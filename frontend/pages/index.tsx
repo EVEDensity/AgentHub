@@ -169,10 +169,10 @@ export default function AgentHubIM(): JSX.Element {
     const badge = msg.type || 'text';
     return (
       <div key={`${msg.timestamp}-${index}`} className={`mb-4 flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-        <div className={`max-w-[78%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-blue-600 text-white' : 'bg-white text-slate-800'}`}>
+        <div className={`max-w-[78%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800 border border-warm-150'}`}>
           <div className="mb-1 flex items-center gap-2 text-xs opacity-80">
             <span className="font-semibold">{msg.sender || 'agent'}</span>
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{badge}</span>
+            <span className={`rounded px-2 py-0.5 ${isUser ? 'bg-white/20 text-white' : 'bg-warm-100 text-warm-600'}`}>{badge}</span>
           </div>
           {msg.type === 'code' || msg.type === 'diff' ? (
             <DiffBubble value={msg.content} />
@@ -187,21 +187,21 @@ export default function AgentHubIM(): JSX.Element {
 
   if (!token) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-100">
-        <form onSubmit={submitAuth} className="w-96 rounded-2xl bg-white p-8 shadow">
-          <h1 className="text-2xl font-bold">AgentHub {authMode === 'login' ? '登录' : '注册'}</h1>
-          <p className="mt-2 text-sm text-slate-500">默认管理员：admin / admin123</p>
-          {notice && <div className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-700">{notice}</div>}
-          <label className="mt-5 block text-sm font-medium">
+      <div className="flex min-h-screen items-center justify-center bg-warm-50">
+        <form onSubmit={submitAuth} className="card w-96 p-8">
+          <h1 className="text-h1 text-warm-800">AgentHub {authMode === 'login' ? '登录' : '注册'}</h1>
+          <p className="mt-2 text-caption text-warm-500">默认管理员：admin / admin123</p>
+          {notice && <div className="mt-4 rounded-lg bg-warning-50 p-3 text-sm text-warning-600">{notice}</div>}
+          <label className="mt-6 block text-h4 text-warm-700">
             用户名
-            <input className="mt-2 w-full rounded-lg border px-3 py-2" value={authForm.name} onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} />
+            <input className="input-field mt-2" value={authForm.name} onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} />
           </label>
-          <label className="mt-4 block text-sm font-medium">
+          <label className="mt-5 block text-h4 text-warm-700">
             密码
-            <input type="password" className="mt-2 w-full rounded-lg border px-3 py-2" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />
+            <input type="password" className="input-field mt-2" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />
           </label>
-          <button className="mt-6 w-full rounded-xl bg-blue-600 px-4 py-2 text-white">{authMode === 'login' ? '登录' : '注册'}</button>
-          <button type="button" className="mt-3 w-full text-sm text-blue-600" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
+          <button className="btn-primary mt-6 w-full">{authMode === 'login' ? '登录' : '注册'}</button>
+          <button type="button" className="btn-ghost mt-3 w-full text-primary-500" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
             {authMode === 'login' ? '没有账号？注册' : '已有账号？登录'}
           </button>
         </form>
@@ -212,47 +212,47 @@ export default function AgentHubIM(): JSX.Element {
   const percent = dag.total ? Math.round((dag.completed / dag.total) * 100) : 0;
 
   return (
-    <div className="flex h-screen bg-slate-100 text-slate-900">
-      <aside className="w-72 border-r bg-white p-5">
+    <div className="flex h-screen bg-warm-50 text-warm-800">
+      <aside className="w-72 border-r border-warm-150 bg-white p-6">
         <div className="mb-6">
-          <div className="text-2xl font-bold">AgentHub</div>
-          <div className="mt-1 text-sm text-slate-500">{user?.name} / {user?.role}</div>
+          <div className="text-h2 text-warm-800">AgentHub</div>
+          <div className="mt-1 text-caption text-warm-500">{user?.name} / {user?.role}</div>
         </div>
-        <a className="block w-full rounded-xl border px-4 py-2 text-center font-medium hover:bg-slate-50" href="/admin">管理控制台</a>
-        <button className="mt-3 w-full rounded-xl border px-4 py-2" onClick={logout}>退出登录</button>
-        {notice && <div className="mt-3 rounded-xl bg-amber-50 p-3 text-sm text-amber-700">{notice}</div>}
-        <div className="mt-6 rounded-2xl bg-slate-50 p-4">
-          <div className="mb-3 font-semibold">可 @ Agent</div>
+        <a className="btn-secondary block w-full text-center" href="/admin">管理控制台</a>
+        <button className="btn-ghost mt-2 w-full" onClick={logout}>退出登录</button>
+        {notice && <div className="mt-4 rounded-lg bg-warning-50 p-3 text-sm text-warning-600">{notice}</div>}
+        <div className="mt-6 rounded-xl bg-warm-50 p-4">
+          <div className="mb-3 text-h4 text-warm-700">可 @ Agent</div>
           <div className="flex flex-wrap gap-2">
             {AGENTS.map((a) => (
-              <button key={a} className="rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-700" onClick={() => setInput(`@${a} ${input}`)}>{a}</button>
+              <button key={a} className="tag tag-blue" onClick={() => setInput(`@${a} ${input}`)}>{a}</button>
             ))}
           </div>
         </div>
         {pending.length > 0 && (
-          <div className="mt-6 rounded-2xl bg-red-50 p-4">
-            <div className="mb-2 font-semibold text-red-700">失败重试队列</div>
+          <div className="mt-6 rounded-xl bg-danger-50 p-4">
+            <div className="mb-2 text-h4 text-danger-500">失败重试队列</div>
             {pending.map((m) => (
-              <button key={m.timestamp} className="mb-2 block text-left text-xs text-red-700 underline" onClick={() => retryMessage(m)}>{m.content.slice(0, 28)}...</button>
+              <button key={m.timestamp} className="mb-2 block text-left text-xs text-danger-500 underline" onClick={() => retryMessage(m)}>{m.content.slice(0, 28)}...</button>
             ))}
           </div>
         )}
       </aside>
 
       <main className="flex flex-1 flex-col">
-        <header className="border-b bg-white px-6 py-4">
+        <header className="border-b border-warm-150 bg-white px-6 py-4">
           <div className="flex items-center justify-between gap-6">
             <div>
-              <div className="text-lg font-semibold">IM 协作入口</div>
-              <div className="text-sm text-slate-500">WebSocket：{connected ? '已连接' : '重连中'}</div>
+              <div className="text-h3 text-warm-800">IM 协作入口</div>
+              <div className="text-caption text-warm-500 mt-0.5">WebSocket：{connected ? '已连接' : '重连中'}</div>
             </div>
             <div className="min-w-[420px]">
-              <div className="mb-1 flex justify-between text-xs text-slate-500">
-                <button onClick={() => setTaskOpen(true)} className="underline">DAG 进度 / 查看任务详情</button>
+              <div className="mb-1.5 flex justify-between text-caption text-warm-500">
+                <button onClick={() => setTaskOpen(true)} className="text-primary-500 hover:text-primary-600">DAG 进度 / 查看任务详情</button>
                 <span>{percent}%</span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-                <div className="h-full bg-blue-600" style={{ width: `${percent}%` }} />
+              <div className="h-1.5 overflow-hidden rounded-full bg-warm-100">
+                <div className="h-full bg-primary-500 transition-all duration-300" style={{ width: `${percent}%` }} />
               </div>
             </div>
           </div>
@@ -264,37 +264,46 @@ export default function AgentHubIM(): JSX.Element {
           <div ref={bottomRef} />
         </section>
 
-        <footer className="border-t bg-white p-4">
+        <footer className="border-t border-warm-150 bg-white px-6 py-4">
           <div className="flex gap-3">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={3}
-              className="flex-1 rounded-2xl border px-4 py-3 outline-none focus:border-blue-500"
+              className="input-field flex-1 resize-none"
+              placeholder="输入消息，支持 @Agent 指令..."
             />
             <div className="flex flex-col gap-2">
-              <button className="rounded-xl bg-blue-600 px-5 py-2 text-white" onClick={() => send()}>发送</button>
-              <button className="rounded-xl border px-5 py-2" onClick={openPreview}>预览</button>
+              <button className="btn-primary" onClick={() => send()}>发送</button>
+              <button className="btn-secondary" onClick={openPreview}>预览</button>
             </div>
           </div>
         </footer>
       </main>
 
       {taskOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
-          <div className="max-h-[80vh] w-[720px] overflow-auto rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="mb-4 flex justify-between">
-              <h2 className="text-xl font-semibold">任务详情</h2>
-              <button className="rounded-lg border px-3 py-1" onClick={() => setTaskOpen(false)}>关闭</button>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-warm-900/20">
+          <div className="w-[520px] rounded-xl bg-white p-6 shadow-modal">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-h3 text-warm-800">DAG 任务详情</h3>
+              <button className="btn-ghost p-1 text-warm-500" onClick={() => setTaskOpen(false)}>✕</button>
             </div>
-            {dag.nodes.map((n, i) => (
-              <div key={n.id || i} className="mb-3 rounded-xl border p-3">
-                <div className="font-semibold">{n.id || i + 1}. {n.agent || n.name} / {n.status}</div>
-                <div className="mt-1 text-sm text-slate-500">{n.description}</div>
-                <div className="mt-1 text-xs text-slate-400">依赖：{n.dependencies?.join(', ') || '无'}</div>
-              </div>
-            ))}
+            <div className="space-y-3">
+              {dag.nodes.map((n, i) => (
+                <div key={n.id || i} className="flex items-center gap-3 rounded-lg bg-warm-50 px-4 py-3">
+                  <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium ${
+                    n.status === 'completed' ? 'bg-success-50 text-success-500' :
+                    n.status === 'running' ? 'bg-primary-50 text-primary-500' :
+                    'bg-warm-100 text-warm-500'
+                  }`}>
+                    {n.status === 'completed' ? '✓' : n.status === 'running' ? '●' : i + 1}
+                  </span>
+                  <span className="text-body flex-1 text-warm-700">{n.agent || n.name || `任务 ${i + 1}`}</span>
+                  <span className="tag tag-warm">{n.status || 'pending'}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

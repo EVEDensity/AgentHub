@@ -9,10 +9,10 @@ export default function DiffBubble({ value }: DiffBubbleProps): JSX.Element {
   const language = value?.startsWith('diff') ? 'diff' : 'python';
 
   return (
-    <div className="mt-2 overflow-hidden rounded-xl border border-slate-200/80 bg-slate-900 shadow-md">
-      <div className="flex items-center justify-between border-b border-slate-700/40 bg-slate-800/70 px-4 py-2.5">
-        <div className="text-xs font-semibold tracking-wide text-slate-100">代码 / Diff 预览</div>
-        <div className="rounded-full border border-slate-600/60 bg-slate-700/40 px-2 py-0.5 text-[11px] text-slate-200">{language.toUpperCase()}</div>
+    <div className="mt-2 overflow-hidden rounded-xl border border-warm-150 bg-warm-900 shadow-card">
+      <div className="flex items-center justify-between border-b border-warm-700/40 bg-warm-800/70 px-4 py-2.5">
+        <div className="text-caption font-semibold tracking-wide text-warm-100">代码 / Diff 预览</div>
+        <div className="rounded-full border border-warm-600/60 bg-warm-700/40 px-2 py-0.5 text-[11px] text-warm-200">{language.toUpperCase()}</div>
       </div>
       <MonacoEditor
         height="360px"

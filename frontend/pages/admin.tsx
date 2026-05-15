@@ -1,278 +1,231 @@
-import { useEffect, useMemo, useState, type JSX } from 'react';
-import type { AuditLog, ModelConfig, ModelFormState, BindFormState, TestState } from '../types';
-
-const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
+import { useEffect, useState, type JSX } from 'react';
+import type { User } from '../types';
 
 const PROVIDERS = [
-  { value: 'openai', label: 'OpenAI', home: 'https://api.openai.com/v1', icon: 'O' },
-  { value: 'deepseek', label: 'DeepSeek', home: 'https://api.deepseek.com/v1', icon: 'D' },
-  { value: 'minimax', label: 'MiniMax', home: 'https://api.minimax.chat/v1', icon: 'M' },
-  { value: 'zhipu', label: '智谱 GLM', home: 'https://open.bigmodel.cn/api/paas/v4', icon: 'G' },
-  { value: 'qwen', label: '通义千问 Qwen', home: 'https://dashscope.aliyuncs.com/compatible-mode/v1', icon: 'Q' },
-  { value: 'doubao', label: '字节豆包', home: 'https://ark.cn-beijing.volces.com/api/v3', icon: 'B' },
-  { value: 'custom_openai', label: '自定义 OpenAI', home: 'https://your-openai-compatible-api/v1', icon: 'C' },
-  { value: 'anthropic', label: 'Anthropic', home: 'https://api.anthropic.com', icon: 'A' },
-  { value: 'ollama', label: 'Ollama', home: 'http://localhost:11434', icon: 'L' },
-  { value: 'mock', label: 'Mock', home: '本地 Mock，无需官网地址', icon: 'K' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'azure', label: 'Azure OpenAI' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'ollama', label: 'Ollama' },
+  { value: 'gemini', label: 'Gemini' },
 ] as const;
 
-export default function AdminPage(): JSX.Element {
-  const [models, setModels] = useState<ModelConfig[]>([]);
-  const [bindings, setBindings] = useState<Array<Record<string, unknown>>>([]);
-  const [audits, setAudits] = useState<AuditLog[]>([]);
-  const [templates, setTemplates] = useState<Array<Record<string, unknown>>>([]);
-  const [notice, setNotice] = useState<string>('');
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [testState, setTestState] = useState<TestState>({});
-  const [modelForm, setModelForm] = useState<ModelFormState>({ provider: 'openai', modelName: 'gpt-4o-mini', apiKey: '', baseUrl: '' });
-  const [bindForm, setBindForm] = useState<BindFormState>({ role: 'Orchestrator', modelConfigId: '', prompt: '' });
+interface ModelConfig {
+  id?: string;
+  provider: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  group: string;
+  priority: number;
+}
 
-  useEffect(() => { refresh(); }, []);
-  const selectedModel = useMemo(() => models.find((m) => m.id === selectedId) || models[0], [models, selectedId]);
+interface AuditLog {
+  id: string;
+  action: string;
+  detail: string;
+  timestamp: string;
+}
+
+interface TestState {
+  status: 'checking' | 'success' | 'failed';
+  message: string;
+}
+
+export default function Admin(): JSX.Element {
+  const [user, setUser] = useState<User | null>(null);
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [modelForm, setModelForm] = useState<ModelConfig>({
+    provider: 'openai',
+    model: '',
+    baseUrl: '',
+    apiKey: '',
+    group: 'default',
+    priority: 0,
+  });
+  const [testState, setTestState] = useState<TestState>({ status: 'checking', message: '待测试' });
+  const [notice, setNotice] = useState<string>('');
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem('agenthub_user');
+    if (savedUser) setUser(JSON.parse(savedUser) as User);
+    fetchModels();
+    fetchLogs();
+  }, []);
 
   function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('agenthub_token') : '';
+    const token = localStorage.getItem('agenthub_token');
     return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
   }
 
-  async function refresh(): Promise<void> {
-    const [modelRes, bindRes, auditRes, templateRes] = await Promise.all([
-      fetch('/api/admin/model-config', { headers: authHeaders() }),
-      fetch('/api/admin/role-bind', { headers: authHeaders() }),
-      fetch('/api/admin/audit-log', { headers: authHeaders() }),
-      fetch('/api/tasks/templates/list'),
-    ]);
-    if (modelRes.status === 401) setNotice('请先在 IM 首页登录管理员账号');
-    if (modelRes.ok) {
-      const data = (await modelRes.json()) as ModelConfig[];
-      setModels(data);
-      if (!selectedId && data[0]) setSelectedId(data[0].id);
-    }
-    if (bindRes.ok) setBindings(await bindRes.json() as Array<Record<string, unknown>>);
-    if (auditRes.ok) setAudits(await auditRes.json() as AuditLog[]);
-    if (templateRes.ok) setTemplates(await templateRes.json() as Array<Record<string, unknown>>);
+  async function fetchModels(): Promise<void> {
+    const res = await fetch('/api/admin/model-config', { headers: authHeaders() });
+    if (res.ok) setModels((await res.json()) as ModelConfig[]);
+  }
+
+  async function fetchLogs(): Promise<void> {
+    const res = await fetch('/api/admin/audit-logs', { headers: authHeaders() });
+    if (res.ok) setLogs((await res.json()) as AuditLog[]);
+  }
+
+  function modelField(key: keyof ModelConfig, value: string | number): void {
+    setModelForm((prev) => ({ ...prev, [key]: value }));
   }
 
   async function saveModel(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const res = await fetch('/api/admin/model-config', {
       method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(modelForm),
     });
-    setNotice(res.ok ? '模型配置已保存，可在下方列表中检测连接' : '模型配置保存失败');
     if (res.ok) {
-      setModelForm((v) => ({ ...v, apiKey: '' }));
-      await refresh();
+      setNotice('模型配置已保存');
+      fetchModels();
+      setModelForm({ provider: 'openai', model: '', baseUrl: '', apiKey: '', group: 'default', priority: 0 });
+    } else {
+      const data = await res.json();
+      setNotice(data.detail || '保存失败');
     }
   }
 
-  async function bindRole(event: React.FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    const body = { ...bindForm, modelConfigId: Number(bindForm.modelConfigId || selectedModel?.id || models[0]?.id) };
-    const res = await fetch('/api/admin/role-bind', {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body),
-    });
-    setNotice(res.ok ? '角色绑定已保存' : '角色绑定失败');
-    if (res.ok) await refresh();
+  async function deleteModel(id: string): Promise<void> {
+    const res = await fetch(`/api/admin/model-config/${id}`, { method: 'DELETE', headers: authHeaders() });
+    if (res.ok) {
+      setNotice('已删除');
+      fetchModels();
+    }
   }
 
-  async function testModel(model: ModelConfig): Promise<void> {
-    setSelectedId(model.id);
-    setTestState((prev) => ({ ...prev, [model.id]: { status: 'checking', message: '正在检测连接...' } }));
-    const res = await fetch(`/api/admin/model-config/${model.id}/test`, { method: 'POST', headers: authHeaders() });
-    const data = await res.json() as { status?: string; message?: string; latencyMs?: number };
-    const resultStatus = (data.status || (res.ok ? 'success' : 'failed')) as 'checking' | 'success' | 'failed';
-    setTestState((prev) => ({ ...prev, [model.id]: { status: resultStatus, message: data.message || '', latencyMs: data.latencyMs } }));
-    setNotice(res.ok && data.status === 'success' ? `${model.provider}/${model.modelName} 连接正常` : `${model.provider}/${model.modelName} 检测失败`);
-  }
-
-  function providerMeta(provider: string): typeof PROVIDERS[number] {
-    return PROVIDERS.find((p) => p.value === provider) || PROVIDERS[0];
-  }
-
-  function modelField<K extends keyof ModelFormState>(name: K, value: ModelFormState[K]): void {
-    setModelForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  function bindField<K extends keyof BindFormState>(name: K, value: BindFormState[K]): void {
-    setBindForm((prev) => ({ ...prev, [name]: value }));
-  }
-
-  function StatusPill({ state }: { state: TestState[number] | undefined }): JSX.Element {
-    if (!state) return <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">未检测</span>;
-    if (state.status === 'checking') return <span className="rounded-full bg-blue-50 px-3 py-1 text-xs text-blue-700">检测中</span>;
-    if (state.status === 'success') return <span className="rounded-full bg-green-50 px-3 py-1 text-xs text-green-700">连接正常</span>;
-    return <span className="rounded-full bg-red-50 px-3 py-1 text-xs text-red-700">连接失败</span>;
-  }
-
-  function ModelCard({ model }: { model: ModelConfig }): JSX.Element {
-    const meta = providerMeta(model.provider);
-    const state = testState[model.id];
-    const active = selectedModel?.id === model.id;
-    return (
-      <button type="button" onClick={() => setSelectedId(model.id)}
-        className={`group w-full rounded-2xl border bg-white p-5 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50/30 ${active ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'}`}>
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-lg font-bold text-slate-700">{meta.icon}</span>
-            <div>
-              <div className="flex items-center gap-2 text-lg font-semibold text-slate-900">
-                <span>{model.modelName}</span>
-                <span className="rounded-md bg-amber-50 px-2 py-0.5 text-xs text-amber-700">{model.provider}</span>
-              </div>
-              <div className="mt-1 text-sm text-blue-600">{model.baseUrl || meta.home}</div>
-            </div>
-          </div>
-          <div className="flex min-w-[260px] items-center justify-end gap-3">
-            <StatusPill state={state} />
-            <button type="button" className="rounded-xl border bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
-              onClick={(e) => { e.stopPropagation(); testModel(model); }}>刷新</button>
-          </div>
-        </div>
-        <div className="mt-4 grid gap-2 text-sm text-slate-500 md:grid-cols-3">
-          <div>编号：{model.id}</div>
-          <div>状态：{model.isActive ? '启用' : '停用'}</div>
-          <div>延迟：{state?.latencyMs != null ? `${state.latencyMs} ms` : '未检测'}</div>
-        </div>
-        {state?.message && (
-          <div className={`mt-3 rounded-xl px-3 py-2 text-sm ${state.status === 'failed' ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'}`}>
-            {state.message}
-          </div>
-        )}
-      </button>
-    );
+  async function testModel(id: string): Promise<void> {
+    setTestState({ status: 'checking', message: '测试中...' });
+    const res = await fetch(`/api/admin/model-config/${id}/test`, { headers: authHeaders() });
+    const data = await res.json();
+    setTestState({ status: res.ok ? 'success' : 'failed', message: (data.message as string) || (data.detail as string) || '未知' });
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 p-8 text-slate-900">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">AgentHub 管理控制台</h1>
-            <p className="mt-1 text-slate-500">模型源配置、连接检测、角色绑定、DAG 模板与审计日志</p>
+    <div className="min-h-screen bg-warm-50 text-warm-800">
+      <header className="border-b border-warm-150 bg-white px-8 py-4">
+        <div className="mx-auto flex max-w-6xl items-center justify-between">
+          <div className="flex items-center gap-4">
+            <h1 className="text-h2 text-warm-800">管理控制台</h1>
+            <span className="tag tag-warm">{user?.name} / {user?.role}</span>
           </div>
-          <div className="flex gap-3">
-            <a className="rounded-xl border bg-white px-4 py-2 hover:bg-slate-50" href="/im">返回 IM</a>
-            <button className="rounded-xl border bg-white px-4 py-2 hover:bg-slate-50" onClick={refresh}>刷新全部</button>
-          </div>
+          <a className="btn-ghost" href="/">← 返回 IM</a>
         </div>
+      </header>
 
-        {notice && <div className="mb-4 rounded-xl bg-blue-50 p-3 text-blue-700">{notice}</div>}
+      <main className="mx-auto max-w-6xl px-8 py-8">
+        {notice && (
+          <div className="mb-6 rounded-lg bg-warning-50 p-4 text-sm text-warning-600">
+            {notice}
+            <button className="ml-3 text-warning-500 hover:text-warning-600" onClick={() => setNotice('')}>✕</button>
+          </div>
+        )}
 
-        <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
-          <section className="rounded-2xl bg-white p-6 shadow-sm">
-            <h2 className="mb-4 text-xl font-semibold">新增模型源</h2>
-            <form onSubmit={saveModel} className="grid gap-4 md:grid-cols-2">
-              <label className="block text-sm font-medium">
+        <div className="grid gap-8 xl:grid-cols-[1.2fr_0.8fr]">
+          <section className="card p-6">
+            <h2 className="text-h3 text-warm-800">新增模型源</h2>
+            <form onSubmit={saveModel} className="mt-5 grid gap-5 md:grid-cols-2">
+              <label className="block text-h4 text-warm-700">
                 Provider
-                <select className="mt-2 w-full rounded-lg border px-3 py-2" value={modelForm.provider}
+                <select className="input-field mt-2" value={modelForm.provider}
                   onChange={(e) => modelField('provider', e.target.value)}>
                   {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
               </label>
-              <label className="block text-sm font-medium">
-                模型名称
-                <input className="mt-2 w-full rounded-lg border px-3 py-2" value={modelForm.modelName}
-                  onChange={(e) => modelField('modelName', e.target.value)} required />
+              <label className="block text-h4 text-warm-700">
+                Model
+                <input className="input-field mt-2" value={modelForm.model}
+                  onChange={(e) => modelField('model', e.target.value)} />
               </label>
-              <label className="block text-sm font-medium">
-                API Key
-                <input type="password" className="mt-2 w-full rounded-lg border px-3 py-2" value={modelForm.apiKey}
-                  onChange={(e) => modelField('apiKey', e.target.value)} placeholder="Ollama/Mock 可留空" />
-              </label>
-              <label className="block text-sm font-medium">
+              <label className="block text-h4 text-warm-700">
                 Base URL
-                <input className="mt-2 w-full rounded-lg border px-3 py-2" value={modelForm.baseUrl}
-                  onChange={(e) => modelField('baseUrl', e.target.value)} placeholder={providerMeta(modelForm.provider).home} />
+                <input className="input-field mt-2" value={modelForm.baseUrl}
+                  onChange={(e) => modelField('baseUrl', e.target.value)} />
+              </label>
+              <label className="block text-h4 text-warm-700">
+                API Key
+                <input type="password" className="input-field mt-2" value={modelForm.apiKey}
+                  onChange={(e) => modelField('apiKey', e.target.value)} />
+              </label>
+              <label className="block text-h4 text-warm-700">
+                Group
+                <input className="input-field mt-2" value={modelForm.group}
+                  onChange={(e) => modelField('group', e.target.value)} />
+              </label>
+              <label className="block text-h4 text-warm-700">
+                Priority
+                <input type="number" className="input-field mt-2" value={modelForm.priority}
+                  onChange={(e) => modelField('priority', Number(e.target.value))} />
               </label>
               <div className="md:col-span-2">
-                <button className="rounded-xl bg-blue-600 px-5 py-2 text-white hover:bg-blue-700">保存模型源</button>
+                <button className="btn-primary">保存配置</button>
               </div>
             </form>
           </section>
 
-          <section className="rounded-2xl bg-white p-6 shadow-sm">
-            <h2 className="mb-4 text-xl font-semibold">角色绑定</h2>
-            <form onSubmit={bindRole} className="space-y-4">
-              <label className="block text-sm font-medium">
-                Agent 角色
-                <select className="mt-2 w-full rounded-lg border px-3 py-2" value={bindForm.role}
-                  onChange={(e) => bindField('role', e.target.value)}>
-                  {AGENTS.map((agent) => <option key={agent} value={agent}>{agent}</option>)}
-                </select>
-              </label>
-              <label className="block text-sm font-medium">
-                模型配置
-                <select className="mt-2 w-full rounded-lg border px-3 py-2"
-                  value={bindForm.modelConfigId || selectedModel?.id || ''}
-                  onChange={(e) => bindField('modelConfigId', e.target.value)}>
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>#{model.id} {model.provider}/{model.modelName}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm font-medium">
-                角色 Prompt
-                <textarea rows={4} className="mt-2 w-full rounded-lg border px-3 py-2" value={bindForm.prompt}
-                  onChange={(e) => bindField('prompt', e.target.value)} />
-              </label>
-              <button className="rounded-xl bg-blue-600 px-5 py-2 text-white hover:bg-blue-700">保存绑定</button>
-            </form>
+          <section className="card p-6">
+            <h2 className="text-h3 text-warm-800">角色绑定</h2>
+            <div className="mt-5 space-y-3">
+              {['admin', 'developer', 'viewer'].map((role) => (
+                <div key={role} className="flex items-center justify-between rounded-lg bg-warm-50 px-4 py-3">
+                  <span className="text-body text-warm-700">{role}</span>
+                  <span className="tag tag-blue">已绑定</span>
+                </div>
+              ))}
+            </div>
           </section>
         </div>
 
-        <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-semibold">模型源连接检测</h2>
-              <p className="mt-1 text-sm text-slate-500">支持 DeepSeek 全系列、MiniMax、智谱 GLM、Qwen、豆包、自定义 OpenAI API</p>
-            </div>
-            {selectedModel && (
-              <div className="rounded-xl bg-slate-50 px-4 py-2 text-sm text-slate-600">
-                当前选中：{selectedModel.id} {selectedModel.provider}/{selectedModel.modelName}
-              </div>
+        <section className="card mt-8 p-6">
+          <h2 className="text-h3 text-warm-800">模型配置列表</h2>
+          <div className="mt-5 space-y-3">
+            {models.length === 0 ? (
+              <p className="text-caption text-warm-400">暂无配置</p>
+            ) : (
+              models.map((m) => (
+                <div key={m.id} className="flex items-center justify-between rounded-lg bg-warm-50 px-4 py-3">
+                  <div className="flex items-center gap-4">
+                    <span className="tag tag-blue">{m.provider}</span>
+                    <span className="text-body text-warm-700">{m.model}</span>
+                    <span className="text-caption text-warm-400">{m.group}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button className="btn-ghost text-caption text-primary-500" onClick={() => testModel(m.id!)}>测试</button>
+                    <button className="btn-ghost text-caption text-danger-500" onClick={() => deleteModel(m.id!)}>删除</button>
+                  </div>
+                </div>
+              ))
             )}
           </div>
-          <div className="space-y-4">
-            {models.map((model) => <ModelCard key={model.id} model={model} />)}
-          </div>
+          {testState.status !== 'checking' && (
+            <div className={`mt-4 rounded-lg p-3 text-sm ${
+              testState.status === 'success' ? 'bg-success-50 text-success-600' : 'bg-danger-50 text-danger-600'
+            }`}>
+              {testState.message}
+            </div>
+          )}
         </section>
 
-        <section className="mt-6 rounded-2xl bg-white p-6 shadow-sm">
-          <h2 className="mb-4 text-xl font-semibold">审计日志</h2>
-          <div className="overflow-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="py-2">时间</th>
-                  <th>用户</th>
-                  <th>Agent</th>
-                  <th>动作</th>
-                  <th>风险</th>
-                  <th>决策</th>
-                  <th>Hash</th>
-                </tr>
-              </thead>
-              <tbody>
-                {audits.map((audit) => (
-                  <tr key={audit.id} className="border-b">
-                    <td className="py-2">{audit.timestamp}</td>
-                    <td>{audit.userId}</td>
-                    <td>{audit.agentId}</td>
-                    <td>{audit.action}</td>
-                    <td>{audit.riskLevel}</td>
-                    <td>{audit.decision}</td>
-                    <td className="font-mono text-xs">{audit.contentHash?.slice(0, 12)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <section className="card mt-8 p-6">
+          <h2 className="text-h3 text-warm-800">审计日志</h2>
+          <div className="mt-5 space-y-2">
+            {logs.length === 0 ? (
+              <p className="text-caption text-warm-400">暂无日志</p>
+            ) : (
+              logs.map((log) => (
+                <div key={log.id} className="flex items-start gap-3 rounded-lg bg-warm-50 px-4 py-3">
+                  <span className="tag tag-warm shrink-0">{new Date(log.timestamp).toLocaleString()}</span>
+                  <span className="text-body text-warm-700">{log.action}</span>
+                  <span className="text-caption text-warm-400">{log.detail}</span>
+                </div>
+              ))
+            )}
           </div>
         </section>
-      </div>
+      </main>
     </div>
   );
 }

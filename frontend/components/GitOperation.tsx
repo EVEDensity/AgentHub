@@ -30,19 +30,19 @@ export default function GitOperation({ sessionId }: GitOperationProps): JSX.Elem
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 text-lg font-semibold">Git 操作</div>
+    <div className="card p-5">
+      <div className="mb-4 text-h3 text-warm-800">Git 操作</div>
       <div className="flex flex-wrap gap-2">
         <input value={branchName} onChange={(e) => setBranchName(e.target.value)}
-          className="w-60 rounded-lg border px-3 py-2 outline-none focus:border-blue-500" />
+          className="input-field w-60" />
         <button disabled={loading}
-          className="rounded-xl border bg-white px-4 py-2 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          className="btn-secondary disabled:opacity-50"
           onClick={() => post('/api/git/branch', { branchName, sessionId })}>创建分支</button>
         <button disabled={loading}
-          className="rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
+          className="btn-primary disabled:opacity-50"
           onClick={() => post('/api/git/commit', { sessionId, message: 'Agent 自动提交' })}>提交代码</button>
       </div>
-      {notice && <div className="mt-2 text-sm text-slate-500">{notice}</div>}
+      {notice && <div className="mt-3 text-caption text-warm-500">{notice}</div>}
     </div>
   );
 }
