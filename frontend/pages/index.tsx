@@ -166,19 +166,28 @@ export default function AgentHubIM(): JSX.Element {
 
   function renderMessage(msg: Message, index: number): JSX.Element {
     const isUser = msg.sender === user?.name || msg.sender === 'user';
+    const isCode = msg.type === 'code' || msg.type === 'diff';
     const badge = msg.type || 'text';
+    if (isCode) {
+      return (
+        <div key={`${msg.timestamp}-${index}`} className="-mx-6 mb-4 px-6">
+          <div className="mb-2 flex items-center gap-2 text-xs text-warm-500">
+            <span className="font-semibold text-warm-700">{msg.sender || 'agent'}</span>
+            <span className="tag tag-warm">{badge}</span>
+          </div>
+          <DiffBubble value={msg.content} />
+          {msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}
+        </div>
+      );
+    }
     return (
       <div key={`${msg.timestamp}-${index}`} className={`mb-4 flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-        <div className={`max-w-[78%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800 border border-warm-150'}`}>
+        <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800 border border-warm-150'}`}>
           <div className="mb-1 flex items-center gap-2 text-xs opacity-80">
             <span className="font-semibold">{msg.sender || 'agent'}</span>
             <span className={`rounded px-2 py-0.5 ${isUser ? 'bg-white/20 text-white' : 'bg-warm-100 text-warm-600'}`}>{badge}</span>
           </div>
-          {msg.type === 'code' || msg.type === 'diff' ? (
-            <DiffBubble value={msg.content} />
-          ) : (
-            <div className="whitespace-pre-wrap leading-7">{msg.content}</div>
-          )}
+          <div className="whitespace-pre-wrap leading-7">{msg.content}</div>
           {!isUser && msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}
         </div>
       </div>
