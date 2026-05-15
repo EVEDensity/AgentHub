@@ -139,7 +139,8 @@ export default function AgentHubIM() {
   function renderMessage(msg, index) {
     const isUser = msg.sender === user?.name || msg.sender === 'user';
     const badge = msg.type || 'text';
-    return <div key={`${msg.timestamp}-${index}`} className={`mb-4 flex ${isUser ? 'justify-end' : 'justify-start'}`}><div className={`max-w-[78%] rounded-xl px-4 py-3 shadow-warm-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800'}`}><div className="mb-1 flex items-center gap-2 text-xs opacity-80"><span className="font-semibold">{msg.sender || 'agent'}</span><span className="tag tag-warm">{badge}</span></div>{msg.type === 'code' || msg.type === 'diff' ? <DiffBubble value={msg.content} /> : <div className="whitespace-pre-wrap leading-7 text-body">{msg.content}</div>}{!isUser && msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}</div></div>;
+    const isCodeLike = msg.type === 'code' || msg.type === 'diff';
+    return <div key={`${msg.timestamp}-${index}`} className={`mb-4 flex ${isCodeLike ? 'justify-stretch' : isUser ? 'justify-end' : 'justify-start'}`}><div className={`${isCodeLike ? 'w-full max-w-none' : 'max-w-[98%] xl:max-w-[95%]'} rounded-xl px-4 py-3 shadow-warm-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800'}`}><div className="mb-1 flex items-center gap-2 text-xs opacity-80"><span className="font-semibold">{msg.sender || 'agent'}</span><span className="tag tag-warm">{badge}</span></div>{isCodeLike ? <DiffBubble value={msg.content} /> : <div className="whitespace-pre-wrap leading-7 text-body">{msg.content}</div>}{!isUser && msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}</div></div>;
   }
 
   if (!token) {
