@@ -1133,6 +1133,3 @@ CREATE TABLE model_configs (
 ---
 
 **文档结束**
-此方案为 AgentHub 项目的完整落地蓝图，包含
-
-> （注：文档部分内容可能由 AI 生成）
