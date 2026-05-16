@@ -14,6 +14,14 @@ const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
   riskLevel: agentId === 'Deploy' ? 'L3' : agentId === 'CodeGen' || agentId === 'Orchestrator' ? 'L2' : 'L1',
 }));
 
+interface ChatSession {
+  id: string;
+  name: string;
+  type?: string;
+  active?: number;
+  createdAt?: string;
+}
+
 interface DagState {
   total: number;
   completed: number;
@@ -26,6 +34,9 @@ export default function AgentHubIM(): JSX.Element {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authForm, setAuthForm] = useState<{ name: string; password: string }>({ name: 'admin', password: 'admin123' });
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessionId, setSessionId] = useState<string>('session-1');
+  const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen 生成一个 FastAPI health 路由文件，保存为 health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
   const [taskOpen, setTaskOpen] = useState<boolean>(false);
@@ -51,17 +62,30 @@ export default function AgentHubIM(): JSX.Element {
 
   useEffect(() => {
     if (!token) return;
-    fetch('/api/chat/sessions/session-1/messages', { headers: authHeaders() })
+    fetch('/api/chat/sessions', { headers: authHeaders() })
       .then((r) => r.json())
-      .then((data: Message[]) => setMessages(data))
+      .then((data: ChatSession[]) => {
+        setSessions(data);
+        if (!data.find((s) => s.id === sessionId) && data.length) {
+          setSessionId(data[0].id);
+        }
+      })
       .catch(() => {});
     fetch('/api/agent/registry', { headers: authHeaders() })
       .then((r) => r.json())
       .then((data: Agent[]) => setAgents(data.length ? data : FALLBACK_AGENTS))
       .catch(() => setAgents(FALLBACK_AGENTS));
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !sessionId) return;
+    fetch(`/api/chat/sessions/${sessionId}/messages`, { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data: Message[]) => setMessages(data))
+      .catch(() => {});
     connectWs();
     return () => wsRef.current?.close();
-  }, [token]);
+  }, [token, sessionId]);
 
   useEffect(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages]);
 
@@ -99,7 +123,7 @@ export default function AgentHubIM(): JSX.Element {
 
   function connectWs(): void {
     if (reconnectRef.current) clearTimeout(reconnectRef.current);
-    const ws = new WebSocket(`ws://127.0.0.1:8000/ws/session-1?token=${encodeURIComponent(token)}`);
+    const ws = new WebSocket(`ws://127.0.0.1:8000/ws/${sessionId}?token=${encodeURIComponent(token)}`);
     wsRef.current = ws;
     ws.onopen = () => {
       setConnected(true);
@@ -136,11 +160,51 @@ export default function AgentHubIM(): JSX.Element {
     setMentionOpen(false);
   }
 
+  async function createSession(): Promise<void> {
+    const name = `Untitled Session ${sessions.length + 1}`;
+    const res = await fetch('/api/chat/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setNotice(data.detail || '新建会话失败');
+      return;
+    }
+    const created = data as ChatSession;
+    setSessions((prev) => [created, ...prev]);
+    setSessionId(created.id);
+    setMessages([]);
+  }
+
+  function selectSession(id: string): void {
+    setSessionId(id);
+    setTaskOpen(false);
+  }
+
+  async function deleteSession(id: string): Promise<void> {
+    const ok = window.confirm('确认删除该会话？');
+    if (!ok) return;
+    const res = await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE', headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) {
+      setNotice(data.detail || '删除失败');
+      return;
+    }
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    if (sessionId === id) {
+      const next = sessions.find((s) => s.id !== id);
+      setSessionId(next?.id || 'session-1');
+      setMessages([]);
+    }
+  }
+
   function send(customText?: string): void {
     const text = (customText || input).trim();
     if (!text) return;
     const msg: PendingMessage = {
-      sessionId: 'session-1',
+      sessionId,
       content: text,
       sender: user?.name || 'user',
       timestamp: new Date().toISOString(),
@@ -180,7 +244,7 @@ export default function AgentHubIM(): JSX.Element {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
-        sessionId: 'session-1',
+        sessionId,
         message: '确认提交 CodeGen 生成文件',
         paths: generated.files,
       }),
@@ -247,37 +311,51 @@ export default function AgentHubIM(): JSX.Element {
 
   return (
     <div className="flex h-screen bg-warm-50 text-warm-800">
-      <aside className="w-72 border-r border-warm-150 bg-white p-6">
-        <div className="mb-6">
+      <aside className="w-80 border-r border-warm-150 bg-white p-4 flex h-screen flex-col">
+        <div className="mb-4">
           <div className="text-h2 text-warm-800">AgentHub</div>
           <div className="mt-1 text-caption text-warm-500">{user?.name} / {user?.role}</div>
         </div>
         <a className="btn-secondary block w-full text-center" href="/admin">管理控制台</a>
         <button className="btn-ghost mt-2 w-full" onClick={logout}>退出登录</button>
-        {notice && <div className="mt-4 rounded-lg bg-warning-50 p-3 text-sm text-warning-600">{notice}</div>}
-        <div className="mt-6 rounded-xl bg-warm-50 p-4">
-          <div className="mb-3 text-h4 text-warm-700">可 @ Agent</div>
-          <div className="flex flex-wrap gap-2">
-            {AGENTS.map((a) => (
-              <button key={a} className="tag tag-blue" onClick={() => setInput(`@${a} ${input}`)}>{a}</button>
-            ))}
+        {notice && <div className="mt-3 rounded-lg bg-warning-50 p-2 text-xs text-warning-600">{notice}</div>}
+        <div className="mb-3 mt-4 flex items-center justify-between border-b border-warm-150 pb-3">
+          <button className="btn-ghost flex items-center gap-2" onClick={createSession}><span className="text-lg">＋</span><span>新建会话</span></button>
+        </div>
+        <div className="mb-3 flex items-center gap-2 rounded-xl border border-warm-150 bg-warm-50 px-3 py-2">
+          <span className="text-warm-400">⌕</span>
+          <input className="w-full bg-transparent text-sm outline-none" placeholder="搜索会话..." value={sessionQuery} onChange={(e) => setSessionQuery(e.target.value)} />
+        </div>
+        <div className="mb-2 text-xs text-warm-500">最近 30 天</div>
+        <div className="flex-1 overflow-hidden">
+          <div className="h-full space-y-1 overflow-auto pr-1">
+          {sessions.filter((s) => !sessionQuery.trim() || s.name.toLowerCase().includes(sessionQuery.toLowerCase())).map((s) => (
+            <div key={s.id} className={`group flex items-center gap-2 rounded-lg px-2 py-1 ${s.id === sessionId ? 'bg-warm-100' : 'hover:bg-warm-50'}`}>
+              <button className={`flex-1 rounded-lg px-2 py-2 text-left text-sm ${s.id === sessionId ? 'text-warm-800' : 'text-warm-600'}`} onClick={() => selectSession(s.id)}>
+                <div className="truncate">• {s.name || 'Untitled Session'}</div>
+              </button>
+              <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-danger-500 group-hover:visible" title="删除会话" onClick={() => deleteSession(s.id)}>
+                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4h8v2" />
+                  <path d="M19 6l-1 14H6L5 6" />
+                  <path d="M10 11v6" />
+                  <path d="M14 11v6" />
+                </svg>
+              </button>
+            </div>
+          ))}
+          {!sessions.length && <div className="rounded-lg bg-warm-50 px-3 py-2 text-sm text-warm-500">暂无会话，点击“新建会话”</div>}
           </div>
         </div>
-        {pending.length > 0 && (
-          <div className="mt-6 rounded-xl bg-danger-50 p-4">
-            <div className="mb-2 text-h4 text-danger-500">失败重试队列</div>
-            {pending.map((m) => (
-              <button key={m.timestamp} className="mb-2 block text-left text-xs text-danger-500 underline" onClick={() => retryMessage(m)}>{m.content.slice(0, 28)}...</button>
-            ))}
-          </div>
-        )}
+        <div className="mt-3 border-t border-warm-150 pt-3 text-sm text-warm-600">⚙ 设置</div>
       </aside>
 
       <main className="flex flex-1 flex-col">
         <header className="border-b border-warm-150 bg-white px-6 py-4">
           <div className="flex items-center justify-between gap-6">
             <div>
-              <div className="text-h3 text-warm-800">IM 协作入口</div>
+              <div className="text-h3 text-warm-800">{sessions.find((s) => s.id === sessionId)?.name || '新建会话'}</div>
               <div className="text-caption text-warm-500 mt-0.5">WebSocket：{connected ? '已连接' : '重连中'}</div>
             </div>
             <div className="min-w-[420px]">
@@ -298,8 +376,25 @@ export default function AgentHubIM(): JSX.Element {
           <div ref={bottomRef} />
         </section>
 
-        <footer className="border-t border-warm-150 bg-white px-6 py-4">
+        <footer className="relative border-t border-warm-150 bg-white px-6 py-4">
+          {mentionOpen && (
+            <div className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
+              <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
+                <span>@ 选择单独 Agent</span>
+                <button className="text-primary-500" onClick={insertAllMentions}>@全部 Agent</button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {agents.map((agent) => (
+                  <button key={agent.agentId} className="rounded-lg bg-warm-50 px-3 py-2 text-left hover:bg-primary-50" onClick={() => insertMention(agent.agentId)}>
+                    <div className="font-medium text-warm-700">@{agent.agentId}</div>
+                    <div className="text-caption text-warm-500">{agent.domain} / {agent.riskLevel}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-3">
+            <button className="btn-secondary self-start" onClick={() => setMentionOpen((v) => !v)}>@</button>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}

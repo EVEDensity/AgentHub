@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import uuid
 
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from app.db.init_db import now
 from app.schemas.common import ChatTaskRequest
 from app.services.auth_service import get_current_user
 from app.services.agent_service import list_messages
@@ -10,16 +14,46 @@ from app.services.task_state_machine import task_state_machine
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
+class SessionCreateRequest(BaseModel):
+    name: str = "新建会话"
+
+
 @router.get("/sessions")
 async def sessions() -> list[dict]:
     from app.db.session import dict_rows
 
-    return dict_rows("SELECT id,name,type,active,created_at AS createdAt FROM sessions ORDER BY created_at")
+    return dict_rows("SELECT id,name,type,active,created_at AS createdAt FROM sessions ORDER BY created_at DESC")
+
+
+@router.post("/sessions")
+async def create_session(data: SessionCreateRequest, user: dict = Depends(get_current_user)) -> dict:
+    from app.db.session import get_connection
+
+    session_id = f"session-{uuid.uuid4().hex[:8]}"
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO sessions(id,name,type,participants,active,created_at) VALUES(?,?,?,?,?,?)",
+            (session_id, data.name.strip() or "新建会话", "group", "[]", 1, now()),
+        )
+    return {"id": session_id, "name": data.name.strip() or "新建会话", "createdAt": now(), "active": 1, "type": "group"}
 
 
 @router.get("/sessions/{session_id}/messages")
 async def messages(session_id: str) -> list[dict]:
     return list_messages(session_id)
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
+    from app.db.session import get_connection
+
+    with get_connection() as conn:
+        conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM tasks WHERE session_id=?", (session_id,))
+        cursor = conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "success", "sessionId": session_id}
 
 
 @router.post("/tasks")
