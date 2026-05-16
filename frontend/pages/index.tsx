@@ -3,9 +3,16 @@ import DiffBubble from '../components/DiffBubble';
 import GeneratedFilesPanel from '../components/GeneratedFilesPanel';
 import FidelityScore from '../components/FidelityScore';
 import PreviewSidebar from '../components/PreviewSidebar';
-import type { GeneratedData, Message, PendingMessage, User } from '../types';
+import type { Agent, GeneratedData, Message, PendingMessage, User } from '../types';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
+const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
+  agentId,
+  domain: agentId.toLowerCase(),
+  status: 'sleeping',
+  adapterType: 'mock',
+  riskLevel: agentId === 'Deploy' ? 'L3' : agentId === 'CodeGen' || agentId === 'Orchestrator' ? 'L2' : 'L1',
+}));
 
 interface DagState {
   total: number;
@@ -28,6 +35,8 @@ export default function AgentHubIM(): JSX.Element {
   const [notice, setNotice] = useState<string>('');
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [generated, setGenerated] = useState<GeneratedData | null>(null);
+  const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
+  const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -46,6 +55,10 @@ export default function AgentHubIM(): JSX.Element {
       .then((r) => r.json())
       .then((data: Message[]) => setMessages(data))
       .catch(() => {});
+    fetch('/api/agent/registry', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data: Agent[]) => setAgents(data.length ? data : FALLBACK_AGENTS))
+      .catch(() => setAgents(FALLBACK_AGENTS));
     connectWs();
     return () => wsRef.current?.close();
   }, [token]);
@@ -109,6 +122,18 @@ export default function AgentHubIM(): JSX.Element {
         if (data.symbolic?.generated) setGenerated(data.symbolic.generated as GeneratedData);
       }
     };
+  }
+
+  function insertMention(agentId: string): void {
+    const mention = `@${agentId}`;
+    setInput((prev) => (prev.includes(mention) ? prev : `${mention} ${prev}`));
+    setMentionOpen(false);
+  }
+
+  function insertAllMentions(): void {
+    const mentions = agents.map((agent) => `@${agent.agentId}`).join(' ');
+    setInput((prev) => `${mentions} ${prev}`);
+    setMentionOpen(false);
   }
 
   function send(customText?: string): void {

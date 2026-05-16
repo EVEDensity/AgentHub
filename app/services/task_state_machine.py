@@ -6,6 +6,7 @@ import uuid
 from app.db.init_db import now
 from app.db.session import dict_rows, get_connection, one_row
 from app.schemas.dag import DAGConfig
+from app.services.agent_route_service import agent_route_service
 from app.services.template_engine import template_engine
 from app.services.websocket_manager import manager
 
@@ -19,18 +20,22 @@ class TaskStateMachine:
     }
 
     def create_task(self, session_id: str, message: str) -> dict:
-        dag, template_id = template_engine.match_template(message)
+        dag, template_id, route = agent_route_service.resolve_dag(message)
         template_engine.validate(dag)
         task_id = str(uuid.uuid4())
+        route_id = route["id"] if route else None
         with get_connection() as conn:
             conn.execute(
-                "INSERT INTO tasks(id,session_id,status,dag_json,current_node_id,template_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (task_id, session_id, "PENDING", dag.model_dump_json(), None, template_id, now(), now()),
+                "INSERT INTO tasks(id,session_id,status,dag_json,current_node_id,template_id,agent_route_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (task_id, session_id, "PENDING", dag.model_dump_json(), None, template_id, route_id, now(), now()),
             )
-        return {"taskId": task_id, "status": "PENDING", "dagProgress": dag.model_dump()}
+        progress = dag.model_dump()
+        if route:
+            progress["route"] = {"id": route["id"], "name": route["name"], "description": route["description"]}
+        return {"taskId": task_id, "status": "PENDING", "dagProgress": progress}
 
     def get_task(self, task_id: str) -> dict | None:
-        row = one_row("SELECT id,session_id,status,dag_json,current_node_id,template_id,created_at,updated_at FROM tasks WHERE id=?", (task_id,))
+        row = one_row("SELECT id,session_id,status,dag_json,current_node_id,template_id,agent_route_id,created_at,updated_at FROM tasks WHERE id=?", (task_id,))
         if not row:
             return None
         row["dagProgress"] = json.loads(row.pop("dag_json"))
@@ -78,9 +83,9 @@ class TaskStateMachine:
 
     def list_tasks(self, session_id: str | None = None) -> list[dict]:
         if session_id:
-            items = dict_rows("SELECT id,session_id,status,dag_json,current_node_id,template_id,created_at,updated_at FROM tasks WHERE session_id=? ORDER BY created_at DESC", (session_id,))
+            items = dict_rows("SELECT id,session_id,status,dag_json,current_node_id,template_id,agent_route_id,created_at,updated_at FROM tasks WHERE session_id=? ORDER BY created_at DESC", (session_id,))
         else:
-            items = dict_rows("SELECT id,session_id,status,dag_json,current_node_id,template_id,created_at,updated_at FROM tasks ORDER BY created_at DESC")
+            items = dict_rows("SELECT id,session_id,status,dag_json,current_node_id,template_id,agent_route_id,created_at,updated_at FROM tasks ORDER BY created_at DESC")
         for item in items:
             item["dagProgress"] = json.loads(item.pop("dag_json"))
         return items

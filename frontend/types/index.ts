@@ -55,8 +55,10 @@ export interface DAGProgress {
 
 export interface DAGNode {
   id: string;
-  name: string;
-  status: 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  name?: string;
+  agent?: string;
+  description?: string;
+  status: 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | string;
   dependencies: string[];
 }
 
@@ -119,4 +121,27 @@ export interface AuditLog {
   riskLevel: 'low' | 'medium' | 'high' | string;
   decision: string;
   contentHash?: string;
+  payload?: string;
+}
+
+export interface AgentRouteNode {
+  id: string;
+  domain: string;
+  agent: string;
+  description: string;
+  dependencies: string[];
+  status: 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | string;
+  layer?: 'meta' | 'domain' | 'micro' | string;
+}
+
+export interface AgentRoute {
+  id: number;
+  name: string;
+  description: string;
+  triggerKeywords: string[];
+  nodes: AgentRouteNode[];
+  isDefault: boolean;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
 }

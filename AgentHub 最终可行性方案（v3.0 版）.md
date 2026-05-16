@@ -58,16 +58,29 @@
 
 - 具备学术创新性（三层联邦、符号通信、稀疏激活）和工程可落地性，前后端代码可直接生成、运行
 
-### 技术栈全景（前端\+后端，明确可落地）
+### 技术栈全景（前端+后端，明确可落地）
 
 |层面|技术选型|核心用途|
 |---|---|---|
-|前端|React/Next\.js \+ Socket\.IO \+ Monaco Editor \+ Tailwind CSS|IM 聊天界面、模型配置、角色绑定、Diff 展示、预览面板|
-|后端|FastAPI \+ Python \+ PostgreSQL \+ Redis|接口开发、Agent 调度、数据存储、消息队列|
-|数据库|PostgreSQL \+ ChromaDB（向量库）|结构化数据存储、Agent 记忆与上下文存储|
-|模型适配|OpenAI API \+ Anthropic API \+ Ollama（本地模型）|多模型适配，前端可配置 API Key 与模型参数|
-|通信|WebSocket（Socket\.IO） \+ Redis Pub/Sub|实时 IM 交互、Agent 间异步通信|
+|前端|React/Next.js + TypeScript + Tailwind CSS + Monaco Editor|IM 聊天界面、模型配置、角色绑定、Diff 展示、预览面板|
+|后端|FastAPI + Python + PostgreSQL + Redis|接口开发、Agent 调度、数据存储、消息队列|
+|数据库|PostgreSQL + ChromaDB（向量库）|结构化数据存储、Agent 记忆与上下文存储|
+|模型适配|OpenAI API + Anthropic API + Ollama（本地模型）|多模型适配，前端可配置 API Key 与模型参数|
+|通信|WebSocket + Redis Pub/Sub|实时 IM 交互、Agent 间异步通信|
 |代码编辑|Monaco Editor|前端内嵌代码编辑、Diff 对比|
+
+### 前端设计系统（飞书风格暖色调）
+
+|维度|实现|
+|---|---|
+|色彩体系|低饱和暖色调 `warm` 色阶（50-900），飞书蓝 `primary`，柔和绿/琥珀/暖红辅助色|
+|背景色|#FAF9F7 暖白底，极低对比度护眼设计|
+|字体|系统原生字体栈（SF Pro + Noto Sans SC），h1~h4/body/caption 层级|
+|圆角|轻量化圆角体系（4px~16px），卡片 12px，按钮 8px|
+|阴影|极低透明度柔和阴影（card/modal/sidebar 三级）|
+|按钮|btn-primary / btn-secondary / btn-ghost 三种层级|
+|输入框|input-field 统一风格，focus 态飞书蓝光晕|
+|滚动条|6px 细滚动条，暖灰配色|
 
 ---
 
@@ -414,21 +427,17 @@ export default function AgentHubIM() {
 }
 ```
 
-#### 3\.1\.2 前端核心组件说明（给AI参考，确保生成正确）
+#### 3.1.2 前端核心组件说明（TypeScript + Tailwind CSS 实现）
 
-1. ChatWindow：主容器，支持 Tab 多会话，绑定 WebSocket 实时通信
-
-2. MessageList：消息列表，区分用户/Agent/系统消息，支持文本、代码、Diff 渲染
-
-3. MessageInput：支持 @Agent 自动补全，输入框防抖，提交触发 WebSocket 消息发送
-
-4. DiffBubble：内嵌 Monaco Editor，实现代码 Diff 行内高亮、折叠功能
-
-5. PreviewSidebar：右侧可滑出 iframe，展示部署后的预览页面
-
-6. DAGProgressBar：顶部进度条，展示任务执行状态，点击可查看节点详情
-
-7. ModelConfigDrawer：模型配置弹窗，支持 API Key 密码输入、服务商选择，不回显敏感信息
+|组件|文件|功能说明|
+|---|---|---|
+|AgentHubIM|pages/index.tsx|主聊天页面，WebSocket 实时通信，@Agent 指令，消息渲染，DAG 进度条|
+|DiffBubble|components/DiffBubble.tsx|内嵌 Monaco Editor，实现代码/ Diff 预览，占满宽度|
+|GeneratedFilesPanel|components/GeneratedFilesPanel.tsx|生成文件面板，文件切换、代码复制、Git Diff 展示|
+|FidelityScore|components/FidelityScore.tsx|保真度展示，彩色进度条 + 达标/不足标签|
+|PreviewSidebar|components/PreviewSidebar.tsx|右侧预览面板，iframe 加载预览 URL|
+|GitOperation|components/GitOperation.tsx|Git 操作，创建分支、提交代码|
+|Admin|pages/admin.tsx|管理后台，模型配置、角色绑定、审计日志|
 
 ### 3\.2 消息路由与适配层（后端代码，与前端联动）
 
@@ -711,104 +720,45 @@ class GitService:
         return diff.decode("utf-8")
 ```
 
-#### 3\.4\.2 前端 Git 操作组件（可直接嵌入聊天页）
+#### 3.4.2 前端 Git 操作组件（可直接嵌入聊天页）
 
-```JavaScript
-// components/GitOperation.jsx
-import { useState } from 'react';
-import { Button, Space, message } from 'antd';
-import { GitBranchOutlined, GitCommitOutlined, GitRollbackOutlined } from '@ant-design/icons';
+```TypeScript
+// components/GitOperation.tsx
+import { useState, type JSX } from 'react';
 
-export default function GitOperation({ sessionId }) {
-  const [branchName, setBranchName] = useState('');
-  const [loading, setLoading] = useState(false);
+interface GitOperationProps { sessionId: string; }
 
-  const createBranch = async () => {
-    if (!branchName.trim()) {
-      message.warning('请输入分支名称');
-      return;
-    }
+export default function GitOperation({ sessionId }: GitOperationProps): JSX.Element {
+  const [branchName, setBranchName] = useState<string>('feature/agenthub-demo');
+  const [loading, setLoading] = useState<boolean>(false);
+  const [notice, setNotice] = useState<string>('');
+
+  async function post(url: string, body: Record<string, unknown>): Promise<void> {
     setLoading(true);
+    setNotice('');
     try {
-      const res = await fetch(`/api/admin/git/branch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ branchName: branchName, sessionId })
-      });
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
-      if (res.ok) {
-        message.success('分支创建成功');
-        setBranchName('');
-      } else {
-        message.error(data.detail || '创建失败');
-      }
-    } catch (err) {
-      message.error('网络错误');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const commitCode = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/admin/git/commit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: 'Agent 自动提交' })
-      });
-      if (res.ok) {
-        message.success('代码提交成功');
-      } else {
-        message.error('提交失败');
-      }
-    } catch (err) {
-      message.error('网络错误');
-    } finally {
-      setLoading(false);
-    }
-  };
+      setNotice(res.ok ? (data.branch ? `分支 ${data.branch} 创建成功` : `提交成功：${data.commit_hash?.slice(0, 8)}`) : data.detail || '操作失败');
+    } catch { setNotice('网络错误，请确认后端已启动'); }
+    finally { setLoading(false); }
+  }
 
   return (
-    <div className="mt-4 p-2 border rounded">
-      <h4 className="font-bold">Git 操作</h4>
-      <Space className="mt-2">
-        <input
-          placeholder="分支名称"
-          value={branchName}
-          onChange={(e) => setBranchName(e.target.value)}
-          style={{ width: 200 }}
-        />
-        <Button 
-          type="primary" 
-          icon={<GitBranchOutlined />} 
-          onClick={createBranch}
-          loading={loading}
-        >
-          创建分支
-        </Button>
-        <Button 
-          type="default" 
-          icon={<GitCommitOutlined />} 
-          onClick={commitCode}
-          loading={loading}
-        >
-          提交代码
-        </Button>
-        <Button 
-          type="default" 
-          icon={<GitRollbackOutlined />}
-          loading={loading}
-        >
-          回滚
-        </Button>
-      </Space>
+    <div className="card p-5">
+      <div className="mb-4 text-h3 text-warm-800">Git 操作</div>
+      <div className="flex flex-wrap gap-2">
+        <input value={branchName} onChange={(e) => setBranchName(e.target.value)} className="input-field w-60" />
+        <button disabled={loading} className="btn-secondary disabled:opacity-50" onClick={() => post('/api/git/branch', { branchName, sessionId })}>创建分支</button>
+        <button disabled={loading} className="btn-primary disabled:opacity-50" onClick={() => post('/api/git/commit', { sessionId, message: 'Agent 自动提交' })}>提交代码</button>
+      </div>
+      {notice && <div className="mt-3 text-caption text-warm-500">{notice}</div>}
     </div>
   );
 }
 ```
 
-### 3\.5 六大优化子系统（前端\+后端完整实现）
+### 3.5 六大优化子系统（前端+后端完整实现）
 
 #### 3\.5\.1 蒸馏保真度管理器（FidelityManager，前后端联动）
 
@@ -870,28 +820,23 @@ class FidelityManager:
 
 #### 3\.5\.2 前端保真度展示组件
 
-```JavaScript
-// components/FidelityScore.jsx
-import { Progress, Tag } from 'antd';
+```TypeScript
+// components/FidelityScore.tsx
+import type { JSX } from 'react';
 
-export default function FidelityScore({ score }) {
-  const getColor = () => {
-    if (score >= 0.8) return 'green';
-    if (score >= 0.7) return 'orange';
-    return 'red';
-  };
+interface FidelityScoreProps { score?: number; }
 
+export default function FidelityScore({ score = 0.95 }: FidelityScoreProps): JSX.Element {
+  const percent = Math.round(score * 100);
+  const color = score >= 0.8 ? 'bg-success-500' : score >= 0.7 ? 'bg-warning-500' : 'bg-danger-500';
+  const label = score >= 0.7 ? '保真度达标' : '保真度不足';
   return (
-    <div className="flex items-center gap-2 mt-1">
-      <Tag color={getColor()}>{score >= 0.7 ? '保真度达标' : '保真度不足'}</Tag>
-      <Progress 
-        percent={score * 100} 
-        size="small" 
-        status={score >= 0.7 ? 'normal' : 'exception'} 
-        showInfo={false}
-        style={{ width: 100 }}
-      />
-      <span className="text-sm">{score.toFixed(2)}</span>
+    <div className="mt-2 flex items-center gap-2 text-caption text-warm-500">
+      <span className="tag tag-warm">{label}</span>
+      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-warm-100">
+        <div className={`h-full ${color}`} style={{ width: `${percent}%` }} />
+      </div>
+      <span className="text-warm-400">{Number(score).toFixed(2)}</span>
     </div>
   );
 }
@@ -1112,7 +1057,7 @@ CREATE TABLE model_configs (
 
 ### 9\.2 技术选型依据（AI生成代码时需遵循）
 
-1. 前端：React/Next\.js 优先，组件化开发，适配WebSocket实时通信，样式用Tailwind CSS\+Ant Design
+1. 前端：React/Next.js + TypeScript，组件化开发，适配 WebSocket 实时通信，样式用 Tailwind CSS + 自定义组件类
 
 2. 后端：FastAPI 异步框架，支持WebSocket，适配多模型适配器，代码符合PEP8规范
 
@@ -1124,11 +1069,9 @@ CREATE TABLE model_configs (
 
 ### 9\.3 前端组件复用说明（AI生成代码时需复用）
 
-- 公共组件：MessageInput（带@自动补全）、DiffBubble（内嵌Monaco Editor）、FidelityScore（保真度展示）
-
-- 布局组件：ChatWindow（主容器）、SessionList（左侧会话列表）、PreviewSidebar（右侧预览）
-
-- 功能组件：GitOperation（Git操作）、ModelConfigDrawer（模型配置弹窗）、DAGProgress（进度条）
+- 公共组件：DiffBubble（内嵌 Monaco Editor）、FidelityScore（保真度展示）、GeneratedFilesPanel（文件面板）
+- 布局组件：AgentHubIM（主容器）、PreviewSidebar（右侧预览）
+- 功能组件：GitOperation（Git 操作）、Admin（管理后台）
 
 ---
 

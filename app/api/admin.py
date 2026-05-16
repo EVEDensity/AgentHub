@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.init_db import now
 from app.db.session import dict_rows, get_connection, one_row
-from app.schemas.common import AuditConfirmRequest, ModelConfigRequest, RoleBindRequest
+from app.schemas.common import AgentRouteActiveRequest, AgentRouteRequest, AuditConfirmRequest, ModelConfigRequest, RoleBindRequest
+from app.services.agent_route_service import agent_route_service
 from app.services.auth_service import get_current_user, require_admin, write_audit
 from app.services.secret_service import decrypt_secret, encrypt_secret
 
@@ -112,6 +113,45 @@ async def role_bind(data: RoleBindRequest, user: dict = Depends(get_current_user
 async def list_role_bindings(user: dict = Depends(get_current_user)) -> list[dict]:
     require_admin(user)
     return dict_rows("SELECT role,model_config_id AS modelConfigId,prompt,updated_at AS updatedAt FROM role_bindings ORDER BY role")
+
+
+@router.get("/agent-routes")
+async def list_agent_routes(user: dict = Depends(get_current_user)) -> list[dict]:
+    require_admin(user)
+    return agent_route_service.list_routes()
+
+
+@router.post("/agent-routes")
+async def create_agent_route(data: AgentRouteRequest, user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    try:
+        route = agent_route_service.create_route(data.name, data.description, data.triggerKeywords, data.nodes, data.isDefault)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    audit_id = write_audit(user["id"], "admin", "agent_route_create", "L2", "approve", {"routeId": route["id"], "name": route["name"]})
+    return {"status": "success", "route": route, "auditId": audit_id}
+
+
+@router.post("/agent-routes/{route_id}/default")
+async def set_default_agent_route(route_id: int, user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    try:
+        route = agent_route_service.set_default(route_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    audit_id = write_audit(user["id"], "admin", "agent_route_set_default", "L2", "approve", {"routeId": route_id})
+    return {"status": "success", "route": route, "auditId": audit_id}
+
+
+@router.patch("/agent-routes/{route_id}/active")
+async def set_agent_route_active(route_id: int, data: AgentRouteActiveRequest, user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    try:
+        route = agent_route_service.set_active(route_id, data.active)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    audit_id = write_audit(user["id"], "admin", "agent_route_active", "L1", "approve", {"routeId": route_id, "active": data.active})
+    return {"status": "success", "route": route, "auditId": audit_id}
 
 
 @router.get("/users")
