@@ -317,6 +317,7 @@ export default function AgentHubIM(): JSX.Element {
           <div className="mt-1 text-caption text-warm-500">{user?.name} / {user?.role}</div>
         </div>
         <a className="btn-secondary block w-full text-center" href="/admin">管理控制台</a>
+        <a className="btn-secondary mt-2 block w-full text-center" href="/canvas">Agent 画布</a>
         <button className="btn-ghost mt-2 w-full" onClick={logout}>退出登录</button>
         {notice && <div className="mt-3 rounded-lg bg-warning-50 p-2 text-xs text-warning-600">{notice}</div>}
         <div className="mb-3 mt-4 flex items-center justify-between border-b border-warm-150 pb-3">

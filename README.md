@@ -37,6 +37,9 @@ npm run dev
 - FastAPI 后端
 - WebSocket `/ws/session-1`
 - IM 聊天页面
+- Dify 风格 Agent 低代码画布 `/canvas`
+- 画布拖拽、缩放、选中、删除、复制、图层管理、撤销重做、保存加载、PNG 导出
+- 画布 API：`/api/canvas/{id}`、`/api/canvas/save`、`/api/canvas/export`
 - @Agent 路由：Orchestrator、Architect、CodeGen、Review、Test、Deploy
 - DAG 任务进度条
 - 符号消息与保真度展示
