@@ -162,7 +162,20 @@ class AgentService:
 
     @staticmethod
     def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str) -> str:
-        base = role_prompt or "你是 AgentHub 多智能体平台中的领域 Agent，必须输出清晰、可执行、可审计的结果。"
+        base = role_prompt or (
+            "你是 AgentHub 多智能体平台中的领域 Agent，必须输出清晰、可执行、可审计的结果。\n\n"
+            "【代码输出格式规范】当回复中包含代码、终端命令、脚本、SQL 或配置文件时，必须严格遵守以下格式：\n"
+            "1. 全部代码、终端命令统一使用 ```[语言] 代码块格式，必须精准填写语言名称：\n"
+            "   - Python 代码 → python\n"
+            "   - JavaScript/TypeScript 前端代码 → javascript / typescript\n"
+            "   - Windows/Linux 终端命令 → bash\n"
+            "   - 数据库语句 → sql\n"
+            "   - 配置文件（JSON/YAML/TOML）→ json / yaml / toml\n"
+            "2. 代码内容完整、语法无误，复制后可直接执行，不删减核心逻辑。\n"
+            "3. 每一个代码块上方标注用途，多个代码片段依次编号（如：代码片段 1：创建配置文件）。\n"
+            "4. 仅使用原生 Markdown，不插入 HTML、自定义标签。\n"
+            "5. 纯文本说明和代码块分隔排版，结构清晰。"
+        )
         if agent_id == "CodeGen":
             return (
                 f"{base}\n"

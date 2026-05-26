@@ -9,6 +9,23 @@ export interface Message {
   symbolic?: SymbolicData & {
     generated?: GeneratedData;
   };
+  messageId?: string;
+  isStreaming?: boolean;
+}
+
+export interface StreamChunk {
+  event: 'message_chunk';
+  messageId: string;
+  sessionId: string;
+  content: string;
+  isFinal: boolean;
+}
+
+export interface StreamInterrupted {
+  event: 'stream_interrupted';
+  sessionId: string;
+  reason: string;
+  timestamp: string;
 }
 
 export interface SymbolicData {

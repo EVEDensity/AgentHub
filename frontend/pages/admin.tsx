@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type JSX } from 'react';
 import type { Agent, AgentRoute, AgentRouteNode, AuditLog, User } from '../types';
 import TokenUsageHeatmap from '../components/heatmap/TokenUsageHeatmap';
-import AgentFlowCanvas from '../components/flow/AgentFlowCanvas';
+import AgentCanvas from '../components/flow/AgentCanvas';
 
 const SETTINGS_MENU = [
   '服务商',
@@ -406,7 +406,8 @@ export default function AdminPage(): JSX.Element {
           }
         : undefined;
       return (
-        <AgentFlowCanvas
+        <AgentCanvas
+          embedded
           initialData={initialData}
           agents={agents}
           onSave={saveFlow}

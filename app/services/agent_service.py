@@ -5,6 +5,7 @@ import random
 import re
 import time
 import uuid
+from collections.abc import AsyncGenerator
 
 from app.db.init_db import now
 from app.db.session import dict_rows, get_connection, one_row
@@ -130,10 +131,14 @@ async def call_agent(session_id: str, content: str, user_id: str) -> dict:
         result = "模型调用失败，已降级为本地响应：" + " | ".join(errors[:2])
 
     content_out = normalize_agent_output(agent["agent_id"], result, content)
-    prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(content, content_out)
+    usage = adapter.last_usage
+    if usage and usage.get("total_tokens", 0) > 0:
+        prompt_tokens, completion_tokens, total_tokens = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
+    else:
+        prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(content, content_out)
     generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
     public = {**public_symbolic(symbolic), "generated": generated, "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")}}
-    write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})
+    AuthService.write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})
     display_content = "CodeGen 已生成结构化文件，请在下方生成文件面板中检查内容、查看 Diff，并确认提交。" if generated else content_out
     message = {
         "event": "message",
@@ -159,8 +164,60 @@ async def call_agent(session_id: str, content: str, user_id: str) -> dict:
     return message
 
 
+async def stream_agent_response(session_id: str, content: str, user_id: str, token=None) -> AsyncGenerator[str, None] | None:
+    agent = resolve_agent(content)
+    models = choose_models(candidate_models_for_role(agent["agent_id"]))
+    if not models:
+        return None
+
+    prompt = build_prompt(agent["agent_id"], agent["domain"], content, generate_symbolic_message(content, "text", session_id), models[0].get("prompt", "") if models else "")
+
+    selected = models[0]
+    adapter = adapter_manager.get_adapter(selected.get("provider", "mock"))
+
+    async def stream():
+        started = time.perf_counter()
+        full = ""
+        try:
+            async for chunk in adapter.stream_prompt(prompt, selected.get("model_name", "mock"), decrypt_secret(selected.get("api_key", "")), selected.get("base_url", "")):
+                if token and token.cancelled:
+                    break
+                full += chunk
+                if chunk:
+                    yield chunk
+            _update_runtime(selected, True, (time.perf_counter() - started) * 1000)
+        except Exception:
+            _update_runtime(selected, False, (time.perf_counter() - started) * 1000)
+            fallback = "模型调用失败，请稍后重试。"
+            yield fallback
+            full += fallback
+
+        content_out = normalize_agent_output(agent["agent_id"], full, content)
+        usage = adapter.last_usage
+        if usage and usage.get("total_tokens", 0) > 0:
+            pt, ct, tt = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
+        else:
+            pt, ct, tt = max(1, len(content) // 4), max(1, len(content_out) // 4), max(1, len(content) // 4) + max(1, len(content_out) // 4)
+        save_message(session_id, agent["agent_id"], content_out, "text", 0.95, None, pt, ct, tt)
+
+    return stream()
+
+
 def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str) -> str:
-    base = role_prompt or "你是 AgentHub 多智能体平台中的领域 Agent，必须输出清晰、可执行、可审计的结果。"
+    base = role_prompt or (
+        "你是 AgentHub 多智能体平台中的领域 Agent，必须输出清晰、可执行、可审计的结果。\n\n"
+        "【代码输出格式规范】当回复中包含代码、终端命令、脚本、SQL 或配置文件时，必须严格遵守以下格式：\n"
+        "1. 全部代码、终端命令统一使用 ```[语言] 代码块格式，必须精准填写语言名称：\n"
+        "   - Python 代码 → python\n"
+        "   - JavaScript/TypeScript 前端代码 → javascript / typescript\n"
+        "   - Windows/Linux 终端命令 → bash\n"
+        "   - 数据库语句 → sql\n"
+        "   - 配置文件（JSON/YAML/TOML）→ json / yaml / toml\n"
+        "2. 代码内容完整、语法无误，复制后可直接执行，不删减核心逻辑。\n"
+        "3. 每一个代码块上方标注用途，多个代码片段依次编号（如：代码片段 1：创建配置文件）。\n"
+        "4. 仅使用原生 Markdown，不插入 HTML、自定义标签。\n"
+        "5. 纯文本说明和代码块分隔排版，结构清晰。"
+    )
     if agent_id == "CodeGen":
         return (
             f"{base}\n"
@@ -179,6 +236,20 @@ def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, 
     return prompt_tokens, completion_tokens, total_tokens
 
 
+def _remove_repeated_text(text: str) -> str:
+    if not text:
+        return text
+    lines = text.split('\n')
+    unique_lines = []
+    prev_line = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped and stripped != prev_line:
+            unique_lines.append(line)
+            prev_line = stripped
+    return '\n'.join(unique_lines)
+
+
 def normalize_agent_output(agent_id: str, model_output: str, original: str) -> str:
     if agent_id == "CodeGen":
         if model_output and not model_output.startswith("本地 Mock 模型响应") and not model_output.startswith("模型调用失败"):
@@ -195,7 +266,7 @@ def normalize_agent_output(agent_id: str, model_output: str, original: str) -> s
             ensure_ascii=False,
         )
     if model_output and not model_output.startswith("本地 Mock 模型响应"):
-        return model_output
+        return _remove_repeated_text(model_output)
     if agent_id == "Review":
         return "Review 完成：结构符合 FastAPI + Next.js 分层方案，建议生产环境收紧 CORS、加入鉴权、限流和审计。"
     if agent_id == "Test":

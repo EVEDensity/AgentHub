@@ -237,7 +237,7 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
             WHERE created_at >= ? AND created_at <= ?
             ORDER BY created_at ASC
             """,
-            (f"{start_day.isoformat()} 00:00:00", f"{end_day.isoformat()} 23:59:59"),
+            (f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59"),
         )
     else:
         rows = dict_rows(
@@ -247,7 +247,7 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
             WHERE created_at >= ? AND created_at <= ?
             ORDER BY created_at ASC
             """,
-            (f"{start_day.isoformat()} 00:00:00", f"{end_day.isoformat()} 23:59:59"),
+            (f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59"),
         )
 
     day_map: dict[str, dict] = {}

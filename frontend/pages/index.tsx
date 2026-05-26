@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import DiffBubble from '../components/chat/DiffBubble';
+import MarkdownRenderer from '../components/chat/MarkdownRenderer';
 import GeneratedFilesPanel from '../components/git/GeneratedFilesPanel';
 import FidelityScore from '../components/chat/FidelityScore';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
-import type { Agent, GeneratedData, Message, PendingMessage, User } from '../types';
+import type { Agent, GeneratedData, Message, PendingMessage, StreamChunk, User } from '../types';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
@@ -37,7 +38,7 @@ export default function AgentHubIM(): JSX.Element {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionId, setSessionId] = useState<string>('session-1');
   const [sessionQuery, setSessionQuery] = useState<string>('');
-  const [input, setInput] = useState<string>('@CodeGen 生成一个 FastAPI health 路由文件，保存为 health_router.py');
+  const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
   const [taskOpen, setTaskOpen] = useState<boolean>(false);
   const [previewOpen, setPreviewOpen] = useState<boolean>(false);
@@ -48,6 +49,7 @@ export default function AgentHubIM(): JSX.Element {
   const [generated, setGenerated] = useState<GeneratedData | null>(null);
   const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
+  const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,14 +105,14 @@ export default function AgentHubIM(): JSX.Element {
     });
     const data = await res.json();
     if (!res.ok) {
-      setNotice(data.detail || '认证失败');
+      setNotice(data.detail || 'Auth failed');
       return;
     }
     localStorage.setItem('agenthub_token', data.accessToken);
     localStorage.setItem('agenthub_user', JSON.stringify(data.user));
     setToken(data.accessToken as string);
     setUser(data.user as User);
-    setNotice('登录成功');
+    setNotice('Login success');
   }
 
   function logout(): void {
@@ -127,7 +129,7 @@ export default function AgentHubIM(): JSX.Element {
     wsRef.current = ws;
     ws.onopen = () => {
       setConnected(true);
-      setNotice('WebSocket 已连接');
+      setNotice('WebSocket connected');
       const queued = [...retryRef.current];
       retryRef.current = [];
       setPending([]);
@@ -135,15 +137,75 @@ export default function AgentHubIM(): JSX.Element {
     };
     ws.onclose = () => {
       setConnected(false);
+      setIsStreaming(false);
       reconnectRef.current = setTimeout(connectWs, 1500);
     };
     ws.onerror = () => setConnected(false);
     ws.onmessage = (event: MessageEvent<string>) => {
-      const data = JSON.parse(event.data) as Message & { total?: number; completed?: number; nodes?: DagState['nodes']; event?: string };
-      if (data.event === 'task_update') setDag({ total: data.total || 0, completed: data.completed || 0, nodes: data.nodes || [] });
-      if (data.event === 'message') {
-        setMessages((prev) => [...prev, data]);
-        if (data.symbolic?.generated) setGenerated(data.symbolic.generated as GeneratedData);
+      const raw: Record<string, unknown> = JSON.parse(event.data);
+      const evt = raw.event as string | undefined;
+
+      if (evt === 'task_update') {
+        setDag({ total: raw.total as number || 0, completed: raw.completed as number || 0, nodes: raw.nodes as DagState['nodes'] || [] });
+      }
+
+      if (evt === 'message_chunk') {
+        const chunk = raw as unknown as StreamChunk;
+        setIsStreaming(!chunk.isFinal);
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.messageId === chunk.messageId);
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = {
+              ...updated[idx],
+              content: updated[idx].content + chunk.content,
+              isStreaming: !chunk.isFinal,
+            };
+            return updated;
+          }
+          const newMsg: Message = {
+            event: 'message',
+            sessionId: chunk.sessionId,
+            sender: 'agent',
+            content: chunk.content,
+            type: 'text',
+            timestamp: new Date().toISOString(),
+            messageId: chunk.messageId,
+            isStreaming: !chunk.isFinal,
+          };
+          return [...prev, newMsg];
+        });
+      }
+
+      if (evt === 'stream_interrupted') {
+        setIsStreaming(false);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const lastIdx = updated.length - 1;
+          if (lastIdx >= 0 && updated[lastIdx].isStreaming) {
+            updated[lastIdx] = {
+              ...updated[lastIdx],
+              isStreaming: false,
+              content: updated[lastIdx].content + '\n\n[Interrupted, processing new message...]',
+            };
+          }
+          return updated;
+        });
+      }
+
+      if (evt === 'message') {
+        setIsStreaming(false);
+        const msg = raw as unknown as Message;
+        setMessages((prev) => {
+          const lastIdx = prev.length - 1;
+          if (lastIdx >= 0 && prev[lastIdx].isStreaming && prev[lastIdx].messageId) {
+            const updated = [...prev];
+            updated[lastIdx] = { ...msg, messageId: undefined, isStreaming: false };
+            return updated;
+          }
+          return [...prev, { ...msg, messageId: undefined, isStreaming: false }];
+        });
+        if (msg.symbolic?.generated) setGenerated(msg.symbolic.generated as GeneratedData);
       }
     };
   }
@@ -169,7 +231,7 @@ export default function AgentHubIM(): JSX.Element {
     });
     const data = await res.json();
     if (!res.ok) {
-      setNotice(data.detail || '新建会话失败');
+      setNotice(data.detail || 'Create session failed');
       return;
     }
     const created = data as ChatSession;
@@ -184,12 +246,12 @@ export default function AgentHubIM(): JSX.Element {
   }
 
   async function deleteSession(id: string): Promise<void> {
-    const ok = window.confirm('确认删除该会话？');
+    const ok = window.confirm('Delete this session?');
     if (!ok) return;
     const res = await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE', headers: authHeaders() });
     const data = await res.json();
     if (!res.ok) {
-      setNotice(data.detail || '删除失败');
+      setNotice(data.detail || 'Delete failed');
       return;
     }
     setSessions((prev) => prev.filter((s) => s.id !== id));
@@ -210,13 +272,16 @@ export default function AgentHubIM(): JSX.Element {
       timestamp: new Date().toISOString(),
       type: 'text',
     };
+    if (isStreaming) {
+      setIsStreaming(false);
+    }
     setMessages((prev) => [...prev, { ...msg, event: 'message' }]);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(msg));
     } else {
       retryRef.current.push(msg);
       setPending((prev) => [...prev, msg]);
-      setNotice('消息已进入失败重试队列，连接恢复后自动发送');
+      setNotice('Message queued for retry');
     }
     setInput('');
   }
@@ -227,7 +292,7 @@ export default function AgentHubIM(): JSX.Element {
       setPending((prev) => prev.filter((item) => item.timestamp !== msg.timestamp));
     } else {
       retryRef.current.push(msg);
-      setNotice('WebSocket 未连接，继续等待自动重连');
+      setNotice('WebSocket not connected, waiting for reconnect');
     }
   }
 
@@ -245,24 +310,27 @@ export default function AgentHubIM(): JSX.Element {
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         sessionId,
-        message: '确认提交 CodeGen 生成文件',
+        message: 'Confirm commit of CodeGen generated files',
         paths: generated.files,
       }),
     });
     const data = await res.json();
-    setNotice(res.ok ? `已提交：${data.commit_hash || data.message}` : data.detail || '提交失败');
+    setNotice(res.ok ? `Committed: ${data.commit_hash || data.message}` : data.detail || 'Commit failed');
   }
 
   function renderMessage(msg: Message, index: number): JSX.Element {
     const isUser = msg.sender === user?.name || msg.sender === 'user';
     const isCode = msg.type === 'code' || msg.type === 'diff';
     const badge = msg.type || 'text';
+    const showCursor = msg.isStreaming;
+
     if (isCode) {
       return (
         <div key={`${msg.timestamp}-${index}`} className="-mx-6 mb-4 px-6">
           <div className="mb-2 flex items-center gap-2 text-xs text-warm-500">
             <span className="font-semibold text-warm-700">{msg.sender || 'agent'}</span>
             <span className="tag tag-warm">{badge}</span>
+            {showCursor && <span className="inline-block h-4 w-0.5 animate-pulse bg-primary-500" />}
           </div>
           <DiffBubble value={msg.content} />
           {msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}
@@ -275,8 +343,19 @@ export default function AgentHubIM(): JSX.Element {
           <div className="mb-1 flex items-center gap-2 text-xs opacity-80">
             <span className="font-semibold">{msg.sender || 'agent'}</span>
             <span className={`rounded px-2 py-0.5 ${isUser ? 'bg-white/20 text-white' : 'bg-warm-100 text-warm-600'}`}>{badge}</span>
+            {showCursor && <span className="inline-block h-4 w-0.5 animate-pulse bg-primary-500" />}
           </div>
-          <div className="whitespace-pre-wrap leading-7">{msg.content}</div>
+          {isUser ? (
+            <div className="whitespace-pre-wrap leading-7">
+              {msg.content}
+              {showCursor && <span className="ml-0.5 inline-block h-5 w-0.5 animate-pulse bg-primary-500 align-text-bottom" />}
+            </div>
+          ) : (
+            <div className="leading-7">
+              <MarkdownRenderer content={msg.content} />
+              {showCursor && <span className="ml-0.5 inline-block h-5 w-0.5 animate-pulse bg-primary-500 align-text-bottom" />}
+            </div>
+          )}
           {!isUser && msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}
         </div>
       </div>
@@ -287,20 +366,20 @@ export default function AgentHubIM(): JSX.Element {
     return (
       <div className="flex min-h-screen items-center justify-center bg-warm-50">
         <form onSubmit={submitAuth} className="card w-96 p-8">
-          <h1 className="text-h1 text-warm-800">AgentHub {authMode === 'login' ? '登录' : '注册'}</h1>
-          <p className="mt-2 text-caption text-warm-500">默认管理员：admin / admin123</p>
+          <h1 className="text-h1 text-warm-800">AgentHub {authMode === 'login' ? 'Login' : 'Register'}</h1>
+          <p className="mt-2 text-caption text-warm-500">Default admin: admin / admin123</p>
           {notice && <div className="mt-4 rounded-lg bg-warning-50 p-3 text-sm text-warning-600">{notice}</div>}
           <label className="mt-6 block text-h4 text-warm-700">
-            用户名
+            Username
             <input className="input-field mt-2" value={authForm.name} onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} />
           </label>
           <label className="mt-5 block text-h4 text-warm-700">
-            密码
+            Password
             <input type="password" className="input-field mt-2" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />
           </label>
-          <button className="btn-primary mt-6 w-full">{authMode === 'login' ? '登录' : '注册'}</button>
+          <button className="btn-primary mt-6 w-full">{authMode === 'login' ? 'Login' : 'Register'}</button>
           <button type="button" className="btn-ghost mt-3 w-full text-primary-500" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
-            {authMode === 'login' ? '没有账号？注册' : '已有账号？登录'}
+            {authMode === 'login' ? 'No account? Register' : 'Already have an account? Login'}
           </button>
         </form>
       </div>
@@ -316,26 +395,26 @@ export default function AgentHubIM(): JSX.Element {
           <div className="text-h2 text-warm-800">AgentHub</div>
           <div className="mt-1 text-caption text-warm-500">{user?.name} / {user?.role}</div>
         </div>
-        <a className="btn-secondary block w-full text-center" href="/admin">管理控制台</a>
-        <a className="btn-secondary mt-2 block w-full text-center" href="/canvas">Agent 画布</a>
+        <a className="btn-secondary block w-full text-center" href="/admin">管理面板</a>
+        <a className="btn-secondary mt-2 block w-full text-center" href="/canvas">智能体画布</a>
         <button className="btn-ghost mt-2 w-full" onClick={logout}>退出登录</button>
         {notice && <div className="mt-3 rounded-lg bg-warning-50 p-2 text-xs text-warning-600">{notice}</div>}
         <div className="mb-3 mt-4 flex items-center justify-between border-b border-warm-150 pb-3">
-          <button className="btn-ghost flex items-center gap-2" onClick={createSession}><span className="text-lg">＋</span><span>新建会话</span></button>
+          <button className="btn-ghost flex items-center gap-2" onClick={createSession}><span className="text-lg">+</span><span>New Session</span></button>
         </div>
         <div className="mb-3 flex items-center gap-2 rounded-xl border border-warm-150 bg-warm-50 px-3 py-2">
-          <span className="text-warm-400">⌕</span>
-          <input className="w-full bg-transparent text-sm outline-none" placeholder="搜索会话..." value={sessionQuery} onChange={(e) => setSessionQuery(e.target.value)} />
+          <span className="text-warm-400">Search</span>
+          <input className="w-full bg-transparent text-sm outline-none" placeholder="Search sessions..." value={sessionQuery} onChange={(e) => setSessionQuery(e.target.value)} />
         </div>
-        <div className="mb-2 text-xs text-warm-500">最近 30 天</div>
+        <div className="mb-2 text-xs text-warm-500">Recent 30 days</div>
         <div className="flex-1 overflow-hidden">
           <div className="h-full space-y-1 overflow-auto pr-1">
           {sessions.filter((s) => !sessionQuery.trim() || s.name.toLowerCase().includes(sessionQuery.toLowerCase())).map((s) => (
             <div key={s.id} className={`group flex items-center gap-2 rounded-lg px-2 py-1 ${s.id === sessionId ? 'bg-warm-100' : 'hover:bg-warm-50'}`}>
               <button className={`flex-1 rounded-lg px-2 py-2 text-left text-sm ${s.id === sessionId ? 'text-warm-800' : 'text-warm-600'}`} onClick={() => selectSession(s.id)}>
-                <div className="truncate">• {s.name || 'Untitled Session'}</div>
+                <div className="truncate">{s.name || 'Untitled'}</div>
               </button>
-              <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-danger-500 group-hover:visible" title="删除会话" onClick={() => deleteSession(s.id)}>
+              <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-danger-500 group-hover:visible" title="Delete session" onClick={() => deleteSession(s.id)}>
                 <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M3 6h18" />
                   <path d="M8 6V4h8v2" />
@@ -346,22 +425,23 @@ export default function AgentHubIM(): JSX.Element {
               </button>
             </div>
           ))}
-          {!sessions.length && <div className="rounded-lg bg-warm-50 px-3 py-2 text-sm text-warm-500">暂无会话，点击“新建会话”</div>}
+          {!sessions.length && <div className="rounded-lg bg-warm-50 px-3 py-2 text-sm text-warm-500">No sessions, click &quot;New Session&quot;</div>}
           </div>
         </div>
-        <a className="mt-3 block border-t border-warm-150 pt-3 text-sm text-warm-600 hover:text-primary-500" href="/admin">⚙ 设置</a>
       </aside>
 
       <main className="flex flex-1 flex-col">
         <header className="border-b border-warm-150 bg-white px-6 py-4">
           <div className="flex items-center justify-between gap-6">
             <div>
-              <div className="text-h3 text-warm-800">{sessions.find((s) => s.id === sessionId)?.name || '新建会话'}</div>
-              <div className="text-caption text-warm-500 mt-0.5">WebSocket：{connected ? '已连接' : '重连中'}</div>
+              <div className="text-h3 text-warm-800">{sessions.find((s) => s.id === sessionId)?.name || 'New Session'}</div>
+              <div className="text-caption text-warm-500 mt-0.5">
+                WebSocket: {connected ? (isStreaming ? 'AI streaming...' : 'Connected') : 'Reconnecting'}
+              </div>
             </div>
             <div className="min-w-[420px]">
               <div className="mb-1.5 flex justify-between text-caption text-warm-500">
-                <button onClick={() => setTaskOpen(true)} className="text-primary-500 hover:text-primary-600">DAG 进度 / 查看任务详情</button>
+                <button onClick={() => setTaskOpen(true)} className="text-primary-500 hover:text-primary-600">DAG Progress / View Tasks</button>
                 <span>{percent}%</span>
               </div>
               <div className="h-1.5 overflow-hidden rounded-full bg-warm-100">
@@ -381,8 +461,8 @@ export default function AgentHubIM(): JSX.Element {
           {mentionOpen && (
             <div className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
               <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
-                <span>@ 选择单独 Agent</span>
-                <button className="text-primary-500" onClick={insertAllMentions}>@全部 Agent</button>
+                <span>@ Select Agent</span>
+                <button className="text-primary-500" onClick={insertAllMentions}>@All Agents</button>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {agents.map((agent) => (
@@ -402,11 +482,11 @@ export default function AgentHubIM(): JSX.Element {
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={3}
               className="input-field flex-1 resize-none"
-              placeholder="输入消息，支持 @Agent 指令..."
+              placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : 'Type message, supports @Agent directives...'}
             />
             <div className="flex flex-col gap-2">
-              <button className="btn-primary" onClick={() => send()}>发送</button>
-              <button className="btn-secondary" onClick={openPreview}>预览</button>
+              <button className="btn-primary" onClick={() => send()}>Send</button>
+              <button className="btn-secondary" onClick={openPreview}>Preview</button>
             </div>
           </div>
         </footer>
@@ -416,8 +496,8 @@ export default function AgentHubIM(): JSX.Element {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-warm-900/20">
           <div className="w-[520px] rounded-xl bg-white p-6 shadow-modal">
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-h3 text-warm-800">DAG 任务详情</h3>
-              <button className="btn-ghost p-1 text-warm-500" onClick={() => setTaskOpen(false)}>✕</button>
+              <h3 className="text-h3 text-warm-800">DAG Task Details</h3>
+              <button className="btn-ghost p-1 text-warm-500" onClick={() => setTaskOpen(false)}>X</button>
             </div>
             <div className="space-y-3">
               {dag.nodes.map((n, i) => (
@@ -427,9 +507,9 @@ export default function AgentHubIM(): JSX.Element {
                     n.status === 'running' ? 'bg-primary-50 text-primary-500' :
                     'bg-warm-100 text-warm-500'
                   }`}>
-                    {n.status === 'completed' ? '✓' : n.status === 'running' ? '●' : i + 1}
+                    {n.status === 'completed' ? 'OK' : n.status === 'running' ? 'R' : i + 1}
                   </span>
-                  <span className="text-body flex-1 text-warm-700">{n.agent || n.name || `任务 ${i + 1}`}</span>
+                  <span className="text-body flex-1 text-warm-700">{n.agent || n.name || `Task ${i + 1}`}</span>
                   <span className="tag tag-warm">{n.status || 'pending'}</span>
                 </div>
               ))}

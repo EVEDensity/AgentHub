@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
@@ -12,13 +14,25 @@ class LLMAdapterError(RuntimeError):
 
 
 class BaseAdapter:
+    def __init__(self) -> None:
+        self.last_usage: dict[str, int] = {}
+
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> str:
         raise NotImplementedError
+
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+        result = await self.execute_prompt(prompt, model, api_key, base_url)
+        chunk_size = max(1, len(result) // 20)
+        for i in range(0, len(result), chunk_size):
+            yield result[i:i + chunk_size]
+        yield ""
 
 
 class MockAdapter(BaseAdapter):
     async def execute_prompt(self, prompt: str, model: str = "mock", api_key: str = "", base_url: str = "") -> str:
-        return f"本地 Mock 模型响应：{prompt[:500]}"
+        result = f"本地 Mock 模型响应：{prompt[:500]}"
+        self.last_usage = {"prompt_tokens": max(1, len(prompt) // 4), "completion_tokens": max(1, len(result) // 4), "total_tokens": max(1, len(prompt) // 4) + max(1, len(result) // 4)}
+        return result
 
 
 class OpenAICompatibleAdapter(BaseAdapter):
@@ -30,7 +44,6 @@ class OpenAICompatibleAdapter(BaseAdapter):
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
             return await MockAdapter().execute_prompt(prompt, model)
-        # 使用默认模型处理测试连接请求
         actual_model = model if model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "/chat/completions"
         payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
@@ -38,7 +51,54 @@ class OpenAICompatibleAdapter(BaseAdapter):
             response = await client.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
         if response.status_code >= 400:
             raise LLMAdapterError(response.text)
-        return response.json()["choices"][0]["message"]["content"]
+        data = response.json()
+        usage = data.get("usage", {})
+        self.last_usage = {
+            "prompt_tokens": usage.get("prompt_tokens") or max(1, len(prompt) // 4),
+            "completion_tokens": usage.get("completion_tokens") or max(1, len(data["choices"][0]["message"]["content"]) // 4),
+            "total_tokens": usage.get("total_tokens") or (self.last_usage.get("prompt_tokens", 0) + self.last_usage.get("completion_tokens", 0)),
+        }
+        return data["choices"][0]["message"]["content"]
+
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+        key = api_key or self.env_api_key
+        if not ENABLE_REAL_LLM or not key:
+            async for chunk in MockAdapter().stream_prompt(prompt, model):
+                yield chunk
+            return
+        actual_model = model if model != "ping" else self.default_model
+        url = (base_url.rstrip("/") if base_url else self.default_base_url) + "//chat/completions"
+        url = url.replace("//chat", "/chat")  # normalize double slash
+        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "stream": True, "stream_options": {"include_usage": True}}
+        full_text = ""
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    raise LLMAdapterError(body.decode(errors="replace"))
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                        delta = obj["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            full_text += content
+                            yield content
+                        # 捕获 usage（部分 API 在最后 chunk 返回）
+                        if "usage" in obj:
+                            u = obj["usage"]
+                            self.last_usage = {"prompt_tokens": u.get("prompt_tokens", 0), "completion_tokens": u.get("completion_tokens", 0), "total_tokens": u.get("total_tokens", 0)}
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+        yield ""
+        # 如果没有从 chunk 中拿到 usage，使用估算
+        if not self.last_usage:
+            self.last_usage = {"prompt_tokens": max(1, len(prompt) // 4), "completion_tokens": max(1, len(full_text) // 4), "total_tokens": max(1, len(prompt) // 4) + max(1, len(full_text) // 4)}
 
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
@@ -101,6 +161,33 @@ class OllamaAdapter(BaseAdapter):
             return response.json().get("response", "")
         except httpx.HTTPError:
             return await MockAdapter().execute_prompt(prompt, model)
+
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+        url = (base_url.rstrip("/") if base_url else OLLAMA_BASE_URL) + "/api/generate"
+        payload = {"model": model or "llama3", "prompt": prompt, "stream": True}
+        try:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    if response.status_code >= 400:
+                        body = await response.aread()
+                        raise LLMAdapterError(body.decode(errors="replace"))
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                            if chunk.get("done"):
+                                break
+                            content = chunk.get("response", "")
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+        except httpx.HTTPError:
+            async for chunk in MockAdapter().stream_prompt(prompt, model):
+                yield chunk
+            return
+        yield ""
 
 
 class AdapterManager:
