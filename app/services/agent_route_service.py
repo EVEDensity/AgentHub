@@ -28,6 +28,9 @@ class AgentRouteService:
         dag = DAGConfig(total=len(nodes), completed=0, nodes=nodes)
         template_engine.validate(dag)
         with get_connection() as conn:
+            existing = conn.execute("SELECT id FROM agent_routes WHERE name=?", (name,)).fetchone()
+            if existing:
+                raise ValueError(f"Agent route with name '{name}' already exists")
             if is_default:
                 conn.execute("UPDATE agent_routes SET is_default=0")
             cursor = conn.execute(

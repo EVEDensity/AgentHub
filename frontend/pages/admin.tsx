@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type JSX } from 'react';
 import type { Agent, AgentRoute, AgentRouteNode, AuditLog, User } from '../types';
-import TokenUsageHeatmap from '../components/TokenUsageHeatmap';
-import AgentFlowCanvas from '../components/AgentFlowCanvas';
+import TokenUsageHeatmap from '../components/heatmap/TokenUsageHeatmap';
+import AgentFlowCanvas from '../components/flow/AgentFlowCanvas';
 
 const SETTINGS_MENU = [
   '服务商',

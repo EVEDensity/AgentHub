@@ -1,7 +1,7 @@
 import dynamic from 'next/dynamic';
 import type { JSX } from 'react';
 
-const AgentCanvas = dynamic(() => import('../components/AgentCanvas'), {
+const AgentCanvas = dynamic(() => import('../components/flow/AgentCanvas'), {
   ssr: false,
   loading: () => (
     <div className="flex h-screen items-center justify-center bg-warm-50 text-warm-500">

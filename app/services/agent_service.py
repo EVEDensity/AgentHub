@@ -9,7 +9,7 @@ import uuid
 from app.db.init_db import now
 from app.db.session import dict_rows, get_connection, one_row
 from app.services.adapter_manager import adapter_manager
-from app.services.auth_service import write_audit
+from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.secret_service import decrypt_secret
 from app.services.symbolic import generate_symbolic_message, public_symbolic

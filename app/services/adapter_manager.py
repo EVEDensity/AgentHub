@@ -24,13 +24,16 @@ class MockAdapter(BaseAdapter):
 class OpenAICompatibleAdapter(BaseAdapter):
     default_base_url = "https://api.openai.com/v1"
     env_api_key = OPENAI_API_KEY
+    default_model = "gpt-3.5-turbo"
 
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> str:
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
             return await MockAdapter().execute_prompt(prompt, model)
+        # 使用默认模型处理测试连接请求
+        actual_model = model if model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "/chat/completions"
-        payload: dict[str, Any] = {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
+        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
         if response.status_code >= 400:
@@ -44,22 +47,27 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
 class DeepSeekAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://api.deepseek.com/v1"
+    default_model = "deepseek-v4-flash"
 
 
 class MinimaxAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://api.minimax.chat/v1"
+    default_model = "abab6-chat"
 
 
 class ZhipuAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://open.bigmodel.cn/api/paas/v4"
+    default_model = "glm-4"
 
 
 class QwenAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    default_model = "qwen-turbo"
 
 
 class DoubaoAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://ark.cn-beijing.volces.com/api/v3"
+    default_model = "Doubao-3.5"
 
 
 class CustomOpenAIAdapter(OpenAICompatibleAdapter):

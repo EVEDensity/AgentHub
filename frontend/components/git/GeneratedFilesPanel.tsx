@@ -1,6 +1,6 @@
 import { useState, type JSX } from 'react';
-import DiffBubble from './DiffBubble';
-import type { GeneratedData } from '../types';
+import DiffBubble from '../chat/DiffBubble';
+import type { GeneratedData } from '../../types';
 
 interface GeneratedFilesPanelProps {
   generated: GeneratedData;

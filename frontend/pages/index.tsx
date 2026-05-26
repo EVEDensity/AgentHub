@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
-import DiffBubble from '../components/DiffBubble';
-import GeneratedFilesPanel from '../components/GeneratedFilesPanel';
-import FidelityScore from '../components/FidelityScore';
-import PreviewSidebar from '../components/PreviewSidebar';
+import DiffBubble from '../components/chat/DiffBubble';
+import GeneratedFilesPanel from '../components/git/GeneratedFilesPanel';
+import FidelityScore from '../components/chat/FidelityScore';
+import PreviewSidebar from '../components/shared/PreviewSidebar';
 import type { Agent, GeneratedData, Message, PendingMessage, User } from '../types';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
