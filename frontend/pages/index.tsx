@@ -349,7 +349,7 @@ export default function AgentHubIM(): JSX.Element {
           {!sessions.length && <div className="rounded-lg bg-warm-50 px-3 py-2 text-sm text-warm-500">暂无会话，点击“新建会话”</div>}
           </div>
         </div>
-        <div className="mt-3 border-t border-warm-150 pt-3 text-sm text-warm-600">⚙ 设置</div>
+        <a className="mt-3 block border-t border-warm-150 pt-3 text-sm text-warm-600 hover:text-primary-500" href="/admin">⚙ 设置</a>
       </aside>
 
       <main className="flex flex-1 flex-col">
@@ -388,7 +388,7 @@ export default function AgentHubIM(): JSX.Element {
                 {agents.map((agent) => (
                   <button key={agent.agentId} className="rounded-lg bg-warm-50 px-3 py-2 text-left hover:bg-primary-50" onClick={() => insertMention(agent.agentId)}>
                     <div className="font-medium text-warm-700">@{agent.agentId}</div>
-                    <div className="text-caption text-warm-500">{agent.domain} / {agent.riskLevel}</div>
+                    <div className="text-caption text-warm-500">{agent.domain} / {agent.rankLevel || 'L1'}</div>
                   </button>
                 ))}
               </div>

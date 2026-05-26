@@ -91,4 +91,19 @@ class AgentCreateRequest(BaseModel):
     agentId: str
     domain: str
     adapterType: str = "mock"
-    riskLevel: str = "L1"
+    baseModelName: str = ""
+    rankLevel: str = "L1"
+    dutyNote: str = ""
+    baseUrl: str = ""
+    apiKey: str = ""
+
+
+class AgentUpdateRequest(BaseModel):
+    agentId: str
+    domain: str
+    adapterType: str = "mock"
+    baseModelName: str = ""
+    rankLevel: str = "L1"
+    dutyNote: str = ""
+    baseUrl: str = ""
+    apiKey: str = ""

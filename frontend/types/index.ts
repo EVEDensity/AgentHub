@@ -39,7 +39,10 @@ export interface Agent {
   domain: string;
   status: string;
   adapterType: string;
-  riskLevel: string;
+  baseModelName?: string;
+  rankLevel?: string;
+  dutyNote?: string;
+  baseUrl?: string;
 }
 
 export interface Task {

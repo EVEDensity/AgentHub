@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"D:/Users/xyn/Desktop/skills/anysearch-skill/anysearch-skill/\")",
+      "Read(//d/Users/xyn/Desktop/skills/anysearch-skill/anysearch-skill/**)"
+    ]
+  }
+}

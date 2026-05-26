@@ -63,11 +63,33 @@ def _update_runtime(model: dict, ok: bool, latency_ms: float) -> None:
     state["latency"] = state["latency"] * 0.7 + latency_ms * 0.3
 
 
-def save_message(session_id: str, sender: str, content: str, msg_type: str, score: float = 0.95, symbolic: dict | None = None) -> None:
+def save_message(
+    session_id: str,
+    sender: str,
+    content: str,
+    msg_type: str,
+    score: float = 0.95,
+    symbolic: dict | None = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+) -> None:
     with get_connection() as conn:
         conn.execute(
-            "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (str(uuid.uuid4()), session_id, sender, content, msg_type, score, json.dumps(symbolic or {}, ensure_ascii=False), now()),
+            "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                str(uuid.uuid4()),
+                session_id,
+                sender,
+                content,
+                msg_type,
+                score,
+                json.dumps(symbolic or {}, ensure_ascii=False),
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                now(),
+            ),
         )
 
 
@@ -108,6 +130,7 @@ async def call_agent(session_id: str, content: str, user_id: str) -> dict:
         result = "模型调用失败，已降级为本地响应：" + " | ".join(errors[:2])
 
     content_out = normalize_agent_output(agent["agent_id"], result, content)
+    prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(content, content_out)
     generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
     public = {**public_symbolic(symbolic), "generated": generated, "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")}}
     write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})
@@ -122,7 +145,17 @@ async def call_agent(session_id: str, content: str, user_id: str) -> dict:
         "fidelityScore": symbolic["fidelity_score"],
         "symbolic": public,
     }
-    save_message(session_id, message["sender"], message["content"], message["type"], message["fidelityScore"], message["symbolic"])
+    save_message(
+        session_id,
+        message["sender"],
+        message["content"],
+        message["type"],
+        message["fidelityScore"],
+        message["symbolic"],
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+    )
     return message
 
 
@@ -137,6 +170,13 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
     return f"{base}\nAgent: {agent_id}\nDomain: {domain}\n符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+
+
+def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, int]:
+    prompt_tokens = max(1, len(user_text) // 4)
+    completion_tokens = max(1, len(model_output) // 4)
+    total_tokens = prompt_tokens + completion_tokens
+    return prompt_tokens, completion_tokens, total_tokens
 
 
 def normalize_agent_output(agent_id: str, model_output: str, original: str) -> str:

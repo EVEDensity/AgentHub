@@ -25,7 +25,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,role TEXT NOT NULL,password_hash TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'group',participants TEXT NOT NULL DEFAULT '[]',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,sender TEXT NOT NULL,content TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'text',fidelity_score REAL DEFAULT 0.95,symbolic_json TEXT DEFAULT '{}',created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS agent_registry(agent_id TEXT PRIMARY KEY,domain TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'sleeping',adapter_type TEXT NOT NULL DEFAULT 'mock',config TEXT NOT NULL DEFAULT '{}',risk_level TEXT NOT NULL DEFAULT 'L1');
+            CREATE TABLE IF NOT EXISTS agent_registry(agent_id TEXT PRIMARY KEY,domain TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'sleeping',adapter_type TEXT NOT NULL DEFAULT 'mock',base_model_name TEXT NOT NULL DEFAULT '',config TEXT NOT NULL DEFAULT '{}',risk_level TEXT NOT NULL DEFAULT 'L1',duty_note TEXT NOT NULL DEFAULT '',base_url TEXT NOT NULL DEFAULT '',api_key TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',dag_json TEXT NOT NULL,current_node_id TEXT,template_id INTEGER,agent_route_id INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS dag_templates(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT NOT NULL,keywords TEXT NOT NULL,dag_json TEXT NOT NULL,usage_count INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS model_configs(id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT NOT NULL,model_name TEXT NOT NULL,api_key TEXT NOT NULL DEFAULT '',api_key_hash TEXT NOT NULL DEFAULT '',base_url TEXT DEFAULT '',is_active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
@@ -59,8 +59,19 @@ def init_db() -> None:
 
 def migrate_existing_schema(conn) -> None:
     migrations = {
+        "agent_registry": [
+            "ALTER TABLE agent_registry ADD COLUMN base_model_name TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE agent_registry ADD COLUMN duty_note TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE agent_registry ADD COLUMN base_url TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE agent_registry ADD COLUMN api_key TEXT NOT NULL DEFAULT ''",
+        ],
         "users": ["ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''"],
-        "messages": ["ALTER TABLE messages ADD COLUMN symbolic_json TEXT DEFAULT '{}'"],
+        "messages": [
+            "ALTER TABLE messages ADD COLUMN symbolic_json TEXT DEFAULT '{}'",
+            "ALTER TABLE messages ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0",
+        ],
         "tasks": ["ALTER TABLE tasks ADD COLUMN current_node_id TEXT", "ALTER TABLE tasks ADD COLUMN template_id INTEGER", "ALTER TABLE tasks ADD COLUMN agent_route_id INTEGER"],
         "model_configs": ["ALTER TABLE model_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''"],
         "audit_log": ["ALTER TABLE audit_log ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'"],
