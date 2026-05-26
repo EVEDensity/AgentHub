@@ -22,7 +22,7 @@ class SessionCreateRequest(BaseModel):
 async def sessions() -> list[dict]:
     from app.db.session import dict_rows
 
-    return dict_rows("SELECT id,name,type,active,created_at AS createdAt FROM sessions ORDER BY created_at DESC")
+    return dict_rows("SELECT id,name,type,active,created_at AS createdAt,is_pinned AS isPinned FROM sessions ORDER BY is_pinned DESC, created_at DESC")
 
 
 @router.post("/sessions")
@@ -54,6 +54,33 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"status": "success", "sessionId": session_id}
+
+
+@router.put("/sessions/{session_id}")
+async def rename_session(session_id: str, data: dict, user: dict = Depends(get_current_user)) -> dict:
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    from app.db.session import get_connection
+
+    with get_connection() as conn:
+        cursor = conn.execute("UPDATE sessions SET name=? WHERE id=?", (name, session_id))
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "success", "sessionId": session_id, "name": name}
+
+
+@router.put("/sessions/{session_id}/pin")
+async def toggle_pin_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
+    from app.db.session import get_connection, one_row
+
+    row = one_row("SELECT is_pinned FROM sessions WHERE id=?", (session_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+    new_val = 0 if row.get("is_pinned") else 1
+    with get_connection() as conn:
+        conn.execute("UPDATE sessions SET is_pinned=? WHERE id=?", (new_val, session_id))
+    return {"status": "success", "sessionId": session_id, "isPinned": new_val}
 
 
 @router.post("/tasks")

@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.db.init_db import now
+from app.services.agent_service import save_message
 from app.services.auth_service import websocket_user
 from app.services.message_router import route_message, stream_message
 from app.services.websocket_manager import manager
@@ -60,6 +61,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
 
 async def _process_and_stream(session_id: str, content: str, sender: str, user_id: str) -> None:
     token = manager.get_stream_token(session_id)
+    # 持久化用户消息：无论流式/非流式路径，用户消息都需要入库
+    save_message(session_id, sender, content, "text")
 
     try:
         stream_result = await stream_message(session_id, content, sender, user_id, token)

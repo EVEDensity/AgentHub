@@ -167,16 +167,20 @@ export default function AdminPage(): JSX.Element {
     e.preventDefault();
     if (!editingAgentId) return;
 
-    const res = await fetch(`/api/agent/registry/${encodeURIComponent(editingAgentId)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify(editAgent),
-    });
-    const data = await res.json();
-    setNotice(res.ok ? `已更新服务商：${editingAgentId}` : data.detail || '更新失败');
-    if (res.ok) {
-      cancelEditAgent();
-      await refresh();
+    try {
+      const res = await fetch(`/api/agent/registry/${encodeURIComponent(editingAgentId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(editAgent),
+      });
+      const data = await res.json();
+      setNotice(res.ok ? `已更新服务商：${editingAgentId}` : data.detail || '更新失败');
+      if (res.ok) {
+        cancelEditAgent();
+        await refresh();
+      }
+    } catch {
+      setNotice('保存失败：网络连接异常，请检查后端服务是否运行');
     }
   }
 
@@ -537,6 +541,8 @@ export default function AdminPage(): JSX.Element {
                 </button>
               </div>
 
+              {notice && <div className="mb-4 rounded-lg bg-warning-50 p-3 text-sm text-warning-600">{notice}</div>}
+
               {isCreatingAgent ? (
                 <form onSubmit={createAgent} className="grid gap-3 md:grid-cols-2">
                   <input className="input-field" placeholder="自定义名称（Agent ID）" value={newAgent.agentId} onChange={(e) => setNewAgent((p) => ({ ...p, agentId: e.target.value }))} />
@@ -571,7 +577,7 @@ export default function AdminPage(): JSX.Element {
                   </select>
                   <input className="input-field" placeholder="API Base URL" value={editAgent.baseUrl} onChange={(e) => setEditAgent((p) => ({ ...p, baseUrl: e.target.value }))} />
                   <textarea className="input-field md:col-span-2" rows={2} placeholder="职责备注" value={editAgent.dutyNote} onChange={(e) => setEditAgent((p) => ({ ...p, dutyNote: e.target.value }))} />
-                  <input className="input-field md:col-span-2" placeholder="API Key（留空则会清空）" type="password" value={editAgent.apiKey} onChange={(e) => setEditAgent((p) => ({ ...p, apiKey: e.target.value }))} />
+                  <input className="input-field md:col-span-2" placeholder="API Key（留空则保持不变，输入新值将替换）" type="password" value={editAgent.apiKey} onChange={(e) => setEditAgent((p) => ({ ...p, apiKey: e.target.value }))} />
                   <div className="md:col-span-2 flex justify-end gap-2">
                     <button type="button" className="btn-secondary" onClick={cancelEditAgent}>取消</button>
                     <button className="btn-primary">保存</button>

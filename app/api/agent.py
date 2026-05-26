@@ -67,19 +67,16 @@ async def update_agent(agent_id: str, data: AgentUpdateRequest, user: dict = Dep
         if not exists:
             raise HTTPException(status_code=404, detail="Agent 不存在")
 
-        conn.execute(
-            "UPDATE agent_registry SET domain=?,adapter_type=?,base_model_name=?,risk_level=?,duty_note=?,base_url=?,api_key=? WHERE agent_id=?",
-            (
-                data.domain.strip(),
-                data.adapterType,
-                data.baseModelName.strip(),
-                data.rankLevel,
-                data.dutyNote.strip(),
-                data.baseUrl.strip(),
-                encrypt_secret(data.apiKey.strip()),
-                agent_id,
-            ),
-        )
+        if data.apiKey.strip():
+            conn.execute(
+                "UPDATE agent_registry SET domain=?,adapter_type=?,base_model_name=?,risk_level=?,duty_note=?,base_url=?,api_key=? WHERE agent_id=?",
+                (data.domain.strip(), data.adapterType, data.baseModelName.strip(), data.rankLevel, data.dutyNote.strip(), data.baseUrl.strip(), encrypt_secret(data.apiKey.strip()), agent_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE agent_registry SET domain=?,adapter_type=?,base_model_name=?,risk_level=?,duty_note=?,base_url=? WHERE agent_id=?",
+                (data.domain.strip(), data.adapterType, data.baseModelName.strip(), data.rankLevel, data.dutyNote.strip(), data.baseUrl.strip(), agent_id),
+            )
 
     audit_id = write_audit(user["id"], agent_id, "agent_update", "L2", "approve", {**data.model_dump(), "apiKey": "***" if data.apiKey else ""})
     return {"status": "success", "agentId": agent_id, "auditId": audit_id}

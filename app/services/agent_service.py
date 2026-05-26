@@ -96,7 +96,7 @@ def save_message(
 
 def list_messages(session_id: str) -> list[dict]:
     items = dict_rows(
-        "SELECT session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at",
+        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at",
         (session_id,),
     )
     for item in items:
@@ -247,7 +247,30 @@ def _remove_repeated_text(text: str) -> str:
         if stripped and stripped != prev_line:
             unique_lines.append(line)
             prev_line = stripped
-    return '\n'.join(unique_lines)
+    text = '\n'.join(unique_lines)
+
+    cleaned = _remove_repeated_phrases(text)
+    return cleaned
+
+
+def _remove_repeated_phrases(text: str) -> str:
+    """Detect and remove consecutively repeated phrases (12+ chars) within text."""
+    n = len(text)
+    if n < 24:
+        return text
+    # Scan with decreasing window sizes to catch both long and short repetitions
+    for window in range(min(n // 2, 80), 11, -1):
+        i = 0
+        while i + window * 2 <= n:
+            phrase = text[i:i + window]
+            # Check if this phrase immediately repeats
+            if text[i + window:i + window * 2] == phrase:
+                # Remove the duplicate and restart scan from this position
+                text = text[:i + window] + text[i + window * 2:]
+                n = len(text)
+                continue
+            i += 1
+    return text
 
 
 def normalize_agent_output(agent_id: str, model_output: str, original: str) -> str:

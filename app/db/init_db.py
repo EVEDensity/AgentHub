@@ -75,6 +75,7 @@ def migrate_existing_schema(conn) -> None:
         "tasks": ["ALTER TABLE tasks ADD COLUMN current_node_id TEXT", "ALTER TABLE tasks ADD COLUMN template_id INTEGER", "ALTER TABLE tasks ADD COLUMN agent_route_id INTEGER"],
         "model_configs": ["ALTER TABLE model_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''"],
         "audit_log": ["ALTER TABLE audit_log ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'"],
+        "sessions": ["ALTER TABLE sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"],
     }
     for table, statements in migrations.items():
         existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}

@@ -21,6 +21,7 @@ interface ChatSession {
   type?: string;
   active?: number;
   createdAt?: string;
+  isPinned?: number;
 }
 
 interface DagState {
@@ -48,12 +49,21 @@ export default function AgentHubIM(): JSX.Element {
   const [pending, setPending] = useState<PendingMessage[]>([]);
   const [generated, setGenerated] = useState<GeneratedData | null>(null);
   const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
+  const [mentionSearch, setMentionSearch] = useState<string>('');
+  const [selectedRiskLevel, setSelectedRiskLevel] = useState<string>('all');
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
+  const [editingId, setEditingId] = useState<string>('');
+  const [editName, setEditName] = useState<string>('');
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const currentSessionRef = useRef<string>(sessionId);
+
+  useEffect(() => {
+    currentSessionRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     const saved = localStorage.getItem('agenthub_token');
@@ -79,12 +89,28 @@ export default function AgentHubIM(): JSX.Element {
       .catch(() => setAgents(FALLBACK_AGENTS));
   }, [token]);
 
+  async function reloadMessages(merge = false): Promise<void> {
+    try {
+      const sid = currentSessionRef.current;
+      const res = await fetch(`/api/chat/sessions/${sid}/messages`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const data: Message[] = (await res.json()) as Message[];
+      if (merge) {
+        setMessages((prev) => {
+          const existingIds = new Set(prev.filter((m) => m.id).map((m) => m.id));
+          const newMessages = data.filter((m) => !m.id || !existingIds.has(m.id));
+          if (newMessages.length === 0) return prev;
+          return [...prev, ...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+        });
+      } else {
+        setMessages(data);
+      }
+    } catch { /* ignore */ }
+  }
+
   useEffect(() => {
     if (!token || !sessionId) return;
-    fetch(`/api/chat/sessions/${sessionId}/messages`, { headers: authHeaders() })
-      .then((r) => r.json())
-      .then((data: Message[]) => setMessages(data))
-      .catch(() => {});
+    void reloadMessages(false);
     connectWs();
     return () => wsRef.current?.close();
   }, [token, sessionId]);
@@ -124,12 +150,18 @@ export default function AgentHubIM(): JSX.Element {
   }
 
   function connectWs(): void {
-    if (reconnectRef.current) clearTimeout(reconnectRef.current);
-    const ws = new WebSocket(`ws://127.0.0.1:8000/ws/${sessionId}?token=${encodeURIComponent(token)}`);
+    const sid = currentSessionRef.current;
+    if (reconnectRef.current) {
+      clearTimeout(reconnectRef.current);
+      reconnectRef.current = null;
+    }
+    const ws = new WebSocket(`ws://127.0.0.1:8000/ws/${sid}?token=${encodeURIComponent(token)}`);
     wsRef.current = ws;
     ws.onopen = () => {
+      if (currentSessionRef.current !== sid) { ws.close(); return; }
       setConnected(true);
       setNotice('WebSocket connected');
+      void reloadMessages(true);
       const queued = [...retryRef.current];
       retryRef.current = [];
       setPending([]);
@@ -138,10 +170,13 @@ export default function AgentHubIM(): JSX.Element {
     ws.onclose = () => {
       setConnected(false);
       setIsStreaming(false);
-      reconnectRef.current = setTimeout(connectWs, 1500);
+      if (currentSessionRef.current === sid) {
+        reconnectRef.current = setTimeout(connectWs, 1500);
+      }
     };
     ws.onerror = () => setConnected(false);
     ws.onmessage = (event: MessageEvent<string>) => {
+      if (currentSessionRef.current !== sid) return;
       const raw: Record<string, unknown> = JSON.parse(event.data);
       const evt = raw.event as string | undefined;
 
@@ -260,6 +295,45 @@ export default function AgentHubIM(): JSX.Element {
       setSessionId(next?.id || 'session-1');
       setMessages([]);
     }
+  }
+
+  async function renameSession(id: string): Promise<void> {
+    const name = editName.trim();
+    if (!name) {
+      setEditingId('');
+      return;
+    }
+    const res = await fetch(`/api/chat/sessions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setNotice(data.detail || 'Rename failed');
+      return;
+    }
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, name } : s)));
+    setEditingId('');
+  }
+
+  async function togglePin(id: string, current: number): Promise<void> {
+    const res = await fetch(`/api/chat/sessions/${id}/pin`, { method: 'PUT', headers: authHeaders() });
+    const data = await res.json();
+    if (!res.ok) {
+      setNotice(data.detail || 'Pin toggle failed');
+      return;
+    }
+    setSessions((prev) => {
+      const updated = prev.map((s) => (s.id === id ? { ...s, isPinned: data.isPinned as number } : s));
+      updated.sort((a, b) => (b.isPinned || 0) - (a.isPinned || 0) || (b.createdAt || '').localeCompare(a.createdAt || ''));
+      return updated;
+    });
+  }
+
+  function startRename(s: ChatSession): void {
+    setEditingId(s.id);
+    setEditName(s.name);
   }
 
   function send(customText?: string): void {
@@ -410,12 +484,36 @@ export default function AgentHubIM(): JSX.Element {
         <div className="flex-1 overflow-hidden">
           <div className="h-full space-y-1 overflow-auto pr-1">
           {sessions.filter((s) => !sessionQuery.trim() || s.name.toLowerCase().includes(sessionQuery.toLowerCase())).map((s) => (
-            <div key={s.id} className={`group flex items-center gap-2 rounded-lg px-2 py-1 ${s.id === sessionId ? 'bg-warm-100' : 'hover:bg-warm-50'}`}>
-              <button className={`flex-1 rounded-lg px-2 py-2 text-left text-sm ${s.id === sessionId ? 'text-warm-800' : 'text-warm-600'}`} onClick={() => selectSession(s.id)}>
-                <div className="truncate">{s.name || 'Untitled'}</div>
+            <div key={s.id} className={`group flex items-center gap-1 rounded-lg px-2 py-1 ${s.id === sessionId ? 'bg-warm-100' : 'hover:bg-warm-50'}`}>
+              {editingId === s.id ? (
+                <input
+                  className="flex-1 rounded border border-primary-300 px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-primary-500"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') renameSession(s.id); if (e.key === 'Escape') setEditingId(''); }}
+                  onBlur={() => renameSession(s.id)}
+                  autoFocus
+                />
+              ) : (
+                <button className={`flex-1 rounded-lg px-2 py-2 text-left text-sm ${s.id === sessionId ? 'text-warm-800' : 'text-warm-600'}`} onClick={() => selectSession(s.id)}>
+                  <div className="flex items-center gap-1.5 truncate">
+                    {s.isPinned ? <span className="shrink-0 text-amber-500" title="Pinned">📌</span> : null}
+                    <span className="truncate">{s.name || 'Untitled'}</span>
+                  </div>
+                </button>
+              )}
+              <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-amber-500 group-hover:visible" title="Pin session" onClick={() => togglePin(s.id, s.isPinned || 0)}>
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill={s.isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 2l3 7h5l-4 6 1 7-5-3-5 3 1-7-4-6h5z" />
+                </svg>
+              </button>
+              <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-primary-500 group-hover:visible" title="Rename session" onClick={() => startRename(s)}>
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+                </svg>
               </button>
               <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-danger-500 group-hover:visible" title="Delete session" onClick={() => deleteSession(s.id)}>
-                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M3 6h18" />
                   <path d="M8 6V4h8v2" />
                   <path d="M19 6l-1 14H6L5 6" />
@@ -464,13 +562,51 @@ export default function AgentHubIM(): JSX.Element {
                 <span>@ Select Agent</span>
                 <button className="text-primary-500" onClick={insertAllMentions}>@All Agents</button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {agents.map((agent) => (
-                  <button key={agent.agentId} className="rounded-lg bg-warm-50 px-3 py-2 text-left hover:bg-primary-50" onClick={() => insertMention(agent.agentId)}>
-                    <div className="font-medium text-warm-700">@{agent.agentId}</div>
-                    <div className="text-caption text-warm-500">{agent.domain} / {agent.rankLevel || 'L1'}</div>
+              <div className="mb-2">
+                <input
+                  type="text"
+                  placeholder="搜索agent..."
+                  value={mentionSearch}
+                  onChange={(e) => setMentionSearch(e.target.value)}
+                  className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              <div className="mb-2 flex gap-1">
+                {['all', 'L1', 'L2', 'L3'].map((level) => (
+                  <button
+                    key={level}
+                    onClick={() => setSelectedRiskLevel(level)}
+                    className={`rounded-md px-2 py-1 text-xs ${
+                      selectedRiskLevel === level
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-warm-100 text-warm-600 hover:bg-warm-200'
+                    }`}
+                  >
+                    {level === 'all' ? '全部' : level}
                   </button>
                 ))}
+              </div>
+              <div className="max-h-60 overflow-y-auto">
+                <div className="grid grid-cols-2 gap-2">
+                  {agents
+                    .filter((agent) => {
+                      const matchesSearch = mentionSearch === '' ||
+                        agent.agentId.toLowerCase().includes(mentionSearch.toLowerCase()) ||
+                        agent.domain.toLowerCase().includes(mentionSearch.toLowerCase());
+                      const matchesLevel = selectedRiskLevel === 'all' || agent.rankLevel === selectedRiskLevel;
+                      return matchesSearch && matchesLevel;
+                    })
+                    .map((agent) => (
+                      <button
+                        key={agent.agentId}
+                        className="rounded-lg bg-warm-50 px-3 py-2 text-left hover:bg-primary-50"
+                        onClick={() => insertMention(agent.agentId)}
+                      >
+                        <div className="font-medium text-warm-700">@{agent.agentId}</div>
+                        <div className="text-caption text-warm-500">{agent.domain} / {agent.rankLevel || 'L1'}</div>
+                      </button>
+                    ))}
+                </div>
               </div>
             </div>
           )}

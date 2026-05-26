@@ -1,4 +1,5 @@
 export interface Message {
+  id?: string;
   event: string;
   sessionId: string;
   sender: string;

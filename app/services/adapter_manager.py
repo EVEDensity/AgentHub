@@ -39,6 +39,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
     default_base_url = "https://api.openai.com/v1"
     env_api_key = OPENAI_API_KEY
     default_model = "gpt-3.5-turbo"
+    supports_stream_usage: bool = False  # Only OpenAI supports stream_options
 
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> str:
         key = api_key or self.env_api_key
@@ -46,7 +47,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
             return await MockAdapter().execute_prompt(prompt, model)
         actual_model = model if model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "/chat/completions"
-        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
+        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "frequency_penalty": 0.5, "presence_penalty": 0.3}
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
         if response.status_code >= 400:
@@ -69,7 +70,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
         actual_model = model if model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "//chat/completions"
         url = url.replace("//chat", "/chat")  # normalize double slash
-        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "stream": True, "stream_options": {"include_usage": True}}
+        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "stream": True, "frequency_penalty": 0.5, "presence_penalty": 0.3}
+        if self.supports_stream_usage:
+            payload["stream_options"] = {"include_usage": True}
         full_text = ""
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as response:
@@ -103,6 +106,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://api.openai.com/v1"
+    supports_stream_usage: bool = True
 
 
 class DeepSeekAdapter(OpenAICompatibleAdapter):
