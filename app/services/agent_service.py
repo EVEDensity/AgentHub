@@ -176,7 +176,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     if usage and usage.get("total_tokens", 0) > 0:
         prompt_tokens, completion_tokens, total_tokens = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
     else:
-        prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(content, content_out)
+        prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(prompt, content_out)
     generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
     public = {
         **public_symbolic(symbolic),
@@ -260,7 +260,7 @@ async def stream_agent_response(
         if usage and usage.get("total_tokens", 0) > 0:
             pt, ct, tt = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
         else:
-            pt, ct, tt = max(1, len(content) // 4), max(1, len(content_out) // 4), max(1, len(content) // 4) + max(1, len(content_out) // 4)
+            pt, ct, tt = max(1, len(prompt) // 4), max(1, len(content_out) // 4), max(1, len(prompt) // 4) + max(1, len(content_out) // 4)
         save_message(session_id, agent["agent_id"], content_out, "text", 0.95, None, pt, ct, tt)
 
     return stream()

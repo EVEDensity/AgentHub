@@ -255,10 +255,11 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
         day = row.get("day")
         if not day:
             continue
-        item = day_map.setdefault(day, {"sessionIds": set(), "tokens": 0})
+        item = day_map.setdefault(day, {"sessionIds": set(), "tokens": 0, "messages": 0})
         session_id = row.get("sessionId") or ""
         if session_id:
             item["sessionIds"].add(session_id)
+        item["messages"] += 1
         if has_total_tokens:
             tk = int(row.get("total_tokens") or 0)
             if tk <= 0 and has_prompt_tokens and has_completion_tokens:
@@ -275,11 +276,12 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
     cursor = start_day
     while cursor <= end_day:
         key = cursor.isoformat()
-        item = day_map.get(key, {"sessionIds": set(), "tokens": 0})
+        item = day_map.get(key, {"sessionIds": set(), "tokens": 0, "messages": 0})
         days.append(
             {
                 "date": key,
                 "sessions": len(item["sessionIds"]),
+                "messages": item["messages"],
                 "tokens": int(item["tokens"]),
             }
         )
@@ -290,18 +292,20 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
     last_30_start = end_day - timedelta(days=29)
 
     def _get(day_key: str) -> dict:
-        data = day_map.get(day_key, {"sessionIds": set(), "tokens": 0})
-        return {"sessions": len(data["sessionIds"]), "tokens": int(data["tokens"])}
+        data = day_map.get(day_key, {"sessionIds": set(), "tokens": 0, "messages": 0})
+        return {"sessions": len(data["sessionIds"]), "messages": data["messages"], "tokens": int(data["tokens"])}
 
     today_stats = _get(today_key)
     yesterday_stats = _get(yesterday_key)
 
     last_30_sessions = 0
+    last_30_messages = 0
     last_30_tokens = 0
     c = last_30_start
     while c <= end_day:
         d = _get(c.isoformat())
         last_30_sessions += d["sessions"]
+        last_30_messages += d["messages"]
         last_30_tokens += d["tokens"]
         c += timedelta(days=1)
 
@@ -312,7 +316,7 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
         },
         "today": today_stats,
         "yesterday": yesterday_stats,
-        "last30": {"sessions": last_30_sessions, "tokens": last_30_tokens},
+        "last30": {"sessions": last_30_sessions, "messages": last_30_messages, "tokens": last_30_tokens},
         "days": days,
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
     }

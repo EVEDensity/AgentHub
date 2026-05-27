@@ -132,7 +132,11 @@ class AgentService:
             result = "模型调用失败，已降级为本地响应：" + " | ".join(errors[:2])
 
         content_out = AgentService.normalize_agent_output(agent["agent_id"], result, content)
-        prompt_tokens, completion_tokens, total_tokens = AgentService._estimate_token_usage(content, content_out)
+        usage = adapter.last_usage
+        if usage and usage.get("total_tokens", 0) > 0:
+            prompt_tokens, completion_tokens, total_tokens = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
+        else:
+            prompt_tokens, completion_tokens, total_tokens = AgentService._estimate_token_usage(prompt, content_out)
         generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
         public = {**public_symbolic(symbolic), "generated": generated, "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")}}
         AuthService.write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})

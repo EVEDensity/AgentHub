@@ -73,6 +73,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "stream": True, "frequency_penalty": 0.5, "presence_penalty": 0.3}
         if self.supports_stream_usage:
             payload["stream_options"] = {"include_usage": True}
+        self.last_usage = {}  # reset per call so stale data never leaks
         full_text = ""
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as response:
@@ -92,15 +93,14 @@ class OpenAICompatibleAdapter(BaseAdapter):
                         if content:
                             full_text += content
                             yield content
-                        # 捕获 usage（部分 API 在最后 chunk 返回）
                         if "usage" in obj:
                             u = obj["usage"]
                             self.last_usage = {"prompt_tokens": u.get("prompt_tokens", 0), "completion_tokens": u.get("completion_tokens", 0), "total_tokens": u.get("total_tokens", 0)}
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
         yield ""
-        # 如果没有从 chunk 中拿到 usage，使用估算
-        if not self.last_usage:
+        # Always set fallback estimation when no real usage was captured from chunks
+        if not self.last_usage.get("total_tokens"):
             self.last_usage = {"prompt_tokens": max(1, len(prompt) // 4), "completion_tokens": max(1, len(full_text) // 4), "total_tokens": max(1, len(prompt) // 4) + max(1, len(full_text) // 4)}
 
 
@@ -150,7 +150,14 @@ class AnthropicAdapter(BaseAdapter):
             response = await client.post(url, headers=headers, json=payload)
         if response.status_code >= 400:
             raise LLMAdapterError(response.text)
-        return "\n".join(block.get("text", "") for block in response.json().get("content", []) if block.get("type") == "text")
+        data = response.json()
+        usage = data.get("usage", {})
+        self.last_usage = {
+            "prompt_tokens": usage.get("input_tokens") or max(1, len(prompt) // 4),
+            "completion_tokens": usage.get("output_tokens") or max(1, len(data.get("content", [{}])[0].get("text", "")) // 4),
+            "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or max(1, len(prompt) // 4) + max(1, len(data.get("content", [{}])[0].get("text", "")) // 4),
+        }
+        return "\n".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
 
 
 class OllamaAdapter(BaseAdapter):
@@ -162,13 +169,22 @@ class OllamaAdapter(BaseAdapter):
                 response = await client.post(url, json=payload)
             if response.status_code >= 400:
                 raise LLMAdapterError(response.text)
-            return response.json().get("response", "")
+            data = response.json()
+            result = data.get("response", "")
+            self.last_usage = {
+                "prompt_tokens": data.get("prompt_eval_count") or max(1, len(prompt) // 4),
+                "completion_tokens": data.get("eval_count") or max(1, len(result) // 4),
+                "total_tokens": (data.get("prompt_eval_count") or 0) + (data.get("eval_count") or 0) or max(1, len(prompt) // 4) + max(1, len(result) // 4),
+            }
+            return result
         except httpx.HTTPError:
             return await MockAdapter().execute_prompt(prompt, model)
 
     async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
         url = (base_url.rstrip("/") if base_url else OLLAMA_BASE_URL) + "/api/generate"
         payload = {"model": model or "llama3", "prompt": prompt, "stream": True}
+        self.last_usage = {}
+        full_text = ""
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
                 async with client.stream("POST", url, json=payload) as response:
@@ -181,9 +197,15 @@ class OllamaAdapter(BaseAdapter):
                         try:
                             chunk = json.loads(line)
                             if chunk.get("done"):
+                                self.last_usage = {
+                                    "prompt_tokens": chunk.get("prompt_eval_count") or max(1, len(prompt) // 4),
+                                    "completion_tokens": chunk.get("eval_count") or max(1, len(full_text) // 4),
+                                    "total_tokens": (chunk.get("prompt_eval_count") or 0) + (chunk.get("eval_count") or 0) or max(1, len(prompt) // 4) + max(1, len(full_text) // 4),
+                                }
                                 break
                             content = chunk.get("response", "")
                             if content:
+                                full_text += content
                                 yield content
                         except json.JSONDecodeError:
                             continue
@@ -192,6 +214,8 @@ class OllamaAdapter(BaseAdapter):
                 yield chunk
             return
         yield ""
+        if not self.last_usage.get("total_tokens"):
+            self.last_usage = {"prompt_tokens": max(1, len(prompt) // 4), "completion_tokens": max(1, len(full_text) // 4), "total_tokens": max(1, len(prompt) // 4) + max(1, len(full_text) // 4)}
 
 
 class AdapterManager:

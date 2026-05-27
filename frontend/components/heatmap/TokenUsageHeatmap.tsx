@@ -3,14 +3,15 @@ import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 interface HeatmapDay {
   date: string;
   sessions: number;
+  messages: number;
   tokens: number;
 }
 
 interface HeatmapData {
   range: { start: string; end: string };
-  today: { sessions: number; tokens: number };
-  yesterday: { sessions: number; tokens: number };
-  last30: { sessions: number; tokens: number };
+  today: { sessions: number; messages: number; tokens: number };
+  yesterday: { sessions: number; messages: number; tokens: number };
+  last30: { sessions: number; messages: number; tokens: number };
   days: HeatmapDay[];
   generatedAt: string;
 }
@@ -202,9 +203,9 @@ export default function TokenUsageHeatmap(): JSX.Element {
         </div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <StatCard label="今天" tokens={data.today.tokens} sessions={data.today.sessions} />
-          <StatCard label="昨天" tokens={data.yesterday.tokens} sessions={data.yesterday.sessions} />
-          <StatCard label="30 天" tokens={data.last30.tokens} sessions={data.last30.sessions} />
+          <StatCard label="今天" tokens={data.today.tokens} sessions={data.today.sessions} messages={data.today.messages} />
+          <StatCard label="昨天" tokens={data.yesterday.tokens} sessions={data.yesterday.sessions} messages={data.yesterday.messages} />
+          <StatCard label="30 天" tokens={data.last30.tokens} sessions={data.last30.sessions} messages={data.last30.messages} />
         </div>
       </div>
 
@@ -278,7 +279,7 @@ export default function TokenUsageHeatmap(): JSX.Element {
         >
           <div className="font-medium">{formatDateLabel(tooltip.day.date)}</div>
           <div className="mt-0.5 text-[#EBC4B0]">
-            {tooltip.day.sessions} 次会话 · {formatTokens(tooltip.day.tokens)}
+            {tooltip.day.messages} 条消息 · {tooltip.day.sessions} 个会话 · {formatTokens(tooltip.day.tokens)}
           </div>
         </div>
       )}
@@ -286,12 +287,12 @@ export default function TokenUsageHeatmap(): JSX.Element {
   );
 }
 
-function StatCard({ label, tokens, sessions }: { label: string; tokens: number; sessions: number }): JSX.Element {
+function StatCard({ label, tokens, sessions, messages }: { label: string; tokens: number; sessions: number; messages: number }): JSX.Element {
   return (
     <div className="flex min-w-[170px] flex-col justify-center rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] px-5 py-4">
       <div className="text-xs text-warm-500">{label}</div>
       <div className="mt-1 text-xl font-semibold text-warm-900">{formatTokens(tokens)}</div>
-      <div className="mt-0.5 text-xs text-warm-400">{sessions} 次会话</div>
+      <div className="mt-0.5 text-xs text-warm-400">{messages} 条消息 · {sessions} 个会话</div>
     </div>
   );
 }
