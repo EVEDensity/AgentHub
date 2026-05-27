@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(ls -la \"D:/Users/xyn/Desktop/skills/anysearch-skill/anysearch-skill/\")",
-      "Read(//d/Users/xyn/Desktop/skills/anysearch-skill/anysearch-skill/**)"
+      "Read(//d/Users/xyn/Desktop/skills/anysearch-skill/anysearch-skill/**)",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(npx next *)",
+      "Bash(npx tsc *)"
     ]
   }
 }

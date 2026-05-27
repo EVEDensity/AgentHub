@@ -18,6 +18,7 @@ class AgentGraphState(TypedDict, total=False):
     content: str
     sender: str
     user_id: str
+    attachments: list[dict[str, Any]]
     task: dict[str, Any]
     response: dict[str, Any]
 
@@ -40,7 +41,12 @@ async def run_dag_node(state: AgentGraphState) -> AgentGraphState:
 
 
 async def call_agent_node(state: AgentGraphState) -> AgentGraphState:
-    response = await call_agent(state["session_id"], state["content"], user_id=state.get("user_id", "local-admin"))
+    response = await call_agent(
+        state["session_id"],
+        state["content"],
+        user_id=state.get("user_id", "local-admin"),
+        attachments=state.get("attachments", []),
+    )
     return {**state, "response": response}
 
 
@@ -61,12 +67,13 @@ class LangGraphAgentWorkflow:
         workflow.add_edge("call_agent", END)
         return workflow.compile()
 
-    async def run(self, session_id: str, content: str, sender: str = "user", user_id: str = "local-admin") -> dict[str, Any]:
+    async def run(self, session_id: str, content: str, sender: str = "user", user_id: str = "local-admin", attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         initial_state: AgentGraphState = {
             "session_id": session_id,
             "content": content,
             "sender": sender,
             "user_id": user_id,
+            "attachments": attachments or [],
         }
         if self._graph:
             final_state = await self._graph.ainvoke(initial_state)

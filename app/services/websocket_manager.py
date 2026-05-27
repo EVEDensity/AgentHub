@@ -21,7 +21,10 @@ class StreamToken:
 class WebSocketManager:
     def __init__(self) -> None:
         self.clients: dict[str, list[WebSocket]] = {}
-        self._stream_tokens: dict[str, StreamToken] = {}
+        self._tokens: dict[str, StreamToken] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    # ── connection management ──────────────────────────────────────
 
     async def connect(self, session_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -41,21 +44,46 @@ class WebSocketManager:
             except RuntimeError:
                 self.disconnect(session_id, websocket)
 
-    def get_stream_token(self, session_id: str) -> StreamToken:
+    # ── per-session serialisation lock ─────────────────────────────
+
+    def get_session_lock(self, session_id: str) -> asyncio.Lock:
+        """Return (creating if necessary) the per-session mutex that
+        guarantees at most one message is processed at a time."""
+        if session_id not in self._locks:
+            self._locks[session_id] = asyncio.Lock()
+        return self._locks[session_id]
+
+    # ── stream-token lifecycle (per-session, task-bound) ──────────
+
+    def create_token(self, session_id: str) -> StreamToken:
+        """Create a fresh cancellation token for the session.
+
+        Replaces any previous token – the old token is cancelled so the
+        prior task will exit at its next ``token.cancelled`` check."""
+        old = self._tokens.pop(session_id, None)
+        if old and not old.cancelled:
+            old.cancel()
         token = StreamToken()
-        self._stream_tokens[session_id] = token
+        self._tokens[session_id] = token
         return token
 
-    def cancel_stream(self, session_id: str) -> str | None:
-        token = self._stream_tokens.pop(session_id, None)
+    def cancel_token(self, session_id: str) -> None:
+        """Signal the current stream (if any) to stop."""
+        token = self._tokens.get(session_id)
         if token and not token.cancelled:
             token.cancel()
-            return session_id
-        return None
+
+    def remove_token(self, session_id: str, token: StreamToken) -> None:
+        """Remove *token* only if it is still the registered one."""
+        current = self._tokens.get(session_id)
+        if current is token:
+            self._tokens.pop(session_id, None)
 
     def has_active_stream(self, session_id: str) -> bool:
-        token = self._stream_tokens.get(session_id)
+        token = self._tokens.get(session_id)
         return token is not None and not token.cancelled
+
+    # ── streaming broadcast helpers ────────────────────────────────
 
     async def stream_broadcast(self, session_id: str, message_id: str, chunk: str, is_final: bool = False) -> None:
         payload: dict[str, Any] = {
@@ -76,6 +104,15 @@ class WebSocketManager:
                 "reason": reason,
             },
         )
+
+    # ── session cleanup ────────────────────────────────────────────
+
+    def teardown_session(self, session_id: str) -> None:
+        """Cancel any in-flight work and release session-scoped resources."""
+        self.cancel_token(session_id)
+        self._tokens.pop(session_id, None)
+        self._locks.pop(session_id, None)
+        self.clients.pop(session_id, None)
 
 
 manager = WebSocketManager()

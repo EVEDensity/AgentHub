@@ -1,3 +1,36 @@
+export type FileCategory = 'code' | 'document' | 'image' | 'archive' | 'spreadsheet' | 'config' | 'unknown';
+
+export interface AttachmentMeta {
+  name: string;
+  size: number;
+  type: string;
+  content?: string;
+  category?: FileCategory;
+  fileId?: string;
+  uploadProgress?: number;
+  uploadStatus?: 'pending' | 'uploading' | 'done' | 'error';
+  uploadError?: string;
+}
+
+export interface UploadInitResponse {
+  uploadId: string;
+  chunkSizeHint: number;
+}
+
+export interface UploadChunkResponse {
+  uploadId: string;
+  chunkIndex: number;
+  received: number;
+  totalChunks: number;
+}
+
+export interface UploadCompleteResponse {
+  fileId: string;
+  fileName: string;
+  size: number;
+  category: string;
+}
+
 export interface Message {
   id?: string;
   event: string;
@@ -12,6 +45,7 @@ export interface Message {
   };
   messageId?: string;
   isStreaming?: boolean;
+  attachments?: AttachmentMeta[];
 }
 
 export interface StreamChunk {
@@ -120,6 +154,7 @@ export interface PendingMessage {
   sender: string;
   timestamp: string;
   type: 'text' | 'code' | 'system' | 'diff';
+  attachments?: AttachmentMeta[];
 }
 
 export interface GeneratedFileDetail {

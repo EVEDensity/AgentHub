@@ -36,64 +36,80 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             if not content:
                 continue
 
-            if manager.has_active_stream(session_id):
-                stream_id = manager.cancel_stream(session_id)
-                if stream_id:
-                    await manager.broadcast(
-                        session_id,
-                        {
-                            "event": "stream_interrupted",
-                            "sessionId": session_id,
-                            "reason": "user_interaction",
-                            "timestamp": now(),
-                        },
-                    )
-                    await asyncio.sleep(0.05)
+            # Cancel any in-flight stream — the per-session lock inside
+            # _process_and_stream guarantees the old task releases it
+            # before the new one proceeds.
+            manager.cancel_token(session_id)
+            await asyncio.sleep(0.02)
 
-            task = asyncio.create_task(
-                _process_and_stream(session_id, content, data.get("sender", user["name"]), user["id"])
+            asyncio.create_task(
+                _process_and_stream(
+                    session_id,
+                    content,
+                    data.get("sender", user["name"]),
+                    user["id"],
+                    data.get("attachments", []),
+                )
             )
 
     except WebSocketDisconnect:
         manager.disconnect(session_id, websocket)
-        manager.cancel_stream(session_id)
+        manager.teardown_session(session_id)
 
 
-async def _process_and_stream(session_id: str, content: str, sender: str, user_id: str) -> None:
-    token = manager.get_stream_token(session_id)
-    # 持久化用户消息：无论流式/非流式路径，用户消息都需要入库
-    save_message(session_id, sender, content, "text")
+async def _process_and_stream(
+    session_id: str,
+    content: str,
+    sender: str,
+    user_id: str,
+    attachments: list[dict] | None = None,
+) -> None:
+    """Process one user message with the per-session lock held.
 
-    try:
-        stream_result = await stream_message(session_id, content, sender, user_id, token)
+    Only one instance of this coroutine runs per session at a time.
+    The caller is responsible for calling ``manager.cancel_token``
+    *before* scheduling this task so that any in-flight work sees the
+    cancellation signal and releases the lock promptly.
+    """
+    lock = manager.get_session_lock(session_id)
+    async with lock:
+        token = manager.create_token(session_id)
 
-        if stream_result is None:
-            response = await route_message(session_id, content, sender, user_id)
-            await manager.broadcast(session_id, response)
-            return
+        try:
+            # Persist the user message regardless of streaming path
+            save_message(session_id, sender, content, "text")
 
-        message_id = str(uuid.uuid4())
+            stream_result = await stream_message(session_id, content, sender, user_id, token, attachments or [])
 
-        async for chunk in stream_result:
-            if token.cancelled:
+            # Non-streaming fallback
+            if stream_result is None:
+                response = await route_message(session_id, content, sender, user_id, attachments or [])
+                await manager.broadcast(session_id, response)
                 return
-            await manager.stream_broadcast(session_id, message_id, chunk, is_final=False)
 
-        if not token.cancelled:
-            await manager.stream_broadcast(session_id, message_id, "", is_final=True)
+            # Streaming path
+            message_id = str(uuid.uuid4())
 
-    except Exception:
-        if not token.cancelled:
-            await manager.broadcast(
-                session_id,
-                {
-                    "event": "message",
-                    "sessionId": session_id,
-                    "content": "模型调用失败",
-                    "sender": "system",
-                    "timestamp": now(),
-                    "type": "system",
-                },
-            )
-    finally:
-        manager._stream_tokens.pop(session_id, None)
+            async for chunk in stream_result:
+                if token.cancelled:
+                    return
+                await manager.stream_broadcast(session_id, message_id, chunk, is_final=False)
+
+            if not token.cancelled:
+                await manager.stream_broadcast(session_id, message_id, "", is_final=True)
+
+        except Exception:
+            if not token.cancelled:
+                await manager.broadcast(
+                    session_id,
+                    {
+                        "event": "message",
+                        "sessionId": session_id,
+                        "content": "模型调用失败",
+                        "sender": "system",
+                        "timestamp": now(),
+                        "type": "system",
+                    },
+                )
+        finally:
+            manager.remove_token(session_id, token)

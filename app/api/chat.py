@@ -88,3 +88,18 @@ async def create_task(data: ChatTaskRequest, user: dict = Depends(get_current_us
     if not data.message.strip():
         raise HTTPException(status_code=400, detail="message is required")
     return task_state_machine.create_task(data.sessionId, data.message)
+
+
+@router.get("/workflows")
+async def list_workflows() -> list[dict]:
+    from app.db.session import dict_rows
+
+    rows = dict_rows(
+        "SELECT id,name,description,trigger_keywords FROM agent_routes WHERE active=1 ORDER BY is_default DESC, updated_at DESC"
+    )
+    for r in rows:
+        import json
+
+        r["triggerKeywords"] = json.loads(r.pop("trigger_keywords", "[]") or "[]")
+        r["routeId"] = r.pop("id")
+    return rows

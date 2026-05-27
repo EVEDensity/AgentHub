@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from app.db.init_db import now
 from app.db.session import dict_rows, get_connection, one_row
@@ -17,6 +18,40 @@ from app.services.symbolic import generate_symbolic_message, public_symbolic
 
 AGENTS = {"Orchestrator", "Architect", "CodeGen", "Review", "Test", "Deploy"}
 _RUNTIME: dict[str, dict] = {}
+
+
+def _build_attachment_context(attachments: list[dict[str, Any]] | None) -> tuple[str, list[dict[str, Any]]]:
+    if not attachments:
+        return "", []
+
+    blocks: list[str] = []
+    clean: list[dict[str, Any]] = []
+    max_text_len = 12000
+
+    for idx, item in enumerate(attachments, start=1):
+        name = str(item.get("name", f"file_{idx}"))
+        file_type = str(item.get("type", "text/plain"))
+        size = int(item.get("size", 0) or 0)
+        content = str(item.get("content", ""))
+
+        is_image = file_type.startswith("image/") or name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
+        if is_image:
+            preview = content[:180]
+            blocks.append(
+                f"[附件图片 {idx}] name={name}, type={file_type}, size={size}\\n"
+                f"data_url_prefix={preview}"
+            )
+        else:
+            trimmed = content[:max_text_len]
+            ext = name.split(".")[-1] if "." in name else "text"
+            blocks.append(
+                f"[附件文件 {idx}] name={name}, type={file_type}, size={size}\\n"
+                f"```{ext}\\n{trimmed}\\n```"
+            )
+
+        clean.append({"name": name, "type": file_type, "size": size})
+
+    return "\\n\\n".join(blocks), clean
 
 
 def extract_mentions(content: str) -> list[str]:
@@ -104,13 +139,19 @@ def list_messages(session_id: str) -> list[dict]:
     return items
 
 
-async def call_agent(session_id: str, content: str, user_id: str) -> dict:
+async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None) -> dict:
     agent = resolve_agent(content)
     domain = agent["domain"]
     msg_type = "code" if domain == "codegen" or any(word in content.lower() for word in ["code", "fastapi", "react", "代码", "实现"]) else "text"
-    symbolic = generate_symbolic_message(content, msg_type, session_id)
+
+    attachment_context, attachment_meta = _build_attachment_context(attachments)
+    llm_input = content
+    if attachment_context:
+        llm_input = f"{content}\n\n[用户上传附件上下文]\n{attachment_context}"
+
+    symbolic = generate_symbolic_message(llm_input, msg_type, session_id)
     models = choose_models(candidate_models_for_role(agent["agent_id"]))
-    prompt = build_prompt(agent["agent_id"], domain, content, symbolic, models[0].get("prompt", "") if models else "")
+    prompt = build_prompt(agent["agent_id"], domain, llm_input, symbolic, models[0].get("prompt", "") if models else "")
 
     result = ""
     selected = models[0] if models else {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
@@ -137,7 +178,12 @@ async def call_agent(session_id: str, content: str, user_id: str) -> dict:
     else:
         prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(content, content_out)
     generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
-    public = {**public_symbolic(symbolic), "generated": generated, "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")}}
+    public = {
+        **public_symbolic(symbolic),
+        "generated": generated,
+        "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")},
+        "attachments": attachment_meta,
+    }
     AuthService.write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})
     display_content = "CodeGen 已生成结构化文件，请在下方生成文件面板中检查内容、查看 Diff，并确认提交。" if generated else content_out
     message = {
@@ -164,13 +210,30 @@ async def call_agent(session_id: str, content: str, user_id: str) -> dict:
     return message
 
 
-async def stream_agent_response(session_id: str, content: str, user_id: str, token=None) -> AsyncGenerator[str, None] | None:
+async def stream_agent_response(
+    session_id: str,
+    content: str,
+    user_id: str,
+    token=None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> AsyncGenerator[str, None] | None:
     agent = resolve_agent(content)
     models = choose_models(candidate_models_for_role(agent["agent_id"]))
     if not models:
         return None
 
-    prompt = build_prompt(agent["agent_id"], agent["domain"], content, generate_symbolic_message(content, "text", session_id), models[0].get("prompt", "") if models else "")
+    attachment_context, _ = _build_attachment_context(attachments)
+    llm_input = content
+    if attachment_context:
+        llm_input = f"{content}\n\n[用户上传附件上下文]\n{attachment_context}"
+
+    prompt = build_prompt(
+        agent["agent_id"],
+        agent["domain"],
+        llm_input,
+        generate_symbolic_message(llm_input, "text", session_id),
+        models[0].get("prompt", "") if models else "",
+    )
 
     selected = models[0]
     adapter = adapter_manager.get_adapter(selected.get("provider", "mock"))

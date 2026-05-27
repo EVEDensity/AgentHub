@@ -4,7 +4,7 @@ import MarkdownRenderer from '../components/chat/MarkdownRenderer';
 import GeneratedFilesPanel from '../components/git/GeneratedFilesPanel';
 import FidelityScore from '../components/chat/FidelityScore';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
-import type { Agent, GeneratedData, Message, PendingMessage, StreamChunk, User } from '../types';
+import type { Agent, AttachmentMeta, GeneratedData, Message, PendingMessage, StreamChunk, User } from '../types';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
@@ -30,6 +30,72 @@ interface DagState {
   nodes: Array<{ id?: string; name?: string; status?: string; agent?: string; description?: string; dependencies?: string[] }>;
 }
 
+interface WorkflowSummary {
+  routeId: number;
+  name: string;
+  description: string;
+  triggerKeywords: string[];
+}
+
+type FileCategory = 'code' | 'document' | 'image' | 'archive' | 'spreadsheet' | 'config' | 'unknown';
+
+const FILE_CATEGORY_CONFIG: Record<FileCategory, { label: string; extensions: string[]; mimePattern: RegExp }> = {
+  code: { label: 'Code', extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'], mimePattern: /^(text\/|\b(?:javascript|typescript|json)\b)/ },
+  document: { label: 'Document', extensions: ['txt','md','pdf','docx','rtf','tex','rst','org','log'], mimePattern: /^(text\/|application\/pdf|application\/vnd\.openxmlformats)/ },
+  image: { label: 'Image', extensions: ['png','jpg','jpeg','gif','svg','webp','bmp','ico'], mimePattern: /^image\// },
+  archive: { label: 'Archive', extensions: ['zip','rar','7z','tar','gz','bz2','xz'], mimePattern: /^(application\/zip|application\/x-rar|application\/x-7z|application\/gzip|application\/x-tar)/ },
+  spreadsheet: { label: 'Sheet', extensions: ['xlsx','xls','csv','tsv'], mimePattern: /^(application\/vnd\.(ms-excel|openxmlformats-officedocument\.spreadsheetml)|text\/csv)/ },
+  config: { label: 'Config', extensions: ['json','yaml','yml','xml','toml','ini','cfg','env','conf','cnf','editorconfig','gitignore','dockerfile','makefile','prisma','graphql','proto'], mimePattern: /^(application\/json|application\/xml|text\/(xml|yaml|toml))/ },
+  unknown: { label: 'File', extensions: [], mimePattern: /^$/ },
+};
+
+const ALL_EXTENSIONS: Set<string> = new Set();
+Object.values(FILE_CATEGORY_CONFIG).forEach((c) => c.extensions.forEach((e) => ALL_EXTENSIONS.add(e)));
+const ACCEPT_STRING = Array.from(ALL_EXTENSIONS).map((e) => `.${e}`).join(',');
+
+function detectFileCategory(name: string, mimeType: string): FileCategory {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  for (const [cat, cfg] of Object.entries(FILE_CATEGORY_CONFIG) as [FileCategory, typeof FILE_CATEGORY_CONFIG[FileCategory]][]) {
+    if (cfg.extensions.includes(ext)) return cat;
+    if (cfg.mimePattern.test(mimeType)) return cat;
+  }
+  return 'unknown';
+}
+
+function FileIcon({ category, size }: { category: FileCategory; size: number }) {
+  const cls = `h-${size} w-${size} shrink-0 text-warm-400`;
+  switch (category) {
+    case 'code':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>;
+    case 'document':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>;
+    case 'image':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>;
+    case 'archive':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>;
+    case 'spreadsheet':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>;
+    case 'config':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>;
+    default:
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>;
+  }
+}
+
+const INLINE_THRESHOLD = 512 * 1024; // files ≤ 512 KB can be embedded inline
+
+interface AttachedFile {
+  name: string;
+  content?: string;
+  size: number;
+  type: string;
+  category: FileCategory;
+  fileId?: string;
+  uploadProgress?: number;
+  uploadStatus: 'pending' | 'uploading' | 'done' | 'error';
+  uploadError?: string;
+}
+
 export default function AgentHubIM(): JSX.Element {
   const [token, setToken] = useState<string>('');
   const [user, setUser] = useState<User | null>(null);
@@ -52,6 +118,8 @@ export default function AgentHubIM(): JSX.Element {
   const [mentionSearch, setMentionSearch] = useState<string>('');
   const [selectedRiskLevel, setSelectedRiskLevel] = useState<string>('all');
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState<number>(0);
+  const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [editingId, setEditingId] = useState<string>('');
   const [editName, setEditName] = useState<string>('');
@@ -60,6 +128,12 @@ export default function AgentHubIM(): JSX.Element {
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentionStartRef = useRef<number>(-1);
+  const mentionTriggerRef = useRef<'@' | '#'>('@');
+  const mentionPanelRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
 
   useEffect(() => {
     currentSessionRef.current = sessionId;
@@ -87,6 +161,10 @@ export default function AgentHubIM(): JSX.Element {
       .then((r) => r.json())
       .then((data: Agent[]) => setAgents(data.length ? data : FALLBACK_AGENTS))
       .catch(() => setAgents(FALLBACK_AGENTS));
+    fetch('/api/chat/workflows', { headers: authHeaders() })
+      .then((r) => r.json())
+      .then((data: WorkflowSummary[]) => setWorkflows(data))
+      .catch(() => {});
   }, [token]);
 
   async function reloadMessages(merge = false): Promise<void> {
@@ -245,16 +323,208 @@ export default function AgentHubIM(): JSX.Element {
     };
   }
 
-  function insertMention(agentId: string): void {
-    const mention = `@${agentId}`;
-    setInput((prev) => (prev.includes(mention) ? prev : `${mention} ${prev}`));
+  function detectMention(value: string, cursor: number): void {
+    const textBefore = value.slice(0, cursor);
+    const lastAt = textBefore.lastIndexOf('@');
+    const lastHash = textBefore.lastIndexOf('#');
+
+    // Find nearest trigger; if both present, use the later one
+    const candidates: Array<{ pos: number; trigger: '@' | '#' }> = [];
+    if (lastAt >= 0) candidates.push({ pos: lastAt, trigger: '@' });
+    if (lastHash >= 0) candidates.push({ pos: lastHash, trigger: '#' });
+    candidates.sort((a, b) => b.pos - a.pos);
+
+    for (const c of candidates) {
+      const charBefore = c.pos === 0 ? ' ' : value[c.pos - 1];
+      const textAfter = textBefore.slice(c.pos + 1);
+      if (!textAfter.includes(' ') && !textAfter.includes('\n') &&
+          (c.pos === 0 || charBefore === ' ' || charBefore === '\n')) {
+        setMentionSearch(textAfter);
+        setMentionOpen(true);
+        setMentionActiveIndex(0);
+        mentionStartRef.current = c.pos;
+        mentionTriggerRef.current = c.trigger;
+        return;
+      }
+    }
     setMentionOpen(false);
+    setMentionActiveIndex(0);
+    mentionStartRef.current = -1;
+  }
+
+  function handleInput(e: React.ChangeEvent<HTMLTextAreaElement>): void {
+    const value = e.target.value;
+    const cursor = e.target.selectionStart || 0;
+    setInput(value);
+    detectMention(value, cursor);
+  }
+
+  function insertMention(agentId: string): void {
+    setMentionOpen(false);
+    setMentionSearch('');
+    const mention = `@${agentId} `;
+    const start = mentionStartRef.current;
+    mentionStartRef.current = -1;
+
+    if (start >= 0) {
+      const ta = textareaRef.current;
+      const cursor = ta ? ta.selectionEnd : input.length;
+      const before = input.slice(0, start);
+      const after = input.slice(cursor);
+      const newInput = before + mention + after;
+      setInput(newInput);
+      const newPos = start + mention.length;
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.selectionStart = newPos;
+          el.selectionEnd = newPos;
+        }
+      });
+    } else {
+      setInput((prev) => (prev.includes(mention.trim()) ? prev : `${mention}${prev}`));
+    }
   }
 
   function insertAllMentions(): void {
-    const mentions = agents.map((agent) => `@${agent.agentId}`).join(' ');
-    setInput((prev) => `${mentions} ${prev}`);
     setMentionOpen(false);
+    setMentionSearch('');
+    const mentions = agents.map((a) => `@${a.agentId} `).join('');
+    const start = mentionStartRef.current;
+    mentionStartRef.current = -1;
+
+    if (start >= 0) {
+      const ta = textareaRef.current;
+      const cursor = ta ? ta.selectionEnd : input.length;
+      const before = input.slice(0, start);
+      const after = input.slice(cursor);
+      setInput(before + mentions + after);
+      const newPos = start + mentions.length;
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.selectionStart = newPos;
+          el.selectionEnd = newPos;
+        }
+      });
+    } else {
+      setInput((prev) => `${mentions}${prev}`);
+    }
+  }
+
+  function insertAtSymbol(): void {
+    const ta = textareaRef.current;
+    if (!ta) { setMentionOpen(true); return; }
+    const pos = ta.selectionStart ?? input.length;
+    const before = input.slice(0, pos);
+    const after = input.slice(pos);
+    const v = before + '@' + after;
+    setInput(v);
+    detectMention(v, pos + 1);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.selectionStart = pos + 1;
+        el.selectionEnd = pos + 1;
+      }
+    });
+  }
+
+  function handleBlur(): void {
+    setTimeout(() => {
+      const activeEl = document.activeElement;
+      if (mentionPanelRef.current?.contains(activeEl)) return;
+      setMentionOpen(false);
+      setMentionActiveIndex(0);
+      mentionStartRef.current = -1;
+    }, 200);
+  }
+
+  function handleTextareaKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
+    if (mentionOpen) {
+      const itemCount = mentionTriggerRef.current === '@' ? filteredAgents.length : filteredWorkflows.length;
+      if (itemCount > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setMentionActiveIndex((prev) => (prev + 1) % itemCount);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setMentionActiveIndex((prev) => (prev - 1 + itemCount) % itemCount);
+          return;
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          if (mentionTriggerRef.current === '@') {
+            insertMention(filteredAgents[mentionActiveIndex].agentId);
+          } else {
+            insertWorkflow(filteredWorkflows[mentionActiveIndex]);
+          }
+          return;
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMentionOpen(false);
+        setMentionActiveIndex(0);
+        mentionStartRef.current = -1;
+        return;
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      setMentionOpen(false);
+      send();
+    }
+  }
+
+  const filteredAgents = agents.filter((agent) => {
+    const matchesSearch = mentionSearch === '' ||
+      agent.agentId.toLowerCase().includes(mentionSearch.toLowerCase()) ||
+      agent.domain.toLowerCase().includes(mentionSearch.toLowerCase());
+    const matchesLevel = selectedRiskLevel === 'all' || agent.rankLevel === selectedRiskLevel;
+    return matchesSearch && matchesLevel;
+  });
+
+  const filteredWorkflows = workflows.filter((w) => {
+    if (mentionSearch === '') return true;
+    const q = mentionSearch.toLowerCase();
+    return (
+      w.name.toLowerCase().includes(q) ||
+      w.description.toLowerCase().includes(q) ||
+      w.triggerKeywords.some((k) => k.toLowerCase().includes(q))
+    );
+  });
+
+  function insertWorkflow(wf: WorkflowSummary): void {
+    setMentionOpen(false);
+    setMentionSearch('');
+    const name = `#route:${wf.name}`;
+    const start = mentionStartRef.current;
+    mentionStartRef.current = -1;
+
+    if (start >= 0) {
+      const ta = textareaRef.current;
+      const cursor = ta ? ta.selectionEnd : input.length;
+      const before = input.slice(0, start);
+      const after = input.slice(cursor);
+      setInput(before + name + ' ' + after);
+      const newPos = start + name.length + 1;
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.selectionStart = newPos;
+          el.selectionEnd = newPos;
+        }
+      });
+    } else {
+      setInput((prev) => (prev.includes(name) ? prev : `${name} ${prev}`));
+    }
   }
 
   async function createSession(): Promise<void> {
@@ -336,28 +606,224 @@ export default function AgentHubIM(): JSX.Element {
     setEditName(s.name);
   }
 
+  function extractApiError(err: unknown): string {
+    if (err && typeof err === 'object' && 'detail' in err) {
+      const detail = (err as Record<string, unknown>).detail;
+      if (typeof detail === 'string') return detail;
+      if (Array.isArray(detail)) {
+        return (detail as Array<{ msg?: string }>).map((d) => d.msg || '').filter(Boolean).join('; ') || 'Validation error';
+      }
+    }
+    return 'Upload failed';
+  }
+
+  async function uploadFileChunked(file: File): Promise<string> {
+    const CHUNK_SIZE = 512 * 1024; // 512KB
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+    // Init upload session
+    const initRes = await fetch('/api/files/upload/init', { method: 'POST', headers: authHeaders() });
+    const { uploadId } = (await initRes.json()) as { uploadId: string; chunkSizeHint: number };
+
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end);
+
+      const formData = new FormData();
+      formData.append('file', chunk, `${file.name}.chunk${i}`);
+      formData.append('upload_id', uploadId);
+      formData.append('chunk_index', String(i));
+      formData.append('total_chunks', String(totalChunks));
+      formData.append('file_name', file.name);
+
+      const res = await fetch('/api/files/upload/chunk', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(extractApiError(err) || `Chunk ${i} failed`);
+      }
+
+      // Update progress
+      setAttachedFiles((prev) => prev.map((f) =>
+        f.name === file.name
+          ? { ...f, uploadProgress: Math.round(((i + 1) / totalChunks) * 100), uploadStatus: 'uploading' as const }
+          : f,
+      ));
+    }
+
+    // Complete upload
+    const completeRes = await fetch('/api/files/upload/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ upload_id: uploadId, file_name: file.name, total_chunks: totalChunks }),
+    });
+
+    if (!completeRes.ok) {
+      throw new Error('Upload completion failed');
+    }
+
+    return uploadId;
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>): void {
+    const fs = e.target.files;
+    if (!fs || fs.length === 0) return;
+
+    const MAX_INLINE = 2 * 1024 * 1024;  // 2 MB for inline embedding
+    const MAX_TOTAL = 50 * 1024 * 1024;  // 50 MB for HTTP upload
+
+    Array.from(fs).forEach(async (file) => {
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      const category = detectFileCategory(file.name, file.type);
+
+      // Validate extension
+      if (category === 'unknown' || !ALL_EXTENSIONS.has(ext)) {
+        setNotice(`不支持的文件类型: ${file.name}`);
+        return;
+      }
+
+      // Validate size
+      if (file.size > MAX_TOTAL) {
+        setNotice(`文件 ${file.name} 超过 50MB 限制`);
+        return;
+      }
+
+      const base: AttachedFile = {
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/octet-stream',
+        category,
+        uploadStatus: 'pending',
+      };
+
+      // Determine strategy: inline vs HTTP upload
+      const isInlineText = (category === 'code' || category === 'config' || (category === 'document' && ext !== 'pdf' && ext !== 'docx' && ext !== 'rtf'));
+      const isInlineImage = category === 'image' && file.size <= MAX_INLINE;
+      const canInline = (isInlineText && file.size <= MAX_INLINE) || isInlineImage;
+
+      if (canInline) {
+        // Inline path: read content immediately
+        const reader = new FileReader();
+        reader.onload = () => {
+          setAttachedFiles((prev) => [...prev, {
+            ...base,
+            content: reader.result as string,
+            uploadStatus: 'done' as const,
+            uploadProgress: 100,
+          }]);
+        };
+        reader.onerror = () => {
+          setNotice(`读取文件失败: ${file.name}`);
+        };
+        if (isInlineImage) {
+          reader.readAsDataURL(file);
+        } else {
+          reader.readAsText(file);
+        }
+      } else {
+        // HTTP upload path: add pending entry, then start uploading
+        setAttachedFiles((prev) => [...prev, { ...base, uploadProgress: 0 }]);
+
+        try {
+          const fileId = await uploadFileChunked(file);
+          setAttachedFiles((prev) => prev.map((f) =>
+            f.name === file.name
+              ? { ...f, fileId, uploadStatus: 'done' as const, uploadProgress: 100 }
+              : f,
+          ));
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : 'Upload failed';
+          setAttachedFiles((prev) => prev.map((f) =>
+            f.name === file.name
+              ? { ...f, uploadStatus: 'error' as const, uploadError: msg }
+              : f,
+          ));
+          setNotice(`上传失败: ${file.name} - ${msg}`);
+        }
+      }
+    });
+    e.target.value = '';
+  }
+
+  function removeFile(index: number): void {
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  }
+
   function send(customText?: string): void {
     const text = (customText || input).trim();
-    if (!text) return;
-    const msg: PendingMessage = {
+    if (!text && attachedFiles.length === 0) return;
+
+    const fileMetas: AttachmentMeta[] = attachedFiles.map((f) => ({
+      name: f.name,
+      size: f.size,
+      type: f.type,
+      category: f.category,
+      fileId: f.fileId,
+    }));
+
+    // Full content sent to AI (includes file contents for analysis)
+    let aiContent = text;
+    if (attachedFiles.length > 0) {
+      const fileBlocks = attachedFiles.map((f) => {
+        const ext = f.name.split('.').pop()?.toLowerCase() || '';
+        const isImg = /^(png|jpg|jpeg|gif|svg|webp|bmp)$/i.test(ext);
+        if (f.fileId && !f.content) {
+          return `[Attached File: ${f.name} (fileId: ${f.fileId})]`;
+        }
+        if (isImg) {
+          return `[Attached Image: ${f.name}]`;
+        }
+        return `[Attached File: ${f.name}]\n\`\`\`${ext}\n${f.content || ''}\n\`\`\``;
+      }).join('\n\n');
+      aiContent = text ? `${text}\n\n---\n${fileBlocks}` : fileBlocks;
+    }
+
+    // Display content shown in chat bubble (clean, no raw file content)
+    const displayContent = text || (attachedFiles.length > 0 ? `发送了 ${attachedFiles.length} 个文件` : '');
+
+    const localMsg: Message = {
+      event: 'message',
       sessionId,
-      content: text,
+      content: displayContent,
       sender: user?.name || 'user',
       timestamp: new Date().toISOString(),
       type: 'text',
+      attachments: fileMetas.length > 0 ? fileMetas : undefined,
     };
+
+    const wsMsg: PendingMessage = {
+      sessionId,
+      content: aiContent,
+      sender: user?.name || 'user',
+      timestamp: new Date().toISOString(),
+      type: 'text',
+      attachments: attachedFiles,
+    };
+
     if (isStreaming) {
       setIsStreaming(false);
     }
-    setMessages((prev) => [...prev, { ...msg, event: 'message' }]);
+    setMessages((prev) => [...prev, localMsg]);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
+      wsRef.current.send(JSON.stringify(wsMsg));
     } else {
-      retryRef.current.push(msg);
-      setPending((prev) => [...prev, msg]);
+      retryRef.current.push(wsMsg);
+      setPending((prev) => [...prev, wsMsg]);
       setNotice('Message queued for retry');
     }
     setInput('');
+    setAttachedFiles([]);
   }
 
   function retryMessage(msg: PendingMessage): void {
@@ -422,6 +888,17 @@ export default function AgentHubIM(): JSX.Element {
           {isUser ? (
             <div className="whitespace-pre-wrap leading-7">
               {msg.content}
+              {msg.attachments && msg.attachments.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5 border-t border-white/20 pt-2">
+                  {msg.attachments.map((f, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 rounded bg-white/20 px-2 py-0.5 text-xs">
+                      <FileIcon category={f.category || 'unknown'} size={3} />
+                      <span className="max-w-[140px] truncate">{f.name}</span>
+                      <span className="opacity-70">{formatSize(f.size)}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
               {showCursor && <span className="ml-0.5 inline-block h-5 w-0.5 animate-pulse bg-primary-500 align-text-bottom" />}
             </div>
           ) : (
@@ -556,8 +1033,8 @@ export default function AgentHubIM(): JSX.Element {
         </section>
 
         <footer className="relative border-t border-warm-150 bg-white px-6 py-4">
-          {mentionOpen && (
-            <div className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
+          {mentionOpen && mentionTriggerRef.current === '@' && (
+            <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
               <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
                 <span>@ Select Agent</span>
                 <button className="text-primary-500" onClick={insertAllMentions}>@All Agents</button>
@@ -567,7 +1044,7 @@ export default function AgentHubIM(): JSX.Element {
                   type="text"
                   placeholder="搜索agent..."
                   value={mentionSearch}
-                  onChange={(e) => setMentionSearch(e.target.value)}
+                  onChange={(e) => { setMentionSearch(e.target.value); setMentionActiveIndex(0); }}
                   className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                 />
               </div>
@@ -575,7 +1052,7 @@ export default function AgentHubIM(): JSX.Element {
                 {['all', 'L1', 'L2', 'L3'].map((level) => (
                   <button
                     key={level}
-                    onClick={() => setSelectedRiskLevel(level)}
+                    onClick={() => { setSelectedRiskLevel(level); setMentionActiveIndex(0); }}
                     className={`rounded-md px-2 py-1 text-xs ${
                       selectedRiskLevel === level
                         ? 'bg-primary-500 text-white'
@@ -588,41 +1065,130 @@ export default function AgentHubIM(): JSX.Element {
               </div>
               <div className="max-h-60 overflow-y-auto">
                 <div className="grid grid-cols-2 gap-2">
-                  {agents
-                    .filter((agent) => {
-                      const matchesSearch = mentionSearch === '' ||
-                        agent.agentId.toLowerCase().includes(mentionSearch.toLowerCase()) ||
-                        agent.domain.toLowerCase().includes(mentionSearch.toLowerCase());
-                      const matchesLevel = selectedRiskLevel === 'all' || agent.rankLevel === selectedRiskLevel;
-                      return matchesSearch && matchesLevel;
-                    })
-                    .map((agent) => (
+                  {filteredAgents.length === 0 ? (
+                    <div className="col-span-2 py-4 text-center text-sm text-warm-400">No matching agents</div>
+                  ) : (
+                    filteredAgents.map((agent, idx) => (
                       <button
                         key={agent.agentId}
-                        className="rounded-lg bg-warm-50 px-3 py-2 text-left hover:bg-primary-50"
+                        className={`rounded-lg px-3 py-2 text-left border ${
+                          idx === mentionActiveIndex
+                            ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
+                            : 'bg-warm-50 border-transparent hover:bg-primary-50'
+                        }`}
                         onClick={() => insertMention(agent.agentId)}
+                        onMouseEnter={() => setMentionActiveIndex(idx)}
                       >
                         <div className="font-medium text-warm-700">@{agent.agentId}</div>
                         <div className="text-caption text-warm-500">{agent.domain} / {agent.rankLevel || 'L1'}</div>
                       </button>
-                    ))}
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {mentionOpen && mentionTriggerRef.current === '#' && (
+            <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
+              <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
+                <span># Select Workflow</span>
+                <span className="text-warm-400">{filteredWorkflows.length} workflows</span>
+              </div>
+              <div className="mb-2">
+                <input
+                  type="text"
+                  placeholder="搜索工作流..."
+                  value={mentionSearch}
+                  onChange={(e) => { setMentionSearch(e.target.value); setMentionActiveIndex(0); }}
+                  className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              <div className="max-h-60 overflow-y-auto">
+                <div className="space-y-1">
+                  {filteredWorkflows.length === 0 ? (
+                    <div className="py-4 text-center text-sm text-warm-400">No matching workflows</div>
+                  ) : (
+                    filteredWorkflows.map((wf, idx) => (
+                      <button
+                        key={wf.routeId}
+                        className={`w-full rounded-lg px-3 py-2 text-left border ${
+                          idx === mentionActiveIndex
+                            ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
+                            : 'bg-warm-50 border-transparent hover:bg-primary-50'
+                        }`}
+                        onClick={() => insertWorkflow(wf)}
+                        onMouseEnter={() => setMentionActiveIndex(idx)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-warm-800">#{wf.name}</span>
+                          <span className="text-xs text-warm-400">{wf.description.slice(0, 40)}{wf.description.length > 40 ? '...' : ''}</span>
+                        </div>
+                        {wf.triggerKeywords.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {wf.triggerKeywords.map((k) => (
+                              <span key={k} className="rounded bg-warm-100 px-1.5 py-0.5 text-xs text-warm-500">{k}</span>
+                            ))}
+                          </div>
+                        )}
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
           )}
           <div className="flex gap-3">
-            <button className="btn-secondary self-start" onClick={() => setMentionOpen((v) => !v)}>@</button>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-              rows={3}
-              className="input-field flex-1 resize-none"
-              placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : 'Type message, supports @Agent directives...'}
-            />
+            <div className="flex flex-1 flex-col gap-2">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={handleInput}
+                onBlur={handleBlur}
+                onKeyDown={handleTextareaKeyDown}
+                rows={3}
+                className="input-field w-full resize-none"
+                placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : 'Type message, supports @Agent directives...'}
+              />
+              {attachedFiles.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {attachedFiles.map((f, i) => (
+                    <span key={`${f.name}-${i}`} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs border ${
+                      f.uploadStatus === 'error' ? 'bg-danger-50 border-danger-200 text-danger-700' :
+                      f.uploadStatus === 'uploading' ? 'bg-primary-50 border-primary-200 text-warm-700' :
+                      'bg-warm-100 border-warm-150 text-warm-700'
+                    }`}>
+                      <FileIcon category={f.category} size={3.5} />
+                      <span className="max-w-[140px] truncate">{f.name}</span>
+                      <span className="text-warm-400">{formatSize(f.size)}</span>
+                      {f.uploadStatus === 'uploading' && (
+                        <span className="flex items-center gap-1 text-primary-600">
+                          <span className="h-2 w-12 overflow-hidden rounded-full bg-primary-100">
+                            <span className="block h-full rounded-full bg-primary-500 transition-all" style={{ width: `${f.uploadProgress || 0}%` }} />
+                          </span>
+                          <span className="text-[10px]">{f.uploadProgress || 0}%</span>
+                        </span>
+                      )}
+                      {f.uploadStatus === 'error' && (
+                        <span className="text-[10px] text-danger-500" title={f.uploadError}>失败</span>
+                      )}
+                      {f.uploadStatus !== 'uploading' && (
+                        <button className="ml-0.5 text-warm-400 hover:text-danger-500" onClick={() => removeFile(i)} title="Remove">
+                          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="flex flex-col gap-2">
               <button className="btn-primary" onClick={() => send()}>Send</button>
               <button className="btn-secondary" onClick={openPreview}>Preview</button>
+              <label className="btn-ghost flex cursor-pointer items-center justify-center p-2" title="Attach file">
+                <svg className="h-5 w-5 text-warm-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                <input ref={fileInputRef} type="file" multiple className="sr-only" onChange={handleFileChange} accept={ACCEPT_STRING} />
+              </label>
             </div>
           </div>
         </footer>
