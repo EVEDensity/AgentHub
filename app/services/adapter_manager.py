@@ -25,6 +25,7 @@ class BaseAdapter:
         chunk_size = max(1, len(result) // 20)
         for i in range(0, len(result), chunk_size):
             yield result[i:i + chunk_size]
+            await asyncio.sleep(0)
         yield ""
 
 

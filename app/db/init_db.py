@@ -32,6 +32,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS role_bindings(role TEXT PRIMARY KEY,model_config_id INTEGER NOT NULL,prompt TEXT DEFAULT '',updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS agent_routes(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT NOT NULL DEFAULT '',trigger_keywords TEXT NOT NULL DEFAULT '[]',nodes_json TEXT NOT NULL,is_default INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS audit_log(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,agent_id TEXT NOT NULL,action TEXT NOT NULL,risk_level TEXT NOT NULL,decision TEXT NOT NULL,content_hash TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',timestamp TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS system_config(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL);
             """
         )
         migrate_existing_schema(conn)
@@ -75,7 +76,10 @@ def migrate_existing_schema(conn) -> None:
         "tasks": ["ALTER TABLE tasks ADD COLUMN current_node_id TEXT", "ALTER TABLE tasks ADD COLUMN template_id INTEGER", "ALTER TABLE tasks ADD COLUMN agent_route_id INTEGER"],
         "model_configs": ["ALTER TABLE model_configs ADD COLUMN api_key TEXT NOT NULL DEFAULT ''"],
         "audit_log": ["ALTER TABLE audit_log ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'"],
-        "sessions": ["ALTER TABLE sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"],
+        "sessions": [
+            "ALTER TABLE sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE sessions ADD COLUMN last_message_at TEXT NOT NULL DEFAULT ''",
+        ],
     }
     for table, statements in migrations.items():
         existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}

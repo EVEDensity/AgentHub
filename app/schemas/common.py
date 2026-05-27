@@ -107,3 +107,7 @@ class AgentUpdateRequest(BaseModel):
     dutyNote: str = ""
     baseUrl: str = ""
     apiKey: str = ""
+
+
+class DefaultChatAgentRequest(BaseModel):
+    agentId: str

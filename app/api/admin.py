@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.init_db import now
 from app.db.session import dict_rows, get_connection, one_row
-from app.schemas.common import AgentRouteActiveRequest, AgentRouteRequest, AuditConfirmRequest, ModelConfigRequest, RoleBindRequest
+from app.schemas.common import AgentRouteActiveRequest, AgentRouteRequest, AuditConfirmRequest, DefaultChatAgentRequest, ModelConfigRequest, RoleBindRequest
 from app.schemas.dag import DAGConfig
 from app.services.template_engine import template_engine
 from app.services.agent_route_service import agent_route_service
@@ -116,6 +116,26 @@ async def role_bind(data: RoleBindRequest, user: dict = Depends(get_current_user
 async def list_role_bindings(user: dict = Depends(get_current_user)) -> list[dict]:
     require_admin(user)
     return dict_rows("SELECT role,model_config_id AS modelConfigId,prompt,updated_at AS updatedAt FROM role_bindings ORDER BY role")
+
+
+@router.get("/default-chat-agent")
+async def get_default_chat_agent(user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    row = one_row("SELECT value FROM system_config WHERE key='default_chat_agent'")
+    return {"agentId": row["value"] if row else "Orchestrator"}
+
+
+@router.post("/default-chat-agent")
+async def set_default_chat_agent(data: DefaultChatAgentRequest, user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    # Verify agent exists
+    agent = one_row("SELECT agent_id FROM agent_registry WHERE agent_id=?", (data.agentId,))
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent not found: {data.agentId}")
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO system_config(key,value,updated_at) VALUES('default_chat_agent',?,?)", (data.agentId, now()))
+    write_audit(user["id"], data.agentId, "set_default_chat_agent", "L2", "approve", {"agentId": data.agentId})
+    return {"status": "success", "agentId": data.agentId}
 
 
 @router.get("/agent-routes")

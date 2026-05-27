@@ -25,18 +25,38 @@ class AgentService:
 
     @staticmethod
     def resolve_agent(content: str) -> dict:
-        target = next((name for name in AgentService.extract_mentions(content) if name in AGENTS), "Orchestrator")
-        agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (target,))
+        mentioned = next((name for name in AgentService.extract_mentions(content) if name in AGENTS), None)
+        if mentioned:
+            agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (mentioned,))
+            if agent:
+                return agent
+        # No valid mention — fall back to user-configured default, then Orchestrator
+        default_row = one_row("SELECT value FROM system_config WHERE key='default_chat_agent'")
+        default_agent_id = default_row["value"] if default_row else "Orchestrator"
+        agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (default_agent_id,))
         return agent or {"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}
 
     @staticmethod
     def candidate_models_for_role(role: str) -> list[dict]:
+        # 1) Explicit role bindings (role_bindings JOIN model_configs)
         rows = dict_rows(
             "SELECT mc.id,mc.provider,mc.model_name AS model_name,mc.api_key,mc.base_url,rb.prompt FROM role_bindings rb JOIN model_configs mc ON rb.model_config_id=mc.id WHERE rb.role=? AND mc.is_active=1 ORDER BY mc.id DESC",
             (role,),
         )
         if rows:
             return rows
+        # 2) Agent's own config in agent_registry (adapter_type + base_model_name + base_url + api_key)
+        agent_row = one_row("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=?", (role,))
+        if agent_row and agent_row.get("adapter_type") and agent_row.get("adapter_type") != "mock":
+            return [{
+                "id": 0,
+                "provider": agent_row["adapter_type"],
+                "model_name": agent_row.get("base_model_name") or "ping",  # "ping" → adapter uses its default_model
+                "api_key": agent_row.get("api_key") or "",
+                "base_url": agent_row.get("base_url") or "",
+                "prompt": "",
+            }]
+        # 3) Fallback: any active model_config
         rows = dict_rows("SELECT id,provider,model_name,api_key,base_url,'' AS prompt FROM model_configs WHERE is_active=1 ORDER BY id DESC")
         return rows or [{"id": 0, "provider": "mock", "model_name": "mock", "api_key": "", "base_url": "", "prompt": ""}]
 
@@ -76,6 +96,7 @@ class AgentService:
         completion_tokens: int = 0,
         total_tokens: int = 0,
     ) -> None:
+        ts = now()
         with get_connection() as conn:
             conn.execute(
                 "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -90,9 +111,10 @@ class AgentService:
                     prompt_tokens,
                     completion_tokens,
                     total_tokens,
-                    now(),
+                    ts,
                 ),
             )
+            conn.execute("UPDATE sessions SET last_message_at=? WHERE id=?", (ts, session_id))
 
     @staticmethod
     def list_messages(session_id: str) -> list[dict]:

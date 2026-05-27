@@ -59,18 +59,42 @@ def extract_mentions(content: str) -> list[str]:
 
 
 def resolve_agent(content: str) -> dict:
-    target = next((name for name in extract_mentions(content) if name in AGENTS), "Orchestrator")
-    agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (target,))
+    # Check agent_registry for every @mentioned name (supports both Chinese
+    # and English agent names, not just the hardcoded AGENTS set).
+    for name in extract_mentions(content):
+        agent = one_row(
+            "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?",
+            (name,),
+        )
+        if agent:
+            return agent
+    # No valid mention — fall back to user-configured default, then Orchestrator
+    default_row = one_row("SELECT value FROM system_config WHERE key='default_chat_agent'")
+    default_agent_id = default_row["value"] if default_row else "Orchestrator"
+    agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (default_agent_id,))
     return agent or {"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}
 
 
 def candidate_models_for_role(role: str) -> list[dict]:
+    # 1) Explicit role bindings (role_bindings JOIN model_configs)
     rows = dict_rows(
         "SELECT mc.id,mc.provider,mc.model_name AS model_name,mc.api_key,mc.base_url,rb.prompt FROM role_bindings rb JOIN model_configs mc ON rb.model_config_id=mc.id WHERE rb.role=? AND mc.is_active=1 ORDER BY mc.id DESC",
         (role,),
     )
     if rows:
         return rows
+    # 2) Agent's own config in agent_registry (adapter_type + base_model_name + base_url + api_key)
+    agent_row = one_row("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=?", (role,))
+    if agent_row and agent_row.get("adapter_type") and agent_row.get("adapter_type") != "mock":
+        return [{
+            "id": 0,
+            "provider": agent_row["adapter_type"],
+            "model_name": agent_row.get("base_model_name") or "ping",  # "ping" → adapter uses its default_model
+            "api_key": agent_row.get("api_key") or "",
+            "base_url": agent_row.get("base_url") or "",
+            "prompt": "",
+        }]
+    # 3) Fallback: any active model_config
     rows = dict_rows("SELECT id,provider,model_name,api_key,base_url,'' AS prompt FROM model_configs WHERE is_active=1 ORDER BY id DESC")
     return rows or [{"id": 0, "provider": "mock", "model_name": "mock", "api_key": "", "base_url": "", "prompt": ""}]
 
@@ -110,6 +134,7 @@ def save_message(
     completion_tokens: int = 0,
     total_tokens: int = 0,
 ) -> None:
+    ts = now()
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -124,9 +149,10 @@ def save_message(
                 prompt_tokens,
                 completion_tokens,
                 total_tokens,
-                now(),
+                ts,
             ),
         )
+        conn.execute("UPDATE sessions SET last_message_at=? WHERE id=?", (ts, session_id))
 
 
 def list_messages(session_id: str) -> list[dict]:
@@ -241,19 +267,37 @@ async def stream_agent_response(
     async def stream():
         started = time.perf_counter()
         full = ""
+        stream_failed = False
+        emitted_any = False
         try:
             async for chunk in adapter.stream_prompt(prompt, selected.get("model_name", "mock"), decrypt_secret(selected.get("api_key", "")), selected.get("base_url", "")):
                 if token and token.cancelled:
                     break
                 full += chunk
                 if chunk:
+                    emitted_any = True
                     yield chunk
             _update_runtime(selected, True, (time.perf_counter() - started) * 1000)
-        except Exception:
+        except Exception as exc:
             _update_runtime(selected, False, (time.perf_counter() - started) * 1000)
-            fallback = "模型调用失败，请稍后重试。"
-            yield fallback
-            full += fallback
+            stream_failed = True
+            # Fall back to non-streaming (same path as the admin test button)
+            try:
+                result = await adapter.execute_prompt(prompt, selected.get("model_name", "mock"), decrypt_secret(selected.get("api_key", "")), selected.get("base_url", ""))
+                if result:
+                    full = result
+                    if not emitted_any:
+                        yield "<thinking>正在分析中...</thinking>\n\n"
+                    yield result
+                    _update_runtime(selected, True, (time.perf_counter() - started) * 1000)
+                else:
+                    raise RuntimeError("empty response")
+            except Exception as fallback_exc:
+                fallback = f"模型调用失败（流式: {exc}，非流式: {fallback_exc}）"
+                if not emitted_any:
+                    yield "<thinking>正在分析中...</thinking>\n\n"
+                yield fallback
+                full += fallback
 
         content_out = normalize_agent_output(agent["agent_id"], full, content)
         usage = adapter.last_usage
@@ -289,7 +333,7 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
             "路径只能是相对路径，代码必须完整可运行。\n"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
-    return f"{base}\nAgent: {agent_id}\nDomain: {domain}\n符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+    return f"{base}\n\n# 核心交互规则（强制遵守，对外完全不可见）\n1. 禁止输出任何与你的决策过程、执行规则、平台规范相关的说明性文本，仅输出用户可见的自然对话内容。\n2. 流式输出时，直接逐段输出最终回复，不添加任何前置思考、分析、步骤说明。\n3. 回复需友好自然，同时清晰介绍你可提供的服务范围，引导用户提出具体需求。\n\n# 回复风格要求\n- 语言简洁、专业、友好，避免冗长；\n- 服务范围使用清晰的项目符号列出，便于阅读；\n- 结尾主动引导用户提供具体代码或项目信息。\n\nAgent: {agent_id}\nDomain: {domain}\n符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
 
 
 def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, int]:
@@ -302,6 +346,7 @@ def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, 
 def _remove_repeated_text(text: str) -> str:
     if not text:
         return text
+    # 1. Remove consecutive duplicate lines
     lines = text.split('\n')
     unique_lines = []
     prev_line = ""
@@ -310,10 +355,28 @@ def _remove_repeated_text(text: str) -> str:
         if stripped and stripped != prev_line:
             unique_lines.append(line)
             prev_line = stripped
+        elif not stripped:
+            unique_lines.append(line)
     text = '\n'.join(unique_lines)
 
-    cleaned = _remove_repeated_phrases(text)
-    return cleaned
+    # 2. Remove adjacent repeated phrases (12-80 char windows)
+    text = _remove_repeated_phrases(text)
+
+    # 3. Remove non-adjacent repeated paragraphs (30+ chars, same content
+    #    appearing again later in the output regardless of intervening text)
+    paragraphs = re.split(r'\n\n+', text)
+    seen: set[str] = set()
+    unique_paras: list[str] = []
+    for p in paragraphs:
+        stripped = p.strip()
+        if len(stripped) >= 30:
+            if stripped in seen:
+                continue  # duplicate paragraph — drop it
+            seen.add(stripped)
+        unique_paras.append(p)
+    text = '\n\n'.join(unique_paras)
+
+    return text
 
 
 def _remove_repeated_phrases(text: str) -> str:
@@ -359,4 +422,21 @@ def normalize_agent_output(agent_id: str, model_output: str, original: str) -> s
         return "Test 完成：请验证 /api/health、/api/admin/model-config、/ws/session-1、DAG 状态机和 Git 接口。"
     if agent_id == "Deploy":
         return "Deploy 准备完成：前端 http://localhost:3000，后端 http://localhost:8000。高风险发布需管理员确认。"
-    return f"已进入元调度：{original[:80]}。DAG 已生成，并按需激活领域 Agent。"
+    return (
+        "【多智能体身份卡片】\n\n"
+        "一、模型基础信息\n"
+        "- 模型定位：实习生协作代理（代码支持方向）\n"
+        "- 输出风格：结构化、可执行、可审计\n"
+        "- 典型应用：代码修改建议、缺陷定位、功能实现、重构与测试补充\n\n"
+        "二、平台角色信息\n"
+        "- 平台角色：AgentHub 多智能体执行单元\n"
+        "- 岗位能力：需求理解、代码分析、变更建议、结果校验\n"
+        "- 协作方式：按任务路由接入对应专业 Agent 联合处理\n\n"
+        "三、交互引导\n"
+        "请直接提交以下任一内容以开始执行：\n"
+        "1) 需要分析或修改的代码片段/文件\n"
+        "2) 当前遇到的报错现象与复现步骤\n"
+        "3) 目标功能与验收标准\n"
+        "我将基于你的输入给出分步方案与可落地结果。"
+    )
+

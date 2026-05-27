@@ -67,15 +67,19 @@ export default function AdminPage(): JSX.Element {
     return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
   }
 
+  const [defaultChatAgent, setDefaultChatAgent] = useState<string>('Orchestrator');
+
   async function refresh(): Promise<void> {
-    const [a, r, l] = await Promise.all([
+    const [a, r, l, d] = await Promise.all([
       fetch('/api/agent/registry', { headers: authHeaders() }),
       fetch('/api/admin/agent-routes', { headers: authHeaders() }),
       fetch('/api/admin/audit-log', { headers: authHeaders() }),
+      fetch('/api/admin/default-chat-agent', { headers: authHeaders() }),
     ]);
     if (a.ok) setAgents((await a.json()) as Agent[]);
     if (r.ok) setRoutes((await r.json()) as AgentRoute[]);
     if (l.ok) setLogs((await l.json()) as AuditLog[]);
+    if (d.ok) setDefaultChatAgent(((await d.json()) as { agentId: string }).agentId);
   }
 
   async function createAgent(e: FormEvent<HTMLFormElement>): Promise<void> {
@@ -229,7 +233,23 @@ export default function AdminPage(): JSX.Element {
     if (res.ok) await refresh();
   }
 
+  async function handleSetDefaultChatAgent(agentId: string): Promise<void> {
+    const res = await fetch('/api/admin/default-chat-agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ agentId }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      setDefaultChatAgent(agentId);
+      setNotice(`已将 ${agentId} 设为默认对话模型。不含 @Agent 指令的日常对话将默认使用该模型。`);
+    } else {
+      setNotice((data as { detail?: string }).detail || '设置失败');
+    }
+  }
+
   function renderServiceProviderModule(): JSX.Element {
+    const isDefault = (a: Agent) => a.agentId === defaultChatAgent;
     return (
       <section className="space-y-4">
         <div className="flex items-start justify-between gap-3">
@@ -242,14 +262,26 @@ export default function AdminPage(): JSX.Element {
           </button>
         </div>
 
+        {/* Default model explanation banner */}
+        <div className="rounded-xl border border-primary-200 bg-primary-50 px-4 py-3">
+          <div className="flex items-start gap-2">
+            <svg className="h-5 w-5 shrink-0 text-primary-500 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <div>
+              <p className="text-sm font-medium text-primary-800">关于默认对话模型</p>
+              <p className="mt-0.5 text-sm text-primary-600">将某个服务商设为默认后，<strong>不含 @Agent 指令的日常对话</strong>将默认使用该模型进行响应。如需指定其他 Agent，在输入框中 @Agent 名称即可临时切换。</p>
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-3">
           {agents.map((a) => {
             const test = agentTests[a.agentId];
             const online = a.status === 'online';
+            const isDefaultAgent = isDefault(a);
             return (
               <div
                 key={a.agentId}
-                className={`rounded-2xl border bg-white px-5 py-4 ${online ? 'border-green-400' : 'border-warm-200'}`}
+                className={`rounded-2xl border bg-white px-5 py-4 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-green-400' : 'border-warm-200'}`}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
@@ -257,7 +289,7 @@ export default function AdminPage(): JSX.Element {
                       <span className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-green-500' : 'bg-warm-400'}`} />
                       <span className="truncate text-2xl font-semibold text-warm-900">{a.agentId}</span>
                       <span className="rounded bg-warm-100 px-2 py-0.5 text-xs text-warm-600">{a.adapterType}</span>
-                      {online ? <span className="rounded bg-amber-100 px-2 py-0.5 text-xs text-amber-700">默认</span> : null}
+                      {isDefaultAgent ? <span className="rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700">默认对话模型</span> : null}
                     </div>
                     <div className="mt-1 truncate text-sm text-warm-500">
                       {a.baseUrl || '未配置地址'} · {a.baseModelName || '未配置模型'}
@@ -267,15 +299,25 @@ export default function AdminPage(): JSX.Element {
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    {!isDefaultAgent && (
+                      <button className="btn-secondary px-3 py-1 text-sm" onClick={() => handleSetDefaultChatAgent(a.agentId)}>
+                        设为默认对话模型
+                      </button>
+                    )}
+                    {isDefaultAgent && (
+                      <span className="rounded bg-primary-50 px-3 py-1 text-xs text-primary-600">当前默认 · 日常对话使用此模型</span>
+                    )}
                     <button className="btn-ghost px-3 py-1 text-sm" onClick={() => startEditAgent(a)}>
                       编辑
                     </button>
                     <button className="btn-ghost px-3 py-1 text-sm" onClick={() => testAgent(a.agentId)}>
                       测试
                     </button>
-                    <button className="btn-ghost px-3 py-1 text-sm text-red-500" onClick={() => removeAgent(a.agentId)}>
-                      删除
-                    </button>
+                    {a.agentId !== 'Orchestrator' && (
+                      <button className="btn-ghost px-3 py-1 text-sm text-red-500" onClick={() => removeAgent(a.agentId)}>
+                        删除
+                      </button>
+                    )}
                   </div>
                 </div>
                 {test ? (

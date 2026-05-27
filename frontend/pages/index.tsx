@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from 'react';
 import DiffBubble from '../components/chat/DiffBubble';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
+import ThinkingPanel from '../components/chat/ThinkingPanel';
 import GeneratedFilesPanel from '../components/git/GeneratedFilesPanel';
 import FidelityScore from '../components/chat/FidelityScore';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
@@ -22,6 +23,17 @@ interface ChatSession {
   active?: number;
   createdAt?: string;
   isPinned?: number;
+  lastMessageAt?: string;
+}
+
+function sortSessions(items: ChatSession[]): ChatSession[] {
+  return [...items].sort((a, b) => {
+    const pinDiff = (b.isPinned || 0) - (a.isPinned || 0);
+    if (pinDiff !== 0) return pinDiff;
+    const aTime = a.lastMessageAt || a.createdAt || '';
+    const bTime = b.lastMessageAt || b.createdAt || '';
+    return bTime.localeCompare(aTime);
+  });
 }
 
 interface DagState {
@@ -82,6 +94,46 @@ function FileIcon({ category, size }: { category: FileCategory; size: number }) 
   }
 }
 
+interface ContentSegment {
+  type: 'think' | 'text';
+  content: string;
+  isComplete: boolean;
+}
+
+function normalizeStructuredStreamContent(content: string): string {
+  // Strip lingering thinking tags from providers that ignore the prompt rules
+  return content ? content.replace(/<\/?think(?:ing)?>/g, '') : content;
+}
+
+function parseThinkSegments(content: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
+  const re = /<think>([\s\S]*?)(<\/think>|$)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', content: content.slice(lastIndex, match.index), isComplete: true });
+    }
+    segments.push({
+      type: 'think',
+      content: match[1],
+      isComplete: match[2] === '</think>',
+    });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    segments.push({ type: 'text', content: content.slice(lastIndex), isComplete: true });
+  }
+
+  if (segments.length === 0) {
+    segments.push({ type: 'text', content, isComplete: true });
+  }
+
+  return segments;
+}
+
 const INLINE_THRESHOLD = 512 * 1024; // files ≤ 512 KB can be embedded inline
 
 interface AttachedFile {
@@ -127,6 +179,7 @@ export default function AgentHubIM(): JSX.Element {
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const mentionStartRef = useRef<number>(-1);
@@ -134,6 +187,9 @@ export default function AgentHubIM(): JSX.Element {
   const mentionPanelRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+
+  const prevMessageCountRef = useRef(0);
+  const prevSessionRef = useRef<string>(sessionId);
 
   useEffect(() => {
     currentSessionRef.current = sessionId;
@@ -151,7 +207,7 @@ export default function AgentHubIM(): JSX.Element {
     fetch('/api/chat/sessions', { headers: authHeaders() })
       .then((r) => r.json())
       .then((data: ChatSession[]) => {
-        setSessions(data);
+        setSessions(sortSessions(data));
         if (!data.find((s) => s.id === sessionId) && data.length) {
           setSessionId(data[0].id);
         }
@@ -178,10 +234,13 @@ export default function AgentHubIM(): JSX.Element {
           const existingIds = new Set(prev.filter((m) => m.id).map((m) => m.id));
           const newMessages = data.filter((m) => !m.id || !existingIds.has(m.id));
           if (newMessages.length === 0) return prev;
-          return [...prev, ...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+          // Remove streaming placeholders — DB data is authoritative and
+          // includes the final saved message for any in-progress stream.
+          const clean = prev.filter((m) => !m.messageId);
+          return [...clean, ...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
         });
       } else {
-        setMessages(data);
+        setMessages([...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
       }
     } catch { /* ignore */ }
   }
@@ -193,7 +252,34 @@ export default function AgentHubIM(): JSX.Element {
     return () => wsRef.current?.close();
   }, [token, sessionId]);
 
-  useEffect(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages]);
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    const currentCount = messages.length;
+    const isNewMessage = currentCount > prevMessageCountRef.current;
+    const isSessionSwitch = sessionId !== prevSessionRef.current;
+    prevMessageCountRef.current = currentCount;
+    prevSessionRef.current = sessionId;
+
+    if (isSessionSwitch) {
+      requestAnimationFrame(() => {
+        container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
+      });
+      return;
+    }
+
+    if (isNewMessage) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      return;
+    }
+
+    // Streaming update — only follow if user hasn't scrolled up
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceToBottom < 120) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
+    }
+  }, [messages, sessionId]);
 
   function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const localToken = typeof window !== 'undefined' ? localStorage.getItem('agenthub_token') : '';
@@ -309,15 +395,35 @@ export default function AgentHubIM(): JSX.Element {
       if (evt === 'message') {
         setIsStreaming(false);
         const msg = raw as unknown as Message;
+        const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
         setMessages((prev) => {
-          const lastIdx = prev.length - 1;
-          if (lastIdx >= 0 && prev[lastIdx].isStreaming && prev[lastIdx].messageId) {
+          // Replace the streaming placeholder (matched by messageId, not isStreaming,
+          // because isFinal=true already cleared isStreaming before this event arrives)
+          const streamingIdx = prev.findIndex((m) => m.messageId);
+          if (streamingIdx >= 0 && !isSystemMsg) {
             const updated = [...prev];
-            updated[lastIdx] = { ...msg, messageId: undefined, isStreaming: false };
+            updated[streamingIdx] = { ...msg, messageId: undefined, isStreaming: false };
+            // reloadMessages merge may have already added the same DB record
+            // while the placeholder was still pending — remove any duplicate.
+            if (msg.id) {
+              return updated.filter((m, i) => i === streamingIdx || m.id !== msg.id);
+            }
             return updated;
+          }
+          // Suppress system connect messages from chat log
+          if (isSystemMsg && msg.content && msg.content.includes('已连接')) {
+            return prev;
+          }
+          // Dedup by id: reloadMessages may have already fetched this message
+          // from DB while the streaming placeholder was still pending replacement.
+          if (msg.id && prev.some((m) => m.id === msg.id)) {
+            return prev;
           }
           return [...prev, { ...msg, messageId: undefined, isStreaming: false }];
         });
+        if (!isSystemMsg) {
+          setSessions((prev) => sortSessions(prev.map((s) => (s.id === (msg.sessionId || sid) ? { ...s, lastMessageAt: msg.timestamp || new Date().toISOString() } : s))));
+        }
         if (msg.symbolic?.generated) setGenerated(msg.symbolic.generated as GeneratedData);
       }
     };
@@ -540,7 +646,7 @@ export default function AgentHubIM(): JSX.Element {
       return;
     }
     const created = data as ChatSession;
-    setSessions((prev) => [created, ...prev]);
+    setSessions((prev) => sortSessions([created, ...prev]));
     setSessionId(created.id);
     setMessages([]);
   }
@@ -596,8 +702,7 @@ export default function AgentHubIM(): JSX.Element {
     }
     setSessions((prev) => {
       const updated = prev.map((s) => (s.id === id ? { ...s, isPinned: data.isPinned as number } : s));
-      updated.sort((a, b) => (b.isPinned || 0) - (a.isPinned || 0) || (b.createdAt || '').localeCompare(a.createdAt || ''));
-      return updated;
+      return sortSessions(updated);
     });
   }
 
@@ -815,6 +920,7 @@ export default function AgentHubIM(): JSX.Element {
       setIsStreaming(false);
     }
     setMessages((prev) => [...prev, localMsg]);
+    setSessions((prev) => sortSessions(prev.map((s) => (s.id === sessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(wsMsg));
     } else {
@@ -903,7 +1009,16 @@ export default function AgentHubIM(): JSX.Element {
             </div>
           ) : (
             <div className="leading-7">
-              <MarkdownRenderer content={msg.content} />
+              {parseThinkSegments(normalizeStructuredStreamContent(msg.content)).map((seg, si) =>
+                seg.type === 'think' ? (
+                  <ThinkingPanel key={si} content={seg.content} isStreaming={!!showCursor} isComplete={seg.isComplete} />
+                ) : (
+                  <div key={si}>
+                    {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
+                    <MarkdownRenderer content={seg.content.replace('【正式回复】\n', '')} />
+                  </div>
+                ),
+              )}
               {showCursor && <span className="ml-0.5 inline-block h-5 w-0.5 animate-pulse bg-primary-500 align-text-bottom" />}
             </div>
           )}
@@ -1026,7 +1141,7 @@ export default function AgentHubIM(): JSX.Element {
           </div>
         </header>
 
-        <section className="flex-1 overflow-auto p-6">
+        <section ref={messagesContainerRef} className="flex-1 overflow-auto p-6">
           {messages.map(renderMessage)}
           {generated && <GeneratedFilesPanel generated={generated} onCommit={confirmCommit} />}
           <div ref={bottomRef} />

@@ -22,7 +22,7 @@ class SessionCreateRequest(BaseModel):
 async def sessions() -> list[dict]:
     from app.db.session import dict_rows
 
-    return dict_rows("SELECT id,name,type,active,created_at AS createdAt,is_pinned AS isPinned FROM sessions ORDER BY is_pinned DESC, created_at DESC")
+    return dict_rows("SELECT id,name,type,active,created_at AS createdAt,is_pinned AS isPinned,last_message_at AS lastMessageAt FROM sessions ORDER BY is_pinned DESC, CASE WHEN last_message_at != '' THEN last_message_at ELSE created_at END DESC")
 
 
 @router.post("/sessions")

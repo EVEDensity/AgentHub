@@ -5,7 +5,8 @@
       "Read(//d/Users/xyn/Desktop/skills/anysearch-skill/anysearch-skill/**)",
       "Bash(curl -s http://localhost:3000)",
       "Bash(npx next *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(python -m py_compile app/api/websocket.py)"
     ]
   }
 }
