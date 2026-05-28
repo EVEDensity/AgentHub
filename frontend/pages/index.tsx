@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import DiffBubble from '../components/chat/DiffBubble';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
 import ThinkingPanel from '../components/chat/ThinkingPanel';
@@ -187,6 +187,8 @@ export default function AgentHubIM(): JSX.Element {
   const mentionPanelRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const streamBufferRef = useRef<{ messageId: string; sessionId: string; chunks: string[]; isFinal: boolean } | null>(null);
+  const streamFlushRafRef = useRef<number | null>(null);
 
   const prevMessageCountRef = useRef(0);
   const prevSessionRef = useRef<string>(sessionId);
@@ -281,6 +283,44 @@ export default function AgentHubIM(): JSX.Element {
     }
   }, [messages, sessionId]);
 
+  function flushStreamBuffer(): void {
+    const buf = streamBufferRef.current;
+    if (!buf || buf.chunks.length === 0 || currentSessionRef.current !== buf.sessionId) return;
+    const contentDelta = buf.chunks.join('');
+    const finalFlag = buf.isFinal;
+    buf.chunks = [];
+    buf.isFinal = false;
+
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.messageId === buf.messageId);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = {
+          ...updated[idx],
+          content: updated[idx].content + contentDelta,
+          isStreaming: !finalFlag,
+        };
+        return updated;
+      }
+      const newMsg: Message = {
+        event: 'message',
+        sessionId: buf.sessionId,
+        sender: 'agent',
+        content: contentDelta,
+        type: 'text',
+        timestamp: new Date().toISOString(),
+        messageId: buf.messageId,
+        isStreaming: !finalFlag,
+      };
+      return [...prev, newMsg];
+    });
+
+    if (finalFlag) {
+      setIsStreaming(false);
+      streamBufferRef.current = null;
+    }
+  }
+
   function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const localToken = typeof window !== 'undefined' ? localStorage.getItem('agenthub_token') : '';
     return localToken ? { ...extra, Authorization: `Bearer ${localToken}` } : extra;
@@ -333,6 +373,11 @@ export default function AgentHubIM(): JSX.Element {
     };
     ws.onclose = () => {
       setConnected(false);
+      if (streamFlushRafRef.current != null) {
+        window.cancelAnimationFrame(streamFlushRafRef.current);
+        streamFlushRafRef.current = null;
+      }
+      streamBufferRef.current = null;
       setIsStreaming(false);
       if (currentSessionRef.current === sid) {
         reconnectRef.current = setTimeout(connectWs, 1500);
@@ -351,29 +396,29 @@ export default function AgentHubIM(): JSX.Element {
       if (evt === 'message_chunk') {
         const chunk = raw as unknown as StreamChunk;
         setIsStreaming(!chunk.isFinal);
-        setMessages((prev) => {
-          const idx = prev.findIndex((m) => m.messageId === chunk.messageId);
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = {
-              ...updated[idx],
-              content: updated[idx].content + chunk.content,
-              isStreaming: !chunk.isFinal,
-            };
-            return updated;
-          }
-          const newMsg: Message = {
-            event: 'message',
-            sessionId: chunk.sessionId,
-            sender: 'agent',
-            content: chunk.content,
-            type: 'text',
-            timestamp: new Date().toISOString(),
+
+        if (!streamBufferRef.current || streamBufferRef.current.messageId !== chunk.messageId || streamBufferRef.current.sessionId !== chunk.sessionId) {
+          streamBufferRef.current = {
             messageId: chunk.messageId,
-            isStreaming: !chunk.isFinal,
+            sessionId: chunk.sessionId,
+            chunks: [],
+            isFinal: false,
           };
-          return [...prev, newMsg];
-        });
+        }
+
+        if (chunk.content) {
+          streamBufferRef.current.chunks.push(chunk.content);
+        }
+        if (chunk.isFinal) {
+          streamBufferRef.current.isFinal = true;
+        }
+
+        if (streamFlushRafRef.current == null) {
+          streamFlushRafRef.current = window.requestAnimationFrame(() => {
+            streamFlushRafRef.current = null;
+            flushStreamBuffer();
+          });
+        }
       }
 
       if (evt === 'stream_interrupted') {
@@ -588,15 +633,21 @@ export default function AgentHubIM(): JSX.Element {
     }
   }
 
-  const filteredAgents = agents.filter((agent) => {
+  const filteredSessions = useMemo(() => {
+    const q = sessionQuery.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) => s.name.toLowerCase().includes(q));
+  }, [sessions, sessionQuery]);
+
+  const filteredAgents = useMemo(() => agents.filter((agent) => {
     const matchesSearch = mentionSearch === '' ||
       agent.agentId.toLowerCase().includes(mentionSearch.toLowerCase()) ||
       agent.domain.toLowerCase().includes(mentionSearch.toLowerCase());
     const matchesLevel = selectedRiskLevel === 'all' || agent.rankLevel === selectedRiskLevel;
     return matchesSearch && matchesLevel;
-  });
+  }), [agents, mentionSearch, selectedRiskLevel]);
 
-  const filteredWorkflows = workflows.filter((w) => {
+  const filteredWorkflows = useMemo(() => workflows.filter((w) => {
     if (mentionSearch === '') return true;
     const q = mentionSearch.toLowerCase();
     return (
@@ -604,7 +655,7 @@ export default function AgentHubIM(): JSX.Element {
       w.description.toLowerCase().includes(q) ||
       w.triggerKeywords.some((k) => k.toLowerCase().includes(q))
     );
-  });
+  }), [workflows, mentionSearch]);
 
   function insertWorkflow(wf: WorkflowSummary): void {
     setMentionOpen(false);
@@ -1075,7 +1126,7 @@ export default function AgentHubIM(): JSX.Element {
         <div className="mb-2 text-xs text-warm-500">Recent 30 days</div>
         <div className="flex-1 overflow-hidden">
           <div className="h-full space-y-1 overflow-auto pr-1">
-          {sessions.filter((s) => !sessionQuery.trim() || s.name.toLowerCase().includes(sessionQuery.toLowerCase())).map((s) => (
+          {filteredSessions.map((s) => (
             <div key={s.id} className={`group flex items-center gap-1 rounded-lg px-2 py-1 ${s.id === sessionId ? 'bg-warm-100' : 'hover:bg-warm-50'}`}>
               {editingId === s.id ? (
                 <input
