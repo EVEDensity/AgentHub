@@ -41,6 +41,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
     env_api_key = OPENAI_API_KEY
     default_model = "gpt-3.5-turbo"
     supports_stream_usage: bool = False  # Only OpenAI supports stream_options
+    temperature: float = 0.2
+    frequency_penalty: float = 0.5
+    presence_penalty: float = 0.3
 
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> str:
         key = api_key or self.env_api_key
@@ -48,7 +51,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
             return await MockAdapter().execute_prompt(prompt, model)
         actual_model = model if model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "/chat/completions"
-        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "frequency_penalty": 0.5, "presence_penalty": 0.3}
+        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": self.temperature, "frequency_penalty": self.frequency_penalty, "presence_penalty": self.presence_penalty}
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
         if response.status_code >= 400:
@@ -71,11 +74,12 @@ class OpenAICompatibleAdapter(BaseAdapter):
         actual_model = model if model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "//chat/completions"
         url = url.replace("//chat", "/chat")  # normalize double slash
-        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "stream": True, "frequency_penalty": 0.5, "presence_penalty": 0.3}
+        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": self.temperature, "stream": True, "frequency_penalty": self.frequency_penalty, "presence_penalty": self.presence_penalty}
         if self.supports_stream_usage:
             payload["stream_options"] = {"include_usage": True}
         self.last_usage = {}  # reset per call so stale data never leaks
         full_text = ""
+        reasoning_open = False
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as response:
                 if response.status_code >= 400:
@@ -90,8 +94,20 @@ class OpenAICompatibleAdapter(BaseAdapter):
                     try:
                         obj = json.loads(data)
                         delta = obj["choices"][0].get("delta", {})
+                        reasoning = delta.get("reasoning_content", "")
                         content = delta.get("content", "")
+                        if reasoning:
+                            if not reasoning_open:
+                                reasoning_open = True
+                                full_text += "<think>"
+                                yield "<think>"
+                            full_text += reasoning
+                            yield reasoning
                         if content:
+                            if reasoning_open:
+                                reasoning_open = False
+                                full_text += "</think>"
+                                yield "</think>"
                             full_text += content
                             yield content
                         if "usage" in obj:
@@ -99,6 +115,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
                             self.last_usage = {"prompt_tokens": u.get("prompt_tokens", 0), "completion_tokens": u.get("completion_tokens", 0), "total_tokens": u.get("total_tokens", 0)}
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
+                if reasoning_open:
+                    full_text += "</think>"
+                    yield "</think>"
         yield ""
         # Always set fallback estimation when no real usage was captured from chunks
         if not self.last_usage.get("total_tokens"):
@@ -137,6 +156,14 @@ class DoubaoAdapter(OpenAICompatibleAdapter):
 
 class CustomOpenAIAdapter(OpenAICompatibleAdapter):
     default_base_url = ""
+
+
+class KimiAdapter(OpenAICompatibleAdapter):
+    default_base_url = "https://api.moonshot.cn/v1"
+    default_model = "kimi-k2.6"
+    temperature: float = 1.0
+    frequency_penalty: float = 0.0
+    presence_penalty: float = 0.0
 
 
 class AnthropicAdapter(BaseAdapter):
@@ -232,6 +259,7 @@ class AdapterManager:
             "qwen": QwenAdapter(),
             "doubao": DoubaoAdapter(),
             "custom_openai": CustomOpenAIAdapter(),
+            "kimi": KimiAdapter(),
         }
 
     def get_adapter(self, provider: str) -> BaseAdapter:

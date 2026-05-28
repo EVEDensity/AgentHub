@@ -14,10 +14,168 @@ from app.services.adapter_manager import adapter_manager
 from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.secret_service import decrypt_secret
-from app.services.symbolic import generate_symbolic_message, public_symbolic
+from app.services.symbolic import (
+    FIDELITY_HIGH,
+    FIDELITY_LOW,
+    FIDELITY_WARN,
+    evaluate_contribution,
+    fidelity_action,
+    fidelity_grade,
+    generate_symbolic_message,
+    public_symbolic,
+    requires_redistill,
+)
+
 
 AGENTS = {"Orchestrator", "Architect", "CodeGen", "Review", "Test", "Deploy"}
 _RUNTIME: dict[str, dict] = {}
+
+# ── Collaboration context for multi-agent communication ──────────────
+# Models how real employees communicate: shared project context,
+# structured peer summaries, role-specific expectations, distilled
+# information rather than raw text dumps.
+
+_ROLE_LABELS: dict[str, str] = {
+    "orchestrator": "协调调度",
+    "architect": "架构设计",
+    "codegen": "代码生成",
+    "review": "代码审查",
+    "test": "测试验证",
+    "deploy": "部署发布",
+}
+
+
+class CollaborationContext:
+    """Shared memory for one multi-agent collaboration turn — with fidelity tracking."""
+
+    def __init__(self, user_content: str):
+        self.user_content = user_content
+        self.participants: list[dict] = []
+        self.contributions: list[dict] = []
+        self._fidelity_scores: list[float] = []
+
+    def register(self, agent: dict) -> None:
+        self.participants.append(agent)
+
+    def record(self, agent_id: str, domain: str, content: str) -> dict:
+        """Record a contribution with fidelity evaluation.
+
+        Returns the fidelity assessment dict so callers can decide whether to
+        block, warn, or enrich downstream.
+        """
+        clean = _strip_think_tags(_strip_kimi_thinking(content))
+        sentences = re.split(r"[。！？\n]", clean)
+        summary_parts = [s.strip() for s in sentences[:3] if len(s.strip()) > 10]
+        summary = "。".join(summary_parts) if summary_parts else clean[:200]
+
+        key_points: list[str] = []
+        for line in clean.split("\n"):
+            line = line.strip()
+            if 20 < len(line) < 200 and (
+                re.match(r"^[-•*\d]+[.)]", line)
+                or any(kw in line for kw in ["建议", "方案", "采用", "需要", "注意", "关键", "核心", "必须", "推荐", "优先"])
+            ):
+                key_points.append(line[:150])
+        if not key_points:
+            key_points.append(summary[:150])
+
+        # Evaluate fidelity of this contribution
+        fidelity = evaluate_contribution(self.user_content, clean, agent_id, domain)
+        self._fidelity_scores.append(fidelity["fidelity_score"])
+
+        self.contributions.append({
+            "agent_id": agent_id,
+            "domain": domain,
+            "summary": summary[:300],
+            "key_points": key_points[:3],
+            "fidelity": fidelity,
+        })
+        return fidelity
+
+    def context_for(self, agent_id: str) -> str:
+        if not self.contributions:
+            return ""
+
+        my = next((p for p in self.participants if p["agent_id"] == agent_id), None)
+        my_domain = (my or {}).get("domain", "")
+
+        roster = "\n".join(
+            f"- {p['agent_id']}（{_ROLE_LABELS.get(p.get('domain',''), 'general')}）"
+            for p in self.participants
+        )
+
+        peer_blocks: list[str] = []
+        for c in self.contributions:
+            if c["agent_id"] == agent_id:
+                continue
+            pts = "\n".join(f"  · {pt}" for pt in c["key_points"][:3])
+            fid = c.get("fidelity", {})
+            fid_note = ""
+            if fid and fid.get("fidelity_score", 1.0) < FIDELITY_HIGH:
+                fid_note = f" [保真度: {fid['fidelity_score']:.2f} — 请交叉验证]"
+            peer_blocks.append(
+                f"### {c['agent_id']}（{_ROLE_LABELS.get(c['domain'], 'general')}）{fid_note}\n"
+                f"摘要：{c['summary']}\n"
+                f"关键要点：\n{pts}"
+            )
+
+        expectations = _collab_expectations(my_domain, agent_id)
+
+        return (
+            "【多智能体协作上下文 — 你正在与其他Agent协同完成用户任务】\n\n"
+            f"## 协作团队\n{roster}\n\n"
+            + (f"## 同伴已完成的工作\n" + "\n\n".join(peer_blocks) + "\n\n" if peer_blocks else "")
+            + f"## 对你（{agent_id}）的角色期望\n{expectations}\n\n"
+            "## 协作铁律\n"
+            "1. 基于同伴输出进行补充和深化，严禁重复已有内容\n"
+            "2. 你的回复将与其他Agent的回复一起展示给用户\n"
+            "3. 如有不同意见请标注「补充意见」后继续，不要陷入辩论\n"
+            "4. 保持专业、具体、可执行，给出下一步行动建议"
+        )
+
+    @property
+    def overall_fidelity(self) -> float:
+        """Average fidelity across all contributions in this turn."""
+        if not self._fidelity_scores:
+            return 1.0
+        return round(sum(self._fidelity_scores) / len(self._fidelity_scores), 3)
+
+    @property
+    def summary(self) -> str:
+        if not self.contributions:
+            return ""
+        overall = self.overall_fidelity
+        fid_tag = f" [整体保真度: {overall:.2f}]" if overall < FIDELITY_HIGH else ""
+        lines = [f"【本轮协作摘要】{fid_tag}"]
+        for i, c in enumerate(self.contributions, 1):
+            fid = c.get("fidelity", {})
+            fid_str = f" (保真度: {fid['fidelity_score']:.2f})" if fid and fid.get("fidelity_score", 1.0) < FIDELITY_HIGH else ""
+            lines.append(f"{i}. {c['agent_id']}（{_ROLE_LABELS.get(c['domain'], 'general')}）{fid_str}：{c['summary'][:120]}")
+        return "\n".join(lines)
+
+
+def _collab_expectations(domain: str, agent_id: str) -> str:
+    return {
+        "architect": "基于用户需求进行技术方案设计。如果前面已有Agent给出分析，请在其基础上补充架构层面（技术选型、模块划分、数据流、部署拓扑）的建议，不要重复具体实现细节。",
+        "codegen": "基于已有的技术方案生成具体可运行代码。如果Architect已给出架构方案，严格遵循其设计；如果Review已提出修改意见，先修正再输出最终代码。",
+        "review": "审查已有方案和代码。逐项检查同伴输出是否存在逻辑漏洞、安全隐患、性能瓶颈或偏离需求之处，给出条目化的修改建议和风险等级。",
+        "test": "基于已有代码和方案设计测试策略。列出关键测试路径、边界条件和推荐的测试框架，指出同伴代码中最可能出错的模块。",
+        "deploy": "基于已完成的工作检查部署前置条件：代码是否已审查通过、测试是否通过、环境配置是否完整。给出分步部署方案。",
+        "orchestrator": "你是多Agent协作的协调者。综合所有Agent的输出，识别冲突和缺口，规划下一步执行顺序，确保整体任务高质量完成。",
+    }.get(domain, f"基于你的专业领域（{domain}），在同伴已有工作的基础上给出独立且互补的分析和建议。不要重复已有内容，给出增量价值。")
+
+
+def _intent_from_domain(domain: str, _content: str = "") -> str:
+    """Map agent domain to a symbolic-message intent_type (§3.2)."""
+    mapping = {
+        "architect": "architecture",
+        "codegen": "code_generation",
+        "review": "code_review",
+        "test": "testing",
+        "deploy": "deployment",
+        "orchestrator": "orchestration",
+    }
+    return mapping.get(domain, "general")
 
 
 def _build_attachment_context(attachments: list[dict[str, Any]] | None) -> tuple[str, list[dict[str, Any]]]:
@@ -58,21 +216,37 @@ def extract_mentions(content: str) -> list[str]:
     return re.findall(r"@(\w+)", content)
 
 
-def resolve_agent(content: str) -> dict:
-    # Check agent_registry for every @mentioned name (supports both Chinese
-    # and English agent names, not just the hardcoded AGENTS set).
+def resolve_all_agents(content: str) -> list[dict]:
+    """Return ALL valid agents @mentioned in the content.
+
+    If no valid mention is found, falls back to the default chat agent.
+    """
+    agents: list[dict] = []
+    seen: set[str] = set()
     for name in extract_mentions(content):
+        if name in seen:
+            continue
+        seen.add(name)
         agent = one_row(
             "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?",
             (name,),
         )
         if agent:
-            return agent
+            agents.append(agent)
+
+    if agents:
+        return agents
+
     # No valid mention — fall back to user-configured default, then Orchestrator
     default_row = one_row("SELECT value FROM system_config WHERE key='default_chat_agent'")
     default_agent_id = default_row["value"] if default_row else "Orchestrator"
     agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (default_agent_id,))
-    return agent or {"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}
+    return [agent] if agent else [{"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}]
+
+
+def resolve_agent(content: str) -> dict:
+    """Resolve a single agent from @mentions (kept for backward compatibility)."""
+    return resolve_all_agents(content)[0]
 
 
 def candidate_models_for_role(role: str) -> list[dict]:
@@ -165,8 +339,9 @@ def list_messages(session_id: str) -> list[dict]:
     return items
 
 
-async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None) -> dict:
-    agent = resolve_agent(content)
+async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "") -> dict:
+    if agent is None:
+        agent = resolve_agent(content)
     domain = agent["domain"]
     msg_type = "code" if domain == "codegen" or any(word in content.lower() for word in ["code", "fastapi", "react", "代码", "实现"]) else "text"
 
@@ -175,9 +350,15 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     if attachment_context:
         llm_input = f"{content}\n\n[用户上传附件上下文]\n{attachment_context}"
 
-    symbolic = generate_symbolic_message(llm_input, msg_type, session_id)
+    symbolic = generate_symbolic_message(
+        llm_input, msg_type, session_id,
+        sender_role=agent["agent_id"],
+        intent_type=_intent_from_domain(domain, content),
+        risk_level=agent.get("risk_level", "L1"),
+    )
     models = choose_models(candidate_models_for_role(agent["agent_id"]))
-    prompt = build_prompt(agent["agent_id"], domain, llm_input, symbolic, models[0].get("prompt", "") if models else "")
+    history = _build_conversation_history(session_id)
+    prompt = build_prompt(agent["agent_id"], domain, llm_input, symbolic, models[0].get("prompt", "") if models else "", collab_ctx, history)
 
     result = ""
     selected = models[0] if models else {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
@@ -211,7 +392,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         "attachments": attachment_meta,
     }
     AuthService.write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})
-    display_content = "CodeGen 已生成结构化文件，请在下方生成文件面板中检查内容、查看 Diff，并确认提交。" if generated else content_out
+    display_content = "CodeGen 已生成结构化文件，请在下方生成文件面板中检查内容、查看 Diff，并确认提交。" if (generated and generated.get("files")) else content_out
     message = {
         "event": "message",
         "sessionId": session_id,
@@ -242,8 +423,11 @@ async def stream_agent_response(
     user_id: str,
     token=None,
     attachments: list[dict[str, Any]] | None = None,
+    agent: dict | None = None,
+    collab_ctx: str = "",
 ) -> AsyncGenerator[str, None] | None:
-    agent = resolve_agent(content)
+    if agent is None:
+        agent = resolve_agent(content)
     models = choose_models(candidate_models_for_role(agent["agent_id"]))
     if not models:
         return None
@@ -257,8 +441,15 @@ async def stream_agent_response(
         agent["agent_id"],
         agent["domain"],
         llm_input,
-        generate_symbolic_message(llm_input, "text", session_id),
+        generate_symbolic_message(
+            llm_input, "text", session_id,
+            sender_role=agent["agent_id"],
+            intent_type=_intent_from_domain(agent["domain"], content),
+            risk_level=agent.get("risk_level", "L1"),
+        ),
         models[0].get("prompt", "") if models else "",
+        collab_ctx,
+        _build_conversation_history(session_id),
     )
 
     selected = models[0]
@@ -305,35 +496,129 @@ async def stream_agent_response(
             pt, ct, tt = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
         else:
             pt, ct, tt = max(1, len(prompt) // 4), max(1, len(content_out) // 4), max(1, len(prompt) // 4) + max(1, len(content_out) // 4)
-        save_message(session_id, agent["agent_id"], content_out, "text", 0.95, None, pt, ct, tt)
+        # Compute actual fidelity instead of hardcoded 0.95
+        from app.services.symbolic import compute_fidelity as _cf
+        fid_score = _cf(llm_input, content_out, intent_type=_intent_from_domain(agent["domain"], content), has_code=("```" in content_out))
+        symbolic_out = generate_symbolic_message(
+            llm_input, "text", session_id,
+            sender_role=agent["agent_id"],
+            intent_type=_intent_from_domain(agent["domain"], content),
+            risk_level=agent.get("risk_level", "L1"),
+        )
+        save_message(session_id, agent["agent_id"], content_out, "text", fid_score, public_symbolic(symbolic_out), pt, ct, tt)
 
     return stream()
 
 
-def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str) -> str:
-    base = role_prompt or (
-        "你是 AgentHub 多智能体平台中的领域 Agent，必须输出清晰、可执行、可审计的结果。\n\n"
-        "【代码输出格式规范】当回复中包含代码、终端命令、脚本、SQL 或配置文件时，必须严格遵守以下格式：\n"
-        "1. 全部代码、终端命令统一使用 ```[语言] 代码块格式，必须精准填写语言名称：\n"
-        "   - Python 代码 → python\n"
-        "   - JavaScript/TypeScript 前端代码 → javascript / typescript\n"
-        "   - Windows/Linux 终端命令 → bash\n"
-        "   - 数据库语句 → sql\n"
-        "   - 配置文件（JSON/YAML/TOML）→ json / yaml / toml\n"
-        "2. 代码内容完整、语法无误，复制后可直接执行，不删减核心逻辑。\n"
-        "3. 每一个代码块上方标注用途，多个代码片段依次编号（如：代码片段 1：创建配置文件）。\n"
-        "4. 仅使用原生 Markdown，不插入 HTML、自定义标签。\n"
-        "5. 纯文本说明和代码块分隔排版，结构清晰。"
+def _build_conversation_history(session_id: str, max_chars: int = 2000) -> str:
+    """Fetch recent messages from this session and format as a transcript.
+
+    Gives every agent called in the session full awareness of what was
+    discussed before — the foundation of long-term conversational memory.
+
+    Messages are processed newest-first so that the most recent (and most
+    relevant) context is always included when the char limit is hit.
+    """
+    try:
+        rows = dict_rows(
+            "SELECT sender,content FROM messages WHERE session_id=? AND type!='system' ORDER BY created_at DESC LIMIT 30",
+            (session_id,),
+        )
+    except Exception:
+        return ""
+
+    if not rows:
+        return ""
+
+    # Keep DESC order (newest first), build lines until we hit max_chars,
+    # then reverse to chronological for the prompt.
+    lines: list[str] = []
+    total = 0
+    for r in rows:
+        content = _strip_think_tags(r["content"])
+        line = f"{r['sender']}：{content}"
+        total += len(line)
+        lines.append(line)
+        if total > max_chars:
+            break
+
+    lines.reverse()  # chronological order for readability
+    return "【会话历史记录 — 以下是本会话中之前的对话内容，请基于此上下文理解用户的后续问题】\n" + "\n".join(lines)
+
+
+def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "") -> str:
+    # ── Shared session context (ALL agents see this FIRST) ──────────
+    # This is the "main context window" — every agent reads it before
+    # its role-specific instructions, ensuring a unified understanding
+    # of what the conversation is about regardless of domain.
+    shared_context = ""
+    if history:
+        shared_context = (
+            "【共享会话上下文 — 所有Agent的对话记忆窗口】\n"
+            "以下是你与用户及其他Agent之间的完整对话记录。请首先通读此上下文，"
+            "理解当前话题和讨论脉络，再结合你的专业角色给出回复。\n"
+            "即使话题与你的专业领域不完全匹配，也请基于上下文给出合理回答，"
+            "不要以\"我是XX专家\"为由拒绝回复。\n\n"
+            f"{history}\n"
+            "─── 以上为共享记忆，以下是你的角色指令 ───\n"
+        )
+
+    collab_section = f"\n\n{collab_ctx}" if collab_ctx else ""
+
+    # ── Role identity (lightweight, below shared context) ──────────
+    role_labels = {
+        "orchestrator": "协调调度专家",
+        "architect": "架构设计专家",
+        "codegen": "代码生成专家",
+        "review": "代码审查专家",
+        "test": "测试验证专家",
+        "deploy": "部署发布专家",
+    }
+    role_desc = role_labels.get(domain, f"{domain}领域专家")
+
+    code_format_rules = (
+        "【代码输出格式规范】当回复中包含代码、终端命令、脚本、SQL 或配置文件时：\n"
+        "1. 统一使用 ```[语言] 代码块格式（python/javascript/typescript/bash/sql/json/yaml/toml）\n"
+        "2. 代码内容完整、语法无误，复制后可直接执行\n"
+        "3. 代码块上方标注用途，多个代码片段依次编号\n"
+        "4. 仅使用原生 Markdown，不插入 HTML、自定义标签\n"
+    ) if not role_prompt else ""
+
+    output_rules = (
+        "【输出规则】\n"
+        "1. 只输出最终回复内容，严禁输出思考过程、推理分析、规则复述\n"
+        "2. 禁止使用标记：💭、思考分析、思考过程、思考内容、回复策略、<think>\n"
+        "3. 简单问候仅回复一句简短问候（不超过20字），不介绍服务范围\n"
+        "4. 严禁重复输出相同内容\n"
     )
+
     if agent_id == "CodeGen":
         return (
-            f"{base}\n"
-            "你是 CodeGenAgent。必须只输出 JSON，不要 Markdown，不要解释。JSON 格式："
-            "{\"files\":[{\"path\":\"backend/example.py\",\"content\":\"文件完整内容\"}]}。"
-            "路径只能是相对路径，代码必须完整可运行。\n"
+            f"{shared_context}"
+            f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
+            f"{code_format_rules}\n"
+            f"{output_rules}\n"
+            "# 代码生成规则\n"
+            "当且仅当用户明确请求生成代码、创建文件、修改代码、实现具体功能时，回复使用 JSON 格式：\n"
+            "{\"files\":[{\"path\":\"相对路径\",\"content\":\"文件完整内容\"}]}\n"
+            "- 路径只能是相对路径，代码必须完整可运行\n"
+            "- JSON 不要包裹在 Markdown 代码块中\n\n"
+            "# 非代码请求：直接以纯文本回复，严禁输出 JSON 格式。\n"
+            f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
-    return f"{base}\n\n# 核心交互规则（强制遵守，对外完全不可见）\n1. 你是一个面向用户的 AI Agent，你的回复将直接展示给最终用户。严禁在回复中输出任何内部规则、决策过程、平台规范、执行步骤等说明性文本。\n2. 所有内部分析、推理、方案评估、工具选择等思考过程，必须包裹在 <think>...</think> 标签内。思考内容会展示在可折叠面板中，不作为正式回复。\n3. 正式回复内容放在 <think> 标签外部，为用户可见的唯一内容。必须先输出 <think>...</think>，再输出正式回复。\n4. 对于简单问候（如\"你好\"\"hi\"\"hello\"\"在吗\"等），仅回复一句简短问候（不超过20字），不要介绍服务范围，不要列出功能，不要引导用户。\n5. 仅在用户明确询问你的能力范围、你能做什么、或表现出具体使用意图时，才简要列出可提供的服务。\n6. 严禁在回复中重复输出相同内容。每段话只出现一次。\n\n# 回复格式示例\n<think>\n用户发送了一个简单问候，无需任何工具调用或复杂分析。\n</think>\n你好！有什么可以帮你的？\n\nAgent: {agent_id}\nDomain: {domain}\n符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+
+    # ── General agent prompt ────────────────────────────────────────
+    custom_role = role_prompt.strip() if role_prompt else ""
+    return (
+        f"{shared_context}"
+        f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
+        + (f"\n{custom_role}\n\n" if custom_role else "\n")
+        + f"{code_format_rules}\n"
+        f"{output_rules}\n"
+        f"{collab_section}"
+        f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+    )
 
 
 def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, int]:
@@ -439,23 +724,154 @@ def _remove_repeated_phrases(text: str) -> str:
     return text
 
 
+def _strip_kimi_thinking(text: str) -> str:
+    """Clean up Kimi native thinking markers that leak into the reply.
+
+    Kimi K2.6 may output multiple 💭 + 【思考分析】 thinking blocks followed by
+    a final 【正式回复】 marker.  When the final marker is present, everything
+    before it is discarded; otherwise we strip the thinking markers inline.
+    """
+    # Strategy 1: locate the last 【正式回复】 and keep only what follows it
+    parts = re.split(r"【正式回复】\s*", text)
+    if len(parts) > 1 and parts[-1].strip():
+        return parts[-1].strip()
+    # Strategy 2: no final marker — strip thinking patterns inline
+    text = re.sub(r"💭\s*", "", text)
+    text = re.sub(r"【思考分析】已完成\s*\(\d+字\)", "", text)
+    text = re.sub(r"^(回复策略：.*|思考内容：.*|注意：用户消息.*|核心需求是.*)\n?", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> tags injected by the adapter for reasoning_content.
+
+    These tags drive the frontend ThinkingPanel but pollute saved messages and
+    conversation history — strip them before persistence.
+    """
+    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+
+
+def _strip_codegen_prefix(text: str) -> str:
+    """Remove decorative prefixes models sometimes add before JSON."""
+    return re.sub(r"^(【[^】]*】\s*)+", "", text.strip())
+
+
+def _is_codegen_json_response(text: str) -> bool:
+    """Check if text is a CodeGen-style JSON file manifest."""
+    try:
+        data = json.loads(text)
+        return isinstance(data, dict) and isinstance(data.get("files"), list)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False
+
+
+def _is_code_request(text: str) -> bool:
+    """Check whether the user is asking for code generation."""
+    keywords = [
+        "生成", "创建", "实现", "写", "编写", "修改", "添加", "改", "开发",
+        "code", "fastapi", "react", "api", "页面", "组件", "路由", "接口",
+        "帮我做", "帮我写", "做一个", "写一个", "改一下", "加一个",
+    ]
+    return any(w in text.lower() for w in keywords)
+
+
+def _latex_to_unicode(text: str) -> str:
+    """Convert common LaTeX math commands to Unicode symbols.
+
+    Models (especially Kimi K2.6) often output LaTeX like \\div, \\times
+    which the frontend cannot render.  Map them to proper Unicode glyphs.
+    Longer patterns are replaced first so that e.g. \\rightarrow is handled
+    before the shorter \\to contained within it.
+    """
+    replacements = [
+        ("\\textdegree", "°"),
+        ("\\Leftrightarrow", "⇔"),
+        ("\\rightarrow", "→"),
+        ("\\leftarrow", "←"),
+        ("\\Rightarrow", "⇒"),
+        ("\\subseteq", "⊆"),
+        ("\\notin", "∉"),
+        ("\\subset", "⊂"),
+        ("\\approx", "≈"),
+        ("\\equiv", "≡"),
+        ("\\propto", "∝"),
+        ("\\infty", "∞"),
+        ("\\ldots", "…"),
+        ("\\cdots", "⋯"),
+        ("\\degree", "°"),
+        ("\\angle", "∠"),
+        ("\\triangle", "△"),
+        ("\\forall", "∀"),
+        ("\\exists", "∃"),
+        ("\\emptyset", "∅"),
+        ("\\times", "×"),
+        ("\\cdot", "·"),
+        ("\\leq", "≤"),
+        ("\\geq", "≥"),
+        ("\\neq", "≠"),
+        ("\\sim", "∼"),
+        ("\\sum", "∑"),
+        ("\\prod", "∏"),
+        ("\\int", "∫"),
+        ("\\div", "÷"),
+        ("\\pm", "±"),
+        ("\\mp", "∓"),
+        ("\\sqrt", "√"),
+        ("\\alpha", "α"),
+        ("\\beta", "β"),
+        ("\\gamma", "γ"),
+        ("\\delta", "δ"),
+        ("\\epsilon", "ε"),
+        ("\\theta", "θ"),
+        ("\\lambda", "λ"),
+        ("\\mu", "μ"),
+        ("\\pi", "π"),
+        ("\\sigma", "σ"),
+        ("\\omega", "ω"),
+        ("\\land", "∧"),
+        ("\\lor", "∨"),
+        ("\\neg", "¬"),
+        ("\\cup", "∪"),
+        ("\\cap", "∩"),
+        ("\\to", "→"),
+        ("\\in", "∈"),
+        ("\\%", "%"),
+        ("\\_", "_"),
+        ("\\&", "&"),
+        ("\\#", "#"),
+    ]
+    for latex, uni in replacements:
+        text = text.replace(latex, uni)
+    return text
+
+
 def normalize_agent_output(agent_id: str, model_output: str, original: str) -> str:
     if agent_id == "CodeGen":
+        # Real model response (not mock)
         if model_output and not model_output.startswith("本地 Mock 模型响应") and not model_output.startswith("模型调用失败"):
-            return model_output
-        return json.dumps(
-            {
-                "files": [
-                    {
-                        "path": "backend/health_router.py" if "fastapi" in original.lower() or "路由" in original else "frontend/GeneratedPanel.jsx",
-                        "content": "from fastapi import APIRouter\n\nrouter = APIRouter(prefix=\"/generated\", tags=[\"generated\"])\n\n\n@router.get(\"/health\")\nasync def generated_health() -> dict[str, str]:\n    return {\"status\": \"ok\", \"module\": \"agenthub-generated\"}\n",
-                    }
-                ]
-            },
-            ensure_ascii=False,
-        )
+            stripped = _latex_to_unicode(_strip_think_tags(_strip_kimi_thinking(_strip_codegen_prefix(model_output))))
+            # Safety net: model may ignore prompt and still output JSON for a
+            # conversational question. If so, replace with a text reply.
+            if _is_codegen_json_response(stripped) and not _is_code_request(original):
+                return "我是 AgentHub 平台的代码生成专家，基于大规模语言模型构建。对于编程任务，我可以生成完整的可执行代码；如果你有代码相关的具体需求，请直接告诉我！"
+            return stripped
+        # Mock fallback: only return JSON for actual code-generation requests
+        if _is_code_request(original):
+            return json.dumps(
+                {
+                    "files": [
+                        {
+                            "path": "backend/health_router.py" if "fastapi" in original.lower() or "路由" in original else "frontend/GeneratedPanel.jsx",
+                            "content": "from fastapi import APIRouter\n\nrouter = APIRouter(prefix=\"/generated\", tags=[\"generated\"])\n\n\n@router.get(\"/health\")\nasync def generated_health() -> dict[str, str]:\n    return {\"status\": \"ok\", \"module\": \"agenthub-generated\"}\n",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        return "Mock 运行模式下 CodeGen 不可用，请前往管理后台为 CodeGen Agent 配置真实的大模型 API Key。配置后，我可以根据你的需求生成完整的可执行代码。"
     if model_output and not model_output.startswith("本地 Mock 模型响应"):
-        return _remove_repeated_text(model_output)
+        return _remove_repeated_text(_latex_to_unicode(_strip_think_tags(_strip_kimi_thinking(model_output))))
     if agent_id == "Review":
         return "Review 完成：结构符合 FastAPI + Next.js 分层方案，建议生产环境收紧 CORS、加入鉴权、限流和审计。"
     if agent_id == "Test":

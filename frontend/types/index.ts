@@ -63,6 +63,38 @@ export interface StreamInterrupted {
   timestamp: string;
 }
 
+export interface FidelityWarning {
+  event: 'fidelity_warning';
+  sessionId: string;
+  agentId: string;
+  fidelityScore: number;
+  grade: 'warn' | 'low';
+  message: string;
+  timestamp: string;
+}
+
+export interface FidelityBlock {
+  event: 'fidelity_block';
+  sessionId: string;
+  agentId: string;
+  fidelityScore: number;
+  grade: 'block';
+  message: string;
+  requiresHumanConfirm: boolean;
+  timestamp: string;
+}
+
+export interface FidelityResolved {
+  event: 'fidelity_resolved';
+  sessionId: string;
+  agentId: string;
+  fidelityScore: number;
+  message: string;
+  timestamp: string;
+}
+
+export type FidelityEvent = FidelityWarning | FidelityBlock | FidelityResolved;
+
 export interface SymbolicData {
   task_fingerprint_id: string;
   session_id: string;

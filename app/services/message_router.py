@@ -29,5 +29,7 @@ async def stream_message(
     user_id: str = "local-admin",
     token=None,
     attachments: list[dict] | None = None,
+    agent: dict | None = None,
+    collab_ctx: str = "",
 ) -> AsyncGenerator[str, None] | None:
-    return await stream_agent_response(session_id, content, user_id, token, attachments or [])
+    return await stream_agent_response(session_id, content, user_id, token, attachments or [], agent=agent, collab_ctx=collab_ctx)

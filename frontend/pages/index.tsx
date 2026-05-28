@@ -87,6 +87,9 @@ export default function AgentHubIM(): JSX.Element {
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const lastMessageIdRef = useRef<string>('');
+  const dedupIdsRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
@@ -255,24 +258,54 @@ export default function AgentHubIM(): JSX.Element {
 
   // ── WebSocket ────────────────────────────────────────────
 
+  function _reconnectDelay(): number {
+    // Exponential backoff: 1s → 2s → 4s → 8s → ... → 30s max
+    const attempt = reconnectAttemptsRef.current;
+    const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+    return delay + Math.random() * 500; // jitter to avoid thundering herd
+  }
+
   function connectWs(): void {
     const sid = currentSessionRef.current;
     if (reconnectRef.current) {
       clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
     }
+    // Close any existing socket
+    if (wsRef.current) {
+      wsRef.current.onclose = null; // prevent reconnect trigger
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+
     const ws = new WebSocket(`ws://127.0.0.1:8000/ws/${sid}?token=${encodeURIComponent(token)}`);
     wsRef.current = ws;
+
     ws.onopen = () => {
       if (currentSessionRef.current !== sid) { ws.close(); return; }
       setConnected(true);
+      reconnectAttemptsRef.current = 0; // reset backoff on successful connect
       setNotice('WebSocket connected');
-      void reloadMessages(true);
+
+      // Replay queued messages that were pending during disconnect
       const queued = [...retryRef.current];
       retryRef.current = [];
       setPending([]);
-      queued.forEach((msg) => ws.send(JSON.stringify(msg)));
+      queued.forEach((msg) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+      });
+
+      // Request missed messages since last known ID
+      if (lastMessageIdRef.current) {
+        ws.send(JSON.stringify({
+          event: 'sync_request',
+          lastMessageId: lastMessageIdRef.current,
+        }));
+      } else {
+        void reloadMessages(true);
+      }
     };
+
     ws.onclose = () => {
       setConnected(false);
       if (streamFlushRafRef.current != null) {
@@ -282,14 +315,44 @@ export default function AgentHubIM(): JSX.Element {
       streamBufferRef.current = null;
       setIsStreaming(false);
       if (currentSessionRef.current === sid) {
-        reconnectRef.current = setTimeout(connectWs, 1500);
+        reconnectAttemptsRef.current += 1;
+        reconnectRef.current = setTimeout(connectWs, _reconnectDelay());
       }
     };
+
     ws.onerror = () => setConnected(false);
+
     ws.onmessage = (event: MessageEvent<string>) => {
       if (currentSessionRef.current !== sid) return;
       const raw: Record<string, unknown> = JSON.parse(event.data);
       const evt = raw.event as string | undefined;
+
+      // ── Heartbeat: respond to pings ──────────────────────────
+      if (evt === 'ping') {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ event: 'pong', ts: Date.now() }));
+        }
+        return;
+      }
+
+      // ── Replayed message dedup ───────────────────────────────
+      const msgId = (raw.id || raw.messageId || '') as string;
+      if (raw._replay && msgId && dedupIdsRef.current.has(msgId)) {
+        return; // already processed
+      }
+      if (msgId) {
+        dedupIdsRef.current.add(msgId);
+        // Keep dedup set from growing unbounded (cap at ~500)
+        if (dedupIdsRef.current.size > 500) {
+          const arr = [...dedupIdsRef.current];
+          dedupIdsRef.current = new Set(arr.slice(arr.length - 250));
+        }
+      }
+
+      // Track last known message ID for reconnection sync
+      if (evt === 'message' || evt === 'message_chunk') {
+        if (msgId) lastMessageIdRef.current = msgId;
+      }
 
       if (evt === 'task_update') {
         setDag({ total: raw.total as number || 0, completed: raw.completed as number || 0, nodes: raw.nodes as DagState['nodes'] || [] });
@@ -337,6 +400,67 @@ export default function AgentHubIM(): JSX.Element {
           }
           return updated;
         });
+      }
+
+      // ── Fidelity closed-loop events (§3.3) ─────────────────────
+      if (evt === 'fidelity_warning') {
+        const payload = raw as { agentId?: string; fidelityScore?: number; grade?: string; message?: string };
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.sender === (payload.agentId || '') && last.fidelityScore == null) {
+            const updated = [...prev];
+            updated[updated.length - 1] = {
+              ...last,
+              fidelityScore: payload.fidelityScore,
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              event: 'message',
+              sessionId: sid,
+              sender: 'system',
+              content: payload.message || `保真度警告 (${(payload.fidelityScore || 0).toFixed(2)})`,
+              type: 'system' as const,
+              timestamp: new Date().toISOString(),
+              fidelityScore: payload.fidelityScore,
+            },
+          ];
+        });
+      }
+
+      if (evt === 'fidelity_block') {
+        const payload = raw as { agentId?: string; fidelityScore?: number; message?: string; requiresHumanConfirm?: boolean };
+        setIsStreaming(false);
+        setMessages((prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: sid,
+            sender: 'system',
+            content: `⚠️ ${payload.message || '保真度过低，流程已阻断'}` + (payload.requiresHumanConfirm ? '\n\n需要人工确认后继续。' : ''),
+            type: 'system' as const,
+            timestamp: new Date().toISOString(),
+            fidelityScore: payload.fidelityScore,
+          },
+        ]);
+      }
+
+      if (evt === 'fidelity_resolved') {
+        const payload = raw as { agentId?: string; fidelityScore?: number; message?: string };
+        setMessages((prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: sid,
+            sender: 'system',
+            content: `✅ ${payload.message || '保真度已恢复'}`,
+            type: 'system' as const,
+            timestamp: new Date().toISOString(),
+            fidelityScore: payload.fidelityScore,
+          },
+        ]);
       }
 
       if (evt === 'message') {
@@ -724,7 +848,12 @@ export default function AgentHubIM(): JSX.Element {
   const handleSend = useCallback((customText?: string) => {
     const currentInput = inputRef.current;
     const currentFiles = attachedFilesRef.current;
-    const text = (customText || currentInput).trim();
+    const rawText = typeof customText === 'string'
+      ? customText
+      : typeof currentInput === 'string'
+        ? currentInput
+        : '';
+    const text = rawText.trim();
     if (!text && currentFiles.length === 0) return;
 
     const fileMetas: AttachmentMeta[] = currentFiles.map((f) => ({
