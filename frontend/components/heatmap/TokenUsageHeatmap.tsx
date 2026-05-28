@@ -89,7 +89,7 @@ export default function TokenUsageHeatmap(): JSX.Element {
     setError('');
     try {
       const token = localStorage.getItem('agenthub_token');
-      const res = await fetch('/api/admin/token-usage-heatmap', {
+      const res = await fetch('/api/admin/analytics/token-usage', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (res.status === 401 || res.status === 403) {

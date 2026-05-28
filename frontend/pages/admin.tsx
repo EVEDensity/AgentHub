@@ -72,9 +72,9 @@ export default function AdminPage(): JSX.Element {
   async function refresh(): Promise<void> {
     const [a, r, l, d] = await Promise.all([
       fetch('/api/agent/registry', { headers: authHeaders() }),
-      fetch('/api/admin/agent-routes', { headers: authHeaders() }),
-      fetch('/api/admin/audit-log', { headers: authHeaders() }),
-      fetch('/api/admin/default-chat-agent', { headers: authHeaders() }),
+      fetch('/api/admin/workflows', { headers: authHeaders() }),
+      fetch('/api/admin/audit/logs', { headers: authHeaders() }),
+      fetch('/api/admin/chat-defaults', { headers: authHeaders() }),
     ]);
     if (a.ok) setAgents((await a.json()) as Agent[]);
     if (r.ok) setRoutes((await r.json()) as AgentRoute[]);
@@ -211,20 +211,20 @@ export default function AdminPage(): JSX.Element {
   async function createRoute(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     const payload = { name: form.name, description: form.description, triggerKeywords: form.triggerKeywords.split(',').map((x) => x.trim()).filter(Boolean), nodes: form.nodes, isDefault: false };
-    const res = await fetch('/api/admin/agent-routes', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(payload) });
+    const res = await fetch('/api/admin/workflows', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(payload) });
     const data = await res.json();
     setNotice(res.ok ? `路线创建成功：${form.name}` : data.detail || '路线创建失败');
     if (res.ok) await refresh();
   }
 
   async function setDefaultRoute(id: number): Promise<void> {
-    const res = await fetch(`/api/admin/agent-routes/${id}/default`, { method: 'POST', headers: authHeaders() });
+    const res = await fetch(`/api/admin/workflows/${id}/default`, { method: 'POST', headers: authHeaders() });
     setNotice(res.ok ? '默认路线已更新' : '设置失败');
     if (res.ok) await refresh();
   }
 
   async function toggleRoute(route: AgentRoute): Promise<void> {
-    const res = await fetch(`/api/admin/agent-routes/${route.id}/active`, {
+    const res = await fetch(`/api/admin/workflows/${route.id}/active`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ active: !route.active }),
@@ -234,7 +234,7 @@ export default function AdminPage(): JSX.Element {
   }
 
   async function handleSetDefaultChatAgent(agentId: string): Promise<void> {
-    const res = await fetch('/api/admin/default-chat-agent', {
+    const res = await fetch('/api/admin/chat-defaults', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ agentId }),
@@ -361,7 +361,7 @@ export default function AdminPage(): JSX.Element {
   const [editingFlow, setEditingFlow] = useState<AgentRoute | null>(null);
 
   async function deleteFlow(routeId: number) {
-    const res = await fetch(`/api/admin/agent-routes/${routeId}`, {
+    const res = await fetch(`/api/admin/workflows/${routeId}`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
@@ -409,7 +409,7 @@ export default function AdminPage(): JSX.Element {
       })),
       isDefault: data.isDefault,
     };
-    const url = data.id ? `/api/admin/agent-routes/${data.id}` : '/api/admin/agent-routes';
+    const url = data.id ? `/api/admin/workflows/${data.id}` : '/api/admin/workflows';
     const method = data.id ? 'PUT' : 'POST';
     const res = await fetch(url, {
       method,

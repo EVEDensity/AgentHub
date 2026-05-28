@@ -209,46 +209,60 @@ export default function AgentFlowCanvas({
   return (
     <div className="flex h-[calc(100vh-73px)] flex-col">
       {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-warm-150 bg-white px-6 py-3">
-        <div className="flex items-center gap-4">
-          <input
-            className="input-field w-48"
-            placeholder="工作流名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <input
-            className="input-field w-64"
-            placeholder="描述"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <input
-            className="input-field w-48"
-            placeholder="触发关键词（逗号分隔）"
-            value={triggerKeywords}
-            onChange={(e) => setTriggerKeywords(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="btn-secondary text-sm" onClick={() => setScale((s) => Math.max(0.3, s - 0.1))}>
-            缩小
-          </button>
-          <span className="text-xs text-warm-500">{Math.round(scale * 100)}%</span>
-          <button className="btn-secondary text-sm" onClick={() => setScale((s) => Math.min(2, s + 0.1))}>
-            放大
-          </button>
-          <button className="btn-secondary text-sm" onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }}>
-            重置视角
-          </button>
-          <button className="btn-primary text-sm" onClick={handleSave}>
-            保存
-          </button>
-          {initialData?.id && (
-            <button className="btn-ghost text-sm text-red-500" onClick={handleDelete}>
-              删除工作流
+      <div className="border-b border-warm-150 bg-white px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3 xl:flex-nowrap xl:justify-between">
+          {/* ① 左侧：功能模式标签区 */}
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-warm-150 bg-warm-50/60 px-2 py-2">
+            <input
+              className="h-10 min-w-[150px] flex-1 rounded-lg border border-warm-200 bg-white px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              placeholder="工作流名称"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <input
+              className="h-10 min-w-[210px] flex-[1.2] rounded-lg border border-warm-200 bg-white px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              placeholder="描述"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <input
+              className="h-10 min-w-[200px] flex-1 rounded-lg border border-warm-200 bg-white px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              placeholder="触发关键词（逗号分隔）"
+              value={triggerKeywords}
+              onChange={(e) => setTriggerKeywords(e.target.value)}
+            />
+          </div>
+
+          {/* ② 中间：画布控制区 */}
+          <div className="flex items-center gap-2 rounded-xl border border-warm-150 bg-warm-50/60 px-2 py-2">
+            <button className="btn-secondary h-10 min-w-[76px] whitespace-nowrap rounded-lg px-4 text-sm" onClick={() => setScale((s) => Math.max(0.3, s - 0.1))}>
+              缩小
             </button>
-          )}
+            <span className="inline-flex h-10 min-w-[64px] items-center justify-center rounded-lg border border-warm-200 bg-white px-2 text-xs font-medium text-warm-600">
+              {Math.round(scale * 100)}%
+            </span>
+            <button className="btn-secondary h-10 min-w-[76px] whitespace-nowrap rounded-lg px-4 text-sm" onClick={() => setScale((s) => Math.min(2, s + 0.1))}>
+              放大
+            </button>
+            <button className="btn-secondary h-10 min-w-[98px] whitespace-nowrap rounded-lg px-4 text-sm" onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }}>
+              重置视角
+            </button>
+          </div>
+
+          {/* ③ 右侧：操作按钮区 */}
+          <div className="ml-auto flex items-center gap-2 rounded-xl border border-warm-150 bg-white px-2 py-2">
+            {initialData?.id && (
+              <button
+                className="h-10 min-w-[98px] whitespace-nowrap rounded-lg border border-danger-200 bg-danger-50 px-4 text-sm font-medium text-danger-600 transition hover:bg-danger-100 active:translate-y-px"
+                onClick={handleDelete}
+              >
+                删除工作流
+              </button>
+            )}
+            <button className="btn-primary h-10 min-w-[76px] whitespace-nowrap rounded-lg px-5 text-sm font-semibold shadow-sm shadow-primary-200/70" onClick={handleSave}>
+              保存
+            </button>
+          </div>
         </div>
       </div>
 
