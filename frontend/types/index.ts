@@ -201,3 +201,51 @@ export interface AgentRoute {
   created_at?: string;
   updated_at?: string;
 }
+
+export interface ChatSession {
+  id: string;
+  name: string;
+  type?: string;
+  active?: number;
+  createdAt?: string;
+  isPinned?: number;
+  lastMessageAt?: string;
+}
+
+export interface DagState {
+  total: number;
+  completed: number;
+  nodes: Array<{
+    id?: string;
+    name?: string;
+    status?: string;
+    agent?: string;
+    description?: string;
+    dependencies?: string[];
+  }>;
+}
+
+export interface WorkflowSummary {
+  routeId: number;
+  name: string;
+  description: string;
+  triggerKeywords: string[];
+}
+
+export interface AttachedFile {
+  name: string;
+  content?: string;
+  size: number;
+  type: string;
+  category: FileCategory;
+  fileId?: string;
+  uploadProgress?: number;
+  uploadStatus: 'pending' | 'uploading' | 'done' | 'error';
+  uploadError?: string;
+}
+
+export interface ContentSegment {
+  type: 'think' | 'text';
+  content: string;
+  isComplete: boolean;
+}

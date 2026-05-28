@@ -105,7 +105,22 @@ async def _process_and_stream(
                     await asyncio.sleep(0.004)
                 if not token.cancelled:
                     await manager.stream_broadcast(session_id, message_id, "", is_final=True)
-                    await manager.broadcast(session_id, response)
+                    from app.db.session import dict_rows as _dr
+
+                    rows = _dr(
+                        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at DESC LIMIT 1",
+                        (session_id,),
+                    )
+                    if rows:
+                        final = rows[0]
+                        final["event"] = "message"
+                        try:
+                            final["symbolic"] = json.loads(final.pop("symbolic_json", "{}") or "{}")
+                        except (json.JSONDecodeError, TypeError):
+                            final["symbolic"] = {}
+                        await manager.broadcast(session_id, final)
+                    else:
+                        await manager.broadcast(session_id, response)
                 return
 
             # Streaming path

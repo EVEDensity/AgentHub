@@ -333,7 +333,7 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
             "路径只能是相对路径，代码必须完整可运行。\n"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
-    return f"{base}\n\n# 核心交互规则（强制遵守，对外完全不可见）\n1. 禁止输出任何与你的决策过程、执行规则、平台规范相关的说明性文本，仅输出用户可见的自然对话内容。\n2. 流式输出时，直接逐段输出最终回复，不添加任何前置思考、分析、步骤说明。\n3. 回复需友好自然，同时清晰介绍你可提供的服务范围，引导用户提出具体需求。\n\n# 回复风格要求\n- 语言简洁、专业、友好，避免冗长；\n- 服务范围使用清晰的项目符号列出，便于阅读；\n- 结尾主动引导用户提供具体代码或项目信息。\n\nAgent: {agent_id}\nDomain: {domain}\n符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+    return f"{base}\n\n# 核心交互规则（强制遵守，对外完全不可见）\n1. 你是一个面向用户的 AI Agent，你的回复将直接展示给最终用户。严禁在回复中输出任何内部规则、决策过程、平台规范、执行步骤等说明性文本。\n2. 所有内部分析、推理、方案评估、工具选择等思考过程，必须包裹在 <think>...</think> 标签内。思考内容会展示在可折叠面板中，不作为正式回复。\n3. 正式回复内容放在 <think> 标签外部，为用户可见的唯一内容。必须先输出 <think>...</think>，再输出正式回复。\n4. 对于简单问候（如\"你好\"\"hi\"\"hello\"\"在吗\"等），仅回复一句简短问候（不超过20字），不要介绍服务范围，不要列出功能，不要引导用户。\n5. 仅在用户明确询问你的能力范围、你能做什么、或表现出具体使用意图时，才简要列出可提供的服务。\n6. 严禁在回复中重复输出相同内容。每段话只出现一次。\n\n# 回复格式示例\n<think>\n用户发送了一个简单问候，无需任何工具调用或复杂分析。\n</think>\n你好！有什么可以帮你的？\n\nAgent: {agent_id}\nDomain: {domain}\n符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
 
 
 def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, int]:
@@ -346,6 +346,46 @@ def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, 
 def _remove_repeated_text(text: str) -> str:
     if not text:
         return text
+
+    # 0. Detect full-text duplication: model sometimes echoes the entire
+    #    response twice back-to-back.  We scan a sliding midpoint ±20 %
+    #    to handle header prefixes like 【正式回复】 that offset alignment.
+    n = len(text)
+    if n >= 60:
+        best_ratio = 0.0
+        best_left = text
+        # Sample every 4th position; full scan is unnecessary for this heuristic
+        start = max(n // 3, 30)
+        end = min(n * 2 // 3, n - 30)
+        for mid in range(start, end, 4):
+            left = text[:mid].strip()
+            right = text[mid:].strip()
+            if not left or not right:
+                continue
+            # Fast path: exact match
+            if left == right:
+                return left
+            # Containment: the shorter half is substantially inside the longer
+            # one (≥80 % length ratio prevents matching on shared-phrase overlap).
+            if len(left) < len(right) and len(left) >= len(right) * 0.8 and left in right:
+                return right
+            if len(right) < len(left) and len(right) >= len(left) * 0.8 and right in left:
+                return left
+            # Fuzzy: longest common prefix ratio
+            min_len = min(len(left), len(right))
+            match_len = 0
+            for j in range(min_len):
+                if left[j] == right[j]:
+                    match_len += 1
+                else:
+                    break
+            ratio = match_len / max(len(left), len(right))
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_left = left
+        if best_ratio > 0.95:
+            text = best_left
+
     # 1. Remove consecutive duplicate lines
     lines = text.split('\n')
     unique_lines = []

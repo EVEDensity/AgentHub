@@ -10,18 +10,17 @@ interface ThinkingPanelProps {
 }
 
 export default function ThinkingPanel({ content, isStreaming, isComplete }: ThinkingPanelProps): JSX.Element {
-  const [expanded, setExpanded] = useState(true);
+  // Collapsed by default; only expand during active thinking (streaming, incomplete)
+  const [expanded, setExpanded] = useState(() => isStreaming && !isComplete);
   const prevComplete = useRef(false);
 
   useEffect(() => {
-    // Auto-collapse when </think> first arrives (transition from incomplete → complete)
     if (isComplete && !prevComplete.current) {
       setExpanded(false);
     }
     prevComplete.current = isComplete;
   }, [isComplete]);
 
-  // During active thinking with no closing tag, keep it open
   useEffect(() => {
     if (isStreaming && !isComplete) {
       setExpanded(true);
