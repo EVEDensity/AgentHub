@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import agent, auth, canvas, chat, files, git, im, system, tasks, websocket
+from app.api import agent, auth, canvas, chat, files, git, im, memory, system, tasks, websocket
 from app.api.admin import router as admin_router
 
 api_router = APIRouter()
 api_router.include_router(system.router)
+api_router.include_router(memory.router)
 api_router.include_router(im.router)
 api_router.include_router(auth.router)
 api_router.include_router(canvas.router)

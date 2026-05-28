@@ -25,6 +25,17 @@ from app.services.websocket_manager import manager
 
 logger = logging.getLogger("agenthub.websocket")
 
+# ── auto-memory extraction (lazy singleton) ─────────────────────────
+_memory_extractor = None  # type: ignore
+
+
+def _get_memory_extractor():
+    global _memory_extractor
+    if _memory_extractor is None:
+        from app.services.memory import MemoryExtractor
+        _memory_extractor = MemoryExtractor()
+    return _memory_extractor
+
 router = APIRouter(tags=["websocket"])
 
 
@@ -352,6 +363,18 @@ async def _process_and_stream(
                 )
         finally:
             manager.remove_token(session_id, token)
+
+    # ── Auto memory extraction (background, non-blocking) ────────
+    # Schedule extraction after message processing completes.
+    # Only runs if AGENTHUB_AUTO_MEMORY=true (default).
+    # This runs in background and does NOT block the response.
+    try:
+        from app.config import AUTO_MEMORY_ENABLED
+        if AUTO_MEMORY_ENABLED:
+            extractor = _get_memory_extractor()
+            asyncio.create_task(extractor.extract_from_session(session_id))
+    except Exception:
+        logger.debug("auto-memory extraction init failed", exc_info=True)
 
 
 async def _invoke_agent(

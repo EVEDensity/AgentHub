@@ -16,6 +16,13 @@ APP_VERSION = "3.0-modular"
 DEFAULT_SESSION_ID = "session-1"
 DEFAULT_USER_ID = "local-admin"
 
+# Memory system: project-local .claude/memory/ directory
+MEMORY_DIR = PROJECT_ROOT / ".claude" / "memory"
+
+# Auto memory extraction settings
+AUTO_MEMORY_ENABLED = os.getenv("AGENTHUB_AUTO_MEMORY", "true").lower() != "false"
+AUTO_MEMORY_MIN_MSG = int(os.getenv("AGENTHUB_MEMORY_MIN_MSG", "4"))
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")

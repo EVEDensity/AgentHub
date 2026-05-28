@@ -528,6 +528,23 @@ export default function AdminPage(): JSX.Element {
     if (activeMenu === '服务商') return renderServiceProviderModule();
     if (activeMenu === 'Agent Flow') return renderAgentFlowModule();
     if (activeMenu === 'Token 用量') return <TokenUsageHeatmap />;
+    if (activeMenu === '记忆') {
+      return (
+        <section className="card p-6">
+          <h2 className="text-h3">记忆系统</h2>
+          <p className="mt-3 text-sm text-warm-500">
+            记忆系统用于跨会话持久化存储用户偏好、反馈、项目上下文和外部参考信息。
+          </p>
+          <a
+            href="/memory"
+            className="btn-primary mt-4 inline-flex items-center gap-2"
+            style={{ display: 'inline-flex', padding: '8px 20px', background: '#3b82f6', color: '#fff', borderRadius: 6, textDecoration: 'none', fontSize: 14 }}
+          >
+            打开记忆管理页面 →
+          </a>
+        </section>
+      );
+    }
 
     return (
       <section className="card p-6">

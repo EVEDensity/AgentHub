@@ -281,3 +281,57 @@ export interface ContentSegment {
   content: string;
   isComplete: boolean;
 }
+
+// ── Memory System Types ─────────────────────────────────────────────
+
+export type MemoryType = 'user' | 'feedback' | 'project' | 'reference';
+
+export interface MemoryFileInfo {
+  filename: string;
+  name: string;
+  description: string;
+  type: MemoryType;
+  mtime: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryDetail {
+  filename: string;
+  meta: {
+    name: string;
+    description: string;
+    type: MemoryType;
+    created_at: string;
+    updated_at: string;
+  };
+  body: string;
+}
+
+export interface MemoryCreateRequest {
+  name: string;
+  description?: string;
+  type?: MemoryType;
+  body?: string;
+  filename?: string;
+}
+
+export interface MemoryUpdateRequest {
+  name?: string;
+  description?: string;
+  type?: MemoryType;
+  body?: string;
+}
+
+export interface MemoryIndexResponse {
+  content: string;
+  path: string;
+}
+
+export interface MemoryFreshnessInfo {
+  filename: string;
+  name: string;
+  mtime: number;
+  age_days: number;
+  warning: string;
+}
