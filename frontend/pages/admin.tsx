@@ -84,6 +84,124 @@ export default function AdminPage(): JSX.Element {
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillMetaExpanded, setSkillMetaExpanded] = useState(false);
 
+  // ── General settings state ─────────────────────────────────────
+  const [generalTheme, setGeneralTheme] = useState<string>(
+    () => typeof window !== 'undefined' ? (localStorage.getItem('agenthub_theme') || 'warm') : 'warm'
+  );
+  const [generalLang, setGeneralLang] = useState<string>(
+    () => typeof window !== 'undefined' ? (localStorage.getItem('agenthub_lang') || 'zh') : 'zh'
+  );
+  const [generalReplyLang, setGeneralReplyLang] = useState<string>(
+    () => typeof window !== 'undefined' ? (localStorage.getItem('agenthub_reply_lang') || 'default') : 'default'
+  );
+  const [generalReasoning, setGeneralReasoning] = useState<number>(
+    () => typeof window !== 'undefined' ? parseInt(localStorage.getItem('agenthub_reasoning') || '2', 10) : 2
+  );
+  const [generalThinking, setGeneralThinking] = useState<boolean>(
+    () => typeof window !== 'undefined' ? localStorage.getItem('agenthub_thinking') !== 'false' : true
+  );
+  const [generalNotify, setGeneralNotify] = useState<boolean>(
+    () => typeof window !== 'undefined' ? localStorage.getItem('agenthub_notify') !== 'false' : true
+  );
+  const [generalZoom, setGeneralZoom] = useState<number>(
+    () => typeof window !== 'undefined' ? parseInt(localStorage.getItem('agenthub_zoom') || '100', 10) : 100
+  );
+  const [generalSettingsLoaded, setGeneralSettingsLoaded] = useState(false);
+
+  // ── Load settings from backend on mount ──────────────────────────
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    fetch('/api/settings')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: Record<string, unknown> | null) => {
+        if (!data) return;
+        // Merge backend values, preferring backend over localStorage defaults
+        if (typeof data.theme === 'string') { setGeneralTheme(data.theme); localStorage.setItem('agenthub_theme', data.theme); }
+        if (typeof data.lang === 'string') { setGeneralLang(data.lang); localStorage.setItem('agenthub_lang', data.lang); }
+        if (typeof data.reply_lang === 'string') { setGeneralReplyLang(data.reply_lang); localStorage.setItem('agenthub_reply_lang', data.reply_lang); }
+        if (typeof data.reasoning === 'number') { setGeneralReasoning(data.reasoning); localStorage.setItem('agenthub_reasoning', String(data.reasoning)); }
+        if (typeof data.thinking === 'boolean') { setGeneralThinking(data.thinking); localStorage.setItem('agenthub_thinking', String(data.thinking)); }
+        if (typeof data.notify === 'boolean') { setGeneralNotify(data.notify); localStorage.setItem('agenthub_notify', String(data.notify)); }
+        if (typeof data.zoom === 'number') { setGeneralZoom(data.zoom); localStorage.setItem('agenthub_zoom', String(data.zoom)); }
+      })
+      .catch(() => { /* backend may not be running — use localStorage defaults */ })
+      .finally(() => setGeneralSettingsLoaded(true));
+  }, []);
+
+  // ── Sync helper: persist a single setting to backend ────────────
+  function syncSetting(key: string, value: unknown): void {
+    if (typeof window === 'undefined') return;
+    fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    }).catch(() => { /* backend off — saved in localStorage only */ });
+  }
+
+  // Apply theme to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', generalTheme);
+    localStorage.setItem('agenthub_theme', generalTheme);
+    if (generalSettingsLoaded) syncSetting('theme', generalTheme);
+  }, [generalTheme]);
+
+  // Apply language to document
+  useEffect(() => {
+    document.documentElement.lang = generalLang === 'en' ? 'en' : 'zh-CN';
+    localStorage.setItem('agenthub_lang', generalLang);
+    if (generalSettingsLoaded) syncSetting('lang', generalLang);
+  }, [generalLang]);
+
+  // Apply zoom to document
+  useEffect(() => {
+    document.body.style.zoom = `${generalZoom}%`;
+    localStorage.setItem('agenthub_zoom', String(generalZoom));
+    if (generalSettingsLoaded) syncSetting('zoom', generalZoom);
+  }, [generalZoom]);
+
+  // Sync reply_lang to backend
+  useEffect(() => {
+    localStorage.setItem('agenthub_reply_lang', generalReplyLang);
+    if (generalSettingsLoaded) syncSetting('reply_lang', generalReplyLang);
+  }, [generalReplyLang]);
+
+  // Sync reasoning to backend
+  useEffect(() => {
+    localStorage.setItem('agenthub_reasoning', String(generalReasoning));
+    if (generalSettingsLoaded) syncSetting('reasoning', generalReasoning);
+  }, [generalReasoning]);
+
+  // Sync thinking to backend
+  useEffect(() => {
+    localStorage.setItem('agenthub_thinking', String(generalThinking));
+    if (generalSettingsLoaded) syncSetting('thinking', generalThinking);
+  }, [generalThinking]);
+
+  // Sync notify to backend
+  useEffect(() => {
+    localStorage.setItem('agenthub_notify', String(generalNotify));
+    if (generalSettingsLoaded) syncSetting('notify', generalNotify);
+  }, [generalNotify]);
+
+  // Keyboard shortcuts for zoom (Ctrl + / Ctrl - / Ctrl 0)
+  useEffect(() => {
+    function handleZoomKey(e: KeyboardEvent): void {
+      if (!e.ctrlKey && !e.metaKey) return;
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault();
+        setGeneralZoom((z) => Math.min(200, z + 10));
+      } else if (e.key === '-') {
+        e.preventDefault();
+        setGeneralZoom((z) => Math.max(50, z - 10));
+      } else if (e.key === '0') {
+        e.preventDefault();
+        setGeneralZoom(100);
+      }
+    }
+    window.addEventListener('keydown', handleZoomKey);
+    return () => window.removeEventListener('keydown', handleZoomKey);
+  }, []);
+
   useEffect(() => {
     const u = localStorage.getItem('agenthub_user');
     if (u) setUser(JSON.parse(u) as User);
@@ -1262,12 +1380,258 @@ export default function AdminPage(): JSX.Element {
     );
   }
 
+  function renderGeneralModule(): JSX.Element {
+    const THEME_OPTIONS = [
+      { value: 'light', label: '纯白', icon: 'light_mode', desc: '明亮清爽的工作区' },
+      { value: 'warm', label: '经典暖色', icon: 'routine', desc: '柔和的暖色调，护眼舒适' },
+      { value: 'dark', label: '暗色', icon: 'dark_mode', desc: '深色界面，适合昏暗环境' },
+    ];
+    const REASONING_LABELS = ['低', '中', '高', '最大'];
+
+    return (
+      <div className="space-y-4 max-w-4xl">
+        {/* ── 配色主题 ─────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+          <div className="border-b border-warm-100 px-5 py-3">
+            <h3 className="text-base font-semibold text-warm-900">配色主题</h3>
+            <p className="text-xs text-warm-500 mt-0.5">在经典暖色、暗色与纯白工作区之间切换。</p>
+          </div>
+          <div className="px-5 py-4 grid grid-cols-3 gap-3">
+            {THEME_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setGeneralTheme(opt.value)}
+                className={`relative rounded-xl border-2 px-4 py-4 text-left transition-all ${
+                  generalTheme === opt.value
+                    ? 'border-primary-400 bg-primary-50 ring-1 ring-primary-200'
+                    : 'border-warm-150 bg-white hover:border-warm-300 hover:bg-warm-50'
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <span className={`material-symbols-outlined text-[20px] ${
+                    generalTheme === opt.value ? 'text-primary-600' : 'text-warm-400'
+                  }`}>
+                    {opt.icon}
+                  </span>
+                </div>
+                <div className={`text-sm font-semibold ${
+                  generalTheme === opt.value ? 'text-primary-800' : 'text-warm-700'
+                }`}>
+                  {opt.label}
+                </div>
+                <div className="text-[11px] text-warm-400 mt-0.5">{opt.desc}</div>
+                {generalTheme === opt.value && (
+                  <span className="absolute top-3 right-3 material-symbols-outlined text-[18px] text-primary-500">
+                    check_circle
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* ── 语言 ─────────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+          <div className="border-b border-warm-100 px-5 py-3">
+            <h3 className="text-base font-semibold text-warm-900">语言</h3>
+            <p className="text-xs text-warm-500 mt-0.5">选择应用程序的显示语言。</p>
+          </div>
+          <div className="px-5 py-4">
+            <div className="inline-flex rounded-lg border border-warm-200 bg-warm-50 p-1">
+              {[
+                { value: 'en', label: 'English' },
+                { value: 'zh', label: '中文' },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => { setGeneralLang(opt.value); }}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                    generalLang === opt.value
+                      ? 'bg-white text-warm-900 shadow-sm'
+                      : 'text-warm-500 hover:text-warm-700'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ── 回复语言 ─────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+          <div className="border-b border-warm-100 px-5 py-3">
+            <h3 className="text-base font-semibold text-warm-900">回复语言</h3>
+            <p className="text-xs text-warm-500 mt-0.5">指定 Claude 始终以某种语言回复。</p>
+          </div>
+          <div className="px-5 py-4">
+            <select
+              className="min-h-10 rounded-xl border border-warm-200 bg-warm-50 px-3 text-sm text-warm-700 outline-none min-w-[240px]"
+              value={generalReplyLang}
+              onChange={(e) => { setGeneralReplyLang(e.target.value); }}
+            >
+              <option value="default">默认（跟随提示词语言）</option>
+              <option value="english">English</option>
+              <option value="chinese">中文</option>
+              <option value="japanese">日本語</option>
+            </select>
+          </div>
+        </section>
+
+        {/* ── 推理强度 ─────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+          <div className="border-b border-warm-100 px-5 py-3">
+            <h3 className="text-base font-semibold text-warm-900">推理强度</h3>
+            <p className="text-xs text-warm-500 mt-0.5">控制模型使用的计算量。更高强度带来更深入的推理，但响应速度会变慢。</p>
+          </div>
+          <div className="px-5 py-4">
+            <div className="flex items-center gap-1 max-w-md">
+              {[1, 2, 3, 4].map((level) => (
+                <button
+                  key={level}
+                  onClick={() => { setGeneralReasoning(level); }}
+                  className={`flex-1 py-2.5 text-sm font-medium rounded-lg border transition-all ${
+                    generalReasoning >= level
+                      ? 'bg-primary-50 border-primary-300 text-primary-700'
+                      : 'bg-white border-warm-200 text-warm-500 hover:border-warm-300'
+                  }`}
+                >
+                  {REASONING_LABELS[level - 1]}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-between max-w-md mt-1.5 px-1">
+              <span className="text-[10px] text-warm-400">快速响应</span>
+              <span className="text-[10px] text-warm-400">深度推理</span>
+            </div>
+          </div>
+        </section>
+
+        {/* ── 思考模式 ─────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+          <div className="px-5 py-4 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base font-semibold text-warm-900">思考模式</h3>
+              <p className="text-xs text-warm-500 mt-0.5">
+                控制新会话是否启用模型思考。关闭后，DeepSeek 等兼容供应商会收到显式非思考模式参数。
+              </p>
+            </div>
+            <button
+              onClick={() => { setGeneralThinking(!generalThinking); }}
+              className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
+                generalThinking ? 'bg-primary-500' : 'bg-warm-300'
+              }`}
+              role="switch"
+              aria-checked={generalThinking}
+            >
+              <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                generalThinking ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+        </section>
+
+        {/* ── 系统通知 ─────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+          <div className="px-5 py-4 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base font-semibold text-warm-900">系统通知</h3>
+              <p className="text-xs text-warm-500 mt-0.5">
+                使用操作系统原生通知提醒授权确认、Agent 回复完成和定时任务结果。
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                const next = !generalNotify;
+                setGeneralNotify(next);
+                if (next && 'Notification' in window && Notification.permission === 'default') {
+                  Notification.requestPermission();
+                }
+              }}
+              className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
+                generalNotify ? 'bg-primary-500' : 'bg-warm-300'
+              }`}
+              role="switch"
+              aria-checked={generalNotify}
+            >
+              <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                generalNotify ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+        </section>
+
+        {/* ── 界面缩放 ─────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+          <div className="border-b border-warm-100 px-5 py-3">
+            <h3 className="text-base font-semibold text-warm-900">界面缩放</h3>
+            <p className="text-xs text-warm-500 mt-0.5">调整整个界面的显示大小。</p>
+          </div>
+          <div className="px-5 py-4">
+            <div className="flex items-center gap-4 max-w-lg">
+              <span className="text-xs text-warm-400 shrink-0">50%</span>
+              <input
+                type="range"
+                min="50"
+                max="200"
+                step="10"
+                value={generalZoom}
+                onChange={(e) => setGeneralZoom(parseInt(e.target.value, 10))}
+                className="flex-1 h-2 rounded-full bg-warm-200 appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary-500 [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer"
+              />
+              <span className="text-xs text-warm-400 shrink-0">200%</span>
+              <div className="flex items-center gap-1 ml-2">
+                <button
+                  onClick={() => setGeneralZoom(Math.max(50, generalZoom - 10))}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-warm-200 bg-white text-warm-500 hover:bg-warm-50 transition-colors"
+                  title="缩小"
+                >
+                  <span className="text-[18px] font-medium">−</span>
+                </button>
+                <span className="w-14 text-center text-sm font-semibold text-warm-700">{generalZoom}%</span>
+                <button
+                  onClick={() => setGeneralZoom(Math.min(200, generalZoom + 10))}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-warm-200 bg-white text-warm-500 hover:bg-warm-50 transition-colors"
+                  title="放大"
+                >
+                  <span className="text-[18px] font-medium">+</span>
+                </button>
+                <button
+                  onClick={() => setGeneralZoom(100)}
+                  className="ml-1 px-2 py-1 text-xs text-warm-500 hover:text-warm-700 underline underline-offset-2"
+                >
+                  重置
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex items-center gap-4 text-[11px] text-warm-400">
+              <span>快捷键：</span>
+              <kbd className="rounded border border-warm-200 bg-warm-50 px-1.5 py-0.5 text-[10px] font-mono">Ctrl</kbd>
+              <span>+</span>
+              <kbd className="rounded border border-warm-200 bg-warm-50 px-1.5 py-0.5 text-[10px] font-mono">+</kbd>
+              <span className="mx-2 text-warm-300">/</span>
+              <kbd className="rounded border border-warm-200 bg-warm-50 px-1.5 py-0.5 text-[10px] font-mono">Ctrl</kbd>
+              <span>+</span>
+              <kbd className="rounded border border-warm-200 bg-warm-50 px-1.5 py-0.5 text-[10px] font-mono">-</kbd>
+              <span className="mx-2 text-warm-300">/</span>
+              <kbd className="rounded border border-warm-200 bg-warm-50 px-1.5 py-0.5 text-[10px] font-mono">Ctrl</kbd>
+              <span>+</span>
+              <kbd className="rounded border border-warm-200 bg-warm-50 px-1.5 py-0.5 text-[10px] font-mono">0</kbd>
+              <span className="ml-1">恢复 100%</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderModuleContent(): JSX.Element {
     if (activeMenu === '服务商') return renderServiceProviderModule();
     if (activeMenu === 'Agent Flow') return renderAgentFlowModule();
     if (activeMenu === 'Token 用量') return <TokenUsageHeatmap />;
     if (activeMenu === '记忆') return renderMemoryModule();
     if (activeMenu === '技能') return renderSkillsModule();
+    if (activeMenu === '通用') return renderGeneralModule();
 
     return (
       <section className="card p-6">

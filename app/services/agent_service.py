@@ -636,6 +636,73 @@ def _invalidate_memory_cache() -> None:
     _MEMORY_CACHE["ts"] = 0.0
 
 
+def _load_settings() -> dict[str, Any]:
+    """Load general settings from the shared settings.json file.
+
+    Returns a dict with defaults for all known keys.  This is a lightweight
+    read-every-call so settings changes take effect without restart.
+    """
+    defaults: dict[str, Any] = {
+        "theme": "warm",
+        "lang": "zh",
+        "reply_lang": "default",
+        "reasoning": 2,
+        "thinking": True,
+        "notify": True,
+        "zoom": 100,
+    }
+    try:
+        from app.config import DATA_DIR
+        path = DATA_DIR / "settings.json"
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                # Only accept known keys with correct types
+                for k, v in defaults.items():
+                    val = data.get(k)
+                    if val is not None and isinstance(val, type(v)):
+                        defaults[k] = val
+    except Exception:
+        pass
+    return defaults
+
+
+def _build_reply_lang_instruction(settings: dict[str, Any]) -> str:
+    """Return a prompt instruction for the configured reply language."""
+    lang = settings.get("reply_lang", "default")
+    if lang == "english":
+        return "\n【回复语言】请始终使用 English 回复用户的所有消息，包括代码注释和文档。\n"
+    elif lang == "chinese":
+        return "\n【回复语言】请始终使用中文回复用户的所有消息，包括代码注释和文档。\n"
+    elif lang == "japanese":
+        return "\n【回复语言】请常に日本語で返信してください。コードのコメントやドキュメントも日本語で記述してください。\n"
+    return ""
+
+
+def _build_reasoning_instruction(settings: dict[str, Any]) -> str:
+    """Return a prompt instruction for the configured reasoning intensity."""
+    level = settings.get("reasoning", 2)
+    if level >= 4:
+        return (
+            "\n【推理强度：最大】请对问题进行最深入、最全面的分析：\n"
+            "1. 从多个角度和维度考虑问题\n"
+            "2. 探索多种解决方案并比较优劣\n"
+            "3. 提供详细的论证过程和决策依据\n"
+            "4. 考虑边界情况和潜在风险\n"
+        )
+    elif level >= 3:
+        return (
+            "\n【推理强度：高】请进行较为深入的分析：\n"
+            "1. 从多个角度考虑问题\n"
+            "2. 比较至少两种解决方案\n"
+            "3. 提供论证过程和决策依据\n"
+        )
+    elif level >= 2:
+        return ""
+    else:
+        return "\n【推理强度：低】请直接给出简洁的结论和方案，减少分析过程。\n"
+
+
 def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "") -> str:
     # ── Shared session context (ALL agents see this FIRST) ──────────
     # This is the "main context window" — every agent reads it before
@@ -654,6 +721,11 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
         )
 
     collab_section = f"\n\n{collab_ctx}" if collab_ctx else ""
+
+    # ── Load settings for reply language, reasoning, thinking ───────
+    settings = _load_settings()
+    reply_lang_instr = _build_reply_lang_instruction(settings)
+    reasoning_instr = _build_reasoning_instruction(settings)
 
     # ── Role identity (lightweight, below shared context) ──────────
     role_labels = {
@@ -674,6 +746,10 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
         "4. 仅使用原生 Markdown，不插入 HTML、自定义标签\n"
     ) if not role_prompt else ""
 
+    thinking_rule = ""
+    if not settings.get("thinking", True):
+        thinking_rule = "【思考模式已关闭】直接给出最终答案，不要进行任何思考、推理或分析。\n"
+
     output_rules = (
         "【输出规则】\n"
         "1. 只输出最终回复内容，严禁输出思考过程、推理分析、规则复述\n"
@@ -687,6 +763,9 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
             f"{memory_context}"
             f"{shared_context}"
             f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
+            f"{reply_lang_instr}"
+            f"{reasoning_instr}"
+            f"{thinking_rule}"
             f"{code_format_rules}\n"
             f"{output_rules}\n"
             "# 代码生成规则\n"
@@ -706,7 +785,10 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
         f"{shared_context}"
         f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
         + (f"\n{custom_role}\n\n" if custom_role else "\n")
-        + f"{code_format_rules}\n"
+        + f"{reply_lang_instr}"
+        f"{reasoning_instr}"
+        f"{thinking_rule}"
+        f"{code_format_rules}\n"
         f"{output_rules}\n"
         f"{collab_section}"
         f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"

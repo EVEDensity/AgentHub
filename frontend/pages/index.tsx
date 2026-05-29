@@ -120,6 +120,17 @@ export default function AgentHubIM(): JSX.Element {
     if (savedUser) setUser(JSON.parse(savedUser) as User);
   }, []);
 
+  // Apply global settings (theme, lang, zoom) on page load
+  useEffect(() => {
+    const theme = localStorage.getItem('agenthub_theme') || 'warm';
+    const lang = localStorage.getItem('agenthub_lang') || 'zh';
+    const zoom = localStorage.getItem('agenthub_zoom') || '100';
+
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
+    document.body.style.zoom = `${zoom}%`;
+  }, []);
+
   useEffect(() => {
     if (!token) return;
     fetch('/api/chat/sessions', { headers: authHeaders() })
