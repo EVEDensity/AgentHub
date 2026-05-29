@@ -1,9 +1,11 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
-import type { Agent, AgentRoute, AgentRouteNode, AuditLog, MemoryDetail, MemoryFileInfo, SkillMeta, SkillDetail, User } from '../types';
+import type { Agent, AgentRoute, AgentRouteNode, MemoryDetail, MemoryFileInfo, SkillMeta, SkillDetail, User } from '../types';
 import TokenUsageHeatmap from '../components/heatmap/TokenUsageHeatmap';
 import AgentCanvas from '../components/flow/AgentCanvas';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
+import CodeReviewPanel from '../components/chat/CodeReviewPanel';
+import AuditLogList from '../components/admin/AuditLogList';
 
 const SETTINGS_MENU = [
   '服务商',
@@ -17,6 +19,7 @@ const SETTINGS_MENU = [
   '插件',
   'Computer Use',
   'Token 用量',
+  '审计日志',
 ] as const;
 
 type MenuItem = (typeof SETTINGS_MENU)[number];
@@ -27,7 +30,6 @@ export default function AdminPage(): JSX.Element {
   const [notice, setNotice] = useState('');
   const [agents, setAgents] = useState<Agent[]>([]);
   const [routes, setRoutes] = useState<AgentRoute[]>([]);
-  const [logs, setLogs] = useState<AuditLog[]>([]);
   const [activeMenu, setActiveMenu] = useState<MenuItem>('服务商');
   const [newAgent, setNewAgent] = useState({
     agentId: '',
@@ -318,15 +320,13 @@ export default function AdminPage(): JSX.Element {
   const [defaultChatAgent, setDefaultChatAgent] = useState<string>('Orchestrator');
 
   async function refresh(): Promise<void> {
-    const [a, r, l, d] = await Promise.all([
+    const [a, r, d] = await Promise.all([
       fetch('/api/agent/registry', { headers: authHeaders() }),
       fetch('/api/admin/workflows', { headers: authHeaders() }),
-      fetch('/api/admin/audit/logs', { headers: authHeaders() }),
       fetch('/api/admin/chat-defaults', { headers: authHeaders() }),
     ]);
     if (a.ok) setAgents((await a.json()) as Agent[]);
     if (r.ok) setRoutes((await r.json()) as AgentRoute[]);
-    if (l.ok) setLogs((await l.json()) as AuditLog[]);
     if (d.ok) setDefaultChatAgent(((await d.json()) as { agentId: string }).agentId);
   }
 
@@ -1380,6 +1380,108 @@ export default function AdminPage(): JSX.Element {
     );
   }
 
+  const DEMO_DIFF = `diff --git a/app/api/settings.py b/app/api/settings.py
+index 0000000..a1b2c3d 100644
+--- a/app/api/settings.py
++++ b/app/api/settings.py
+@@ -1,0 +1,45 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++from fastapi import APIRouter
++from pydantic import BaseModel
++
++from app.config import DATA_DIR
++
++router = APIRouter(prefix="/api", tags=["settings"])
++
++SETTINGS_PATH = DATA_DIR / "settings.json"
++
++DEFAULTS: dict[str, Any] = {
++    "theme": "warm",
++    "lang": "zh",
++    "reply_lang": "default",
++    "reasoning": 2,
++    "thinking": True,
++    "notify": True,
++    "zoom": 100,
++}
++
++
++def _read_settings() -> dict[str, Any]:
++    settings: dict[str, Any] = dict(DEFAULTS)
++    try:
++        if SETTINGS_PATH.exists():
++            raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
++            if isinstance(raw, dict):
++                settings.update(raw)
++    except (json.JSONDecodeError, OSError):
++        pass
++    return {k: settings.get(k, DEFAULTS[k]) for k in DEFAULTS}
++
++
++@router.get("/settings")
++async def get_settings() -> dict[str, Any]:
++    return _read_settings()
+diff --git a/frontend/components/chat/CodeReviewPanel.tsx b/frontend/components/chat/CodeReviewPanel.tsx
+index 0000000..e4f5g6h 100644
+--- a/frontend/components/chat/CodeReviewPanel.tsx
++++ b/frontend/components/chat/CodeReviewPanel.tsx
+@@ -1,0 +1,30 @@
++import React, { useEffect, useMemo, useState, type JSX } from 'react';
++
++interface FileDiff {
++  path: string;
++  oldPath: string;
++  lang: string;
++  hunks: DiffHunk[];
++  added: number;
++  deleted: number;
++}
++
++export default function CodeReviewPanel({ content }: { content: string }): JSX.Element {
++  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
++  const files = useMemo(() => parseDiff(content), [content]);
++
++  const totalAdded = useMemo(() => files.reduce((s, f) => s + f.added, 0), [files]);
++  const totalDeleted = useMemo(() => files.reduce((s, f) => s + f.deleted, 0), [files]);
++
++  useEffect(() => {
++    if (files.length > 0) {
++      setExpandedFiles(new Set([files[0].path]));
++    }
++  }, [files]);
++
++  return (
++    <div className="rounded-2xl border border-warm-200 bg-white">
++      {/* Diff rendering logic */}
++    </div>
++  );
++}
+diff --git a/frontend/styles/globals.css b/frontend/styles/globals.css
+index a1b2c3d..e4f5g6h 100644
+--- a/frontend/styles/globals.css
++++ b/frontend/styles/globals.css
+@@ -145,7 +145,7 @@
+ [data-theme="warm"] {
+-  --bg-root: #FAF9F7;
+-  --bg-surface: #FFFFFF;
+-  --bg-elevated: #F5F4F0;
++  --warm-50: 250 249 247;
++  --warm-100: 245 244 240;
++  --warm-150: 238 237 232;
++  --warm-200: 230 229 223;
+@@ -196,4 +196,3 @@
+ [data-theme="dark"] body {
+-  background: var(--bg-root);
+-  color: var(--text-primary);
++  background: #1E1E1E;
++  color: #E8E8E8;
+ }`;
+
   function renderGeneralModule(): JSX.Element {
     const THEME_OPTIONS = [
       { value: 'light', label: '纯白', icon: 'light_mode', desc: '明亮清爽的工作区' },
@@ -1621,6 +1723,20 @@ export default function AdminPage(): JSX.Element {
             </div>
           </div>
         </section>
+
+        {/* ── 代码审查 Demo ─────────────────────────────────────── */}
+        <section className="rounded-2xl border border-primary-200 bg-white overflow-hidden">
+          <div className="border-b border-primary-100 bg-primary-50/50 px-5 py-3 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-warm-900">🧪 代码审查演示</h3>
+              <p className="text-xs text-warm-500 mt-0.5">下方展示 CodeReviewPanel 组件对多文件 git diff 的渲染效果。</p>
+            </div>
+            <span className="tag tag-blue shrink-0">实时预览</span>
+          </div>
+          <div className="px-5 py-4">
+            <CodeReviewPanel content={DEMO_DIFF} />
+          </div>
+        </section>
       </div>
     );
   }
@@ -1632,6 +1748,7 @@ export default function AdminPage(): JSX.Element {
     if (activeMenu === '记忆') return renderMemoryModule();
     if (activeMenu === '技能') return renderSkillsModule();
     if (activeMenu === '通用') return renderGeneralModule();
+    if (activeMenu === '审计日志') return <AuditLogList authHeaders={authHeaders} />;
 
     return (
       <section className="card p-6">

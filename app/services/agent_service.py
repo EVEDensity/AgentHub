@@ -521,6 +521,18 @@ async def stream_agent_response(
             risk_level=agent.get("risk_level", "L1"),
         )
         save_message(session_id, agent["agent_id"], content_out, "text", fid_score, public_symbolic(symbolic_out), pt, ct, tt)
+        AuthService.write_audit(
+            user_id,
+            agent["agent_id"],
+            "agent_execute",
+            agent.get("risk_level", "L1"),
+            "auto",
+            {
+                "sessionId": session_id,
+                "domain": agent["domain"],
+                "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")},
+            },
+        )
 
     return stream()
 

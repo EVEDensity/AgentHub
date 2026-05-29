@@ -20,20 +20,38 @@ def _default_password_hash() -> str:
 
 def init_db() -> None:
     with get_connection() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,role TEXT NOT NULL,password_hash TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'group',participants TEXT NOT NULL DEFAULT '[]',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,sender TEXT NOT NULL,content TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'text',fidelity_score REAL DEFAULT 0.95,symbolic_json TEXT DEFAULT '{}',created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS agent_registry(agent_id TEXT PRIMARY KEY,domain TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'sleeping',adapter_type TEXT NOT NULL DEFAULT 'mock',base_model_name TEXT NOT NULL DEFAULT '',config TEXT NOT NULL DEFAULT '{}',risk_level TEXT NOT NULL DEFAULT 'L1',duty_note TEXT NOT NULL DEFAULT '',base_url TEXT NOT NULL DEFAULT '',api_key TEXT NOT NULL DEFAULT '');
-            CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',dag_json TEXT NOT NULL,current_node_id TEXT,template_id INTEGER,agent_route_id INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS dag_templates(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT NOT NULL,keywords TEXT NOT NULL,dag_json TEXT NOT NULL,usage_count INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS model_configs(id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT NOT NULL,model_name TEXT NOT NULL,api_key TEXT NOT NULL DEFAULT '',api_key_hash TEXT NOT NULL DEFAULT '',base_url TEXT DEFAULT '',is_active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS role_bindings(role TEXT PRIMARY KEY,model_config_id INTEGER NOT NULL,prompt TEXT DEFAULT '',updated_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS agent_routes(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT NOT NULL DEFAULT '',trigger_keywords TEXT NOT NULL DEFAULT '[]',nodes_json TEXT NOT NULL,is_default INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS audit_log(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,agent_id TEXT NOT NULL,action TEXT NOT NULL,risk_level TEXT NOT NULL,decision TEXT NOT NULL,content_hash TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',timestamp TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS system_config(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL);
-            """
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,role TEXT NOT NULL,password_hash TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,name TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'group',participants TEXT NOT NULL DEFAULT '[]',active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,sender TEXT NOT NULL,content TEXT NOT NULL,type TEXT NOT NULL DEFAULT 'text',fidelity_score REAL DEFAULT 0.95,symbolic_json TEXT DEFAULT '{}',created_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_registry(agent_id TEXT PRIMARY KEY,domain TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'sleeping',adapter_type TEXT NOT NULL DEFAULT 'mock',base_model_name TEXT NOT NULL DEFAULT '',config TEXT NOT NULL DEFAULT '{}',risk_level TEXT NOT NULL DEFAULT 'L1',duty_note TEXT NOT NULL DEFAULT '',base_url TEXT NOT NULL DEFAULT '',api_key TEXT NOT NULL DEFAULT '')"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',dag_json TEXT NOT NULL,current_node_id TEXT,template_id INTEGER,agent_route_id INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dag_templates(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,category TEXT NOT NULL,keywords TEXT NOT NULL,dag_json TEXT NOT NULL,usage_count INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS model_configs(id INTEGER PRIMARY KEY AUTOINCREMENT,provider TEXT NOT NULL,model_name TEXT NOT NULL,api_key TEXT NOT NULL DEFAULT '',api_key_hash TEXT NOT NULL DEFAULT '',base_url TEXT DEFAULT '',is_active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS role_bindings(role TEXT PRIMARY KEY,model_config_id INTEGER NOT NULL,prompt TEXT DEFAULT '',updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_routes(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,description TEXT NOT NULL DEFAULT '',trigger_keywords TEXT NOT NULL DEFAULT '[]',nodes_json TEXT NOT NULL,is_default INTEGER NOT NULL DEFAULT 0,active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS audit_log(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,agent_id TEXT NOT NULL,action TEXT NOT NULL,risk_level TEXT NOT NULL,decision TEXT NOT NULL,content_hash TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',timestamp TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS system_config(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)"
         )
         migrate_existing_schema(conn)
         conn.execute("INSERT OR IGNORE INTO users(id,name,role,password_hash,created_at) VALUES(?,?,?,?,?)", (DEFAULT_USER_ID, "admin", "admin", _default_password_hash(), now()))

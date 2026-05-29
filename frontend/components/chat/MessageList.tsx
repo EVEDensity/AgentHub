@@ -1,6 +1,7 @@
 import { memo, type JSX } from 'react';
 import type { ContentSegment, GeneratedData, Message, User } from '../../types';
 import DiffBubble from './DiffBubble';
+import CodeReviewPanel from './CodeReviewPanel';
 import FidelityScore from './FidelityScore';
 import MarkdownRenderer from './MarkdownRenderer';
 import ThinkingPanel from './ThinkingPanel';
@@ -76,6 +77,8 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
     const showCursor = msg.isStreaming;
 
     if (isCode) {
+      // Auto-detect: multi-file git diff → CodeReviewPanel, else Monaco DiffBubble
+      const isGitDiff = msg.content.includes('diff --git ');
       return (
         <div key={`${msg.timestamp}-${index}`} className="-mx-6 mb-4 px-6">
           <div className="mb-2 flex items-center gap-2 text-xs text-warm-500">
@@ -83,7 +86,11 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
             <span className="tag tag-warm">{badge}</span>
             {showCursor && <span className="inline-block h-4 w-0.5 animate-pulse bg-primary-500" />}
           </div>
-          <DiffBubble value={msg.content} />
+          {isGitDiff ? (
+            <CodeReviewPanel content={msg.content} />
+          ) : (
+            <DiffBubble value={msg.content} />
+          )}
           {msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}
         </div>
       );
@@ -114,16 +121,31 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
             </div>
           ) : (
             <div className="leading-7">
-              {parseThinkSegments(normalizeStructuredStreamContent(msg.content)).map((seg, si) =>
-                seg.type === 'think' ? (
-                  <ThinkingPanel key={si} content={seg.content} isStreaming={!!showCursor} isComplete={seg.isComplete} />
-                ) : (
+              {parseThinkSegments(normalizeStructuredStreamContent(msg.content)).map((seg, si) => {
+                if (seg.type === 'think') {
+                  return <ThinkingPanel key={si} content={seg.content} isStreaming={!!showCursor} isComplete={seg.isComplete} />;
+                }
+                // Detect git diff blocks within text and render CodeReviewPanel
+                const cleanText = seg.content.replace('【正式回复】\n', '');
+                const diffIdx = cleanText.indexOf('diff --git ');
+                if (diffIdx >= 0) {
+                  const before = cleanText.slice(0, diffIdx).trim();
+                  const diffContent = cleanText.slice(diffIdx);
+                  return (
+                    <div key={si}>
+                      {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
+                      {before && <MarkdownRenderer content={before} />}
+                      <CodeReviewPanel content={diffContent} />
+                    </div>
+                  );
+                }
+                return (
                   <div key={si}>
                     {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
-                    <MarkdownRenderer content={seg.content.replace('【正式回复】\n', '')} />
+                    <MarkdownRenderer content={cleanText} />
                   </div>
-                ),
-              )}
+                );
+              })}
               {showCursor && <span className="ml-0.5 inline-block h-5 w-0.5 animate-pulse bg-primary-500 align-text-bottom" />}
             </div>
           )}
