@@ -25,8 +25,12 @@ from app.services.websocket_manager import manager
 
 logger = logging.getLogger("agenthub.websocket")
 
-# ── auto-memory extraction (lazy singleton) ─────────────────────────
+# ── auto-memory extraction (lazy singletons) ────────────────────────
 _memory_extractor = None  # type: ignore
+_session_mgr_singleton = None  # type: ignore
+# Per-session throttle: {session_id: last_run_timestamp}
+_throttle_state: dict[str, float] = {}
+_THROTTLE_SECONDS = 90  # min interval between background memory tasks per session
 
 
 def _get_memory_extractor():
@@ -35,6 +39,25 @@ def _get_memory_extractor():
         from app.services.memory import MemoryExtractor
         _memory_extractor = MemoryExtractor()
     return _memory_extractor
+
+
+def _get_session_mgr():
+    global _session_mgr_singleton
+    if _session_mgr_singleton is None:
+        from app.services.memory.session_memory import SessionMemoryManager
+        _session_mgr_singleton = SessionMemoryManager()
+    return _session_mgr_singleton
+
+
+def _should_run_memory_tasks(session_id: str) -> bool:
+    """Return True if enough time has passed since last memory task run."""
+    import time
+    now_ts = time.monotonic()
+    last = _throttle_state.get(session_id, 0.0)
+    if now_ts - last >= _THROTTLE_SECONDS:
+        _throttle_state[session_id] = now_ts
+        return True
+    return False
 
 router = APIRouter(tags=["websocket"])
 
@@ -96,6 +119,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
 
             # Cancel any in-flight stream
             manager.cancel_token(session_id)
+            await manager.send_stream_interrupted(session_id, "New message received, interrupting current stream")
             await asyncio.sleep(0.02)
 
             task = asyncio.create_task(
@@ -364,17 +388,24 @@ async def _process_and_stream(
         finally:
             manager.remove_token(session_id, token)
 
-    # ── Auto memory extraction (background, non-blocking) ────────
-    # Schedule extraction after message processing completes.
-    # Only runs if AGENTHUB_AUTO_MEMORY=true (default).
-    # This runs in background and does NOT block the response.
-    try:
-        from app.config import AUTO_MEMORY_ENABLED
-        if AUTO_MEMORY_ENABLED:
-            extractor = _get_memory_extractor()
-            asyncio.create_task(extractor.extract_from_session(session_id))
-    except Exception:
-        logger.debug("auto-memory extraction init failed", exc_info=True)
+    # ── Auto memory tasks (background, non-blocking, throttled) ───
+    # Both extraction and summarization fire in background after a message.
+    # Throttled: only run once every _THROTTLE_SECONDS per session to avoid
+    # firing expensive LLM calls on every single message.
+    if _should_run_memory_tasks(session_id):
+        try:
+            from app.config import AUTO_MEMORY_ENABLED
+            if AUTO_MEMORY_ENABLED:
+                extractor = _get_memory_extractor()
+                asyncio.create_task(extractor.extract_from_session(session_id))
+        except Exception:
+            logger.debug("auto-memory extraction init failed", exc_info=True)
+
+        try:
+            session_mgr = _get_session_mgr()
+            asyncio.create_task(session_mgr.update_session_summary(session_id))
+        except Exception:
+            logger.debug("session-memory update init failed", exc_info=True)
 
 
 async def _invoke_agent(
@@ -422,7 +453,7 @@ async def _invoke_agent(
             await asyncio.sleep(0.004)
         if not token.cancelled:
             await manager.stream_broadcast(session_id, message_id, "", is_final=True)
-            await _broadcast_final_message(session_id, response)
+            await _broadcast_final_message(session_id, message_id, response)
         return text
 
     # Streaming path
@@ -457,40 +488,43 @@ async def _invoke_agent(
 
     if not token.cancelled:
         await manager.stream_broadcast(session_id, message_id, "", is_final=True, sender=agent_id)
-        await _broadcast_final_db_message(session_id)
+        await _broadcast_final_db_message(session_id, message_id)
 
     return "".join(full_response)
 
 
-async def _broadcast_final_message(session_id: str, response: dict) -> None:
+async def _broadcast_final_message(session_id: str, message_id: str, response: dict) -> None:
     from app.db.session import dict_rows as _dr
 
     rows = _dr(
-        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at DESC LIMIT 1",
+        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (session_id,),
     )
     if rows:
         final = rows[0]
         final["event"] = "message"
+        final["messageId"] = message_id
         try:
             final["symbolic"] = json.loads(final.pop("symbolic_json", "{}") or "{}")
         except (json.JSONDecodeError, TypeError):
             final["symbolic"] = {}
         await manager.broadcast(session_id, final)
     else:
+        response["messageId"] = message_id
         await manager.broadcast(session_id, response)
 
 
-async def _broadcast_final_db_message(session_id: str) -> None:
+async def _broadcast_final_db_message(session_id: str, message_id: str) -> None:
     from app.db.session import dict_rows
 
     rows = dict_rows(
-        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at DESC LIMIT 1",
+        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (session_id,),
     )
     if rows:
         final = rows[0]
         final["event"] = "message"
+        final["messageId"] = message_id
         try:
             final["symbolic"] = json.loads(final.pop("symbolic_json", "{}") or "{}")
         except (json.JSONDecodeError, TypeError):

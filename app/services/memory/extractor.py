@@ -82,13 +82,16 @@ class MemoryExtractor:
         """
         # 1. Fetch messages
         messages = self._get_session_messages(session_id)
-        if len(messages) < self._min_new_messages:
+        if len(messages) < 2:
             return 0
 
         # 2. Check throttling (cursor tracking)
         last_id = self._state.get("sessions", {}).get(session_id, "")
         new_count = self._count_new_messages(messages, last_id)
-        if new_count < self._min_new_messages:
+        # For brand-new sessions (no cursor), extract immediately with 2+ messages.
+        # For existing sessions, respect the configured threshold.
+        min_new = 2 if not last_id else self._min_new_messages
+        if new_count < min_new:
             return 0
 
         # 3. Build transcript
@@ -107,64 +110,53 @@ class MemoryExtractor:
             return 0
 
         summary = parsed.get("compressed_summary", "")
-        memories = parsed.get("memories", [])
 
-        # 6. Save each memory
-        saved = 0
-        for mem in memories:
-            try:
-                name = mem.get("name", "").strip()
-                desc = mem.get("description", "").strip()
-                raw_type = mem.get("type", "reference").strip()
-                body = mem.get("body", "").strip()
-
-                if not name:
-                    continue
-
-                # Validate type
-                try:
-                    mtype = MemoryType(raw_type)
-                except ValueError:
-                    mtype = MemoryType.REFERENCE
-
-                # Check if already exists — skip duplicates by name
-                existing = self._find_by_name(name)
-                if existing is not None:
-                    logger.debug("memory '%s' already exists, skipping", name)
-                    continue
-
-                self._storage.save(
-                    name=name,
-                    description=desc,
-                    type_=mtype,
-                    body=body or summary,
-                )
-                saved += 1
-            except Exception as exc:
-                logger.error("failed to save memory '%s': %s", mem.get("name", "?"), exc)
-
-        # 7. Save compressed summary as project memory if non-empty
-        if summary and saved == 0 and not self._find_by_name("session_summary"):
+        # 6. Save ONE session summary file per session, named after the session
+        if summary:
+            session_name = self._get_session_name(session_id)
+            session_filename = sanitize_filename(session_name) if session_name else sanitize_filename(session_id)
             try:
                 self._storage.save(
-                    name="session_summary",
-                    description=f"会话 {session_id} 的压缩摘要",
+                    name=session_name or session_id,
+                    description=f"会话对话总结",
                     type_=MemoryType.PROJECT,
                     body=summary,
-                    filename=f"summary_{sanitize_filename(session_id)}",
+                    filename=session_filename,
                 )
-                saved += 1
+                saved = 1
             except Exception as exc:
-                logger.error("failed to save summary: %s", exc)
+                logger.error("failed to save session summary: %s", exc)
+        else:
+            saved = 0
 
         # 8. Update cursor
         if messages:
             self._update_cursor(session_id, messages[-1]["id"])
 
+        # Invalidate memory context cache so the next agent call picks up fresh data
+        try:
+            from app.services.agent_service import _invalidate_memory_cache
+            _invalidate_memory_cache()
+        except Exception:
+            pass
+
         logger.info("extraction saved %d memories from session=%s", saved, session_id)
         return saved
 
     # ── message fetching ────────────────────────────────────────────
+
+    @staticmethod
+    def _get_session_name(session_id: str) -> str:
+        try:
+            row = dict_rows(
+                "SELECT name FROM sessions WHERE id=? LIMIT 1",
+                (session_id,),
+            )
+            if row and row[0].get("name"):
+                return row[0]["name"]
+        except Exception:
+            pass
+        return session_id
 
     def _get_session_messages(self, session_id: str) -> list[dict[str, Any]]:
         """Fetch all text messages from a session, oldest first."""
@@ -232,71 +224,95 @@ class MemoryExtractor:
     async def _call_extraction_llm(self, transcript: str) -> Optional[str]:
         """Call an LLM with the extraction prompt.
 
-        Uses the first available configured LLM model. Falls back to mock
-        which returns a simulated extraction (for development).
+        Tries all available models in sequence until one succeeds.
         """
         prompt = EXTRACTION_PROMPT.format(transcript=transcript)
+        candidates = self._list_extraction_models()
 
-        # Find the best available model
-        model = self._pick_extraction_model()
-        provider = model.get("provider", "mock")
-        model_name = model.get("model_name", "mock")
-        api_key = model.get("api_key", "")
-        base_url = model.get("base_url", "")
+        for model in candidates:
+            provider = model.get("provider", "")
+            model_name = model.get("model_name", "")
+            api_key = model.get("api_key", "")
+            base_url = model.get("base_url", "")
 
-        adapter = adapter_manager.get_adapter(provider)
+            if provider == "mock" or not api_key:
+                continue  # skip mock and empty-key models during real extraction
 
-        try:
-            result = await adapter.execute_prompt(
-                prompt=prompt,
-                model=model_name,
-                api_key=api_key,
-                base_url=base_url,
-            )
-            return result.strip() if result else None
-        except Exception as exc:
-            logger.warning("LLM extraction failed (%s/%s): %s", provider, model_name, exc)
-            # Fallback: try mock for dev/testing
-            if provider != "mock":
-                try:
-                    mock_result = await adapter_manager.get_adapter("mock").execute_prompt(
-                        prompt=prompt, model="mock",
-                    )
-                    return mock_result.strip() if mock_result else None
-                except Exception:
-                    pass
-            return None
+            adapter = adapter_manager.get_adapter(provider)
+            try:
+                result = await adapter.execute_prompt(
+                    prompt=prompt,
+                    model=model_name,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+                if result and result.strip():
+                    logger.info("extraction LLM succeeded with %s/%s", provider, model_name)
+                    return result.strip()
+                logger.warning("extraction LLM returned empty result (%s/%s)", provider, model_name)
+            except Exception as exc:
+                logger.warning("extraction LLM failed (%s/%s): %s", provider, model_name, exc)
+                continue  # try next candidate
 
-    def _pick_extraction_model(self) -> dict[str, str]:
-        """Pick the best available model for extraction.
+        logger.error("all extraction LLM candidates failed")
+        return None
 
-        Priority: DB model_configs → env vars → mock
+    def _list_extraction_models(self) -> list[dict[str, str]]:
+        """Return all available models for extraction in priority order.
+
+        Priority: DB model_configs (active, with key, non-mock) → env vars.
+        Mock is NOT included since it produces unusable results.
         """
-        # First: look up active model configs from DB
+        from app.services.secret_service import decrypt_secret
+
+        candidates: list[dict[str, str]] = []
+        seen: set[str] = set()
+
         try:
             rows = dict_rows(
                 "SELECT provider, model_name, api_key, base_url "
                 "FROM model_configs WHERE is_active=1 ORDER BY id DESC LIMIT 5"
             )
             if rows:
-                # Prefer non-mock, non-empty-key models
                 for row in rows:
-                    if row.get("api_key") and row.get("provider") != "mock":
-                        return row
-                # Fallback to any active config
-                return rows[0]
+                    decrypted = decrypt_secret(row.get("api_key") or "")
+                    if decrypted and row.get("provider") != "mock":
+                        key = f"{row['provider']}/{row['model_name']}"
+                        if key not in seen:
+                            seen.add(key)
+                            candidates.append({**row, "api_key": decrypted})
         except Exception:
             pass
 
-        # Second: check environment-configured keys
+        # Also try models from agent_registry as fallback
+        try:
+            agent_rows = dict_rows(
+                "SELECT DISTINCT adapter_type AS provider, base_model_name AS model_name, "
+                "api_key, base_url "
+                "FROM agent_registry WHERE api_key IS NOT NULL AND api_key != '' "
+                "AND adapter_type != '' AND adapter_type IS NOT NULL"
+            )
+            for row in agent_rows:
+                decrypted = decrypt_secret(row.get("api_key") or "")
+                if decrypted and row.get("provider") and row.get("provider") != "mock":
+                    key = f"{row['provider']}/{row['model_name']}"
+                    if key not in seen:
+                        seen.add(key)
+                        candidates.append({**row, "api_key": decrypted})
+        except Exception:
+            pass
+
         from app.config import OPENAI_API_KEY, ANTHROPIC_API_KEY
         if OPENAI_API_KEY:
-            return {"provider": "openai", "model_name": "gpt-4o-mini", "api_key": OPENAI_API_KEY, "base_url": ""}
+            key = f"openai/gpt-4o-mini"
+            if key not in seen:
+                candidates.append({"provider": "openai", "model_name": "gpt-4o-mini", "api_key": OPENAI_API_KEY, "base_url": ""})
         if ANTHROPIC_API_KEY:
-            return {"provider": "anthropic", "model_name": "claude-sonnet-4-6", "api_key": ANTHROPIC_API_KEY, "base_url": ""}
+            key = f"anthropic/claude-sonnet-4-6"
+            if key not in seen:
+                candidates.append({"provider": "anthropic", "model_name": "claude-sonnet-4-6", "api_key": ANTHROPIC_API_KEY, "base_url": ""})
 
-        # Fallback: mock (development only)
-        return {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
+        return candidates
 
     # ── parsing ────────────────────────────────────────────────────
 

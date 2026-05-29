@@ -335,3 +335,95 @@ export interface MemoryFreshnessInfo {
   age_days: number;
   warning: string;
 }
+
+export interface ConsolidationAction {
+  action: 'merge' | 'delete' | 'update' | 'keep';
+  targets: string[];
+  reason: string;
+  merged_name?: string;
+  merged_description?: string;
+  merged_body?: string;
+}
+
+export interface ConsolidationResult {
+  merged: Array<{ file: string; targets: string[]; reason: string }>;
+  deleted: Array<{ file: string; reason: string }>;
+  updated: Array<{ file: string; reason: string }>;
+  unchanged: Array<{ file: string; reason: string }>;
+  summary: string;
+  dry_run: boolean;
+  actions?: ConsolidationAction[];
+}
+
+export interface ConsolidationStatus {
+  last_consolidation: string;
+  consolidation_count: number;
+  merged_files: Array<{ file: string; targets: string[]; reason: string }>;
+}
+
+export interface SessionSummary {
+  session_id: string;
+  preview: string;
+  updated_at: string;
+}
+
+export interface MemorySearchResult {
+  filename: string;
+  name: string;
+  description: string;
+  type: MemoryType;
+  score: number;
+  snippet: string;
+  mtime: number;
+}
+
+// ── Skill System Types ──────────────────────────────────────────────
+
+export type SkillSource = 'user' | 'project' | 'plugin' | 'mcp';
+
+export interface SkillCredential {
+  name: string;
+  required?: boolean;
+  description?: string;
+  storage?: string;
+}
+
+export interface SkillMeta {
+  name: string;
+  display_name: string;
+  description: string;
+  version: string;
+  source: SkillSource;
+  category: string;
+  subcategory: string;
+  icon: string;
+  enabled: boolean;
+  credentials: SkillCredential[];
+  authors: string[];
+  tags: string[];
+  content_length: number;
+  body_lines: number;
+  has_skill_md: boolean;
+  file_count: number;
+  path: string;
+}
+
+export interface SkillDetail {
+  name: string;
+  source: SkillSource;
+  category: string;
+  subcategory: string;
+  meta: Record<string, unknown>;
+  body: string;
+  raw: string;
+  path: string;
+}
+
+export interface SkillListResponse {
+  skills: SkillMeta[];
+  total: number;
+  total_tokens_estimate: number;
+  sources: string[];
+  categories: string[];
+  _refresh_hint?: boolean;
+}

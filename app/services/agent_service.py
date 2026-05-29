@@ -30,6 +30,19 @@ from app.services.symbolic import (
 AGENTS = {"Orchestrator", "Architect", "CodeGen", "Review", "Test", "Deploy"}
 _RUNTIME: dict[str, dict] = {}
 
+# ── Memory context cache (avoid scanning 200 files on every message) ──
+_MEMORY_CACHE: dict[str, Any] = {"context": "", "ts": 0.0, "ttl": 60.0}
+_SESSION_MGR_SINGLETON: Any = None
+
+
+def _get_session_mgr_singleton():
+    """Return a cached SessionMemoryManager — avoids recreating on every message."""
+    global _SESSION_MGR_SINGLETON
+    if _SESSION_MGR_SINGLETON is None:
+        from app.services.memory.session_memory import SessionMemoryManager
+        _SESSION_MGR_SINGLETON = SessionMemoryManager()
+    return _SESSION_MGR_SINGLETON
+
 # ── Collaboration context for multi-agent communication ──────────────
 # Models how real employees communicate: shared project context,
 # structured peer summaries, role-specific expectations, distilled
@@ -358,7 +371,8 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     )
     models = choose_models(candidate_models_for_role(agent["agent_id"]))
     history = _build_conversation_history(session_id)
-    prompt = build_prompt(agent["agent_id"], domain, llm_input, symbolic, models[0].get("prompt", "") if models else "", collab_ctx, history)
+    memory_ctx = _build_memory_context()
+    prompt = build_prompt(agent["agent_id"], domain, llm_input, symbolic, models[0].get("prompt", "") if models else "", collab_ctx, history, memory_ctx)
 
     result = ""
     selected = models[0] if models else {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
@@ -450,6 +464,7 @@ async def stream_agent_response(
         models[0].get("prompt", "") if models else "",
         collab_ctx,
         _build_conversation_history(session_id),
+        _build_memory_context(),
     )
 
     selected = models[0]
@@ -546,7 +561,82 @@ def _build_conversation_history(session_id: str, max_chars: int = 2000) -> str:
     return "【会话历史记录 — 以下是本会话中之前的对话内容，请基于此上下文理解用户的后续问题】\n" + "\n".join(lines)
 
 
-def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "") -> str:
+def _build_memory_context(max_chars: int = 3000, force: bool = False) -> str:
+    """Load persistent memories and global summary and format as a prompt block.
+
+    Cached with a 60-second TTL to avoid scanning 200+ files from disk on every
+    single chat message. Call with force=True to bypass the cache (e.g. after
+    memory extraction completes).
+    """
+    now_ts = time.monotonic()
+    if not force and _MEMORY_CACHE["context"] and (now_ts - _MEMORY_CACHE["ts"]) < _MEMORY_CACHE["ttl"]:
+        return _MEMORY_CACHE["context"]
+
+    sections: list[str] = []
+
+    # ── Global summary (cross-session aggregated) ─────────────────
+    try:
+        session_mgr = _get_session_mgr_singleton()
+        global_summary = session_mgr.get_global_summary()
+        if global_summary:
+            sections.append(
+                "【全局记忆 — 跨会话聚合摘要】\n"
+                "以下是对所有会话内容的综合摘要，代表项目的长期积累知识：\n\n"
+                f"{global_summary}"
+            )
+    except Exception:
+        pass
+
+    # ── File-backed memories ──────────────────────────────────────
+    try:
+        from app.config import MEMORY_DIR
+        from app.services.memory.storage import MemoryStorage
+        from app.services.memory.scanner import MemoryScanner
+
+        storage = MemoryStorage(MEMORY_DIR)
+        scanner = MemoryScanner(storage)
+        headers = scanner.scan(max_files=200)
+        if headers:
+            lines: list[str] = []
+            total = 0
+            for h in headers:
+                entry = f"- [{h.type.value}] {h.name}: {h.description}"
+                freshness = scanner.freshness_text(h.mtime)
+                if freshness:
+                    entry += f" ({freshness})"
+                total += len(entry)
+                if total > max_chars:
+                    lines.append("- ... [更多记忆已截断]")
+                    break
+                lines.append(entry)
+            sections.append(
+                "【持久化记忆上下文 — 跨会话存储的关键信息】\n"
+                "以下是从项目记忆库中加载的已知信息。请优先参考这些内容，"
+                "避免重复询问用户已经明确过的偏好或背景。\n"
+                "如果记忆标注了\"较旧\"，请结合上下文判断其是否仍然有效。\n\n"
+                + "\n".join(lines)
+            )
+    except Exception:
+        pass
+
+    if not sections:
+        _MEMORY_CACHE["context"] = ""
+        _MEMORY_CACHE["ts"] = now_ts
+        return ""
+
+    result = "\n\n".join(sections) + "\n─── 以上为持久化记忆，以下是会话上下文 ───\n"
+    _MEMORY_CACHE["context"] = result
+    _MEMORY_CACHE["ts"] = now_ts
+    return result
+
+
+def _invalidate_memory_cache() -> None:
+    """Clear the memory context cache so next call rebuilds it."""
+    _MEMORY_CACHE["context"] = ""
+    _MEMORY_CACHE["ts"] = 0.0
+
+
+def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "") -> str:
     # ── Shared session context (ALL agents see this FIRST) ──────────
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
@@ -594,6 +684,7 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
 
     if agent_id == "CodeGen":
         return (
+            f"{memory_context}"
             f"{shared_context}"
             f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
             f"{code_format_rules}\n"
@@ -611,6 +702,7 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
     # ── General agent prompt ────────────────────────────────────────
     custom_role = role_prompt.strip() if role_prompt else ""
     return (
+        f"{memory_context}"
         f"{shared_context}"
         f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
         + (f"\n{custom_role}\n\n" if custom_role else "\n")

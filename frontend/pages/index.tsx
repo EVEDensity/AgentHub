@@ -390,15 +390,18 @@ export default function AgentHubIM(): JSX.Element {
         setIsStreaming(false);
         setMessages((prev) => {
           const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          if (lastIdx >= 0 && updated[lastIdx].isStreaming) {
-            updated[lastIdx] = {
-              ...updated[lastIdx],
-              isStreaming: false,
-              content: updated[lastIdx].content + '\n\n[Interrupted, processing new message...]',
-            };
+          let changed = false;
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].isStreaming) {
+              updated[i] = {
+                ...updated[i],
+                isStreaming: false,
+                content: updated[i].content + '\n\n[Interrupted, processing new message...]',
+              };
+              changed = true;
+            }
           }
-          return updated;
+          return changed ? updated : prev;
         });
       }
 
@@ -477,7 +480,10 @@ export default function AgentHubIM(): JSX.Element {
         const msg = raw as unknown as Message;
         const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
         setMessages((prev) => {
-          const streamingIdx = prev.findIndex((m) => m.messageId);
+          const targetMessageId = (raw.messageId || msg.messageId || '') as string;
+          const streamingIdx = targetMessageId
+            ? prev.findIndex((m) => m.messageId === targetMessageId)
+            : prev.findIndex((m) => m.messageId);
           if (streamingIdx >= 0 && !isSystemMsg) {
             const updated = [...prev];
             updated[streamingIdx] = { ...msg, messageId: undefined, isStreaming: false };
@@ -878,7 +884,9 @@ export default function AgentHubIM(): JSX.Element {
 
     const displayContent = text || (currentFiles.length > 0 ? `发送了 ${currentFiles.length} 个文件` : '');
 
+    const clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const localMsg: Message = {
+      id: clientId,
       event: 'message',
       sessionId,
       content: displayContent,
