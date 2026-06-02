@@ -20,6 +20,14 @@ def _default_password_hash() -> str:
 
 def init_db() -> None:
     with get_connection() as conn:
+        # ── Performance: enable WAL mode for concurrent reads + writes ──
+        # Without WAL, SQLite uses "delete" journaling which serialises all
+        # access — a single writer blocks all readers, causing "database is
+        # locked" errors under concurrent WebSocket + HTTP workloads.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")  # 5 s wait instead of instant fail
+        conn.execute("PRAGMA synchronous=NORMAL")  # safer than OFF, faster than FULL
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,name TEXT NOT NULL UNIQUE,role TEXT NOT NULL,password_hash TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL)"
         )
@@ -52,6 +60,70 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE TABLE IF NOT EXISTS system_config(key TEXT PRIMARY KEY,value TEXT NOT NULL,updated_at TEXT NOT NULL)"
+        )
+        # Tool-calling infrastructure
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tool_definitions("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "name TEXT NOT NULL UNIQUE,"
+            "description TEXT NOT NULL,"
+            "category TEXT NOT NULL,"
+            "parameters_json TEXT NOT NULL,"
+            "return_type TEXT NOT NULL,"
+            "examples_json TEXT NOT NULL DEFAULT '[]',"
+            "risk_level TEXT NOT NULL DEFAULT 'L1',"
+            "handler_type TEXT NOT NULL DEFAULT 'builtin',"
+            "handler_config TEXT NOT NULL DEFAULT '{}',"
+            "enabled INTEGER NOT NULL DEFAULT 1,"
+            "created_at TEXT NOT NULL"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS agent_tool_bindings("
+            "agent_id TEXT NOT NULL,"
+            "tool_id INTEGER NOT NULL,"
+            "enabled INTEGER NOT NULL DEFAULT 1,"
+            "PRIMARY KEY (agent_id, tool_id)"
+            ")"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tool_call_log("
+            "id TEXT PRIMARY KEY,"
+            "session_id TEXT NOT NULL,"
+            "agent_id TEXT NOT NULL,"
+            "tool_name TEXT NOT NULL,"
+            "arguments_json TEXT NOT NULL,"
+            "result_json TEXT NOT NULL DEFAULT '{}',"
+            "success INTEGER NOT NULL DEFAULT 0,"
+            "duration_ms REAL NOT NULL DEFAULT 0,"
+            "created_at TEXT NOT NULL"
+            ")"
+        )
+        # Permission system for tool execution
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tool_permission_rules("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "agent_id TEXT NOT NULL DEFAULT '*',"
+            "tool_pattern TEXT NOT NULL,"
+            "path_pattern TEXT NOT NULL DEFAULT '*',"
+            "behavior TEXT NOT NULL DEFAULT 'ask',"
+            "source TEXT NOT NULL DEFAULT 'user',"
+            "priority INTEGER NOT NULL DEFAULT 0,"
+            "enabled INTEGER NOT NULL DEFAULT 1,"
+            "created_at TEXT NOT NULL"
+            ")"
+        )
+        # Hook configuration for tool execution lifecycle
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tool_hook_configs("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "hook_name TEXT NOT NULL,"
+            "tool_name TEXT,"
+            "hook_type TEXT NOT NULL,"
+            "config_json TEXT NOT NULL DEFAULT '{}',"
+            "enabled INTEGER NOT NULL DEFAULT 1,"
+            "created_at TEXT NOT NULL"
+            ")"
         )
         migrate_existing_schema(conn)
         conn.execute("INSERT OR IGNORE INTO users(id,name,role,password_hash,created_at) VALUES(?,?,?,?,?)", (DEFAULT_USER_ID, "admin", "admin", _default_password_hash(), now()))
@@ -97,6 +169,10 @@ def migrate_existing_schema(conn) -> None:
         "sessions": [
             "ALTER TABLE sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE sessions ADD COLUMN last_message_at TEXT NOT NULL DEFAULT ''",
+        ],
+        "tool_definitions": [
+            "ALTER TABLE tool_definitions ADD COLUMN handler_type TEXT NOT NULL DEFAULT 'builtin'",
+            "ALTER TABLE tool_definitions ADD COLUMN handler_config TEXT NOT NULL DEFAULT '{}'",
         ],
     }
     for table, statements in migrations.items():

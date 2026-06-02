@@ -6,7 +6,8 @@
       "Bash(curl -s http://localhost:3000)",
       "Bash(npx next *)",
       "Bash(npx tsc *)",
-      "Bash(python -m py_compile app/api/websocket.py)"
+      "Bash(python -m py_compile app/api/websocket.py)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('app/services/tools/skill_tools.py', doraise=True\\); py_compile.compile\\('app/services/tools/definitions.py', doraise=True\\); py_compile.compile\\('app/services/tool_registry.py', doraise=True\\); py_compile.compile\\('app/config.py', doraise=True\\); print\\('All files compile clean'\\)\")"
     ]
   }
 }

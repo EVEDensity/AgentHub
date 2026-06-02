@@ -37,7 +37,7 @@ export interface Message {
   sessionId: string;
   sender: string;
   content: string;
-  type: 'text' | 'code' | 'system' | 'diff';
+  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result';
   timestamp: string;
   fidelityScore?: number;
   symbolic?: SymbolicData & {
@@ -45,6 +45,8 @@ export interface Message {
   };
   messageId?: string;
   isStreaming?: boolean;
+  toolCallData?: ToolCallData;
+  toolResultData?: ToolResultData;
   attachments?: AttachmentMeta[];
 }
 
@@ -426,4 +428,147 @@ export interface SkillListResponse {
   sources: string[];
   categories: string[];
   _refresh_hint?: boolean;
+}
+
+// ── Tool Calling types ───────────────────────────────────────────────
+
+export interface ToolCallParam {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+  default?: unknown;
+  enum?: string[];
+}
+
+export interface ToolExample {
+  userQuestion: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface ToolDefinition {
+  id?: number;
+  name: string;
+  description: string;
+  category: string;
+  parameters: ToolCallParam[];
+  returnType: string;
+  examples: ToolExample[];
+  riskLevel: string;
+  handlerType?: string;
+  enabled: boolean;
+  createdAt?: string;
+  isConcurrencySafe?: boolean;
+  requiresUserConfirmation?: boolean;
+}
+
+export interface ToolCallItem {
+  name: string;
+  arguments: Record<string, unknown>;
+  status: 'queued' | 'executing' | 'calling' | 'success' | 'error';
+  progress?: ToolProgressEvent;
+}
+
+export interface ToolCallData {
+  calls: ToolCallItem[];
+}
+
+export interface ToolResultItem {
+  tool_name: string;
+  success: boolean;
+  result?: unknown;
+  error?: string;
+}
+
+export interface ToolResultData {
+  results: ToolResultItem[];
+}
+
+export interface ToolCallEvent {
+  event: 'tool_call';
+  sessionId: string;
+  messageId: string;
+  toolCalls: ToolCallItem[];
+  timestamp: string;
+}
+
+export interface ToolResultEvent {
+  event: 'tool_result';
+  sessionId: string;
+  messageId: string;
+  results: ToolResultItem[];
+  timestamp: string;
+}
+
+// ── Permission types ─────────────────────────────────────────────────
+
+export type PermissionMode = 'default' | 'bypass' | 'auto';
+export type PermissionBehavior = 'allow' | 'deny' | 'ask';
+
+export interface PermissionRule {
+  id: number;
+  agentId: string;
+  toolPattern: string;
+  pathPattern: string;
+  behavior: PermissionBehavior;
+  source: string;
+  priority: number;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface PermissionRequestEvent {
+  event: 'permission_request';
+  sessionId: string;
+  requestId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  riskLevel: string;
+  reason: string;
+  timestamp: string;
+}
+
+export interface PermissionResponseMessage {
+  event: 'permission_response';
+  requestId: string;
+  decision: 'allow' | 'deny';
+}
+
+// ── Progress types ───────────────────────────────────────────────────
+
+export type ToolProgressType = 'progress' | 'read_progress' | 'bash_progress' | 'search_progress';
+
+export interface ToolProgressEvent {
+  event: 'tool_progress';
+  sessionId: string;
+  toolName: string;
+  progressType: ToolProgressType;
+  message: string;
+  percentage?: number;
+  timestamp: string;
+}
+
+// ── Search progress types ───────────────────────────────────────────
+
+export interface SearchProgressQueryUpdate {
+  type: 'query_update';
+  query: string;
+  provider_count: number;
+}
+
+export interface SearchProgressResultsReceived {
+  type: 'search_results_received';
+  query: string;
+  source: string;
+  result_count: number;
+}
+
+export type SearchProgressData = SearchProgressQueryUpdate | SearchProgressResultsReceived;
+
+export interface SearchProgressEvent {
+  event: 'search_progress';
+  sessionId: string;
+  toolName: 'web_search';
+  data: SearchProgressData;
+  timestamp: string;
 }

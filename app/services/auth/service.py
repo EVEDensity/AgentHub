@@ -109,11 +109,17 @@ class AuthService:
 
     @staticmethod
     def write_audit(user_id: str, agent_id: str, action: str, risk_level: str, decision: str, payload: dict) -> str:
+        """Write an audit log entry (best-effort, non-fatal on DB lock)."""
+        import logging
+        _log = logging.getLogger("agenthub.auth")
         content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         audit_id = str(uuid.uuid4())
-        with get_connection() as conn:
-            conn.execute(
-                "INSERT INTO audit_log(id,user_id,agent_id,action,risk_level,decision,content_hash,payload_json,timestamp) VALUES(?,?,?,?,?,?,?,?,?)",
-                (audit_id, user_id, agent_id, action, risk_level, decision, hashlib.sha256(content.encode()).hexdigest(), content, now()),
-            )
+        try:
+            with get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO audit_log(id,user_id,agent_id,action,risk_level,decision,content_hash,payload_json,timestamp) VALUES(?,?,?,?,?,?,?,?,?)",
+                    (audit_id, user_id, agent_id, action, risk_level, decision, hashlib.sha256(content.encode()).hexdigest(), content, now()),
+                )
+        except Exception:
+            _log.warning("write_audit failed for user=%s action=%s (non-fatal)", user_id, action, exc_info=True)
         return audit_id

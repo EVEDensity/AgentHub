@@ -9,6 +9,7 @@ interface SessionSidebarProps {
   editingId: string;
   editName: string;
   notice: string;
+  isAutoNaming: boolean;
   sessionsLength: number;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
@@ -16,6 +17,7 @@ interface SessionSidebarProps {
   onRenameSession: (id: string) => void;
   onTogglePin: (id: string, current: number) => void;
   onStartRename: (s: ChatSession) => void;
+  onRegenerateName: (id: string) => void;
   onSessionQueryChange: (q: string) => void;
   onEditNameChange: (name: string) => void;
   onEditNameKeyDown: (e: React.KeyboardEvent<HTMLInputElement>, id: string) => void;
@@ -23,10 +25,19 @@ interface SessionSidebarProps {
   onLogout: () => void;
 }
 
+const GENERIC_NAME_PATTERNS = ['untitled session', 'new session', '新建会话', '默认会话'];
+
+function looksGeneric(name: string): boolean {
+  const lower = (name || '').trim().toLowerCase();
+  if (!lower) return true;
+  return GENERIC_NAME_PATTERNS.some((p) => lower.startsWith(p));
+}
+
 const SessionSidebar = memo(function SessionSidebar({
   user, filteredSessions, sessionId, sessionQuery, editingId, editName, notice,
-  sessionsLength, onCreateSession, onSelectSession, onDeleteSession, onRenameSession,
-  onTogglePin, onStartRename, onSessionQueryChange, onEditNameChange,
+  isAutoNaming, sessionsLength, onCreateSession, onSelectSession, onDeleteSession,
+  onRenameSession, onTogglePin, onStartRename, onRegenerateName,
+  onSessionQueryChange, onEditNameChange,
   onEditNameKeyDown, onEditNameBlur, onLogout,
 }: SessionSidebarProps) {
   return (
@@ -66,19 +77,39 @@ const SessionSidebar = memo(function SessionSidebar({
                 <div className="flex items-center gap-1.5 truncate">
                   {s.isPinned ? <span className="shrink-0 text-amber-500" title="Pinned">📌</span> : null}
                   <span className="truncate">{s.name || 'Untitled'}</span>
+                  {s.id === sessionId && isAutoNaming && (
+                    <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary-500" title="AI 生成名称中..." />
+                  )}
                 </div>
               </button>
             )}
+            {/* Pin button */}
             <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-amber-500 group-hover:visible" title="Pin session" onClick={() => onTogglePin(s.id, s.isPinned || 0)}>
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill={s.isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M12 2l3 7h5l-4 6 1 7-5-3-5 3 1-7-4-6h5z" />
               </svg>
             </button>
+            {/* Rename button */}
             <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-primary-500 group-hover:visible" title="Rename session" onClick={() => onStartRename(s)}>
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
               </svg>
             </button>
+            {/* AI Regenerate name button — shown when name looks generic */}
+            {looksGeneric(s.name) && (
+              <button
+                className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-accent-500 group-hover:visible"
+                title="AI 自动生成名称"
+                onClick={() => onRegenerateName(s.id)}
+                disabled={s.id === sessionId && isAutoNaming}
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="1 4 1 10 7 10" />
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                </svg>
+              </button>
+            )}
+            {/* Delete button */}
             <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-danger-500 group-hover:visible" title="Delete session" onClick={() => onDeleteSession(s.id)}>
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M3 6h18" />

@@ -2,9 +2,11 @@ import { memo, type JSX } from 'react';
 import type { ContentSegment, GeneratedData, Message, User } from '../../types';
 import DiffBubble from './DiffBubble';
 import CodeReviewPanel from './CodeReviewPanel';
+import CodeGenResultPanel, { isCodeGenOutput } from './CodeGenResultPanel';
 import FidelityScore from './FidelityScore';
 import MarkdownRenderer from './MarkdownRenderer';
 import ThinkingPanel from './ThinkingPanel';
+import ToolCallBubble from './ToolCallBubble';
 import GeneratedFilesPanel from '../git/GeneratedFilesPanel';
 
 function normalizeStructuredStreamContent(content: string): string {
@@ -72,9 +74,48 @@ interface MessageListProps {
 const MessageList = memo(function MessageList({ messages, user, generated, onCommit, messagesContainerRef, bottomRef }: MessageListProps) {
   function renderMessage(msg: Message, index: number): JSX.Element {
     const isUser = msg.sender === user?.name || msg.sender === 'user';
+    const isToolCall = msg.type === 'tool_call' || msg.type === 'tool_result';
     const isCode = msg.type === 'code' || msg.type === 'diff';
     const badge = msg.type || 'text';
     const showCursor = msg.isStreaming;
+
+    // ── Streaming thinking placeholder → show animated thinking indicator ──
+    // This covers both the initial "empty" placeholder and subsequent
+    // agent_thinking updates that carry phase details (e.g. "正在调用工具: ...")
+    const isThinking = showCursor && !isUser && !isCode && !isToolCall;
+    if (isThinking && (!msg.content || msg.content.startsWith('正在'))) {
+      const statusText = msg.content || '模型正在思考中...';
+      return (
+        <div key={`${msg.timestamp}-${index}`} className="mb-4 flex justify-start">
+          <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-white border border-blue-200 shadow-sm">
+            <div className="mb-1 flex items-center gap-2 text-xs opacity-80">
+              <span className="font-semibold text-warm-700">{msg.sender || 'agent'}</span>
+              <span className="rounded px-2 py-0.5 bg-blue-50 text-blue-600 text-xs">思考中</span>
+            </div>
+            <div className="flex items-center gap-2 py-1">
+              <span className="flex items-center gap-1">
+                <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: '0ms' }} />
+                <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: '200ms' }} />
+                <span className="inline-block h-2 w-2 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: '400ms' }} />
+              </span>
+              <span className="text-sm text-warm-500">{statusText}</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (isToolCall) {
+      return (
+        <div key={`${msg.timestamp}-${index}`} className="mb-3">
+          <ToolCallBubble
+            calls={msg.toolCallData?.calls}
+            results={msg.toolResultData?.results}
+            isStreaming={showCursor}
+          />
+        </div>
+      );
+    }
 
     if (isCode) {
       // Auto-detect: multi-file git diff → CodeReviewPanel, else Monaco DiffBubble
@@ -136,6 +177,15 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
                       {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
                       {before && <MarkdownRenderer content={before} />}
                       <CodeReviewPanel content={diffContent} />
+                    </div>
+                  );
+                }
+                // Detect CodeGen JSON output ({"files":[...]}) and render structured panel
+                if (isCodeGenOutput(cleanText)) {
+                  return (
+                    <div key={si}>
+                      {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
+                      <CodeGenResultPanel content={cleanText} />
                     </div>
                   );
                 }

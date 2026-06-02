@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import time
@@ -25,6 +26,8 @@ from app.services.symbolic import (
     public_symbolic,
     requires_redistill,
 )
+
+logger = logging.getLogger("agenthub.agent_service")
 
 
 AGENTS = {"Orchestrator", "Architect", "CodeGen", "Review", "Test", "Deploy"}
@@ -229,6 +232,79 @@ def extract_mentions(content: str) -> list[str]:
     return re.findall(r"@(\w+)", content)
 
 
+def extract_skill_calls(content: str) -> list[str]:
+    """Extract skill invocations like ``/skill-name`` from message content."""
+    return re.findall(r"(?:^|\s)/(\w[\w-]*)", content)
+
+
+def load_skill_prompt(skill_name: str) -> str | None:
+    """Load a skill's SKILL.md body for prompt injection."""
+    from pathlib import Path
+
+    def _find_skill_dir(base: Path) -> Path | None:
+        if not base.is_dir():
+            return None
+        candidate = base / skill_name
+        if candidate.is_dir():
+            return candidate
+        try:
+            for d in base.iterdir():
+                if d.is_dir() and d.name.lower() == skill_name.lower():
+                    return d
+        except OSError:
+            pass
+        return None
+
+    # User skills
+    skill_dir = _find_skill_dir(Path.home() / ".claude" / "skills")
+    # Project skills
+    if not skill_dir:
+        cwd = Path.cwd()
+        for parent in [cwd, *cwd.parents]:
+            skill_dir = _find_skill_dir(parent / ".claude" / "skills")
+            if skill_dir:
+                break
+        if not skill_dir:
+            import os
+            proj_env = os.environ.get("AGENTHUB_PROJECT_DIR", "")
+            if proj_env:
+                skill_dir = _find_skill_dir(Path(proj_env) / ".claude" / "skills")
+    if not skill_dir:
+        return None
+    try:
+        skill_dir = skill_dir.resolve() if skill_dir.is_symlink() else skill_dir
+    except OSError:
+        pass
+    for filename in ("SKILL.md", "skill.md"):
+        skill_file = skill_dir / filename
+        if skill_file.exists():
+            try:
+                raw = skill_file.read_text(encoding="utf-8")
+                fm_match = re.match(r"^---\s*\n.*?\n---\s*\n", raw, re.DOTALL)
+                if fm_match:
+                    return raw[fm_match.end():].strip()
+                return raw.strip()
+            except (OSError, UnicodeDecodeError):
+                return None
+    return None
+
+
+_STREAMING_EXECUTOR = None
+
+
+def _get_streaming_executor():
+    """Return the application-level StreamingToolExecutor, if configured."""
+    global _STREAMING_EXECUTOR
+    if _STREAMING_EXECUTOR is not None:
+        return _STREAMING_EXECUTOR
+    try:
+        from app.services.tools import get_streaming_executor as _gse
+        _STREAMING_EXECUTOR = _gse()
+        return _STREAMING_EXECUTOR
+    except Exception:
+        return None
+
+
 def resolve_all_agents(content: str) -> list[dict]:
     """Return ALL valid agents @mentioned in the content.
 
@@ -352,7 +428,7 @@ def list_messages(session_id: str) -> list[dict]:
     return items
 
 
-async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "") -> dict:
+async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "", token: Any = None, on_tool_event: Any = None) -> dict:
     if agent is None:
         agent = resolve_agent(content)
     domain = agent["domain"]
@@ -372,32 +448,21 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     models = choose_models(candidate_models_for_role(agent["agent_id"]))
     history = _build_conversation_history(session_id)
     memory_ctx = _build_memory_context()
-    prompt = build_prompt(agent["agent_id"], domain, llm_input, symbolic, models[0].get("prompt", "") if models else "", collab_ctx, history, memory_ctx)
 
-    result = ""
-    selected = models[0] if models else {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
-    errors: list[str] = []
-    for model in models:
-        selected = model
-        adapter = adapter_manager.get_adapter(model.get("provider", "mock"))
-        started = time.perf_counter()
-        try:
-            result = await adapter.execute_prompt(prompt, model.get("model_name", "mock"), decrypt_secret(model.get("api_key", "")), model.get("base_url", ""))
-            _update_runtime(model, True, (time.perf_counter() - started) * 1000)
-            break
-        except Exception as exc:
-            _update_runtime(model, False, (time.perf_counter() - started) * 1000)
-            errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
-            result = ""
-    if not result:
-        result = "模型调用失败，已降级为本地响应：" + " | ".join(errors[:2])
+    # Use tool-enabled call loop (handles tool detection, execution, synthesis)
+    result, usage, selected = await _run_tool_call_loop(
+        session_id, content, user_id, agent, domain, llm_input,
+        models, history, memory_ctx, collab_ctx, token=token,
+        streaming_executor=_get_streaming_executor(),
+        on_tool_event=on_tool_event,
+    )
 
     content_out = normalize_agent_output(agent["agent_id"], result, content)
-    usage = adapter.last_usage
+    adapter = adapter_manager.get_adapter(selected.get("provider", "mock"))
     if usage and usage.get("total_tokens", 0) > 0:
         prompt_tokens, completion_tokens, total_tokens = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
     else:
-        prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(prompt, content_out)
+        prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(llm_input, content_out)
     generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
     public = {
         **public_symbolic(symbolic),
@@ -405,7 +470,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")},
         "attachments": attachment_meta,
     }
-    AuthService.write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})
+    AuthService.write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"]})
     display_content = "CodeGen 已生成结构化文件，请在下方生成文件面板中检查内容、查看 Diff，并确认提交。" if (generated and generated.get("files")) else content_out
     message = {
         "event": "message",
@@ -439,7 +504,13 @@ async def stream_agent_response(
     attachments: list[dict[str, Any]] | None = None,
     agent: dict | None = None,
     collab_ctx: str = "",
+    on_tool_event: Any = None,
 ) -> AsyncGenerator[str, None] | None:
+    """Stream an agent response with full tool-calling support.
+
+    Uses the same proven ``_run_tool_call_loop`` as ``call_agent()``,
+    then streams the final synthesized result to the frontend in chunks.
+    """
     if agent is None:
         agent = resolve_agent(content)
     models = choose_models(candidate_models_for_role(agent["agent_id"]))
@@ -451,88 +522,81 @@ async def stream_agent_response(
     if attachment_context:
         llm_input = f"{content}\n\n[用户上传附件上下文]\n{attachment_context}"
 
-    prompt = build_prompt(
-        agent["agent_id"],
-        agent["domain"],
-        llm_input,
-        generate_symbolic_message(
-            llm_input, "text", session_id,
-            sender_role=agent["agent_id"],
-            intent_type=_intent_from_domain(agent["domain"], content),
-            risk_level=agent.get("risk_level", "L1"),
-        ),
-        models[0].get("prompt", "") if models else "",
-        collab_ctx,
-        _build_conversation_history(session_id),
-        _build_memory_context(),
-    )
-
-    selected = models[0]
-    adapter = adapter_manager.get_adapter(selected.get("provider", "mock"))
-
     async def stream():
-        started = time.perf_counter()
-        full = ""
-        stream_failed = False
-        emitted_any = False
+        # ── Phase 1: Run the proven tool-call loop ──────────────────
+        # Wrap in try/except so that any exception in the tool-call loop
+        # becomes a visible error message instead of crashing the generator
+        # and producing a generic "模型调用失败" from the outer handler.
         try:
-            async for chunk in adapter.stream_prompt(prompt, selected.get("model_name", "mock"), decrypt_secret(selected.get("api_key", "")), selected.get("base_url", "")):
-                if token and token.cancelled:
-                    break
-                full += chunk
-                if chunk:
-                    emitted_any = True
-                    yield chunk
-            _update_runtime(selected, True, (time.perf_counter() - started) * 1000)
-        except Exception as exc:
-            _update_runtime(selected, False, (time.perf_counter() - started) * 1000)
-            stream_failed = True
-            # Fall back to non-streaming (same path as the admin test button)
-            try:
-                result = await adapter.execute_prompt(prompt, selected.get("model_name", "mock"), decrypt_secret(selected.get("api_key", "")), selected.get("base_url", ""))
-                if result:
-                    full = result
-                    if not emitted_any:
-                        yield "<thinking>正在分析中...</thinking>\n\n"
-                    yield result
-                    _update_runtime(selected, True, (time.perf_counter() - started) * 1000)
-                else:
-                    raise RuntimeError("empty response")
-            except Exception as fallback_exc:
-                fallback = f"模型调用失败（流式: {exc}，非流式: {fallback_exc}）"
-                if not emitted_any:
-                    yield "<thinking>正在分析中...</thinking>\n\n"
-                yield fallback
-                full += fallback
+            result, usage, selected = await _run_tool_call_loop(
+                session_id, content, user_id, agent, agent["domain"], llm_input,
+                models, _build_conversation_history(session_id), _build_memory_context(),
+                collab_ctx, token=token, on_tool_event=on_tool_event,
+                streaming_executor=_get_streaming_executor(),
+            )
+        except Exception as _loop_exc:
+            logger.exception(
+                "stream_agent_response: _run_tool_call_loop crashed session=%s agent=%s",
+                session_id, agent["agent_id"],
+            )
+            result = (
+                f"模型调用异常：{_loop_exc}\n\n"
+                "请检查：\n"
+                "1. 模型 API Key 是否正确配置\n"
+                "2. API 端点是否可达（网络/GFW）\n"
+                "3. 模型适配器是否正常加载"
+            )
+            usage = {}
+            selected = models[0] if models else {
+                "provider": "unknown", "model_name": "unknown",
+            }
 
-        content_out = normalize_agent_output(agent["agent_id"], full, content)
-        usage = adapter.last_usage
-        if usage and usage.get("total_tokens", 0) > 0:
-            pt, ct, tt = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
-        else:
-            pt, ct, tt = max(1, len(prompt) // 4), max(1, len(content_out) // 4), max(1, len(prompt) // 4) + max(1, len(content_out) // 4)
-        # Compute actual fidelity instead of hardcoded 0.95
-        from app.services.symbolic import compute_fidelity as _cf
-        fid_score = _cf(llm_input, content_out, intent_type=_intent_from_domain(agent["domain"], content), has_code=("```" in content_out))
-        symbolic_out = generate_symbolic_message(
-            llm_input, "text", session_id,
-            sender_role=agent["agent_id"],
-            intent_type=_intent_from_domain(agent["domain"], content),
-            risk_level=agent.get("risk_level", "L1"),
-        )
-        save_message(session_id, agent["agent_id"], content_out, "text", fid_score, public_symbolic(symbolic_out), pt, ct, tt)
-        AuthService.write_audit(
-            user_id,
-            agent["agent_id"],
-            "agent_execute",
-            agent.get("risk_level", "L1"),
-            "auto",
-            {
-                "sessionId": session_id,
-                "domain": agent["domain"],
-                "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")},
-            },
-        )
+        content_out = normalize_agent_output(agent["agent_id"], result, content)
+
+        # ── Phase 2: Stream final content ──────────────────────────
+        yield "<thinking>正在分析中...</thinking>\n\n"
+
+        chunk_buf = ""
+        separators = set("，。！？；：\n")
+        for ch in content_out:
+            if token and token.cancelled:
+                return
+            chunk_buf += ch
+            if len(chunk_buf) >= 120 or ch in separators:
+                yield chunk_buf
+                chunk_buf = ""
+        if chunk_buf:
+            yield chunk_buf
+
+        # ── Persist message & audit (best-effort, non-fatal) ────────
+        try:
+            usage_dict = usage or {}
+            pt = usage_dict.get("prompt_tokens", max(1, len(llm_input) // 4))
+            ct = usage_dict.get("completion_tokens", max(1, len(content_out) // 4))
+            tt = usage_dict.get("total_tokens", pt + ct)
+            from app.services.symbolic import compute_fidelity as _cf
+            fid_score = _cf(llm_input, content_out, intent_type=_intent_from_domain(agent["domain"], content), has_code=("```" in content_out))
+            symbolic_out = generate_symbolic_message(
+                llm_input, "text", session_id,
+                sender_role=agent["agent_id"],
+                intent_type=_intent_from_domain(agent["domain"], content),
+                risk_level=agent.get("risk_level", "L1"),
+            )
+            save_message(session_id, agent["agent_id"], content_out, "text", fid_score, public_symbolic(symbolic_out), pt, ct, tt)
+            AuthService.write_audit(
+                user_id,
+                agent["agent_id"],
+                "agent_execute",
+                agent.get("risk_level", "L1"),
+                "auto",
+                {
+                    "sessionId": session_id,
+                    "domain": agent["domain"],
+                    "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")},
+                },
+            )
+        except Exception:
+            logger.warning("stream_agent_response: save_message/audit failed (non-fatal)", exc_info=True)
 
     return stream()
 
@@ -714,8 +778,44 @@ def _build_reasoning_instruction(settings: dict[str, Any]) -> str:
     else:
         return "\n【推理强度：低】请直接给出简洁的结论和方案，减少分析过程。\n"
 
+def _get_agent_tools(agent_id: str) -> list[str] | None:
+    """Get the list of tool names available to an agent.
 
-def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "") -> str:
+    Queries agent_tool_bindings. If no bindings exist, returns None
+    (meaning all tools are available by default).
+    """
+    try:
+        rows = dict_rows(
+            "SELECT td.name FROM tool_definitions td "
+            "JOIN agent_tool_bindings atb ON td.id = atb.tool_id "
+            "WHERE atb.agent_id=? AND atb.enabled=1 AND td.enabled=1",
+            (agent_id,),
+        )
+        if rows:
+            return [r["name"] for r in rows]
+    except Exception:
+        pass  # table may not exist yet — fall through to default
+    return None  # None = all tools available
+
+
+def _build_tool_section(agent_id: str = "", available_tools: list[str] | None = None) -> str:
+    """Build the tool-calling prompt section for injection into the agent prompt.
+
+    Returns empty string if no tools are registered or tools are disabled.
+    """
+    from app.services.tool_registry import tool_registry
+
+    tool_defs = tool_registry.build_prompt_section(available_tools)
+    if not tool_defs:
+        return ""
+
+    instructions = tool_registry.build_calling_instructions()
+    return "\n\n" + tool_defs + "\n\n" + instructions
+
+
+
+
+def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None) -> str:
     # ── Shared session context (ALL agents see this FIRST) ──────────
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
@@ -733,6 +833,14 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
         )
 
     collab_section = f"\n\n{collab_ctx}" if collab_ctx else ""
+
+    # ── Current date (so the model knows what "today" is) ────────────
+    # The model's training cutoff may be months ago.  Without this, the
+    # model hallucinates dates or uses stale ones in search queries.
+    from datetime import datetime as _dt
+    today_str = _dt.now().strftime("%Y年%m月%d日")
+    weekday_str = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][_dt.now().weekday()]
+    date_context = f"【当前日期】{today_str} {weekday_str}。涉及\"今天\"、\"最新\"、\"最近\"等内容时，请基于此日期。\n"
 
     # ── Load settings for reply language, reasoning, thinking ───────
     settings = _load_settings()
@@ -774,6 +882,7 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
         return (
             f"{memory_context}"
             f"{shared_context}"
+            f"{date_context}"
             f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
             f"{reply_lang_instr}"
             f"{reasoning_instr}"
@@ -786,7 +895,8 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
             "- 路径只能是相对路径，代码必须完整可运行\n"
             "- JSON 不要包裹在 Markdown 代码块中\n\n"
             "# 非代码请求：直接以纯文本回复，严禁输出 JSON 格式。\n"
-            f"{collab_section}"
+            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
 
@@ -795,6 +905,7 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
     return (
         f"{memory_context}"
         f"{shared_context}"
+        f"{date_context}"
         f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
         + (f"\n{custom_role}\n\n" if custom_role else "\n")
         + f"{reply_lang_instr}"
@@ -802,7 +913,8 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
         f"{thinking_rule}"
         f"{code_format_rules}\n"
         f"{output_rules}\n"
-        f"{collab_section}"
+        + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+        + f"{collab_section}"
         f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
     )
 
@@ -812,6 +924,282 @@ def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, 
     completion_tokens = max(1, len(model_output) // 4)
     total_tokens = prompt_tokens + completion_tokens
     return prompt_tokens, completion_tokens, total_tokens
+
+def _format_conversation(conversation: list[dict]) -> str:
+    """Format a multi-turn conversation (including tool calls/results) for prompt injection."""
+    parts: list[str] = []
+    for turn in conversation:
+        role = turn.get("role", "")
+        if role == "user":
+            parts.append(f"【用户消息】\n{turn.get('content', '')}")
+        elif role == "assistant" and "tool_calls" in turn:
+            tcs = turn["tool_calls"]
+            for tc in tcs:
+                parts.append(
+                    f"【工具调用】\n"
+                    f"调用工具: {tc.get('name', 'unknown')}\n"
+                    f"参数: {json.dumps(tc.get('arguments', {}), ensure_ascii=False)}"
+                )
+        elif role == "tool":
+            from app.services.tool_executor import tool_executor
+            parts.append(tool_executor.build_tool_result_context(turn.get("results", [])))
+        elif role == "assistant":
+            parts.append(f"【助手回复】\n{turn.get('content', '')}")
+    return "\n\n".join(parts)
+
+
+def _log_tool_call(session_id: str, agent_id: str, tool_name: str, arguments: dict, result: dict) -> None:
+    """Log a tool call to the audit table (best-effort, non-fatal)."""
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT INTO tool_call_log (id, session_id, agent_id, tool_name, arguments_json, result_json, success, duration_ms, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    session_id,
+                    agent_id,
+                    tool_name,
+                    json.dumps(arguments, ensure_ascii=False),
+                    json.dumps(result, ensure_ascii=False),
+                    1 if result.get("success") else 0,
+                    int(result.get("duration_ms", 0)),
+                    now(),
+                ),
+            )
+    except Exception:
+        pass  # table may not exist yet
+
+
+async def _run_tool_call_loop(
+    session_id: str,
+    content: str,
+    user_id: str,
+    agent: dict,
+    domain: str,
+    llm_input: str,
+    models: list[dict],
+    history: str,
+    memory_ctx: str,
+    collab_ctx: str = "",
+    token: Any = None,
+    on_tool_event: Any = None,
+    streaming_executor: Any = None,
+) -> tuple[str, dict, dict]:
+    """Execute the tool-calling loop for a single user message.
+
+    1. Call LLM with tool-enabled prompt.
+    2. Check response for tool_calls JSON.
+    3. Execute tools, append results, re-call LLM.
+    4. If no tool calls: return final text.
+    5. Max iterations: 5. Overall timeout: 180s.
+    """
+    import asyncio as _asyncio
+    from app.services.tool_executor import tool_executor
+    from app.services.tool_registry import tool_registry
+
+    executor = tool_executor
+    conversation: list[dict] = [{"role": "user", "content": llm_input}]
+    available_tools = _get_agent_tools(agent["agent_id"])
+
+    LOOP_TIMEOUT = 180  # 3-minute overall safety cap
+
+    all_tool_names = tool_registry.list_names()
+    logger.info(
+        "tool_loop start: agent=%s domain=%s all_tools=%s available_tools=%s",
+        agent["agent_id"], domain, all_tool_names,
+        available_tools if available_tools is not None else "<all>",
+    )
+
+    final_text = ""
+    usage: dict = {}
+    selected = models[0] if models else {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
+    adapter = None
+
+    async def _loop_body() -> tuple[str, dict, dict]:
+        nonlocal final_text, usage, selected, adapter
+        for iteration in range(executor.MAX_ITERATIONS):
+            # ── Respect cancellation token ────────────────────────────
+            if token and token.cancelled:
+                logger.info("tool_loop cancelled at iteration %d", iteration)
+                return "流式响应已被中断。", usage, selected
+
+            conv_text = _format_conversation(conversation)
+            symbolic = generate_symbolic_message(
+                conv_text, "text", session_id,
+                sender_role=agent["agent_id"],
+                intent_type=_intent_from_domain(domain, conv_text),
+                risk_level=agent.get("risk_level", "L1"),
+            )
+            prompt = build_prompt(
+                agent["agent_id"], domain, conv_text, symbolic,
+                models[0].get("prompt", "") if models else "",
+                collab_ctx, history, memory_ctx,
+                tools_enabled=True, available_tools=available_tools,
+            )
+
+            logger.info(
+                "tool_loop iter=%d: prompt_len=%d has_tool_section=%s",
+                iteration, len(prompt),
+                "tool_calls" in prompt.lower(),
+            )
+
+            # Try each model
+            result = ""
+            errors: list[str] = []
+            for model in models:
+                if token and token.cancelled:
+                    return "流式响应已被中断。", usage, selected
+                selected = model
+                adapter = adapter_manager.get_adapter(model.get("provider", "mock"))
+                started = time.perf_counter()
+                try:
+                    # Native OpenAI-format tools for iteration 0 only.
+                    native_tools = None
+                    if iteration == 0:
+                        native_tools = (
+                            tool_registry.build_openai_tools(available_tools)
+                            if available_tools is not None
+                            else tool_registry.build_openai_tools()
+                        )
+                        if native_tools:
+                            logger.info(
+                                "tool_loop iter=0: using native function calling with %d tools",
+                                len(native_tools),
+                            )
+                    result = await adapter.execute_prompt(
+                        prompt,
+                        model.get("model_name", "mock"),
+                        decrypt_secret(model.get("api_key", "")),
+                        model.get("base_url", ""),
+                        tools=native_tools if native_tools else None,
+                    )
+                    elapsed = (time.perf_counter() - started) * 1000
+                    _update_runtime(model, True, elapsed)
+                    logger.info(
+                        "tool_loop iter=%d llm_call: provider=%s model=%s elapsed=%.0fms result_len=%d",
+                        iteration, model.get("provider"), model.get("model_name"),
+                        elapsed, len(result),
+                    )
+                    break
+                except Exception as exc:
+                    elapsed = (time.perf_counter() - started) * 1000
+                    _update_runtime(model, False, elapsed)
+                    errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
+                    logger.warning(
+                        "tool_loop iter=%d llm_fail: provider=%s model=%s elapsed=%.0fms error=%s",
+                        iteration, model.get("provider"), model.get("model_name"),
+                        elapsed, exc,
+                    )
+                    result = ""
+
+            if token and token.cancelled:
+                return "流式响应已被中断。", usage, selected
+
+            if not result:
+                final_text = "模型调用失败，已降级为本地响应：" + " | ".join(errors[:2])
+                break
+
+            # Check for tool calls
+            has_tc = executor.has_tool_calls(result)
+            logger.info(
+                "tool_loop iter=%d: has_tool_calls=%s result_preview=%s",
+                iteration, has_tc, result[:200].replace("\n", "\\n"),
+            )
+            if has_tc:
+                tool_calls = executor.parse_tool_calls(result)
+                logger.info(
+                    "tool_loop iter=%d: parsed %d tool_calls: %s",
+                    iteration, len(tool_calls),
+                    [tc.get("name", "?") for tc in tool_calls],
+                )
+                if tool_calls:
+                    if token and token.cancelled:
+                        return "流式响应已被中断。", usage, selected
+
+                    # Notify frontend
+                    if on_tool_event:
+                        try:
+                            await on_tool_event("calling", tool_calls, None)
+                        except Exception:
+                            pass
+
+                    # Execute tools
+                    if streaming_executor is not None:
+                        for tc in tool_calls:
+                            name = tc.get("name", "")
+                            streaming_executor.enqueue(
+                                name=name,
+                                arguments=tc.get("arguments", {}),
+                                is_concurrency_safe=tool_registry.get_concurrency_safety(name),
+                            )
+                        tool_results = await streaming_executor.process_queue()
+                    else:
+                        tool_results = await executor.execute_all(tool_calls)
+
+                    if on_tool_event:
+                        try:
+                            await on_tool_event("done", tool_calls, tool_results)
+                        except Exception:
+                            pass
+
+                    # Log tool calls (best-effort)
+                    try:
+                        for tc, tr in zip(tool_calls, tool_results):
+                            _log_tool_call(session_id, agent["agent_id"], tc["name"], tc.get("arguments", {}), tr)
+                    except Exception:
+                        pass
+
+                    conversation.append({"role": "assistant", "tool_calls": tool_calls})
+                    conversation.append({"role": "tool", "results": tool_results})
+
+                    if iteration >= executor.MAX_ITERATIONS - 1:
+                        final_text = executor.build_tool_result_context(tool_results)
+                        break
+
+                    continue  # loop back for synthesis
+
+            # No tool calls found.
+            # If native tools were used and didn't produce tool_calls,
+            # retry with prompt-based calling only (reasoning models
+            # often don't support native function calling).
+            if iteration == 0 and native_tools:
+                logger.info(
+                    "tool_loop iter=%d: native tools produced no tool_calls, "
+                    "retrying with prompt-based calling only",
+                    iteration,
+                )
+                continue  # next iteration will NOT pass native tools
+
+            final_text = result
+            break
+
+        if not final_text:
+            final_text = "工具调用后未能生成回复。"
+
+        usage_dict = adapter.last_usage if adapter else {}
+        return final_text, usage_dict, selected
+
+    # ── Execute with overall timeout ──────────────────────────────
+    try:
+        final_text, usage_dict, selected = await _asyncio.wait_for(
+            _loop_body(), timeout=LOOP_TIMEOUT,
+        )
+    except _asyncio.TimeoutError:
+        logger.error(
+            "tool_loop timeout after %ds session=%s agent=%s",
+            LOOP_TIMEOUT, session_id, agent["agent_id"],
+        )
+        final_text = (
+            f"工具调用超时（{LOOP_TIMEOUT}秒限制）。"
+            "请尝试简化问题或稍后重试。"
+        )
+        usage_dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "note": "timeout"}
+        selected = models[0] if models else {
+            "provider": "mock", "model_name": "mock", "api_key": "", "base_url": "",
+        }
+
+    return final_text, usage_dict, selected
 
 
 def _remove_repeated_text(text: str) -> str:

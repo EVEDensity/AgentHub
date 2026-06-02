@@ -12,7 +12,32 @@ from app.db.init_db import init_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import logging
+    _log = logging.getLogger("agenthub.startup")
+
     init_db()
+
+    # Register built-in tools for the tool-calling system
+    try:
+        from app.services.tools import register_builtin_tools
+        count = register_builtin_tools()
+        _log.info("startup: registered %d built-in tools", count)
+    except Exception:
+        _log.warning("startup: register_builtin_tools failed — tools will be unavailable", exc_info=True)
+
+    # Initialize enhanced function-calling system
+    # (permission manager, hook manager, streaming executor, etc.)
+    try:
+        from app.services.tools import initialize_tool_system
+        streaming_executor = initialize_tool_system()
+        app.state.streaming_executor = streaming_executor
+        _log.info("startup: enhanced function-calling system initialized")
+    except Exception:
+        _log.warning(
+            "startup: initialize_tool_system failed — agents will use simple parallel execution",
+            exc_info=True,
+        )
+
     yield
 
 

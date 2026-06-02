@@ -68,14 +68,27 @@ class WebSocketManager:
         return conn_id
 
     def disconnect(self, session_id: str, websocket: WebSocket) -> None:
-        """Remove a specific websocket from a session."""
+        """Remove a specific websocket from a session.
+
+        Idempotent — safe to call multiple times for the same connection
+        (e.g. after a heartbeat timeout has already pruned it).
+        """
         conns = self._connections.get(session_id, [])
-        for cid, ws, _, _ in list(conns):
-            if ws is websocket:
-                conns.remove((cid, ws, _, _))
-                self._heartbeats.pop((session_id, cid), None)
-                logger.info("ws disconnect session=%s conn=%s", session_id, cid)
+        # Build the target tuple (only the ws identity matters for the
+        # ``is`` check, but we need a full tuple for ``list.remove``).
+        target: tuple[str, WebSocket, str, float] | None = None
+        for item in conns:
+            if item[1] is websocket:
+                target = item
                 break
+        if target is None:
+            return  # already removed (e.g. by broadcast dead-connection pruning)
+        try:
+            conns.remove(target)
+        except ValueError:
+            pass  # race with another cleanup path
+        self._heartbeats.pop((session_id, target[0]), None)
+        logger.info("ws disconnect session=%s conn=%s", session_id, target[0])
         if not conns and session_id in self._connections:
             self._connections.pop(session_id, None)
 

@@ -21,6 +21,7 @@ class AgentGraphState(TypedDict, total=False):
     attachments: list[dict[str, Any]]
     task: dict[str, Any]
     response: dict[str, Any]
+    on_tool_event: Any  # callable for WebSocket tool event broadcast
 
 
 async def persist_user_message_node(state: AgentGraphState) -> AgentGraphState:
@@ -48,6 +49,7 @@ async def call_agent_node(state: AgentGraphState) -> AgentGraphState:
         state["content"],
         user_id=state.get("user_id", "local-admin"),
         attachments=state.get("attachments", []),
+        on_tool_event=state.get("on_tool_event"),
     )
     return {**state, "response": response}
 
@@ -140,13 +142,14 @@ class LangGraphAgentWorkflow:
                          └──────┘
 """
 
-    async def run(self, session_id: str, content: str, sender: str = "user", user_id: str = "local-admin", attachments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    async def run(self, session_id: str, content: str, sender: str = "user", user_id: str = "local-admin", attachments: list[dict[str, Any]] | None = None, on_tool_event=None) -> dict[str, Any]:
         initial_state: AgentGraphState = {
             "session_id": session_id,
             "content": content,
             "sender": sender,
             "user_id": user_id,
             "attachments": attachments or [],
+            "on_tool_event": on_tool_event,
         }
         if self._graph:
             final_state = await self._graph.ainvoke(initial_state)

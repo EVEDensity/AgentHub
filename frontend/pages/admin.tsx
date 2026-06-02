@@ -1,6 +1,6 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
-import type { Agent, AgentRoute, AgentRouteNode, MemoryDetail, MemoryFileInfo, SkillMeta, SkillDetail, User } from '../types';
+import type { Agent, AgentRoute, AgentRouteNode, ConsolidationResult, MemoryDetail, MemoryFileInfo, MemorySearchResult, SessionSummary, SkillMeta, SkillDetail, User } from '../types';
 import TokenUsageHeatmap from '../components/heatmap/TokenUsageHeatmap';
 import AgentCanvas from '../components/flow/AgentCanvas';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
@@ -73,6 +73,24 @@ export default function AdminPage(): JSX.Element {
   const [memoryBodyDraft, setMemoryBodyDraft] = useState('');
   const [memoryDirty, setMemoryDirty] = useState(false);
   const [memoryPreview, setMemoryPreview] = useState(false);
+
+  // ── Memory: sub-tab, sessions, consolidation, content search ────
+  const [memorySubTab, setMemorySubTab] = useState<'files' | 'sessions' | 'consolidation'>('files');
+  const [sessionList, setSessionList] = useState<Array<{ session_id: string; preview: string; updated_at: string }>>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeSessionSummary, setActiveSessionSummary] = useState<string>('');
+  const [globalSummary, setGlobalSummary] = useState<string>('');
+  const [globalSummaryLoading, setGlobalSummaryLoading] = useState(false);
+
+  const [consolidationLoading, setConsolidationLoading] = useState(false);
+  const [consolidationResult, setConsolidationResult] = useState<ConsolidationResult | null>(null);
+  const [consolidationError, setConsolidationError] = useState('');
+  const [consolidationDryRun, setConsolidationDryRun] = useState(true);
+
+  const [memorySearchQuery, setMemorySearchQuery] = useState('');
+  const [memorySearchResults, setMemorySearchResults] = useState<MemorySearchResult[] | null>(null);
+  const [memorySearchLoading, setMemorySearchLoading] = useState(false);
 
   // ── Skills module state ────────────────────────────────────────
   const [skillList, setSkillList] = useState<SkillMeta[]>([]);
@@ -214,6 +232,12 @@ export default function AdminPage(): JSX.Element {
   useEffect(() => {
     if (activeMenu === '记忆') {
       void loadMemoryFiles();
+      void loadSessionSummaries();
+      void loadGlobalSummary();
+      setConsolidationResult(null);
+      setConsolidationError('');
+      setMemorySearchResults(null);
+      setMemorySearchQuery('');
     }
     if (activeMenu === '技能') {
       void loadSkills();
@@ -402,6 +426,153 @@ export default function AdminPage(): JSX.Element {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+  }
+
+  async function handleImportMemory(e: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // If a memory file is currently selected, append to it instead of creating new files
+    const target = activeMemoryFile;
+    const url = target
+      ? `/api/memory/import?target=${encodeURIComponent(target)}`
+      : '/api/memory/import';
+
+    setMemoryError('');
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMemoryError((data.detail as string) || '导入失败');
+        return;
+      }
+      if (data.mode === 'append') {
+        setNotice(`已拼接到 ${target}（导入 ${data.imported_chars} 字符，合计 ${data.total_chars} 字符）`);
+      } else {
+        setNotice(`记忆导入完成：成功 ${data.imported_count} 条` + (data.skipped_count > 0 ? `，跳过 ${data.skipped_count} 条` : ''));
+      }
+      await loadMemoryFiles();
+      // Reload the detail for the target file (append) or first imported file (create)
+      const fileToLoad = data.mode === 'append' ? target : (data.imported?.[0] as string | undefined);
+      if (fileToLoad) {
+        setActiveMemoryFile(fileToLoad);
+        await loadMemoryDetail(fileToLoad);
+      }
+    } catch (err: unknown) {
+      setMemoryError(err instanceof Error ? err.message : '导入失败');
+    } finally {
+      // Reset the file input so the same file can be re-imported
+      e.target.value = '';
+    }
+  }
+
+  // ── Memory: session summaries ──────────────────────────────────────
+
+  async function loadSessionSummaries(): Promise<void> {
+    setSessionsLoading(true);
+    try {
+      const res = await fetch('/api/memory/sessions');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { sessions: SessionSummary[]; count: number };
+      setSessionList(data.sessions || []);
+    } catch {
+      setMemoryError('加载会话摘要失败');
+    } finally {
+      setSessionsLoading(false);
+    }
+  }
+
+  async function loadSessionDetail(sessionId: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/memory/sessions/${encodeURIComponent(sessionId)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { session_id: string; summary: string };
+      setActiveSessionId(sessionId);
+      setActiveSessionSummary(data.summary || '');
+    } catch {
+      setActiveSessionSummary('（无法加载会话摘要）');
+    }
+  }
+
+  async function loadGlobalSummary(): Promise<void> {
+    setGlobalSummaryLoading(true);
+    try {
+      const res = await fetch('/api/memory/global-summary');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { global_summary: string };
+      setGlobalSummary(data.global_summary || '');
+    } catch {
+      setGlobalSummary('');
+    } finally {
+      setGlobalSummaryLoading(false);
+    }
+  }
+
+  async function refreshGlobalSummary(): Promise<void> {
+    setGlobalSummaryLoading(true);
+    try {
+      const res = await fetch('/api/memory/global-summary/refresh', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { global_summary: string };
+      setGlobalSummary(data.global_summary || '');
+      setNotice('全局摘要已刷新');
+    } catch {
+      setNotice('全局摘要刷新失败');
+    } finally {
+      setGlobalSummaryLoading(false);
+    }
+  }
+
+  // ── Memory: consolidation (AutoDream) ──────────────────────────────
+
+  async function runConsolidation(dryRun: boolean): Promise<void> {
+    setConsolidationLoading(true);
+    setConsolidationError('');
+    try {
+      const res = await fetch('/api/memory/consolidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: dryRun }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as ConsolidationResult;
+      setConsolidationResult(data);
+      if (!dryRun) {
+        setNotice(`记忆整理完成：合并 ${data.merged?.length || 0} 项，删除 ${data.deleted?.length || 0} 项，更新 ${data.updated?.length || 0} 项`);
+        await loadMemoryFiles();
+      }
+    } catch (e: unknown) {
+      setConsolidationError(e instanceof Error ? e.message : '记忆整理失败');
+    } finally {
+      setConsolidationLoading(false);
+    }
+  }
+
+  // ── Memory: content search ─────────────────────────────────────────
+
+  async function runMemorySearch(): Promise<void> {
+    const q = memorySearchQuery.trim();
+    if (!q) {
+      setMemorySearchResults(null);
+      return;
+    }
+    setMemorySearchLoading(true);
+    try {
+      const res = await fetch(`/api/memory/search?q=${encodeURIComponent(q)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { results: MemorySearchResult[] };
+      setMemorySearchResults(data.results || []);
+    } catch {
+      setMemoryError('搜索记忆失败');
+    } finally {
+      setMemorySearchLoading(false);
+    }
   }
 
   // ── Skills module helpers ──────────────────────────────────────────
@@ -918,92 +1089,447 @@ export default function AdminPage(): JSX.Element {
   }
 
   function renderMemoryModule(): JSX.Element {
-    return (
-      <section className="overflow-hidden rounded-2xl border border-warm-200 bg-white">
-        <div className="grid min-h-[720px] grid-cols-[300px_1fr]">
-          <aside className="border-r border-warm-150 bg-[#FBFAF8]">
-            <div className="border-b border-warm-150 px-4 py-3">
-              <div className="text-base font-semibold text-warm-900">项目记忆</div>
-              <div className="text-xs text-warm-500">项目</div>
-            </div>
+    const SUB_TABS: Array<{ key: typeof memorySubTab; label: string }> = [
+      { key: 'files', label: '文件管理' },
+      { key: 'sessions', label: '会话摘要' },
+      { key: 'consolidation', label: '记忆整理' },
+    ];
 
-            <div className="border-b border-warm-150 px-4 py-3">
-              <div className="mb-2 text-sm font-medium text-warm-800">资源管理器</div>
+    return (
+      <section className="overflow-hidden rounded-2xl border border-warm-200 bg-white flex flex-col" style={{ minHeight: 720 }}>
+        {/* Sub-tab navigation */}
+        <div className="flex items-center border-b border-warm-150 bg-[#FBFAF8] px-5">
+          {SUB_TABS.map((tab) => (
+            <button
+              key={tab.key}
+              className={`px-5 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                memorySubTab === tab.key
+                  ? 'border-primary-400 text-primary-700'
+                  : 'border-transparent text-warm-500 hover:text-warm-700'
+              }`}
+              onClick={() => {
+                setMemorySubTab(tab.key);
+                if (tab.key === 'sessions') { void loadSessionSummaries(); void loadGlobalSummary(); }
+                if (tab.key === 'consolidation') { setConsolidationResult(null); setConsolidationError(''); }
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {memorySubTab === 'files' && renderMemoryFilesTab()}
+        {memorySubTab === 'sessions' && renderMemorySessionsTab()}
+        {memorySubTab === 'consolidation' && renderMemoryConsolidationTab()}
+      </section>
+    );
+  }
+
+  function renderMemoryFilesTab(): JSX.Element {
+    return (
+      <div className="grid flex-1 grid-cols-[300px_1fr]" style={{ minHeight: 660 }}>
+        <aside className="border-r border-warm-150 bg-[#FBFAF8] flex flex-col">
+          <div className="border-b border-warm-150 px-4 py-3">
+            <div className="text-base font-semibold text-warm-900">项目记忆</div>
+            <div className="text-xs text-warm-500">共 {memoryFiles.length} 个文件</div>
+          </div>
+
+          {/* Content search bar */}
+          <div className="border-b border-warm-150 px-4 py-3 space-y-2">
+            <div className="text-xs font-medium text-warm-600">内容搜索</div>
+            <div className="flex items-center gap-1">
               <input
-                className="w-full rounded-lg border border-warm-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary-300"
-                placeholder="搜索项目记忆文件..."
-                value={memoryKeyword}
-                onChange={(e) => setMemoryKeyword(e.target.value)}
+                className="flex-1 min-w-0 rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-primary-300"
+                placeholder="搜索记忆内容..."
+                value={memorySearchQuery}
+                onChange={(e) => setMemorySearchQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { void runMemorySearch(); } }}
+              />
+              <button
+                className="btn-primary shrink-0 px-3 py-1.5 text-xs rounded-lg"
+                disabled={!memorySearchQuery.trim() || memorySearchLoading}
+                onClick={() => void runMemorySearch()}
+              >
+                {memorySearchLoading ? '...' : '搜索'}
+              </button>
+            </div>
+            {memorySearchResults !== null && (
+              <button
+                className="text-xs text-warm-400 hover:text-warm-600 underline"
+                onClick={() => { setMemorySearchResults(null); setMemorySearchQuery(''); }}
+              >
+                清除搜索结果（{memorySearchResults.length} 条）
+              </button>
+            )}
+          </div>
+
+          {/* Filename filter */}
+          <div className="border-b border-warm-150 px-4 py-3">
+            <div className="mb-2 text-xs font-medium text-warm-600">文件筛选</div>
+            <input
+              className="w-full rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-primary-300"
+              placeholder="筛选文件名..."
+              value={memoryKeyword}
+              onChange={(e) => setMemoryKeyword(e.target.value)}
+            />
+          </div>
+
+          <div className="flex-1 overflow-auto px-3 py-3">
+            {memoryLoading ? <div className="px-2 py-2 text-xs text-warm-500">加载中...</div> : null}
+            {memoryError ? <div className="px-2 py-2 text-xs text-red-500">{memoryError}</div> : null}
+
+            {/* Content search results */}
+            {memorySearchResults !== null && (
+              <>
+                <div className="mb-2 text-xs font-medium text-primary-600">搜索结果</div>
+                {memorySearchResults.length === 0 && (
+                  <div className="px-2 py-2 text-xs text-warm-400">无匹配结果</div>
+                )}
+                {memorySearchResults.map((r) => (
+                  <button
+                    key={r.filename}
+                    className="mb-1 block w-full rounded-lg border px-3 py-2 text-left border-transparent hover:border-primary-200 hover:bg-primary-50/50"
+                    onClick={() => {
+                      setMemorySearchResults(null);
+                      setMemorySearchQuery('');
+                      setActiveMemoryFile(r.filename);
+                      void loadMemoryDetail(r.filename);
+                    }}
+                  >
+                    <div className="truncate text-sm font-medium text-warm-800">{r.name}</div>
+                    <div className="mt-0.5 truncate text-xs text-warm-500">{r.snippet}</div>
+                    <div className="mt-0.5 text-[10px] text-warm-400">{r.filename} · 相关度: {(r.score * 100).toFixed(0)}%</div>
+                  </button>
+                ))}
+                <div className="my-2 border-t border-warm-150" />
+                <div className="mb-2 text-xs font-medium text-warm-400">全部文件</div>
+              </>
+            )}
+
+            {/* File list (or "no results" from content search takes over) */}
+            {!memoryLoading && !filteredMemoryFiles.length && memorySearchResults === null ? (
+              <div className="px-2 py-2 text-xs text-warm-400">暂无记忆文件</div>
+            ) : null}
+
+            {memorySearchResults === null && filteredMemoryFiles.map((f) => (
+              <button
+                key={f.filename}
+                className={`mb-1 block w-full rounded-lg border px-3 py-2 text-left ${activeMemoryFile === f.filename ? 'border-warm-300 bg-warm-100' : 'border-transparent hover:border-warm-200 hover:bg-warm-50'}`}
+                onClick={() => {
+                  setActiveMemoryFile(f.filename);
+                  void loadMemoryDetail(f.filename);
+                }}
+              >
+                <div className="truncate text-sm font-medium text-warm-800">{f.name}</div>
+                <div className="mt-1 truncate text-xs text-warm-500">{f.filename}</div>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <div className="min-w-0 flex flex-col">
+          <header className="flex items-center justify-between border-b border-warm-150 px-5 py-3 shrink-0">
+            <div>
+              <div className="text-lg font-semibold text-warm-900">{memoryDetail?.meta.name || 'MEMORY.md'}</div>
+              <div className="text-xs text-warm-500">{activeMemoryFile || '未选择文件'}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => void loadMemoryFiles()}>刷新</button>
+              <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => setMemoryPreview((v) => !v)}>{memoryPreview ? '编辑' : '预览'}</button>
+              <button className="btn-primary px-3 py-1.5 text-sm" disabled={!memoryDirty} onClick={() => void saveMemoryDetail()}>保存</button>
+              <button className="btn-primary px-3 py-1.5 text-sm" disabled={!activeMemoryFile} onClick={() => handleExportMemory()}>导出</button>
+              <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => document.getElementById('memory-import-input')?.click()}>导入</button>
+              <input id="memory-import-input" type="file" accept=".md,.markdown,.txt" className="hidden" onChange={(e) => { void handleImportMemory(e); }} />
+            </div>
+          </header>
+
+          <div className="grid flex-1 grid-cols-2">
+            <div className="border-r border-warm-150 flex flex-col">
+              <div className="flex items-center justify-between border-b border-warm-150 px-4 py-2 shrink-0">
+                <span className="text-xs font-medium tracking-wide text-warm-600">编辑</span>
+                <span className="text-xs text-warm-400">MARKDOWN</span>
+              </div>
+              <textarea
+                className="flex-1 w-full resize-none border-0 bg-white px-4 py-3 font-mono text-[13px] leading-6 text-warm-800 outline-none"
+                value={memoryBodyDraft}
+                onChange={(e) => {
+                  setMemoryBodyDraft(e.target.value);
+                  setMemoryDirty(true);
+                }}
+                placeholder="请输入记忆内容..."
+                disabled={memoryPreview || !memoryDetail}
               />
             </div>
-
-            <div className="h-[calc(720px-140px)] overflow-auto px-3 py-3">
-              {memoryLoading ? <div className="px-2 py-2 text-xs text-warm-500">加载中...</div> : null}
-              {memoryError ? <div className="px-2 py-2 text-xs text-red-500">{memoryError}</div> : null}
-              {!memoryLoading && !filteredMemoryFiles.length ? (
-                <div className="px-2 py-2 text-xs text-warm-400">暂无记忆文件</div>
-              ) : null}
-
-              {filteredMemoryFiles.map((f) => (
-                <button
-                  key={f.filename}
-                  className={`mb-1 block w-full rounded-lg border px-3 py-2 text-left ${activeMemoryFile === f.filename ? 'border-warm-300 bg-warm-100' : 'border-transparent hover:border-warm-200 hover:bg-warm-50'}`}
-                  onClick={() => {
-                    setActiveMemoryFile(f.filename);
-                    void loadMemoryDetail(f.filename);
-                  }}
-                >
-                  <div className="truncate text-sm font-medium text-warm-800">{f.name}</div>
-                  <div className="mt-1 truncate text-xs text-warm-500">{f.filename}</div>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <div className="min-w-0">
-            <header className="flex items-center justify-between border-b border-warm-150 px-5 py-3">
-              <div>
-                <div className="text-lg font-semibold text-warm-900">{memoryDetail?.meta.name || 'MEMORY.md'}</div>
-                <div className="text-xs text-warm-500">{activeMemoryFile || '未选择文件'}</div>
+            <div className="flex flex-col">
+              <div className="flex items-center justify-between border-b border-warm-150 px-4 py-2 shrink-0">
+                <span className="text-xs font-medium tracking-wide text-warm-600">预览</span>
+                <span className="text-xs text-warm-400">已渲染</span>
               </div>
-              <div className="flex items-center gap-2">
-                <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => void loadMemoryFiles()}>刷新</button>
-                <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => setMemoryPreview((v) => !v)}>{memoryPreview ? '编辑' : '预览'}</button>
-                <button className="btn-primary px-3 py-1.5 text-sm" disabled={!memoryDirty} onClick={() => void saveMemoryDetail()}>保存</button>
-                <button className="btn-primary px-3 py-1.5 text-sm" disabled={!activeMemoryFile} onClick={() => handleExportMemory()}>导出</button>
-              </div>
-            </header>
-
-            <div className="grid h-[calc(720px-61px)] grid-cols-2">
-              <div className="border-r border-warm-150">
-                <div className="flex items-center justify-between border-b border-warm-150 px-4 py-2">
-                  <span className="text-xs font-medium tracking-wide text-warm-600">编辑</span>
-                  <span className="text-xs text-warm-400">MARKDOWN</span>
-                </div>
-                <textarea
-                  className="h-[calc(720px-101px)] w-full resize-none border-0 bg-white px-4 py-3 font-mono text-[13px] leading-6 text-warm-800 outline-none"
-                  value={memoryBodyDraft}
-                  onChange={(e) => {
-                    setMemoryBodyDraft(e.target.value);
-                    setMemoryDirty(true);
-                  }}
-                  placeholder="请输入记忆内容..."
-                  disabled={memoryPreview || !memoryDetail}
-                />
-              </div>
-              <div>
-                <div className="flex items-center justify-between border-b border-warm-150 px-4 py-2">
-                  <span className="text-xs font-medium tracking-wide text-warm-600">预览</span>
-                  <span className="text-xs text-warm-400">已渲染</span>
-                </div>
-                <div className="h-[calc(720px-101px)] overflow-auto bg-[#FCFCFB] px-4 py-3 text-[14px] leading-7 text-warm-800">
-                  <pre className="whitespace-pre-wrap font-sans">{memoryBodyDraft || '（空内容）'}</pre>
-                </div>
+              <div className="flex-1 overflow-auto bg-[#FCFCFB] px-4 py-3">
+                <MarkdownRenderer content={memoryBodyDraft || '（空内容）'} />
               </div>
             </div>
           </div>
         </div>
-      </section>
+      </div>
+    );
+  }
+
+  function renderMemorySessionsTab(): JSX.Element {
+    return (
+      <div className="grid flex-1 grid-cols-[320px_1fr]" style={{ minHeight: 660 }}>
+        <aside className="border-r border-warm-150 bg-[#FBFAF8] flex flex-col">
+          <div className="border-b border-warm-150 px-4 py-3">
+            <div className="text-base font-semibold text-warm-900">会话摘要</div>
+            <div className="text-xs text-warm-500">共 {sessionList.length} 个会话</div>
+          </div>
+
+          {/* Global summary card */}
+          <div className="border-b border-warm-150 px-4 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-warm-600">全局摘要</span>
+              <button
+                className="text-[10px] text-primary-500 hover:text-primary-700"
+                disabled={globalSummaryLoading}
+                onClick={() => void refreshGlobalSummary()}
+              >
+                {globalSummaryLoading ? '刷新中...' : '强制刷新'}
+              </button>
+            </div>
+            {globalSummaryLoading ? (
+              <div className="text-xs text-warm-400">加载中...</div>
+            ) : globalSummary ? (
+              <div className="text-xs text-warm-600 leading-relaxed max-h-24 overflow-auto">{globalSummary}</div>
+            ) : (
+              <div className="text-xs text-warm-400">暂无全局摘要</div>
+            )}
+          </div>
+
+          {/* Session list */}
+          <div className="flex-1 overflow-auto px-3 py-3">
+            {sessionsLoading ? <div className="px-2 py-2 text-xs text-warm-500">加载中...</div> : null}
+            {!sessionsLoading && !sessionList.length ? (
+              <div className="px-2 py-2 text-xs text-warm-400">暂无会话摘要 — 发送消息后系统会自动生成</div>
+            ) : null}
+            {sessionList.map((s) => (
+              <button
+                key={s.session_id}
+                className={`mb-1 block w-full rounded-lg border px-3 py-2 text-left ${
+                  activeSessionId === s.session_id
+                    ? 'border-primary-300 bg-primary-50'
+                    : 'border-transparent hover:border-warm-200 hover:bg-warm-50'
+                }`}
+                onClick={() => { void loadSessionDetail(s.session_id); }}
+              >
+                <div className="truncate text-xs font-medium text-warm-800 font-mono">{s.session_id}</div>
+                <div className="mt-1 text-xs text-warm-500 leading-relaxed line-clamp-2">{s.preview}</div>
+                <div className="mt-1 text-[10px] text-warm-400">{s.updated_at ? new Date(s.updated_at).toLocaleString() : '—'}</div>
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        <div className="min-w-0 flex flex-col">
+          <header className="flex items-center justify-between border-b border-warm-150 px-5 py-3 shrink-0">
+            <div>
+              <div className="text-base font-semibold text-warm-900 font-mono text-sm">
+                {activeSessionId || '未选择会话'}
+              </div>
+              <div className="text-xs text-warm-500">会话摘要详情</div>
+            </div>
+            {activeSessionId && (
+              <button
+                className="btn-ghost px-3 py-1.5 text-xs text-red-500"
+                onClick={async () => {
+                  if (!window.confirm(`确认重置会话 ${activeSessionId} 的摘要？`)) return;
+                  await fetch(`/api/memory/sessions/reset/${encodeURIComponent(activeSessionId)}`, { method: 'POST' });
+                  setActiveSessionId(null);
+                  setActiveSessionSummary('');
+                  void loadSessionSummaries();
+                  setNotice('会话摘要已重置');
+                }}
+              >
+                重置摘要
+              </button>
+            )}
+          </header>
+          <div className="flex-1 overflow-auto bg-[#FCFCFB] px-6 py-4">
+            {!activeSessionId ? (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <span className="text-5xl text-warm-300 mb-4">📋</span>
+                <p className="text-sm text-warm-500">从左侧选择一个会话查看其自动生成的摘要</p>
+                <p className="text-xs text-warm-400 mt-1">
+                  会话摘要在您发送消息后自动生成，汇总了对话中的关键信息
+                </p>
+              </div>
+            ) : activeSessionSummary ? (
+              <div className="text-sm text-warm-700 leading-relaxed whitespace-pre-wrap">
+                {activeSessionSummary}
+              </div>
+            ) : (
+              <div className="text-sm text-warm-400">（空摘要）</div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderMemoryConsolidationTab(): JSX.Element {
+    return (
+      <div className="flex-1 flex flex-col" style={{ minHeight: 660 }}>
+        <header className="flex items-center justify-between border-b border-warm-150 px-5 py-3 shrink-0">
+          <div>
+            <div className="text-base font-semibold text-warm-900">记忆整理（AutoDream）</div>
+            <div className="text-xs text-warm-500">合并重复记忆、删除过时内容、更新过期信息</div>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-warm-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                className="rounded"
+                checked={consolidationDryRun}
+                onChange={(e) => setConsolidationDryRun(e.target.checked)}
+              />
+              仅分析（dry run）
+            </label>
+            <button
+              className="btn-secondary px-4 py-1.5 text-sm"
+              disabled={consolidationLoading}
+              onClick={() => void runConsolidation(true)}
+            >
+              {consolidationLoading ? '分析中...' : '分析'}
+            </button>
+            <button
+              className="btn-primary px-4 py-1.5 text-sm"
+              disabled={consolidationLoading}
+              onClick={() => {
+                if (!window.confirm('确认执行记忆整理？此操作将实际合并/删除记忆文件。建议先执行"仅分析"预览变更。')) return;
+                void runConsolidation(false);
+              }}
+            >
+              {consolidationLoading ? '执行中...' : '执行整理'}
+            </button>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-auto px-5 py-4">
+          {consolidationError && (
+            <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 mb-4">{consolidationError}</div>
+          )}
+
+          {!consolidationResult && !consolidationLoading && (
+            <div className="flex flex-col items-center justify-center h-full text-center">
+              <span className="text-5xl text-warm-300 mb-4">🧠</span>
+              <p className="text-sm text-warm-600 font-medium">AutoDream 记忆整理</p>
+              <p className="text-xs text-warm-500 mt-1 max-w-md leading-relaxed">
+                通过 LLM 分析所有记忆文件，自动检测重复内容、过时信息和需要更新的条目。
+                建议先执行"仅分析"预览变更，确认无误后再执行实际整理。
+              </p>
+              <div className="mt-4 flex gap-3">
+                <div className="rounded-lg border border-warm-200 bg-warm-50 px-4 py-2 text-center">
+                  <div className="text-lg font-semibold text-warm-800">{memoryFiles.length}</div>
+                  <div className="text-[10px] text-warm-400">当前记忆文件</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {consolidationLoading && (
+            <div className="flex items-center justify-center py-12">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary-400 border-t-transparent" />
+              <span className="ml-3 text-sm text-warm-500">正在分析记忆文件...</span>
+            </div>
+          )}
+
+          {consolidationResult && (
+            <div className="space-y-4">
+              {/* Summary banner */}
+              <div className="rounded-xl border border-primary-200 bg-primary-50/50 px-5 py-3">
+                <div className="flex items-center gap-3 text-sm">
+                  {consolidationResult.dry_run ? (
+                    <span className="tag tag-blue">仅分析 · DRY RUN</span>
+                  ) : (
+                    <span className="tag tag-green">已执行</span>
+                  )}
+                  <span className="text-warm-600">
+                    合并 {consolidationResult.merged?.length || 0} 项 ·
+                    删除 {consolidationResult.deleted?.length || 0} 项 ·
+                    更新 {consolidationResult.updated?.length || 0} 项 ·
+                    保留 {consolidationResult.unchanged?.length || 0} 项
+                  </span>
+                </div>
+                {consolidationResult.summary && (
+                  <div className="mt-2 text-sm text-warm-600 leading-relaxed">{consolidationResult.summary}</div>
+                )}
+              </div>
+
+              {/* Merged */}
+              {consolidationResult.merged && consolidationResult.merged.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-green-700 mb-2">🟢 待合并（{consolidationResult.merged.length} 项）</h4>
+                  <div className="space-y-2">
+                    {consolidationResult.merged.map((m, i) => (
+                      <div key={i} className="rounded-lg border border-green-200 bg-green-50/30 px-4 py-2">
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="font-medium text-warm-800">{m.file}</span>
+                          <span className="text-warm-400">←</span>
+                          <span className="text-xs text-warm-500 font-mono">{m.targets.join(', ')}</span>
+                        </div>
+                        <div className="text-xs text-warm-500 mt-1">{m.reason}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Deleted */}
+              {consolidationResult.deleted && consolidationResult.deleted.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-red-700 mb-2">🔴 待删除（{consolidationResult.deleted.length} 项）</h4>
+                  <div className="space-y-2">
+                    {consolidationResult.deleted.map((d, i) => (
+                      <div key={i} className="rounded-lg border border-red-200 bg-red-50/30 px-4 py-2">
+                        <div className="text-sm font-medium text-red-800">{d.file}</div>
+                        <div className="text-xs text-warm-500 mt-1">{d.reason}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Updated */}
+              {consolidationResult.updated && consolidationResult.updated.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-blue-700 mb-2">🔵 待更新（{consolidationResult.updated.length} 项）</h4>
+                  <div className="space-y-2">
+                    {consolidationResult.updated.map((u, i) => (
+                      <div key={i} className="rounded-lg border border-blue-200 bg-blue-50/30 px-4 py-2">
+                        <div className="text-sm font-medium text-blue-800">{u.file}</div>
+                        <div className="text-xs text-warm-500 mt-1">{u.reason}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Unchanged */}
+              {consolidationResult.unchanged && consolidationResult.unchanged.length > 0 && (
+                <details className="rounded-lg border border-warm-200 overflow-hidden">
+                  <summary className="px-4 py-2 text-sm text-warm-500 cursor-pointer select-none hover:bg-warm-50">
+                    保留不变（{consolidationResult.unchanged.length} 项）
+                  </summary>
+                  <div className="px-4 py-2 border-t border-warm-150 max-h-48 overflow-auto">
+                    {consolidationResult.unchanged.map((u, i) => (
+                      <div key={i} className="text-xs text-warm-500 py-0.5">{u.file}</div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     );
   }
 

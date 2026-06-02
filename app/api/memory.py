@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.config import AUTO_MEMORY_ENABLED, MEMORY_DIR
@@ -228,6 +228,120 @@ async def batch_export_memories(req: BatchDeleteRequest):
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": "attachment; filename*=UTF-8''memories_export.md"},
     )
+
+
+@router.post("/import")
+async def import_memories(
+    file: UploadFile = File(...),
+    target_filename: str = Query("", alias="target", description="可选：拼接到的目标文件名（当前编辑器选中的文件）"),
+):
+    """Import a markdown file — supports two modes:
+
+    **Append mode** (target_filename is provided):
+        Appends the uploaded content to the specified target memory file,
+        merging it into the existing body. The target's frontmatter is
+        preserved; only updated_at is refreshed.
+
+    **Create mode** (target_filename omitted):
+        Parses the upload into individual memory files (supports both
+        single files and batch exports joined by \\n\\n---\\n\\n).
+
+    Returns:
+        status: "ok"
+        mode: "append" | "create"
+        ...
+    """
+    if not file.filename or not file.filename.lower().endswith(('.md', '.markdown', '.txt')):
+        raise HTTPException(
+            status_code=400,
+            detail="仅支持 .md / .markdown / .txt 格式的记忆导出文件",
+        )
+
+    content = (await file.read()).decode("utf-8")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="上传的文件内容为空")
+
+    storage = _get_storage()
+
+    # ── Append mode: merge into existing target file ──────────────────
+    if target_filename:
+        existing = storage.get(target_filename)
+        if existing is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"目标记忆文件 '{target_filename}' 不存在，请先选择一个文件",
+            )
+
+        # Strip frontmatter from uploaded content to get raw body
+        imported_doc = MemoryDocument.parse(content)
+        imported_body = imported_doc.body.strip() if imported_doc.body else content.strip()
+
+        # Merge: existing body + separator + imported body
+        merged_body = existing.body.rstrip() + "\n\n---\n\n" + imported_body
+
+        storage.save(
+            name=existing.meta.name,
+            description=existing.meta.description,
+            type_=existing.meta.type,
+            body=merged_body,
+            filename=target_filename,
+        )
+
+        return {
+            "status": "ok",
+            "mode": "append",
+            "target_filename": target_filename,
+            "imported_chars": len(imported_body),
+            "total_chars": len(merged_body),
+        }
+
+    # ── Create mode: parse into individual files ──────────────────────
+    BATCH_SEP = "\n\n---\n\n"
+    sections_by_sep = content.split(BATCH_SEP)
+    fm_count = sum(1 for s in sections_by_sep if s.strip().startswith("---"))
+    raw_sections = [s.strip() for s in sections_by_sep if s.strip()] if fm_count > 1 else [content.strip()]
+
+    imported: list[str] = []
+    skipped: list[dict] = []
+
+    for section in raw_sections:
+        if not section.strip():
+            continue
+
+        try:
+            doc = MemoryDocument.parse(section)
+        except Exception:
+            skipped.append({"content_preview": section[:80], "error": "无法解析YAML frontmatter"})
+            continue
+
+        if not doc.meta.name or doc.meta.name == "untitled":
+            skipped.append({"content_preview": section[:80], "error": "缺少 name 字段"})
+            continue
+
+        try:
+            from app.services.memory.models import sanitize_filename
+
+            filename = sanitize_filename(doc.meta.name)
+            storage.save(
+                name=doc.meta.name,
+                description=doc.meta.description,
+                type_=doc.meta.type,
+                body=doc.body,
+                filename=filename,
+            )
+            imported.append(filename)
+        except Exception as exc:
+            skipped.append({"name": doc.meta.name, "error": str(exc)})
+
+    return {
+        "status": "ok",
+        "mode": "create",
+        "imported": imported,
+        "imported_count": len(imported),
+        "skipped": skipped,
+        "skipped_count": len(skipped),
+        "total_sections": len(raw_sections),
+    }
 
 
 @router.post("/files", response_model=MemoryFileInfo)
@@ -619,3 +733,43 @@ async def reset_session_memory(session_id: str):
     session_mgr = _get_session_mgr()
     session_mgr.reset_session(session_id)
     return {"status": "ok", "session_id": session_id, "reset": True}
+
+
+@router.post("/sessions/transfer")
+async def transfer_session_memory(req: SessionTransferRequest):
+    """Transfer (copy/merge) memory summary from one session to another.
+
+    - mode="append":  Append source summary to target session's summary.
+    - mode="overwrite": Replace target session's summary with source's.
+    """
+    session_mgr = _get_session_mgr()
+
+    source_summary = session_mgr.get_session_summary(req.source_session_id)
+    if not source_summary:
+        raise HTTPException(
+            status_code=404,
+            detail=f"源会话 '{req.source_session_id}' 没有已缓存的摘要",
+        )
+
+    if req.mode == "overwrite":
+        session_mgr.write_session_summary(req.target_session_id, source_summary)
+        return {
+            "status": "ok",
+            "mode": "overwrite",
+            "source_session_id": req.source_session_id,
+            "target_session_id": req.target_session_id,
+        }
+
+    # append mode (default)
+    target_summary = session_mgr.get_session_summary(req.target_session_id)
+    if target_summary:
+        merged = target_summary.rstrip() + "\n\n---\n\n" + source_summary
+    else:
+        merged = source_summary
+    session_mgr.write_session_summary(req.target_session_id, merged)
+    return {
+        "status": "ok",
+        "mode": "append",
+        "source_session_id": req.source_session_id,
+        "target_session_id": req.target_session_id,
+    }

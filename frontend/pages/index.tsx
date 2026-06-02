@@ -6,7 +6,7 @@ import DagModal from '../components/chat/DagModal';
 import MessageList from '../components/chat/MessageList';
 import SessionSidebar from '../components/chat/SessionSidebar';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
-import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, GeneratedData, Message, PendingMessage, StreamChunk, User, WorkflowSummary } from '../types';
+import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, GeneratedData, Message, PendingMessage, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary } from '../types';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
@@ -77,12 +77,14 @@ export default function AgentHubIM(): JSX.Element {
   const [selectedRiskLevel, setSelectedRiskLevel] = useState<string>('all');
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionActiveIndex, setMentionActiveIndex] = useState<number>(0);
-  const [mentionTrigger, setMentionTrigger] = useState<'@' | '#'>('@');
+  const [mentionTrigger, setMentionTrigger] = useState<'@' | '#' | '/'>( '@');
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
+  const [skills, setSkills] = useState<SkillMeta[]>([]);
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [editingId, setEditingId] = useState<string>('');
   const [editName, setEditName] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<PendingMessage[]>([]);
@@ -150,6 +152,10 @@ export default function AgentHubIM(): JSX.Element {
       .then((r) => r.json())
       .then((data: WorkflowSummary[]) => setWorkflows(data))
       .catch(() => {});
+    fetch('/api/skills')
+      .then((r) => r.json())
+      .then((data: { skills: SkillMeta[] }) => setSkills(data.skills || []))
+      .catch(() => {});
   }, [token]);
 
   async function reloadMessages(merge = false): Promise<void> {
@@ -163,11 +169,18 @@ export default function AgentHubIM(): JSX.Element {
           const existingIds = new Set(prev.filter((m) => m.id).map((m) => m.id));
           const newMessages = data.filter((m) => !m.id || !existingIds.has(m.id));
           if (newMessages.length === 0) return prev;
-          const clean = prev.filter((m) => !m.messageId);
+          // Only remove actively-streaming temp messages; keep finalized ones
+          // that haven't been replaced by the DB message event yet.
+          const clean = prev.filter((m) => !m.isStreaming);
           return [...clean, ...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
         });
       } else {
-        setMessages([...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
+        // Only replace all messages if data is non-empty; an empty API
+        // response usually means a race condition (DB not yet written).
+        // Replacing with [] would wipe the chat history from view.
+        if (data.length > 0) {
+          setMessages([...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
+        }
       }
     } catch { /* ignore */ }
   }
@@ -231,11 +244,29 @@ export default function AgentHubIM(): JSX.Element {
 
   function flushStreamBuffer(): void {
     const buf = streamBufferRef.current;
-    if (!buf || buf.chunks.length === 0 || currentSessionRef.current !== buf.sessionId) return;
+    if (!buf || currentSessionRef.current !== buf.sessionId) return;
+
+    // Handle final signal even when no content chunks are pending.
+    // The backend sends an empty message_chunk with isFinal=true to
+    // signal end-of-stream.  Without this branch the early return
+    // below would drop the final flag, leaving isStreaming stuck.
+    if (buf.chunks.length === 0) {
+      if (buf.isFinal) {
+        setIsStreaming(false);
+        streamBufferRef.current = null;
+      }
+      return;
+    }
+
     const contentDelta = buf.chunks.join('');
     const finalFlag = buf.isFinal;
     buf.chunks = [];
-    buf.isFinal = false;
+    // Only clear isFinal when this flush didn't consume it —
+    // preserves the final signal if chunks arrive in the same
+    // JS tick as the empty isFinal marker.
+    if (!finalFlag) {
+      buf.isFinal = false;
+    }
 
     setMessages((prev) => {
       const idx = prev.findIndex((m) => m.messageId === buf.messageId);
@@ -319,6 +350,12 @@ export default function AgentHubIM(): JSX.Element {
 
     ws.onclose = () => {
       setConnected(false);
+      // Flush any buffered stream content BEFORE clearing — otherwise
+      // the last batch of chunks from the final RAF frame is lost and
+      // the user sees a truncated response ("对话一半").
+      if (streamBufferRef.current && streamBufferRef.current.chunks.length > 0) {
+        flushStreamBuffer();
+      }
       if (streamFlushRafRef.current != null) {
         window.cancelAnimationFrame(streamFlushRafRef.current);
         streamFlushRafRef.current = null;
@@ -374,6 +411,15 @@ export default function AgentHubIM(): JSX.Element {
         setIsStreaming(!chunk.isFinal);
 
         if (!streamBufferRef.current || streamBufferRef.current.messageId !== chunk.messageId || streamBufferRef.current.sessionId !== chunk.sessionId) {
+          // First chunk of a new stream — clean up any thinking placeholder
+          // from the agent_thinking event (it has a different messageId)
+          setMessages((prev) => {
+            const cleaned = prev.filter(
+              (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
+            );
+            return cleaned.length !== prev.length ? cleaned : prev;
+          });
+
           streamBufferRef.current = {
             messageId: chunk.messageId,
             sessionId: chunk.sessionId,
@@ -404,11 +450,16 @@ export default function AgentHubIM(): JSX.Element {
           let changed = false;
           for (let i = updated.length - 1; i >= 0; i--) {
             if (updated[i].isStreaming) {
-              updated[i] = {
-                ...updated[i],
-                isStreaming: false,
-                content: updated[i].content + '\n\n[Interrupted, processing new message...]',
-              };
+              // If it's a thinking placeholder (empty or progress text), remove it entirely
+              if (!updated[i].content || updated[i].content.startsWith('正在')) {
+                updated.splice(i, 1);
+              } else {
+                updated[i] = {
+                  ...updated[i],
+                  isStreaming: false,
+                  content: updated[i].content + '\n\n[Interrupted, processing new message...]',
+                };
+              }
               changed = true;
             }
           }
@@ -477,6 +528,96 @@ export default function AgentHubIM(): JSX.Element {
         ]);
       }
 
+      // ── Agent thinking (shows streaming indicator during tool phase) ──
+      if (evt === 'agent_thinking') {
+        const payload = raw as {
+          messageId: string;
+          agentId: string;
+          phase?: string;
+          details?: string;
+        };
+        setIsStreaming(true);
+        // Insert or update the thinking placeholder with phase details.
+        // Subsequent agent_thinking events (e.g. "executing", "synthesizing")
+        // update the same placeholder in-place so the user sees live progress.
+        setMessages((prev) => {
+          const existingIdx = prev.findIndex(
+            (m) => m.messageId === payload.messageId && m.isStreaming
+          );
+          if (existingIdx >= 0) {
+            // Update existing placeholder with new phase info
+            const updated = [...prev];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              content: payload.details || updated[existingIdx].content,
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              event: 'message',
+              sessionId: sid,
+              sender: payload.agentId || 'agent',
+              content: payload.details || '',
+              type: 'text' as const,
+              timestamp: new Date().toISOString(),
+              messageId: payload.messageId,
+              isStreaming: true,
+            },
+          ];
+        });
+      }
+
+      // ── Tool call events ──────────────────────────────────────────
+      if (evt === 'tool_call') {
+        const payload = raw as unknown as ToolCallEvent;
+        setMessages((prev) => {
+          // Remove empty thinking placeholders — tool execution has started
+          const cleaned = prev.filter(
+            (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
+          );
+          return [
+            ...cleaned,
+            {
+              event: 'message',
+              sessionId: sid,
+              sender: 'system',
+              content: '',
+              type: 'tool_call' as const,
+              timestamp: payload.timestamp,
+              messageId: payload.messageId,
+              toolCallData: { calls: payload.toolCalls },
+            },
+          ];
+        });
+      }
+
+      if (evt === 'tool_result') {
+        const payload = raw as unknown as ToolResultEvent;
+        setMessages((prev) => {
+          // Find the matching tool_call message and update it
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].type === 'tool_call' && updated[i].messageId === payload.messageId) {
+              updated[i] = {
+                ...updated[i],
+                type: 'tool_result' as const,
+                toolResultData: { results: payload.results },
+              };
+              break;
+            }
+          }
+          return updated;
+        });
+      }
+
+      if (evt === 'session_renamed') {
+        const payload = raw as { sessionId: string; name: string };
+        setSessions((prev) => prev.map((s) => (s.id === payload.sessionId ? { ...s, name: payload.name } : s)));
+        setIsAutoNaming(false);
+      }
+
       if (evt === 'message') {
         // Flush any pending stream buffer before searching for the
         // placeholder — the RAF callback may not have fired yet, and
@@ -491,12 +632,24 @@ export default function AgentHubIM(): JSX.Element {
         const msg = raw as unknown as Message;
         const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
         setMessages((prev) => {
+          // Clean up any empty thinking placeholders (from agent_thinking) before
+          // adding/replacing the final message
+          let cleaned = prev;
+          const hasEmptyThinkers = prev.some(
+            (m) => m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在'))
+          );
+          if (hasEmptyThinkers) {
+            cleaned = prev.filter(
+              (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
+            );
+          }
+
           const targetMessageId = (raw.messageId || msg.messageId || '') as string;
           const streamingIdx = targetMessageId
-            ? prev.findIndex((m) => m.messageId === targetMessageId)
-            : prev.findIndex((m) => m.messageId);
+            ? cleaned.findIndex((m) => m.messageId === targetMessageId)
+            : -1;
           if (streamingIdx >= 0 && !isSystemMsg) {
-            const updated = [...prev];
+            const updated = [...cleaned];
             updated[streamingIdx] = { ...msg, messageId: undefined, isStreaming: false };
             if (msg.id) {
               return updated.filter((m, i) => i === streamingIdx || m.id !== msg.id);
@@ -504,12 +657,12 @@ export default function AgentHubIM(): JSX.Element {
             return updated;
           }
           if (isSystemMsg && msg.content && msg.content.includes('已连接')) {
-            return prev;
+            return cleaned;
           }
-          if (msg.id && prev.some((m) => m.id === msg.id)) {
-            return prev;
+          if (msg.id && cleaned.some((m) => m.id === msg.id)) {
+            return cleaned;
           }
-          return [...prev, { ...msg, messageId: undefined, isStreaming: false }];
+          return [...cleaned, { ...msg, messageId: undefined, isStreaming: false }];
         });
         if (!isSystemMsg) {
           setSessions((prev) => sortSessions(prev.map((s) => (s.id === (msg.sessionId || sid) ? { ...s, lastMessageAt: msg.timestamp || new Date().toISOString() } : s))));
@@ -525,15 +678,21 @@ export default function AgentHubIM(): JSX.Element {
     const textBefore = value.slice(0, cursor);
     const lastAt = textBefore.lastIndexOf('@');
     const lastHash = textBefore.lastIndexOf('#');
+    const lastSlash = textBefore.lastIndexOf('/');
 
-    const candidates: Array<{ pos: number; trigger: '@' | '#' }> = [];
+    const candidates: Array<{ pos: number; trigger: '@' | '#' | '/' }> = [];
     if (lastAt >= 0) candidates.push({ pos: lastAt, trigger: '@' });
     if (lastHash >= 0) candidates.push({ pos: lastHash, trigger: '#' });
+    if (lastSlash >= 0) candidates.push({ pos: lastSlash, trigger: '/' });
     candidates.sort((a, b) => b.pos - a.pos);
 
     for (const c of candidates) {
       const charBefore = c.pos === 0 ? ' ' : value[c.pos - 1];
       const textAfter = textBefore.slice(c.pos + 1);
+      // For / trigger, also skip if preceded by a protocol scheme (e.g. "https://")
+      if (c.trigger === '/' && textBefore.slice(Math.max(0, c.pos - 7), c.pos).match(/(?:https?|ftp|file):$/)) {
+        continue;
+      }
       if (!textAfter.includes(' ') && !textAfter.includes('\n') &&
           (c.pos === 0 || charBefore === ' ' || charBefore === '\n')) {
         setMentionSearch(textAfter);
@@ -629,8 +788,8 @@ export default function AgentHubIM(): JSX.Element {
     }
   }, [sessionId, sessions]);
 
-  const handleRenameSession = useCallback(async (id: string) => {
-    const name = editName.trim();
+  const handleRenameSession = useCallback(async (id: string, newName?: string) => {
+    const name = (newName || editName).trim();
     if (!name) {
       setEditingId('');
       return;
@@ -649,6 +808,23 @@ export default function AgentHubIM(): JSX.Element {
     setEditingId('');
   }, [editName]);
 
+  // Direct rename for ChatHeader (takes explicit name, bypasses editName state)
+  const handleChatHeaderRename = useCallback(async (id: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const res = await fetch(`/api/chat/sessions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setNotice(data.detail || 'Rename failed');
+      return;
+    }
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, name: trimmed } : s)));
+  }, []);
+
   const handleTogglePin = useCallback(async (id: string, _current: number) => {
     const res = await fetch(`/api/chat/sessions/${id}/pin`, { method: 'PUT', headers: authHeaders() });
     const data = await res.json();
@@ -666,6 +842,27 @@ export default function AgentHubIM(): JSX.Element {
     setEditingId(s.id);
     setEditName(s.name);
   }, []);
+
+  const handleAutoName = useCallback(async (id?: string) => {
+    const targetId = id || sessionId;
+    if (!targetId) return;
+    setIsAutoNaming(true);
+    try {
+      const res = await fetch(`/api/chat/sessions/${targetId}/auto-name`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === 'success' && data.name) {
+        setSessions((prev) => prev.map((s) => (s.id === targetId ? { ...s, name: data.name as string } : s)));
+      }
+    } catch { /* ignore */ }
+    finally { setIsAutoNaming(false); }
+  }, [sessionId]);
+
+  const handleRegenerateName = useCallback((id?: string) => {
+    void handleAutoName(id);
+  }, [handleAutoName]);
 
   const handleSessionQueryChange = useCallback((q: string) => {
     setSessionQuery(q);
@@ -730,9 +927,21 @@ export default function AgentHubIM(): JSX.Element {
     );
   }), [workflows, mentionSearch]);
 
+  const filteredSkills = useMemo(() => skills.filter((s) => {
+    if (mentionSearch === '') return true;
+    const q = mentionSearch.toLowerCase();
+    return (
+      s.name.toLowerCase().includes(q) ||
+      (s.display_name || '').toLowerCase().includes(q) ||
+      (s.description || '').toLowerCase().includes(q)
+    );
+  }), [skills, mentionSearch]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionOpen) {
-      const itemCount = mentionTrigger === '@' ? filteredAgents.length : filteredWorkflows.length;
+      const itemCount = mentionTrigger === '@' ? filteredAgents.length
+        : mentionTrigger === '#' ? filteredWorkflows.length
+        : filteredSkills.length;
       if (itemCount > 0) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
@@ -748,8 +957,10 @@ export default function AgentHubIM(): JSX.Element {
           e.preventDefault();
           if (mentionTrigger === '@') {
             handleInsertMention(filteredAgents[mentionActiveIndex].agentId);
-          } else {
+          } else if (mentionTrigger === '#') {
             handleInsertWorkflow(filteredWorkflows[mentionActiveIndex]);
+          } else {
+            handleInsertSkill(filteredSkills[mentionActiveIndex]);
           }
           return;
         }
@@ -767,7 +978,7 @@ export default function AgentHubIM(): JSX.Element {
       setMentionOpen(false);
       handleSend();
     }
-  }, [mentionOpen, mentionTrigger, mentionActiveIndex, filteredAgents, filteredWorkflows]);
+  }, [mentionOpen, mentionTrigger, mentionActiveIndex, filteredAgents, filteredWorkflows, filteredSkills]);
 
   const handleInsertMention = useCallback((agentId: string) => {
     setMentionOpen(false);
@@ -847,6 +1058,33 @@ export default function AgentHubIM(): JSX.Element {
       });
     } else {
       setInput((prev) => (prev.includes(name) ? prev : `${name} ${prev}`));
+    }
+  }, []);
+
+  const handleInsertSkill = useCallback((skill: SkillMeta) => {
+    setMentionOpen(false);
+    setMentionSearch('');
+    const trigger = `/${skill.name} `;
+    const start = mentionStartRef.current;
+    mentionStartRef.current = -1;
+
+    if (start >= 0) {
+      const ta = textareaRef.current;
+      setInput((prev) => {
+        const cursor = ta ? ta.selectionEnd : prev.length;
+        return prev.slice(0, start) + trigger + prev.slice(cursor);
+      });
+      const newPos = start + trigger.length;
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.selectionStart = newPos;
+          el.selectionEnd = newPos;
+        }
+      });
+    } else {
+      setInput((prev) => (prev.includes(trigger.trim()) ? prev : `${trigger}${prev}`));
     }
   }, []);
 
@@ -1020,14 +1258,12 @@ export default function AgentHubIM(): JSX.Element {
     return uploadId;
   }
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const fs = e.target.files;
-    if (!fs || fs.length === 0) return;
-
+  // Shared file-processing helper — used by both file input and clipboard paste
+  function processFiles(files: File[]): void {
     const MAX_INLINE = 2 * 1024 * 1024;
     const MAX_TOTAL = 50 * 1024 * 1024;
 
-    Array.from(fs).forEach(async (file) => {
+    files.forEach(async (file) => {
       const ext = (file.name.split('.').pop() || '').toLowerCase();
       const category = detectFileCategory(file.name, file.type);
 
@@ -1092,7 +1328,19 @@ export default function AgentHubIM(): JSX.Element {
         }
       }
     });
+  }
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const fs = e.target.files;
+    if (!fs || fs.length === 0) return;
+    processFiles(Array.from(fs));
     e.target.value = '';
+  }, []);
+
+  const handlePasteFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return;
+    processFiles(files);
+    setNotice(`已从剪贴板添加 ${files.length} 张图片`);
   }, []);
 
   const handleRemoveFile = useCallback((index: number) => {
@@ -1131,7 +1379,7 @@ export default function AgentHubIM(): JSX.Element {
   }
 
   return (
-    <div className="flex h-screen bg-warm-50 text-warm-800">
+    <div className="flex h-screen bg-warm-50 text-warm-800 overflow-hidden">
       <SessionSidebar
         user={user}
         filteredSessions={filteredSessions}
@@ -1140,6 +1388,7 @@ export default function AgentHubIM(): JSX.Element {
         editingId={editingId}
         editName={editName}
         notice={notice}
+        isAutoNaming={isAutoNaming}
         sessionsLength={sessions.length}
         onCreateSession={handleCreateSession}
         onSelectSession={handleSelectSession}
@@ -1147,6 +1396,7 @@ export default function AgentHubIM(): JSX.Element {
         onRenameSession={handleRenameSession}
         onTogglePin={handleTogglePin}
         onStartRename={handleStartRename}
+        onRegenerateName={handleRegenerateName}
         onSessionQueryChange={handleSessionQueryChange}
         onEditNameChange={handleEditNameChange}
         onEditNameKeyDown={handleEditNameKeyDown}
@@ -1154,13 +1404,17 @@ export default function AgentHubIM(): JSX.Element {
         onLogout={handleLogout}
       />
 
-      <main className="flex flex-1 flex-col">
+      <main className="flex flex-1 flex-col min-h-0">
         <ChatHeader
           sessionName={sessionName}
+          sessionId={sessionId}
           connected={connected}
           isStreaming={isStreaming}
+          isAutoNaming={isAutoNaming}
           percent={percent}
           onTaskClick={handleTaskClick}
+          onRenameSession={handleChatHeaderRename}
+          onRegenerateName={() => handleRegenerateName()}
         />
 
         <MessageList
@@ -1183,6 +1437,7 @@ export default function AgentHubIM(): JSX.Element {
           selectedRiskLevel={selectedRiskLevel}
           filteredAgents={filteredAgents}
           filteredWorkflows={filteredWorkflows}
+          filteredSkills={filteredSkills}
           textareaRef={textareaRef}
           mentionPanelRef={mentionPanelRef}
           fileInputRef={fileInputRef}
@@ -1193,9 +1448,11 @@ export default function AgentHubIM(): JSX.Element {
           onPreview={handlePreview}
           onFileChange={handleFileChange}
           onRemoveFile={handleRemoveFile}
+          onPasteFiles={handlePasteFiles}
           onInsertMention={handleInsertMention}
           onInsertAllMentions={handleInsertAllMentions}
           onInsertWorkflow={handleInsertWorkflow}
+          onInsertSkill={handleInsertSkill}
           onMentionSearchChange={handleMentionSearchChange}
           onMentionActiveIndexChange={handleMentionActiveIndexChange}
           onRiskLevelChange={handleRiskLevelChange}

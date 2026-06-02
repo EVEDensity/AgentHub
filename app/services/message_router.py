@@ -12,6 +12,7 @@ async def route_message(
     sender: str = "user",
     user_id: str = "local-admin",
     attachments: list[dict] | None = None,
+    on_tool_event=None,
 ) -> dict:
     return await agent_workflow.run(
         session_id=session_id,
@@ -19,6 +20,7 @@ async def route_message(
         sender=sender,
         user_id=user_id,
         attachments=attachments or [],
+        on_tool_event=on_tool_event,
     )
 
 
@@ -31,5 +33,9 @@ async def stream_message(
     attachments: list[dict] | None = None,
     agent: dict | None = None,
     collab_ctx: str = "",
+    on_tool_event=None,
 ) -> AsyncGenerator[str, None] | None:
-    return await stream_agent_response(session_id, content, user_id, token, attachments or [], agent=agent, collab_ctx=collab_ctx)
+    return await stream_agent_response(
+        session_id, content, user_id, token, attachments or [],
+        agent=agent, collab_ctx=collab_ctx, on_tool_event=on_tool_event,
+    )

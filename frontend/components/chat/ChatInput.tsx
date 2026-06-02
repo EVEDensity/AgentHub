@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import type { Agent, AttachedFile, WorkflowSummary } from '../../types';
+import type { Agent, AttachedFile, SkillMeta, WorkflowSummary } from '../../types';
 
 const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]; mimePattern: RegExp }> = {
   code: { label: 'Code', extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'], mimePattern: /^(text\/|\b(?:javascript|typescript|json)\b)/ },
@@ -46,12 +46,13 @@ interface ChatInputProps {
   isStreaming: boolean;
   attachedFiles: AttachedFile[];
   mentionOpen: boolean;
-  mentionTrigger: '@' | '#';
+  mentionTrigger: '@' | '#' | '/';
   mentionSearch: string;
   mentionActiveIndex: number;
   selectedRiskLevel: string;
   filteredAgents: Agent[];
   filteredWorkflows: WorkflowSummary[];
+  filteredSkills: SkillMeta[];
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   mentionPanelRef: React.RefObject<HTMLDivElement | null>;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
@@ -62,9 +63,11 @@ interface ChatInputProps {
   onPreview: () => void;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onRemoveFile: (index: number) => void;
+  onPasteFiles: (files: File[]) => void;
   onInsertMention: (agentId: string) => void;
   onInsertAllMentions: () => void;
   onInsertWorkflow: (wf: WorkflowSummary) => void;
+  onInsertSkill: (skill: SkillMeta) => void;
   onMentionSearchChange: (q: string) => void;
   onMentionActiveIndexChange: (idx: number) => void;
   onRiskLevelChange: (level: string) => void;
@@ -73,14 +76,37 @@ interface ChatInputProps {
 const ChatInput = memo(function ChatInput({
   input, isStreaming, attachedFiles,
   mentionOpen, mentionTrigger, mentionSearch, mentionActiveIndex, selectedRiskLevel,
-  filteredAgents, filteredWorkflows,
+  filteredAgents, filteredWorkflows, filteredSkills,
   textareaRef, mentionPanelRef, fileInputRef,
-  onInputChange, onBlur, onKeyDown, onSend, onPreview, onFileChange, onRemoveFile,
-  onInsertMention, onInsertAllMentions, onInsertWorkflow,
+  onInputChange, onBlur, onKeyDown, onSend, onPreview, onFileChange, onRemoveFile, onPasteFiles,
+  onInsertMention, onInsertAllMentions, onInsertWorkflow, onInsertSkill,
   onMentionSearchChange, onMentionActiveIndexChange, onRiskLevelChange,
 }: ChatInputProps) {
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const items = e.clipboardData?.items;
+    if (!items || items.length === 0) return;
+
+    const imageFiles: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const blob = item.getAsFile();
+        if (blob) {
+          const ext = item.type.split('/')[1] || 'png';
+          const name = `clipboard-${Date.now()}-${i}.${ext}`;
+          imageFiles.push(new File([blob], name, { type: item.type }));
+        }
+      }
+    }
+
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      onPasteFiles(imageFiles);
+    }
+  }
   return (
-    <footer className="relative border-t border-warm-150 bg-white px-6 py-4">
+    <footer className="shrink-0 relative border-t border-warm-150 bg-white px-6 py-4">
       {mentionOpen && mentionTrigger === '@' && (
         <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
           <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
@@ -186,29 +212,95 @@ const ChatInput = memo(function ChatInput({
           </div>
         </div>
       )}
-      <div className="flex gap-3">
-        <div className="flex flex-1 flex-col gap-2">
+
+      {mentionOpen && mentionTrigger === '/' && (
+        <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[560px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
+          <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
+            <span>/ Select Skill</span>
+            <span className="text-warm-400">{filteredSkills.length} skills</span>
+          </div>
+          <div className="mb-2">
+            <input
+              type="text"
+              placeholder="搜索技能..."
+              value={mentionSearch}
+              onChange={(e) => { onMentionSearchChange(e.target.value); onMentionActiveIndexChange(0); }}
+              className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+          </div>
+          <div className="mb-2 flex gap-1 flex-wrap">
+            {(() => {
+              // Collect unique categories from filtered skills
+              const cats = [...new Set(filteredSkills.map((s) => s.category || '其他'))];
+              return cats.map((cat) => (
+                <span key={cat} className="rounded bg-warm-100 px-1.5 py-0.5 text-xs text-warm-500">{cat}</span>
+              ));
+            })()}
+          </div>
+          <div className="max-h-60 overflow-y-auto">
+            <div className="space-y-1">
+              {filteredSkills.length === 0 ? (
+                <div className="py-4 text-center text-sm text-warm-400">No matching skills</div>
+              ) : (
+                filteredSkills.map((skill, idx) => (
+                  <button
+                    key={skill.name}
+                    className={`w-full rounded-lg px-3 py-2 text-left border ${
+                      idx === mentionActiveIndex
+                        ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
+                        : 'bg-warm-50 border-transparent hover:bg-primary-50'
+                    }`}
+                    onClick={() => onInsertSkill(skill)}
+                    onMouseEnter={() => onMentionActiveIndexChange(idx)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 text-lg">{skill.icon || '🔧'}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-warm-800">/{skill.name}</span>
+                          <span className="text-xs text-warm-400">{skill.category}{skill.subcategory ? ` / ${skill.subcategory}` : ''}</span>
+                        </div>
+                        <div className="text-xs text-warm-500 truncate mt-0.5">{skill.description.slice(0, 80)}{skill.description.length > 80 ? '...' : ''}</div>
+                      </div>
+                      {skill.version && <span className="shrink-0 text-xs text-warm-400">{skill.version}</span>}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="grid gap-3 items-start overflow-hidden" style={{ gridTemplateColumns: '1fr auto' }}>
+        <div className="flex flex-col gap-2 min-w-0">
           <textarea
             ref={textareaRef}
             value={input}
             onChange={onInputChange}
             onBlur={onBlur}
             onKeyDown={onKeyDown}
+            onPaste={handlePaste}
             rows={3}
             className="input-field w-full resize-none"
             placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : 'Type message, supports @Agent directives...'}
           />
           {attachedFiles.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {attachedFiles.map((f, i) => (
-                <span key={`${f.name}-${i}`} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs border ${
+            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto py-0.5">
+              {attachedFiles.map((f, i) => {
+                const isImage = f.category === 'image' && f.content;
+                return (
+                <span key={`${f.name}-${i}`} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs border shrink-0 ${
                   f.uploadStatus === 'error' ? 'bg-danger-50 border-danger-200 text-danger-700' :
                   f.uploadStatus === 'uploading' ? 'bg-primary-50 border-primary-200 text-warm-700' :
                   'bg-warm-100 border-warm-150 text-warm-700'
                 }`}>
-                  <FileIcon category={f.category} size={3.5} />
-                  <span className="max-w-[140px] truncate">{f.name}</span>
-                  <span className="text-warm-400">{formatSize(f.size)}</span>
+                  {isImage ? (
+                    <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" />
+                  ) : (
+                    <FileIcon category={f.category} size={3.5} />
+                  )}
+                  <span className="max-w-[100px] truncate">{f.name}</span>
+                  <span className="text-warm-400 shrink-0">{formatSize(f.size)}</span>
                   {f.uploadStatus === 'uploading' && (
                     <span className="flex items-center gap-1 text-primary-600">
                       <span className="h-2 w-12 overflow-hidden rounded-full bg-primary-100">
@@ -221,18 +313,19 @@ const ChatInput = memo(function ChatInput({
                     <span className="text-[10px] text-danger-500" title={f.uploadError}>失败</span>
                   )}
                   {f.uploadStatus !== 'uploading' && (
-                    <button className="ml-0.5 text-warm-400 hover:text-danger-500" onClick={() => onRemoveFile(i)} title="Remove">
+                    <button className="ml-0.5 shrink-0 text-warm-400 hover:text-danger-500" onClick={() => onRemoveFile(i)} title="Remove">
                       <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                   )}
                 </span>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
-        <div className="flex flex-col gap-2">
-          <button className="btn-primary" onClick={onSend}>Send</button>
-          <button className="btn-secondary" onClick={onPreview}>Preview</button>
+        <div className="flex flex-col gap-2" style={{ flexShrink: 0 }}>
+          <button className="btn-primary whitespace-nowrap" onClick={onSend}>Send</button>
+          <button className="btn-secondary whitespace-nowrap" onClick={onPreview}>Preview</button>
           <label className="btn-ghost flex cursor-pointer items-center justify-center p-2" title="Attach file">
             <svg className="h-5 w-5 text-warm-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
             <input ref={fileInputRef} type="file" multiple className="sr-only" onChange={onFileChange} accept={ACCEPT_STRING} />
