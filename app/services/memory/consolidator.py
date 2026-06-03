@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
 from typing import Any, Optional
 
 from app.config import MEMORY_DIR
+from app.db.session import afetch_all
 from app.services.adapter_manager import adapter_manager
 from app.services.memory.models import MemoryHeader, MemoryDocument
 from app.services.memory.storage import MemoryStorage
@@ -71,7 +73,7 @@ class MemoryConsolidator:
         Returns a dict with keys: merged, deleted, updated, unchanged, summary.
         When dry_run=True, returns the proposed actions without executing them.
         """
-        headers = self._scanner.scan(max_files=200)
+        headers = await self._scanner.scan(max_files=200)
         if len(headers) < 2:
             return {
                 "merged": [], "deleted": [], "updated": [], "unchanged": [],
@@ -80,7 +82,7 @@ class MemoryConsolidator:
             }
 
         # Read full content for each memory
-        memories = self._read_all_memories(headers)
+        memories = await self._read_all_memories(headers)
         memory_list = self._format_memory_list(memories)
 
         # Call LLM for analysis
@@ -118,12 +120,12 @@ class MemoryConsolidator:
             reason = action.get("reason", "")
 
             if act_type == "merge" and len(targets) >= 2:
-                merged = self._execute_merge(action)
+                merged = await self._execute_merge(action)
                 if merged:
                     result["merged"].append({"file": merged, "targets": targets, "reason": reason})
 
             elif act_type == "delete" and targets:
-                deleted = self._execute_deletes(targets)
+                deleted = await self._execute_deletes(targets)
                 for d in deleted:
                     result["deleted"].append({"file": d, "reason": reason})
 
@@ -137,7 +139,7 @@ class MemoryConsolidator:
 
         # Rebuild index
         try:
-            self._storage.rebuild_index()
+            await self._storage.rebuild_index()
         except Exception:
             pass
 
@@ -164,10 +166,10 @@ class MemoryConsolidator:
 
     # ── internal helpers ────────────────────────────────────────────
 
-    def _read_all_memories(self, headers: list[MemoryHeader]) -> list[dict[str, Any]]:
+    async def _read_all_memories(self, headers: list[MemoryHeader]) -> list[dict[str, Any]]:
         memories: list[dict[str, Any]] = []
         for h in headers:
-            doc = self._storage.get(h.filename)
+            doc = await self._storage.get(h.filename)
             if doc:
                 memories.append({
                     "filename": h.filename,
@@ -194,7 +196,7 @@ class MemoryConsolidator:
 
     async def _call_consolidation_llm(self, memory_list: str) -> str | None:
         prompt = CONSOLIDATION_PROMPT.format(memory_list=memory_list)
-        candidates = self._list_consolidation_models()
+        candidates = await self._list_consolidation_models()
 
         for model in candidates:
             provider = model.get("provider", "")
@@ -220,14 +222,13 @@ class MemoryConsolidator:
         logger.error("all consolidation LLM candidates failed")
         return None
 
-    def _list_consolidation_models(self) -> list[dict[str, str]]:
+    async def _list_consolidation_models(self) -> list[dict[str, str]]:
         from app.services.secret_service import decrypt_secret
 
         candidates: list[dict[str, str]] = []
         seen: set[str] = set()
         try:
-            from app.db.session import dict_rows
-            rows = dict_rows(
+            rows = await afetch_all(
                 "SELECT provider, model_name, api_key, base_url "
                 "FROM model_configs WHERE is_active=1 ORDER BY id DESC LIMIT 5"
             )
@@ -242,7 +243,7 @@ class MemoryConsolidator:
         except Exception:
             pass
         try:
-            agent_rows = dict_rows(
+            agent_rows = await afetch_all(
                 "SELECT DISTINCT adapter_type AS provider, base_model_name AS model_name, "
                 "api_key, base_url "
                 "FROM agent_registry WHERE api_key IS NOT NULL AND api_key != '' "
@@ -264,7 +265,7 @@ class MemoryConsolidator:
             candidates.append({"provider": "anthropic", "model_name": "claude-sonnet-4-6", "api_key": ANTHROPIC_API_KEY, "base_url": ""})
         return candidates
 
-    def _execute_merge(self, action: dict[str, Any]) -> str | None:
+    async def _execute_merge(self, action: dict[str, Any]) -> str | None:
         """Merge memory files: combine bodies, create new file, delete originals."""
         merged_name = action.get("merged_name", "").strip()
         merged_desc = action.get("merged_description", "").strip()
@@ -280,7 +281,7 @@ class MemoryConsolidator:
             # Combine existing body content with LLM's merged result
             bodies = []
             for t in targets:
-                doc = self._storage.get(t)
+                doc = await self._storage.get(t)
                 if doc:
                     bodies.append(doc.body)
 
@@ -288,12 +289,12 @@ class MemoryConsolidator:
             final_body = merged_body if merged_body else "\n\n---\n\n".join(bodies)
 
             # Detect type from first target
-            first = self._storage.get(targets[0])
+            first = await self._storage.get(targets[0])
             mem_type = MemoryType.REFERENCE
             if first and first.meta:
                 mem_type = first.meta.type
 
-            self._storage.save(
+            await self._storage.save(
                 name=merged_name,
                 description=merged_desc,
                 type_=mem_type,
@@ -302,18 +303,18 @@ class MemoryConsolidator:
 
             # Delete merged originals
             for t in targets:
-                self._storage.delete(t)
+                await self._storage.delete(t)
 
             return sanitize_filename(merged_name)
         except Exception as exc:
             logger.error("merge failed for %s: %s", targets, exc)
             return None
 
-    def _execute_deletes(self, targets: list[str]) -> list[str]:
+    async def _execute_deletes(self, targets: list[str]) -> list[str]:
         deleted: list[str] = []
         for t in targets:
             try:
-                self._storage.delete(t)
+                await self._storage.delete(t)
                 deleted.append(t)
             except Exception as exc:
                 logger.error("delete failed for %s: %s", t, exc)
@@ -353,6 +354,7 @@ class MemoryConsolidator:
     # ── state persistence ───────────────────────────────────────────
 
     def _load_state(self) -> dict[str, Any]:
+        """Load consolidation state from JSON file (safe for sync context)."""
         try:
             if self._state_path.exists():
                 return json.loads(self._state_path.read_text(encoding="utf-8"))
@@ -360,7 +362,21 @@ class MemoryConsolidator:
             logger.warning("failed to load consolidation state: %s", exc)
         return {}
 
+    async def _load_state_async(self) -> dict[str, Any]:
+        """Async version — use from async callers to avoid blocking the event loop."""
+        return await asyncio.to_thread(self._load_state)
+
     def _save_state(self) -> None:
+        """Persist consolidation state (non-blocking when in async context)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._write_state_file()
+            return
+        loop.create_task(asyncio.to_thread(self._write_state_file))
+
+    def _write_state_file(self) -> None:
+        """Perform the actual file write (may be called from any thread)."""
         try:
             self._state_path.write_text(
                 json.dumps(self._state, ensure_ascii=False, indent=2),

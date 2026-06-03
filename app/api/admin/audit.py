@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.db.session import dict_rows, one_row
+from app.db.session import afetch_all, afetch_one
 from app.schemas.common import AuditConfirmRequest
 from app.services.auth_service import get_current_user, require_admin, write_audit
 
@@ -49,25 +49,32 @@ async def list_logs(
     # Build WHERE clause
     conditions: list[str] = []
     params: list[str] = []
+    param_idx = 0
 
     if user_id:
-        conditions.append("user_id LIKE ?")
+        param_idx += 1
+        conditions.append(f"user_id LIKE ${param_idx}")
         params.append(f"%{user_id}%")
     if agent_id:
-        conditions.append("agent_id LIKE ?")
+        param_idx += 1
+        conditions.append(f"agent_id LIKE ${param_idx}")
         params.append(f"%{agent_id}%")
     if action:
-        conditions.append("action LIKE ?")
+        param_idx += 1
+        conditions.append(f"action LIKE ${param_idx}")
         params.append(f"%{action}%")
     if risk_level:
-        conditions.append("risk_level = ?")
+        param_idx += 1
+        conditions.append(f"risk_level = ${param_idx}")
         params.append(risk_level)
     if search:
+        param_idx += 1
+        q_param = f"%{search}%"
         conditions.append(
-            "(action LIKE ? OR user_id LIKE ? OR agent_id LIKE ? OR payload_json LIKE ?)"
+            f"(action LIKE ${param_idx} OR user_id LIKE ${param_idx} OR agent_id LIKE ${param_idx} OR payload_json LIKE ${param_idx})"
         )
-        q = f"%{search}%"
-        params.extend([q, q, q, q])
+        params.extend([q_param, q_param, q_param, q_param])
+        param_idx += 3  # already added 4 params
 
     where_clause = ""
     if conditions:
@@ -75,7 +82,7 @@ async def list_logs(
 
     # Count total matching rows
     count_sql = f"SELECT COUNT(*) AS cnt FROM audit_log {where_clause}"
-    total_row = one_row(count_sql, tuple(params))
+    total_row = await afetch_one(count_sql, *params)
     total = total_row["cnt"] if total_row else 0
 
     # Map sort column to DB column name
@@ -91,14 +98,14 @@ async def list_logs(
 
     offset = (page - 1) * page_size
     data_sql = (
-        f"SELECT id, user_id AS userId, agent_id AS agentId, action, "
-        f"risk_level AS riskLevel, decision, content_hash AS contentHash, "
+        f"SELECT id, user_id AS \"userId\", agent_id AS \"agentId\", action, "
+        f"risk_level AS \"riskLevel\", decision, content_hash AS \"contentHash\", "
         f"payload_json AS payload, timestamp "
         f"FROM audit_log {where_clause} "
         f"ORDER BY {db_sort_col} {order} "
-        f"LIMIT ? OFFSET ?"
+        f"LIMIT ${len(params)+1} OFFSET ${len(params)+2}"
     )
-    rows = dict_rows(data_sql, tuple(params) + (page_size, offset))
+    rows = await afetch_all(data_sql, *params, page_size, offset)
 
     return {
         "items": rows,
@@ -120,12 +127,12 @@ async def get_log_detail(
     """Return full detail of a single audit-log entry (admin only)."""
     require_admin(user)
 
-    row = one_row(
-        "SELECT id, user_id AS userId, agent_id AS agentId, action, "
-        "risk_level AS riskLevel, decision, content_hash AS contentHash, "
+    row = await afetch_one(
+        "SELECT id, user_id AS \"userId\", agent_id AS \"agentId\", action, "
+        "risk_level AS \"riskLevel\", decision, content_hash AS \"contentHash\", "
         "payload_json AS payload, timestamp "
-        "FROM audit_log WHERE id = ?",
-        (log_id,),
+        "FROM audit_log WHERE id = $1",
+        log_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Audit log entry not found")

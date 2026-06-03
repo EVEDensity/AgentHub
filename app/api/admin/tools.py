@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.init_db import now
-from app.db.session import dict_rows, get_connection, one_row
+from app.db.session import afetch_all, afetch_one, aexecute, aexecute_insert
 from app.schemas.common import (
     AgentToolBindRequest,
     PermissionRuleCreateRequest,
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/tools", tags=["admin-tools"])
 @router.get("/")
 async def list_tools(user: dict = Depends(get_current_user)) -> list[dict]:
     """List all tool definitions (built-in + custom)."""
-    rows = dict_rows(
+    rows = await afetch_all(
         "SELECT id, name, description, category, parameters_json, return_type, "
         "examples_json, risk_level, handler_type, enabled, created_at "
         "FROM tool_definitions ORDER BY category, name"
@@ -38,11 +38,11 @@ async def list_tools(user: dict = Depends(get_current_user)) -> list[dict]:
 @router.get("/{tool_id}")
 async def get_tool(tool_id: int, user: dict = Depends(get_current_user)) -> dict:
     """Get a single tool definition by ID."""
-    row = one_row(
+    row = await afetch_one(
         "SELECT id, name, description, category, parameters_json, return_type, "
         "examples_json, risk_level, handler_type, enabled, created_at "
-        "FROM tool_definitions WHERE id=?",
-        (tool_id,),
+        "FROM tool_definitions WHERE id=$1",
+        tool_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Tool not found")
@@ -52,41 +52,35 @@ async def get_tool(tool_id: int, user: dict = Depends(get_current_user)) -> dict
 @router.post("/")
 async def create_tool(data: ToolCreateRequest, user: dict = Depends(get_current_user)) -> dict:
     """Create a new tool definition (for custom tools)."""
-    with get_connection() as conn:
-        existing = conn.execute(
-            "SELECT id FROM tool_definitions WHERE name=?", (data.name,)
-        ).fetchone()
-        if existing:
-            raise HTTPException(status_code=409, detail=f"工具 '{data.name}' 已存在")
+    existing = await afetch_one("SELECT id FROM tool_definitions WHERE name=$1", data.name)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"工具 '{data.name}' 已存在")
 
-        cursor = conn.execute(
-            "INSERT INTO tool_definitions (name, description, category, parameters_json, "
-            "return_type, examples_json, risk_level, enabled, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                data.name,
-                data.description,
-                data.category,
-                json.dumps(_params_to_list(data.parameters), ensure_ascii=False),
-                data.return_type,
-                json.dumps(data.examples, ensure_ascii=False),
-                data.risk_level,
-                1 if data.enabled else 0,
-                now(),
-            ),
-        )
-        tool_id = cursor.lastrowid
+    tool_id = await aexecute_insert(
+        "INSERT INTO tool_definitions (name, description, category, parameters_json, "
+        "return_type, examples_json, risk_level, enabled, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+        data.name,
+        data.description,
+        data.category,
+        json.dumps(_params_to_list(data.parameters), ensure_ascii=False),
+        data.return_type,
+        json.dumps(data.examples, ensure_ascii=False),
+        data.risk_level,
+        1 if data.enabled else 0,
+        now(),
+    )
 
     return {
         "status": "ok",
-        "tool": {"id": tool_id, "name": data.name, "category": data.category},
+        "tool": {"id": int(tool_id), "name": data.name, "category": data.category},
     }
 
 
 @router.put("/{tool_id}")
 async def update_tool(tool_id: int, data: ToolUpdateRequest, user: dict = Depends(get_current_user)) -> dict:
     """Update a tool definition."""
-    row = one_row("SELECT id FROM tool_definitions WHERE id=?", (tool_id,))
+    row = await afetch_one("SELECT id FROM tool_definitions WHERE id=$1", tool_id)
     if not row:
         raise HTTPException(status_code=404, detail="Tool not found")
 
@@ -109,10 +103,9 @@ async def update_tool(tool_id: int, data: ToolUpdateRequest, user: dict = Depend
     if not updates:
         return {"status": "ok", "message": "nothing to update"}
 
-    set_clause = ", ".join(f"{k}=?" for k in updates)
-    values = list(updates.values()) + [tool_id]
-    with get_connection() as conn:
-        conn.execute(f"UPDATE tool_definitions SET {set_clause} WHERE id=?", values)
+    set_clause = ", ".join(f"{k}=${i+1}" for i, k in enumerate(updates))
+    values = list(updates.values())
+    await aexecute(f"UPDATE tool_definitions SET {set_clause} WHERE id=${len(values)+1}", *values, tool_id)
 
     return {"status": "ok", "tool_id": tool_id}
 
@@ -120,15 +113,14 @@ async def update_tool(tool_id: int, data: ToolUpdateRequest, user: dict = Depend
 @router.delete("/{tool_id}")
 async def delete_tool(tool_id: int, user: dict = Depends(get_current_user)) -> dict:
     """Delete a tool definition. Cannot delete built-in tools (handler_type='builtin')."""
-    row = one_row("SELECT name, handler_type FROM tool_definitions WHERE id=?", (tool_id,))
+    row = await afetch_one("SELECT name, handler_type FROM tool_definitions WHERE id=$1", tool_id)
     if not row:
         raise HTTPException(status_code=404, detail="Tool not found")
     if row.get("handler_type") == "builtin":
         raise HTTPException(status_code=400, detail="不能删除内置工具")
 
-    with get_connection() as conn:
-        conn.execute("DELETE FROM agent_tool_bindings WHERE tool_id=?", (tool_id,))
-        conn.execute("DELETE FROM tool_definitions WHERE id=?", (tool_id,))
+    await aexecute("DELETE FROM agent_tool_bindings WHERE tool_id=$1", tool_id)
+    await aexecute("DELETE FROM tool_definitions WHERE id=$1", tool_id)
 
     return {"status": "ok", "tool_id": tool_id, "name": row["name"]}
 
@@ -136,11 +128,11 @@ async def delete_tool(tool_id: int, user: dict = Depends(get_current_user)) -> d
 @router.get("/bindings/{agent_id}")
 async def get_agent_tools(agent_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Get tool bindings for a specific agent."""
-    rows = dict_rows(
+    rows = await afetch_all(
         "SELECT td.id, td.name, td.category, atb.enabled FROM tool_definitions td "
-        "LEFT JOIN agent_tool_bindings atb ON td.id = atb.tool_id AND atb.agent_id=? "
+        "LEFT JOIN agent_tool_bindings atb ON td.id = atb.tool_id AND atb.agent_id=$1 "
         "WHERE td.enabled=1 ORDER BY td.category, td.name",
-        (agent_id,),
+        agent_id,
     )
     bound = [
         {"tool_id": r["id"], "name": r["name"], "category": r["category"], "enabled": bool(r.get("enabled"))}
@@ -156,15 +148,13 @@ async def get_agent_tools(agent_id: str, user: dict = Depends(get_current_user))
 @router.put("/bindings/{agent_id}")
 async def update_agent_tools(agent_id: str, data: AgentToolBindRequest, user: dict = Depends(get_current_user)) -> dict:
     """Update tool bindings for an agent."""
-    with get_connection() as conn:
-        # Remove existing bindings
-        conn.execute("DELETE FROM agent_tool_bindings WHERE agent_id=?", (agent_id,))
-        # Add new bindings
-        for tool_id in data.tool_ids:
-            conn.execute(
-                "INSERT OR REPLACE INTO agent_tool_bindings (agent_id, tool_id, enabled) VALUES (?, ?, 1)",
-                (agent_id, tool_id),
-            )
+    await aexecute("DELETE FROM agent_tool_bindings WHERE agent_id=$1", agent_id)
+    for tool_id in data.tool_ids:
+        await aexecute(
+            "INSERT INTO agent_tool_bindings (agent_id, tool_id, enabled) VALUES ($1, $2, 1) "
+            "ON CONFLICT(agent_id, tool_id) DO UPDATE SET enabled=1",
+            agent_id, tool_id,
+        )
 
     return {"status": "ok", "agent_id": agent_id, "tool_count": len(data.tool_ids)}
 
@@ -174,7 +164,7 @@ async def update_agent_tools(agent_id: str, data: AgentToolBindRequest, user: di
 @router.get("/permissions/rules")
 async def list_permission_rules(user: dict = Depends(get_current_user)) -> list[dict]:
     """List all tool permission rules."""
-    rows = dict_rows(
+    rows = await afetch_all(
         "SELECT id, agent_id, tool_pattern, path_pattern, behavior, "
         "source, priority, enabled, created_at "
         "FROM tool_permission_rules ORDER BY priority DESC, id ASC"
@@ -198,11 +188,11 @@ async def list_permission_rules(user: dict = Depends(get_current_user)) -> list[
 @router.get("/permissions/rules/{rule_id}")
 async def get_permission_rule(rule_id: int, user: dict = Depends(get_current_user)) -> dict:
     """Get a single permission rule."""
-    row = one_row(
+    row = await afetch_one(
         "SELECT id, agent_id, tool_pattern, path_pattern, behavior, "
         "source, priority, enabled, created_at "
-        "FROM tool_permission_rules WHERE id=?",
-        (rule_id,),
+        "FROM tool_permission_rules WHERE id=$1",
+        rule_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Permission rule not found")
@@ -222,29 +212,26 @@ async def get_permission_rule(rule_id: int, user: dict = Depends(get_current_use
 @router.post("/permissions/rules")
 async def create_permission_rule(data: PermissionRuleCreateRequest, user: dict = Depends(get_current_user)) -> dict:
     """Create a new tool permission rule."""
-    with get_connection() as conn:
-        cursor = conn.execute(
-            "INSERT INTO tool_permission_rules "
-            "(agent_id, tool_pattern, path_pattern, behavior, source, priority, enabled, created_at) "
-            "VALUES (?, ?, ?, ?, 'user', ?, 1, ?)",
-            (data.agent_id, data.tool_pattern, data.path_pattern, data.behavior, data.priority, now()),
-        )
-        rule_id = cursor.lastrowid
+    rule_id = await aexecute_insert(
+        "INSERT INTO tool_permission_rules "
+        "(agent_id, tool_pattern, path_pattern, behavior, source, priority, enabled, created_at) "
+        "VALUES ($1, $2, $3, $4, 'user', $5, 1, $6) RETURNING id",
+        data.agent_id, data.tool_pattern, data.path_pattern, data.behavior, data.priority, now(),
+    )
 
-    # Reload permission rules in the manager
     try:
-        from app.services.tools.permission import permission_manager
-        permission_manager.load_rules()
+        from app.services.tools import _permission_manager as permission_manager
+        await permission_manager.load_rules()
     except Exception:
         pass
 
-    return {"status": "ok", "rule": {"id": rule_id, "toolPattern": data.tool_pattern, "behavior": data.behavior}}
+    return {"status": "ok", "rule": {"id": int(rule_id), "toolPattern": data.tool_pattern, "behavior": data.behavior}}
 
 
 @router.put("/permissions/rules/{rule_id}")
 async def update_permission_rule(rule_id: int, data: PermissionRuleUpdateRequest, user: dict = Depends(get_current_user)) -> dict:
     """Update a permission rule."""
-    row = one_row("SELECT id FROM tool_permission_rules WHERE id=?", (rule_id,))
+    row = await afetch_one("SELECT id FROM tool_permission_rules WHERE id=$1", rule_id)
     if not row:
         raise HTTPException(status_code=404, detail="Permission rule not found")
 
@@ -263,15 +250,13 @@ async def update_permission_rule(rule_id: int, data: PermissionRuleUpdateRequest
     if not updates:
         return {"status": "ok", "message": "nothing to update"}
 
-    set_clause = ", ".join(f"{k}=?" for k in updates)
-    values = list(updates.values()) + [rule_id]
-    with get_connection() as conn:
-        conn.execute(f"UPDATE tool_permission_rules SET {set_clause} WHERE id=?", values)
+    set_clause = ", ".join(f"{k}=${i+1}" for i, k in enumerate(updates))
+    values = list(updates.values())
+    await aexecute(f"UPDATE tool_permission_rules SET {set_clause} WHERE id=${len(values)+1}", *values, rule_id)
 
-    # Reload permission rules
     try:
-        from app.services.tools.permission import permission_manager
-        permission_manager.load_rules()
+        from app.services.tools import _permission_manager as permission_manager
+        await permission_manager.load_rules()
     except Exception:
         pass
 
@@ -281,17 +266,15 @@ async def update_permission_rule(rule_id: int, data: PermissionRuleUpdateRequest
 @router.delete("/permissions/rules/{rule_id}")
 async def delete_permission_rule(rule_id: int, user: dict = Depends(get_current_user)) -> dict:
     """Delete a permission rule."""
-    row = one_row("SELECT id, tool_pattern FROM tool_permission_rules WHERE id=?", (rule_id,))
+    row = await afetch_one("SELECT id, tool_pattern FROM tool_permission_rules WHERE id=$1", rule_id)
     if not row:
         raise HTTPException(status_code=404, detail="Permission rule not found")
 
-    with get_connection() as conn:
-        conn.execute("DELETE FROM tool_permission_rules WHERE id=?", (rule_id,))
+    await aexecute("DELETE FROM tool_permission_rules WHERE id=$1", rule_id)
 
-    # Reload permission rules
     try:
-        from app.services.tools.permission import permission_manager
-        permission_manager.load_rules()
+        from app.services.tools import _permission_manager as permission_manager
+        await permission_manager.load_rules()
     except Exception:
         pass
 
@@ -301,13 +284,13 @@ async def delete_permission_rule(rule_id: int, user: dict = Depends(get_current_
 @router.get("/permissions/rules/agent/{agent_id}")
 async def get_agent_permission_rules(agent_id: str, user: dict = Depends(get_current_user)) -> list[dict]:
     """Get permission rules for a specific agent."""
-    rows = dict_rows(
+    rows = await afetch_all(
         "SELECT id, agent_id, tool_pattern, path_pattern, behavior, "
         "source, priority, enabled, created_at "
         "FROM tool_permission_rules "
-        "WHERE enabled=1 AND (agent_id=? OR agent_id='*') "
+        "WHERE enabled=1 AND (agent_id=$1 OR agent_id='*') "
         "ORDER BY priority DESC, id ASC",
-        (agent_id,),
+        agent_id,
     )
     result: list[dict] = []
     for r in rows:

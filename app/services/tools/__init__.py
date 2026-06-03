@@ -40,7 +40,7 @@ _result_storage = None
 _progress_tracker = None
 
 
-def initialize_tool_system() -> "StreamingToolExecutor":
+async def initialize_tool_system() -> "StreamingToolExecutor":
     """Wire up all enhanced tool system components.
 
     Called once during FastAPI startup (lifespan).
@@ -65,7 +65,7 @@ def initialize_tool_system() -> "StreamingToolExecutor":
     # ── 1. Permission manager ──────────────────────────────────────────
     _permission_manager = PermissionManager()
     try:
-        _permission_manager.load_rules()
+        await _permission_manager.load_rules()
     except Exception:
         logger.debug("initialize_tool_system: permission rules not loaded (DB may not be ready)")
 

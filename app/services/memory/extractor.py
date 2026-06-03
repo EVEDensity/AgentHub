@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from app.config import MEMORY_DIR
-from app.db.session import dict_rows
+from app.db.session import afetch_all
 from app.services.adapter_manager import adapter_manager
 from app.services.memory.storage import MemoryStorage
 from app.services.memory.models import MemoryType, sanitize_filename
@@ -81,7 +82,7 @@ class MemoryExtractor:
         Returns the number of new memories saved, or 0 if skipped/throttled.
         """
         # 1. Fetch messages
-        messages = self._get_session_messages(session_id)
+        messages = await self._get_session_messages(session_id)
         if len(messages) < 2:
             return 0
 
@@ -113,10 +114,10 @@ class MemoryExtractor:
 
         # 6. Save ONE session summary file per session, named after the session
         if summary:
-            session_name = self._get_session_name(session_id)
+            session_name = await self._get_session_name(session_id)
             session_filename = sanitize_filename(session_name) if session_name else sanitize_filename(session_id)
             try:
-                self._storage.save(
+                await self._storage.save(
                     name=session_name or session_id,
                     description=f"会话对话总结",
                     type_=MemoryType.PROJECT,
@@ -146,11 +147,11 @@ class MemoryExtractor:
     # ── message fetching ────────────────────────────────────────────
 
     @staticmethod
-    def _get_session_name(session_id: str) -> str:
+    async def _get_session_name(session_id: str) -> str:
         try:
-            row = dict_rows(
-                "SELECT name FROM sessions WHERE id=? LIMIT 1",
-                (session_id,),
+            row = await afetch_all(
+                "SELECT name FROM sessions WHERE id=$1 LIMIT 1",
+                session_id,
             )
             if row and row[0].get("name"):
                 return row[0]["name"]
@@ -158,14 +159,14 @@ class MemoryExtractor:
             pass
         return session_id
 
-    def _get_session_messages(self, session_id: str) -> list[dict[str, Any]]:
+    async def _get_session_messages(self, session_id: str) -> list[dict[str, Any]]:
         """Fetch all text messages from a session, oldest first."""
         try:
-            rows = dict_rows(
+            rows = await afetch_all(
                 "SELECT id, sender, content, type, created_at "
-                "FROM messages WHERE session_id=? AND type!='system' "
+                "FROM messages WHERE session_id=$1 AND type!='system' "
                 "ORDER BY created_at ASC",
-                (session_id,),
+                session_id,
             )
             return rows
         except Exception as exc:
@@ -227,7 +228,7 @@ class MemoryExtractor:
         Tries all available models in sequence until one succeeds.
         """
         prompt = EXTRACTION_PROMPT.format(transcript=transcript)
-        candidates = self._list_extraction_models()
+        candidates = await self._list_extraction_models()
 
         for model in candidates:
             provider = model.get("provider", "")
@@ -257,7 +258,7 @@ class MemoryExtractor:
         logger.error("all extraction LLM candidates failed")
         return None
 
-    def _list_extraction_models(self) -> list[dict[str, str]]:
+    async def _list_extraction_models(self) -> list[dict[str, str]]:
         """Return all available models for extraction in priority order.
 
         Priority: DB model_configs (active, with key, non-mock) → env vars.
@@ -269,7 +270,7 @@ class MemoryExtractor:
         seen: set[str] = set()
 
         try:
-            rows = dict_rows(
+            rows = await afetch_all(
                 "SELECT provider, model_name, api_key, base_url "
                 "FROM model_configs WHERE is_active=1 ORDER BY id DESC LIMIT 5"
             )
@@ -286,7 +287,7 @@ class MemoryExtractor:
 
         # Also try models from agent_registry as fallback
         try:
-            agent_rows = dict_rows(
+            agent_rows = await afetch_all(
                 "SELECT DISTINCT adapter_type AS provider, base_model_name AS model_name, "
                 "api_key, base_url "
                 "FROM agent_registry WHERE api_key IS NOT NULL AND api_key != '' "
@@ -365,14 +366,14 @@ class MemoryExtractor:
 
     # ── duplicate detection ─────────────────────────────────────────
 
-    def _find_by_name(self, name: str) -> Optional[str]:
+    async def _find_by_name(self, name: str) -> Optional[str]:
         """Find a memory file by name. Returns filename or None."""
         fname = sanitize_filename(name)
-        doc = self._storage.get(fname)
+        doc = await self._storage.get(fname)
         if doc is not None:
             return doc.file_path
         # Also check all files by scanning frontmatter
-        for h in self._storage.list_headers():
+        for h in await self._storage.list_headers():
             if h.name == name:
                 return h.path
         return None
@@ -380,7 +381,7 @@ class MemoryExtractor:
     # ── state persistence (cursor tracking) ─────────────────────────
 
     def _load_state(self) -> dict[str, Any]:
-        """Load extraction state from JSON file."""
+        """Load extraction state from JSON file (safe for sync context — constructor)."""
         try:
             if self._state_path.exists():
                 return json.loads(self._state_path.read_text(encoding="utf-8"))
@@ -388,8 +389,27 @@ class MemoryExtractor:
             logger.warning("failed to load extraction state: %s", exc)
         return {"sessions": {}}
 
+    async def _load_state_async(self) -> dict[str, Any]:
+        """Async version — use from async callers to avoid blocking the event loop."""
+        return await asyncio.to_thread(self._load_state)
+
     def _save_state(self) -> None:
-        """Persist extraction state."""
+        """Persist extraction state.
+
+        When called from an async context the actual disk write is dispatched
+        via ``asyncio.to_thread`` to avoid blocking.  When called from a sync
+        context (e.g. constructor path) the write is performed inline.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — write inline (safe for constructor / sync boot)
+            self._write_state_file()
+            return
+        loop.create_task(asyncio.to_thread(self._write_state_file))
+
+    def _write_state_file(self) -> None:
+        """Perform the actual file write (may be called from any thread)."""
         try:
             self._state_path.write_text(
                 json.dumps(self._state, ensure_ascii=False, indent=2),
@@ -422,7 +442,7 @@ class MemoryExtractor:
         Returns a dict of session_id -> memories_saved.
         """
         try:
-            sessions = dict_rows("SELECT id FROM sessions ORDER BY created_at ASC")
+            sessions = await afetch_all("SELECT id FROM sessions ORDER BY created_at ASC")
         except Exception as exc:
             logger.error("failed to list sessions for backfill: %s", exc)
             return {}

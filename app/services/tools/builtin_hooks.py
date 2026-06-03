@@ -31,7 +31,7 @@ async def audit_log_hook(
     from app.services.tools.hooks import PostToolUseResult
 
     try:
-        from app.db.session import get_connection
+        from app.db.session import aexecute
         from app.db.init_db import now
 
         session_id = context.get("session_id", "")
@@ -42,23 +42,20 @@ async def audit_log_hook(
         # Sanitize arguments: only log non-sensitive params
         safe_args = _sanitize_arguments(arguments)
 
-        with get_connection() as conn:
-            conn.execute(
-                "INSERT INTO tool_call_log (id, session_id, agent_id, tool_name, "
-                "arguments_json, result_json, success, duration_ms, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    str(uuid.uuid4()),
-                    session_id,
-                    agent_id,
-                    tool_name,
-                    json.dumps(safe_args, ensure_ascii=False),
-                    json.dumps(_summarize_result(result), ensure_ascii=False),
-                    success,
-                    int(duration_ms),
-                    now(),
-                ),
-            )
+        await aexecute(
+            "INSERT INTO tool_call_log (id, session_id, agent_id, tool_name, "
+            "arguments_json, result_json, success, duration_ms, created_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            str(uuid.uuid4()),
+            session_id,
+            agent_id,
+            tool_name,
+            json.dumps(safe_args, ensure_ascii=False),
+            json.dumps(_summarize_result(result), ensure_ascii=False),
+            success,
+            int(duration_ms),
+            now(),
+        )
     except Exception:
         # Best-effort — never let audit logging break the tool pipeline
         pass

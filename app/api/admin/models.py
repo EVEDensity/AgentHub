@@ -15,7 +15,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.init_db import now
-from app.db.session import dict_rows, get_connection, one_row
+from app.db.session import afetch_all, afetch_one, aexecute_insert
 from app.schemas.common import ModelConfigRequest
 from app.services.auth_service import get_current_user, require_admin, write_audit
 from app.services.secret_service import decrypt_secret, encrypt_secret
@@ -46,19 +46,18 @@ async def create_model(data: ModelConfigRequest, user: dict = Depends(get_curren
 
     api_key_hash = hashlib.sha256(data.apiKey.encode()).hexdigest() if data.apiKey else ""
 
-    with get_connection() as conn:
-        cursor = conn.execute(
-            "INSERT INTO model_configs(provider, model_name, api_key, api_key_hash, base_url, is_active, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (data.provider, data.modelName, encrypt_secret(data.apiKey), api_key_hash,
-             data.baseUrl, 1, now()),
-        )
+    new_id = await aexecute_insert(
+        "INSERT INTO model_configs(provider, model_name, api_key, api_key_hash, base_url, is_active, created_at) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+        data.provider, data.modelName, encrypt_secret(data.apiKey), api_key_hash,
+        data.baseUrl, 1, now(),
+    )
 
     audit_id = write_audit(
         user["id"], "admin", "model_config_create", "L2", "approve",
         {"provider": data.provider, "modelName": data.modelName},
     )
-    return {"status": "success", "id": cursor.lastrowid, "auditId": audit_id}
+    return {"status": "success", "id": int(new_id), "auditId": audit_id}
 
 
 # ── LIST ──────────────────────────────────────────────────────────────────
@@ -68,9 +67,9 @@ async def create_model(data: ModelConfigRequest, user: dict = Depends(get_curren
 async def list_models(user: dict = Depends(get_current_user)) -> list[dict]:
     """Return all registered model configurations."""
     require_admin(user)
-    return dict_rows(
-        "SELECT id, provider, model_name AS modelName, base_url AS baseUrl, "
-        "is_active AS isActive, created_at AS createdAt "
+    return await afetch_all(
+        "SELECT id, provider, model_name AS \"modelName\", base_url AS \"baseUrl\", "
+        "is_active AS \"isActive\", created_at AS \"createdAt\" "
         "FROM model_configs ORDER BY id DESC"
     )
 
@@ -83,10 +82,10 @@ async def test_model(model_id: int, user: dict = Depends(get_current_user)) -> d
     """Probe connectivity to a specific model provider and report latency."""
     require_admin(user)
 
-    row = one_row(
-        "SELECT id, provider, model_name AS modelName, api_key AS apiKey, base_url AS baseUrl "
-        "FROM model_configs WHERE id = ?",
-        (model_id,),
+    row = await afetch_one(
+        "SELECT id, provider, model_name AS \"modelName\", api_key AS \"apiKey\", base_url AS \"baseUrl\" "
+        "FROM model_configs WHERE id = $1",
+        model_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Model config not found")

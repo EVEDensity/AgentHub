@@ -33,6 +33,7 @@ from app.config import (
     SKILLS_DIR_PROJECT,
     SKILLS_DIR_USER,
 )
+from app.utils.async_file import aisfile, aisdir, aread_text, aiterdir
 
 logger = logging.getLogger("agenthub.tools.skill")
 
@@ -44,7 +45,7 @@ MAX_SKILL_BODY_CHARS = 30_000  # truncate SKILL.md body for context budget
 # ── SKILL.md frontmatter parser ────────────────────────────────────────
 
 
-def _parse_skill_md(skill_dir: Path) -> dict[str, Any] | None:
+async def _parse_skill_md(skill_dir: Path) -> dict[str, Any] | None:
     """Parse a SKILL.md file, extracting YAML frontmatter and markdown body.
 
     Returns a dict with keys: name, description, version, body, path,
@@ -52,11 +53,11 @@ def _parse_skill_md(skill_dir: Path) -> dict[str, Any] | None:
     Returns None if the SKILL.md is missing or unparseable.
     """
     skill_md = skill_dir / "SKILL.md"
-    if not skill_md.is_file():
+    if not await aisfile(skill_md):
         return None
 
     try:
-        raw = skill_md.read_text(encoding="utf-8")
+        raw = await aread_text(skill_md)
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -115,20 +116,21 @@ def _parse_skill_md(skill_dir: Path) -> dict[str, Any] | None:
     # Discover scripts
     scripts_dir = skill_dir / "scripts"
     scripts: list[str] = []
-    if scripts_dir.is_dir():
+    scripts_dir_exists = await aisdir(scripts_dir)
+    if scripts_dir_exists:
         try:
-            for entry in sorted(scripts_dir.iterdir()):
-                if entry.is_file() and entry.suffix in (
+            for entry in await aiterdir(scripts_dir):
+                if await aisfile(entry) and entry.suffix in (
                     ".py", ".js", ".sh", ".ps1", ".bash",
                 ):
                     scripts.append(entry.name)
-                elif entry.is_dir():
+                elif await aisdir(entry):
                     # List subdirectories too (e.g. shared/)
                     try:
                         has_py = any(
                             f.suffix == ".py"
-                            for f in entry.iterdir()
-                            if f.is_file()
+                            for f in await aiterdir(entry)
+                            if await aisfile(f)
                         )
                         if has_py:
                             scripts.append(f"{entry.name}/")
@@ -155,16 +157,16 @@ def _parse_skill_md(skill_dir: Path) -> dict[str, Any] | None:
         "path": str(skill_dir),
         "body": body,
         "scripts": scripts,
-        "scripts_dir": str(scripts_dir) if scripts_dir.is_dir() else None,
-        "has_env": (skill_dir / ".env").is_file(),
-        "has_env_example": (skill_dir / ".env.example").is_file(),
+        "scripts_dir": str(scripts_dir) if scripts_dir_exists else None,
+        "has_env": await aisfile(skill_dir / ".env"),
+        "has_env_example": await aisfile(skill_dir / ".env.example"),
     }
 
 
 # ── Helper: discover all skill directories ────────────────────────────
 
 
-def _discover_skill_dirs(source: str = "all") -> list[tuple[Path, str]]:
+async def _discover_skill_dirs(source: str = "all") -> list[tuple[Path, str]]:
     """Return a list of ``(path, source_label)`` for all skill directories.
 
     Args:
@@ -177,20 +179,20 @@ def _discover_skill_dirs(source: str = "all") -> list[tuple[Path, str]]:
     seen: set[str] = set()
 
     # Project skills first (higher priority)
-    if source in ("all", "project") and SKILLS_DIR_PROJECT.is_dir():
+    if source in ("all", "project") and await aisdir(SKILLS_DIR_PROJECT):
         try:
-            for entry in sorted(SKILLS_DIR_PROJECT.iterdir()):
-                if entry.is_dir() and not entry.name.startswith("."):
+            for entry in await aiterdir(SKILLS_DIR_PROJECT):
+                if await aisdir(entry) and not entry.name.startswith("."):
                     seen.add(entry.name)
                     result.append((entry, "project"))
         except OSError:
             pass
 
     # User skills
-    if source in ("all", "user") and SKILLS_DIR_USER.is_dir():
+    if source in ("all", "user") and await aisdir(SKILLS_DIR_USER):
         try:
-            for entry in sorted(SKILLS_DIR_USER.iterdir()):
-                if entry.is_dir() and not entry.name.startswith("."):
+            for entry in await aiterdir(SKILLS_DIR_USER):
+                if await aisdir(entry) and not entry.name.startswith("."):
                     if entry.name not in seen:
                         # Resolve symlinks
                         try:
@@ -222,14 +224,14 @@ async def skill_list_handler(source: str = "all") -> dict[str, Any]:
         return {"success": False, "error": f"source 参数无效。可选值: {', '.join(sorted(valid))}"}
 
     try:
-        dirs = _discover_skill_dirs(source)
+        dirs = await _discover_skill_dirs(source)
     except Exception as exc:
         logger.exception("skill_list: discovery failed")
         return {"success": False, "error": f"技能目录扫描失败: {exc}"}
 
     skills: list[dict[str, Any]] = []
     for skill_dir, src in dirs:
-        info = _parse_skill_md(skill_dir)
+        info = await _parse_skill_md(skill_dir)
         if info is None:
             skills.append({
                 "name": skill_dir.name,
@@ -290,13 +292,13 @@ async def skill_load_handler(name: str) -> dict[str, Any]:
 
     # Check project-level first (higher priority)
     project_dir = SKILLS_DIR_PROJECT / name
-    if project_dir.is_dir():
+    if await aisdir(project_dir):
         skill_dir = project_dir
         source = "project"
     else:
         # Check user-level
         user_dir = SKILLS_DIR_USER / name
-        if user_dir.is_dir():
+        if await aisdir(user_dir):
             try:
                 skill_dir = user_dir.resolve()
             except OSError:
@@ -305,24 +307,24 @@ async def skill_load_handler(name: str) -> dict[str, Any]:
 
     # Case-insensitive search
     if skill_dir is None:
-        dirs = _discover_skill_dirs("all")
+        dirs = await _discover_skill_dirs("all")
         for d, src in dirs:
             if d.name.lower() == name:
                 skill_dir = d
                 source = src
                 break
 
-    if skill_dir is None or not skill_dir.is_dir():
+    if skill_dir is None or not await aisdir(skill_dir):
         # Provide helpful error with available skill names
         available = []
-        for d, _ in _discover_skill_dirs("all"):
-            info = _parse_skill_md(d)
+        for d, _ in await _discover_skill_dirs("all"):
+            info = await _parse_skill_md(d)
             label = info["name"] if info else d.name
             available.append(label)
         hint = f"\n可用的技能: {', '.join(available)}" if available else ""
         return {"success": False, "error": f"技能 '{name}' 不存在{hint}"}
 
-    info = _parse_skill_md(skill_dir)
+    info = await _parse_skill_md(skill_dir)
     if info is None:
         return {"success": False, "error": f"技能 '{name}' 的 SKILL.md 无法读取或解析"}
 
@@ -419,7 +421,7 @@ async def command_execute_handler(
     else:
         cwd_path = PROJECT_ROOT
 
-    if not cwd_path.is_dir():
+    if not await aisdir(cwd_path):
         return {"success": False, "error": f"工作目录不存在: {cwd_path}"}
 
     # ── Execute ──────────────────────────────────────────────────────

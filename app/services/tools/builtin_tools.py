@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from app.config import MEMORY_DIR, PROJECT_ROOT
+from app.utils.async_file import (
+    aexists,
+    aisfile,
+    aisdir,
+    aread_text,
+    awrite_text,
+    astat_size,
+    aiterdir,
+    amkdir,
+)
 
 logger = logging.getLogger("agenthub.tools.builtin")
 
@@ -641,24 +651,24 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
     if safe is None:
         return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围。工作区: {PROJECT_ROOT}"}
 
-    if not safe.exists():
+    if not await aexists(safe):
         # Try listing similar files as a helpful hint
         parent = safe.parent
         similar: list[str] = []
         try:
             name_lower = safe.name.lower()
-            for child in sorted(parent.iterdir())[:20]:
-                if child.is_file() and name_lower[:4] in child.name.lower():
+            for child in (await aiterdir(parent))[:20]:
+                if await aisfile(child) and name_lower[:4] in child.name.lower():
                     similar.append(str(child.relative_to(PROJECT_ROOT)))
         except OSError:
             pass
         hint = f"\n目录 '{parent.relative_to(PROJECT_ROOT)}' 中相似文件: {similar}" if similar else ""
         return {"success": False, "error": f"文件不存在: {path}{hint}"}
 
-    if safe.is_dir():
+    if await aisdir(safe):
         try:
-            listing = sorted(safe.iterdir())[:50]
-            names = [str(p.relative_to(PROJECT_ROOT)) + ("/" if p.is_dir() else "") for p in listing]
+            listing = (await aiterdir(safe))[:50]
+            names = [str(p.relative_to(PROJECT_ROOT)) + ("/" if await aisdir(p) else "") for p in listing]
             return {
                 "success": True,
                 "result": f"目录 '{path}' 内容 ({len(names)} 项):\n" + "\n".join(names),
@@ -668,7 +678,7 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
 
     # Check file size
     try:
-        size = safe.stat().st_size
+        size = await astat_size(safe)
         if size > MAX_FILE_READ_BYTES:
             return {
                 "success": False,
@@ -678,7 +688,7 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
         return {"success": False, "error": f"无法读取文件信息: {exc}"}
 
     try:
-        content = safe.read_text(encoding=encoding)
+        content = await aread_text(safe, encoding=encoding)
         lines = content.split("\n")
         total_lines = len(lines)
         truncated = lines[:min(max_lines, len(lines))]
@@ -718,22 +728,22 @@ async def file_write_handler(path: str, content: str, mode: str = "overwrite") -
     if safe is None:
         return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
 
-    if safe.exists() and safe.is_dir():
+    if await aexists(safe) and await aisdir(safe):
         return {"success": False, "error": f"'{path}' 是一个目录，无法写入"}
 
     try:
         # Ensure parent directory exists
-        safe.parent.mkdir(parents=True, exist_ok=True)
+        await amkdir(safe.parent)
 
-        if mode == "append" and safe.exists():
-            existing = safe.read_text(encoding="utf-8")
-            safe.write_text(existing + "\n" + content, encoding="utf-8")
+        if mode == "append" and await aexists(safe):
+            existing = await aread_text(safe, encoding="utf-8")
+            await awrite_text(safe, existing + "\n" + content, encoding="utf-8")
             action = "追加"
         else:
-            safe.write_text(content, encoding="utf-8")
+            await awrite_text(safe, content, encoding="utf-8")
             action = "覆写"
 
-        size = safe.stat().st_size
+        size = await astat_size(safe)
         return {
             "success": True,
             "result": f"文件 '{path}' {action}成功 ({size} 字节)",
@@ -768,11 +778,11 @@ async def code_execute_handler(code: str, language: str = "python", timeout: int
         with tempfile.TemporaryDirectory(prefix="agenthub_exec_") as tmpdir:
             if language == "python":
                 script_path = Path(tmpdir) / "script.py"
-                script_path.write_text(code, encoding="utf-8")
+                await awrite_text(script_path, code, encoding="utf-8")
                 cmd = ["python", str(script_path)]
             else:
                 script_path = Path(tmpdir) / "script.sh"
-                script_path.write_text(code, encoding="utf-8")
+                await awrite_text(script_path, code, encoding="utf-8")
                 cmd = ["bash", str(script_path)]
 
             proc = await _run_subprocess(cmd, effective_timeout, cwd=tmpdir)
@@ -850,7 +860,7 @@ async def memory_search_handler(query: str, max_results: int = 5) -> dict[str, A
         from app.services.memory.models import MemoryType
 
         storage = MemoryStorage(MEMORY_DIR)
-        headers = storage.list_headers(max_files=200)
+        headers = await storage.list_headers(max_files=200)
 
         # Simple keyword matching with scoring
         scored: list[tuple[float, dict]] = []

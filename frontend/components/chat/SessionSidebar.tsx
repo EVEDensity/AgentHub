@@ -8,6 +8,8 @@ interface SessionSidebarProps {
   sessionQuery: string;
   editingId: string;
   editName: string;
+  /** 动态宽度（px），未传时使用默认 w-80 (320px) */
+  width?: number;
   notice: string;
   isAutoNaming: boolean;
   sessionsLength: number;
@@ -39,9 +41,13 @@ const SessionSidebar = memo(function SessionSidebar({
   onRenameSession, onTogglePin, onStartRename, onRegenerateName,
   onSessionQueryChange, onEditNameChange,
   onEditNameKeyDown, onEditNameBlur, onLogout,
+  width,
 }: SessionSidebarProps) {
   return (
-    <aside className="w-80 border-r border-warm-150 bg-white p-4 flex h-screen flex-col">
+    <aside
+      className="border-r border-warm-150 bg-white p-4 flex h-screen flex-col shrink-0"
+      style={width ? { width: `${width}px` } : undefined}
+    >
       <div className="mb-4">
         <div className="text-h2 text-warm-800">AgentHub</div>
         <div className="mt-1 text-caption text-warm-500">{user?.name} / {user?.role}</div>

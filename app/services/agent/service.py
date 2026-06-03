@@ -7,7 +7,7 @@ import time
 import uuid
 
 from app.db.init_db import now
-from app.db.session import dict_rows, get_connection, one_row
+from app.db.session import afetch_all, afetch_one, aexecute
 from app.services.adapter_manager import adapter_manager
 from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
@@ -24,29 +24,29 @@ class AgentService:
         return re.findall(r"@(\w+)", content)
 
     @staticmethod
-    def resolve_agent(content: str) -> dict:
+    async def resolve_agent(content: str) -> dict:
         mentioned = next((name for name in AgentService.extract_mentions(content) if name in AGENTS), None)
         if mentioned:
-            agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (mentioned,))
+            agent = await afetch_one("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1", mentioned)
             if agent:
                 return agent
         # No valid mention — fall back to user-configured default, then Orchestrator
-        default_row = one_row("SELECT value FROM system_config WHERE key='default_chat_agent'")
+        default_row = await afetch_one("SELECT value FROM system_config WHERE key='default_chat_agent'")
         default_agent_id = default_row["value"] if default_row else "Orchestrator"
-        agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (default_agent_id,))
+        agent = await afetch_one("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1", default_agent_id)
         return agent or {"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}
 
     @staticmethod
-    def candidate_models_for_role(role: str) -> list[dict]:
+    async def candidate_models_for_role(role: str) -> list[dict]:
         # 1) Explicit role bindings (role_bindings JOIN model_configs)
-        rows = dict_rows(
-            "SELECT mc.id,mc.provider,mc.model_name AS model_name,mc.api_key,mc.base_url,rb.prompt FROM role_bindings rb JOIN model_configs mc ON rb.model_config_id=mc.id WHERE rb.role=? AND mc.is_active=1 ORDER BY mc.id DESC",
-            (role,),
+        rows = await afetch_all(
+            "SELECT mc.id,mc.provider,mc.model_name AS model_name,mc.api_key,mc.base_url,rb.prompt FROM role_bindings rb JOIN model_configs mc ON rb.model_config_id=mc.id WHERE rb.role=$1 AND mc.is_active=1 ORDER BY mc.id DESC",
+            role,
         )
         if rows:
             return rows
         # 2) Agent's own config in agent_registry (adapter_type + base_model_name + base_url + api_key)
-        agent_row = one_row("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=?", (role,))
+        agent_row = await afetch_one("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=$1", role)
         if agent_row and agent_row.get("adapter_type") and agent_row.get("adapter_type") != "mock":
             return [{
                 "id": 0,
@@ -57,7 +57,7 @@ class AgentService:
                 "prompt": "",
             }]
         # 3) Fallback: any active model_config
-        rows = dict_rows("SELECT id,provider,model_name,api_key,base_url,'' AS prompt FROM model_configs WHERE is_active=1 ORDER BY id DESC")
+        rows = await afetch_all("SELECT id,provider,model_name,api_key,base_url,'' AS prompt FROM model_configs WHERE is_active=1 ORDER BY id DESC")
         return rows or [{"id": 0, "provider": "mock", "model_name": "mock", "api_key": "", "base_url": "", "prompt": ""}]
 
     @staticmethod
@@ -85,7 +85,7 @@ class AgentService:
         state["latency"] = state["latency"] * 0.7 + latency_ms * 0.3
 
     @staticmethod
-    def save_message(
+    async def save_message(
         session_id: str,
         sender: str,
         content: str,
@@ -97,30 +97,27 @@ class AgentService:
         total_tokens: int = 0,
     ) -> None:
         ts = now()
-        with get_connection() as conn:
-            conn.execute(
-                "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    str(uuid.uuid4()),
-                    session_id,
-                    sender,
-                    content,
-                    msg_type,
-                    score,
-                    json.dumps(symbolic or {}, ensure_ascii=False),
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                    ts,
-                ),
-            )
-            conn.execute("UPDATE sessions SET last_message_at=? WHERE id=?", (ts, session_id))
+        await aexecute(
+            "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+            str(uuid.uuid4()),
+            session_id,
+            sender,
+            content,
+            msg_type,
+            score,
+            json.dumps(symbolic or {}, ensure_ascii=False),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            ts,
+        )
+        await aexecute("UPDATE sessions SET last_message_at=$1 WHERE id=$2", ts, session_id)
 
     @staticmethod
-    def list_messages(session_id: str) -> list[dict]:
-        items = dict_rows(
-            "SELECT session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at",
-            (session_id,),
+    async def list_messages(session_id: str) -> list[dict]:
+        items = await afetch_all(
+            "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at",
+            session_id,
         )
         for item in items:
             item["symbolic"] = json.loads(item.pop("symbolic_json") or "{}")
@@ -128,11 +125,11 @@ class AgentService:
 
     @staticmethod
     async def call_agent(session_id: str, content: str, user_id: str) -> dict:
-        agent = AgentService.resolve_agent(content)
+        agent = await AgentService.resolve_agent(content)
         domain = agent["domain"]
         msg_type = "code" if domain == "codegen" or any(word in content.lower() for word in ["code", "fastapi", "react", "代码", "实现"]) else "text"
         symbolic = generate_symbolic_message(content, msg_type, session_id)
-        models = AgentService.choose_models(AgentService.candidate_models_for_role(agent["agent_id"]))
+        models = AgentService.choose_models(await AgentService.candidate_models_for_role(agent["agent_id"]))
         prompt = AgentService.build_prompt(agent["agent_id"], domain, content, symbolic, models[0].get("prompt", "") if models else "")
 
         result = ""
@@ -159,7 +156,7 @@ class AgentService:
             prompt_tokens, completion_tokens, total_tokens = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
         else:
             prompt_tokens, completion_tokens, total_tokens = AgentService._estimate_token_usage(prompt, content_out)
-        generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
+        generated = await write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
         public = {**public_symbolic(symbolic), "generated": generated, "model": {"provider": selected.get("provider"), "modelName": selected.get("model_name")}}
         AuthService.write_audit(user_id, agent["agent_id"], "agent_execute", agent.get("risk_level", "L1"), "auto", {"sessionId": session_id, "domain": domain, "generated": generated, "model": public["model"], "fallbackErrors": errors[:3]})
         display_content = "CodeGen 已生成结构化文件，请在下方生成文件面板中检查内容、查看 Diff，并确认提交。" if generated else content_out
@@ -173,7 +170,7 @@ class AgentService:
             "fidelityScore": symbolic["fidelity_score"],
             "symbolic": public,
         }
-        AgentService.save_message(
+        await AgentService.save_message(
             session_id,
             message["sender"],
             message["content"],

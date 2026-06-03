@@ -3,12 +3,26 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# ── Load .env file (if python-dotenv is available) ─────────────────
+try:
+    from dotenv import load_dotenv
+    _env_file = Path(__file__).resolve().parent.parent / ".env"
+    if _env_file.exists():
+        load_dotenv(_env_file)
+except ImportError:
+    pass  # dotenv not installed — env vars must be set externally
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = BASE_DIR.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
-DB_PATH = DATA_DIR / "agenthub.sqlite3"
+
 WORKSPACE_REPO_PATH = PROJECT_ROOT
+
+# ── Database ───────────────────────────────────────────────────────
+# PostgreSQL connection URL (required — e.g. Neon serverless).
+# Set via .env file or environment variable.
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 APP_NAME = "AgentHub 多智能体协作平台"
 APP_VERSION = "3.0-modular"

@@ -315,7 +315,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
             return await MockAdapter().execute_prompt(prompt, model)
-        actual_model = model if model != "ping" else self.default_model
+        actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "/chat/completions"
         payload: dict[str, Any] = {
             "model": actual_model,
@@ -323,7 +323,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
             "temperature": self.temperature,
             "frequency_penalty": self.frequency_penalty,
             "presence_penalty": self.presence_penalty,
-            "max_tokens": 4096,  # generous for reasoning models (DeepSeek V4, Kimi K2)
+            "max_tokens": getattr(self, "max_tokens", 16384),
         }
         # ── Native function calling ──────────────────────────────────
         if tools:
@@ -363,19 +363,32 @@ class OpenAICompatibleAdapter(BaseAdapter):
             return json.dumps({"tool_calls": converted}, ensure_ascii=False)
 
         # ── Plain text response ──────────────────────────────────────
-        # Reasoning models (DeepSeek V4, Kimi K2, etc.) separate thinking
-        # from the final answer: reasoning_content holds the chain-of-thought
-        # and content may be empty if the model stopped early (e.g. hit
-        # token limit during reasoning).  We combine both so the frontend
-        # always has text to display, and wrap reasoning in <think> tags
-        # so ThinkingPanel renders it properly.
+        # Reasoning models (DeepSeek V4, Kimi K2, doubao-thinking, etc.)
+        # separate chain-of-thought from the final answer:
+        #   reasoning_content = internal thinking (wrapped in <think> for UI)
+        #   content           = the visible reply
+        #
+        # When the model exhausts its token budget during reasoning,
+        # ``content`` may be empty while ``reasoning_content`` is present.
+        # This is a token-limit issue, not a model failure — the model
+        # simply needs more headroom to finish.  We surface the reasoning
+        # so the user can see the progress, and guide them to retry.
         content = message.get("content") or ""
         reasoning = message.get("reasoning_content") or ""
 
         if reasoning and not content:
-            # Model only output reasoning — likely hit token limit.
-            # Return the reasoning wrapped so the user sees something.
-            content = f"<think>{reasoning}</think>\n\n[模型推理阶段完成，但未生成最终回复 — 请重试或简化问题]"
+            # Model only produced reasoning — almost certainly hit token limit.
+            if finish_reason == "length":
+                hint = (
+                    "模型推理已完成但输出 token 不足，回复被截断。\n"
+                    "建议：(1) 简化问题或拆分任务 (2) 降低系统提示词长度 (3) 在模型配置中增加 max_tokens"
+                )
+            else:
+                hint = (
+                    "模型推理阶段完成但未生成最终回复 (finish_reason={})。\n"
+                    "请重试或简化输入内容。"
+                ).format(finish_reason or "unknown")
+            content = f"<think>{reasoning}</think>\n\n{hint}"
         elif reasoning and content:
             content = f"<think>{reasoning}</think>\n\n{content}"
         # else: no reasoning — just plain content (or empty)
@@ -394,10 +407,10 @@ class OpenAICompatibleAdapter(BaseAdapter):
             async for chunk in MockAdapter().stream_prompt(prompt, model):
                 yield chunk
             return
-        actual_model = model if model != "ping" else self.default_model
+        actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "//chat/completions"
         url = url.replace("//chat", "/chat")  # normalize double slash
-        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": self.temperature, "stream": True, "frequency_penalty": self.frequency_penalty, "presence_penalty": self.presence_penalty}
+        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": self.temperature, "stream": True, "frequency_penalty": self.frequency_penalty, "presence_penalty": self.presence_penalty, "max_tokens": getattr(self, "max_tokens", 16384)}
         if self.supports_stream_usage:
             payload["stream_options"] = {"include_usage": True}
         self.last_usage = {}  # reset per call so stale data never leaks
@@ -441,6 +454,13 @@ class OpenAICompatibleAdapter(BaseAdapter):
                 if reasoning_open:
                     full_text += "</think>"
                     yield "</think>"
+                    # Model produced reasoning but no final content — token limit likely
+                    hint = (
+                        "\n\n模型推理已完成但输出 token 不足，回复被截断。"
+                        "建议简化问题或增加 max_tokens 配置后重试。"
+                    )
+                    full_text += hint
+                    yield hint
         yield ""
         # Always set fallback estimation when no real usage was captured from chunks
         if not self.last_usage.get("total_tokens"):

@@ -77,10 +77,70 @@ const HEAT_COLORS = [
 const WEEKDAY_LABELS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const DISPLAY_WEEKDAY_INDEX = new Set([0, 2, 4, 6]);
 
+// Skeleton component for loading state
+function SkeletonBox({ className }: { className?: string }): JSX.Element {
+  return (
+    <div className={`animate-pulse bg-warm-200 rounded-sm ${className || ''}`} />
+  );
+}
+
+function StatCardSkeleton(): JSX.Element {
+  return (
+    <div className="flex min-w-[170px] flex-col justify-center rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] px-5 py-4">
+      <SkeletonBox className="h-3 w-16 mb-2" />
+      <SkeletonBox className="h-6 w-24 mb-1" />
+      <SkeletonBox className="h-3 w-32" />
+    </div>
+  );
+}
+
+function HeatmapSkeleton(): JSX.Element {
+  return (
+    <div className="rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] p-5">
+      {/* Month labels skeleton */}
+      <div className="mb-1 flex gap-[3px] pl-10">
+        {Array(52).fill(null).map((_, i) => (
+          <SkeletonBox key={i} className="w-3 h-3" />
+        ))}
+      </div>
+      
+      <div className="flex">
+        {/* Weekday labels skeleton */}
+        <div className="mr-2 flex flex-col gap-[3px]">
+          {WEEKDAY_LABELS.map((wd) => (
+            <SkeletonBox key={wd} className="h-3 w-8" />
+          ))}
+        </div>
+        
+        {/* Grid skeleton */}
+        <div className="flex gap-[3px] overflow-x-auto pb-1">
+          {Array(52).fill(null).map((_, wi) => (
+            <div key={wi} className="flex flex-col gap-[3px]">
+              {Array(7).fill(null).map((_, di) => (
+                <SkeletonBox key={di} className="h-3 w-3 rounded-sm" />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+      
+      {/* Legend skeleton */}
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <SkeletonBox className="h-3 w-12" />
+        {HEAT_COLORS.map((_, i) => (
+          <SkeletonBox key={i} className="h-3 w-3 rounded-sm" />
+        ))}
+        <SkeletonBox className="h-3 w-12" />
+      </div>
+    </div>
+  );
+}
+
 export default function TokenUsageHeatmap(): JSX.Element {
   const [data, setData] = useState<HeatmapData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; day: HeatmapDay } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -92,19 +152,51 @@ export default function TokenUsageHeatmap(): JSX.Element {
       const res = await fetch('/api/admin/analytics/token-usage', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
+      
       if (res.status === 401 || res.status === 403) {
         setError('登录已过期，请重新登录');
         setData(null);
         return;
       }
-      if (!res.ok) {
-        setError(`加载失败 (${res.status})`);
+      
+      if (res.status === 429) {
+        setError('请求过于频繁，请稍后重试');
         setData(null);
         return;
       }
-      setData((await res.json()) as HeatmapData);
+      
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        const errorMsg = errorText || `加载失败 (${res.status})`;
+        setError(errorMsg);
+        setData(null);
+        return;
+      }
+      
+      const jsonData = await res.json();
+      
+      // Validate data structure
+      if (!jsonData || typeof jsonData !== 'object') {
+        setError('数据格式错误');
+        setData(null);
+        return;
+      }
+      
+      setData(jsonData as HeatmapData);
     } catch (err) {
-      setError('网络错误，请检查后端服务是否运行');
+      const errorMsg = err instanceof Error ? err.message : '网络错误';
+      console.error('Token usage load error:', err);
+      
+      // Retry up to 3 times with backoff
+      if (retryCount < 3) {
+        setTimeout(() => {
+          setRetryCount(prev => prev + 1);
+          void load();
+        }, 1000 * (retryCount + 1));
+        return;
+      }
+      
+      setError(`加载失败：${errorMsg}，请检查后端服务是否运行`);
       setData(null);
     } finally {
       setLoading(false);
@@ -143,7 +235,8 @@ export default function TokenUsageHeatmap(): JSX.Element {
     setTooltip(null);
   }
 
-  if (loading && !data) {
+  // Loading state with skeleton
+  if (loading) {
     return (
       <div className="space-y-6">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -151,14 +244,24 @@ export default function TokenUsageHeatmap(): JSX.Element {
             <h2 className="text-[22px] font-semibold tracking-tight text-warm-900">Token 用量</h2>
             <p className="mt-1 text-sm text-warm-500">加载中...</p>
           </div>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-5 border-2 border-warm-300 border-t-warm-600 rounded-full animate-spin" />
+            <span className="text-sm text-warm-500">正在获取数据...</span>
+          </div>
         </div>
-        <div className="rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] p-5">
-          <div className="text-sm text-warm-500">正在加载数据...</div>
+        
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <StatCardSkeleton />
+          <StatCardSkeleton />
+          <StatCardSkeleton />
         </div>
+        
+        <HeatmapSkeleton />
       </div>
     );
   }
 
+  // Error state
   if (error) {
     return (
       <div className="space-y-6">
@@ -168,14 +271,34 @@ export default function TokenUsageHeatmap(): JSX.Element {
             <p className="mt-1 text-sm text-warm-500">基于本机 AgentHub 会话记录统计</p>
           </div>
         </div>
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
-          <div className="text-sm text-red-600">{error}</div>
-          <button className="btn-secondary mt-3" onClick={() => void load()}>重试</button>
+        
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6">
+          <div className="flex items-start gap-3">
+            <svg className="h-5 w-5 shrink-0 text-red-500 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12" y2="16" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-red-700">加载失败</p>
+              <p className="mt-1 text-sm text-red-600">{error}</p>
+            </div>
+          </div>
+          <button 
+            className="btn-primary mt-4" 
+            onClick={() => {
+              setRetryCount(0);
+              void load();
+            }}
+          >
+            重试加载
+          </button>
         </div>
       </div>
     );
   }
 
+  // No data state
   if (!data) {
     return (
       <div className="space-y-6">
@@ -185,8 +308,32 @@ export default function TokenUsageHeatmap(): JSX.Element {
             <p className="mt-1 text-sm text-warm-500">基于本机 AgentHub 会话记录统计</p>
           </div>
         </div>
-        <div className="rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] p-5">
-          <div className="text-sm text-warm-500">暂无数据</div>
+        
+        <div className="rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] p-8 text-center">
+          <svg className="h-12 w-12 mx-auto text-warm-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <p className="mt-4 text-sm text-warm-500">暂无数据</p>
+          <p className="mt-1 text-xs text-warm-400">开始使用 AgentHub 后，这里将显示您的 Token 使用统计</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Validate data integrity
+  if (!data.days || !Array.isArray(data.days)) {
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-[22px] font-semibold tracking-tight text-warm-900">Token 用量</h2>
+            <p className="mt-1 text-sm text-warm-500">数据异常</p>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-5">
+          <p className="text-sm text-yellow-700">数据格式异常，请刷新页面重试</p>
         </div>
       </div>
     );
@@ -245,10 +392,11 @@ export default function TokenUsageHeatmap(): JSX.Element {
                   return (
                     <div
                       key={day.date}
-                      className={`h-3 w-3 rounded-sm ${HEAT_COLORS[level]} cursor-pointer transition-all hover:ring-1 hover:ring-warm-400`}
+                      className={`h-3 w-3 rounded-sm ${HEAT_COLORS[level]} cursor-pointer transition-all hover:ring-1 hover:ring-warm-400 hover:scale-125`}
                       onMouseEnter={(e) => handleCellEnter(e, day)}
                       onMouseMove={handleCellMove}
                       onMouseLeave={handleCellLeave}
+                      title={`${formatDateLabel(day.date)}: ${day.messages} 条消息, ${day.sessions} 个会话, ${formatTokens(day.tokens)}`}
                     />
                   );
                 })}
@@ -270,10 +418,10 @@ export default function TokenUsageHeatmap(): JSX.Element {
       {/* Tooltip */}
       {tooltip && (
         <div
-          className="fixed z-50 rounded-lg bg-[#3F342A] px-3 py-2 text-xs text-white"
+          className="fixed z-50 rounded-lg bg-[#3F342A] px-3 py-2 text-xs text-white shadow-lg"
           style={{
-            left: tooltip.x + 12,
-            top: tooltip.y + 12,
+            left: Math.min(tooltip.x + 12, window.innerWidth - 200),
+            top: Math.min(tooltip.y + 12, window.innerHeight - 100),
             pointerEvents: 'none',
           }}
         >
@@ -289,7 +437,7 @@ export default function TokenUsageHeatmap(): JSX.Element {
 
 function StatCard({ label, tokens, sessions, messages }: { label: string; tokens: number; sessions: number; messages: number }): JSX.Element {
   return (
-    <div className="flex min-w-[170px] flex-col justify-center rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] px-5 py-4">
+    <div className="flex min-w-[170px] flex-col justify-center rounded-2xl border border-[#E7DECF] bg-[#F7F2E8] px-5 py-4 transition-all hover:shadow-md">
       <div className="text-xs text-warm-500">{label}</div>
       <div className="mt-1 text-xl font-semibold text-warm-900">{formatTokens(tokens)}</div>
       <div className="mt-0.5 text-xs text-warm-400">{messages} 条消息 · {sessions} 个会话</div>

@@ -73,7 +73,16 @@ interface MessageListProps {
 
 const MessageList = memo(function MessageList({ messages, user, generated, onCommit, messagesContainerRef, bottomRef }: MessageListProps) {
   function renderMessage(msg: Message, index: number): JSX.Element {
-    const isUser = msg.sender === user?.name || msg.sender === 'user';
+    // 用户消息判定：
+    // 1. sender === 'user' (本地立即创建的消息)
+    // 2. sender === 当前登录用户的 name
+    // 3. sender 与 current user.name 一致（忽略大小写）
+    // 4. fallback：如果 user 为空但消息没有 agent_id 前缀（兼容旧会话）
+    const userName = (user?.name || '').trim();
+    const sender = (msg.sender || '').trim();
+    const isUser = sender === 'user'
+      || (userName !== '' && sender === userName)
+      || (userName !== '' && sender.toLowerCase() === userName.toLowerCase());
     const isToolCall = msg.type === 'tool_call' || msg.type === 'tool_result';
     const isCode = msg.type === 'code' || msg.type === 'diff';
     const badge = msg.type || 'text';

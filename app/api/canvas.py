@@ -11,6 +11,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from app.utils.async_file import aread_text, awrite_bytes, awrite_text, aexists
+
 router = APIRouter(prefix="/api/canvas", tags=["canvas"])
 
 CANVAS_DIR = Path("data/canvases")
@@ -44,13 +46,13 @@ class CanvasExportRequest(BaseModel):
 @router.get("/{canvas_id}")
 async def get_canvas(canvas_id: str = DEFAULT_CANVAS_ID) -> dict[str, Any]:
     path = _canvas_path(canvas_id)
-    if not path.exists():
+    if not await aexists(path):
         return {
             "id": _safe_canvas_id(canvas_id),
             "name": "Agent Workflow Canvas",
             "data": None,
         }
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(await aread_text(path))
 
 
 @router.post("/save")
@@ -62,7 +64,7 @@ async def save_canvas(payload: CanvasSaveRequest) -> dict[str, Any]:
         "name": payload.name.strip() or "Agent Workflow Canvas",
         "data": payload.data,
     }
-    _canvas_path(canvas_id).write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    await awrite_text(_canvas_path(canvas_id), json.dumps(document, ensure_ascii=False, indent=2))
     return {"status": "success", "id": canvas_id}
 
 
@@ -79,12 +81,12 @@ async def export_canvas(payload: CanvasExportRequest) -> dict[str, str]:
             raise HTTPException(status_code=400, detail="Invalid image data") from exc
         filename = f"{canvas_id}-{uuid.uuid4().hex[:8]}.png"
         path = EXPORT_DIR / filename
-        path.write_bytes(content)
+        await awrite_bytes(path, content)
         return {"status": "success", "url": f"/api/canvas/exports/{filename}"}
 
     filename = f"{canvas_id}-{uuid.uuid4().hex[:8]}.json"
     path = EXPORT_DIR / filename
-    path.write_text(json.dumps(payload.data or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+    await awrite_text(path, json.dumps(payload.data or {}, ensure_ascii=False, indent=2))
     return {"status": "success", "url": f"/api/canvas/exports/{filename}"}
 
 
@@ -93,7 +95,7 @@ async def get_export(filename: str) -> FileResponse:
     if not re.fullmatch(r"[a-zA-Z0-9_.-]+", filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
     path = EXPORT_DIR / filename
-    if not path.exists():
+    if not await aexists(path):
         raise HTTPException(status_code=404, detail="Export not found")
     return FileResponse(path)
 

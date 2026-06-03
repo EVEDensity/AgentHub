@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.db.init_db import now
-from app.db.session import one_row
+from app.db.session import afetch_all, afetch_one
 from app.services.agent_service import extract_mentions, save_message
 from app.services.auth_service import websocket_user
 from app.services.message_router import route_message, stream_message
@@ -45,12 +45,21 @@ _AUTO_NAME_MAX_ATTEMPTS = 5  # stop trying after this many attempts
 
 
 def _should_auto_name(session_id: str) -> bool:
-    """Return True if we should attempt auto-naming for this session."""
+    """Return True if we should attempt auto-naming for this session.
+
+    Always fires on the very first attempt (attempts == 0) so that
+    new sessions get named immediately after the first agent response.
+    Subsequent attempts are throttled.
+    """
     import time
     now_ts = time.monotonic()
     last_ts, attempts = _auto_name_state.get(session_id, (0.0, 0))
     if attempts >= _AUTO_NAME_MAX_ATTEMPTS:
         return False
+    # Always allow the very first attempt — no throttle
+    if attempts == 0:
+        _auto_name_state[session_id] = (now_ts, 1)
+        return True
     interval = _AUTO_NAME_INITIAL_SECONDS if attempts < 2 else _AUTO_NAME_BACKOFF_SECONDS
     if now_ts - last_ts >= interval:
         _auto_name_state[session_id] = (now_ts, attempts + 1)
@@ -125,8 +134,7 @@ async def _auto_name_and_broadcast(session_id: str) -> None:
         from app.api.chat import is_generic_name, try_auto_name_session
 
         # Quick pre-check: skip if already has a meaningful name
-        from app.db.session import one_row
-        row = one_row("SELECT name FROM sessions WHERE id=?", (session_id,))
+        row = await afetch_one("SELECT name FROM sessions WHERE id=$1", session_id)
         if row and not is_generic_name(row.get("name") or ""):
             return  # already named
 
@@ -196,7 +204,7 @@ def _chunk_text_for_streaming(text: str, chunk_size: int = 120) -> list[str]:
 
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str | None = Query(default=None)) -> None:
-    user = websocket_user(token)
+    user = await websocket_user(token)
     user_id = user["id"]
     conn_id = await manager.connect(session_id, websocket, user_id)
 
@@ -415,7 +423,7 @@ async def _process_and_stream(
         token = manager.create_token(session_id)
 
         try:
-            save_message(session_id, sender, content, "text")
+            await save_message(session_id, sender, content, "text")
 
             # ── Skill invocation detection ──────────────────────────
             # Detect /skill-name patterns and inject SKILL.md body as
@@ -427,7 +435,7 @@ async def _process_and_stream(
             if skill_names:
                 loaded_skills: list[str] = []
                 for sn in skill_names:
-                    body = load_skill_prompt(sn)
+                    body = await load_skill_prompt(sn)
                     if body:
                         loaded_skills.append(
                             f"## 技能：{sn}\n\n{body}"
@@ -457,9 +465,9 @@ async def _process_and_stream(
                 if name in seen:
                     continue
                 seen.add(name)
-                row = one_row(
-                    "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?",
-                    (name,),
+                row = await afetch_one(
+                    "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1",
+                    name,
                 )
                 if row:
                     target_agents.append(row)
@@ -714,7 +722,7 @@ async def _invoke_agent(
             await _broadcast_final_message(session_id, message_id, response)
         return text
 
-    # Streaming path
+    # Streaming path — real SSE chunks from the adapter
     message_id = str(uuid.uuid4())
     full_response: list[str] = []
     batch: list[str] = []
@@ -727,11 +735,15 @@ async def _invoke_agent(
             if chunk:
                 full_response.append(chunk)
                 batch.append(chunk)
-            # Flush every ~50ms to balance latency vs overhead
+            # Flush frequently so the frontend sees tokens as they arrive.
+            # Real SSE chunks come at natural pacing (every few hundred ms),
+            # so a short batch window adds minimal overhead while keeping
+            # latency low.
             now_ts = asyncio.get_event_loop().time()
-            if batch and now_ts - last_flush > 0.05:
+            joined = "".join(batch)
+            if batch and (now_ts - last_flush > 0.02 or len(joined) >= 20):
                 await manager.stream_broadcast(
-                    session_id, message_id, "".join(batch), is_final=False,
+                    session_id, message_id, joined, is_final=False,
                     sender=agent_id,
                 )
                 batch.clear()
@@ -771,11 +783,9 @@ async def _invoke_agent(
 
 
 async def _broadcast_final_message(session_id: str, message_id: str, response: dict) -> None:
-    from app.db.session import dict_rows as _dr
-
-    rows = _dr(
-        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        (session_id,),
+    rows = await afetch_all(
+        "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1",
+        session_id,
     )
     if rows:
         final = rows[0]
@@ -792,11 +802,9 @@ async def _broadcast_final_message(session_id: str, message_id: str, response: d
 
 
 async def _broadcast_final_db_message(session_id: str, message_id: str) -> None:
-    from app.db.session import dict_rows
-
-    rows = dict_rows(
-        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        (session_id,),
+    rows = await afetch_all(
+        "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1",
+        session_id,
     )
     if rows:
         final = rows[0]

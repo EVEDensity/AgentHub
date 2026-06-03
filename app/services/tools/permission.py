@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from app.db.session import afetch_all
+
 logger = logging.getLogger("agenthub.tools.permission")
 
 
@@ -97,7 +99,7 @@ class PermissionManager:
 
     # ── Rule loading ──────────────────────────────────────────────────
 
-    def load_rules(self, agent_id: str = "*", user_id: str = "") -> None:
+    async def load_rules(self, agent_id: str = "*", user_id: str = "") -> None:
         """Load permission rules from the database.
 
         Called during startup and can be refreshed at runtime.
@@ -107,15 +109,13 @@ class PermissionManager:
             user_id: Currently unused, reserved for per-user rules
         """
         try:
-            from app.db.session import dict_rows
-
-            rows = dict_rows(
+            rows = await afetch_all(
                 "SELECT id, agent_id, tool_pattern, path_pattern, behavior, "
                 "source, priority, enabled "
                 "FROM tool_permission_rules "
-                "WHERE enabled=1 AND (agent_id=? OR agent_id='*') "
+                "WHERE enabled=1 AND (agent_id=$1 OR agent_id='*') "
                 "ORDER BY priority DESC",
-                (agent_id,),
+                agent_id,
             )
         except Exception:
             logger.debug("permission_manager: failed to load rules (table may not exist yet)")

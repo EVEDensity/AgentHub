@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.db.session import dict_rows
+from app.db.session import afetch_all
 from app.services.auth_service import get_current_user, require_admin
 
 router = APIRouter(prefix="/users", tags=["admin-users"])
@@ -18,6 +18,6 @@ router = APIRouter(prefix="/users", tags=["admin-users"])
 async def list_users(user: dict = Depends(get_current_user)) -> list[dict]:
     """Return every registered user (admin only)."""
     require_admin(user)
-    return dict_rows(
-        "SELECT id, name, role, created_at AS createdAt FROM users ORDER BY created_at"
+    return await afetch_all(
+        "SELECT id, name, role, created_at AS \"createdAt\" FROM users ORDER BY created_at"
     )

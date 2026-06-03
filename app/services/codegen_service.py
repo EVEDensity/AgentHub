@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -98,13 +99,21 @@ def extract_files(model_output: str, original: str) -> list[dict]:
     return [{"path": str(rel), "content": content, "language": language_for(str(rel))}]
 
 
-def write_generated_files(model_output: str, original: str) -> dict:
+async def write_generated_files(model_output: str, original: str) -> dict:
     files = extract_files(model_output, original)
     public_files: list[dict] = []
-    for item in files:
+
+    async def _write_one(item: dict) -> dict:
         rel = _safe_rel_path(item["path"])
         target = GENERATED_DIR / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(item["content"], encoding="utf-8")
-        public_files.append({"path": str(target.relative_to(PROJECT_ROOT)), "content": item["content"], "language": item["language"]})
+
+        def _sync():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+
+        await asyncio.to_thread(_sync)
+        return {"path": str(target.relative_to(PROJECT_ROOT)), "content": item["content"], "language": item["language"]}
+
+    for item in files:
+        public_files.append(await _write_one(item))
     return {"files": [file["path"] for file in public_files], "fileDetails": public_files, "diff": git_service.diff().get("diff", "")}

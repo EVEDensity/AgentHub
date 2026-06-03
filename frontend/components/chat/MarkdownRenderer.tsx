@@ -1,6 +1,9 @@
-import { type JSX } from 'react';
+import { useState, type JSX, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import InteractiveCodeBlock from './InteractiveCodeBlock';
+import MermaidChart from './MermaidChart';
+import DataTable, { type DataTableColumn } from './DataTable';
 
 export interface MarkdownRendererProps {
   /** Markdown 原始文本 */
@@ -14,14 +17,56 @@ export interface MarkdownRendererProps {
 }
 
 /**
+ * 从 React 子节点中提取纯文本
+ */
+function extractText(node: ReactNode): string {
+  if (node === null || node === undefined) return '';
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (typeof node === 'object' && 'props' in node) {
+    return extractText((node as { props: { children?: ReactNode } }).props.children);
+  }
+  return '';
+}
+
+/**
+ * 从 th 子节点中提取表头文本数组
+ */
+function extractHeaders(children: ReactNode): string[] {
+  const arr = Array.isArray(children) ? children : [children];
+  return arr.map(extractText).map((s) => s.trim());
+}
+
+/**
+ * 从 tr 子节点中提取单元格数据
+ */
+function extractCells(rowChildren: ReactNode): string[] {
+  const arr = Array.isArray(rowChildren) ? rowChildren : [rowChildren];
+  return arr
+    .filter((c): c is { props: { children?: ReactNode } } =>
+      typeof c === 'object' && c !== null && 'props' in c
+    )
+    .map((c) => extractText(c.props.children).trim());
+}
+
+/**
+ * 表格上下文 - 在 thead/tbody 之间共享解析结果
+ */
+interface TableContext {
+  columns: DataTableColumn[];
+  rows: Record<string, unknown>[];
+  hasParsed: boolean;
+}
+
+/**
  * MarkdownRenderer - 基于 react-markdown 的自定义 Markdown 渲染器
  *
- * 替换默认的 code 节点为 InteractiveCodeBlock，提供：
- * - 语言标签 + 下拉切换 / 复制 / 运行 / 折叠交互按钮
- * - Prism 语法高亮（oneDark 主题）
- *
- * 同时自定义段落、标题、列表、引用、链接、表格等节点样式，
- * 匹配 AgentHub warm 色调设计系统。
+ * 功能特性：
+ * - 代码块：InteractiveCodeBlock（含语言标签、复制、运行、折叠）
+ * - Mermaid：MermaidChart（图表渲染、复制、下载）
+ * - 表格：DataTable（识别 Markdown 表格并提供复制/下载/新窗口打开）
+ * - 标题/段落/列表/引用/链接/代码高亮等
  */
 export default function MarkdownRenderer({
   content,
@@ -29,7 +74,7 @@ export default function MarkdownRenderer({
   runningCodeKey,
   className = '',
 }: MarkdownRendererProps): JSX.Element {
-  /** 代码片段计数器，每次渲染从 1 开始 */
+  /** 代码片段计数器 */
   let codeIndex = 0;
   const nextCodeIndex = () => {
     codeIndex += 1;
@@ -41,19 +86,23 @@ export default function MarkdownRenderer({
   return (
     <div className={`markdown-renderer ${className}`}>
       <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
         components={{
           /**
-           * 代码节点：
-           * - className 含 "language-xxx" → 围栏代码块 → InteractiveCodeBlock
-           * - 否则 → 内联代码 → 原生 <code> 样式
+           * 代码节点
            */
           code({ className, children, ...rest }: any) {
             const match = /language-(\w+)/.exec(className || '');
+            const codeString = String(children).replace(/\n$/, '');
 
-            // 围栏代码块
             if (match) {
               const language = match[1];
-              const codeString = String(children).replace(/\n$/, '');
+
+              // Mermaid 图表
+              if (language === 'mermaid') {
+                return <MermaidChart code={codeString} chartId={`mermaid-${codeIndex}`} />;
+              }
+
               const idx = nextCodeIndex();
               const runKey = runKeyFor(language, idx);
 
@@ -76,6 +125,71 @@ export default function MarkdownRenderer({
               >
                 {children}
               </code>
+            );
+          },
+
+          /**
+           * 表格 - 整个 table 节点整体渲染为 DataTable
+           * react-markdown 会将 Markdown 表格解析为 table 节点，
+           * 其 children 是 [thead, tbody] 结构
+           */
+          table({ children }: any) {
+            const arr = Array.isArray(children) ? children : [children];
+            let columns: DataTableColumn[] = [];
+            const rows: Record<string, unknown>[] = [];
+
+            for (const child of arr) {
+              if (!child || typeof child !== 'object' || !('props' in child)) continue;
+              const childProps = (child as { props: { children?: ReactNode } }).props;
+              const childChildren = childProps.children;
+
+              // thead - 提取列定义
+              if (child.type === 'thead' || (child as any).type?.name === 'thead') {
+                const headerRows = Array.isArray(childChildren) ? childChildren : [childChildren];
+                for (const headerRow of headerRows) {
+                  if (!headerRow || typeof headerRow !== 'object' || !('props' in headerRow)) continue;
+                  const headerCells = (headerRow as { props: { children?: ReactNode } }).props.children;
+                  const headers = extractHeaders(headerCells);
+                  columns = headers.map((h, i) => ({
+                    key: `col_${i}`,
+                    title: h || `列 ${i + 1}`,
+                  }));
+                  break;
+                }
+              }
+
+              // tbody - 提取数据行
+              if (child.type === 'tbody' || (child as any).type?.name === 'tbody') {
+                const bodyRows = Array.isArray(childChildren) ? childChildren : [childChildren];
+                for (const bodyRow of bodyRows) {
+                  if (!bodyRow || typeof bodyRow !== 'object' || !('props' in bodyRow)) continue;
+                  const bodyRowChildren = (bodyRow as { props: { children?: ReactNode } }).props.children;
+                  const cells = extractCells(bodyRowChildren);
+                  if (cells.length === 0) continue;
+                  const row: Record<string, unknown> = {};
+                  columns.forEach((col, i) => {
+                    row[col.key] = cells[i] ?? '';
+                  });
+                  rows.push(row);
+                }
+              }
+            }
+
+            if (columns.length === 0) {
+              return (
+                <div className="my-4 rounded-2xl border border-warm-150 bg-white p-4 text-warm-500">
+                  表格数据解析失败
+                </div>
+              );
+            }
+
+            return (
+              <DataTable
+                title="表格"
+                data={rows}
+                columns={columns}
+                tableName={`table-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`}
+              />
             );
           },
 
@@ -142,24 +256,6 @@ export default function MarkdownRenderer({
           /** 强调/加粗 */
           strong({ children }: any) {
             return <strong className="font-semibold text-warm-900">{children}</strong>;
-          },
-
-          /** 表格 */
-          table({ children }: any) {
-            return (
-              <div className="mb-4 overflow-auto rounded-lg border border-warm-150">
-                <table className="w-full text-sm">{children}</table>
-              </div>
-            );
-          },
-          thead({ children }: any) {
-            return <thead className="bg-warm-50 text-left">{children}</thead>;
-          },
-          th({ children }: any) {
-            return <th className="px-4 py-2 font-semibold text-warm-700">{children}</th>;
-          },
-          td({ children }: any) {
-            return <td className="border-t border-warm-100 px-4 py-2 text-warm-600">{children}</td>;
           },
         }}
       >

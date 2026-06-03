@@ -14,6 +14,15 @@ from app.services.memory.models import (
     MemoryType,
     sanitize_filename,
 )
+from app.utils.async_file import (
+    aread_text,
+    awrite_text,
+    aexists,
+    aunlink,
+    astat_mtime,
+    aiterdir,
+    amkdir,
+)
 
 
 class MemoryStorage:
@@ -27,7 +36,8 @@ class MemoryStorage:
 
     def __init__(self, base_dir: str | Path) -> None:
         self._base = Path(base_dir).resolve()
-        self._ensure_dir()
+        # Minimal sync mkdir — __init__ cannot be async.
+        self._base.mkdir(parents=True, exist_ok=True)
 
     # ── public helpers ──────────────────────────────────────────────
 
@@ -41,14 +51,14 @@ class MemoryStorage:
 
     # ── lifecycle ───────────────────────────────────────────────────
 
-    def _ensure_dir(self) -> None:
-        self._base.mkdir(parents=True, exist_ok=True)
-        if not self.index_path.exists():
-            self._write_index([])
+    async def _ensure_dir(self) -> None:
+        await amkdir(self._base)
+        if not await aexists(self.index_path):
+            await self._write_index([])
 
     # ── CRUD ────────────────────────────────────────────────────────
 
-    def save(
+    async def save(
         self,
         name: str,
         description: str,
@@ -57,13 +67,15 @@ class MemoryStorage:
         filename: str | None = None,
     ) -> MemoryDocument:
         """Create or overwrite a memory file."""
+        await self._ensure_dir()
         fname = filename or sanitize_filename(name)
         path = self._base / fname
         now = datetime.now().isoformat(timespec="seconds")
 
         existing = None
-        if path.exists():
-            existing = MemoryDocument.parse(path.read_text(encoding="utf-8"), str(path))
+        if await aexists(path):
+            content = await aread_text(path)
+            existing = MemoryDocument.parse(content, str(path))
             created_at = existing.meta.created_at or now
         else:
             created_at = now
@@ -76,28 +88,30 @@ class MemoryStorage:
             updated_at=now,
         )
         doc = MemoryDocument(meta=meta, body=body, file_path=str(path))
-        path.write_text(doc.to_markdown(), encoding="utf-8")
-        self._refresh_index()
+        await awrite_text(path, doc.to_markdown())
+        await self._refresh_index()
         return doc
 
-    def get(self, filename: str) -> Optional[MemoryDocument]:
+    async def get(self, filename: str) -> Optional[MemoryDocument]:
         """Read a single memory file by filename (e.g. 'user_role.md')."""
+        await self._ensure_dir()
         path = self._resolve(filename)
-        if not path or not path.exists():
+        if not path or not await aexists(path):
             return None
-        content = path.read_text(encoding="utf-8")
+        content = await aread_text(path)
         return MemoryDocument.parse(content, str(path))
 
-    def delete(self, filename: str) -> bool:
+    async def delete(self, filename: str) -> bool:
         """Delete a memory file by filename."""
+        await self._ensure_dir()
         path = self._resolve(filename)
-        if not path or not path.exists():
+        if not path or not await aexists(path):
             return False
-        path.unlink()
-        self._refresh_index()
+        await aunlink(path)
+        await self._refresh_index()
         return True
 
-    def list_headers(self, max_files: int = 200) -> list[MemoryHeader]:
+    async def list_headers(self, max_files: int = 200) -> list[MemoryHeader]:
         """Scan all .md files (except MEMORY.md) and return their headers.
 
         Mimics scanMemoryFiles() from the architecture doc:
@@ -105,16 +119,23 @@ class MemoryStorage:
           - reads first 30 lines for frontmatter
           - sorted by mtime, newest first
         """
+        await self._ensure_dir()
         results: list[MemoryHeader] = []
-        for child in sorted(self._base.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        children = await aiterdir(self._base)
+        # Pre-compute mtimes asynchronously, then sort newest first
+        children_with_mtime: list[tuple[Path, float]] = []
+        for child in children:
+            mtime = await astat_mtime(child)
+            children_with_mtime.append((child, mtime))
+        children_with_mtime.sort(key=lambda x: x[1], reverse=True)
+        for child, mtime in children_with_mtime:
             if not child.name.endswith(".md") or child.name == "MEMORY.md":
                 continue
             if len(results) >= max_files:
                 break
             try:
-                stat = child.stat()
                 # Read first 30 lines for frontmatter
-                head = self._read_head(child, 30)
+                head = await self._read_head(child, 30)
                 meta = MemoryMeta.from_frontmatter(head, child.name) if head else None
                 if meta is None:
                     meta = MemoryMeta(name=child.stem, description="", type=MemoryType.REFERENCE)
@@ -123,7 +144,7 @@ class MemoryStorage:
                     MemoryHeader(
                         filename=child.name,
                         path=str(child),
-                        mtime=stat.st_mtime,
+                        mtime=mtime,
                         description=meta.description,
                         type=meta.type,
                         name=meta.name,
@@ -137,24 +158,25 @@ class MemoryStorage:
 
     # ── MEMORY.md index ─────────────────────────────────────────────
 
-    def get_index_content(self) -> str:
+    async def get_index_content(self) -> str:
         """Read the current MEMORY.md index file."""
-        if self.index_path.exists():
-            return self.index_path.read_text(encoding="utf-8")
+        await self._ensure_dir()
+        if await aexists(self.index_path):
+            return await aread_text(self.index_path)
         return ""
 
-    def rebuild_index(self) -> str:
+    async def rebuild_index(self) -> str:
         """Rebuild MEMORY.md from current files. Returns the index content."""
-        headers = self.list_headers()
-        self._write_index(headers)
-        return self.get_index_content()
+        headers = await self.list_headers()
+        await self._write_index(headers)
+        return await self.get_index_content()
 
-    def _refresh_index(self) -> None:
+    async def _refresh_index(self) -> None:
         """Silently refresh index without returning content."""
-        headers = self.list_headers()
-        self._write_index(headers)
+        headers = await self.list_headers()
+        await self._write_index(headers)
 
-    def _write_index(self, headers: list[MemoryHeader]) -> None:
+    async def _write_index(self, headers: list[MemoryHeader]) -> None:
         """Generate and write the MEMORY.md index file."""
         lines = [
             "# 记忆索引 (Memory Index)",
@@ -198,7 +220,7 @@ class MemoryStorage:
             cl_lines.append("> ⚠️ 索引已截断（超过限制）。")
 
         truncated = "\n".join(cl_lines)
-        self.index_path.write_text(truncated, encoding="utf-8")
+        await awrite_text(self.index_path, truncated)
 
     # ── internals ───────────────────────────────────────────────────
 
@@ -214,16 +236,11 @@ class MemoryStorage:
             return None
         return p
 
-    def _read_head(self, path: Path, n: int) -> str:
+    async def _read_head(self, path: Path, n: int) -> str:
         """Read first n lines of a file efficiently."""
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                lines: list[str] = []
-                for _ in range(n):
-                    line = f.readline()
-                    if not line:
-                        break
-                    lines.append(line)
-                return "".join(lines)
-        except (OSError, UnicodeDecodeError):
+            content = await aread_text(path)
+            lines = content.split("\n")[:n]
+            return "\n".join(lines) + ("\n" if len(lines) == n and lines else "")
+        except (OSError, UnicodeDecodeError, FileNotFoundError):
             return ""

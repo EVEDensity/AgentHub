@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.utils.async_file import aread_text, aexists
+
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
 logger = logging.getLogger("agenthub.skills")
@@ -371,7 +373,7 @@ def _get_skill_dirs() -> list[tuple[str, Path]]:
     return results
 
 
-def scan_skills(source_filter: Optional[str] = None) -> list[dict[str, Any]]:
+async def scan_skills(source_filter: Optional[str] = None) -> list[dict[str, Any]]:
     """Scan local skill directories and return rich metadata for all skills.
 
     Each skill dict contains:
@@ -409,7 +411,7 @@ def scan_skills(source_filter: Optional[str] = None) -> list[dict[str, Any]]:
             actual_file = None
             for candidate in ("SKILL.md", "skill.md"):
                 fp = target / candidate
-                if fp.exists():
+                if await aexists(fp):
                     actual_file = fp
                     break
 
@@ -417,7 +419,7 @@ def scan_skills(source_filter: Optional[str] = None) -> list[dict[str, Any]]:
                 continue
 
             try:
-                raw = actual_file.read_text(encoding="utf-8")
+                raw = await aread_text(actual_file)
             except (OSError, UnicodeDecodeError):
                 logger.debug("failed to read skill file: %s", actual_file)
                 continue
@@ -479,7 +481,7 @@ async def list_skills(
     refresh: bool = Query(False, description="Force re-scan of local skill directories"),
 ):
     """List all locally installed skills with full metadata."""
-    skills = scan_skills(source_filter=source)
+    skills = await scan_skills(source_filter=source)
     total_tokens = sum(s.get("content_length", 0) // 4 for s in skills)
     return {
         "skills": skills,
@@ -518,9 +520,9 @@ async def get_skill_detail(
 
         for filename in ("SKILL.md", "skill.md"):
             skill_file = skill_dir / filename
-            if skill_file.exists():
+            if await aexists(skill_file):
                 try:
-                    raw = skill_file.read_text(encoding="utf-8")
+                    raw = await aread_text(skill_file)
                     meta = _parse_frontmatter(raw)
                     body = _extract_body(raw)
                     primary, sub = _classify_skill(meta, body, skill_name)
@@ -568,9 +570,9 @@ async def get_skill_raw(
 
         for filename in ("SKILL.md", "skill.md"):
             skill_file = skill_dir / filename
-            if skill_file.exists():
+            if await aexists(skill_file):
                 try:
-                    raw = skill_file.read_text(encoding="utf-8")
+                    raw = await aread_text(skill_file)
                     return PlainTextResponse(
                         content=raw,
                         media_type="text/markdown; charset=utf-8",

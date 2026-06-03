@@ -19,18 +19,18 @@ class MemoryScanner:
 
     # ── scanning ────────────────────────────────────────────────────
 
-    def scan(self, max_files: int = 200) -> list[MemoryHeader]:
+    async def scan(self, max_files: int = 200) -> list[MemoryHeader]:
         """Scan all memory files and return headers sorted by mtime (newest first)."""
-        return self._storage.list_headers(max_files=max_files)
+        return await self._storage.list_headers(max_files=max_files)
 
-    def filter_by_type(self, type_: MemoryType, max_files: int = 200) -> list[MemoryHeader]:
+    async def filter_by_type(self, type_: MemoryType, max_files: int = 200) -> list[MemoryHeader]:
         """Return only memories of a specific type."""
-        return [h for h in self.scan(max_files=max_files) if h.type == type_]
+        return [h for h in await self.scan(max_files=max_files) if h.type == type_]
 
-    def format_manifest(self, headers: Optional[list[MemoryHeader]] = None) -> str:
+    async def format_manifest(self, headers: Optional[list[MemoryHeader]] = None) -> str:
         """Format scan results as a text manifest (formatMemoryManifest equivalent)."""
         if headers is None:
-            headers = self.scan()
+            headers = await self.scan()
         if not headers:
             return "(无记忆文件)"
 

@@ -10,11 +10,15 @@ interface ChatHeaderProps {
   onTaskClick: () => void;
   onRenameSession: (id: string, name: string) => void;
   onRegenerateName: () => void;
+  onTogglePreview?: () => void;
+  previewOpen?: boolean;
+  onResetLayout?: () => void;
 }
 
 const ChatHeader = memo(function ChatHeader({
   sessionName, sessionId, connected, isStreaming, isAutoNaming,
   percent, onTaskClick, onRenameSession, onRegenerateName,
+  onTogglePreview, previewOpen, onResetLayout,
 }: ChatHeaderProps) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(sessionName);
@@ -117,7 +121,34 @@ const ChatHeader = memo(function ChatHeader({
         </div>
         <div className="min-w-[420px]">
           <div className="mb-1.5 flex justify-between text-caption text-warm-500">
-            <button onClick={onTaskClick} className="text-primary-500 hover:text-primary-600">DAG Progress / View Tasks</button>
+            <div className="flex items-center gap-3">
+              <button onClick={onTaskClick} className="text-primary-500 hover:text-primary-600">DAG Progress / View Tasks</button>
+              {onTogglePreview && (
+                <button
+                  onClick={onTogglePreview}
+                  className={`text-sm font-medium transition-colors ${
+                    previewOpen
+                      ? 'text-accent-600 hover:text-accent-700'
+                      : 'text-warm-500 hover:text-primary-600'
+                  }`}
+                  title={previewOpen ? '关闭预览面板' : '打开预览面板'}
+                >
+                  {previewOpen ? '关闭预览' : '文件预览'}
+                </button>
+              )}
+              {onResetLayout && (
+                <>
+                  <span className="text-warm-200">|</span>
+                  <button
+                    onClick={onResetLayout}
+                    className="text-sm font-medium text-warm-500 transition-colors hover:text-primary-600"
+                    title="重置侧栏 / 预览面板 / 文件树宽度到默认值"
+                  >
+                    重置布局
+                  </button>
+                </>
+              )}
+            </div>
             <span>{percent}%</span>
           </div>
           <div className="h-1.5 overflow-hidden rounded-full bg-warm-100">

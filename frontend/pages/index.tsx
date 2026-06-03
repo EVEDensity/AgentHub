@@ -6,7 +6,11 @@ import DagModal from '../components/chat/DagModal';
 import MessageList from '../components/chat/MessageList';
 import SessionSidebar from '../components/chat/SessionSidebar';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
-import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, GeneratedData, Message, PendingMessage, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary } from '../types';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import FilePreviewPanel from '../components/chat/FilePreviewPanel';
+import ResizableDivider from '../components/common/ResizableDivider';
+import { useResizableSize } from '../hooks/useResizableSize';
+import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
@@ -74,6 +78,8 @@ export default function AgentHubIM(): JSX.Element {
   const [generated, setGenerated] = useState<GeneratedData | null>(null);
   const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
   const [mentionSearch, setMentionSearch] = useState<string>('');
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState<boolean>(false);
   const [selectedRiskLevel, setSelectedRiskLevel] = useState<string>('all');
   const [mentionOpen, setMentionOpen] = useState<boolean>(false);
   const [mentionActiveIndex, setMentionActiveIndex] = useState<number>(0);
@@ -85,6 +91,31 @@ export default function AgentHubIM(): JSX.Element {
   const [editName, setEditName] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
+  const [previewTabs, setPreviewTabs] = useState<WorkspacePreviewTab[]>([]);
+  const [activePreviewTabId, setActivePreviewTabId] = useState<string | null>(null);
+  const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
+  const [previewPanelOpen, setPreviewPanelOpen] = useState<boolean>(false);
+
+  // ── 可调整布局尺寸（localStorage 持久化） ──────────────
+  // 左侧会话栏宽度：默认 320px，可在 240-480 之间调整
+  const [sidebarWidth, setSidebarWidth, resetSidebarWidth] = useResizableSize(
+    'agenthub.layout.sidebarWidth',
+    320,
+    240,
+    480,
+  );
+  // 右侧预览面板宽度：默认 540px，可在 360-960 之间调整
+  const [previewWidth, setPreviewWidth, resetPreviewWidth] = useResizableSize(
+    'agenthub.layout.previewWidth',
+    540,
+    360,
+    960,
+  );
+  // 拖动过程中的临时值（实时预览，松手才提交）
+  const [sidebarWidthLive, setSidebarWidthLive] = useState<number | null>(null);
+  const [previewWidthLive, setPreviewWidthLive] = useState<number | null>(null);
+  // 整个外层 flex 容器的引用（用于响应式断点计算）
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<PendingMessage[]>([]);
@@ -175,12 +206,10 @@ export default function AgentHubIM(): JSX.Element {
           return [...clean, ...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
         });
       } else {
-        // Only replace all messages if data is non-empty; an empty API
-        // response usually means a race condition (DB not yet written).
-        // Replacing with [] would wipe the chat history from view.
-        if (data.length > 0) {
-          setMessages([...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
-        }
+        // Always replace messages on a full (non-merge) reload.
+        // When switching sessions we must clear stale messages even
+        // when the new session has no messages yet.
+        setMessages([...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
       }
     } catch { /* ignore */ }
   }
@@ -192,6 +221,16 @@ export default function AgentHubIM(): JSX.Element {
 
   useEffect(() => {
     if (!token || !sessionId) return;
+    // Reset session-scoped refs to prevent stale data leaking across sessions
+    lastMessageIdRef.current = '';
+    dedupIdsRef.current = new Set();
+    retryRef.current = [];
+    setPending([]);
+    streamBufferRef.current = null;
+    setIsStreaming(false);
+    setFileReferences([]);
+    // Don't reset previewTabs on session switch — user may want to
+    // keep viewing previously generated files across sessions.
     void reloadMessages(false);
     connectWs();
     return () => {
@@ -610,6 +649,33 @@ export default function AgentHubIM(): JSX.Element {
           }
           return updated;
         });
+
+        // ── Auto-detect file/diff content from tool results ─────
+        if (payload.results) {
+          for (const result of payload.results) {
+            if (!result.success || !result.result) continue;
+            const r = result.result as Record<string, unknown>;
+            const filePath = r.path as string | undefined;
+            if (!filePath) continue;
+
+            // File creation/write → open file preview
+            const content = r.content as string | undefined;
+            if (content && typeof content === 'string') {
+              const ext = filePath.split('.').pop()?.toLowerCase() || '';
+              // Only auto-open for code/config/doc files, skip binary
+              const isPreviewable = /^(py|js|ts|jsx|tsx|java|go|rs|c|cpp|h|hpp|swift|kt|rb|php|sql|sh|bash|vue|svelte|astro|html|css|scss|less|json|yaml|yml|xml|toml|ini|md|txt|cfg|conf|env|dockerfile|makefile|graphql|proto)$/i.test(ext);
+              if (isPreviewable && content.length < 500000) {
+                handleOpenFilePreview(filePath, content, undefined, r.status as string | undefined);
+              }
+            }
+
+            // Diff result → open diff preview
+            const diff = r.diff as string | undefined;
+            if (diff && typeof diff === 'string' && diff.length > 0) {
+              handleOpenDiffPreview(filePath, diff);
+            }
+          }
+        }
       }
 
       if (evt === 'session_renamed') {
@@ -667,7 +733,21 @@ export default function AgentHubIM(): JSX.Element {
         if (!isSystemMsg) {
           setSessions((prev) => sortSessions(prev.map((s) => (s.id === (msg.sessionId || sid) ? { ...s, lastMessageAt: msg.timestamp || new Date().toISOString() } : s))));
         }
-        if (msg.symbolic?.generated) setGenerated(msg.symbolic.generated as GeneratedData);
+        if (msg.symbolic?.generated) {
+          setGenerated(msg.symbolic.generated as GeneratedData);
+          // Auto-open generated files in preview panel
+          const gen = msg.symbolic.generated as GeneratedData;
+          if (gen.fileDetails && gen.fileDetails.length > 0) {
+            for (const fd of gen.fileDetails) {
+              if (fd.path && fd.content && fd.content.length < 500000) {
+                handleOpenFilePreview(fd.path, fd.content);
+              }
+            }
+          }
+          if (gen.diff) {
+            handleOpenDiffPreview('changes.diff', gen.diff);
+          }
+        }
       }
     };
   }
@@ -771,22 +851,43 @@ export default function AgentHubIM(): JSX.Element {
     setTaskOpen(false);
   }, []);
 
-  const handleDeleteSession = useCallback(async (id: string) => {
-    const ok = window.confirm('Delete this session?');
-    if (!ok) return;
-    const res = await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE', headers: authHeaders() });
-    const data = await res.json();
-    if (!res.ok) {
-      setNotice(data.detail || 'Delete failed');
-      return;
+  const handleDeleteSession = useCallback((id: string) => {
+    const session = sessions.find((s) => s.id === id);
+    const name = session?.name || '未命名会话';
+    setConfirmDelete({ id, name });
+  }, [sessions]);
+
+  const performDeleteSession = useCallback(async () => {
+    if (!confirmDelete || deleting) return;
+    const { id } = confirmDelete;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE', headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok) {
+        setNotice(data.detail || 'Delete failed');
+        return;
+      }
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (sessionId === id) {
+        const next = sessions.find((s) => s.id !== id);
+        setSessionId(next?.id || 'session-1');
+        setMessages([]);
+      }
+      const cleanedCount = Array.isArray(data.cleaned) ? data.cleaned.length : 0;
+      setNotice(cleanedCount > 0 ? `已删除会话并清理 ${cleanedCount} 项记忆文件` : '已删除会话');
+      setConfirmDelete(null);
+    } catch (e) {
+      setNotice('Delete failed: ' + String(e));
+    } finally {
+      setDeleting(false);
     }
-    setSessions((prev) => prev.filter((s) => s.id !== id));
-    if (sessionId === id) {
-      const next = sessions.find((s) => s.id !== id);
-      setSessionId(next?.id || 'session-1');
-      setMessages([]);
-    }
-  }, [sessionId, sessions]);
+  }, [confirmDelete, deleting, sessionId, sessions]);
+
+  const cancelDeleteSession = useCallback(() => {
+    if (deleting) return;
+    setConfirmDelete(null);
+  }, [deleting]);
 
   const handleRenameSession = useCallback(async (id: string, newName?: string) => {
     const name = (newName || editName).trim();
@@ -973,6 +1074,14 @@ export default function AgentHubIM(): JSX.Element {
         return;
       }
     }
+    // Ctrl+Enter (Cmd+Enter on macOS) always sends, regardless of
+    // whether the mention panel is open or the shift state.
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      setMentionOpen(false);
+      handleSend();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       setMentionOpen(false);
@@ -1131,6 +1240,25 @@ export default function AgentHubIM(): JSX.Element {
       aiContent = text ? `${text}\n\n---\n${fileBlocks}` : fileBlocks;
     }
 
+    // Include file references (quoted text from preview panel) in the message
+    if (fileReferences.length > 0) {
+      const refBlocks = fileReferences.map((ref) => {
+        const parts: string[] = [`[Referenced File: ${ref.path}]`];
+        if (ref.lineStart) {
+          const lineRange = ref.lineEnd && ref.lineEnd !== ref.lineStart
+            ? `Lines ${ref.lineStart}-${ref.lineEnd}`
+            : `Line ${ref.lineStart}`;
+          parts.push(`(${lineRange})`);
+        }
+        if (ref.quote) {
+          parts.push(`\n\`\`\`\n${ref.quote}\n\`\`\``);
+        }
+        return parts.join('');
+      });
+      const refContent = refBlocks.join('\n\n');
+      aiContent = aiContent ? `${aiContent}\n\n---\n${refContent}` : refContent;
+    }
+
     const displayContent = text || (currentFiles.length > 0 ? `发送了 ${currentFiles.length} 个文件` : '');
 
     const clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1168,7 +1296,8 @@ export default function AgentHubIM(): JSX.Element {
     }
     setInput('');
     setAttachedFiles([]);
-  }, [sessionId, user, isStreaming]);
+    setFileReferences([]);
+  }, [sessionId, user, isStreaming, fileReferences]);
 
   const handleRetryMessage = useCallback((msg: PendingMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -1205,6 +1334,115 @@ export default function AgentHubIM(): JSX.Element {
   const handleTaskClick = useCallback(() => setTaskOpen(true), []);
   const handleTaskClose = useCallback(() => setTaskOpen(false), []);
   const handlePreviewClose = useCallback(() => setPreviewOpen(false), []);
+
+  // ── File Preview handlers ─────────────────────────────────
+
+  const handleOpenFilePreview = useCallback((path: string, content: string, language?: string, status?: string) => {
+    setPreviewPanelOpen(true);
+    setPreviewTabs((prev) => {
+      // Avoid duplicate tabs for the same path+kind
+      const existing = prev.find((t) => t.path === path && t.kind === 'file');
+      if (existing) {
+        // Update existing tab content
+        setActivePreviewTabId(existing.id);
+        return prev.map((t) => (t.id === existing.id ? { ...t, content, state: 'ok' as const, status: status as WorkspacePreviewTab['status'] } : t));
+      }
+      const newTab: WorkspacePreviewTab = {
+        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        path,
+        kind: 'file',
+        content,
+        language,
+        state: 'ok',
+        status: status as WorkspacePreviewTab['status'],
+      };
+      setActivePreviewTabId(newTab.id);
+      return [...prev, newTab];
+    });
+  }, []);
+
+  const handleOpenDiffPreview = useCallback((path: string, diffText: string, language?: string) => {
+    setPreviewPanelOpen(true);
+    setPreviewTabs((prev) => {
+      const existing = prev.find((t) => t.path === path && t.kind === 'diff');
+      if (existing) {
+        setActivePreviewTabId(existing.id);
+        return prev.map((t) => (t.id === existing.id ? { ...t, content: diffText, state: 'ok' as const } : t));
+      }
+      const newTab: WorkspacePreviewTab = {
+        id: `diff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        path,
+        kind: 'diff',
+        content: diffText,
+        language,
+        state: 'ok',
+      };
+      setActivePreviewTabId(newTab.id);
+      return [...prev, newTab];
+    });
+  }, []);
+
+  const handleSelectPreviewTab = useCallback((tabId: string) => {
+    setActivePreviewTabId(tabId);
+    if (!previewPanelOpen) setPreviewPanelOpen(true);
+  }, [previewPanelOpen]);
+
+  const handleClosePreviewTab = useCallback((tabId: string) => {
+    setPreviewTabs((prev) => {
+      const filtered = prev.filter((t) => t.id !== tabId);
+      if (activePreviewTabId === tabId) {
+        setActivePreviewTabId(filtered.length > 0 ? filtered[filtered.length - 1].id : null);
+      }
+      if (filtered.length === 0) {
+        setPreviewPanelOpen(false);
+      }
+      return filtered;
+    });
+  }, [activePreviewTabId]);
+
+  const handleAddReference = useCallback((ref: FileReference) => {
+    setFileReferences((prev) => {
+      // Avoid exact duplicates
+      const exists = prev.some((r) => r.path === ref.path && r.quote === ref.quote);
+      if (exists) return prev;
+      return [...prev, ref];
+    });
+  }, []);
+
+  const handleRemoveReference = useCallback((index: number) => {
+    setFileReferences((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleClearAllReferences = useCallback(() => {
+    setFileReferences([]);
+  }, []);
+
+  // Toggle preview panel
+  const handleTogglePreviewPanel = useCallback(() => {
+    setPreviewPanelOpen((prev) => !prev);
+  }, []);
+
+  // Open workspace file in preview panel (fetched by FilePreviewPanel)
+  const handleOpenWorkspaceFile = useCallback((path: string, content: string, language: string, state: string) => {
+    setPreviewPanelOpen(true);
+    setPreviewTabs((prev) => {
+      const existing = prev.find((t) => t.path === path && t.kind === 'file');
+      if (existing) {
+        setActivePreviewTabId(existing.id);
+        return prev.map((t) => (t.id === existing.id ? { ...t, content, language, state: state as WorkspacePreviewTab['state'] } : t));
+      }
+      const newTab: WorkspacePreviewTab = {
+        id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        path,
+        kind: 'file',
+        content,
+        language,
+        state: state as WorkspacePreviewTab['state'],
+      };
+      setActivePreviewTabId(newTab.id);
+      return [...prev, newTab];
+    });
+  }, []);
 
   // ── File upload ──────────────────────────────────────────
 
@@ -1347,6 +1585,13 @@ export default function AgentHubIM(): JSX.Element {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  const handleClearAllFiles = useCallback(() => {
+    setAttachedFiles((prev) => {
+      if (prev.length === 0) return prev;
+      return [];
+    });
+  }, []);
+
   // ── Memoized values ──────────────────────────────────────
 
   const sessionName = useMemo(() => {
@@ -1402,6 +1647,25 @@ export default function AgentHubIM(): JSX.Element {
         onEditNameKeyDown={handleEditNameKeyDown}
         onEditNameBlur={handleEditNameBlur}
         onLogout={handleLogout}
+        width={sidebarWidthLive ?? sidebarWidth}
+      />
+
+      <ResizableDivider
+        orientation="horizontal"
+        size={sidebarWidthLive ?? sidebarWidth}
+        onPreview={setSidebarWidthLive}
+        onCommit={(v) => {
+          setSidebarWidthLive(null);
+          setSidebarWidth(v);
+        }}
+        min={240}
+        max={480}
+        defaultValue={320}
+        onReset={resetSidebarWidth}
+        ariaLabel="左侧会话栏宽度"
+        title="拖动调整会话栏宽度 · 右键输入数值 · 双击重置"
+        // 气泡出现在被调整的左侧栏内部（分隔条左侧）
+        bubbleSide="left"
       />
 
       <main className="flex flex-1 flex-col min-h-0">
@@ -1415,6 +1679,18 @@ export default function AgentHubIM(): JSX.Element {
           onTaskClick={handleTaskClick}
           onRenameSession={handleChatHeaderRename}
           onRegenerateName={() => handleRegenerateName()}
+          onTogglePreview={handleTogglePreviewPanel}
+          previewOpen={previewPanelOpen}
+          onResetLayout={() => {
+            resetSidebarWidth();
+            resetPreviewWidth();
+            try {
+              window.localStorage.removeItem('agenthub.layout.previewTreeWidth');
+              window.location.reload();
+            } catch {
+              /* ignore */
+            }
+          }}
         />
 
         <MessageList
@@ -1445,9 +1721,9 @@ export default function AgentHubIM(): JSX.Element {
           onBlur={handleBlur}
           onKeyDown={handleKeyDown}
           onSend={handleSend}
-          onPreview={handlePreview}
           onFileChange={handleFileChange}
           onRemoveFile={handleRemoveFile}
+          onClearAllFiles={handleClearAllFiles}
           onPasteFiles={handlePasteFiles}
           onInsertMention={handleInsertMention}
           onInsertAllMentions={handleInsertAllMentions}
@@ -1456,14 +1732,85 @@ export default function AgentHubIM(): JSX.Element {
           onMentionSearchChange={handleMentionSearchChange}
           onMentionActiveIndexChange={handleMentionActiveIndexChange}
           onRiskLevelChange={handleRiskLevelChange}
+          fileReferences={fileReferences}
+          onRemoveReference={handleRemoveReference}
+          onClearAllReferences={handleClearAllReferences}
         />
       </main>
+
+      {/* ── File Preview Panel (right side) ──────────────────── */}
+      {previewPanelOpen && (
+        <>
+          <ResizableDivider
+            orientation="horizontal"
+            size={previewWidthLive ?? previewWidth}
+            onPreview={setPreviewWidthLive}
+            onCommit={(v) => {
+              setPreviewWidthLive(null);
+              setPreviewWidth(v);
+            }}
+            min={360}
+            max={960}
+            defaultValue={540}
+            onReset={resetPreviewWidth}
+            ariaLabel="右侧预览面板宽度"
+            title="拖动调整预览面板宽度 · 右键输入数值 · 双击重置"
+            // 拖动方向反向：向右拖 = 聊天区推开分隔条变宽 = 预览面板变窄
+            reversed
+            // 气泡出现在被调整的预览面板内部（分隔条右侧）
+            bubbleSide="right"
+          />
+          <aside
+            className="border-l border-warm-150 flex flex-col h-full bg-white shrink-0"
+            style={{ width: `${previewWidthLive ?? previewWidth}px` }}
+          >
+            <FilePreviewPanel
+              tabs={previewTabs}
+              activeTabId={activePreviewTabId}
+              onSelectTab={handleSelectPreviewTab}
+              onCloseTab={handleClosePreviewTab}
+              onAddReference={handleAddReference}
+              onOpenWorkspaceFile={handleOpenWorkspaceFile}
+            />
+          </aside>
+        </>
+      )}
 
       {taskOpen && (
         <DagModal dag={dag} onClose={handleTaskClose} />
       )}
 
       <PreviewSidebar open={previewOpen} onClose={handlePreviewClose} previewUrl={previewUrl} />
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="删除对话记录"
+        message={
+          confirmDelete ? (
+            <span>
+              确认要删除对话 <b className="text-warm-800">「{confirmDelete.name}」</b> 吗？此操作不可撤销。
+            </span>
+          ) : null
+        }
+        details={
+          <div>
+            <div className="mb-1 font-medium text-warm-700">⚠️ 该操作将同时清理以下内容：</div>
+            <ul className="ml-4 list-disc space-y-0.5">
+              <li>PostgreSQL 中该会话的所有对话消息</li>
+              <li>该会话关联的任务记录</li>
+              <li>.claude/memory/ 下的会话总结文件</li>
+              <li>项目记忆页面中以该会话名命名的所有记忆文件</li>
+              <li>记忆提取状态（cursor）</li>
+            </ul>
+            <div className="mt-2 text-warm-500">删除后无法恢复，请确认是否继续。</div>
+          </div>
+        }
+        confirmText={deleting ? '删除中...' : '确认删除'}
+        cancelText="取消"
+        variant="danger"
+        onConfirm={performDeleteSession}
+        onCancel={cancelDeleteSession}
+      />
     </div>
   );
 }

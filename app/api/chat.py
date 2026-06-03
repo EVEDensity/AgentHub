@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db.init_db import now
+from app.db.session import afetch_all, afetch_one, aexecute
 from app.schemas.common import ChatTaskRequest
 from app.services.auth_service import get_current_user
 from app.services.agent_service import list_messages
@@ -23,46 +24,44 @@ class SessionCreateRequest(BaseModel):
 
 @router.get("/sessions")
 async def sessions() -> list[dict]:
-    from app.db.session import dict_rows
-
-    return dict_rows("SELECT id,name,type,active,created_at AS createdAt,is_pinned AS isPinned,last_message_at AS lastMessageAt FROM sessions ORDER BY is_pinned DESC, CASE WHEN last_message_at != '' THEN last_message_at ELSE created_at END DESC")
+    return await afetch_all(
+        "SELECT id,name,type,active,created_at AS \"createdAt\",is_pinned AS \"isPinned\",last_message_at AS \"lastMessageAt\" "
+        "FROM sessions ORDER BY is_pinned DESC, "
+        "CASE WHEN last_message_at != '' THEN last_message_at ELSE created_at END DESC"
+    )
 
 
 @router.post("/sessions")
 async def create_session(data: SessionCreateRequest, user: dict = Depends(get_current_user)) -> dict:
-    from app.db.session import get_connection
-
     session_id = f"session-{uuid.uuid4().hex[:8]}"
-    with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO sessions(id,name,type,participants,active,created_at) VALUES(?,?,?,?,?,?)",
-            (session_id, data.name.strip() or "新建会话", "group", "[]", 1, now()),
-        )
+    await aexecute(
+        "INSERT INTO sessions(id,name,type,participants,active,created_at) VALUES($1,$2,$3,$4,$5,$6)",
+        session_id, data.name.strip() or "新建会话", "group", "[]", 1, now(),
+    )
     return {"id": session_id, "name": data.name.strip() or "新建会话", "createdAt": now(), "active": 1, "type": "group"}
 
 
 @router.get("/sessions/{session_id}/messages")
 async def messages(session_id: str) -> list[dict]:
-    return list_messages(session_id)
+    return await list_messages(session_id)
 
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
     from pathlib import Path
-    from app.db.session import get_connection, dict_rows
+    from app.utils.async_file import aexists, aisfile, aunlink, aglob_simple, aread_json, awrite_json
 
     # ── 1. Get session name before deletion (needed for memory cleanup) ──
     session_name: str | None = None
-    row = dict_rows("SELECT name FROM sessions WHERE id=? LIMIT 1", (session_id,))
+    row = await afetch_all("SELECT name FROM sessions WHERE id=$1 LIMIT 1", session_id)
     if row and row[0].get("name"):
         session_name = row[0]["name"]
 
-    # ── 2. Delete from SQLite ──────────────────────────────────────────
-    with get_connection() as conn:
-        conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
-        conn.execute("DELETE FROM tasks WHERE session_id=?", (session_id,))
-        cursor = conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-    if cursor.rowcount == 0:
+    # ── 2. Delete from PostgreSQL ─────────────────────────────────────
+    await aexecute("DELETE FROM messages WHERE session_id=$1", session_id)
+    await aexecute("DELETE FROM tasks WHERE session_id=$1", session_id)
+    deleted = await afetch_one("DELETE FROM sessions WHERE id=$1 RETURNING id", session_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
 
     # ── 3. Clean up memory artifacts ───────────────────────────────────
@@ -72,71 +71,82 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
     memory_base = Path(MEMORY_DIR)
     cleaned: list[str] = []
 
-    # 3a. Delete session summary file (.claude/memory/sessions/{sanitize(session_id)})
+    # 3a. Delete session summary file
     sessions_dir = memory_base / "sessions"
-    raw_fname = sanitize_filename(session_id)  # always has .md suffix
-    # Also try without .md for older files that may have been saved differently
+    raw_fname = sanitize_filename(session_id)
     stem_fname = raw_fname[:-3] if raw_fname.endswith(".md") else raw_fname
     for fname in (raw_fname, stem_fname):
         if not fname:
             continue
         summary_path = sessions_dir / fname
         try:
-            if summary_path.exists():
-                summary_path.unlink()
+            if await aexists(summary_path):
+                await aunlink(summary_path)
                 cleaned.append(f"session_summary/{summary_path.name}")
         except OSError:
             pass
 
-    # 3b. Delete memory files named after the session (by sanitized session name)
+    # 3b. Delete memory files named after the session
     if session_name:
         sanitized_name = sanitize_filename(session_name)
-        for candidate in memory_base.glob(f"{sanitized_name}*"):
+        for candidate in await aglob_simple(memory_base, f"{sanitized_name}*"):
             try:
-                if candidate.is_file() and candidate.name.endswith(".md") and candidate.name != "MEMORY.md":
-                    candidate.unlink()
+                if await aisfile(candidate) and candidate.name.endswith(".md") and candidate.name != "MEMORY.md":
+                    await aunlink(candidate)
                     cleaned.append(f"memory/{candidate.name}")
             except OSError:
                 pass
 
     # 3c. Also check for memory files named after the session ID itself
     sanitized_id = sanitize_filename(session_id)
-    for candidate in memory_base.glob(f"{sanitized_id}*"):
+    for candidate in await aglob_simple(memory_base, f"{sanitized_id}*"):
         try:
-            if candidate.is_file() and candidate.name.endswith(".md") and candidate.name != "MEMORY.md":
-                candidate.unlink()
+            if await aisfile(candidate) and candidate.name.endswith(".md") and candidate.name != "MEMORY.md":
+                await aunlink(candidate)
                 cleaned.append(f"memory/{candidate.name}")
         except OSError:
             pass
 
+    # 3c-extra. 兜底清理：扫描所有 .md 文件，检查其 YAML header 的 session_id
+    # 字段是否等于被删的 session_id（即使文件名与 name/id 都不匹配也能删除）。
+    from app.utils.async_file import aiterdir, aread_text
+    try:
+        for md_file in await aiterdir(memory_base):
+            if not md_file.name.endswith(".md") or md_file.name == "MEMORY.md":
+                continue
+            try:
+                content = await aread_text(md_file)
+            except OSError:
+                continue
+            if f"session_id: {session_id}" in content or f"session_id:{session_id}" in content:
+                try:
+                    await aunlink(md_file)
+                    cleaned.append(f"memory_by_header/{md_file.name}")
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
     # 3d. Clean extraction state cursor
     extraction_state_path = memory_base / ".extraction_state.json"
     try:
-        if extraction_state_path.exists():
-            import json
-            state = json.loads(extraction_state_path.read_text(encoding="utf-8"))
+        if await aexists(extraction_state_path):
+            state = await aread_json(extraction_state_path)
             if state.get("sessions", {}).pop(session_id, None):
-                extraction_state_path.write_text(
-                    json.dumps(state, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+                await awrite_json(extraction_state_path, state)
                 cleaned.append("extraction_state_cursor")
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         pass
 
     # 3e. Clean session memory state
     session_state_path = sessions_dir / ".session_state.json"
     try:
-        if session_state_path.exists():
-            import json
-            state = json.loads(session_state_path.read_text(encoding="utf-8"))
+        if await aexists(session_state_path):
+            state = await aread_json(session_state_path)
             if state.get("sessions", {}).pop(session_id, None):
-                session_state_path.write_text(
-                    json.dumps(state, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
+                await awrite_json(session_state_path, state)
                 cleaned.append("session_memory_state")
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         pass
 
     # 3f. Rebuild MEMORY.md index to reflect deletions
@@ -144,7 +154,7 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
         try:
             from app.services.memory.storage import MemoryStorage
             storage = MemoryStorage(memory_base)
-            storage.rebuild_index()
+            await storage.rebuild_index()
         except Exception:
             pass
 
@@ -161,25 +171,22 @@ async def rename_session(session_id: str, data: dict, user: dict = Depends(get_c
     name = (data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
-    from app.db.session import get_connection
 
-    with get_connection() as conn:
-        cursor = conn.execute("UPDATE sessions SET name=? WHERE id=?", (name, session_id))
-    if cursor.rowcount == 0:
+    updated = await afetch_one(
+        "UPDATE sessions SET name=$1 WHERE id=$2 RETURNING id", name, session_id,
+    )
+    if not updated:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"status": "success", "sessionId": session_id, "name": name}
 
 
 @router.put("/sessions/{session_id}/pin")
 async def toggle_pin_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
-    from app.db.session import get_connection, one_row
-
-    row = one_row("SELECT is_pinned FROM sessions WHERE id=?", (session_id,))
+    row = await afetch_one("SELECT is_pinned FROM sessions WHERE id=$1", session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     new_val = 0 if row.get("is_pinned") else 1
-    with get_connection() as conn:
-        conn.execute("UPDATE sessions SET is_pinned=? WHERE id=?", (new_val, session_id))
+    await aexecute("UPDATE sessions SET is_pinned=$1 WHERE id=$2", new_val, session_id)
     return {"status": "success", "sessionId": session_id, "isPinned": new_val}
 
 
@@ -200,29 +207,126 @@ def is_generic_name(name: str) -> bool:
 
 
 def _build_auto_name_prompt(messages: list[dict]) -> str:
-    """Build a prompt for the LLM to generate a session title from conversation."""
-    lines: list[str] = []
-    for m in messages[-12:]:  # last 12 messages max
-        role = "User" if m.get("sender") not in ("system", "agent", "orchestrator") else "Assistant"
-        content = (m.get("content") or "").strip()
-        if not content:
-            continue
-        # Truncate long messages
-        if len(content) > 500:
-            content = content[:500] + "..."
-        lines.append(f"[{role}]: {content}")
+    """Build a prompt for the LLM to generate a session title from the first interaction.
 
-    if not lines:
+    The title is determined primarily by the user's first message — this ensures
+    the conversation name reflects what the user originally asked about, not
+    whatever tangent the conversation may have drifted into.
+    """
+    # Separate user messages from agent responses
+    user_msgs = [m for m in messages if m.get("sender") not in ("system", "agent", "orchestrator")]
+    agent_msgs = [m for m in messages if m.get("sender") in ("agent", "orchestrator", "system")]
+
+    # The first user message is the primary signal
+    first_user = (user_msgs[0].get("content") or "").strip() if user_msgs else ""
+
+    if not first_user:
         return ""
 
-    conversation = "\n".join(lines)
+    # Truncate if needed
+    if len(first_user) > 300:
+        first_user = first_user[:300] + "..."
+
+    # Optionally include the first agent response for context
+    first_reply = ""
+    if agent_msgs:
+        reply_content = (agent_msgs[0].get("content") or "").strip()
+        if reply_content:
+            if len(reply_content) > 200:
+                reply_content = reply_content[:200] + "..."
+            first_reply = f"\n助手回复摘要：{reply_content}"
+
     return (
-        "你是一个对话标题生成器。请根据以下对话内容，生成一个简洁、有区分度的标题（中文，8-20字），"
-        "准确概括对话的核心主题或用户的主要意图。\n"
-        "不要生成\"新建会话\"、\"未命名\"、\"对话\"等无意义标题。\n"
-        "只输出标题文本，不要加引号、编号或任何额外说明。\n\n"
-        f"对话内容：\n{conversation}\n\n标题："
+        "你是一个对话标题生成器。请根据用户的第一条消息（对话的初始交互）生成一个简洁的标题。\n\n"
+        "要求：\n"
+        "1. 标题必须为中文，3-15字\n"
+        "2. 准确概括用户的核心意图或问题主题\n"
+        "3. 有区分度，方便日后查找\n"
+        "4. 不要生成\"新建会话\"、\"未命名\"、\"对话\"、\"聊天\"等无意义标题\n"
+        "5. 只输出标题文本，不要加引号、编号或任何额外说明\n\n"
+        f"用户第一条消息：{first_user}{first_reply}\n\n标题："
     )
+
+
+def _extract_local_title(first_message: str) -> str:
+    """Local fallback: extract a meaningful Chinese title from the first user message.
+
+    Uses keyword pattern matching to generate a concise title (3-15 chars)
+    without calling any LLM. Handles common patterns like:
+    - \"@Agent do something\" → \"do something\"
+    - \"帮我实现XXX\" → \"实现XXX\"
+    - \"Generate a FastAPI...\" → translates common English intents
+    """
+    import re
+    text = first_message.strip()
+
+    # Strip @mentions and leading/trailing noise
+    text = re.sub(r'@\w+\s*', '', text).strip()
+    if not text:
+        return ""
+
+    # Common action patterns → Chinese title keywords
+    patterns = [
+        (r'(?:生成|创建|写|编写|实现|开发|搭建)\s*(?:一个?\s*)?(.{2,30}?)(?:文件|代码|页面|模块|功能|路由|接口|API|组件)?$', ''),
+        (r'(?:帮我|请|麻烦|帮忙)\s*(.{2,30}?)(?:谢谢|感谢)?$', ''),
+        (r'(?:如何|怎么|怎样)\s*(.{2,30}?)(?:\?|？)?$', ''),
+        (r'(?:修复|修改|优化|调整|更新)\s*(.{2,30}?)$', ''),
+        (r'(?:分析|审查|检查|review|analyze)\s*(.{2,30}?)$', ''),
+    ]
+
+    for pattern, _ in patterns:
+        m = re.search(pattern, text)
+        if m:
+            keyword = m.group(1).strip().rstrip('。！？.?！，,')
+            if 2 <= len(keyword) <= 20:
+                return keyword
+
+    # English intent mapping (common dev commands)
+    eng_patterns = [
+        (r'[Gg]enerate\s+(?:a\s+)?(.{2,40}?)(?:\s+(?:file|route|code|page|module))?$', '生成'),
+        (r'[Cc]reate\s+(?:a\s+)?(.{2,40}?)$', '创建'),
+        (r'[Ff]ix\s+(?:the\s+)?(.{2,40}?)$', '修复'),
+        (r'[Ii]mplement\s+(?:a\s+)?(.{2,40}?)$', '实现'),
+        (r'[Cc]ode\s+(?:review|check)\s+(?:of\s+)?(.{2,40}?)$', '审查'),
+    ]
+
+    for pattern, prefix in eng_patterns:
+        m = re.search(pattern, text)
+        if m:
+            keyword = m.group(1).strip().rstrip('.!?')
+            # Translate common English dev terms
+            translations = {
+                'health route': '健康检查路由', 'health check': '健康检查',
+                'api': 'API接口', 'rest api': 'REST接口',
+                'login': '登录功能', 'auth': '认证功能',
+                'database': '数据库', 'config': '配置管理',
+                'test': '测试用例', 'component': '组件开发',
+                'middleware': '中间件', 'docker': 'Docker部署',
+                'frontend': '前端页面', 'backend': '后端服务',
+                'pipeline': 'CI/CD流水线', 'deploy': '部署流程',
+            }
+            keyword_lower = keyword.lower()
+            for eng, chn in translations.items():
+                if eng in keyword_lower:
+                    return f'{prefix}{chn}'
+            # Generic prefix + English keyword (limited to 15 chars)
+            title = f'{prefix}{keyword[:10]}'
+            return title[:15]
+
+    # Last resort: take the first meaningful segment
+    # Split on common delimiters and take the first meaningful chunk
+    parts = re.split(r'[,，。！？\n!?]', text)
+    for part in parts:
+        part = part.strip()
+        # Remove pure punctuation / short fragments
+        clean = re.sub(r'[^\w一-鿿]', '', part)
+        if len(clean) >= 3:
+            if len(part) <= 15:
+                return part
+            return part[:15]
+
+    # Absolute fallback
+    return text[:15] if len(text) >= 3 else ""
 
 
 async def _call_llm_for_name(prompt: str) -> str | None:
@@ -232,13 +336,12 @@ async def _call_llm_for_name(prompt: str) -> str | None:
 
     from app.services.adapter_manager import adapter_manager
     from app.services.secret_service import decrypt_secret
-    from app.db.session import dict_rows
 
     candidates: list[dict] = []
 
     # 1) Try model_configs table
     try:
-        rows = dict_rows(
+        rows = await afetch_all(
             "SELECT provider, model_name, api_key, base_url "
             "FROM model_configs WHERE is_active=1 ORDER BY id DESC LIMIT 5"
         )
@@ -251,7 +354,7 @@ async def _call_llm_for_name(prompt: str) -> str | None:
 
     # 2) Try agent_registry
     try:
-        agent_rows = dict_rows(
+        agent_rows = await afetch_all(
             "SELECT DISTINCT adapter_type AS provider, base_model_name AS model_name, "
             "api_key, base_url "
             "FROM agent_registry WHERE api_key IS NOT NULL AND api_key != '' "
@@ -282,11 +385,9 @@ async def _call_llm_for_name(prompt: str) -> str | None:
             )
             if result and result.strip():
                 name = result.strip()
-                # Clean up common artifacts
                 for prefix in ("标题：", "标题:", "Title：", "Title:"):
                     if name.startswith(prefix):
                         name = name[len(prefix):].strip()
-                # Remove quotes if the model wrapped the output
                 if len(name) >= 2 and name[0] == name[-1] and name[0] in ('"', "'", "「", "『"):
                     name = name[1:-1].strip()
                 if 2 <= len(name) <= 50:
@@ -301,14 +402,11 @@ async def _call_llm_for_name(prompt: str) -> str | None:
 @router.post("/sessions/{session_id}/auto-name")
 async def auto_name_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Generate a session name automatically from conversation content."""
-    from app.db.session import get_connection, one_row
-
-    session = one_row("SELECT id, name FROM sessions WHERE id=?", (session_id,))
+    session = await afetch_one("SELECT id, name FROM sessions WHERE id=$1", session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Fetch messages
-    msgs = list_messages(session_id)
+    msgs = await list_messages(session_id)
     if not msgs or len(msgs) < 2:
         return {"status": "skipped", "reason": "Not enough messages", "sessionId": session_id}
 
@@ -318,12 +416,15 @@ async def auto_name_session(session_id: str, user: dict = Depends(get_current_us
 
     name = await _call_llm_for_name(prompt)
     if not name:
+        # LLM failed — use local keyword extraction from first user message
+        user_msgs = [m for m in msgs if m.get("sender") not in ("system", "agent", "orchestrator")]
+        first_msg = (user_msgs[0].get("content") or "").strip() if user_msgs else ""
+        if first_msg:
+            name = _extract_local_title(first_msg)
+    if not name:
         return {"status": "skipped", "reason": "LLM call failed", "sessionId": session_id}
 
-    # Update DB
-    with get_connection() as conn:
-        conn.execute("UPDATE sessions SET name=? WHERE id=?", (name, session_id))
-
+    await aexecute("UPDATE sessions SET name=$1 WHERE id=$2", name, session_id)
     return {"status": "success", "sessionId": session_id, "name": name}
 
 
@@ -331,33 +432,42 @@ async def try_auto_name_session(session_id: str) -> str | None:
     """Non-blocking helper: generate and apply an auto-name if the session name is generic.
     Returns the new name if one was set, None otherwise.
     """
-    from app.db.session import one_row
-
     try:
-        session = one_row("SELECT id, name FROM sessions WHERE id=?", (session_id,))
+        session = await afetch_one("SELECT id, name FROM sessions WHERE id=$1", session_id)
         if not session:
             return None
 
         current_name = session.get("name") or ""
         if not is_generic_name(current_name):
-            return None  # Already has a meaningful name
+            return None
 
-        msgs = list_messages(session_id)
-        if not msgs or len(msgs) < 2:
+        msgs = await list_messages(session_id)
+        if not msgs or len(msgs) < 1:
             return None
 
         prompt = _build_auto_name_prompt(msgs)
         if not prompt:
+            # No prompt could be built — try local extraction directly
+            user_msgs = [m for m in msgs if m.get("sender") not in ("system", "agent", "orchestrator")]
+            first_msg = (user_msgs[0].get("content") or "").strip() if user_msgs else ""
+            if first_msg:
+                name = _extract_local_title(first_msg)
+                if name:
+                    await aexecute("UPDATE sessions SET name=$1 WHERE id=$2", name, session_id)
+                    return name
             return None
 
         name = await _call_llm_for_name(prompt)
         if not name:
+            # LLM failed — use local keyword extraction from first user message
+            user_msgs = [m for m in msgs if m.get("sender") not in ("system", "agent", "orchestrator")]
+            first_msg = (user_msgs[0].get("content") or "").strip() if user_msgs else ""
+            if first_msg:
+                name = _extract_local_title(first_msg)
+        if not name:
             return None
 
-        from app.db.session import get_connection
-        with get_connection() as conn:
-            conn.execute("UPDATE sessions SET name=? WHERE id=?", (name, session_id))
-
+        await aexecute("UPDATE sessions SET name=$1 WHERE id=$2", name, session_id)
         return name
     except Exception:
         logger.debug("auto-name background task failed for %s", session_id, exc_info=True)
@@ -368,19 +478,16 @@ async def try_auto_name_session(session_id: str) -> str | None:
 async def create_task(data: ChatTaskRequest, user: dict = Depends(get_current_user)) -> dict:
     if not data.message.strip():
         raise HTTPException(status_code=400, detail="message is required")
-    return task_state_machine.create_task(data.sessionId, data.message)
+    return await task_state_machine.create_task(data.sessionId, data.message)
 
 
 @router.get("/workflows")
 async def list_workflows() -> list[dict]:
-    from app.db.session import dict_rows
-
-    rows = dict_rows(
+    rows = await afetch_all(
         "SELECT id,name,description,trigger_keywords FROM agent_routes WHERE active=1 ORDER BY is_default DESC, updated_at DESC"
     )
     for r in rows:
         import json
-
         r["triggerKeywords"] = json.loads(r.pop("trigger_keywords", "[]") or "[]")
         r["routeId"] = r.pop("id")
     return rows

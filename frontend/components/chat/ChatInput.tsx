@@ -1,5 +1,5 @@
-import { memo } from 'react';
-import type { Agent, AttachedFile, SkillMeta, WorkflowSummary } from '../../types';
+import { memo, useEffect, useRef, useState } from 'react';
+import type { Agent, AttachedFile, FileReference, SkillMeta, WorkflowSummary } from '../../types';
 
 const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]; mimePattern: RegExp }> = {
   code: { label: 'Code', extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'], mimePattern: /^(text\/|\b(?:javascript|typescript|json)\b)/ },
@@ -15,10 +15,30 @@ const ALL_EXTENSIONS: Set<string> = new Set();
 Object.values(FILE_CATEGORY_CONFIG).forEach((c) => c.extensions.forEach((e) => ALL_EXTENSIONS.add(e)));
 const ACCEPT_STRING = Array.from(ALL_EXTENSIONS).map((e) => `.${e}`).join(',');
 
+// Emoji set used by the popover. Kept small but expressive; grouped
+// for quick scanning without overwhelming the floating panel.
+const EMOJI_GROUPS: Array<{ label: string; emojis: string[] }> = [
+  { label: '常用', emojis: ['😀','😁','😂','🤣','😊','😍','😘','😎','🤔','😴','😅','😭','🥺','😡','🤩','🥳','🤯','😇'] },
+  { label: '手势', emojis: ['👍','👎','👏','🙏','👌','✌️','🤝','💪','✋','🫶','🤞','👋'] },
+  { label: '符号', emojis: ['❤️','🔥','✨','🎉','🎊','💯','✅','❌','⭐','🌟','💡','📌','📎','📁','🚀','💎'] },
+  { label: '工作', emojis: ['💻','⌨️','🖥️','📱','🔧','⚙️','🛠️','🧪','📊','📈','📉','📝','🔍','🔒','🔓','📡'] },
+];
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+// Shorten a "clipboard-1716123456789-0.png" style name for chip
+// display while preserving the full string in the hover tooltip.
+function displayName(name: string): string {
+  const clipboardMatch = name.match(/^clipboard-(\d+)-(\d+)(\.[\w]+)?$/i);
+  if (clipboardMatch) {
+    const ext = clipboardMatch[3] || '';
+    return `剪贴板图片${ext}`;
+  }
+  return name;
 }
 
 function FileIcon({ category, size }: { category: string; size: number }) {
@@ -60,10 +80,13 @@ interface ChatInputProps {
   onBlur: () => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
-  onPreview: () => void;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onRemoveFile: (index: number) => void;
+  onClearAllFiles: () => void;
   onPasteFiles: (files: File[]) => void;
+  fileReferences?: FileReference[];
+  onRemoveReference?: (index: number) => void;
+  onClearAllReferences?: () => void;
   onInsertMention: (agentId: string) => void;
   onInsertAllMentions: () => void;
   onInsertWorkflow: (wf: WorkflowSummary) => void;
@@ -78,10 +101,65 @@ const ChatInput = memo(function ChatInput({
   mentionOpen, mentionTrigger, mentionSearch, mentionActiveIndex, selectedRiskLevel,
   filteredAgents, filteredWorkflows, filteredSkills,
   textareaRef, mentionPanelRef, fileInputRef,
-  onInputChange, onBlur, onKeyDown, onSend, onPreview, onFileChange, onRemoveFile, onPasteFiles,
+  onInputChange, onBlur, onKeyDown, onSend, onFileChange, onRemoveFile, onClearAllFiles, onPasteFiles,
   onInsertMention, onInsertAllMentions, onInsertWorkflow, onInsertSkill,
   onMentionSearchChange, onMentionActiveIndexChange, onRiskLevelChange,
+  fileReferences, onRemoveReference, onClearAllReferences,
 }: ChatInputProps) {
+  // Emoji popover state. The panel is positioned via fixed offsets so
+  // it always lands above the toolbar, regardless of scroll position.
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const emojiButtonRef = useRef<HTMLButtonElement | null>(null);
+  const emojiPanelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!emojiOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (emojiPanelRef.current?.contains(t)) return;
+      if (emojiButtonRef.current?.contains(t)) return;
+      setEmojiOpen(false);
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setEmojiOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [emojiOpen]);
+
+  function handleEmojiSelect(emoji: string) {
+    const ta = textareaRef.current;
+    if (!ta) {
+      onInputChange({
+        target: { value: input + emoji, selectionStart: input.length + emoji.length },
+      } as unknown as React.ChangeEvent<HTMLTextAreaElement>);
+      return;
+    }
+    const start = ta.selectionStart ?? input.length;
+    const end = ta.selectionEnd ?? input.length;
+    const next = input.slice(0, start) + emoji + input.slice(end);
+    onInputChange({
+      target: {
+        value: next,
+        selectionStart: start + emoji.length,
+        selectionEnd: start + emoji.length,
+      },
+    } as unknown as React.ChangeEvent<HTMLTextAreaElement>);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        const pos = start + emoji.length;
+        el.selectionStart = pos;
+        el.selectionEnd = pos;
+      }
+    });
+  }
 
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const items = e.clipboardData?.items;
@@ -105,6 +183,9 @@ const ChatInput = memo(function ChatInput({
       onPasteFiles(imageFiles);
     }
   }
+
+  const canSend = input.trim().length > 0 || attachedFiles.length > 0 || (fileReferences && fileReferences.length > 0);
+
   return (
     <footer className="shrink-0 relative border-t border-warm-150 bg-white px-6 py-4">
       {mentionOpen && mentionTrigger === '@' && (
@@ -271,8 +352,249 @@ const ChatInput = memo(function ChatInput({
           </div>
         </div>
       )}
-      <div className="grid gap-3 items-start overflow-hidden" style={{ gridTemplateColumns: '1fr auto' }}>
+
+      {emojiOpen && (
+        <div
+          ref={emojiPanelRef}
+          className="absolute bottom-16 left-6 z-30 w-[320px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal"
+        >
+          <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
+            <span>选择表情</span>
+            <button
+              className="text-warm-400 hover:text-warm-600"
+              onClick={() => setEmojiOpen(false)}
+              title="关闭"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div className="max-h-64 overflow-y-auto pr-1">
+            {EMOJI_GROUPS.map((group) => (
+              <div key={group.label} className="mb-2">
+                <div className="mb-1 text-[11px] text-warm-400">{group.label}</div>
+                <div className="grid grid-cols-8 gap-1">
+                  {group.emojis.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      onClick={() => handleEmojiSelect(emoji)}
+                      className="flex h-8 w-8 items-center justify-center rounded-md text-lg transition-colors hover:bg-primary-50"
+                      title={emoji}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/*
+        Layout (top → bottom in the left column):
+          1) 附件标签层  – horizontal-scroll chips, hidden scrollbar, "clear all" trailing button
+          2) 工具栏层    – emoji / paperclip / skill icons on the left, Send on the right
+          3) 输入框层    – multi-line textarea
+      */}
+      <div className="grid gap-3 items-end overflow-hidden" style={{ gridTemplateColumns: '1fr auto' }}>
         <div className="flex flex-col gap-2 min-w-0">
+          {/* ── Layer 1: attachment chips ─────────────────────── */}
+          {attachedFiles.length > 0 && (
+            <div className="flex items-center gap-2">
+              <div
+                className="chat-attach-scroll flex-1 min-w-0 overflow-x-auto overflow-y-hidden whitespace-nowrap"
+                style={{ scrollbarWidth: 'none' }}
+              >
+                <div className="inline-flex gap-1.5 py-0.5 pr-2">
+                  {attachedFiles.map((f, i) => {
+                    const isImage = f.category === 'image' && f.content;
+                    return (
+                      <span
+                        key={`${f.name}-${i}`}
+                        className={`group relative inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs border shrink-0 ${
+                          f.uploadStatus === 'error'
+                            ? 'bg-danger-50 border-danger-200 text-danger-700'
+                            : f.uploadStatus === 'uploading'
+                              ? 'bg-primary-50 border-primary-200 text-warm-700'
+                              : 'bg-warm-100 border-warm-150 text-warm-700'
+                        }`}
+                      >
+                        {isImage ? (
+                          <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" />
+                        ) : (
+                          <FileIcon category={f.category} size={3.5} />
+                        )}
+                        <span className="max-w-[120px] truncate">{displayName(f.name)}</span>
+                        <span className="text-warm-400 shrink-0">{formatSize(f.size)}</span>
+                        {f.uploadStatus === 'uploading' && (
+                          <span className="flex items-center gap-1 text-primary-600">
+                            <span className="h-2 w-12 overflow-hidden rounded-full bg-primary-100">
+                              <span className="block h-full rounded-full bg-primary-500 transition-all" style={{ width: `${f.uploadProgress || 0}%` }} />
+                            </span>
+                            <span className="text-[10px]">{f.uploadProgress || 0}%</span>
+                          </span>
+                        )}
+                        {f.uploadStatus === 'error' && (
+                          <span className="text-[10px] text-danger-500" title={f.uploadError}>失败</span>
+                        )}
+                        {f.uploadStatus !== 'uploading' && (
+                          <button
+                            className="ml-0.5 shrink-0 text-warm-400 hover:text-danger-500"
+                            onClick={() => onRemoveFile(i)}
+                            title="Remove"
+                          >
+                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                          </button>
+                        )}
+
+                        {/* Hover bubble – full filename + size */}
+                        <span
+                          role="tooltip"
+                          className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-warm-200 bg-warm-900 px-2 py-1 text-[11px] text-white opacity-0 shadow-modal transition-opacity duration-150 group-hover:opacity-100"
+                        >
+                          <span className="block max-w-[260px] truncate">{f.name}</span>
+                          <span className="block text-[10px] text-warm-300">{formatSize(f.size)} · {f.category}</span>
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onClearAllFiles}
+                className="shrink-0 inline-flex items-center gap-1 rounded-md border border-warm-200 bg-warm-50 px-2 py-1 text-[11px] text-warm-600 transition-colors hover:border-danger-200 hover:bg-danger-50 hover:text-danger-600"
+                title="清空全部附件"
+              >
+                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6M14 11v6"/>
+                  <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                </svg>
+                清空
+              </button>
+            </div>
+          )}
+
+          {/* ── Layer 1.5: file reference chips (quoted text from preview) ── */}
+          {fileReferences && fileReferences.length > 0 && (
+            <div className="flex items-center gap-2">
+              <div
+                className="chat-attach-scroll flex-1 min-w-0 overflow-x-auto overflow-y-hidden whitespace-nowrap"
+                style={{ scrollbarWidth: 'none' }}
+              >
+                <div className="inline-flex gap-1.5 py-0.5 pr-2">
+                  {fileReferences.map((ref, i) => {
+                    const lineInfo = ref.lineStart
+                      ? ref.lineEnd && ref.lineEnd !== ref.lineStart
+                        ? `L${ref.lineStart}-L${ref.lineEnd}`
+                        : `L${ref.lineStart}`
+                      : '';
+                    return (
+                      <span
+                        key={ref.id}
+                        className="group relative inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs border shrink-0 bg-purple-50 border-purple-200 text-purple-700"
+                      >
+                        <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                        </svg>
+                        <span className="max-w-[100px] truncate font-medium">{ref.name}</span>
+                        {lineInfo && (
+                          <span className="text-purple-400 shrink-0 text-[10px]">{lineInfo}</span>
+                        )}
+                        {ref.quote && (
+                          <span className="max-w-[140px] truncate text-purple-400 italic">
+                            "{ref.quote.slice(0, 50)}{ref.quote.length > 50 ? '...' : ''}"
+                          </span>
+                        )}
+                        {onRemoveReference && (
+                          <button
+                            className="ml-0.5 shrink-0 text-purple-400 hover:text-danger-500"
+                            onClick={() => onRemoveReference(i)}
+                            title="移除引用"
+                          >
+                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                          </button>
+                        )}
+
+                        {/* Hover tooltip */}
+                        <span
+                          role="tooltip"
+                          className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-purple-200 bg-purple-900 px-2 py-1 text-[11px] text-white opacity-0 shadow-modal transition-opacity duration-150 group-hover:opacity-100"
+                        >
+                          <span className="block max-w-[280px] truncate">{ref.path}</span>
+                          {lineInfo && <span className="block text-[10px] text-purple-300">{lineInfo}</span>}
+                          {ref.quote && <span className="block max-w-[280px] truncate text-[10px] text-purple-300 mt-0.5">"{ref.quote}"</span>}
+                        </span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              {onClearAllReferences && (
+                <button
+                  type="button"
+                  onClick={onClearAllReferences}
+                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-purple-200 bg-purple-50 px-2 py-1 text-[11px] text-purple-600 transition-colors hover:border-danger-200 hover:bg-danger-50 hover:text-danger-600"
+                  title="清空全部引用"
+                >
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6M14 11v6"/>
+                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                  清空引用
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ── Layer 2: toolbar (emoji / paperclip / skill) ──── */}
+          <div className="flex items-center gap-1.5">
+            <button
+              ref={emojiButtonRef}
+              type="button"
+              onClick={() => setEmojiOpen((v) => !v)}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-warm-500 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600 ${
+                emojiOpen ? 'border-primary-200 bg-primary-50 text-primary-600' : ''
+              }`}
+              title="插入表情"
+              aria-haspopup="dialog"
+              aria-expanded={emojiOpen}
+            >
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+                <line x1="9" y1="9" x2="9.01" y2="9"/>
+                <line x1="15" y1="9" x2="15.01" y2="9"/>
+              </svg>
+            </button>
+
+            <label
+              className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-transparent text-warm-500 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600"
+              title="Attach file"
+            >
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              <input ref={fileInputRef} type="file" multiple className="sr-only" onChange={onFileChange} accept={ACCEPT_STRING} />
+            </label>
+
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-warm-500 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600"
+              title="Insert skill / tool"
+              onClick={() => onInsertSkill && filteredSkills[0] && onInsertSkill(filteredSkills[0])}
+            >
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+              </svg>
+            </button>
+          </div>
+
+          {/* ── Layer 3: textarea ─────────────────────────────── */}
           <textarea
             ref={textareaRef}
             value={input}
@@ -282,54 +604,21 @@ const ChatInput = memo(function ChatInput({
             onPaste={handlePaste}
             rows={3}
             className="input-field w-full resize-none"
-            placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : 'Type message, supports @Agent directives...'}
+            placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : '输入消息，支持@Agent唤起智能体指令'}
           />
-          {attachedFiles.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto py-0.5">
-              {attachedFiles.map((f, i) => {
-                const isImage = f.category === 'image' && f.content;
-                return (
-                <span key={`${f.name}-${i}`} className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs border shrink-0 ${
-                  f.uploadStatus === 'error' ? 'bg-danger-50 border-danger-200 text-danger-700' :
-                  f.uploadStatus === 'uploading' ? 'bg-primary-50 border-primary-200 text-warm-700' :
-                  'bg-warm-100 border-warm-150 text-warm-700'
-                }`}>
-                  {isImage ? (
-                    <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" />
-                  ) : (
-                    <FileIcon category={f.category} size={3.5} />
-                  )}
-                  <span className="max-w-[100px] truncate">{f.name}</span>
-                  <span className="text-warm-400 shrink-0">{formatSize(f.size)}</span>
-                  {f.uploadStatus === 'uploading' && (
-                    <span className="flex items-center gap-1 text-primary-600">
-                      <span className="h-2 w-12 overflow-hidden rounded-full bg-primary-100">
-                        <span className="block h-full rounded-full bg-primary-500 transition-all" style={{ width: `${f.uploadProgress || 0}%` }} />
-                      </span>
-                      <span className="text-[10px]">{f.uploadProgress || 0}%</span>
-                    </span>
-                  )}
-                  {f.uploadStatus === 'error' && (
-                    <span className="text-[10px] text-danger-500" title={f.uploadError}>失败</span>
-                  )}
-                  {f.uploadStatus !== 'uploading' && (
-                    <button className="ml-0.5 shrink-0 text-warm-400 hover:text-danger-500" onClick={() => onRemoveFile(i)} title="Remove">
-                      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                  )}
-                </span>
-                );
-              })}
-            </div>
-          )}
         </div>
-        <div className="flex flex-col gap-2" style={{ flexShrink: 0 }}>
-          <button className="btn-primary whitespace-nowrap" onClick={onSend}>Send</button>
-          <button className="btn-secondary whitespace-nowrap" onClick={onPreview}>Preview</button>
-          <label className="btn-ghost flex cursor-pointer items-center justify-center p-2" title="Attach file">
-            <svg className="h-5 w-5 text-warm-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-            <input ref={fileInputRef} type="file" multiple className="sr-only" onChange={onFileChange} accept={ACCEPT_STRING} />
-          </label>
+
+        {/* Send button (right column) */}
+        <div className="flex flex-col gap-2 pb-0.5" style={{ flexShrink: 0 }}>
+          <button
+            className={`btn-primary whitespace-nowrap ${canSend ? '' : 'cursor-not-allowed opacity-50 hover:bg-primary-500 hover:shadow-none'}`}
+            onClick={onSend}
+            disabled={!canSend}
+            title={canSend ? '发送（Enter / Ctrl+Enter）' : '请输入内容或添加附件'}
+          >
+            Send
+          </button>
+          <span className="text-center text-[10px] text-warm-400">Ctrl+Enter</span>
         </div>
       </div>
     </footer>

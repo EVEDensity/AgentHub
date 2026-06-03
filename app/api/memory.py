@@ -12,6 +12,7 @@ from app.services.memory import MemoryDocument, MemoryHeader, MemoryScanner, Mem
 from app.services.memory.consolidator import MemoryConsolidator
 from app.services.memory.extractor import MemoryExtractor
 from app.services.memory.session_memory import SessionMemoryManager
+from app.utils.async_file import aexists, aread_text
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
@@ -125,7 +126,7 @@ class SessionTransferRequest(BaseModel):
 async def list_memories(type_filter: Optional[str] = Query(None, alias="type")):
     """List all memory files with headers, optionally filtered by type."""
     scanner = _get_scanner()
-    headers = scanner.scan()
+    headers = await scanner.scan()
     if type_filter:
         try:
             mt = MemoryType(type_filter)
@@ -150,7 +151,7 @@ async def list_memories(type_filter: Optional[str] = Query(None, alias="type")):
 async def read_memory(filename: str):
     """Read a single memory file by filename."""
     storage = _get_storage()
-    doc = storage.get(filename)
+    doc = await storage.get(filename)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在")
     return MemoryDetail(
@@ -172,18 +173,18 @@ async def export_memory(filename: str):
     from fastapi.responses import PlainTextResponse
 
     storage = _get_storage()
-    doc = storage.get(filename)
+    doc = await storage.get(filename)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在")
 
     # Read raw file content from disk
     file_path = Path(doc.file_path)
-    if not file_path.exists():
+    if not await aexists(file_path):
         raise HTTPException(status_code=404, detail=f"文件 '{filename}' 在磁盘上不存在")
 
     from urllib.parse import quote
 
-    raw = file_path.read_text(encoding="utf-8")
+    raw = await aread_text(file_path)
     safe_filename = quote(filename, safe="")
     return PlainTextResponse(
         content=raw,
@@ -206,15 +207,15 @@ async def batch_export_memories(req: BatchDeleteRequest):
     missing: list[str] = []
 
     for fn in req.filenames:
-        doc = storage.get(fn)
+        doc = await storage.get(fn)
         if doc is None:
             missing.append(fn)
             continue
         file_path = Path(doc.file_path)
-        if not file_path.exists():
+        if not await aexists(file_path):
             missing.append(fn)
             continue
-        parts.append(file_path.read_text(encoding="utf-8"))
+        parts.append(await aread_text(file_path))
 
     if not parts:
         raise HTTPException(status_code=404, detail="没有可导出的文件")
@@ -265,7 +266,7 @@ async def import_memories(
 
     # ── Append mode: merge into existing target file ──────────────────
     if target_filename:
-        existing = storage.get(target_filename)
+        existing = await storage.get(target_filename)
         if existing is None:
             raise HTTPException(
                 status_code=404,
@@ -279,7 +280,7 @@ async def import_memories(
         # Merge: existing body + separator + imported body
         merged_body = existing.body.rstrip() + "\n\n---\n\n" + imported_body
 
-        storage.save(
+        await storage.save(
             name=existing.meta.name,
             description=existing.meta.description,
             type_=existing.meta.type,
@@ -322,7 +323,7 @@ async def import_memories(
             from app.services.memory.models import sanitize_filename
 
             filename = sanitize_filename(doc.meta.name)
-            storage.save(
+            await storage.save(
                 name=doc.meta.name,
                 description=doc.meta.description,
                 type_=doc.meta.type,
@@ -348,7 +349,7 @@ async def import_memories(
 async def create_memory(req: MemoryCreateRequest):
     """Create a new memory file."""
     storage = _get_storage()
-    doc = storage.save(
+    doc = await storage.save(
         name=req.name,
         description=req.description,
         type_=req.type,
@@ -371,7 +372,7 @@ async def create_memory(req: MemoryCreateRequest):
 async def update_memory(filename: str, req: MemoryUpdateRequest):
     """Update an existing memory file (partial update)."""
     storage = _get_storage()
-    doc = storage.get(filename)
+    doc = await storage.get(filename)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在")
 
@@ -380,7 +381,7 @@ async def update_memory(filename: str, req: MemoryUpdateRequest):
     new_type = req.type if req.type is not None else doc.meta.type
     new_body = req.body if req.body is not None else doc.body
 
-    storage.save(
+    await storage.save(
         name=new_name,
         description=new_desc,
         type_=new_type,
@@ -388,7 +389,7 @@ async def update_memory(filename: str, req: MemoryUpdateRequest):
         filename=filename,
     )
     # Re-read to get fresh metadata
-    updated = storage.get(filename)
+    updated = await storage.get(filename)
     if updated is None:
         raise HTTPException(status_code=500, detail="保存后读取失败")
     return MemoryFileInfo(
@@ -406,7 +407,7 @@ async def update_memory(filename: str, req: MemoryUpdateRequest):
 async def delete_memory(filename: str):
     """Delete a memory file."""
     storage = _get_storage()
-    ok = storage.delete(filename)
+    ok = await storage.delete(filename)
     if not ok:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在或无法删除")
     return {"status": "deleted", "filename": filename}
@@ -416,7 +417,7 @@ async def delete_memory(filename: str):
 async def get_index():
     """Get the MEMORY.md index content."""
     storage = _get_storage()
-    content = storage.get_index_content()
+    content = await storage.get_index_content()
     return {"content": content, "path": str(storage.index_path)}
 
 
@@ -424,7 +425,7 @@ async def get_index():
 async def rebuild_index():
     """Force-rebuild the MEMORY.md index from current files."""
     storage = _get_storage()
-    content = storage.rebuild_index()
+    content = await storage.rebuild_index()
     return {"status": "ok", "content": content}
 
 
@@ -432,7 +433,7 @@ async def rebuild_index():
 async def get_manifest():
     """Get a formatted text manifest of all memories."""
     scanner = _get_scanner()
-    manifest = scanner.format_manifest()
+    manifest = await scanner.format_manifest()
     return {"manifest": manifest}
 
 
@@ -440,7 +441,7 @@ async def get_manifest():
 async def get_freshness():
     """Get freshness info for all memory files."""
     scanner = _get_scanner()
-    headers = scanner.scan()
+    headers = await scanner.scan()
     result = []
     for h in headers:
         warning = scanner.freshness_text(h.mtime)
@@ -601,7 +602,7 @@ async def batch_merge_memories(req: BatchMergeRequest):
     mem_type: MemoryType = MemoryType.REFERENCE
 
     for fn in req.filenames:
-        doc = storage.get(fn)
+        doc = await storage.get(fn)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"记忆文件 '{fn}' 不存在")
         if doc.body:
@@ -613,11 +614,11 @@ async def batch_merge_memories(req: BatchMergeRequest):
     merged_name = req.merged_name
     merged_desc = req.merged_description or f"合并自 {', '.join(req.filenames)}"
 
-    doc = storage.save(name=merged_name, description=merged_desc, type_=mem_type, body=merged_body)
+    doc = await storage.save(name=merged_name, description=merged_desc, type_=mem_type, body=merged_body)
 
     # Delete originals
     for fn in req.filenames:
-        storage.delete(fn)
+        await storage.delete(fn)
 
     fname = sanitize_filename(merged_name)
     return {"status": "ok", "merged_file": fname, "name": merged_name, "source_files": req.filenames}
@@ -631,7 +632,7 @@ async def batch_delete_memories(req: BatchDeleteRequest):
     not_found: list[str] = []
 
     for fn in req.filenames:
-        ok = storage.delete(fn)
+        ok = await storage.delete(fn)
         if ok:
             deleted.append(fn)
         else:
@@ -647,7 +648,7 @@ async def batch_delete_memories(req: BatchDeleteRequest):
 async def search_memories(q: str = Query(..., min_length=1, description="搜索关键词")):
     """Search memory file names, descriptions, and bodies for a keyword."""
     scanner = _get_scanner()
-    headers = scanner.scan()
+    headers = await scanner.scan()
     storage = _get_storage()
     keyword = q.lower()
     results: list[dict] = []
@@ -659,7 +660,7 @@ async def search_memories(q: str = Query(..., min_length=1, description="搜索�
         if keyword in h.description.lower():
             score += 2
         body = ""
-        doc = storage.get(h.filename)
+        doc = await storage.get(h.filename)
         if doc:
             body = doc.body
             if keyword in body.lower():
@@ -693,7 +694,7 @@ async def search_memories(q: str = Query(..., min_length=1, description="搜索�
 async def list_session_summaries():
     """List all session memory summaries."""
     session_mgr = _get_session_mgr()
-    summaries = session_mgr.list_session_summaries()
+    summaries = await session_mgr.list_session_summaries()
     return {"sessions": summaries, "count": len(summaries)}
 
 
@@ -701,7 +702,7 @@ async def list_session_summaries():
 async def get_session_summary(session_id: str):
     """Get the cached summary for a specific session."""
     session_mgr = _get_session_mgr()
-    summary = session_mgr.get_session_summary(session_id)
+    summary = await session_mgr.get_session_summary(session_id)
     if not summary:
         raise HTTPException(status_code=404, detail=f"会话 '{session_id}' 没有已缓存的摘要")
     return {"session_id": session_id, "summary": summary}
@@ -711,7 +712,7 @@ async def get_session_summary(session_id: str):
 async def get_global_summary():
     """Get the global aggregated summary across all sessions."""
     session_mgr = _get_session_mgr()
-    summary = session_mgr.get_global_summary()
+    summary = await session_mgr.get_global_summary()
     if not summary:
         return {"global_summary": "", "message": "暂无全局摘要"}
     return {"global_summary": summary}
@@ -731,7 +732,7 @@ async def refresh_global_summary():
 async def reset_session_memory(session_id: str):
     """Reset cursor and delete summary for a session."""
     session_mgr = _get_session_mgr()
-    session_mgr.reset_session(session_id)
+    await session_mgr.reset_session(session_id)
     return {"status": "ok", "session_id": session_id, "reset": True}
 
 
@@ -744,7 +745,7 @@ async def transfer_session_memory(req: SessionTransferRequest):
     """
     session_mgr = _get_session_mgr()
 
-    source_summary = session_mgr.get_session_summary(req.source_session_id)
+    source_summary = await session_mgr.get_session_summary(req.source_session_id)
     if not source_summary:
         raise HTTPException(
             status_code=404,
@@ -752,7 +753,7 @@ async def transfer_session_memory(req: SessionTransferRequest):
         )
 
     if req.mode == "overwrite":
-        session_mgr.write_session_summary(req.target_session_id, source_summary)
+        await session_mgr.write_session_summary(req.target_session_id, source_summary)
         return {
             "status": "ok",
             "mode": "overwrite",
@@ -761,12 +762,12 @@ async def transfer_session_memory(req: SessionTransferRequest):
         }
 
     # append mode (default)
-    target_summary = session_mgr.get_session_summary(req.target_session_id)
+    target_summary = await session_mgr.get_session_summary(req.target_session_id)
     if target_summary:
         merged = target_summary.rstrip() + "\n\n---\n\n" + source_summary
     else:
         merged = source_summary
-    session_mgr.write_session_summary(req.target_session_id, merged)
+    await session_mgr.write_session_summary(req.target_session_id, merged)
     return {
         "status": "ok",
         "mode": "append",

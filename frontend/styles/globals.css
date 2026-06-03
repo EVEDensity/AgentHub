@@ -314,3 +314,76 @@ body {
     color: rgb(var(--warm-400));
   }
 }
+
+/* ── Chat input: horizontal chip scroller ────────────────────────
+   The attachment chips row uses a single-line horizontal scroll.
+   We strip the native scrollbar across WebKit / Firefox / IE so
+   the bar never pollutes the visual layout, but keep wheel/touch
+   scrolling enabled. ──────────────────────────────────────────── */
+
+.chat-attach-scroll {
+  -ms-overflow-style: none;        /* IE / legacy Edge */
+  scrollbar-width: none;           /* Firefox */
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-attach-scroll::-webkit-scrollbar {
+  display: none;                   /* Chromium / WebKit */
+  width: 0;
+  height: 0;
+}
+
+/* ── Markdown renderer ────────────────────────────────────────
+   Prevent long unbreakable strings (URLs, file paths, English
+   identifiers) from forcing the container wider than its parent.
+   `overflow-wrap: anywhere` is the most aggressive break that
+   still respects word boundaries when possible. ─────────────── */
+
+.markdown-renderer {
+  /* 让任意子元素（p/li/td/code/pre）都能在必要时任意位置断行 */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  /* 限定最大宽度，强制出现水平滚动条的场景只发生在真正不可分割的内容（如超宽表格） */
+  max-width: 100%;
+  min-width: 0;
+}
+
+.markdown-renderer p,
+.markdown-renderer li,
+.markdown-renderer h1,
+.markdown-renderer h2,
+.markdown-renderer h3,
+.markdown-renderer h4,
+.markdown-renderer h5,
+.markdown-renderer h6,
+.markdown-renderer blockquote,
+.markdown-renderer dd,
+.markdown-renderer dt,
+.markdown-renderer td,
+.markdown-renderer th,
+.markdown-renderer summary {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* 行内代码允许在任意字符间断行（之前是 nowrap） */
+.markdown-renderer code:not(pre code) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 代码块保留 nowrap（用户期望代码不被自动换行破坏），但限制在容器内并允许水平滚动 */
+.markdown-renderer pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* 表格在容器窄时改为横向滚动，避免撑爆外层 */
+.markdown-renderer table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}

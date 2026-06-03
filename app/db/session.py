@@ -1,111 +1,151 @@
 from __future__ import annotations
 
+"""Database session layer — Neon PostgreSQL via asyncpg.
+
+All database access is asynchronous.  The connection pool is lazy-initialised
+on first use and shared across the application lifetime.
+
+API surface:
+  aget_pool()                → asyncpg.Pool
+  aclose_pool()              → None (graceful shutdown)
+  afetch_all(sql, *args)     → list[dict]
+  afetch_one(sql, *args)     → dict | None
+  aexecute(sql, *args)       → None
+  aexecute_insert(sql, *args)→ str (new row id — SQL must include RETURNING)
+  aexecute_many(sql, list)   → None
+  atransaction()             → async context manager → asyncpg.Connection
+"""
+
 import asyncio
 import logging
-import sqlite3
-import time
-from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from app.config import DB_PATH
+from app.config import DATABASE_URL
 
 logger = logging.getLogger("agenthub.db")
 
-# ── Async lock to serialise all database *write* operations ──────────
-# SQLite allows only one writer at a time (even in WAL mode).  Without
-# this lock, concurrent async tasks (agent streaming, background memory,
-# auto-naming, tool-call logging) each open their own connection and
-# race to write — causing ``sqlite3.OperationalError: database is locked``.
-_write_lock = asyncio.Lock()
+# ═══════════════════════════════════════════════════════════════════════
+# Connection pool
+# ═══════════════════════════════════════════════════════════════════════
 
-# Max number of retries for "database is locked" errors (with backoff)
-_MAX_RETRIES = 5
-_RETRY_BASE_DELAY = 0.05  # 50 ms
+_pool: Any = None  # asyncpg.Pool | None
+_pool_lock = asyncio.Lock()
 
 
-def get_connection() -> sqlite3.Connection:
-    """Return a new SQLite connection with WAL mode and generous busy timeout.
+async def aget_pool() -> Any:
+    """Return the asyncpg connection pool (lazy-init, thread-safe).
 
-    The connection is in autocommit mode (isolation_level='' by default), so
-    every INSERT / UPDATE / DELETE is a transaction of its own that commits
-    immediately.  Always use this as a context manager (``with get_connection()
-    as conn:``) so the connection is properly closed — a bare
-    ``get_connection().execute(...)`` LEAKS the connection and may hold a
-    write lock indefinitely.
+    Raises RuntimeError if DATABASE_URL is not configured.
     """
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=30000")   # 30 s — generous safety net
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    global _pool
 
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is not set — PostgreSQL is required. "
+            "Create a .env file with DATABASE_URL=postgresql://..."
+        )
 
-@asynccontextmanager
-async def write_conn():
-    """Async context manager that provides a connection for write ops.
+    if _pool is not None:
+        return _pool
 
-    Serialises all writes through a module-level ``asyncio.Lock`` so that
-    only one coroutine can hold a write connection at a time.  Reads can
-    proceed concurrently in WAL mode.
-    """
-    async with _write_lock:
-        conn = get_connection()
+    async with _pool_lock:
+        if _pool is not None:
+            return _pool
+
+        import asyncpg
+
+        logger.info("db: connecting to PostgreSQL pool...")
         try:
-            yield conn
-        except sqlite3.OperationalError as exc:
-            if "locked" in str(exc).lower():
-                logger.warning("db write_conn: database locked, retrying...")
-                conn.close()
-                # retry once after a short sleep
-                await asyncio.sleep(0.1)
-                conn = get_connection()
-                yield conn
-                return
+            _pool = await asyncpg.create_pool(
+                DATABASE_URL,
+                min_size=2,
+                max_size=20,
+                command_timeout=30,
+                server_settings={
+                    "application_name": "agenthub",
+                    "timezone": "Asia/Shanghai",
+                },
+            )
+            # Verify connectivity
+            async with _pool.acquire() as conn:
+                version = await conn.fetchval("SELECT version()")
+                logger.info("db: PostgreSQL pool ready — %s", version)
+        except Exception:
+            logger.exception("db: failed to connect to PostgreSQL")
+            _pool = None
             raise
-        finally:
-            conn.close()
+
+    return _pool
 
 
-def _execute_with_retry(
-    conn: sqlite3.Connection,
-    sql: str,
-    args: tuple[Any, ...] = (),
-) -> sqlite3.Cursor:
-    """Execute SQL with retry when the database is locked."""
-    for attempt in range(_MAX_RETRIES):
-        try:
-            return conn.execute(sql, args)
-        except sqlite3.OperationalError as exc:
-            if "locked" not in str(exc).lower() or attempt == _MAX_RETRIES - 1:
-                raise
-            delay = _RETRY_BASE_DELAY * (2 ** attempt)
-            time.sleep(delay)
-    raise RuntimeError("unreachable")  # pragma: no cover
+async def aclose_pool() -> None:
+    """Close the asyncpg pool gracefully (call during app shutdown)."""
+    global _pool
+    if _pool is not None:
+        logger.info("db: closing PostgreSQL pool...")
+        await _pool.close()
+        _pool = None
+        logger.info("db: PostgreSQL pool closed.")
 
 
-def dict_rows(sql: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-    with get_connection() as conn:
-        return [dict(row) for row in conn.execute(sql, args)]
+# ═══════════════════════════════════════════════════════════════════════
+# Async query API
+# ═══════════════════════════════════════════════════════════════════════
 
 
-def one_row(sql: str, args: tuple[Any, ...] = ()) -> dict[str, Any] | None:
-    with get_connection() as conn:
-        row = conn.execute(sql, args).fetchone()
+async def afetch_all(sql: str, *args: Any) -> list[dict[str, Any]]:
+    """Execute a SELECT and return all rows as dicts."""
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+        return [dict(row) for row in rows]
+
+
+async def afetch_one(sql: str, *args: Any) -> dict[str, Any] | None:
+    """Execute a SELECT and return the first row as a dict, or None."""
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(sql, *args)
         return dict(row) if row else None
 
 
-def transaction() -> Iterator[sqlite3.Connection]:
-    conn = get_connection()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+async def aexecute(sql: str, *args: Any) -> None:
+    """Execute an INSERT / UPDATE / DELETE statement."""
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(sql, *args)
 
 
+async def aexecute_insert(sql: str, *args: Any) -> str:
+    """Execute an INSERT and return the new row's id as a string.
+
+    The SQL statement **must** include ``RETURNING id``.
+    """
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(sql, *args)
+        return str(row[0]) if row else ""
+
+
+async def aexecute_many(sql: str, args_list: list[tuple[Any, ...]]) -> None:
+    """Execute a batch INSERT / UPDATE with many parameter sets."""
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        await conn.executemany(sql, args_list)
+
+
+@asynccontextmanager
+async def atransaction():
+    """Async context manager wrapping a PostgreSQL transaction.
+
+    Usage::
+
+        async with atransaction() as conn:
+            await conn.execute("INSERT INTO ...", ...)
+            await conn.execute("UPDATE ...", ...)
+    """
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            yield conn

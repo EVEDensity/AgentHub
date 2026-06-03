@@ -572,3 +572,33 @@ export interface SearchProgressEvent {
   data: SearchProgressData;
   timestamp: string;
 }
+
+// ── Product Preview types ─────────────────────────────────────────────
+
+export type WorkspacePreviewKind = 'file' | 'diff';
+
+export type WorkspaceFileStatus =
+  | 'modified' | 'added' | 'deleted' | 'renamed'
+  | 'untracked' | 'copied' | 'type_changed' | 'unknown';
+
+export interface WorkspacePreviewTab {
+  id: string;
+  path: string;
+  kind: WorkspacePreviewKind;
+  language?: string;
+  state?: 'loading' | 'ok' | 'binary' | 'too_large' | 'missing' | 'error';
+  content?: string;
+  diffOld?: string;
+  diffNew?: string;
+  status?: WorkspaceFileStatus;
+}
+
+export interface FileReference {
+  id: string;
+  name: string;
+  path: string;
+  lineStart?: number;
+  lineEnd?: number;
+  quote?: string;
+  kind?: 'file' | 'folder' | 'chat-selection';
+}

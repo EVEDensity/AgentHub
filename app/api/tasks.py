@@ -10,12 +10,12 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 @router.get("")
 async def list_tasks(sessionId: str | None = None) -> list[dict]:
-    return task_state_machine.list_tasks(sessionId)
+    return await task_state_machine.list_tasks(sessionId)
 
 
 @router.get("/{task_id}/status")
 async def status(task_id: str) -> dict:
-    task = task_state_machine.get_task(task_id)
+    task = await task_state_machine.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"status": task["status"], "dagProgress": task["dagProgress"]}
@@ -23,4 +23,4 @@ async def status(task_id: str) -> dict:
 
 @router.get("/templates/list")
 async def templates() -> list[dict]:
-    return template_engine.list_templates()
+    return await template_engine.list_templates()

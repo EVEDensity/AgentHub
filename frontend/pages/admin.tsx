@@ -28,6 +28,12 @@ export default function AdminPage(): JSX.Element {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [notice, setNotice] = useState('');
+  /** Convert API error detail (string | array of {msg}) to a safe string. */
+  function fmtErr(detail: unknown, fallback: string): string {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) return (detail as Array<{ msg?: string }>).map((d) => d.msg || '').filter(Boolean).join('; ') || fallback;
+    return fallback;
+  }
   const [agents, setAgents] = useState<Agent[]>([]);
   const [routes, setRoutes] = useState<AgentRoute[]>([]);
   const [activeMenu, setActiveMenu] = useState<MenuItem>('服务商');
@@ -647,7 +653,7 @@ export default function AdminPage(): JSX.Element {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    setNotice(res.ok ? `已添加服务商：${newAgent.agentId}` : data.detail || '添加失败');
+    setNotice(res.ok ? `已添加服务商：${newAgent.agentId}` : fmtErr(data.detail, '添加失败'));
     if (res.ok) {
       setNewAgent({
         agentId: '',
@@ -682,7 +688,7 @@ export default function AdminPage(): JSX.Element {
         headers: authHeaders(),
       });
       const data = await res.json().catch(() => ({}));
-      setNotice(res.ok ? `已删除：${agentId}` : (data as { detail?: string }).detail || '删除失败');
+      setNotice(res.ok ? `已删除：${agentId}` : fmtErr((data as { detail?: string }).detail, '删除失败'));
       if (res.ok) {
         if (editingAgentId === agentId) cancelEditAgent();
         await refresh();
@@ -734,7 +740,7 @@ export default function AdminPage(): JSX.Element {
         body: JSON.stringify(editAgent),
       });
       const data = await res.json();
-      setNotice(res.ok ? `已更新服务商：${editingAgentId}` : data.detail || '更新失败');
+      setNotice(res.ok ? `已更新服务商：${editingAgentId}` : fmtErr(data.detail, '更新失败'));
       if (res.ok) {
         cancelEditAgent();
         await refresh();
@@ -769,7 +775,7 @@ export default function AdminPage(): JSX.Element {
     const payload = { name: form.name, description: form.description, triggerKeywords: form.triggerKeywords.split(',').map((x) => x.trim()).filter(Boolean), nodes: form.nodes, isDefault: false };
     const res = await fetch('/api/admin/workflows', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(payload) });
     const data = await res.json();
-    setNotice(res.ok ? `路线创建成功：${form.name}` : data.detail || '路线创建失败');
+    setNotice(res.ok ? `路线创建成功：${form.name}` : fmtErr(data.detail, '路线创建失败'));
     if (res.ok) await refresh();
   }
 
@@ -800,7 +806,7 @@ export default function AdminPage(): JSX.Element {
       setDefaultChatAgent(agentId);
       setNotice(`已将 ${agentId} 设为默认对话模型。不含 @Agent 指令的日常对话将默认使用该模型。`);
     } else {
-      setNotice((data as { detail?: string }).detail || '设置失败');
+      setNotice(fmtErr((data as { detail?: string }).detail, '设置失败'));
     }
   }
 
@@ -930,7 +936,7 @@ export default function AdminPage(): JSX.Element {
       headers: authHeaders(),
     });
     const result = await res.json();
-    setNotice(res.ok ? '工作流已删除' : result.detail || '删除失败');
+    setNotice(res.ok ? '工作流已删除' : fmtErr(result.detail, '删除失败'));
     if (res.ok) {
       setFlowMode('list');
       setEditingFlow(null);
@@ -981,7 +987,7 @@ export default function AdminPage(): JSX.Element {
       body: JSON.stringify(payload),
     });
     const result = await res.json();
-    setNotice(res.ok ? `工作流已保存：${data.name}` : result.detail || '保存失败');
+    setNotice(res.ok ? `工作流已保存：${data.name}` : fmtErr(result.detail, '保存失败'));
     if (res.ok) {
       setFlowMode('list');
       setEditingFlow(null);
@@ -2315,7 +2321,7 @@ index a1b2c3d..e4f5g6h 100644
 
         <main className="h-[calc(100vh-73px)] overflow-y-auto px-8 py-8">
           <div className="mx-auto max-w-7xl space-y-6">
-            {notice && <div className="rounded-lg bg-warning-50 p-3 text-sm text-warning-600">{notice}</div>}
+            {notice && <div className="rounded-lg bg-warning-50 p-3 text-sm text-warning-600">{typeof notice === 'string' ? notice : fmtErr(notice, String(notice))}</div>}
             {renderModuleContent()}
           </div>
         </main>

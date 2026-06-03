@@ -10,11 +10,12 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from app.db.init_db import now
-from app.db.session import dict_rows, get_connection, one_row
+from app.db.session import afetch_all, afetch_one, aexecute
 from app.services.adapter_manager import adapter_manager
 from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.secret_service import decrypt_secret
+from app.utils.async_file import aexists, aisdir, aread_text, aiterdir, aread_json
 from app.services.symbolic import (
     FIDELITY_HIGH,
     FIDELITY_LOW,
@@ -237,38 +238,38 @@ def extract_skill_calls(content: str) -> list[str]:
     return re.findall(r"(?:^|\s)/(\w[\w-]*)", content)
 
 
-def load_skill_prompt(skill_name: str) -> str | None:
+async def load_skill_prompt(skill_name: str) -> str | None:
     """Load a skill's SKILL.md body for prompt injection."""
     from pathlib import Path
 
-    def _find_skill_dir(base: Path) -> Path | None:
-        if not base.is_dir():
+    async def _find_skill_dir(base: Path) -> Path | None:
+        if not await aisdir(base):
             return None
         candidate = base / skill_name
-        if candidate.is_dir():
+        if await aisdir(candidate):
             return candidate
         try:
-            for d in base.iterdir():
-                if d.is_dir() and d.name.lower() == skill_name.lower():
+            for d in await aiterdir(base):
+                if await aisdir(d) and d.name.lower() == skill_name.lower():
                     return d
         except OSError:
             pass
         return None
 
     # User skills
-    skill_dir = _find_skill_dir(Path.home() / ".claude" / "skills")
+    skill_dir = await _find_skill_dir(Path.home() / ".claude" / "skills")
     # Project skills
     if not skill_dir:
         cwd = Path.cwd()
         for parent in [cwd, *cwd.parents]:
-            skill_dir = _find_skill_dir(parent / ".claude" / "skills")
+            skill_dir = await _find_skill_dir(parent / ".claude" / "skills")
             if skill_dir:
                 break
         if not skill_dir:
             import os
             proj_env = os.environ.get("AGENTHUB_PROJECT_DIR", "")
             if proj_env:
-                skill_dir = _find_skill_dir(Path(proj_env) / ".claude" / "skills")
+                skill_dir = await _find_skill_dir(Path(proj_env) / ".claude" / "skills")
     if not skill_dir:
         return None
     try:
@@ -277,9 +278,9 @@ def load_skill_prompt(skill_name: str) -> str | None:
         pass
     for filename in ("SKILL.md", "skill.md"):
         skill_file = skill_dir / filename
-        if skill_file.exists():
+        if await aexists(skill_file):
             try:
-                raw = skill_file.read_text(encoding="utf-8")
+                raw = await aread_text(skill_file)
                 fm_match = re.match(r"^---\s*\n.*?\n---\s*\n", raw, re.DOTALL)
                 if fm_match:
                     return raw[fm_match.end():].strip()
@@ -305,7 +306,7 @@ def _get_streaming_executor():
         return None
 
 
-def resolve_all_agents(content: str) -> list[dict]:
+async def resolve_all_agents(content: str) -> list[dict]:
     """Return ALL valid agents @mentioned in the content.
 
     If no valid mention is found, falls back to the default chat agent.
@@ -316,9 +317,9 @@ def resolve_all_agents(content: str) -> list[dict]:
         if name in seen:
             continue
         seen.add(name)
-        agent = one_row(
-            "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?",
-            (name,),
+        agent = await afetch_one(
+            "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1",
+            name,
         )
         if agent:
             agents.append(agent)
@@ -327,27 +328,27 @@ def resolve_all_agents(content: str) -> list[dict]:
         return agents
 
     # No valid mention — fall back to user-configured default, then Orchestrator
-    default_row = one_row("SELECT value FROM system_config WHERE key='default_chat_agent'")
+    default_row = await afetch_one("SELECT value FROM system_config WHERE key='default_chat_agent'")
     default_agent_id = default_row["value"] if default_row else "Orchestrator"
-    agent = one_row("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=?", (default_agent_id,))
+    agent = await afetch_one("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1", default_agent_id)
     return [agent] if agent else [{"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}]
 
 
-def resolve_agent(content: str) -> dict:
+async def resolve_agent(content: str) -> dict:
     """Resolve a single agent from @mentions (kept for backward compatibility)."""
-    return resolve_all_agents(content)[0]
+    return (await resolve_all_agents(content))[0]
 
 
-def candidate_models_for_role(role: str) -> list[dict]:
+async def candidate_models_for_role(role: str) -> list[dict]:
     # 1) Explicit role bindings (role_bindings JOIN model_configs)
-    rows = dict_rows(
-        "SELECT mc.id,mc.provider,mc.model_name AS model_name,mc.api_key,mc.base_url,rb.prompt FROM role_bindings rb JOIN model_configs mc ON rb.model_config_id=mc.id WHERE rb.role=? AND mc.is_active=1 ORDER BY mc.id DESC",
-        (role,),
+    rows = await afetch_all(
+        "SELECT mc.id,mc.provider,mc.model_name AS model_name,mc.api_key,mc.base_url,rb.prompt FROM role_bindings rb JOIN model_configs mc ON rb.model_config_id=mc.id WHERE rb.role=$1 AND mc.is_active=1 ORDER BY mc.id DESC",
+        role,
     )
     if rows:
         return rows
     # 2) Agent's own config in agent_registry (adapter_type + base_model_name + base_url + api_key)
-    agent_row = one_row("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=?", (role,))
+    agent_row = await afetch_one("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=$1", role)
     if agent_row and agent_row.get("adapter_type") and agent_row.get("adapter_type") != "mock":
         return [{
             "id": 0,
@@ -358,7 +359,7 @@ def candidate_models_for_role(role: str) -> list[dict]:
             "prompt": "",
         }]
     # 3) Fallback: any active model_config
-    rows = dict_rows("SELECT id,provider,model_name,api_key,base_url,'' AS prompt FROM model_configs WHERE is_active=1 ORDER BY id DESC")
+    rows = await afetch_all("SELECT id,provider,model_name,api_key,base_url,'' AS prompt FROM model_configs WHERE is_active=1 ORDER BY id DESC")
     return rows or [{"id": 0, "provider": "mock", "model_name": "mock", "api_key": "", "base_url": "", "prompt": ""}]
 
 
@@ -386,7 +387,7 @@ def _update_runtime(model: dict, ok: bool, latency_ms: float) -> None:
     state["latency"] = state["latency"] * 0.7 + latency_ms * 0.3
 
 
-def save_message(
+async def save_message(
     session_id: str,
     sender: str,
     content: str,
@@ -398,30 +399,27 @@ def save_message(
     total_tokens: int = 0,
 ) -> None:
     ts = now()
-    with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                str(uuid.uuid4()),
-                session_id,
-                sender,
-                content,
-                msg_type,
-                score,
-                json.dumps(symbolic or {}, ensure_ascii=False),
-                prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                ts,
-            ),
-        )
-        conn.execute("UPDATE sessions SET last_message_at=? WHERE id=?", (ts, session_id))
+    await aexecute(
+        "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+        str(uuid.uuid4()),
+        session_id,
+        sender,
+        content,
+        msg_type,
+        score,
+        json.dumps(symbolic or {}, ensure_ascii=False),
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        ts,
+    )
+    await aexecute("UPDATE sessions SET last_message_at=$1 WHERE id=$2", ts, session_id)
 
 
-def list_messages(session_id: str) -> list[dict]:
-    items = dict_rows(
-        "SELECT id,session_id AS sessionId,sender,content,type,fidelity_score AS fidelityScore,symbolic_json,created_at AS timestamp FROM messages WHERE session_id=? ORDER BY created_at",
-        (session_id,),
+async def list_messages(session_id: str) -> list[dict]:
+    items = await afetch_all(
+        "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at",
+        session_id,
     )
     for item in items:
         item["symbolic"] = json.loads(item.pop("symbolic_json") or "{}")
@@ -430,7 +428,7 @@ def list_messages(session_id: str) -> list[dict]:
 
 async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "", token: Any = None, on_tool_event: Any = None) -> dict:
     if agent is None:
-        agent = resolve_agent(content)
+        agent = await resolve_agent(content)
     domain = agent["domain"]
     msg_type = "code" if domain == "codegen" or any(word in content.lower() for word in ["code", "fastapi", "react", "代码", "实现"]) else "text"
 
@@ -445,9 +443,9 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         intent_type=_intent_from_domain(domain, content),
         risk_level=agent.get("risk_level", "L1"),
     )
-    models = choose_models(candidate_models_for_role(agent["agent_id"]))
-    history = _build_conversation_history(session_id)
-    memory_ctx = _build_memory_context()
+    models = choose_models(await candidate_models_for_role(agent["agent_id"]))
+    history = await _build_conversation_history(session_id)
+    memory_ctx = await _build_memory_context()
 
     # Use tool-enabled call loop (handles tool detection, execution, synthesis)
     result, usage, selected = await _run_tool_call_loop(
@@ -463,7 +461,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         prompt_tokens, completion_tokens, total_tokens = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
     else:
         prompt_tokens, completion_tokens, total_tokens = _estimate_token_usage(llm_input, content_out)
-    generated = write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
+    generated = await write_generated_files(content_out, content) if agent["agent_id"] == "CodeGen" else None
     public = {
         **public_symbolic(symbolic),
         "generated": generated,
@@ -482,7 +480,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         "fidelityScore": symbolic["fidelity_score"],
         "symbolic": public,
     }
-    save_message(
+    await save_message(
         session_id,
         message["sender"],
         message["content"],
@@ -512,8 +510,8 @@ async def stream_agent_response(
     then streams the final synthesized result to the frontend in chunks.
     """
     if agent is None:
-        agent = resolve_agent(content)
-    models = choose_models(candidate_models_for_role(agent["agent_id"]))
+        agent = await resolve_agent(content)
+    models = choose_models(await candidate_models_for_role(agent["agent_id"]))
     if not models:
         return None
 
@@ -523,50 +521,73 @@ async def stream_agent_response(
         llm_input = f"{content}\n\n[用户上传附件上下文]\n{attachment_context}"
 
     async def stream():
-        # ── Phase 1: Run the proven tool-call loop ──────────────────
-        # Wrap in try/except so that any exception in the tool-call loop
-        # becomes a visible error message instead of crashing the generator
-        # and producing a generic "模型调用失败" from the outer handler.
-        try:
-            result, usage, selected = await _run_tool_call_loop(
-                session_id, content, user_id, agent, agent["domain"], llm_input,
-                models, _build_conversation_history(session_id), _build_memory_context(),
-                collab_ctx, token=token, on_tool_event=on_tool_event,
-                streaming_executor=_get_streaming_executor(),
-            )
-        except Exception as _loop_exc:
-            logger.exception(
-                "stream_agent_response: _run_tool_call_loop crashed session=%s agent=%s",
-                session_id, agent["agent_id"],
-            )
+        # ── Real SSE streaming via asyncio.Queue bridge ────────────
+        # The tool-call loop runs in a background task and pushes
+        # chunks through a queue as they arrive from the LLM.
+        # This generator drains the queue and yields chunks to the
+        # WebSocket layer immediately — true token-by-token streaming.
+        import asyncio as _asyncio
+
+        chunk_queue: _asyncio.Queue = _asyncio.Queue()
+        _SENTINEL = object()
+
+        async def on_chunk(chunk: str) -> None:
+            await chunk_queue.put(chunk)
+
+        async def _run_loop():
+            try:
+                r, u, s = await _run_tool_call_loop(
+                    session_id, content, user_id, agent, agent["domain"], llm_input,
+                    models, await _build_conversation_history(session_id), await _build_memory_context(),
+                    collab_ctx, token=token, on_tool_event=on_tool_event,
+                    streaming_executor=_get_streaming_executor(),
+                    stream_callback=on_chunk,
+                )
+                return ("ok", r, u, s)
+            except Exception as _loop_exc:
+                logger.exception(
+                    "stream_agent_response: _run_tool_call_loop crashed session=%s agent=%s",
+                    session_id, agent["agent_id"],
+                )
+                return ("error", _loop_exc)
+            finally:
+                await chunk_queue.put(_SENTINEL)
+
+        loop_task = _asyncio.create_task(_run_loop())
+
+        # Phase 1: Yield chunks as they arrive from the adapter
+        # (token-by-token from the real SSE stream)
+        full_text: list[str] = []
+        while True:
+            chunk = await chunk_queue.get()
+            if chunk is _SENTINEL:
+                break
+            if token and token.cancelled:
+                loop_task.cancel()
+                return
+            if chunk:
+                full_text.append(chunk)
+                yield chunk
+
+        # Phase 2: Wait for the tool loop to finish
+        loop_result = await loop_task
+        status = loop_result[0]
+
+        if status == "error":
+            _loop_exc = loop_result[1]
             result = (
                 f"模型调用异常：{_loop_exc}\n\n"
                 "请检查：\n"
                 "1. 模型 API Key 是否正确配置\n"
-                "2. API 端点是否可达（网络/GFW）\n"
+                "2.  API 端点是否可达（网络/GFW）\n"
                 "3. 模型适配器是否正常加载"
             )
             usage = {}
-            selected = models[0] if models else {
-                "provider": "unknown", "model_name": "unknown",
-            }
-
-        content_out = normalize_agent_output(agent["agent_id"], result, content)
-
-        # ── Phase 2: Stream final content ──────────────────────────
-        yield "<thinking>正在分析中...</thinking>\n\n"
-
-        chunk_buf = ""
-        separators = set("，。！？；：\n")
-        for ch in content_out:
-            if token and token.cancelled:
-                return
-            chunk_buf += ch
-            if len(chunk_buf) >= 120 or ch in separators:
-                yield chunk_buf
-                chunk_buf = ""
-        if chunk_buf:
-            yield chunk_buf
+            selected = models[0] if models else {"provider": "unknown", "model_name": "unknown"}
+            content_out = result
+        else:
+            _, result, usage, selected = loop_result
+            content_out = normalize_agent_output(agent["agent_id"], result, content)
 
         # ── Persist message & audit (best-effort, non-fatal) ────────
         try:
@@ -582,7 +603,7 @@ async def stream_agent_response(
                 intent_type=_intent_from_domain(agent["domain"], content),
                 risk_level=agent.get("risk_level", "L1"),
             )
-            save_message(session_id, agent["agent_id"], content_out, "text", fid_score, public_symbolic(symbolic_out), pt, ct, tt)
+            await save_message(session_id, agent["agent_id"], content_out, "text", fid_score, public_symbolic(symbolic_out), pt, ct, tt)
             AuthService.write_audit(
                 user_id,
                 agent["agent_id"],
@@ -601,7 +622,7 @@ async def stream_agent_response(
     return stream()
 
 
-def _build_conversation_history(session_id: str, max_chars: int = 2000) -> str:
+async def _build_conversation_history(session_id: str, max_chars: int = 2000) -> str:
     """Fetch recent messages from this session and format as a transcript.
 
     Gives every agent called in the session full awareness of what was
@@ -611,9 +632,9 @@ def _build_conversation_history(session_id: str, max_chars: int = 2000) -> str:
     relevant) context is always included when the char limit is hit.
     """
     try:
-        rows = dict_rows(
-            "SELECT sender,content FROM messages WHERE session_id=? AND type!='system' ORDER BY created_at DESC LIMIT 30",
-            (session_id,),
+        rows = await afetch_all(
+            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 30",
+            session_id,
         )
     except Exception:
         return ""
@@ -637,7 +658,7 @@ def _build_conversation_history(session_id: str, max_chars: int = 2000) -> str:
     return "【会话历史记录 — 以下是本会话中之前的对话内容，请基于此上下文理解用户的后续问题】\n" + "\n".join(lines)
 
 
-def _build_memory_context(max_chars: int = 3000, force: bool = False) -> str:
+async def _build_memory_context(max_chars: int = 3000, force: bool = False) -> str:
     """Load persistent memories and global summary and format as a prompt block.
 
     Cached with a 60-second TTL to avoid scanning 200+ files from disk on every
@@ -653,7 +674,7 @@ def _build_memory_context(max_chars: int = 3000, force: bool = False) -> str:
     # ── Global summary (cross-session aggregated) ─────────────────
     try:
         session_mgr = _get_session_mgr_singleton()
-        global_summary = session_mgr.get_global_summary()
+        global_summary = await session_mgr.get_global_summary()
         if global_summary:
             sections.append(
                 "【全局记忆 — 跨会话聚合摘要】\n"
@@ -671,7 +692,7 @@ def _build_memory_context(max_chars: int = 3000, force: bool = False) -> str:
 
         storage = MemoryStorage(MEMORY_DIR)
         scanner = MemoryScanner(storage)
-        headers = scanner.scan(max_files=200)
+        headers = await scanner.scan(max_files=200)
         if headers:
             lines: list[str] = []
             total = 0
@@ -712,7 +733,7 @@ def _invalidate_memory_cache() -> None:
     _MEMORY_CACHE["ts"] = 0.0
 
 
-def _load_settings() -> dict[str, Any]:
+async def _load_settings() -> dict[str, Any]:
     """Load general settings from the shared settings.json file.
 
     Returns a dict with defaults for all known keys.  This is a lightweight
@@ -730,8 +751,8 @@ def _load_settings() -> dict[str, Any]:
     try:
         from app.config import DATA_DIR
         path = DATA_DIR / "settings.json"
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
+        if await aexists(path):
+            data = await aread_json(path)
             if isinstance(data, dict):
                 # Only accept known keys with correct types
                 for k, v in defaults.items():
@@ -778,18 +799,18 @@ def _build_reasoning_instruction(settings: dict[str, Any]) -> str:
     else:
         return "\n【推理强度：低】请直接给出简洁的结论和方案，减少分析过程。\n"
 
-def _get_agent_tools(agent_id: str) -> list[str] | None:
+async def _get_agent_tools(agent_id: str) -> list[str] | None:
     """Get the list of tool names available to an agent.
 
     Queries agent_tool_bindings. If no bindings exist, returns None
     (meaning all tools are available by default).
     """
     try:
-        rows = dict_rows(
+        rows = await afetch_all(
             "SELECT td.name FROM tool_definitions td "
             "JOIN agent_tool_bindings atb ON td.id = atb.tool_id "
-            "WHERE atb.agent_id=? AND atb.enabled=1 AND td.enabled=1",
-            (agent_id,),
+            "WHERE atb.agent_id=$1 AND atb.enabled=1 AND td.enabled=1",
+            agent_id,
         )
         if rows:
             return [r["name"] for r in rows]
@@ -815,7 +836,7 @@ def _build_tool_section(agent_id: str = "", available_tools: list[str] | None = 
 
 
 
-def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None) -> str:
+async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None) -> str:
     # ── Shared session context (ALL agents see this FIRST) ──────────
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
@@ -843,7 +864,7 @@ def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_
     date_context = f"【当前日期】{today_str} {weekday_str}。涉及\"今天\"、\"最新\"、\"最近\"等内容时，请基于此日期。\n"
 
     # ── Load settings for reply language, reasoning, thinking ───────
-    settings = _load_settings()
+    settings = await _load_settings()
     reply_lang_instr = _build_reply_lang_instruction(settings)
     reasoning_instr = _build_reasoning_instruction(settings)
 
@@ -948,25 +969,22 @@ def _format_conversation(conversation: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _log_tool_call(session_id: str, agent_id: str, tool_name: str, arguments: dict, result: dict) -> None:
+async def _log_tool_call(session_id: str, agent_id: str, tool_name: str, arguments: dict, result: dict) -> None:
     """Log a tool call to the audit table (best-effort, non-fatal)."""
     try:
-        with get_connection() as conn:
-            conn.execute(
-                "INSERT INTO tool_call_log (id, session_id, agent_id, tool_name, arguments_json, result_json, success, duration_ms, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    str(uuid.uuid4()),
-                    session_id,
-                    agent_id,
-                    tool_name,
-                    json.dumps(arguments, ensure_ascii=False),
-                    json.dumps(result, ensure_ascii=False),
-                    1 if result.get("success") else 0,
-                    int(result.get("duration_ms", 0)),
-                    now(),
-                ),
-            )
+        await aexecute(
+            "INSERT INTO tool_call_log (id, session_id, agent_id, tool_name, arguments_json, result_json, success, duration_ms, created_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+            str(uuid.uuid4()),
+            session_id,
+            agent_id,
+            tool_name,
+            json.dumps(arguments, ensure_ascii=False),
+            json.dumps(result, ensure_ascii=False),
+            1 if result.get("success") else 0,
+            int(result.get("duration_ms", 0)),
+            now(),
+        )
     except Exception:
         pass  # table may not exist yet
 
@@ -985,6 +1003,7 @@ async def _run_tool_call_loop(
     token: Any = None,
     on_tool_event: Any = None,
     streaming_executor: Any = None,
+    stream_callback: Any = None,
 ) -> tuple[str, dict, dict]:
     """Execute the tool-calling loop for a single user message.
 
@@ -993,6 +1012,10 @@ async def _run_tool_call_loop(
     3. Execute tools, append results, re-call LLM.
     4. If no tool calls: return final text.
     5. Max iterations: 5. Overall timeout: 180s.
+
+    When *stream_callback* is an async callable, the final synthesis
+    iteration uses real SSE streaming via ``adapter.stream_prompt()``
+    and feeds every chunk through the callback as it arrives.
     """
     import asyncio as _asyncio
     from app.services.tool_executor import tool_executor
@@ -1000,7 +1023,7 @@ async def _run_tool_call_loop(
 
     executor = tool_executor
     conversation: list[dict] = [{"role": "user", "content": llm_input}]
-    available_tools = _get_agent_tools(agent["agent_id"])
+    available_tools = await _get_agent_tools(agent["agent_id"])
 
     LOOP_TIMEOUT = 180  # 3-minute overall safety cap
 
@@ -1031,7 +1054,7 @@ async def _run_tool_call_loop(
                 intent_type=_intent_from_domain(domain, conv_text),
                 risk_level=agent.get("risk_level", "L1"),
             )
-            prompt = build_prompt(
+            prompt = await build_prompt(
                 agent["agent_id"], domain, conv_text, symbolic,
                 models[0].get("prompt", "") if models else "",
                 collab_ctx, history, memory_ctx,
@@ -1146,7 +1169,7 @@ async def _run_tool_call_loop(
                     # Log tool calls (best-effort)
                     try:
                         for tc, tr in zip(tool_calls, tool_results):
-                            _log_tool_call(session_id, agent["agent_id"], tc["name"], tc.get("arguments", {}), tr)
+                            await _log_tool_call(session_id, agent["agent_id"], tc["name"], tc.get("arguments", {}), tr)
                     except Exception:
                         pass
 
@@ -1159,7 +1182,7 @@ async def _run_tool_call_loop(
 
                     continue  # loop back for synthesis
 
-            # No tool calls found.
+            # No tool calls found — this is the synthesis iteration.
             # If native tools were used and didn't produce tool_calls,
             # retry with prompt-based calling only (reasoning models
             # often don't support native function calling).
@@ -1171,7 +1194,25 @@ async def _run_tool_call_loop(
                 )
                 continue  # next iteration will NOT pass native tools
 
-            final_text = result
+            if stream_callback:
+                # ── Real SSE streaming for the final synthesis ──
+                logger.info(
+                    "tool_loop iter=%d: streaming synthesis via stream_prompt",
+                    iteration,
+                )
+                gathered: list[str] = []
+                async for chunk in adapter.stream_prompt(
+                    prompt,
+                    model.get("model_name", "mock"),
+                    decrypt_secret(model.get("api_key", "")),
+                    model.get("base_url", ""),
+                ):
+                    if chunk:
+                        gathered.append(chunk)
+                        await stream_callback(chunk)
+                final_text = "".join(gathered)
+            else:
+                final_text = result
             break
 
         if not final_text:
@@ -1469,4 +1510,3 @@ def normalize_agent_output(agent_id: str, model_output: str, original: str) -> s
         "3) 目标功能与验收标准\n"
         "我将基于你的输入给出分步方案与可落地结果。"
     )
-

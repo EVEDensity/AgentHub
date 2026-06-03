@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import api_router
 from app.config import APP_NAME, APP_VERSION
-from app.db.init_db import init_db
+from app.db.init_db import ainit_db
 
 
 @asynccontextmanager
@@ -15,7 +15,14 @@ async def lifespan(app: FastAPI):
     import logging
     _log = logging.getLogger("agenthub.startup")
 
-    init_db()
+    # ── Database init ────────────────────────────────────────────────
+    _log.info("startup: initializing PostgreSQL...")
+    try:
+        await ainit_db()
+        _log.info("startup: PostgreSQL initialized")
+    except Exception:
+        _log.exception("startup: PostgreSQL init FAILED")
+        raise
 
     # Register built-in tools for the tool-calling system
     try:
@@ -26,10 +33,9 @@ async def lifespan(app: FastAPI):
         _log.warning("startup: register_builtin_tools failed — tools will be unavailable", exc_info=True)
 
     # Initialize enhanced function-calling system
-    # (permission manager, hook manager, streaming executor, etc.)
     try:
         from app.services.tools import initialize_tool_system
-        streaming_executor = initialize_tool_system()
+        streaming_executor = await initialize_tool_system()
         app.state.streaming_executor = streaming_executor
         _log.info("startup: enhanced function-calling system initialized")
     except Exception:
@@ -39,6 +45,14 @@ async def lifespan(app: FastAPI):
         )
 
     yield
+
+    # ── Shutdown: close DB pool ─────────────────────────────────────
+    try:
+        from app.db.session import aclose_pool
+        await aclose_pool()
+        _log.info("shutdown: PostgreSQL pool closed")
+    except Exception:
+        _log.warning("shutdown: failed to close PostgreSQL pool", exc_info=True)
 
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -12,7 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import DEFAULT_USER_ID
 from app.db.init_db import now
-from app.db.session import get_connection, one_row
+from app.db.session import afetch_one, aexecute
 from app.services.secret_service import _SECRET
 
 security = HTTPBearer(auto_error=False)
@@ -66,29 +67,31 @@ class AuthService:
         return payload
 
     @staticmethod
-    def create_user(name: str, password: str, role: str = "developer") -> dict:
+    async def create_user(name: str, password: str, role: str = "developer") -> dict:
         if not name.strip() or not password:
             raise HTTPException(status_code=400, detail="name and password are required")
         user_id = uuid.uuid4().hex
-        with get_connection() as conn:
-            existing = conn.execute("SELECT id FROM users WHERE name=?", (name,)).fetchone()
-            if existing:
-                raise HTTPException(status_code=409, detail="User already exists")
-            conn.execute("INSERT INTO users(id,name,role,password_hash,created_at) VALUES(?,?,?,?,?)", (user_id, name, role, hash_password(password), now()))
+        existing = await afetch_one("SELECT id FROM users WHERE name=$1", name)
+        if existing:
+            raise HTTPException(status_code=409, detail="User already exists")
+        await aexecute(
+            "INSERT INTO users(id,name,role,password_hash,created_at) VALUES($1,$2,$3,$4,$5)",
+            user_id, name, role, hash_password(password), now(),
+        )
         return {"id": user_id, "name": name, "role": role}
 
     @staticmethod
-    def authenticate_user(name: str, password: str) -> dict:
-        user = one_row("SELECT id,name,role,password_hash,created_at FROM users WHERE name=?", (name,))
+    async def authenticate_user(name: str, password: str) -> dict:
+        user = await afetch_one("SELECT id,name,role,password_hash,created_at FROM users WHERE name=$1", name)
         if not user or not verify_password(password, user.get("password_hash") or ""):
             raise HTTPException(status_code=401, detail="Invalid username or password")
         return {"id": user["id"], "name": user["name"], "role": user["role"], "created_at": user["created_at"]}
 
     @staticmethod
-    def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
+    async def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(security)) -> dict:
         if credentials and credentials.scheme.lower() == 'bearer':
             payload = AuthService.decode_access_token(credentials.credentials)
-            user = one_row('SELECT id,name,role,created_at FROM users WHERE id=?', (payload['sub'],))
+            user = await afetch_one('SELECT id,name,role,created_at FROM users WHERE id=$1', payload['sub'])
             if user:
                 return user
         raise HTTPException(status_code=401, detail='Authentication required')
@@ -99,27 +102,64 @@ class AuthService:
             raise HTTPException(status_code=403, detail="Admin permission required")
 
     @staticmethod
-    def websocket_user(token: str | None) -> dict:
+    async def websocket_user(token: str | None) -> dict:
         if token:
             payload = AuthService.decode_access_token(token)
-            user = one_row('SELECT id,name,role,created_at FROM users WHERE id=?', (payload['sub'],))
+            user = await afetch_one('SELECT id,name,role,created_at FROM users WHERE id=$1', payload['sub'])
             if user:
                 return user
         raise HTTPException(status_code=401, detail='Authentication required')
 
     @staticmethod
     def write_audit(user_id: str, agent_id: str, action: str, risk_level: str, decision: str, payload: dict) -> str:
-        """Write an audit log entry (best-effort, non-fatal on DB lock)."""
+        """Write an audit log entry (best-effort, non-fatal, fire-and-forget).
+
+        Schedules the actual DB write as a background task so callers are
+        never blocked by audit logging.  Returns the audit_id immediately.
+        """
         import logging
         _log = logging.getLogger("agenthub.auth")
         content = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         audit_id = str(uuid.uuid4())
         try:
-            with get_connection() as conn:
-                conn.execute(
-                    "INSERT INTO audit_log(id,user_id,agent_id,action,risk_level,decision,content_hash,payload_json,timestamp) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (audit_id, user_id, agent_id, action, risk_level, decision, hashlib.sha256(content.encode()).hexdigest(), content, now()),
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                _write_audit_async(
+                    audit_id, user_id, agent_id, action, risk_level,
+                    decision, content, _log,
                 )
-        except Exception:
-            _log.warning("write_audit failed for user=%s action=%s (non-fatal)", user_id, action, exc_info=True)
+            )
+        except RuntimeError:
+            # No running event loop — execute synchronously in a new loop
+            try:
+                asyncio.run(
+                    _write_audit_async(
+                        audit_id, user_id, agent_id, action, risk_level,
+                        decision, content, _log,
+                    )
+                )
+            except Exception:
+                pass
         return audit_id
+
+
+async def _write_audit_async(
+    audit_id: str,
+    user_id: str,
+    agent_id: str,
+    action: str,
+    risk_level: str,
+    decision: str,
+    content: str,
+    _log,
+) -> None:
+    """Internal async helper for write_audit."""
+    try:
+        await aexecute(
+            "INSERT INTO audit_log(id,user_id,agent_id,action,risk_level,decision,content_hash,payload_json,timestamp) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            audit_id, user_id, agent_id, action, risk_level, decision,
+            hashlib.sha256(content.encode()).hexdigest(), content, now(),
+        )
+    except Exception:
+        _log.warning("write_audit failed for user=%s action=%s (non-fatal)", user_id, action, exc_info=True)

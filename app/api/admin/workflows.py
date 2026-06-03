@@ -16,7 +16,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.init_db import now
-from app.db.session import get_connection
+from app.db.session import aexecute
 from app.schemas.common import AgentRouteActiveRequest, AgentRouteRequest
 from app.schemas.dag import DAGConfig
 from app.services.agent_route_service import agent_route_service
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/workflows", tags=["admin-workflows"])
 async def list_workflows(user: dict = Depends(get_current_user)) -> list[dict]:
     """Return all registered agent workflows / routes."""
     require_admin(user)
-    return agent_route_service.list_routes()
+    return await agent_route_service.list_routes()
 
 
 # ── CREATE ────────────────────────────────────────────────────────────────
@@ -44,7 +44,7 @@ async def create_workflow(data: AgentRouteRequest, user: dict = Depends(get_curr
     """Register a new workflow (agent route) with DAG validation."""
     require_admin(user)
     try:
-        route = agent_route_service.create_route(
+        route = await agent_route_service.create_route(
             data.name, data.description, data.triggerKeywords, data.nodes, data.isDefault,
         )
     except ValueError as exc:
@@ -65,31 +65,28 @@ async def update_workflow(route_id: int, data: AgentRouteRequest, user: dict = D
     """Replace an existing workflow's definition."""
     require_admin(user)
 
-    existing = agent_route_service.get_route(route_id)
+    existing = await agent_route_service.get_route(route_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
     dag = DAGConfig(total=len(data.nodes), completed=0, nodes=data.nodes)
     template_engine.validate(dag)
 
-    with get_connection() as conn:
-        if data.isDefault:
-            conn.execute("UPDATE agent_routes SET is_default = 0")
-        conn.execute(
-            "UPDATE agent_routes SET name = ?, description = ?, trigger_keywords = ?, "
-            "nodes_json = ?, is_default = ?, updated_at = ? WHERE id = ?",
-            (
-                data.name,
-                data.description,
-                json.dumps(data.triggerKeywords, ensure_ascii=False),
-                json.dumps(data.nodes, ensure_ascii=False),
-                1 if data.isDefault else 0,
-                now(),
-                route_id,
-            ),
-        )
+    if data.isDefault:
+        await aexecute("UPDATE agent_routes SET is_default = 0")
+    await aexecute(
+        "UPDATE agent_routes SET name = $1, description = $2, trigger_keywords = $3, "
+        "nodes_json = $4, is_default = $5, updated_at = $6 WHERE id = $7",
+        data.name,
+        data.description,
+        json.dumps(data.triggerKeywords, ensure_ascii=False),
+        json.dumps(data.nodes, ensure_ascii=False),
+        1 if data.isDefault else 0,
+        now(),
+        route_id,
+    )
 
-    route = agent_route_service.get_route(route_id)
+    route = await agent_route_service.get_route(route_id)
     audit_id = write_audit(
         user["id"], "admin", "workflow_update", "L2", "approve",
         {"routeId": route_id, "name": data.name},
@@ -105,12 +102,11 @@ async def delete_workflow(route_id: int, user: dict = Depends(get_current_user))
     """Remove a workflow and its associated routes."""
     require_admin(user)
 
-    existing = agent_route_service.get_route(route_id)
+    existing = await agent_route_service.get_route(route_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    with get_connection() as conn:
-        conn.execute("DELETE FROM agent_routes WHERE id = ?", (route_id,))
+    await aexecute("DELETE FROM agent_routes WHERE id = $1", route_id)
 
     audit_id = write_audit(
         user["id"], "admin", "workflow_delete", "L2", "approve",
@@ -127,7 +123,7 @@ async def set_default_workflow(route_id: int, user: dict = Depends(get_current_u
     """Mark a workflow as the system default route."""
     require_admin(user)
     try:
-        route = agent_route_service.set_default(route_id)
+        route = await agent_route_service.set_default(route_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -148,7 +144,7 @@ async def toggle_workflow_active(
     """Enable or disable a workflow."""
     require_admin(user)
     try:
-        route = agent_route_service.set_active(route_id, data.active)
+        route = await agent_route_service.set_active(route_id, data.active)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

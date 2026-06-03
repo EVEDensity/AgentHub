@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends
 
-from app.db.session import dict_rows, get_connection
+from app.db.session import afetch_all
 from app.services.auth_service import get_current_user, require_admin
 
 router = APIRouter(prefix="/analytics", tags=["admin-analytics"])
@@ -25,8 +25,11 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
     """
     require_admin(user)
 
-    with get_connection() as conn:
-        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    # PostgreSQL: check column existence via information_schema
+    cols = await afetch_all(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='messages'"
+    )
+    existing_cols = {row["column_name"] for row in cols}
 
     has_total_tokens = "total_tokens" in existing_cols
     has_prompt_tokens = "prompt_tokens" in existing_cols
@@ -36,17 +39,17 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
     start_day = end_day - timedelta(days=364)
 
     if has_total_tokens:
-        rows = dict_rows(
-            "SELECT substr(created_at, 1, 10) AS day, session_id AS sessionId, content, "
+        rows = await afetch_all(
+            "SELECT substr(created_at, 1, 10) AS day, session_id AS \"sessionId\", content, "
             "total_tokens, prompt_tokens, completion_tokens "
-            "FROM messages WHERE created_at >= ? AND created_at <= ? ORDER BY created_at ASC",
-            (f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59"),
+            "FROM messages WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at ASC",
+            f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59",
         )
     else:
-        rows = dict_rows(
+        rows = await afetch_all(
             "SELECT substr(created_at, 1, 10) AS day, session_id AS sessionId, content "
-            "FROM messages WHERE created_at >= ? AND created_at <= ? ORDER BY created_at ASC",
-            (f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59"),
+            "FROM messages WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at ASC",
+            f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59",
         )
 
     # Aggregate per-day stats

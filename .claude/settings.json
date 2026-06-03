@@ -7,7 +7,10 @@
       "Bash(npx next *)",
       "Bash(npx tsc *)",
       "Bash(python -m py_compile app/api/websocket.py)",
-      "Bash(python -c \"import py_compile; py_compile.compile\\('app/services/tools/skill_tools.py', doraise=True\\); py_compile.compile\\('app/services/tools/definitions.py', doraise=True\\); py_compile.compile\\('app/services/tool_registry.py', doraise=True\\); py_compile.compile\\('app/config.py', doraise=True\\); print\\('All files compile clean'\\)\")"
+      "Bash(python -c \"import py_compile; py_compile.compile\\('app/services/tools/skill_tools.py', doraise=True\\); py_compile.compile\\('app/services/tools/definitions.py', doraise=True\\); py_compile.compile\\('app/services/tool_registry.py', doraise=True\\); py_compile.compile\\('app/config.py', doraise=True\\); print\\('All files compile clean'\\)\")",
+      "Bash(grep -n \"\\)}$\" components/chat/FilePreviewPanel.tsx)",
+      "Bash(grep -n \"&& \\($\" components/chat/FilePreviewPanel.tsx)",
+      "Bash(npx prettier *)"
     ]
   }
 }

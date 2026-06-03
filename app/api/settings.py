@@ -7,15 +7,13 @@ client-side cache layer.
 
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.config import DATA_DIR
+from app.utils.async_file import aexists, aread_json, awrite_json, amkdir
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -32,33 +30,31 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
-def _read_settings() -> dict[str, Any]:
+async def _read_settings() -> dict[str, Any]:
     """Read settings from disk, merging with defaults for missing keys."""
     settings: dict[str, Any] = dict(DEFAULTS)
     try:
-        if SETTINGS_PATH.exists():
-            raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        if await aexists(SETTINGS_PATH):
+            raw = await aread_json(SETTINGS_PATH)
             if isinstance(raw, dict):
                 settings.update(raw)
-    except (json.JSONDecodeError, OSError):
+    except (ValueError, OSError):
         pass
     # Prune unknown keys (keep only known defaults)
     return {k: settings.get(k, DEFAULTS[k]) for k in DEFAULTS}
 
 
-def _write_settings(settings: dict[str, Any]) -> None:
+async def _write_settings(settings: dict[str, Any]) -> None:
     """Persist settings to disk."""
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    await amkdir(SETTINGS_PATH.parent)
     cleaned = {k: settings[k] for k in DEFAULTS if k in settings}
-    SETTINGS_PATH.write_text(
-        json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    await awrite_json(SETTINGS_PATH, cleaned)
 
 
 @router.get("/settings")
 async def get_settings() -> dict[str, Any]:
     """Return all settings (merged with defaults)."""
-    return _read_settings()
+    return await _read_settings()
 
 
 class SettingsUpdate(BaseModel):
@@ -74,7 +70,7 @@ class SettingsUpdate(BaseModel):
 @router.post("/settings")
 async def update_settings(body: SettingsUpdate) -> dict[str, Any]:
     """Update one or more settings. Omitted fields are left unchanged."""
-    current = _read_settings()
+    current = await _read_settings()
     updates = body.model_dump(exclude_none=True)
 
     # Validate theme
@@ -94,5 +90,5 @@ async def update_settings(body: SettingsUpdate) -> dict[str, Any]:
         updates["zoom"] = max(50, min(200, int(updates["zoom"])))
 
     current.update(updates)
-    _write_settings(current)
+    await _write_settings(current)
     return current
