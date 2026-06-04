@@ -31,6 +31,21 @@ export interface UploadCompleteResponse {
   category: string;
 }
 
+export interface GuardrailFlag {
+  category: 'pii' | 'injection' | 'harmful' | 'high_risk_op';
+  severity: 'block' | 'confirm' | 'warn';
+  rule: string;
+  message: string;
+}
+
+export interface GuardrailResult {
+  passed: boolean;
+  blocked: boolean;
+  requiresConfirmation: boolean;
+  warningCount: number;
+  flags: GuardrailFlag[];
+}
+
 export interface Message {
   id?: string;
   event: string;
@@ -39,7 +54,7 @@ export interface Message {
   content: string;
   type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result';
   timestamp: string;
-  fidelityScore?: number;
+  guardrailResult?: GuardrailResult;
   symbolic?: SymbolicData & {
     generated?: GeneratedData;
   };
@@ -65,38 +80,6 @@ export interface StreamInterrupted {
   timestamp: string;
 }
 
-export interface FidelityWarning {
-  event: 'fidelity_warning';
-  sessionId: string;
-  agentId: string;
-  fidelityScore: number;
-  grade: 'warn' | 'low';
-  message: string;
-  timestamp: string;
-}
-
-export interface FidelityBlock {
-  event: 'fidelity_block';
-  sessionId: string;
-  agentId: string;
-  fidelityScore: number;
-  grade: 'block';
-  message: string;
-  requiresHumanConfirm: boolean;
-  timestamp: string;
-}
-
-export interface FidelityResolved {
-  event: 'fidelity_resolved';
-  sessionId: string;
-  agentId: string;
-  fidelityScore: number;
-  message: string;
-  timestamp: string;
-}
-
-export type FidelityEvent = FidelityWarning | FidelityBlock | FidelityResolved;
-
 export interface SymbolicData {
   task_fingerprint_id: string;
   session_id: string;
@@ -105,7 +88,6 @@ export interface SymbolicData {
   key_params: Record<string, unknown>;
   knowledge_vector_idx: string[];
   confidence: number;
-  fidelity_score: number;
   distillation_model: string;
   source_trace?: { original_vector_idx: string; audit_hash: string };
 }
@@ -600,5 +582,5 @@ export interface FileReference {
   lineStart?: number;
   lineEnd?: number;
   quote?: string;
-  kind?: 'file' | 'folder' | 'chat-selection';
+  kind?: 'file' | 'folder' | 'chat-selection' | 'markdown-paragraph';
 }

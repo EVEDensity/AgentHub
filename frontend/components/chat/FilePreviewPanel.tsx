@@ -3,6 +3,7 @@ import type { FileReference, WorkspacePreviewTab } from '../../types';
 import MarkdownRenderer from './MarkdownRenderer';
 import ResizableDivider from '../common/ResizableDivider';
 import { useResizableSize } from '../../hooks/useResizableSize';
+import { lineHasReference } from '../../lib/references';
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Language detection from file path
@@ -174,10 +175,11 @@ function highlightCodeLine(line: string, lang: string): string {
 // Code Preview (inline syntax highlighting + line numbers)
 // ══════════════════════════════════════════════════════════════════════════════
 
-function CodePreview({ content, language, maxLines = 5000 }: {
+function CodePreview({ content, language, maxLines = 5000, references }: {
   content: string;
   language: string;
   maxLines?: number;
+  references?: FileReference[];
 }): JSX.Element {
   const lines = useMemo(() => content.split('\n'), [content]);
   const [showAll, setShowAll] = useState(false);
@@ -188,25 +190,33 @@ function CodePreview({ content, language, maxLines = 5000 }: {
     <div className="code-preview font-mono text-sm leading-relaxed bg-[#1E1E1E]">
       <table className="w-full border-collapse">
         <tbody>
-          {visibleLines.map((line, i) => (
-            <tr
-              key={i}
-              className="hover:bg-[#2A2A2A] transition-colors"
-              data-line-number={i + 1}
-              style={{ background: i % 2 === 0 ? '#1E1E1E' : '#1A1A1A' }}
-            >
-              <td className="select-none text-right text-[#5A5A5A] border-r border-[#2D2D2D] bg-[#161616] px-3 py-0 w-[1%] whitespace-nowrap align-top">
-                {i + 1}
-              </td>
-              <td className="px-4 py-0 align-top">
-                <pre
-                  className="my-0 text-[#D4D4D4] whitespace-pre"
-                  style={{ fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Fira Code', monospace", tabSize: 4 }}
-                  dangerouslySetInnerHTML={{ __html: highlightCodeLine(line, language) }}
-                />
-              </td>
-            </tr>
-          ))}
+          {visibleLines.map((line, i) => {
+            const lineNumber = i + 1;
+            const hitRef = lineHasReference(references, lineNumber);
+            const baseBg = i % 2 === 0 ? '#1E1E1E' : '#1A1A1A';
+            const rowBg = hitRef ? 'rgba(245, 158, 11, 0.12)' : baseBg;
+            return (
+              <tr
+                key={i}
+                className="hover:bg-[#2A2A2A] transition-colors"
+                data-line-number={lineNumber}
+                id={hitRef ? `code-ref-${hitRef.id}` : undefined}
+                data-reference-id={hitRef?.id}
+                style={{ background: rowBg }}
+              >
+                <td className="select-none text-right text-[#5A5A5A] border-r border-[#2D2D2D] bg-[#161616] px-3 py-0 w-[1%] whitespace-nowrap align-top">
+                  {lineNumber}
+                </td>
+                <td className="px-4 py-0 align-top">
+                  <pre
+                    className="my-0 text-[#D4D4D4] whitespace-pre"
+                    style={{ fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Consolas', 'Fira Code', monospace", tabSize: 4 }}
+                    dangerouslySetInnerHTML={{ __html: highlightCodeLine(line, language) }}
+                  />
+                </td>
+              </tr>
+            );
+          })}
           {truncated && (
             <tr>
               <td className="select-none text-center text-[#6A6A6A] border-r border-[#2D2D2D] bg-[#161616] px-3 py-2" style={{ fontFamily: 'monospace' }}>
@@ -233,9 +243,10 @@ function CodePreview({ content, language, maxLines = 5000 }: {
 // Diff Preview
 // ══════════════════════════════════════════════════════════════════════════════
 
-function DiffPreview({ diffText, language }: {
+function DiffPreview({ diffText, language, references }: {
   diffText: string;
   language: string;
+  references?: FileReference[];
 }): JSX.Element {
   const diffLines = useMemo(() => parseDiff(diffText), [diffText]);
   const [showAll, setShowAll] = useState(false);
@@ -257,6 +268,16 @@ function DiffPreview({ diffText, language }: {
           else if (isRemoved) bgColor = 'rgba(239, 68, 68, 0.15)';
           else if (isHunk) bgColor = 'rgba(245, 158, 11, 0.12)';
 
+          // 引用高亮：仅 added/context 行能匹配上（removed 行没"新"行号）
+          const hitRef =
+            !isHeader && !isRemoved && line.lineNum != null
+              ? lineHasReference(references, line.lineNum)
+              : undefined;
+          if (hitRef) {
+            // 引用高亮叠在原有 diff 颜色之上，用一个 ring 边框表示
+            bgColor = 'rgba(245, 158, 11, 0.22)';
+          }
+
           return (
             <div
               key={i}
@@ -265,6 +286,9 @@ function DiffPreview({ diffText, language }: {
                 gridTemplateColumns: '48px 18px 1fr',
                 background: bgColor,
               }}
+              data-line-number={!isHeader && !isRemoved ? line.lineNum ?? undefined : undefined}
+              id={hitRef ? `diff-ref-${hitRef.id}` : undefined}
+              data-reference-id={hitRef?.id}
             >
               <span className="select-none text-right text-[#5A5A5A]">{line.lineNum}</span>
               <span
@@ -779,6 +803,16 @@ interface FilePreviewPanelProps {
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string, oldStr: string, newStr: string) => void;
   onOpenWorkspaceFile?: (path: string, content: string, language: string, state: string) => void;
+  /**
+   * 当前所有引用（来自 ChatInput 的 fileReferences）。
+   * 组件内部会按当前激活 tab 的 path 过滤后传给子预览器。
+   */
+  references?: FileReference[];
+  /**
+   * 外部触发「滚动到某条引用」信号。变更时（含 nonce 变化）组件会找到对应 id 锚点并滚动。
+   * 锚点格式：code-ref-{id} / diff-ref-{id} / md-ref-{id}。
+   */
+  pendingScrollRef?: { id: string; nonce: number } | null;
 }
 
 export default function FilePreviewPanel({
@@ -788,6 +822,8 @@ export default function FilePreviewPanel({
   onCloseTab,
   onAddReference,
   onOpenWorkspaceFile,
+  references,
+  pendingScrollRef,
 }: FilePreviewPanelProps): JSX.Element {
   const contentRef = useRef<HTMLDivElement>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -812,6 +848,12 @@ export default function FilePreviewPanel({
     () => tabs.find((t) => t.id === activeTabId) || null,
     [tabs, activeTabId],
   );
+
+  /** 当前激活 tab 命中的引用（按 path 过滤） */
+  const activeReferences = useMemo(() => {
+    if (!references || !activeTab) return undefined;
+    return references.filter((r) => r.path === activeTab.path);
+  }, [references, activeTab]);
 
   // ── Selection detection ─────────────────────────────────────────────
   const handleMouseUp = useCallback(() => {
@@ -888,6 +930,37 @@ export default function FilePreviewPanel({
       contentRef.current.scrollLeft = 0;
     }
   }, [activeTabId]);
+
+  // ── Scroll to pending reference anchor ─────────────────────────────
+  useEffect(() => {
+    if (!pendingScrollRef || !contentRef.current) return;
+    const root = contentRef.current;
+    // 给 Markdown 渲染一点时间（react-markdown 是同步的，但 layout 有可能未稳定）
+    const tryScroll = (attempt = 0) => {
+      const id = pendingScrollRef.id;
+      const el =
+        root.querySelector(`#code-ref-${CSS.escape(id)}`) ||
+        root.querySelector(`#diff-ref-${CSS.escape(id)}`) ||
+        root.querySelector(`#md-ref-${CSS.escape(id)}`) ||
+        root.querySelector(`[data-reference-id="${CSS.escape(id)}"]`);
+      if (el && el instanceof HTMLElement) {
+        // 找到该元素上方最近的可滚动祖先并滚动
+        const scrollTarget = root; // contentRef 是 overflow 容器
+        const elRect = el.getBoundingClientRect();
+        const rootRect = scrollTarget.getBoundingClientRect();
+        const targetTop = scrollTarget.scrollTop + (elRect.top - rootRect.top) - 80;
+        scrollTarget.scrollTo({ top: Math.max(targetTop, 0), behavior: 'smooth' });
+        // 加一个短暂高亮动画
+        el.classList.add('reference-flash');
+        window.setTimeout(() => el.classList.remove('reference-flash'), 1500);
+        return;
+      }
+      if (attempt < 8) {
+        window.setTimeout(() => tryScroll(attempt + 1), 80);
+      }
+    };
+    tryScroll();
+  }, [pendingScrollRef]);
 
   // ── Add selection to chat ───────────────────────────────────────────
   const handleAddToChat = useCallback(() => {
@@ -1050,13 +1123,14 @@ export default function FilePreviewPanel({
               <CodePreview
                 content={activeTab.content || ''}
                 language={activeTab.language || getLanguageFromPath(activeTab.path)}
+                references={activeReferences}
               />
             )}
 
             {/* Markdown preview */}
             {activeTab.kind === 'file' && isMarkdownFile(activeTab.path) && (
               <div className="markdown-container min-h-full min-w-0 bg-white p-6">
-                <MarkdownRenderer content={activeTab.content || ''} />
+                <MarkdownRenderer content={activeTab.content || ''} references={activeReferences} />
               </div>
             )}
 
@@ -1087,6 +1161,7 @@ export default function FilePreviewPanel({
                 <DiffPreview
                   diffText={activeTab.content}
                   language={activeTab.language || getLanguageFromPath(activeTab.path)}
+                  references={activeReferences}
                 />
               ) : activeTab.diffOld && activeTab.diffNew ? (
                 <DiffPreview
@@ -1096,6 +1171,7 @@ export default function FilePreviewPanel({
                     activeTab.diffNew.split('\n').map((l) => '+ ' + l).join('\n')
                   }`}
                   language={activeTab.language || getLanguageFromPath(activeTab.path)}
+                  references={activeReferences}
                 />
               ) : (
                 <div className="flex h-full items-center justify-center bg-white">

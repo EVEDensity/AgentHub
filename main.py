@@ -54,6 +54,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         _log.warning("shutdown: failed to close PostgreSQL pool", exc_info=True)
 
+    # ── Shutdown: close shared HTTP client ──────────────────────────
+    try:
+        from app.services.adapter_manager import close_http_client
+        await close_http_client()
+        _log.info("shutdown: shared HTTP client closed")
+    except Exception:
+        _log.warning("shutdown: failed to close HTTP client", exc_info=True)
+
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
 app.add_middleware(

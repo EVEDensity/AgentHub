@@ -39,7 +39,6 @@ class MessageOut(BaseModel):
     sender: str
     timestamp: str
     type: str = "text"
-    fidelityScore: float = 0.95
     symbolic: dict | None = None
 
 

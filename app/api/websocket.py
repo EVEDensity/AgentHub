@@ -12,15 +12,8 @@ from app.db.session import afetch_all, afetch_one
 from app.services.agent_service import extract_mentions, save_message
 from app.services.auth_service import websocket_user
 from app.services.message_router import route_message, stream_message
-from app.services.symbolic import (
-    FIDELITY_HIGH,
-    FIDELITY_LOW,
-    FIDELITY_WARN,
-    build_enrichment_prompt,
-    build_redistill_prompt,
-    fidelity_action,
-    requires_redistill,
-)
+
+from app.services.guardrails import scan_input as _guardrails_scan
 from app.services.websocket_manager import manager
 
 logger = logging.getLogger("agenthub.websocket")
@@ -248,10 +241,21 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             if not content:
                 continue
 
-            # Cancel any in-flight stream
-            manager.cancel_token(session_id)
-            await manager.send_stream_interrupted(session_id, "New message received, interrupting current stream")
-            await asyncio.sleep(0.02)
+            # Cancel any in-flight stream — but ONLY if there is one.
+            # 无条件 cancel 会让上一轮尚未走完模型循环的 invocation 看到 token.cancelled=True
+            # 并返回 "流式响应已被中断"。 先用 has_active_stream 守卫，避免误中断。
+            if manager.has_active_stream(session_id):
+                manager.cancel_token(session_id)
+                await manager.send_stream_interrupted(session_id, "New message received, interrupting current stream")
+                # 等旧任务释放 session 锁；锁释放后新任务才能进入 _process_and_stream。
+                lock = manager.get_session_lock(session_id)
+                # 最多等 2s；拿不到就直接放行（让新消息处理，新任务内部 create_token 会再取消一次）。
+                try:
+                    await asyncio.wait_for(lock.acquire(), timeout=2.0)
+                    lock.release()
+                except asyncio.TimeoutError:
+                    logger.debug("ws interrupt wait timeout session=%s", session_id)
+                await asyncio.sleep(0.02)
 
             task = asyncio.create_task(
                 _process_and_stream(
@@ -285,129 +289,23 @@ def _log_task_error(session_id: str, task: asyncio.Task) -> None:
         logger.error("ws background task failed session=%s: %s", session_id, exc)
 
 
-async def _handle_fidelity(
-    session_id: str,
-    content: str,
-    agent: dict,
-    user_id: str,
-    token,
-    attachments: list[dict],
-    response_text: str,
-    fid_result: dict,
-    collab,  # CollaborationContext
-) -> None:
-    """Execute fidelity closed-loop actions per §3.3 thresholds.
 
-    - ≥ 0.85: silent pass
-    - 0.70–0.85: emit warning to frontend
-    - 0.55–0.70: emit warning + pull enrichment context
-    - < 0.55: emit block + attempt re-distillation
-    """
-    score = fid_result["fidelity_score"]
-    action = fid_result["action"]
-
-    if score >= FIDELITY_HIGH:
-        return  # normal pass-through
-
-    agent_id = agent["agent_id"]
-
-    if score >= FIDELITY_WARN:
-        # 0.70–0.85: continue but warn frontend
-        await manager.broadcast(
-            session_id,
-            {
-                "event": "fidelity_warning",
-                "sessionId": session_id,
-                "agentId": agent_id,
-                "fidelityScore": score,
-                "grade": "warn",
-                "message": f"Agent {agent_id} 响应保真度偏低（{score:.2f}），建议核实关键信息。",
-                "timestamp": now(),
-            },
-        )
-        return
-
-    if score >= FIDELITY_LOW:
-        # 0.55–0.70: auto-pull extended context and supplement
-        await manager.broadcast(
-            session_id,
-            {
-                "event": "fidelity_warning",
-                "sessionId": session_id,
-                "agentId": agent_id,
-                "fidelityScore": score,
-                "grade": "low",
-                "message": f"Agent {agent_id} 保真度不足（{score:.2f}），正在拉取扩展上下文补充...",
-                "timestamp": now(),
-            },
-        )
-        # Build enrichment prompt and re-invoke the agent
-        enrichment = build_enrichment_prompt(content, response_text[:2000], score)
-        logger.info("ws fidelity enrich session=%s agent=%s score=%.2f", session_id, agent_id, score)
-        try:
-            enriched_text = await _invoke_agent(
-                session_id, enrichment, agent, user_id, token, attachments,
-                collab_ctx=f"【保真度补充 — 上一轮响应保真度仅 {score:.2f}，请基于原始需求补充遗漏的关键信息】\n原始需求：{content[:1000]}",
-            )
-            if enriched_text and not token.cancelled:
-                collab.record(agent_id + "_enriched", agent.get("domain", ""), enriched_text)
-        except Exception:
-            logger.exception("ws fidelity enrich failed session=%s agent=%s", session_id, agent_id)
-        return
-
-    # < 0.55: BLOCK — require re-distillation or human confirmation
-    await manager.broadcast(
-        session_id,
-        {
-            "event": "fidelity_block",
-            "sessionId": session_id,
-            "agentId": agent_id,
-            "fidelityScore": score,
-            "grade": "block",
-            "message": f"Agent {agent_id} 响应保真度严重不足（{score:.2f}），已阻断传递，正在请求重新提炼...",
-            "requiresHumanConfirm": True,
-            "timestamp": now(),
-        },
-    )
-    logger.warning("ws fidelity block session=%s agent=%s score=%.2f", session_id, agent_id, score)
-    # Attempt re-distillation
-    redistill_prompt = build_redistill_prompt(content, response_text[:2000], score)
-    try:
-        redistilled = await _invoke_agent(
-            session_id, redistill_prompt, agent, user_id, token, attachments,
-            collab_ctx="【重新提炼 — 上一轮响应质量不达标，请基于原始需求重新生成高质量回复】",
-        )
-        if redistilled and not token.cancelled:
-            new_fid = collab.record(agent_id + "_redistilled", agent.get("domain", ""), redistilled)
-            new_score = new_fid["fidelity_score"]
-            if new_score >= FIDELITY_LOW:
-                await manager.broadcast(
-                    session_id,
-                    {
-                        "event": "fidelity_resolved",
-                        "sessionId": session_id,
-                        "agentId": agent_id,
-                        "fidelityScore": new_score,
-                        "message": f"重新提炼完成，保真度恢复至 {new_score:.2f}。",
-                        "timestamp": now(),
-                    },
-                )
-            else:
-                await manager.broadcast(
-                    session_id,
-                    {
-                        "event": "fidelity_block",
-                        "sessionId": session_id,
-                        "agentId": agent_id,
-                        "fidelityScore": new_score,
-                        "grade": "block",
-                        "message": f"重新提炼后保真度仍不足（{new_score:.2f}），需要人工确认后继续。",
-                        "requiresHumanConfirm": True,
-                        "timestamp": now(),
-                    },
-                )
-    except Exception:
-        logger.exception("ws fidelity redistill failed session=%s agent=%s", session_id, agent_id)
+def _build_safety_block_message(result) -> str:
+    """Build a human-readable safety block message from guardrail flags."""
+    lines = [
+        "🚫 **安全护栏检测 — 消息已被阻断**\n",
+        "您的输入触发了以下安全红线，消息未被发送给 Agent：\n",
+    ]
+    for f in result.flags:
+        cat_label = {
+            "pii": "🔒 隐私信息泄露",
+            "injection": "🛡️ 注入攻击检测",
+            "harmful": "⚠️ 有害内容检测",
+        }.get(f.category.value, f.category.value)
+        lines.append(f"- {cat_label}：{f.message}")
+    lines.append("\n---\n")
+    lines.append("请移除敏感信息后重试。如有疑问，请联系系统管理员。")
+    return "\n".join(lines)
 
 
 async def _process_and_stream(
@@ -424,6 +322,29 @@ async def _process_and_stream(
 
         try:
             await save_message(session_id, sender, content, "text")
+
+            # ── Safety guardrail scan (Tier 1: auto-block) ──────────
+            guard_result = _guardrails_scan(content)
+            if guard_result.blocked:
+                block_msg = _build_safety_block_message(guard_result)
+                await manager.broadcast(
+                    session_id,
+                    {
+                        "event": "message",
+                        "sessionId": session_id,
+                        "content": block_msg,
+                        "sender": "system",
+                        "timestamp": now(),
+                        "type": "system",
+                        "guardrailResult": guard_result.to_dict(),
+                    },
+                )
+                logger.warning(
+                    "ws guardrail blocked session=%s flags=%s",
+                    session_id,
+                    [f"{f.rule}:{f.message[:60]}" for f in guard_result.flags],
+                )
+                return  # stop — don't route to agent
 
             # ── Skill invocation detection ──────────────────────────
             # Detect /skill-name patterns and inject SKILL.md body as
@@ -490,12 +411,7 @@ async def _process_and_stream(
                             collab_ctx=ctx,
                         )
                         if not token.cancelled and response_text:
-                            fid_result = collab.record(agent["agent_id"], agent.get("domain", ""), response_text)
-                            # ── Fidelity closed-loop (§3.3) ──────────
-                            await _handle_fidelity(
-                                session_id, content, agent, user_id, token,
-                                attachments or [], response_text, fid_result, collab,
-                            )
+                            collab.record(agent["agent_id"], agent.get("domain", ""), response_text)
                     except Exception:
                         if not token.cancelled:
                             await manager.broadcast(
@@ -510,9 +426,8 @@ async def _process_and_stream(
                                 },
                             )
 
-                # Emit collaboration summary (with overall fidelity)
+                # Emit collaboration summary
                 final_summary = collab.summary
-                overall_fid = collab.overall_fidelity
                 if final_summary and not token.cancelled:
                     await manager.broadcast(
                         session_id,
@@ -523,7 +438,6 @@ async def _process_and_stream(
                             "sender": "system",
                             "timestamp": now(),
                             "type": "system",
-                            "fidelityScore": overall_fid,
                         },
                     )
                 return

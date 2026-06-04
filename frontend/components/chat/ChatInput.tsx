@@ -82,11 +82,21 @@ interface ChatInputProps {
   onSend: () => void;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onRemoveFile: (index: number) => void;
+  /**
+   * 点击附件卡片上的预览眼睛按钮 → 打开 FilePreviewModal。
+   * 未传则不显示预览按钮。已经在上传中的文件不会触发预览。
+   */
+  onPreviewFile?: (file: AttachedFile) => void;
   onClearAllFiles: () => void;
   onPasteFiles: (files: File[]) => void;
   fileReferences?: FileReference[];
   onRemoveReference?: (index: number) => void;
   onClearAllReferences?: () => void;
+  /**
+   * 点击引用芯片 → 在右侧预览面板中定位到该文件并滚动到对应行号。
+   * 不传则芯片仅展示用，不可点击。
+   */
+  onJumpToReference?: (ref: FileReference) => void;
   onInsertMention: (agentId: string) => void;
   onInsertAllMentions: () => void;
   onInsertWorkflow: (wf: WorkflowSummary) => void;
@@ -101,10 +111,10 @@ const ChatInput = memo(function ChatInput({
   mentionOpen, mentionTrigger, mentionSearch, mentionActiveIndex, selectedRiskLevel,
   filteredAgents, filteredWorkflows, filteredSkills,
   textareaRef, mentionPanelRef, fileInputRef,
-  onInputChange, onBlur, onKeyDown, onSend, onFileChange, onRemoveFile, onClearAllFiles, onPasteFiles,
+  onInputChange, onBlur, onKeyDown, onSend, onFileChange, onRemoveFile, onClearAllFiles, onPasteFiles, onPreviewFile,
   onInsertMention, onInsertAllMentions, onInsertWorkflow, onInsertSkill,
   onMentionSearchChange, onMentionActiveIndexChange, onRiskLevelChange,
-  fileReferences, onRemoveReference, onClearAllReferences,
+  fileReferences, onRemoveReference, onClearAllReferences, onJumpToReference,
 }: ChatInputProps) {
   // Emoji popover state. The panel is positioned via fixed offsets so
   // it always lands above the toolbar, regardless of scroll position.
@@ -409,25 +419,35 @@ const ChatInput = memo(function ChatInput({
                 <div className="inline-flex gap-1.5 py-0.5 pr-2">
                   {attachedFiles.map((f, i) => {
                     const isImage = f.category === 'image' && f.content;
+                    const isUploading = f.uploadStatus === 'uploading';
+                    const isErrored = f.uploadStatus === 'error';
+                    // 设计图样式: 暗色卡片, 蓝色文件图标, 右侧悬浮眼睛按钮 + 关闭按钮
+                    const chipClass = isErrored
+                      ? 'bg-danger-50 border-danger-200 text-danger-700'
+                      : isUploading
+                        ? 'bg-primary-50 border-primary-200 text-warm-700'
+                        : 'bg-warm-900 border-warm-800 text-warm-50 hover:bg-warm-800';
                     return (
                       <span
                         key={`${f.name}-${i}`}
-                        className={`group relative inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs border shrink-0 ${
-                          f.uploadStatus === 'error'
-                            ? 'bg-danger-50 border-danger-200 text-danger-700'
-                            : f.uploadStatus === 'uploading'
-                              ? 'bg-primary-50 border-primary-200 text-warm-700'
-                              : 'bg-warm-100 border-warm-150 text-warm-700'
-                        }`}
+                        className={`group relative inline-flex items-center gap-1.5 rounded-lg pl-2 pr-1 py-1 text-xs border shrink-0 transition-colors ${chipClass}`}
                       >
                         {isImage ? (
                           <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" />
                         ) : (
-                          <FileIcon category={f.category} size={3.5} />
+                          <span
+                            className={`shrink-0 flex items-center justify-center h-5 w-5 rounded ${isUploading || isErrored ? 'bg-white/40' : 'bg-primary-500/20'}`}
+                          >
+                            <FileIcon category={f.category} size={3.5} />
+                          </span>
                         )}
-                        <span className="max-w-[120px] truncate">{displayName(f.name)}</span>
-                        <span className="text-warm-400 shrink-0">{formatSize(f.size)}</span>
-                        {f.uploadStatus === 'uploading' && (
+                        <span className={`max-w-[120px] truncate ${isUploading || isErrored ? '' : 'text-warm-50'}`}>
+                          {displayName(f.name)}
+                        </span>
+                        <span className={`shrink-0 ${isUploading || isErrored ? 'text-warm-500' : 'text-warm-300'}`}>
+                          {formatSize(f.size)}
+                        </span>
+                        {isUploading && (
                           <span className="flex items-center gap-1 text-primary-600">
                             <span className="h-2 w-12 overflow-hidden rounded-full bg-primary-100">
                               <span className="block h-full rounded-full bg-primary-500 transition-all" style={{ width: `${f.uploadProgress || 0}%` }} />
@@ -435,16 +455,54 @@ const ChatInput = memo(function ChatInput({
                             <span className="text-[10px]">{f.uploadProgress || 0}%</span>
                           </span>
                         )}
-                        {f.uploadStatus === 'error' && (
+                        {isErrored && (
                           <span className="text-[10px] text-danger-500" title={f.uploadError}>失败</span>
                         )}
-                        {f.uploadStatus !== 'uploading' && (
+
+                        {/* 预览按钮 (眼睛) - 设计图核心交互: 上传成功后可点 */}
+                        {!isUploading && onPreviewFile && f.uploadStatus === 'done' && (
                           <button
-                            className="ml-0.5 shrink-0 text-warm-400 hover:text-danger-500"
-                            onClick={() => onRemoveFile(i)}
-                            title="Remove"
+                            type="button"
+                            className={`ml-0.5 shrink-0 inline-flex h-5 w-5 items-center justify-center rounded transition-colors ${
+                              isErrored
+                                ? 'text-warm-400 hover:text-danger-600 hover:bg-white/30'
+                                : 'text-warm-200 hover:text-white hover:bg-white/15'
+                            }`}
+                            onClick={() => onPreviewFile(f)}
+                            title="预览文件"
+                            aria-label={`预览 ${f.name}`}
                           >
-                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            <svg
+                              className="h-3.5 w-3.5"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                          </button>
+                        )}
+
+                        {!isUploading && (
+                          <button
+                            type="button"
+                            className={`ml-0.5 shrink-0 inline-flex h-5 w-5 items-center justify-center rounded transition-colors ${
+                              isErrored
+                                ? 'text-warm-400 hover:text-danger-600 hover:bg-white/30'
+                                : 'text-warm-200 hover:text-white hover:bg-white/15'
+                            }`}
+                            onClick={() => onRemoveFile(i)}
+                            title="移除"
+                            aria-label={`移除 ${f.name}`}
+                          >
+                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                              <line x1="18" y1="6" x2="6" y2="18" />
+                              <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
                           </button>
                         )}
 
@@ -492,42 +550,82 @@ const ChatInput = memo(function ChatInput({
                         ? `L${ref.lineStart}-L${ref.lineEnd}`
                         : `L${ref.lineStart}`
                       : '';
+                    const truncated = (ref.quote?.length ?? 0) > 50;
                     return (
                       <span
                         key={ref.id}
-                        className="group relative inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs border shrink-0 bg-purple-50 border-purple-200 text-purple-700"
+                        className="group relative inline-flex items-center gap-1.5 rounded-lg pl-2.5 pr-1 py-1 text-xs border shrink-0 bg-purple-50 border-purple-200 text-purple-700"
                       >
-                        <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                          <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                        </svg>
-                        <span className="max-w-[100px] truncate font-medium">{ref.name}</span>
-                        {lineInfo && (
-                          <span className="text-purple-400 shrink-0 text-[10px]">{lineInfo}</span>
-                        )}
-                        {ref.quote && (
-                          <span className="max-w-[140px] truncate text-purple-400 italic">
-                            "{ref.quote.slice(0, 50)}{ref.quote.length > 50 ? '...' : ''}"
+                        {/* 整块可点击 → 跳转回源文件 */}
+                        {onJumpToReference ? (
+                          <button
+                            type="button"
+                            onClick={() => onJumpToReference(ref)}
+                            className="flex items-center gap-1.5 outline-none focus-visible:ring-2 focus-visible:ring-purple-400 rounded-md"
+                            title="在预览面板中跳转到该文件"
+                          >
+                            <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                            </svg>
+                            <span className="max-w-[100px] truncate font-medium">{ref.name}</span>
+                            {lineInfo && (
+                              <span className="text-purple-400 shrink-0 text-[10px]">{lineInfo}</span>
+                            )}
+                            {ref.quote && (
+                              <span className="max-w-[140px] truncate text-purple-400 italic">
+                                "{ref.quote.slice(0, 50)}{truncated ? '…' : ''}"
+                              </span>
+                            )}
+                            <svg className="h-3 w-3 shrink-0 text-purple-300 group-hover:text-purple-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M7 17l10-10"/>
+                              <path d="M7 7h10v10"/>
+                            </svg>
+                          </button>
+                        ) : (
+                          <span className="flex items-center gap-1.5">
+                            <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                            </svg>
+                            <span className="max-w-[100px] truncate font-medium">{ref.name}</span>
+                            {lineInfo && (
+                              <span className="text-purple-400 shrink-0 text-[10px]">{lineInfo}</span>
+                            )}
+                            {ref.quote && (
+                              <span className="max-w-[140px] truncate text-purple-400 italic">
+                                "{ref.quote.slice(0, 50)}{truncated ? '…' : ''}"
+                              </span>
+                            )}
                           </span>
                         )}
                         {onRemoveReference && (
                           <button
+                            type="button"
                             className="ml-0.5 shrink-0 text-purple-400 hover:text-danger-500"
-                            onClick={() => onRemoveReference(i)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRemoveReference(i);
+                            }}
                             title="移除引用"
                           >
                             <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                           </button>
                         )}
 
-                        {/* Hover tooltip */}
+                        {/* Hover tooltip — 展示完整路径 + 完整 quote */}
                         <span
                           role="tooltip"
-                          className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md border border-purple-200 bg-purple-900 px-2 py-1 text-[11px] text-white opacity-0 shadow-modal transition-opacity duration-150 group-hover:opacity-100"
+                          className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 -translate-x-1/2 max-w-[360px] whitespace-pre-wrap break-words rounded-md border border-purple-200 bg-purple-900 px-2.5 py-1.5 text-[11px] text-white opacity-0 shadow-modal transition-opacity duration-150 group-hover:opacity-100"
                         >
-                          <span className="block max-w-[280px] truncate">{ref.path}</span>
-                          {lineInfo && <span className="block text-[10px] text-purple-300">{lineInfo}</span>}
-                          {ref.quote && <span className="block max-w-[280px] truncate text-[10px] text-purple-300 mt-0.5">"{ref.quote}"</span>}
+                          <span className="block text-[10px] text-purple-300 mb-0.5">{ref.path}</span>
+                          {lineInfo && <span className="block text-[10px] text-purple-300 mb-1">{lineInfo}</span>}
+                          {ref.quote && (
+                            <span className="block text-[11px] text-purple-100 italic">"{ref.quote}"</span>
+                          )}
+                          {onJumpToReference && (
+                            <span className="block text-[10px] text-purple-300 mt-1">点击跳转回源文件</span>
+                          )}
                         </span>
                       </span>
                     );

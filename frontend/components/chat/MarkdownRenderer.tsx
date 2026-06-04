@@ -2,8 +2,31 @@ import { useState, type JSX, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import InteractiveCodeBlock from './InteractiveCodeBlock';
+import HTMLPreviewBlock from './HTMLPreviewBlock';
 import MermaidChart from './MermaidChart';
 import DataTable, { type DataTableColumn } from './DataTable';
+import type { FileReference } from '../../types';
+
+/** 被引用的行高亮颜色（在 markdown 视图里） */
+const REFERENCED_HIGHLIGHT = 'bg-amber-50 ring-1 ring-amber-300/60 rounded-md -mx-2 px-2';
+
+/**
+ * 计算一个 markdown block 是否落在任意 [lineStart, lineEnd] 引用区间内
+ */
+function findEnclosingReference(
+  refs: FileReference[] | undefined,
+  startLine: number,
+  endLine: number,
+): FileReference | undefined {
+  if (!refs) return undefined;
+  return refs.find((r) => {
+    if (!r.lineStart) return false;
+    const s = r.lineStart;
+    const e = r.lineEnd ?? r.lineStart;
+    // 有重叠即算命中
+    return s <= endLine && e >= startLine;
+  });
+}
 
 export interface MarkdownRendererProps {
   /** Markdown 原始文本 */
@@ -14,6 +37,11 @@ export interface MarkdownRendererProps {
   runningCodeKey?: string | null;
   /** 额外的容器 className */
   className?: string;
+  /**
+   * 当前 Markdown 文档对应的所有引用（来自 ChatInput 的 fileReferences）。
+   * 命中的 block 会加高亮回显，并且会给行号节点写入 data-reference-id。
+   */
+  references?: FileReference[];
 }
 
 /**
@@ -73,6 +101,7 @@ export default function MarkdownRenderer({
   onRunCode,
   runningCodeKey,
   className = '',
+  references,
 }: MarkdownRendererProps): JSX.Element {
   /** 代码片段计数器 */
   let codeIndex = 0;
@@ -82,6 +111,31 @@ export default function MarkdownRenderer({
   };
 
   const runKeyFor = (language: string, idx: number) => `${language}-${idx}`;
+
+  /**
+   * react-markdown 给每个 component 注入的 node.position 包含起止行号（1-based）。
+   * 返回要 spread 到 block 元素上的 props：行号 + 可选 id + 命中引用时的高亮 class。
+   */
+  const blockProps = (node: any, extraClass = ''): {
+    'data-line-number'?: number;
+    'data-line-end'?: number;
+    'data-reference-id'?: string;
+    id?: string;
+    className?: string;
+  } => {
+    const startLine: number | undefined = node?.position?.start?.line;
+    const endLine: number | undefined = node?.position?.end?.line;
+    if (!startLine) return {};
+    const ref = findEnclosingReference(references, startLine, endLine ?? startLine);
+    const highlight = ref ? REFERENCED_HIGHLIGHT : '';
+    return {
+      'data-line-number': startLine,
+      'data-line-end': endLine ?? startLine,
+      'data-reference-id': ref?.id,
+      id: ref ? `md-ref-${ref.id}` : undefined,
+      className: extraClass ? `${extraClass} ${highlight}`.trim() : highlight || undefined,
+    };
+  };
 
   return (
     <div className={`markdown-renderer ${className}`}>
@@ -104,6 +158,18 @@ export default function MarkdownRenderer({
               }
 
               const idx = nextCodeIndex();
+
+              // HTML 代码块 → 双区块展示（代码 + 预览）
+              if (language === 'html' || language === 'htm') {
+                return (
+                  <HTMLPreviewBlock
+                    code={codeString}
+                    index={idx}
+                    defaultTab="preview"
+                  />
+                );
+              }
+
               const runKey = runKeyFor(language, idx);
 
               return (
@@ -194,43 +260,47 @@ export default function MarkdownRenderer({
           },
 
           /** 段落 */
-          p({ children }: any) {
-            return <p className="mb-3 leading-7 text-warm-700 last:mb-0">{children}</p>;
+          p({ children, node }: any) {
+            const bp = blockProps(node, 'mb-3 leading-7 text-warm-700 last:mb-0');
+            return <p {...bp}>{children}</p>;
           },
 
           /** 标题 */
-          h1({ children }: any) {
-            return <h1 className="mb-4 mt-6 text-2xl font-semibold text-warm-900 first:mt-0">{children}</h1>;
+          h1({ children, node }: any) {
+            const bp = blockProps(node, 'mb-4 mt-6 text-2xl font-semibold text-warm-900 first:mt-0');
+            return <h1 {...bp}>{children}</h1>;
           },
-          h2({ children }: any) {
-            return <h2 className="mb-3 mt-5 text-xl font-semibold text-warm-900 first:mt-0">{children}</h2>;
+          h2({ children, node }: any) {
+            const bp = blockProps(node, 'mb-3 mt-5 text-xl font-semibold text-warm-900 first:mt-0');
+            return <h2 {...bp}>{children}</h2>;
           },
-          h3({ children }: any) {
-            return <h3 className="mb-2 mt-4 text-lg font-semibold text-warm-800 first:mt-0">{children}</h3>;
+          h3({ children, node }: any) {
+            const bp = blockProps(node, 'mb-2 mt-4 text-lg font-semibold text-warm-800 first:mt-0');
+            return <h3 {...bp}>{children}</h3>;
           },
 
           /** 无序列表 */
-          ul({ children }: any) {
-            return <ul className="mb-3 list-disc space-y-1 pl-6 text-warm-700">{children}</ul>;
+          ul({ children, node }: any) {
+            const bp = blockProps(node, 'mb-3 list-disc space-y-1 pl-6 text-warm-700');
+            return <ul {...bp}>{children}</ul>;
           },
 
           /** 有序列表 */
-          ol({ children }: any) {
-            return <ol className="mb-3 list-decimal space-y-1 pl-6 text-warm-700">{children}</ol>;
+          ol({ children, node }: any) {
+            const bp = blockProps(node, 'mb-3 list-decimal space-y-1 pl-6 text-warm-700');
+            return <ol {...bp}>{children}</ol>;
           },
 
           /** 列表项 */
-          li({ children }: any) {
-            return <li className="leading-7">{children}</li>;
+          li({ children, node }: any) {
+            const bp = blockProps(node, 'leading-7');
+            return <li {...bp}>{children}</li>;
           },
 
           /** 引用块 */
-          blockquote({ children }: any) {
-            return (
-              <blockquote className="mb-3 border-l-4 border-primary-300 bg-primary-50/50 py-2 pl-4 italic text-warm-600">
-                {children}
-              </blockquote>
-            );
+          blockquote({ children, node }: any) {
+            const bp = blockProps(node, 'mb-3 border-l-4 border-primary-300 bg-primary-50/50 py-2 pl-4 italic text-warm-600');
+            return <blockquote {...bp}>{children}</blockquote>;
           },
 
           /** 链接 */

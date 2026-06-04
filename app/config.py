@@ -73,5 +73,9 @@ SKILLS_DIR_PROJECT = PROJECT_ROOT / ".claude" / "skills"
 COMMAND_EXECUTE_TIMEOUT = int(os.getenv("AGENTHUB_COMMAND_TIMEOUT", "120"))
 COMMAND_EXECUTE_MAX_OUTPUT = int(os.getenv("AGENTHUB_COMMAND_MAX_OUTPUT", "100000"))
 
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("AGENTHUB_REQUEST_TIMEOUT", "45"))
+# Default 600 s (10 min) — complex tasks (full blog HTML, multi-file codegen,
+# long chains of tool calls) can take several minutes.  The old 45 s default
+# was too aggressive and silently killed legitimate long-running requests.
+# Operators can still override via AGENTHUB_REQUEST_TIMEOUT if needed.
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("AGENTHUB_REQUEST_TIMEOUT", "600"))
 ENABLE_REAL_LLM = os.getenv("AGENTHUB_ENABLE_REAL_LLM", "true").lower() != "false"

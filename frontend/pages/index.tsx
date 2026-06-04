@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } fr
 import AuthForm from '../components/chat/AuthForm';
 import ChatHeader from '../components/chat/ChatHeader';
 import ChatInput from '../components/chat/ChatInput';
+import FilePreviewModal from '../components/chat/FilePreviewModal';
 import DagModal from '../components/chat/DagModal';
 import MessageList from '../components/chat/MessageList';
 import SessionSidebar from '../components/chat/SessionSidebar';
@@ -10,7 +11,22 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import FilePreviewPanel from '../components/chat/FilePreviewPanel';
 import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
+import { normalizeReferences } from '../lib/references';
+import {
+  useSessionMessages,
+  useSessionStreaming,
+  updateSessionMessages,
+  setSessionStreaming,
+  getSessionBuffer,
+  setSessionBuffer,
+  replaceSessionMessages,
+  clearSession,
+  pinSession,
+  unpinSession,
+  type StreamBuffer,
+} from '../lib/sessionStore';
 import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
+import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
@@ -63,9 +79,13 @@ export default function AgentHubIM(): JSX.Element {
   const [user, setUser] = useState<User | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authForm, setAuthForm] = useState<{ name: string; password: string }>({ name: 'admin', password: 'admin123' });
-  const [messages, setMessages] = useState<Message[]>([]);
+  // ── 当前 session 的 messages / isStreaming 从 SessionStore 派生 ────────────
+  // 这样切到别的 session 时，旧 session 的 messages 和流状态会保留在 Map 里，
+  // 切回来时直接命中缓存，流的 chunks 不会丢。
   const [sessions, setSessions] = useState<ChatSession[]>([]);
-  const [sessionId, setSessionId] = useState<string>('session-1');
+  const [sessionId, setSessionId] = useState<string>('');
+  const messages = useSessionMessages(sessionId);
+  const isStreaming = useSessionStreaming(sessionId);
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
@@ -86,15 +106,21 @@ export default function AgentHubIM(): JSX.Element {
   const [mentionTrigger, setMentionTrigger] = useState<'@' | '#' | '/'>( '@');
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
   const [skills, setSkills] = useState<SkillMeta[]>([]);
-  const [isStreaming, setIsStreaming] = useState<boolean>(false);
   const [editingId, setEditingId] = useState<string>('');
   const [editName, setEditName] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  // 附件卡片的全屏预览弹窗 (点击眼睛按钮触发)
+  const [previewFile, setPreviewFile] = useState<FilePreviewTarget | null>(null);
   const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
   const [previewTabs, setPreviewTabs] = useState<WorkspacePreviewTab[]>([]);
   const [activePreviewTabId, setActivePreviewTabId] = useState<string | null>(null);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [previewPanelOpen, setPreviewPanelOpen] = useState<boolean>(false);
+  /**
+   * 触发预览面板跳转到某条引用对应的行号。
+   * 写一个递增 counter，让 FilePreviewPanel 用 effect 监听变化并执行滚动。
+   */
+  const [pendingScrollRef, setPendingScrollRef] = useState<{ id: string; nonce: number } | null>(null);
 
   // ── 可调整布局尺寸（localStorage 持久化） ──────────────
   // 左侧会话栏宽度：默认 320px，可在 240-480 之间调整
@@ -117,7 +143,14 @@ export default function AgentHubIM(): JSX.Element {
   // 整个外层 flex 容器的引用（用于响应式断点计算）
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
+  // ── per-session WebSocket 连接 ─────────────────────────────────────
+  // 切 session 时不关闭旧 session 的 WebSocket，让后台 session 的流照常累积。
+  // closeWs(sid) 只在删除会话 / 登出 / 组件卸载时调用。
+  const wsRef = useRef<Map<string, WebSocket>>(new Map());
+  const wsReadyRef = useRef<Map<string, boolean>>(new Map());
+  // ★ streamBufferRef 不再使用——buffer 走 SessionStore。
+  // ★ streamFlushRafRef 改为 per-session Map，让每个 session 独立 RAF 调度 flush。
+  const streamFlushRafRef = useRef<Map<string, number>>(new Map());
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -130,14 +163,19 @@ export default function AgentHubIM(): JSX.Element {
   const mentionStartRef = useRef<number>(-1);
   const mentionPanelRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const streamBufferRef = useRef<{ messageId: string; sessionId: string; chunks: string[]; isFinal: boolean } | null>(null);
-  const streamFlushRafRef = useRef<number | null>(null);
   const inputRef = useRef(input);
   inputRef.current = input;
   const attachedFilesRef = useRef(attachedFiles);
   attachedFilesRef.current = attachedFiles;
+  const previewTabsRef = useRef(previewTabs);
+  previewTabsRef.current = previewTabs;
   const prevMessageCountRef = useRef(0);
   const prevSessionRef = useRef<string>(sessionId);
+  // 关键修复：始终以 ref 形式保留最新的 sessionId，
+  // 让 handleSend / handleRetryMessage 等回调即使在 useCallback 闭包过期时
+  // 也能拿到“此时此刻”真实的 sessionId，而不是上一次渲染的快照。
+  const activeSessionIdRef = useRef<string>(sessionId);
+  activeSessionIdRef.current = sessionId;
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Effects ──────────────────────────────────────────────
@@ -190,13 +228,13 @@ export default function AgentHubIM(): JSX.Element {
   }, [token]);
 
   async function reloadMessages(merge = false): Promise<void> {
+    const sid = currentSessionRef.current;
     try {
-      const sid = currentSessionRef.current;
       const res = await fetch(`/api/chat/sessions/${sid}/messages`, { headers: authHeaders() });
       if (!res.ok) return;
       const data: Message[] = (await res.json()) as Message[];
       if (merge) {
-        setMessages((prev) => {
+        updateSessionMessages(sid, (prev) => {
           const existingIds = new Set(prev.filter((m) => m.id).map((m) => m.id));
           const newMessages = data.filter((m) => !m.id || !existingIds.has(m.id));
           if (newMessages.length === 0) return prev;
@@ -207,9 +245,11 @@ export default function AgentHubIM(): JSX.Element {
         });
       } else {
         // Always replace messages on a full (non-merge) reload.
-        // When switching sessions we must clear stale messages even
-        // when the new session has no messages yet.
-        setMessages([...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)));
+        // 写到 SessionStore（per-session），切走再切回来时这条记录还在 Map 里。
+        replaceSessionMessages(
+          sid,
+          [...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
+        );
       }
     } catch { /* ignore */ }
   }
@@ -226,28 +266,27 @@ export default function AgentHubIM(): JSX.Element {
     dedupIdsRef.current = new Set();
     retryRef.current = [];
     setPending([]);
-    streamBufferRef.current = null;
-    setIsStreaming(false);
+    // ★ 关键修复：不要清 stream buffer，也不要重置 isStreaming。
+    // 旧 session 正在流式接收的 chunks 应当继续累积到 SessionStore 里对应 session 的
+    // buffer 中，等用户切回时能立即看到流式结果。buffer 走 store，不走 ref。
     setFileReferences([]);
     // Don't reset previewTabs on session switch — user may want to
     // keep viewing previously generated files across sessions.
-    void reloadMessages(false);
-    connectWs();
+    // ★ 关键修复：reloadMessages 改成写到 SessionStore 的 per-session Map。
+    // 如果新 session 在 Store 里已经有缓存（用户切走又切回），命中缓存就不发 API。
+    const cached = getSessionBuffer(sessionId);
+    if (!cached) {
+      void reloadMessages(false);
+    }
+    // 无论是否命中缓存，都要 connectWs —— 切回来时需要新 WebSocket 继续接收 chunks。
+    connectWs(sessionId);
     return () => {
-      wsRef.current?.close();
+      // 注意：切 session 不再关闭旧 WebSocket，旧 session 仍在后台接收 chunks。
+      // 旧 ws 仅在删除会话 / 登出 / 组件卸载时由 closeWs() 关闭。
       if (reconnectRef.current) {
         clearTimeout(reconnectRef.current);
         reconnectRef.current = null;
       }
-      if (streamFlushRafRef.current != null) {
-        window.cancelAnimationFrame(streamFlushRafRef.current);
-        streamFlushRafRef.current = null;
-      }
-      if (blurTimerRef.current) {
-        clearTimeout(blurTimerRef.current);
-        blurTimerRef.current = null;
-      }
-      streamBufferRef.current = null;
     };
   }, [token, sessionId]);
 
@@ -281,9 +320,14 @@ export default function AgentHubIM(): JSX.Element {
 
   // ── Streaming ────────────────────────────────────────────
 
-  function flushStreamBuffer(): void {
-    const buf = streamBufferRef.current;
-    if (!buf || currentSessionRef.current !== buf.sessionId) return;
+  /**
+   * 把指定 session 的 buffer 中的 chunks 应用到对应 session 的 messages。
+   * 每个 session 独立调度：切到别的 session 时旧 session 的 chunks 仍能被正确
+   * 累积到对应 session 的 messages 里，切回来时直接看到完整流式结果。
+   */
+  function flushStreamBuffer(sessionId: string): void {
+    const buf = getSessionBuffer(sessionId);
+    if (!buf) return;
 
     // Handle final signal even when no content chunks are pending.
     // The backend sends an empty message_chunk with isFinal=true to
@@ -291,24 +335,27 @@ export default function AgentHubIM(): JSX.Element {
     // below would drop the final flag, leaving isStreaming stuck.
     if (buf.chunks.length === 0) {
       if (buf.isFinal) {
-        setIsStreaming(false);
-        streamBufferRef.current = null;
+        setSessionStreaming(buf.sessionId, false);
+        setSessionBuffer(buf.sessionId, null);
       }
       return;
     }
 
     const contentDelta = buf.chunks.join('');
     const finalFlag = buf.isFinal;
-    buf.chunks = [];
-    // Only clear isFinal when this flush didn't consume it —
-    // preserves the final signal if chunks arrive in the same
-    // JS tick as the empty isFinal marker.
-    if (!finalFlag) {
-      buf.isFinal = false;
-    }
+    // 重置 buffer 内容（保留 isFinal 以便 isFinal 分支消费）
+    const nextBuf: StreamBuffer = {
+      messageId: buf.messageId,
+      sessionId: buf.sessionId,
+      chunks: [],
+      isFinal: finalFlag ? false : buf.isFinal,
+    };
+    setSessionBuffer(buf.sessionId, nextBuf);
 
-    setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.messageId === buf.messageId);
+    const bufMessageId = buf.messageId;
+
+    updateSessionMessages(buf.sessionId, (prev) => {
+      const idx = prev.findIndex((m) => m.messageId === bufMessageId);
       if (idx >= 0) {
         const updated = [...prev];
         updated[idx] = {
@@ -325,15 +372,15 @@ export default function AgentHubIM(): JSX.Element {
         content: contentDelta,
         type: 'text',
         timestamp: new Date().toISOString(),
-        messageId: buf.messageId,
+        messageId: bufMessageId,
         isStreaming: !finalFlag,
       };
       return [...prev, newMsg];
     });
 
     if (finalFlag) {
-      setIsStreaming(false);
-      streamBufferRef.current = null;
+      setSessionStreaming(buf.sessionId, false);
+      setSessionBuffer(buf.sessionId, null);
     }
   }
 
@@ -346,26 +393,52 @@ export default function AgentHubIM(): JSX.Element {
     return delay + Math.random() * 500; // jitter to avoid thundering herd
   }
 
-  function connectWs(): void {
-    const sid = currentSessionRef.current;
+  function closeWs(sid: string): void {
+    const existing = wsRef.current.get(sid);
+    if (existing) {
+      existing.onclose = null;
+      existing.close();
+      wsRef.current.delete(sid);
+    }
+    wsReadyRef.current.delete(sid);
+    unpinSession(sid);
+  }
+
+  function connectWs(targetSid?: string): void {
+    // 关键修复：必须用参数传入的 sessionId，而不是 currentSessionRef.current。
+    // useEffect 顺序执行的不确定性会让 ref 在 connectWs 触发时还未更新，
+    // 导致新建/切换会话时连到了旧 sid —— 表现就是 "只能发到固定会话"。
+    const sid = targetSid || currentSessionRef.current;
+    currentSessionRef.current = sid;
+    // eslint-disable-next-line no-console
+    console.log('[agenthub] connectWs called', { targetSid, ref: currentSessionRef.current, finalSid: sid, alreadyHas: wsRef.current.has(sid), wsMapKeys: Array.from(wsRef.current.keys()) });
+    // ★ 关键修复：如果该 session 已有 ws 但已 CLOSED/CLOSING，删掉重建。
+    // 仅当 ws 是 OPEN/CONNECTING 时才跳过。
+    const existing = wsRef.current.get(sid);
+    if (existing) {
+      if (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING) {
+        return;
+      }
+      // 死连接：清理掉，准备重建
+      try { existing.close(); } catch { /* ignore */ }
+      wsRef.current.delete(sid);
+      wsReadyRef.current.delete(sid);
+    }
+    pinSession(sid);
+
     if (reconnectRef.current) {
       clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
     }
-    // Close any existing socket
-    if (wsRef.current) {
-      wsRef.current.onclose = null; // prevent reconnect trigger
-      wsRef.current.close();
-      wsRef.current = null;
-    }
 
     const ws = new WebSocket(`ws://127.0.0.1:8000/ws/${sid}?token=${encodeURIComponent(token)}`);
-    wsRef.current = ws;
+    wsRef.current.set(sid, ws);
 
     ws.onopen = () => {
-      if (currentSessionRef.current !== sid) { ws.close(); return; }
+      if (wsRef.current.get(sid) !== ws) return; // 已被新连接替代
+      wsReadyRef.current.set(sid, true);
       setConnected(true);
-      reconnectAttemptsRef.current = 0; // reset backoff on successful connect
+      reconnectAttemptsRef.current = 0;
       setNotice('WebSocket connected');
 
       // Replay queued messages that were pending during disconnect
@@ -388,31 +461,39 @@ export default function AgentHubIM(): JSX.Element {
     };
 
     ws.onclose = () => {
+      wsReadyRef.current.delete(sid);
+      if (wsRef.current.get(sid) === ws) {
+        wsRef.current.delete(sid);
+      }
       setConnected(false);
-      // Flush any buffered stream content BEFORE clearing — otherwise
-      // the last batch of chunks from the final RAF frame is lost and
-      // the user sees a truncated response ("对话一半").
-      if (streamBufferRef.current && streamBufferRef.current.chunks.length > 0) {
-        flushStreamBuffer();
+      // Flush any buffered stream content for THIS session before clearing
+      const raf = streamFlushRafRef.current.get(sid);
+      if (raf != null) {
+        window.cancelAnimationFrame(raf);
+        streamFlushRafRef.current.delete(sid);
       }
-      if (streamFlushRafRef.current != null) {
-        window.cancelAnimationFrame(streamFlushRafRef.current);
-        streamFlushRafRef.current = null;
-      }
-      streamBufferRef.current = null;
-      setIsStreaming(false);
+      flushStreamBuffer(sid);
+      setSessionBuffer(sid, null);
+      setSessionStreaming(sid, false);
+      // 仅当用户当前还在这个 session 才重连
       if (currentSessionRef.current === sid) {
         reconnectAttemptsRef.current += 1;
+        if (reconnectRef.current) clearTimeout(reconnectRef.current);
         reconnectRef.current = setTimeout(connectWs, _reconnectDelay());
       }
     };
 
-    ws.onerror = () => setConnected(false);
+    ws.onerror = () => {
+      wsReadyRef.current.delete(sid);
+      setConnected(false);
+    };
 
     ws.onmessage = (event: MessageEvent<string>) => {
-      if (currentSessionRef.current !== sid) return;
+      // ★ 关键修复：移除 `currentSessionRef.current !== sid` 守卫。
+      // 后台 session 的 chunks 也要处理（写入该 session 的 buffer），切回来时直接可见。
       const raw: Record<string, unknown> = JSON.parse(event.data);
       const evt = raw.event as string | undefined;
+      const chunkSessionId = (raw.sessionId || sid) as string;
 
       // ── Heartbeat: respond to pings ──────────────────────────
       if (evt === 'ping') {
@@ -447,44 +528,54 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'message_chunk') {
         const chunk = raw as unknown as StreamChunk;
-        setIsStreaming(!chunk.isFinal);
+        const cSessionId = chunk.sessionId || chunkSessionId;
+        setSessionStreaming(cSessionId, !chunk.isFinal);
 
-        if (!streamBufferRef.current || streamBufferRef.current.messageId !== chunk.messageId || streamBufferRef.current.sessionId !== chunk.sessionId) {
+        const existingBuf = getSessionBuffer(cSessionId);
+        if (!existingBuf || existingBuf.messageId !== chunk.messageId) {
           // First chunk of a new stream — clean up any thinking placeholder
           // from the agent_thinking event (it has a different messageId)
-          setMessages((prev) => {
+          updateSessionMessages(cSessionId, (prev) => {
             const cleaned = prev.filter(
               (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
             );
             return cleaned.length !== prev.length ? cleaned : prev;
           });
 
-          streamBufferRef.current = {
+          setSessionBuffer(cSessionId, {
             messageId: chunk.messageId,
-            sessionId: chunk.sessionId,
+            sessionId: cSessionId,
             chunks: [],
             isFinal: false,
-          };
-        }
-
-        if (chunk.content) {
-          streamBufferRef.current.chunks.push(chunk.content);
-        }
-        if (chunk.isFinal) {
-          streamBufferRef.current.isFinal = true;
-        }
-
-        if (streamFlushRafRef.current == null) {
-          streamFlushRafRef.current = window.requestAnimationFrame(() => {
-            streamFlushRafRef.current = null;
-            flushStreamBuffer();
           });
+        }
+
+        // 把 chunk 追加到对应 session 的 buffer
+        const buf = getSessionBuffer(cSessionId);
+        if (buf) {
+          const nextChunks = chunk.content ? [...buf.chunks, chunk.content] : buf.chunks;
+          setSessionBuffer(cSessionId, {
+            messageId: buf.messageId,
+            sessionId: buf.sessionId,
+            chunks: nextChunks,
+            isFinal: buf.isFinal || !!chunk.isFinal,
+          });
+        }
+
+        // 调度该 session 自己的 RAF flush
+        if (!streamFlushRafRef.current.has(cSessionId)) {
+          const raf = window.requestAnimationFrame(() => {
+            streamFlushRafRef.current.delete(cSessionId);
+            flushStreamBuffer(cSessionId);
+          });
+          streamFlushRafRef.current.set(cSessionId, raf);
         }
       }
 
       if (evt === 'stream_interrupted') {
-        setIsStreaming(false);
-        setMessages((prev) => {
+        const iSessionId = chunkSessionId;
+        setSessionStreaming(iSessionId, false);
+        updateSessionMessages(iSessionId, (prev) => {
           const updated = [...prev];
           let changed = false;
           for (let i = updated.length - 1; i >= 0; i--) {
@@ -506,67 +597,6 @@ export default function AgentHubIM(): JSX.Element {
         });
       }
 
-      // ── Fidelity closed-loop events (§3.3) ─────────────────────
-      if (evt === 'fidelity_warning') {
-        const payload = raw as { agentId?: string; fidelityScore?: number; grade?: string; message?: string };
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last && last.sender === (payload.agentId || '') && last.fidelityScore == null) {
-            const updated = [...prev];
-            updated[updated.length - 1] = {
-              ...last,
-              fidelityScore: payload.fidelityScore,
-            };
-            return updated;
-          }
-          return [
-            ...prev,
-            {
-              event: 'message',
-              sessionId: sid,
-              sender: 'system',
-              content: payload.message || `保真度警告 (${(payload.fidelityScore || 0).toFixed(2)})`,
-              type: 'system' as const,
-              timestamp: new Date().toISOString(),
-              fidelityScore: payload.fidelityScore,
-            },
-          ];
-        });
-      }
-
-      if (evt === 'fidelity_block') {
-        const payload = raw as { agentId?: string; fidelityScore?: number; message?: string; requiresHumanConfirm?: boolean };
-        setIsStreaming(false);
-        setMessages((prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: sid,
-            sender: 'system',
-            content: `⚠️ ${payload.message || '保真度过低，流程已阻断'}` + (payload.requiresHumanConfirm ? '\n\n需要人工确认后继续。' : ''),
-            type: 'system' as const,
-            timestamp: new Date().toISOString(),
-            fidelityScore: payload.fidelityScore,
-          },
-        ]);
-      }
-
-      if (evt === 'fidelity_resolved') {
-        const payload = raw as { agentId?: string; fidelityScore?: number; message?: string };
-        setMessages((prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: sid,
-            sender: 'system',
-            content: `✅ ${payload.message || '保真度已恢复'}`,
-            type: 'system' as const,
-            timestamp: new Date().toISOString(),
-            fidelityScore: payload.fidelityScore,
-          },
-        ]);
-      }
-
       // ── Agent thinking (shows streaming indicator during tool phase) ──
       if (evt === 'agent_thinking') {
         const payload = raw as {
@@ -575,11 +605,11 @@ export default function AgentHubIM(): JSX.Element {
           phase?: string;
           details?: string;
         };
-        setIsStreaming(true);
+        setSessionStreaming(chunkSessionId, true);
         // Insert or update the thinking placeholder with phase details.
         // Subsequent agent_thinking events (e.g. "executing", "synthesizing")
         // update the same placeholder in-place so the user sees live progress.
-        setMessages((prev) => {
+        updateSessionMessages(chunkSessionId, (prev) => {
           const existingIdx = prev.findIndex(
             (m) => m.messageId === payload.messageId && m.isStreaming
           );
@@ -596,7 +626,7 @@ export default function AgentHubIM(): JSX.Element {
             ...prev,
             {
               event: 'message',
-              sessionId: sid,
+              sessionId: chunkSessionId,
               sender: payload.agentId || 'agent',
               content: payload.details || '',
               type: 'text' as const,
@@ -611,7 +641,7 @@ export default function AgentHubIM(): JSX.Element {
       // ── Tool call events ──────────────────────────────────────────
       if (evt === 'tool_call') {
         const payload = raw as unknown as ToolCallEvent;
-        setMessages((prev) => {
+        updateSessionMessages(chunkSessionId, (prev) => {
           // Remove empty thinking placeholders — tool execution has started
           const cleaned = prev.filter(
             (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
@@ -620,7 +650,7 @@ export default function AgentHubIM(): JSX.Element {
             ...cleaned,
             {
               event: 'message',
-              sessionId: sid,
+              sessionId: chunkSessionId,
               sender: 'system',
               content: '',
               type: 'tool_call' as const,
@@ -634,7 +664,7 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'tool_result') {
         const payload = raw as unknown as ToolResultEvent;
-        setMessages((prev) => {
+        updateSessionMessages(chunkSessionId, (prev) => {
           // Find the matching tool_call message and update it
           const updated = [...prev];
           for (let i = updated.length - 1; i >= 0; i--) {
@@ -685,19 +715,20 @@ export default function AgentHubIM(): JSX.Element {
       }
 
       if (evt === 'message') {
-        // Flush any pending stream buffer before searching for the
-        // placeholder — the RAF callback may not have fired yet, and
-        // without a placeholder the message below would be appended
-        // as a duplicate instead of replacing the streaming entry.
-        if (streamBufferRef.current && streamFlushRafRef.current != null) {
-          window.cancelAnimationFrame(streamFlushRafRef.current);
-          streamFlushRafRef.current = null;
-          flushStreamBuffer();
+        // Flush any pending stream buffer for THIS session before searching
+        // for the placeholder — the RAF callback may not have fired yet.
+        const cSessionId = chunkSessionId;
+        const buf = getSessionBuffer(cSessionId);
+        if (buf && streamFlushRafRef.current.has(cSessionId)) {
+          const raf = streamFlushRafRef.current.get(cSessionId);
+          if (raf != null) window.cancelAnimationFrame(raf);
+          streamFlushRafRef.current.delete(cSessionId);
+          flushStreamBuffer(cSessionId);
         }
-        setIsStreaming(false);
+        setSessionStreaming(cSessionId, false);
         const msg = raw as unknown as Message;
         const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
-        setMessages((prev) => {
+        updateSessionMessages(cSessionId, (prev) => {
           // Clean up any empty thinking placeholders (from agent_thinking) before
           // adding/replacing the final message
           let cleaned = prev;
@@ -731,7 +762,7 @@ export default function AgentHubIM(): JSX.Element {
           return [...cleaned, { ...msg, messageId: undefined, isStreaming: false }];
         });
         if (!isSystemMsg) {
-          setSessions((prev) => sortSessions(prev.map((s) => (s.id === (msg.sessionId || sid) ? { ...s, lastMessageAt: msg.timestamp || new Date().toISOString() } : s))));
+          setSessions((prev) => sortSessions(prev.map((s) => (s.id === (msg.sessionId || cSessionId) ? { ...s, lastMessageAt: msg.timestamp || new Date().toISOString() } : s))));
         }
         if (msg.symbolic?.generated) {
           setGenerated(msg.symbolic.generated as GeneratedData);
@@ -823,7 +854,16 @@ export default function AgentHubIM(): JSX.Element {
   const handleLogout = useCallback(() => {
     localStorage.removeItem('agenthub_token');
     localStorage.removeItem('agenthub_user');
-    wsRef.current?.close();
+    // 关闭所有 session 的 WebSocket
+    Array.from(wsRef.current.keys()).forEach((sid) => closeWs(sid));
+    // 关闭 store 里所有的 session
+    Array.from(wsRef.current.keys()).forEach((sid) => clearSession(sid));
+    if (reconnectRef.current) {
+      clearTimeout(reconnectRef.current);
+      reconnectRef.current = null;
+    }
+    streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
+    streamFlushRafRef.current.clear();
     setToken('');
     setUser(null);
   }, []);
@@ -843,10 +883,15 @@ export default function AgentHubIM(): JSX.Element {
     const created = data as ChatSession;
     setSessions((prev) => sortSessions([created, ...prev]));
     setSessionId(created.id);
-    setMessages([]);
+    // 新 session：清掉 Store 里的占位（其实还没建过）
+    replaceSessionMessages(created.id, []);
   }, [sessions.length]);
 
   const handleSelectSession = useCallback((id: string) => {
+    // eslint-disable-next-line no-console
+    console.log('[agenthub] select session', { from: currentSessionRef.current, to: id });
+    currentSessionRef.current = id;
+    activeSessionIdRef.current = id;  // 立即同步给“当前活跃 session” ref，避免下一帧前就发消息
     setSessionId(id);
     setTaskOpen(false);
   }, []);
@@ -868,11 +913,25 @@ export default function AgentHubIM(): JSX.Element {
         setNotice(data.detail || 'Delete failed');
         return;
       }
+      // 关闭这个 session 的 WebSocket、清理 Store、清理重连定时器
+      closeWs(id);
+      if (reconnectRef.current) {
+        clearTimeout(reconnectRef.current);
+        reconnectRef.current = null;
+      }
+      const raf = streamFlushRafRef.current.get(id);
+      if (raf != null) {
+        window.cancelAnimationFrame(raf);
+        streamFlushRafRef.current.delete(id);
+      }
+      clearSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (sessionId === id) {
         const next = sessions.find((s) => s.id !== id);
-        setSessionId(next?.id || 'session-1');
-        setMessages([]);
+        const nextId = next?.id || '';
+        setSessionId(nextId);
+        // 用 useSessionMessages(nextId) 自动从 Store 读，命中缓存
+        // 如果 nextId 不在 Store 里，sessionId 切换 effect 会 reloadMessages
       }
       const cleanedCount = Array.isArray(data.cleaned) ? data.cleaned.length : 0;
       setNotice(cleanedCount > 0 ? `已删除会话并清理 ${cleanedCount} 项记忆文件` : '已删除会话');
@@ -1210,6 +1269,13 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   const handleSend = useCallback((customText?: string) => {
+    // ★ 关键修复：用 ref 取“此时此刻”真实的 sessionId，绕过 useCallback 闭包过期问题。
+    // 表现：切换 / 新建会话后立刻发消息，sessionId 不会用上一次渲染的旧值。
+    const activeSessionId = activeSessionIdRef.current;
+    if (!activeSessionId) {
+      setNotice('当前没有可用会话，请先选择或新建一个会话');
+      return;
+    }
     const currentInput = inputRef.current;
     const currentFiles = attachedFilesRef.current;
     const rawText = typeof customText === 'string'
@@ -1242,7 +1308,9 @@ export default function AgentHubIM(): JSX.Element {
 
     // Include file references (quoted text from preview panel) in the message
     if (fileReferences.length > 0) {
-      const refBlocks = fileReferences.map((ref) => {
+      // 规范化：截断超长 quote、补全 lineEnd
+      const normalized = normalizeReferences(fileReferences);
+      const refBlocks = normalized.map((ref) => {
         const parts: string[] = [`[Referenced File: ${ref.path}]`];
         if (ref.lineStart) {
           const lineRange = ref.lineEnd && ref.lineEnd !== ref.lineStart
@@ -1261,11 +1329,20 @@ export default function AgentHubIM(): JSX.Element {
 
     const displayContent = text || (currentFiles.length > 0 ? `发送了 ${currentFiles.length} 个文件` : '');
 
+    // eslint-disable-next-line no-console
+    console.log('[agenthub] handleSend', {
+      closureSessionId: sessionId,
+      refSessionId: activeSessionId,
+      text,
+      wsMapKeys: Array.from(wsRef.current.keys()),
+      targetWsState: wsRef.current.get(activeSessionId)?.readyState,
+    });
+
     const clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const localMsg: Message = {
       id: clientId,
       event: 'message',
-      sessionId,
+      sessionId: activeSessionId,
       content: displayContent,
       sender: user?.name || 'user',
       timestamp: new Date().toISOString(),
@@ -1274,7 +1351,7 @@ export default function AgentHubIM(): JSX.Element {
     };
 
     const wsMsg: PendingMessage = {
-      sessionId,
+      sessionId: activeSessionId,
       content: aiContent,
       sender: user?.name || 'user',
       timestamp: new Date().toISOString(),
@@ -1283,13 +1360,16 @@ export default function AgentHubIM(): JSX.Element {
     };
 
     if (isStreaming) {
-      setIsStreaming(false);
+      setSessionStreaming(activeSessionId, false);
     }
-    setMessages((prev) => [...prev, localMsg]);
-    setSessions((prev) => sortSessions(prev.map((s) => (s.id === sessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(wsMsg));
+    updateSessionMessages(activeSessionId, (prev) => [...prev, localMsg]);
+    setSessions((prev) => sortSessions(prev.map((s) => (s.id === activeSessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
+    const targetWs = wsRef.current.get(activeSessionId);
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify(wsMsg));
     } else {
+      // ws 还没连上：保险起见触发一次连接（如果本来就在连，就是 no-op）。
+      connectWs(activeSessionId);
       retryRef.current.push(wsMsg);
       setPending((prev) => [...prev, wsMsg]);
       setNotice('Message queued for retry');
@@ -1300,8 +1380,9 @@ export default function AgentHubIM(): JSX.Element {
   }, [sessionId, user, isStreaming, fileReferences]);
 
   const handleRetryMessage = useCallback((msg: PendingMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(msg));
+    const targetWs = wsRef.current.get(msg.sessionId);
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify(msg));
       setPending((prev) => prev.filter((item) => item.timestamp !== msg.timestamp));
     } else {
       retryRef.current.push(msg);
@@ -1444,6 +1525,47 @@ export default function AgentHubIM(): JSX.Element {
     });
   }, []);
 
+  /**
+   * 点击引用芯片 → 打开（或激活）对应文件 tab，并标记要滚动到目标行号。
+   * - 已在 tab 里：直接 activate + 滚动
+   * - 未在 tab 里：尝试从后端 /api/files/workspace/read 拉内容
+   */
+  const handleJumpToReference = useCallback(
+    async (ref: FileReference) => {
+      setPreviewPanelOpen(true);
+
+      // 检查是否已有这个 path 的 tab
+      const existing = previewTabsRef.current.find((t) => t.path === ref.path);
+      if (existing) {
+        setActivePreviewTabId(existing.id);
+        // 等待 activeTab 切换 + DOM 渲染完成后再滚动
+        setPendingScrollRef({ id: ref.id, nonce: Date.now() });
+        return;
+      }
+
+      // 没找到 tab，尝试从工作区 API 拉取
+      try {
+        const token = localStorage.getItem('agenthub_token') || '';
+        const resp = await fetch(
+          `/api/files/workspace/read?path=${encodeURIComponent(ref.path)}`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        );
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const content = data?.content ?? '';
+        const language = data?.language ?? '';
+        const state = data?.state ?? 'ok';
+        handleOpenWorkspaceFile(ref.path, content, language, state);
+        setPendingScrollRef({ id: ref.id, nonce: Date.now() });
+      } catch (err) {
+        // 拿不到内容也至少提示一下；不让 console 全是红
+        console.warn('[references] jump failed to load file:', ref.path, err);
+        setNotice(`无法打开文件: ${ref.path}`);
+      }
+    },
+    [handleOpenWorkspaceFile, setNotice],
+  );
+
   // ── File upload ──────────────────────────────────────────
 
   async function uploadFileChunked(file: File): Promise<string> {
@@ -1585,6 +1707,49 @@ export default function AgentHubIM(): JSX.Element {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  // 点击附件卡片上的预览按钮: 弹出全屏预览模态
+  // 支持两种路径：
+  //   1. 内联文件（小文件 <2MB）— 内容已在 file.content 中，走 FilePreviewModal 的 inlineContent 快速路径
+  //   2. 大文件（已上传）        — 通过 fileId 走 /api/files/preview/{fileId} 获取内容
+  const handlePreviewFile = useCallback((file: AttachedFile) => {
+    if (file.uploadStatus === 'uploading') {
+      setNotice('文件正在上传中, 请稍候再试');
+      return;
+    }
+    if (file.uploadStatus === 'error') {
+      setNotice('文件上传失败, 无法预览');
+      return;
+    }
+
+    // 从文件扩展名推断预览类型
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const mdExts = new Set(['md', 'markdown', 'mdx']);
+    const codeExts = new Set([
+      'py', 'js', 'ts', 'jsx', 'tsx', 'java', 'go', 'rs', 'c', 'cpp',
+      'h', 'hpp', 'swift', 'kt', 'rb', 'php', 'sql', 'sh', 'bash',
+      'vue', 'svelte', 'astro', 'html', 'htm', 'css', 'scss', 'less',
+      'json', 'yaml', 'yml', 'xml', 'toml', 'ini', 'cfg', 'conf',
+    ]);
+    const inlineKind: FilePreviewTarget['inlineKind'] = mdExts.has(ext)
+      ? 'markdown'
+      : codeExts.has(ext)
+        ? 'code'
+        : 'text';
+
+    // 构建 FilePreviewTarget — 优先使用内联内容（不需要 fileId）
+    const target: FilePreviewTarget = {
+      name: file.name,
+      size: file.size,
+      category: file.category,
+      type: file.type,  // MIME type (e.g. "image/png")
+      fileId: file.fileId,
+      inlineContent: file.content,
+      inlineKind: file.category === 'image' ? 'image' : inlineKind,
+    };
+
+    setPreviewFile(target);
+  }, []);
+
   const handleClearAllFiles = useCallback(() => {
     setAttachedFiles((prev) => {
       if (prev.length === 0) return prev;
@@ -1723,6 +1888,7 @@ export default function AgentHubIM(): JSX.Element {
           onSend={handleSend}
           onFileChange={handleFileChange}
           onRemoveFile={handleRemoveFile}
+          onPreviewFile={handlePreviewFile}
           onClearAllFiles={handleClearAllFiles}
           onPasteFiles={handlePasteFiles}
           onInsertMention={handleInsertMention}
@@ -1735,6 +1901,7 @@ export default function AgentHubIM(): JSX.Element {
           fileReferences={fileReferences}
           onRemoveReference={handleRemoveReference}
           onClearAllReferences={handleClearAllReferences}
+          onJumpToReference={handleJumpToReference}
         />
       </main>
 
@@ -1771,6 +1938,8 @@ export default function AgentHubIM(): JSX.Element {
               onCloseTab={handleClosePreviewTab}
               onAddReference={handleAddReference}
               onOpenWorkspaceFile={handleOpenWorkspaceFile}
+              references={fileReferences}
+              pendingScrollRef={pendingScrollRef}
             />
           </aside>
         </>
@@ -1810,6 +1979,13 @@ export default function AgentHubIM(): JSX.Element {
         variant="danger"
         onConfirm={performDeleteSession}
         onCancel={cancelDeleteSession}
+      />
+
+      {/* 附件文件全屏预览弹窗 - 点击附件卡片上的眼睛按钮触发 */}
+      <FilePreviewModal
+        file={previewFile}
+        onClose={() => setPreviewFile(null)}
+        authToken={token}
       />
     </div>
   );

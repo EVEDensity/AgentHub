@@ -3,8 +3,9 @@ import type { ContentSegment, GeneratedData, Message, User } from '../../types';
 import DiffBubble from './DiffBubble';
 import CodeReviewPanel from './CodeReviewPanel';
 import CodeGenResultPanel, { isCodeGenOutput } from './CodeGenResultPanel';
-import FidelityScore from './FidelityScore';
+
 import MarkdownRenderer from './MarkdownRenderer';
+import SafetyBlockAlert from './SafetyBlockAlert';
 import ThinkingPanel from './ThinkingPanel';
 import ToolCallBubble from './ToolCallBubble';
 import GeneratedFilesPanel from '../git/GeneratedFilesPanel';
@@ -141,7 +142,6 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
           ) : (
             <DiffBubble value={msg.content} />
           )}
-          {msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}
         </div>
       );
     }
@@ -208,7 +208,7 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
               {showCursor && <span className="ml-0.5 inline-block h-5 w-0.5 animate-pulse bg-primary-500 align-text-bottom" />}
             </div>
           )}
-          {!isUser && msg.fidelityScore ? <FidelityScore score={msg.fidelityScore} /> : null}
+          {msg.guardrailResult?.flags?.length ? <SafetyBlockAlert result={msg.guardrailResult} /> : null}
         </div>
       </div>
     );

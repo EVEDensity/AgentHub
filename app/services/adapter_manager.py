@@ -12,6 +12,35 @@ from app.config import ANTHROPIC_API_KEY, ENABLE_REAL_LLM, OLLAMA_BASE_URL, OPEN
 
 logger = logging.getLogger("agenthub.adapter")
 
+# ── Shared HTTP client with connection pooling ──────────────────────
+# Creating a new httpx.AsyncClient per LLM call is wasteful: each client
+# opens a fresh TCP+TLS connection, adding 50-300 ms latency.  A shared
+# client pools keep-alive connections and reuses them across calls.
+# Timeouts are set to match REQUEST_TIMEOUT_SECONDS for all adapters;
+# individual calls that need a different timeout can pass it via kwargs.
+
+_shared_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    """Return (or lazily create) a shared httpx.AsyncClient with connection pooling."""
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=100),
+        )
+    return _shared_client
+
+
+async def close_http_client() -> None:
+    """Gracefully close the shared HTTP client (call on app shutdown)."""
+    global _shared_client
+    if _shared_client is not None and not _shared_client.is_closed:
+        await _shared_client.aclose()
+        _shared_client = None
+        logger.info("shared httpx client closed")
+
 
 def _tokenize_for_matching(text: str) -> list[str]:
     """Split text into matchable tokens — works for both English (spaces)
@@ -297,6 +326,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
     temperature: float = 0.2
     frequency_penalty: float = 0.5
     presence_penalty: float = 0.3
+    max_tokens: int = 32768  # 32K output — complex HTML/CSS/JS generation needs headroom
 
     async def execute_prompt(
         self, prompt: str, model: str, api_key: str = "", base_url: str = "",
@@ -329,9 +359,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        # ── Execute ──────────────────────────────────────────────────
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
+        # ── Execute (shared client with connection pooling) ──────────
+        client = _get_client()
+        response = await client.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
         if response.status_code >= 400:
             raise LLMAdapterError(response.text)
         data = response.json()
@@ -416,8 +446,8 @@ class OpenAICompatibleAdapter(BaseAdapter):
         self.last_usage = {}  # reset per call so stale data never leaks
         full_text = ""
         reasoning_open = False
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as response:
+        client = _get_client()
+        async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as response:
                 if response.status_code >= 400:
                     body = await response.aread()
                     raise LLMAdapterError(body.decode(errors="replace"))
@@ -517,8 +547,8 @@ class AnthropicAdapter(BaseAdapter):
         url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com") + "/v1/messages"
         payload = {"model": model, "max_tokens": 2048, "messages": [{"role": "user", "content": prompt}]}
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.post(url, headers=headers, json=payload)
+        client = _get_client()  # shared, connection-pooled
+        response = await client.post(url, headers=headers, json=payload)
         if response.status_code >= 400:
             raise LLMAdapterError(response.text)
         data = response.json()
@@ -536,8 +566,8 @@ class OllamaAdapter(BaseAdapter):
         url = (base_url.rstrip("/") if base_url else OLLAMA_BASE_URL) + "/api/generate"
         payload = {"model": model or "llama3", "prompt": prompt, "stream": False}
         try:
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-                response = await client.post(url, json=payload)
+            client = _get_client()  # shared, connection-pooled
+            response = await client.post(url, json=payload)
             if response.status_code >= 400:
                 raise LLMAdapterError(response.text)
             data = response.json()
@@ -557,29 +587,29 @@ class OllamaAdapter(BaseAdapter):
         self.last_usage = {}
         full_text = ""
         try:
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-                async with client.stream("POST", url, json=payload) as response:
-                    if response.status_code >= 400:
-                        body = await response.aread()
-                        raise LLMAdapterError(body.decode(errors="replace"))
-                    async for line in response.aiter_lines():
-                        if not line:
-                            continue
-                        try:
-                            chunk = json.loads(line)
-                            if chunk.get("done"):
-                                self.last_usage = {
-                                    "prompt_tokens": chunk.get("prompt_eval_count") or max(1, len(prompt) // 4),
-                                    "completion_tokens": chunk.get("eval_count") or max(1, len(full_text) // 4),
-                                    "total_tokens": (chunk.get("prompt_eval_count") or 0) + (chunk.get("eval_count") or 0) or max(1, len(prompt) // 4) + max(1, len(full_text) // 4),
-                                }
-                                break
-                            content = chunk.get("response", "")
-                            if content:
-                                full_text += content
-                                yield content
-                        except json.JSONDecodeError:
-                            continue
+            client = _get_client()  # shared, connection-pooled
+            async with client.stream("POST", url, json=payload) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    raise LLMAdapterError(body.decode(errors="replace"))
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                        if chunk.get("done"):
+                            self.last_usage = {
+                                "prompt_tokens": chunk.get("prompt_eval_count") or max(1, len(prompt) // 4),
+                                "completion_tokens": chunk.get("eval_count") or max(1, len(full_text) // 4),
+                                "total_tokens": (chunk.get("prompt_eval_count") or 0) + (chunk.get("eval_count") or 0) or max(1, len(prompt) // 4) + max(1, len(full_text) // 4),
+                            }
+                            break
+                        content = chunk.get("response", "")
+                        if content:
+                            full_text += content
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
         except httpx.HTTPError:
             async for chunk in MockAdapter().stream_prompt(prompt, model):
                 yield chunk

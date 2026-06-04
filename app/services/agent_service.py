@@ -16,16 +16,10 @@ from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.secret_service import decrypt_secret
 from app.utils.async_file import aexists, aisdir, aread_text, aiterdir, aread_json
+from app.config import REQUEST_TIMEOUT_SECONDS
 from app.services.symbolic import (
-    FIDELITY_HIGH,
-    FIDELITY_LOW,
-    FIDELITY_WARN,
-    evaluate_contribution,
-    fidelity_action,
-    fidelity_grade,
     generate_symbolic_message,
     public_symbolic,
-    requires_redistill,
 )
 
 logger = logging.getLogger("agenthub.agent_service")
@@ -34,8 +28,12 @@ logger = logging.getLogger("agenthub.agent_service")
 AGENTS = {"Orchestrator", "Architect", "CodeGen", "Review", "Test", "Deploy"}
 _RUNTIME: dict[str, dict] = {}
 
-# ── Memory context cache (avoid scanning 200 files on every message) ──
-_MEMORY_CACHE: dict[str, Any] = {"context": "", "ts": 0.0, "ttl": 60.0}
+# ── Memory context cache (avoid scanning 200+ files on every message) ──
+# TTL 300 s (5 min) — keeps the context cache warm within the prompt-cache
+# window, reducing disk I/O while staying fresh enough for cross-session
+# memory.  Invalidation is explicit via _invalidate_memory_cache() when
+# new memories are written (extraction, /memory commands).
+_MEMORY_CACHE: dict[str, Any] = {"context": "", "ts": 0.0, "ttl": 300.0}
 _SESSION_MGR_SINGLETON: Any = None
 
 
@@ -63,23 +61,23 @@ _ROLE_LABELS: dict[str, str] = {
 
 
 class CollaborationContext:
-    """Shared memory for one multi-agent collaboration turn — with fidelity tracking."""
+    """Shared memory for one multi-agent collaboration turn.
+
+    Extracts structured summaries and key points from each agent's
+    contribution so downstream agents can build on peer output without
+    re-reading full responses.
+    """
 
     def __init__(self, user_content: str):
         self.user_content = user_content
         self.participants: list[dict] = []
         self.contributions: list[dict] = []
-        self._fidelity_scores: list[float] = []
 
     def register(self, agent: dict) -> None:
         self.participants.append(agent)
 
-    def record(self, agent_id: str, domain: str, content: str) -> dict:
-        """Record a contribution with fidelity evaluation.
-
-        Returns the fidelity assessment dict so callers can decide whether to
-        block, warn, or enrich downstream.
-        """
+    def record(self, agent_id: str, domain: str, content: str) -> None:
+        """Record a contribution: extract summary + key points for peer context."""
         clean = _strip_think_tags(_strip_kimi_thinking(content))
         sentences = re.split(r"[。！？\n]", clean)
         summary_parts = [s.strip() for s in sentences[:3] if len(s.strip()) > 10]
@@ -96,18 +94,12 @@ class CollaborationContext:
         if not key_points:
             key_points.append(summary[:150])
 
-        # Evaluate fidelity of this contribution
-        fidelity = evaluate_contribution(self.user_content, clean, agent_id, domain)
-        self._fidelity_scores.append(fidelity["fidelity_score"])
-
         self.contributions.append({
             "agent_id": agent_id,
             "domain": domain,
             "summary": summary[:300],
             "key_points": key_points[:3],
-            "fidelity": fidelity,
         })
-        return fidelity
 
     def context_for(self, agent_id: str) -> str:
         if not self.contributions:
@@ -126,12 +118,8 @@ class CollaborationContext:
             if c["agent_id"] == agent_id:
                 continue
             pts = "\n".join(f"  · {pt}" for pt in c["key_points"][:3])
-            fid = c.get("fidelity", {})
-            fid_note = ""
-            if fid and fid.get("fidelity_score", 1.0) < FIDELITY_HIGH:
-                fid_note = f" [保真度: {fid['fidelity_score']:.2f} — 请交叉验证]"
             peer_blocks.append(
-                f"### {c['agent_id']}（{_ROLE_LABELS.get(c['domain'], 'general')}）{fid_note}\n"
+                f"### {c['agent_id']}（{_ROLE_LABELS.get(c['domain'], 'general')}）\n"
                 f"摘要：{c['summary']}\n"
                 f"关键要点：\n{pts}"
             )
@@ -151,23 +139,12 @@ class CollaborationContext:
         )
 
     @property
-    def overall_fidelity(self) -> float:
-        """Average fidelity across all contributions in this turn."""
-        if not self._fidelity_scores:
-            return 1.0
-        return round(sum(self._fidelity_scores) / len(self._fidelity_scores), 3)
-
-    @property
     def summary(self) -> str:
         if not self.contributions:
             return ""
-        overall = self.overall_fidelity
-        fid_tag = f" [整体保真度: {overall:.2f}]" if overall < FIDELITY_HIGH else ""
-        lines = [f"【本轮协作摘要】{fid_tag}"]
+        lines = ["【本轮协作摘要】"]
         for i, c in enumerate(self.contributions, 1):
-            fid = c.get("fidelity", {})
-            fid_str = f" (保真度: {fid['fidelity_score']:.2f})" if fid and fid.get("fidelity_score", 1.0) < FIDELITY_HIGH else ""
-            lines.append(f"{i}. {c['agent_id']}（{_ROLE_LABELS.get(c['domain'], 'general')}）{fid_str}：{c['summary'][:120]}")
+            lines.append(f"{i}. {c['agent_id']}（{_ROLE_LABELS.get(c['domain'], 'general')}）：{c['summary'][:120]}")
         return "\n".join(lines)
 
 
@@ -238,8 +215,14 @@ def extract_skill_calls(content: str) -> list[str]:
     return re.findall(r"(?:^|\s)/(\w[\w-]*)", content)
 
 
-async def load_skill_prompt(skill_name: str) -> str | None:
-    """Load a skill's SKILL.md body for prompt injection."""
+async def load_skill_prompt(skill_name: str, max_chars: int = 30_000) -> str | None:
+    """Load a skill's SKILL.md body for prompt injection.
+
+    The body is truncated to ``max_chars`` to prevent a single enormous
+    skill from overflowing the model's context window.  If truncation
+    happens a note is appended so the model knows the instructions were
+    cut short.
+    """
     from pathlib import Path
 
     async def _find_skill_dir(base: Path) -> Path | None:
@@ -283,8 +266,19 @@ async def load_skill_prompt(skill_name: str) -> str | None:
                 raw = await aread_text(skill_file)
                 fm_match = re.match(r"^---\s*\n.*?\n---\s*\n", raw, re.DOTALL)
                 if fm_match:
-                    return raw[fm_match.end():].strip()
-                return raw.strip()
+                    body = raw[fm_match.end():].strip()
+                else:
+                    body = raw.strip()
+                if len(body) > max_chars:
+                    body = body[:max_chars] + (
+                        f"\n\n... [技能 {skill_name} 的正文已截断，"
+                        f"原始长度 {len(body)} 字符，当前显示前 {max_chars} 字符]"
+                    )
+                    logger.warning(
+                        "skill body truncated skill=%s orig=%d max=%d",
+                        skill_name, len(body), max_chars,
+                    )
+                return body
             except (OSError, UnicodeDecodeError):
                 return None
     return None
@@ -392,7 +386,7 @@ async def save_message(
     sender: str,
     content: str,
     msg_type: str,
-    score: float = 0.95,
+    score: float = 0.0,
     symbolic: dict | None = None,
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
@@ -477,7 +471,6 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         "sender": agent["agent_id"],
         "timestamp": now(),
         "type": "code" if agent["agent_id"] == "CodeGen" else "text",
-        "fidelityScore": symbolic["fidelity_score"],
         "symbolic": public,
     }
     await save_message(
@@ -485,7 +478,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         message["sender"],
         message["content"],
         message["type"],
-        message["fidelityScore"],
+        0.0,
         message["symbolic"],
         prompt_tokens,
         completion_tokens,
@@ -595,15 +588,13 @@ async def stream_agent_response(
             pt = usage_dict.get("prompt_tokens", max(1, len(llm_input) // 4))
             ct = usage_dict.get("completion_tokens", max(1, len(content_out) // 4))
             tt = usage_dict.get("total_tokens", pt + ct)
-            from app.services.symbolic import compute_fidelity as _cf
-            fid_score = _cf(llm_input, content_out, intent_type=_intent_from_domain(agent["domain"], content), has_code=("```" in content_out))
             symbolic_out = generate_symbolic_message(
                 llm_input, "text", session_id,
                 sender_role=agent["agent_id"],
                 intent_type=_intent_from_domain(agent["domain"], content),
                 risk_level=agent.get("risk_level", "L1"),
             )
-            await save_message(session_id, agent["agent_id"], content_out, "text", fid_score, public_symbolic(symbolic_out), pt, ct, tt)
+            await save_message(session_id, agent["agent_id"], content_out, "text", 0.0, public_symbolic(symbolic_out), pt, ct, tt)
             AuthService.write_audit(
                 user_id,
                 agent["agent_id"],
@@ -622,7 +613,7 @@ async def stream_agent_response(
     return stream()
 
 
-async def _build_conversation_history(session_id: str, max_chars: int = 2000) -> str:
+async def _build_conversation_history(session_id: str, max_chars: int = 4000) -> str:
     """Fetch recent messages from this session and format as a transcript.
 
     Gives every agent called in the session full awareness of what was
@@ -630,10 +621,11 @@ async def _build_conversation_history(session_id: str, max_chars: int = 2000) ->
 
     Messages are processed newest-first so that the most recent (and most
     relevant) context is always included when the char limit is hit.
+    LIMIT 15 avoids fetching data that will be truncated anyway.
     """
     try:
         rows = await afetch_all(
-            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 30",
+            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 15",
             session_id,
         )
     except Exception:
@@ -648,7 +640,8 @@ async def _build_conversation_history(session_id: str, max_chars: int = 2000) ->
     total = 0
     for r in rows:
         content = _strip_think_tags(r["content"])
-        line = f"{r['sender']}：{content}"
+        # Truncate individual messages to avoid one giant message consuming the budget
+        line = f"{r['sender']}：{content[:800]}"
         total += len(line)
         lines.append(line)
         if total > max_chars:
@@ -661,7 +654,7 @@ async def _build_conversation_history(session_id: str, max_chars: int = 2000) ->
 async def _build_memory_context(max_chars: int = 3000, force: bool = False) -> str:
     """Load persistent memories and global summary and format as a prompt block.
 
-    Cached with a 60-second TTL to avoid scanning 200+ files from disk on every
+    Cached with a TTL to avoid scanning 200+ files from disk on every
     single chat message. Call with force=True to bypass the cache (e.g. after
     memory extraction completes).
     """
@@ -923,7 +916,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
 
     # ── General agent prompt ────────────────────────────────────────
     custom_role = role_prompt.strip() if role_prompt else ""
-    return (
+    prompt = (
         f"{memory_context}"
         f"{shared_context}"
         f"{date_context}"
@@ -939,10 +932,66 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
     )
 
+    # ── Prompt size guard ──────────────────────────────────────────
+    # If the prompt exceeds the safe limit, truncate the user-content
+    # section (which carries the skill body — the most likely culprit).
+    # We keep the last portion (the user's actual message) intact and
+    # cut from the middle so the model still sees the instructions.
+    MAX_PROMPT_CHARS = 80_000  # ~20K tokens, comfortable for most models
+    prompt_orig_len = len(prompt)
+    if prompt_orig_len > MAX_PROMPT_CHARS:
+        # Find the "用户需求: " anchor — everything before it is
+        # system instructions, everything at/after is user content.
+        anchor = "用户需求: "
+        anchor_idx = prompt.rfind(anchor)
+        if anchor_idx > 0:
+            system_part = prompt[:anchor_idx + len(anchor)]
+            user_part = prompt[anchor_idx + len(anchor):]
+            # Keep the last portion of user content (the user's actual
+            # message is at the very end; the skill body is in the middle).
+            user_budget = MAX_PROMPT_CHARS - len(system_part) - 200
+            if user_budget < 2000:
+                user_budget = 2000  # floor: at least keep the user's message
+            if len(user_part) > user_budget:
+                # Take head (first 20%) + tail (last 80%) of user content
+                head_chars = int(user_budget * 0.2)
+                tail_chars = user_budget - head_chars - 100
+                user_part = (
+                    user_part[:head_chars]
+                    + f"\n\n... [技能说明已截断，原始用户输入共 {len(user_part)} 字符] ...\n\n"
+                    + user_part[-tail_chars:]
+                )
+            prompt = system_part + user_part
+        else:
+            # No anchor — simple truncation with a note
+            prompt = prompt[:MAX_PROMPT_CHARS - 200] + (
+                f"\n\n... [Prompt 已截断，原始长度 {prompt_orig_len} 字符]"
+            )
+
+        logger.warning(
+            "prompt truncated for agent=%s domain=%s orig=%d final=%d",
+            agent_id, domain, prompt_orig_len, len(prompt),
+        )
+
+    return prompt
+
 
 def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, int]:
-    prompt_tokens = max(1, len(user_text) // 4)
-    completion_tokens = max(1, len(model_output) // 4)
+    """Estimate token counts with CJK-aware heuristics.
+
+    Pure ASCII text averages ~4 chars/token.  CJK characters (Chinese,
+    Japanese, Korean) are denser — roughly 1.5 chars/token — because each
+    logogram is a distinct token unit.  Mixing the two ratios gives a much
+    better estimate than the naive ``len // 4`` for bilingual content.
+    """
+    def _count_tokens(text: str) -> int:
+        cjk = sum(1 for c in text if '一' <= c <= '鿿' or '㐀' <= c <= '䶿')
+        non_cjk = len(text) - cjk
+        # CJK: ~1.5 chars/token, non-CJK: ~4 chars/token
+        return max(1, int(cjk / 1.5 + non_cjk / 4))
+
+    prompt_tokens = _count_tokens(user_text)
+    completion_tokens = _count_tokens(model_output)
     total_tokens = prompt_tokens + completion_tokens
     return prompt_tokens, completion_tokens, total_tokens
 
@@ -1025,7 +1074,7 @@ async def _run_tool_call_loop(
     conversation: list[dict] = [{"role": "user", "content": llm_input}]
     available_tools = await _get_agent_tools(agent["agent_id"])
 
-    LOOP_TIMEOUT = 180  # 3-minute overall safety cap
+    LOOP_TIMEOUT = 1800  # 30-minute overall safety cap (was 180s — too short for complex generation)
 
     all_tool_names = tool_registry.list_names()
     logger.info(
@@ -1148,6 +1197,23 @@ async def _run_tool_call_loop(
                             pass
 
                     # Execute tools
+                    # ── Guardrail: classify each tool's risk before execution ──
+                    from app.services.guardrails import classify_tool_risk as _ctr
+                    high_risk_tools: list[dict] = []
+                    for tc in tool_calls:
+                        risk = _ctr(tc.get("name", ""), tc.get("arguments", {}))
+                        if risk.requires_confirmation:
+                            high_risk_tools.append({
+                                "name": tc.get("name"),
+                                "arguments": tc.get("arguments", {}),
+                                "risk": risk.to_dict(),
+                            })
+                    if high_risk_tools and on_tool_event:
+                        try:
+                            await on_tool_event("risk_warning", high_risk_tools, None)
+                        except Exception:
+                            pass
+
                     if streaming_executor is not None:
                         for tc in tool_calls:
                             name = tc.get("name", "")
@@ -1463,15 +1529,36 @@ def _latex_to_unicode(text: str) -> str:
 
 def normalize_agent_output(agent_id: str, model_output: str, original: str) -> str:
     if agent_id == "CodeGen":
-        # Real model response (not mock)
-        if model_output and not model_output.startswith("本地 Mock 模型响应") and not model_output.startswith("模型调用失败"):
+        # Case A: Real model response (not mock, not failure)
+        is_codegen_mock = (
+            not model_output
+            or model_output.startswith("本地 Mock 模型响应")
+        )
+        is_codegen_failure = model_output.startswith("模型调用失败")
+
+        if not is_codegen_mock and not is_codegen_failure:
             stripped = _latex_to_unicode(_strip_think_tags(_strip_kimi_thinking(_strip_codegen_prefix(model_output))))
             # Safety net: model may ignore prompt and still output JSON for a
             # conversational question. If so, replace with a text reply.
             if _is_codegen_json_response(stripped) and not _is_code_request(original):
                 return "我是 AgentHub 平台的代码生成专家，基于大规模语言模型构建。对于编程任务，我可以生成完整的可执行代码；如果你有代码相关的具体需求，请直接告诉我！"
             return stripped
-        # Mock fallback: only return JSON for actual code-generation requests
+
+        # Case B: Model was called but ALL failed → show actual error
+        if is_codegen_failure:
+            error_detail = model_output.replace("模型调用失败，已降级为本地响应：", "").strip()
+            return (
+                f"⚠️ 模型调用失败\n\n"
+                f"错误详情：{error_detail}\n\n"
+                f"可能原因：\n"
+                f"1. 请求超时（当前超时：{REQUEST_TIMEOUT_SECONDS:.0f} 秒）— 复杂代码生成时间较长\n"
+                f"2. Prompt 超出模型上下文窗口限制\n"
+                f"3. 模型 API 返回错误（key 无效、限流、余额不足等）\n\n"
+                f"建议：重试、简化需求、或检查管理后台的模型配置。"
+                f"查看服务端日志获取完整错误堆栈（grep 'llm_fail' 或 'tool_loop'）。"
+            )
+
+        # Case C: Mock / no-model — fallback JSON or text
         if _is_code_request(original):
             return json.dumps(
                 {
@@ -1485,28 +1572,76 @@ def normalize_agent_output(agent_id: str, model_output: str, original: str) -> s
                 ensure_ascii=False,
             )
         return "Mock 运行模式下 CodeGen 不可用，请前往管理后台为 CodeGen Agent 配置真实的大模型 API Key。配置后，我可以根据你的需求生成完整的可执行代码。"
-    if model_output and not model_output.startswith("本地 Mock 模型响应"):
+    # ── Model failure fallback ──────────────────────────────────────
+    # Two distinct error cases, handled very differently:
+    #
+    # Case A: "模型调用失败" — the model WAS called but ALL candidates
+    #   threw exceptions (timeout, context overflow, API error, etc.).
+    #   The error text includes the real exception — SHOW IT so the
+    #   developer can diagnose the root cause.  Hiding it behind a
+    #   generic "API unreachable" message is misleading and wastes time.
+    #
+    # Case B: "本地 Mock 模型响应" / empty — MockAdapter was used,
+    #   meaning the model was NEVER called (no API key, ENABLE_REAL_LLM
+    #   is false, or the provider is literally "mock").  Use domain-
+    #   specific fallbacks or a graceful degradation message.
+    #
+    is_mock = (
+        not model_output
+        or model_output.startswith("本地 Mock 模型响应")
+    )
+    is_model_failure = model_output.startswith("模型调用失败")
+
+    if not is_mock and not is_model_failure:
         return _remove_repeated_text(_latex_to_unicode(_strip_think_tags(_strip_kimi_thinking(model_output))))
+
+    # ── Case A: Real model error — surface the actual failure reason ──
+    if is_model_failure:
+        error_detail = model_output.replace("模型调用失败，已降级为本地响应：", "").strip()
+        return (
+            f"⚠️ 模型调用失败\n\n"
+            f"错误详情：{error_detail}\n\n"
+            f"可能原因：\n"
+            f"1. 请求超时（当前超时：{REQUEST_TIMEOUT_SECONDS:.0f} 秒）— 复杂任务生成时间较长，可尝试简化需求\n"
+            f"2. Prompt 超出模型上下文窗口限制（skill 上下文 + 系统提示词 + 历史消息）\n"
+            f"3. 模型 API 返回错误（key 无效、限流、余额不足等）\n"
+            f"4. max_tokens 不足导致输出被截断\n\n"
+            f"建议：\n"
+            f"- 重试当前请求（可能是临时网络波动）\n"
+            f"- 简化输入或拆分任务（如分步生成页面结构、样式、脚本）\n"
+            f"- 在管理后台检查模型配置（API Key / Base URL / max_tokens）\n"
+            f"- 查看服务端日志获取完整错误堆栈（grep 'llm_fail' 或 'tool_loop'）"
+        )
+
+    # ── Case B: Mock / no-model — graceful degradation ─────────────
+    if agent_id == "CodeGen":
+        if _is_code_request(original):
+            return json.dumps(
+                {
+                    "files": [
+                        {
+                            "path": "backend/health_router.py" if "fastapi" in original.lower() or "路由" in original else "frontend/GeneratedPanel.jsx",
+                            "content": "from fastapi import APIRouter\n\nrouter = APIRouter(prefix=\"/generated\", tags=[\"generated\"])\n\n\n@router.get(\"/health\")\nasync def generated_health() -> dict[str, str]:\n    return {\"status\": \"ok\", \"module\": \"agenthub-generated\"}\n",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        return "Mock 运行模式下 CodeGen 不可用，请前往管理后台为 CodeGen Agent 配置真实的大模型 API Key。配置后，我可以根据你的需求生成完整的可执行代码。"
+
     if agent_id == "Review":
         return "Review 完成：结构符合 FastAPI + Next.js 分层方案，建议生产环境收紧 CORS、加入鉴权、限流和审计。"
     if agent_id == "Test":
         return "Test 完成：请验证 /api/health、/api/admin/model-config、/ws/session-1、DAG 状态机和 Git 接口。"
     if agent_id == "Deploy":
         return "Deploy 准备完成：前端 http://localhost:3000，后端 http://localhost:8000。高风险发布需管理员确认。"
+
+    # Default fallback — a useful response acknowledging the degradation
     return (
-        "【多智能体身份卡片】\n\n"
-        "一、模型基础信息\n"
-        "- 模型定位：实习生协作代理（代码支持方向）\n"
-        "- 输出风格：结构化、可执行、可审计\n"
-        "- 典型应用：代码修改建议、缺陷定位、功能实现、重构与测试补充\n\n"
-        "二、平台角色信息\n"
-        "- 平台角色：AgentHub 多智能体执行单元\n"
-        "- 岗位能力：需求理解、代码分析、变更建议、结果校验\n"
-        "- 协作方式：按任务路由接入对应专业 Agent 联合处理\n\n"
-        "三、交互引导\n"
-        "请直接提交以下任一内容以开始执行：\n"
-        "1) 需要分析或修改的代码片段/文件\n"
-        "2) 当前遇到的报错现象与复现步骤\n"
-        "3) 目标功能与验收标准\n"
-        "我将基于你的输入给出分步方案与可落地结果。"
+        "⚠️ 当前模型 API 暂时不可达，系统已降级为本地响应模式。\n\n"
+        "你的需求已记录，以下是基于本地规则的建议：\n\n"
+        "1. 请检查管理后台的模型配置是否正确（API Key / Base URL / 端点可达性）\n"
+        "2. 如果是代码相关需求，CodeGen Agent 配置真实模型后可自动生成代码\n"
+        "3. 当前会话的消息已保存，模型恢复后可继续处理\n\n"
+        "如有紧急需求，请通过管理后台切换至可用模型或联系系统管理员。"
     )

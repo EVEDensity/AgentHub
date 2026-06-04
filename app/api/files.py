@@ -223,6 +223,449 @@ async def download_file(file_id: str) -> dict:
     return {**meta, "content": content, "encoding": "base64"}
 
 
+# ── Uploaded file preview endpoint (unified text/code/md/docx) ────────────
+
+_PREVIEW_TEXT_EXTS = {
+    ".txt", ".md", ".markdown", ".rst", ".log",
+    ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+    ".java", ".go", ".rs", ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",
+    ".swift", ".kt", ".rb", ".php", ".pl", ".sh", ".bash", ".zsh",
+    ".ps1", ".bat", ".cmd", ".sql", ".graphql", ".gql", ".proto",
+    ".html", ".htm", ".css", ".scss", ".less", ".sass",
+    ".json", ".yaml", ".yml", ".xml", ".toml", ".ini", ".cfg", ".conf",
+    ".cnf", ".env", ".properties", ".vue", ".svelte", ".astro",
+    ".tex", ".org", ".csv", ".tsv",
+}
+
+
+def _detect_preview_kind(ext: str) -> str:
+    """Return one of: text, markdown, docx, pdf, image, binary."""
+    ext = ext.lower()
+    if ext in {".md", ".markdown", ".mdx"}:
+        return "markdown"
+    if ext == ".docx":
+        return "docx"
+    if ext == ".pdf":
+        return "pdf"
+    if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}:
+        return "image"
+    if ext in _PREVIEW_TEXT_EXTS:
+        return "text"
+    return "binary"
+
+
+def _detect_image_mime(ext: str) -> str:
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+        ".svg": "image/svg+xml",
+        ".ico": "image/x-icon",
+    }.get(ext.lower(), "application/octet-stream")
+
+
+def _extract_docx_html(file_path: str, max_chars: int) -> dict:
+    """Parse a .docx file and return HTML with inline base64 images.
+
+    Opens the .docx as a ZIP, extracts images from ``word/media/*``, then
+    walks ``word/document.xml`` to interleave text paragraphs, tables, and
+    embedded images.  Returns a dict with keys:
+
+    * ``content``       – full HTML string (truncated to *max_chars*)
+    * ``contentType``   – ``"html"``
+    * ``totalChars``    – original HTML length before truncation
+    * ``truncated``     – whether the HTML was truncated
+    * ``imageCount``    – number of embedded images found
+    * ``textLength``    – plain-text character count (for the UI footer)
+    """
+    import re
+    import xml.etree.ElementTree as ET
+    import zipfile
+    from base64 import b64encode
+    from io import BytesIO
+
+    MIME_BY_EXT: dict[str, str] = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".tiff": "image/tiff",
+        ".tif": "image/tiff",
+    }
+
+    W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    WP_NS = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+    A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+    # ------------------------------------------------------------------
+    # Step 1 – Open the ZIP and map image relationships
+    # ------------------------------------------------------------------
+    with zipfile.ZipFile(file_path, "r") as zf:
+        # rId → (target_filename, mime)
+        rels_map: dict[str, tuple[str, str]] = {}
+        try:
+            rels_xml = zf.read("word/_rels/document.xml.rels")
+            rels_root = ET.fromstring(rels_xml)
+            for rel_el in rels_root:
+                rid = rel_el.get("Id")
+                target = rel_el.get("Target", "")
+                rtype = rel_el.get("Type", "")
+                if rid and "image" in rtype.lower():
+                    ext = Path(target).suffix.lower()
+                    rels_map[rid] = (target, MIME_BY_EXT.get(ext, "application/octet-stream"))
+        except (KeyError, ET.ParseError):
+            pass
+
+        # Read every referenced image blob → base64
+        media_data: dict[str, tuple[str, str]] = {}  # target → (mime, b64)
+        for target, mime in rels_map.values():
+            try:
+                blob = zf.read(f"word/{target}")
+                media_data[target] = (mime, b64encode(blob).decode("ascii"))
+            except KeyError:
+                pass
+
+        # ------------------------------------------------------------------
+        # Step 2 – Parse word/document.xml
+        # ------------------------------------------------------------------
+        doc_xml = zf.read("word/document.xml")
+        doc_root = ET.fromstring(doc_xml)
+
+    body_el = doc_root.find(f"{{{W_NS}}}body")
+    if body_el is None:
+        return {
+            "content": "<p>(空文档)</p>",
+            "contentType": "html",
+            "totalChars": 0,
+            "truncated": False,
+            "imageCount": 0,
+            "textLength": 0,
+        }
+
+    html_parts: list[str] = []
+    text_chunks: list[str] = []
+    image_count = 0
+
+    # ------------------------------------------------------------------
+    # Helpers for namespace-heavy lookups
+    # ------------------------------------------------------------------
+    def _attrv(el: ET.Element, local: str) -> str | None:
+        return el.get(f"{{{W_NS}}}{local}")
+
+    def _qname(ns: str, local: str) -> str:
+        return f"{{{ns}}}{local}"
+
+    def _iter_elems(parent: ET.Element, ns: str, local: str):
+        return parent.iter(_qname(ns, local))
+
+    def _find_elems(parent: ET.Element, ns: str, local: str):
+        return parent.findall(f".//{{{ns}}}{local}")
+
+    # ------------------------------------------------------------------
+    # Step 3 – Walk body children (paragraphs & tables)
+    # ------------------------------------------------------------------
+    for child in body_el:
+        tag_local = child.tag.split("}", 1)[-1] if "}" in child.tag else child.tag
+
+        # ── Paragraph ────────────────────────────────────────────────
+        if tag_local == "p":
+
+            # --- detect heading level ---
+            heading_level = 0
+            pPr = child.find(_qname(W_NS, "pPr"))
+            if pPr is not None:
+                pStyle = pPr.find(_qname(W_NS, "pStyle"))
+                if pStyle is not None:
+                    style_val = _attrv(pStyle, "val") or ""
+                    if style_val.lower().startswith("heading"):
+                        m = re.search(r"\d+", style_val)
+                        heading_level = max(1, min(6, int(m.group()) if m else 1))
+
+            run_html: list[str] = []
+            run_text: list[str] = []
+
+            for r_el in child.findall(_qname(W_NS, "r")):
+                # --- drawings / images inside the run ---
+                for drawing in r_el.findall(_qname(W_NS, "drawing")):
+                    for blip in drawing.iter(_qname(A_NS, "blip")):
+                        embed = blip.get(_qname(R_NS, "embed"))
+                        if embed and embed in rels_map:
+                            target, mime = rels_map[embed]
+                            if target in media_data:
+                                _, b64 = media_data[target]
+                                img_html = (
+                                    f'<img src="data:{mime};base64,{b64}" '
+                                    f'style="max-width:100%;height:auto;display:block;'
+                                    f'margin:8px 0;border-radius:6px;" '
+                                    f'alt="图片 {image_count + 1}" />'
+                                )
+                                run_html.append(img_html)
+                                run_text.append("[图片]")
+                                image_count += 1
+
+                # --- text nodes ---
+                for t_el in r_el.findall(_qname(W_NS, "t")):
+                    t = t_el.text or ""
+                    run_text.append(t)
+                    # minimal XML escaping for HTML safety
+                    escaped = t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    run_html.append(escaped)
+
+            combined_html = "".join(run_html).strip()
+            combined_text = "".join(run_text).strip()
+
+            if combined_html:
+                if heading_level:
+                    tag = f"h{heading_level}"
+                    html_parts.append(f"<{tag}>{combined_html}</{tag}>")
+                else:
+                    html_parts.append(f"<p>{combined_html}</p>")
+                text_chunks.append(combined_text)
+
+        # ── Table ────────────────────────────────────────────────────
+        elif tag_local == "tbl":
+            html_parts.append(
+                '<table style="border-collapse:collapse;width:100%;margin:8px 0;'
+                'font-size:14px;">'
+            )
+            for tr in child.findall(_qname(W_NS, "tr")):
+                html_parts.append("<tr>")
+                row_texts: list[str] = []
+                for tc in tr.findall(_qname(W_NS, "tc")):
+                    cell_strs: list[str] = []
+                    for p in tc.findall(_qname(W_NS, "p")):
+                        for t in p.findall(_qname(W_NS, "t")):
+                            if t.text:
+                                cell_strs.append(
+                                    t.text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                                )
+                    cell_text = " ".join(cell_strs).strip()
+                    html_parts.append(
+                        f'<td style="border:1px solid #ddd;padding:6px 10px;">{cell_text}</td>'
+                    )
+                    row_texts.append(cell_text)
+                html_parts.append("</tr>")
+                text_chunks.append(" | ".join(row_texts))
+            html_parts.append("</table>")
+
+    # ------------------------------------------------------------------
+    # Step 4 – Assemble complete HTML document
+    # ------------------------------------------------------------------
+    body_html = "\n".join(html_parts)
+    full_html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body {{
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-size: 15px; line-height: 1.7; color: #1a1a1a;
+    max-width: 860px; margin: 0 auto; padding: 20px 24px;
+    background: #fff;
+  }}
+  h1 {{ font-size: 1.6em; margin: 20px 0 10px; color: #111; border-bottom: 2px solid #eee; padding-bottom: 6px; }}
+  h2 {{ font-size: 1.35em; margin: 18px 0 8px; color: #222; }}
+  h3 {{ font-size: 1.15em; margin: 14px 0 6px; color: #333; }}
+  h4, h5, h6 {{ margin: 12px 0 4px; }}
+  p {{ margin: 0 0 8px; }}
+  img {{ max-width: 100%; height: auto; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }}
+  table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
+  td, th {{ border: 1px solid #ddd; padding: 6px 10px; text-align: left; }}
+</style>
+</head>
+<body>
+{body_html}
+</body>
+</html>"""
+
+    text_body = "\n\n".join(t for t in text_chunks if t)
+    total_chars = len(full_html)
+    truncated = total_chars > max_chars
+    content = full_html[:max_chars] if truncated else full_html
+
+    return {
+        "content": content,
+        "contentType": "html",
+        "totalChars": total_chars,
+        "truncated": truncated,
+        "imageCount": image_count,
+        "textLength": len(text_body),
+    }
+
+
+@router.get("/preview/{file_id}")
+async def preview_uploaded_file(
+    file_id: str,
+    max_chars: int = 200_000,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Return preview-ready content for a previously uploaded file.
+
+    This is the single endpoint the frontend uses for inline file previews
+    (eye button on attachment chips). The response shape is normalized so
+    the client can switch on `kind`:
+
+    - kind=text:        raw UTF-8 content
+    - kind=markdown:    raw UTF-8 content (frontend renders with react-markdown)
+    - kind=docx:        converted to plain text via python-docx (best-effort,
+                        preserves paragraph breaks)
+    - kind=pdf:         raw bytes returned as base64; the frontend renders
+                        pages with pdfjs-dist
+    - kind=image:       raw bytes returned as base64; the frontend renders
+                        the image directly
+    - kind=binary:      no content, just metadata; the frontend should show
+                        a friendly "preview not supported" message
+    - state=too_large:  file exceeds 5 MB; same shape as binary
+    - state=missing:    file metadata or payload no longer exists
+    """
+    if max_chars < 1000 or max_chars > 2_000_000:
+        raise HTTPException(status_code=400, detail="max_chars must be in [1000, 2000000]")
+
+    chunk_dir = UPLOAD_DIR / file_id
+    if not await aexists(chunk_dir):
+        return {"fileId": file_id, "state": "missing", "kind": "binary"}
+
+    meta_path = chunk_dir / "meta.json"
+    if not await aexists(meta_path):
+        return {"fileId": file_id, "state": "missing", "kind": "binary"}
+
+    try:
+        meta = json.loads(await aread_text(meta_path))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {"fileId": file_id, "state": "missing", "kind": "binary"}
+
+    file_name = meta.get("fileName") or meta.get("name") or "未命名文件"
+    ext = Path(file_name).suffix.lower()
+    file_path_str = meta.get("path")
+    if not file_path_str:
+        return {
+            "fileId": file_id,
+            "name": file_name,
+            "ext": ext,
+            "size": meta.get("size", 0),
+            "category": meta.get("category", "unknown"),
+            "state": "missing",
+            "kind": _detect_preview_kind(ext),
+        }
+    file_path = Path(file_path_str)
+    if not await aexists(file_path):
+        return {
+            "fileId": file_id,
+            "name": file_name,
+            "ext": ext,
+            "size": meta.get("size", 0),
+            "category": meta.get("category", "unknown"),
+            "state": "missing",
+            "kind": _detect_preview_kind(ext),
+        }
+
+    try:
+        file_size = (await asyncio.to_thread(file_path.stat)).st_size
+    except OSError:
+        file_size = meta.get("size", 0)
+
+    kind = _detect_preview_kind(ext)
+    base = {
+        "fileId": file_id,
+        "name": file_name,
+        "ext": ext,
+        "size": file_size,
+        "category": meta.get("category", "unknown"),
+        "kind": kind,
+    }
+
+    # 5 MB safety cap on previewable payloads
+    if file_size > 5 * 1024 * 1024:
+        return {**base, "state": "too_large", "size": file_size}
+
+    if kind == "binary":
+        return {**base, "state": "binary", "size": file_size}
+
+    if kind == "docx":
+        try:
+            result = await asyncio.to_thread(_extract_docx_html, str(file_path), max_chars)
+            return {**base, "state": "ok", **result}
+        except Exception as exc:  # noqa: BLE001 - 任何 docx 解析异常都视作 binary
+            return {
+                **base,
+                "state": "binary",
+                "size": file_size,
+                "error": f"docx 解析失败: {exc}",
+            }
+
+    if kind in ("pdf", "image"):
+        # PDF / 图片: 以 base64 返回原始字节, 前端用 pdfjs-dist 或 <img> 渲染
+        try:
+            import base64
+
+            content_bytes = await aread_bytes(file_path)
+        except OSError as exc:
+            return {
+                **base,
+                "state": "binary",
+                "size": file_size,
+                "error": f"读取失败: {exc}",
+            }
+        encoded = base64.b64encode(content_bytes).decode("ascii")
+        result: dict = {
+            **base,
+            "state": "ok",
+            "content": encoded,
+            "mimeType": _detect_image_mime(ext) if kind == "image" else "application/pdf",
+            "size": file_size,
+        }
+        if kind == "pdf":
+            # 顺便用 pypdf 提取纯文本, 方便前端做快速预览 / 搜索
+            try:
+                from pypdf import PdfReader
+
+                def _read_text() -> tuple[str, int]:
+                    reader = PdfReader(str(file_path))
+                    pages = len(reader.pages)
+                    chunks: list[str] = []
+                    for i, page in enumerate(reader.pages):
+                        try:
+                            text = page.extract_text() or ""
+                        except Exception:  # noqa: BLE001 - 单页解析失败不影响整体
+                            text = ""
+                        if text.strip():
+                            chunks.append(text)
+                    return ("\n\n".join(chunks), pages)
+
+                extracted, page_count = await asyncio.to_thread(_read_text)
+                result["pageCount"] = page_count
+                truncated = len(extracted) > max_chars
+                result["extractedText"] = extracted[:max_chars] if extracted else ""
+                result["textTruncated"] = truncated
+            except Exception as exc:  # noqa: BLE001
+                result["textError"] = f"PDF 文本提取失败: {exc}"
+        return result
+
+    # kind in {text, markdown}
+    try:
+        content = await aread_text(file_path)
+    except (UnicodeDecodeError, UnicodeError):
+        return {**base, "state": "binary", "size": file_size}
+    truncated = len(content) > max_chars
+    display = content[:max_chars]
+    return {
+        **base,
+        "state": "ok",
+        "content": display,
+        "truncated": truncated,
+        "totalChars": len(content),
+    }
+
+
 # ── Workspace file preview endpoints ──────────────────────────────────
 
 from app.config import PROJECT_ROOT
