@@ -225,6 +225,7 @@ export interface PendingMessage {
   type: 'text' | 'code' | 'system' | 'diff';
   attachments?: AttachmentMeta[];
   quoteReferences?: QuoteReference[];
+  exec_permission?: number;  // 1=询问 2=跳过 3=计划
 }
 
 export interface GeneratedFileDetail {
@@ -290,8 +291,13 @@ export interface DagState {
     name?: string;
     status?: string;
     agent?: string;
+    domain?: string;
     description?: string;
     dependencies?: string[];
+    priority?: number;
+    estimated_effort?: string;
+    error?: string;
+    duration_ms?: number;
   }>;
 }
 

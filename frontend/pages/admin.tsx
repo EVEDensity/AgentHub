@@ -1,13 +1,28 @@
 import { useRouter } from 'next/router';
+import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
 import type { Agent, AgentRoute, AgentRouteNode, ConsolidationResult, MemoryDetail, MemoryFileInfo, MemorySearchResult, SessionSummary, SkillMeta, SkillDetail, User } from '../types';
 import { PLATFORM_LABELS, PLATFORM_COLORS } from '../types';
-import TokenUsageHeatmap from '../components/heatmap/TokenUsageHeatmap';
-import AgentCanvas from '../components/flow/AgentCanvas';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
-import CodeReviewPanel from '../components/chat/CodeReviewPanel';
-import AuditLogList from '../components/admin/AuditLogList';
 import TagInput from '../components/admin/TagInput';
+
+// ── Dynamic imports for heavy / conditionally-rendered sections ──
+const TokenUsageHeatmap = dynamic(() => import('../components/heatmap/TokenUsageHeatmap'), {
+  ssr: false,
+  loading: () => null,
+});
+const AgentCanvas = dynamic(() => import('../components/flow/AgentCanvas'), {
+  ssr: false,
+  loading: () => null,
+});
+const CodeReviewPanel = dynamic(() => import('../components/chat/CodeReviewPanel'), {
+  ssr: false,
+  loading: () => null,
+});
+const AuditLogList = dynamic(() => import('../components/admin/AuditLogList'), {
+  ssr: false,
+  loading: () => null,
+});
 
 const SETTINGS_MENU = [
   '服务商',
@@ -105,6 +120,16 @@ export default function AdminPage(): JSX.Element {
   const [memorySearchQuery, setMemorySearchQuery] = useState('');
   const [memorySearchResults, setMemorySearchResults] = useState<MemorySearchResult[] | null>(null);
   const [memorySearchLoading, setMemorySearchLoading] = useState(false);
+
+  // ── Memory: trash / recovery ─────────────────────────────────────
+  const [showTrash, setShowTrash] = useState(false);
+  const [trashItems, setTrashItems] = useState<Array<{
+    trash_name: string; original_name: string; deleted_at: string;
+    days_elapsed: number; days_remaining: number; expired: boolean;
+  }>>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [pendingDeleteFile, setPendingDeleteFile] = useState<{ filename: string; name: string } | null>(null);
 
   // ── Skills module state ────────────────────────────────────────
   const [skillList, setSkillList] = useState<SkillMeta[]>([]);
@@ -483,6 +508,72 @@ export default function AdminPage(): JSX.Element {
     } finally {
       // Reset the file input so the same file can be re-imported
       e.target.value = '';
+    }
+  }
+
+  // ── Memory: delete / trash / recovery ─────────────────────────────
+
+  function confirmDeleteMemory(filename: string, name: string): void {
+    setPendingDeleteFile({ filename, name });
+    setShowDeleteConfirm(true);
+  }
+
+  async function handleDeleteMemory(): Promise<void> {
+    if (!pendingDeleteFile) return;
+    setShowDeleteConfirm(false);
+    try {
+      const res = await fetch(`/api/memory/files/${encodeURIComponent(pendingDeleteFile.filename)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setNotice(`已删除「${pendingDeleteFile.name}」，可在暂存区 30 天内恢复`);
+      if (activeMemoryFile === pendingDeleteFile.filename) {
+        setActiveMemoryFile(null);
+        setMemoryDetail(null);
+        setMemoryBodyDraft('');
+      }
+      await loadMemoryFiles();
+    } catch (e: unknown) {
+      setMemoryError(e instanceof Error ? e.message : '删除失败');
+    } finally {
+      setPendingDeleteFile(null);
+    }
+  }
+
+  async function loadTrash(): Promise<void> {
+    setTrashLoading(true);
+    try {
+      const res = await fetch('/api/memory/trash');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setTrashItems(data.trash || []);
+    } catch (e: unknown) {
+      setMemoryError(e instanceof Error ? e.message : '加载暂存区失败');
+    } finally {
+      setTrashLoading(false);
+    }
+  }
+
+  async function handleRecoverFromTrash(trashName: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/memory/trash/${encodeURIComponent(trashName)}/recover`, { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setNotice('记忆已从暂存区恢复');
+      await loadMemoryFiles();
+      await loadTrash();
+    } catch (e: unknown) {
+      setMemoryError(e instanceof Error ? e.message : '恢复失败');
+    }
+  }
+
+  async function handlePurgeFromTrash(trashName: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/memory/trash/${encodeURIComponent(trashName)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setNotice('记忆已永久删除');
+      await loadTrash();
+    } catch (e: unknown) {
+      setMemoryError(e instanceof Error ? e.message : '永久删除失败');
     }
   }
 
@@ -866,7 +957,7 @@ export default function AdminPage(): JSX.Element {
                   <div className="min-w-0 flex items-start gap-3">
                     {/* Avatar or fallback */}
                     {a.avatarUrl ? (
-                      <img src={a.avatarUrl} className="h-10 w-10 rounded-full object-cover shrink-0" alt={a.displayName || a.agentId} />
+                      <img src={a.avatarUrl} className="h-10 w-10 rounded-full object-cover shrink-0" alt={a.displayName || a.agentId} loading="lazy" decoding="async" />
                     ) : (
                       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-warm-200 text-warm-600 text-sm font-bold">
                         {(a.displayName || a.agentId)[0]}
@@ -878,6 +969,22 @@ export default function AdminPage(): JSX.Element {
                         <span className="truncate text-2xl font-semibold text-warm-900">{a.agentId}</span>
                         {a.displayName && (
                           <span className="text-sm text-warm-500">{a.displayName}</span>
+                        )}
+                        {a.agentId === 'Architect' && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-2 py-0.5 text-xs font-semibold text-white shadow-sm ring-1 ring-amber-300/60"
+                            title="主 Agent（PM / PMO）：负责任务拆解、调度、降级、仲裁与人工交接"
+                          >
+                            <svg
+                              className="h-3 w-3"
+                              viewBox="0 0 24 24"
+                              fill="currentColor"
+                              aria-hidden="true"
+                            >
+                              <path d="M5 16h14l1.5-9-4.5 3-4-6-4 6L3.5 7 5 16Zm0 2v2h14v-2H5Z" />
+                            </svg>
+                            主 Agent
+                          </span>
                         )}
                         <span
                           className="rounded px-2 py-0.5 text-xs font-medium"
@@ -1291,8 +1398,67 @@ export default function AdminPage(): JSX.Element {
               <button className="btn-primary px-3 py-1.5 text-sm" disabled={!activeMemoryFile} onClick={() => handleExportMemory()}>导出</button>
               <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => document.getElementById('memory-import-input')?.click()}>导入</button>
               <input id="memory-import-input" type="file" accept=".md,.markdown,.txt" className="hidden" onChange={(e) => { void handleImportMemory(e); }} />
+              <button
+                className="btn-secondary px-3 py-1.5 text-sm text-red-600 border-red-200 hover:bg-red-50"
+                disabled={!activeMemoryFile}
+                onClick={() => {
+                  if (activeMemoryFile && memoryDetail) confirmDeleteMemory(activeMemoryFile, memoryDetail.meta.name);
+                }}
+              >删除</button>
+              <button
+                className={`px-3 py-1.5 text-sm ${showTrash ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'btn-secondary'}`}
+                onClick={() => {
+                  setShowTrash(!showTrash);
+                  if (!showTrash) { void loadTrash(); }
+                }}
+              >暂存区{trashItems.length > 0 ? ` (${trashItems.length})` : ''}</button>
             </div>
           </header>
+
+          {/* Trash panel */}
+          {showTrash && (
+            <div className="border-b border-amber-200 bg-amber-50/50 px-5 py-3">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <span className="text-sm font-semibold text-amber-800">🗑 暂存区</span>
+                  <span className="ml-2 text-xs text-amber-600">
+                    已删除的记忆在此保留 30 天，过期后自动永久删除
+                  </span>
+                </div>
+                <button className="text-xs text-amber-600 hover:text-amber-800 underline" onClick={() => setShowTrash(false)}>关闭</button>
+              </div>
+              {trashLoading ? (
+                <div className="text-xs text-warm-500 py-2">加载中...</div>
+              ) : trashItems.length === 0 ? (
+                <div className="text-xs text-warm-400 py-2">暂存区为空</div>
+              ) : (
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {trashItems.map((item) => (
+                    <div key={item.trash_name} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${item.expired ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-white'}`}>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-warm-800">{item.original_name}</div>
+                        <div className="text-xs text-warm-500">
+                          删除于 {item.deleted_at} · {item.days_remaining > 0 ? `剩余 ${Math.ceil(item.days_remaining)} 天` : '已过期'}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 ml-3 shrink-0">
+                        {!item.expired && (
+                          <button
+                            className="rounded px-2 py-1 text-xs text-green-700 bg-green-100 hover:bg-green-200"
+                            onClick={() => { void handleRecoverFromTrash(item.trash_name); }}
+                          >恢复</button>
+                        )}
+                        <button
+                          className="rounded px-2 py-1 text-xs text-red-600 bg-red-100 hover:bg-red-200"
+                          onClick={() => { void handlePurgeFromTrash(item.trash_name); }}
+                        >永久删除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid flex-1 grid-cols-2">
             <div className="border-r border-warm-150 flex flex-col">
@@ -1322,6 +1488,38 @@ export default function AdminPage(): JSX.Element {
             </div>
           </div>
         </div>
+        {/* Delete confirmation modal — rendered at root level via fragment */}
+        {showDeleteConfirm && pendingDeleteFile && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { setShowDeleteConfirm(false); setPendingDeleteFile(null); }}>
+            <div className="bg-white rounded-xl shadow-modal max-w-md w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-3 mb-4">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <div className="text-lg font-semibold text-warm-900">确认删除记忆</div>
+                  <div className="text-sm text-warm-600 mt-0.5">「{pendingDeleteFile.name}」</div>
+                </div>
+              </div>
+              <div className="mb-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+                <p className="font-medium mb-1">📋 删除说明：</p>
+                <ul className="list-disc list-inside space-y-1 text-xs">
+                  <li>删除后文件将进入<strong>暂存区</strong>保存 <strong>30 天</strong></li>
+                  <li>30 天内可随时从暂存区恢复到原位置</li>
+                  <li>超过 30 天后系统将<strong>永久删除</strong>，无法恢复</li>
+                </ul>
+              </div>
+              <div className="flex justify-end gap-3 mt-4">
+                <button
+                  className="px-4 py-2 text-sm rounded-lg border border-warm-200 text-warm-700 hover:bg-warm-50"
+                  onClick={() => { setShowDeleteConfirm(false); setPendingDeleteFile(null); }}
+                >取消</button>
+                <button
+                  className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700"
+                  onClick={() => { void handleDeleteMemory(); }}
+                >确认删除</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -2429,12 +2627,13 @@ index a1b2c3d..e4f5g6h 100644
                         if (!file) return;
                         const formData = new FormData();
                         formData.append('file', file);
+                        if (newAgent.agentId.trim()) formData.append('agentId', newAgent.agentId.trim());
                         try {
                           const res = await fetch('/api/agent/registry/avatar', { method: 'POST', headers: authHeaders(), body: formData });
                           const data = await res.json();
                           if (res.ok && data.avatarUrl) {
                             setNewAgent((p) => ({ ...p, avatarUrl: data.avatarUrl }));
-                            setNotice('头像上传成功');
+                            setNotice(data.storedInDb ? '头像已上传至数据库' : '头像上传成功');
                           } else {
                             setNotice(fmtErr(data.detail, '上传失败'));
                           }
@@ -2502,12 +2701,13 @@ index a1b2c3d..e4f5g6h 100644
                         if (!file) return;
                         const formData = new FormData();
                         formData.append('file', file);
+                        if (editAgent.agentId.trim()) formData.append('agentId', editAgent.agentId.trim());
                         try {
                           const res = await fetch('/api/agent/registry/avatar', { method: 'POST', headers: authHeaders(), body: formData });
                           const data = await res.json();
                           if (res.ok && data.avatarUrl) {
                             setEditAgent((p) => ({ ...p, avatarUrl: data.avatarUrl }));
-                            setNotice('头像上传成功');
+                            setNotice(data.storedInDb ? '头像已上传至数据库' : '头像上传成功');
                           } else {
                             setNotice(fmtErr(data.detail, '上传失败'));
                           }

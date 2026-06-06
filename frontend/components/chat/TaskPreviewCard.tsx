@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type JSX } from 'react';
+import { memo, useState, type JSX } from 'react';
 import { ListTodo, Check, X, Edit3, Clock, ArrowRight } from 'lucide-react';
 import type { TaskPreviewEvent, TaskPreviewItem } from '../../types';
 
@@ -16,7 +16,7 @@ function formatEta(seconds: number): string {
   return `${Math.round(seconds / 3600)} 小时`;
 }
 
-export default function TaskPreviewCard({ data, isStreaming, onSendEvent }: TaskPreviewCardProps): JSX.Element {
+const TaskPreviewCard = memo(function TaskPreviewCard({ data, isStreaming, onSendEvent }: TaskPreviewCardProps): JSX.Element {
   const [submitted, setSubmitted] = useState(false);
   const [modifications, setModifications] = useState('');
   const [showModify, setShowModify] = useState(false);
@@ -193,4 +193,6 @@ export default function TaskPreviewCard({ data, isStreaming, onSendEvent }: Task
       </div>
     </div>
   );
-}
+});
+
+export default TaskPreviewCard;

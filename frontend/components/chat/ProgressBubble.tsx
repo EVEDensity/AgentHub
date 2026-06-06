@@ -1,6 +1,6 @@
 'use client';
 
-import { type JSX } from 'react';
+import { memo, type JSX } from 'react';
 import { TrendingUp, Clock } from 'lucide-react';
 import type { ProgressUpdateEvent } from '../../types';
 
@@ -15,7 +15,7 @@ function formatEta(seconds: number): string {
   return `${Math.round(seconds / 3600)} 小时`;
 }
 
-export default function ProgressBubble({ data, isStreaming }: ProgressBubbleProps): JSX.Element {
+const ProgressBubble = memo(function ProgressBubble({ data, isStreaming }: ProgressBubbleProps): JSX.Element {
   const pct = data.totalSteps > 0 ? Math.round((data.completedSteps / data.totalSteps) * 100) : 0;
   const isDone = data.completedSteps >= data.totalSteps;
 
@@ -77,4 +77,6 @@ export default function ProgressBubble({ data, isStreaming }: ProgressBubbleProp
       </div>
     </div>
   );
-}
+});
+
+export default ProgressBubble;

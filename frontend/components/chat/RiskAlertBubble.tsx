@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type JSX } from 'react';
+import { memo, useState, type JSX } from 'react';
 import { AlertTriangle, ShieldAlert, ArrowRight, X } from 'lucide-react';
 import type { RiskWarningEvent, RiskWarningAction } from '../../types';
 
@@ -48,7 +48,7 @@ const RISK_LABELS: Record<string, string> = {
   low: '低风险',
 };
 
-export default function RiskAlertBubble({ data, isStreaming, onSendEvent }: RiskAlertBubbleProps): JSX.Element {
+const RiskAlertBubble = memo(function RiskAlertBubble({ data, isStreaming, onSendEvent }: RiskAlertBubbleProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const colors = RISK_COLORS[data.riskLevel] || RISK_COLORS.medium;
@@ -129,4 +129,6 @@ export default function RiskAlertBubble({ data, isStreaming, onSendEvent }: Risk
       </div>
     </div>
   );
-}
+});
+
+export default RiskAlertBubble;

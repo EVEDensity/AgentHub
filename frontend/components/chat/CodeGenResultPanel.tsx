@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type JSX } from 'react';
+import { memo, useCallback, useMemo, useState, type JSX } from 'react';
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -332,7 +332,7 @@ interface CodeGenResultPanelProps {
 export { parseCodeGenOutput };
 export type { CodeGenFile, ParsedCodeGen };
 
-export default function CodeGenResultPanel({ content }: CodeGenResultPanelProps): JSX.Element | null {
+const CodeGenResultPanel = memo(function CodeGenResultPanel({ content }: CodeGenResultPanelProps): JSX.Element | null {
   const parsed = useMemo(() => parseCodeGenOutput(content), [content]);
 
   const [expanded, setExpanded] = useState<Set<number>>(() => {
@@ -701,7 +701,9 @@ export default function CodeGenResultPanel({ content }: CodeGenResultPanelProps)
       `}</style>
     </div>
   );
-}
+});
+
+export default CodeGenResultPanel;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Detection helper

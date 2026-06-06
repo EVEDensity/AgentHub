@@ -22,6 +22,9 @@ from app.utils.async_file import (
     astat_mtime,
     aiterdir,
     amkdir,
+    acopy,
+    aread_bytes,
+    awrite_bytes,
 )
 
 
@@ -102,7 +105,17 @@ class MemoryStorage:
         return MemoryDocument.parse(content, str(path))
 
     async def delete(self, filename: str) -> bool:
-        """Delete a memory file by filename."""
+        """Move a memory file to trash (30-day recovery window)."""
+        await self._ensure_dir()
+        path = self._resolve(filename)
+        if not path or not await aexists(path):
+            return False
+        await self._trash_file(path, filename)
+        await self._refresh_index()
+        return True
+
+    async def permanent_delete(self, filename: str) -> bool:
+        """Permanently delete a memory file (no recovery)."""
         await self._ensure_dir()
         path = self._resolve(filename)
         if not path or not await aexists(path):
@@ -110,6 +123,156 @@ class MemoryStorage:
         await aunlink(path)
         await self._refresh_index()
         return True
+
+    # ── Trash / Recovery ──────────────────────────────────────────
+
+    @property
+    def trash_dir(self) -> Path:
+        return self._base / ".trash"
+
+    @property
+    def trash_manifest_path(self) -> Path:
+        return self.trash_dir / "_manifest.json"
+
+    async def _ensure_trash_dir(self) -> None:
+        await amkdir(self.trash_dir)
+
+    async def _trash_file(self, src: Path, original_name: str) -> None:
+        """Move a file to the trash directory with a deletion timestamp prefix."""
+        await self._ensure_trash_dir()
+        import json as _json
+
+        ts = datetime.now().isoformat(timespec="seconds")
+        trash_name = f"{ts}__{original_name}"
+        dst = self.trash_dir / trash_name
+        await acopy(src, dst)
+        await aunlink(src)
+
+        # Update manifest
+        manifest = await self._read_trash_manifest()
+        manifest[trash_name] = {
+            "original_name": original_name,
+            "deleted_at": ts,
+        }
+        await self._write_trash_manifest(manifest)
+
+    async def _read_trash_manifest(self) -> dict:
+        await self._ensure_trash_dir()
+        if not await aexists(self.trash_manifest_path):
+            return {}
+        try:
+            raw = await aread_bytes(self.trash_manifest_path)
+            import json as _json
+            return _json.loads(raw.decode("utf-8"))
+        except Exception:
+            return {}
+
+    async def _write_trash_manifest(self, manifest: dict) -> None:
+        await self._ensure_trash_dir()
+        import json as _json
+        data = _json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+        await awrite_bytes(self.trash_manifest_path, data)
+
+    async def list_trash(self) -> list[dict]:
+        """List all files in the trash with deletion time and days remaining."""
+        await self._ensure_trash_dir()
+        manifest = await self._read_trash_manifest()
+        now = datetime.now()
+        results: list[dict] = []
+
+        children = await aiterdir(self.trash_dir)
+        for child in children:
+            if child.name == "_manifest.json":
+                continue
+            fname = child.name
+            meta = manifest.get(fname, {})
+            deleted_at_str = meta.get("deleted_at", "")
+            try:
+                deleted_at = datetime.fromisoformat(deleted_at_str)
+            except (ValueError, TypeError):
+                deleted_at = datetime.fromtimestamp(await astat_mtime(child))
+            days_elapsed = (now - deleted_at).total_seconds() / 86400.0
+            days_remaining = max(0.0, 30.0 - days_elapsed)
+            results.append({
+                "trash_name": fname,
+                "original_name": meta.get("original_name", fname),
+                "deleted_at": deleted_at_str,
+                "days_elapsed": round(days_elapsed, 2),
+                "days_remaining": round(days_remaining, 2),
+                "expired": days_remaining <= 0,
+            })
+
+        results.sort(key=lambda r: r["deleted_at"], reverse=True)
+        return results
+
+    async def recover_from_trash(self, trash_name: str) -> bool:
+        """Recover a file from trash back to the main memory directory."""
+        await self._ensure_trash_dir()
+        src = self.trash_dir / trash_name
+        if not await aexists(src):
+            return False
+
+        manifest = await self._read_trash_manifest()
+        meta = manifest.get(trash_name, {})
+        original_name = meta.get("original_name", trash_name)
+
+        # Remove timestamp prefix from filename if present
+        # Format: 2026-06-06T12:00:00__original.md
+        if "__" in trash_name:
+            _, _, original_name = trash_name.partition("__")
+
+        dst = self._base / original_name
+        # If a file with the same name already exists, append a suffix
+        if await aexists(dst):
+            base, ext = original_name.rsplit(".", 1) if "." in original_name else (original_name, "md")
+            dst = self._base / f"{base}_recovered.{ext}"
+
+        await acopy(src, dst)
+        await aunlink(src)
+
+        # Remove from manifest
+        manifest.pop(trash_name, None)
+        await self._write_trash_manifest(manifest)
+        await self._refresh_index()
+        return True
+
+    async def purge_trash_item(self, trash_name: str) -> bool:
+        """Permanently delete a file from trash."""
+        await self._ensure_trash_dir()
+        path = self.trash_dir / trash_name
+        if not await aexists(path):
+            return False
+        await aunlink(path)
+        manifest = await self._read_trash_manifest()
+        manifest.pop(trash_name, None)
+        await self._write_trash_manifest(manifest)
+        return True
+
+    async def cleanup_trash(self, retention_days: int = 30) -> int:
+        """Permanently delete trash files older than retention_days. Returns count of purged files."""
+        await self._ensure_trash_dir()
+        manifest = await self._read_trash_manifest()
+        now = datetime.now()
+        purged = 0
+
+        children = await aiterdir(self.trash_dir)
+        for child in children:
+            if child.name == "_manifest.json":
+                continue
+            meta = manifest.get(child.name, {})
+            deleted_at_str = meta.get("deleted_at", "")
+            try:
+                deleted_at = datetime.fromisoformat(deleted_at_str)
+            except (ValueError, TypeError):
+                deleted_at = datetime.fromtimestamp(await astat_mtime(child))
+            days_elapsed = (now - deleted_at).total_seconds() / 86400.0
+            if days_elapsed >= retention_days:
+                await aunlink(child)
+                manifest.pop(child.name, None)
+                purged += 1
+
+        await self._write_trash_manifest(manifest)
+        return purged
 
     async def list_headers(self, max_files: int = 200) -> list[MemoryHeader]:
         """Scan all .md files (except MEMORY.md) and return their headers.

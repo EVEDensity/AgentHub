@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type JSX } from 'react';
+import { memo, useState, type JSX } from 'react';
 import { HelpCircle, Check, MessageSquare } from 'lucide-react';
 import type { AgentQuestionEvent, AgentQuestionOption } from '../../types';
 
@@ -10,7 +10,7 @@ interface AgentQuestionBubbleProps {
   onSendEvent: (event: Record<string, unknown>) => void;
 }
 
-export default function AgentQuestionBubble({ data, isStreaming, onSendEvent }: AgentQuestionBubbleProps): JSX.Element {
+const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreaming, onSendEvent }: AgentQuestionBubbleProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const [customAnswer, setCustomAnswer] = useState('');
   const [showCustom, setShowCustom] = useState(false);
@@ -132,4 +132,6 @@ export default function AgentQuestionBubble({ data, isStreaming, onSendEvent }: 
       </div>
     </div>
   );
-}
+});
+
+export default AgentQuestionBubble;

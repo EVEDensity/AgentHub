@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
-    "axios": "^1.7.9",
-    "canvas": "^3.2.3",
+    "@tanstack/react-virtual": "^3.11.3",
     "konva": "^9.3.18",
     "lucide-react": "^1.16.0",
     "next": "^13.5.7",
@@ -24,10 +23,12 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@next/bundle-analyzer": "^13.5.7",
     "@types/node": "25.8.0",
-    "@types/react": "19.2.14",
+    "@types/react": "^18.2.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "autoprefixer": "^10.4.19",
+    "critters": "^0.0.23",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "typescript": "6.0.3"

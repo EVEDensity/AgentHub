@@ -29,6 +29,21 @@ _THROTTLE_SECONDS = 90  # min interval between background memory tasks per sessi
 # {session_id: {request_id: {"event": asyncio.Event, "decision": str}}}
 _permission_state: dict[str, dict[str, dict]] = {}
 
+# ── Exec permission mode per session ───────────────────────────────
+# 1 = 询问 (ask), 2 = 跳过 (bypass), 3 = 计划 (plan/read-only)
+_session_exec_permission: dict[str, int] = {}
+
+
+def get_session_exec_permission(session_id: str) -> int:
+    """Return the exec_permission for a session (default 1 = ask)."""
+    return _session_exec_permission.get(session_id, 1)
+
+
+def set_session_exec_permission(session_id: str, mode: int) -> None:
+    """Set the exec_permission for a session."""
+    if mode in (1, 2, 3):
+        _session_exec_permission[session_id] = mode
+
 # Auto-name throttle: separate from memory tasks — fires more aggressively
 # for the first few messages, then backs off
 _auto_name_state: dict[str, tuple[float, int]] = {}
@@ -413,6 +428,14 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             if not content:
                 continue
 
+            # ── Store exec permission mode for this session ────────
+            exec_perm = data.get("exec_permission")
+            if isinstance(exec_perm, int) and exec_perm in (1, 2, 3):
+                set_session_exec_permission(session_id, exec_perm)
+                # Also sync to the shared permission module store
+                from app.services.tools.permission import set_exec_permission
+                set_exec_permission(session_id, exec_perm)
+
             # Cancel any in-flight stream — but ONLY if there is one.
             # 无条件 cancel 会让上一轮尚未走完模型循环的 invocation 看到 token.cancelled=True
             # 并返回 "流式响应已被中断"。 先用 has_active_stream 守卫，避免误中断。
@@ -567,78 +590,137 @@ async def _process_and_stream(
                 if row:
                     target_agents.append(row)
 
-            # ── Multi-agent path ──────────────────────────────────────
+            # ── Multi-agent path (Architect-driven DAG execution) ──────
             if len(target_agents) >= 2:
                 from app.services.agent_service import CollaborationContext
+                from app.services.task_decomposer import task_decomposer
+                from app.services.dag_executor import DAGExecutor
+                from app.services.result_synthesizer import result_synthesizer
 
                 collab = CollaborationContext(content)
                 for a in target_agents:
                     collab.register(a)
 
-                # ── 🟡 Trigger 1: Task Preview ──────────────────────────
-                # After task decomposition (agents resolved) but BEFORE
-                # execution starts, broadcast a task_preview so the user
-                # sees what will happen and can confirm/cancel/modify.
+                # ── Step 1: Architect-driven task decomposition ─────────
+                # Use the Architect LLM to decompose the user request into
+                # a structured DAG, falling back to keyword templates.
+                try:
+                    dag_config = await task_decomposer.decompose(
+                        content=content,
+                        session_id=session_id,
+                        agents=target_agents,
+                    )
+                except Exception:
+                    # Last-resort fallback
+                    from app.schemas.dag import DAGConfig
+                    dag_config = DAGConfig(
+                        total=len(target_agents),
+                        completed=0,
+                        nodes=[{
+                            "id": f"n{i}", "domain": a.get("domain", "general"),
+                            "agent": a["agent_id"],
+                            "description": f"执行 {a['agent_id']} 的任务",
+                            "dependencies": [f"n{j}" for j in range(i)] if i > 0 else [],
+                        } for i, a in enumerate(target_agents)],
+                        execution_strategy="sequential",
+                        analysis=f"自动分解为 {len(target_agents)} 个节点",
+                    )
+
+                # ── 🟡 Trigger 1: Task Preview with real DAG ────────
                 task_preview_msg_id = str(uuid.uuid4())
                 task_items = []
-                for i, a in enumerate(target_agents):
+                for node in dag_config.nodes:
                     domain_label = {
                         "orchestrator": "协调调度", "architect": "架构设计",
                         "codegen": "代码生成", "review": "代码审查",
                         "test": "测试验证", "deploy": "部署发布",
-                    }.get(a.get("domain", ""), a.get("domain", "general"))
+                    }.get(node.domain, node.domain)
                     task_items.append({
-                        "id": f"task_{i}",
-                        "description": f"{a['agent_id']} ({domain_label}): 处理用户需求",
-                        "agent": a["agent_id"],
-                        "dependencies": [target_agents[j]["agent_id"] for j in range(i)] if i > 0 else [],
-                        "estimatedSeconds": 30 + i * 15,
+                        "id": node.id,
+                        "description": f"{node.agent} ({domain_label}): {node.description}",
+                        "agent": node.agent,
+                        "dependencies": node.dependencies,
+                        "estimatedSeconds": {"low": 20, "medium": 45, "high": 90}.get(
+                            node.estimated_effort, 45
+                        ),
                     })
                 await manager.broadcast_task_preview(
                     session_id, task_preview_msg_id, task_items,
-                    eta_seconds=sum(t.get("estimatedSeconds", 30) for t in task_items),
+                    eta_seconds=sum(t.get("estimatedSeconds", 45) for t in task_items),
                 )
 
-                for agent in target_agents:
-                    if token.cancelled:
-                        return
-                    ctx = collab.context_for(agent["agent_id"])
-                    try:
-                        response_text = await _invoke_agent(
-                            session_id, content, agent, user_id, token, attachments or [],
-                            collab_ctx=ctx,
-                            quote_references=quote_references,
-                        )
-                        if not token.cancelled and response_text:
-                            collab.record(agent["agent_id"], agent.get("domain", ""), response_text)
-                    except Exception:
-                        if not token.cancelled:
-                            await manager.broadcast(
-                                session_id,
-                                {
-                                    "event": "message",
-                                    "sessionId": session_id,
-                                    "content": f"Agent 【{agent['agent_id']}】调用失败，请稍后重试。",
-                                    "sender": "system",
-                                    "timestamp": now(),
-                                    "type": "system",
-                                },
-                            )
-
-                # Emit collaboration summary
-                final_summary = collab.summary
-                if final_summary and not token.cancelled:
-                    await manager.broadcast(
-                        session_id,
-                        {
-                            "event": "message",
-                            "sessionId": session_id,
-                            "content": final_summary,
-                            "sender": "system",
-                            "timestamp": now(),
-                            "type": "system",
-                        },
+                # ── Step 2: Execute DAG with real agent invocations ──
+                async def _dag_invoke(sid, agent_id, content, extra_context=""):
+                    agent_row = await afetch_one(
+                        "SELECT * FROM agent_registry WHERE agent_id=$1", agent_id,
                     )
+                    if not agent_row:
+                        return f"[错误] Agent '{agent_id}' 未在注册表中找到"
+                    collab_ctx = collab.context_for(agent_id) if collab else ""
+                    full = f"{collab_ctx}\n\n{content}"
+                    if extra_context:
+                        full = f"{extra_context}\n\n{full}"
+                    result = await _invoke_agent(
+                        sid, full, agent_row, user_id, token,
+                        attachments or [],
+                        collab_ctx=collab_ctx,
+                        quote_references=quote_references,
+                    )
+                    if result:
+                        collab.record(agent_id, agent_row.get("domain", ""), result)
+                    return result or ""
+
+                executor = DAGExecutor(
+                    session_id=session_id,
+                    manager=manager,
+                    invoke_fn=_dag_invoke,
+                    on_node_update=None,
+                )
+
+                try:
+                    node_results = await executor.execute(dag_config, collab)
+                except Exception as exc:
+                    logger.warning("DAG execution error: %s", exc)
+
+                # ── Step 3: Synthesize results ────────────────────────
+                if not token.cancelled:
+                    async def _synthesize_invoke(prompt):
+                        architect_row = await afetch_one(
+                            "SELECT * FROM agent_registry WHERE agent_id='Architect'",
+                        )
+                        if not architect_row:
+                            return None
+                        return await _invoke_agent(
+                            session_id, prompt, architect_row, user_id, token,
+                            attachments or [],
+                            collab_ctx="",
+                            quote_references=None,
+                        )
+
+                    final_response = await result_synthesizer.synthesize(
+                        dag=dag_config,
+                        node_results=executor.node_results,
+                        original_request=content,
+                        invoke_fn=_synthesize_invoke,
+                    )
+
+                    if final_response and not token.cancelled:
+                        # Save final synthesized message
+                        await save_message(
+                            session_id, final_response, "Architect",
+                            "text", None, None,
+                        )
+                        await manager.broadcast(
+                            session_id,
+                            {
+                                "event": "message",
+                                "sessionId": session_id,
+                                "content": final_response,
+                                "sender": "Architect",
+                                "timestamp": now(),
+                                "type": "text",
+                            },
+                        )
 
                 # ── 🟡 Trigger 5: Agent Todo ────────────────────────────
                 # After all agents complete, broadcast a follow-up todo

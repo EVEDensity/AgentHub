@@ -1,14 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
 import ChatHeader from '../components/chat/ChatHeader';
 import ChatInput from '../components/chat/ChatInput';
-import FilePreviewModal from '../components/chat/FilePreviewModal';
-import DagModal from '../components/chat/DagModal';
 import MessageList from '../components/chat/MessageList';
+import { type ExecPermission } from '../components/chat/PermissionModePopover';
 import SessionSidebar from '../components/chat/SessionSidebar';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import FilePreviewPanel from '../components/chat/FilePreviewPanel';
 import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
 import { normalizeReferences } from '../lib/references';
@@ -27,6 +26,20 @@ import {
 } from '../lib/sessionStore';
 import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
+
+// ── Dynamic imports for heavy / conditionally-rendered components ──
+const FilePreviewModal = dynamic(() => import('../components/chat/FilePreviewModal'), {
+  ssr: false,
+  loading: () => null,
+});
+const FilePreviewPanel = dynamic(() => import('../components/chat/FilePreviewPanel'), {
+  ssr: false,
+  loading: () => null,
+});
+const DagModal = dynamic(() => import('../components/chat/DagModal'), {
+  ssr: false,
+  loading: () => null,
+});
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
@@ -126,6 +139,10 @@ export default function AgentHubIM(): JSX.Element {
    */
   const [pendingScrollRef, setPendingScrollRef] = useState<{ id: string; nonce: number } | null>(null);
 
+  // ── 执行权限模式 ─────────────────────────────────────────────────
+  // 1=询问权限  2=跳过权限  3=计划模式
+  const [execPermission, setExecPermission] = useState<ExecPermission>(1);
+
   // ── 可调整布局尺寸（localStorage 持久化） ──────────────
   // 左侧会话栏宽度：默认 320px，可在 240-480 之间调整
   const [sidebarWidth, setSidebarWidth, resetSidebarWidth] = useResizableSize(
@@ -155,6 +172,10 @@ export default function AgentHubIM(): JSX.Element {
   // ★ streamBufferRef 不再使用——buffer 走 SessionStore。
   // ★ streamFlushRafRef 改为 per-session Map，让每个 session 独立 RAF 调度 flush。
   const streamFlushRafRef = useRef<Map<string, number>>(new Map());
+  // ★ streamInterruptedAtRef 记录每个 session 上次 stream_interrupted 的时间戳。
+  //   用于在 800ms 窗口内阻断迟到的 agent_thinking 事件重新激活流式状态
+  //   (避免标题栏"AI streaming..."状态卡死)。
+  const streamInterruptedAtRef = useRef<Map<string, number>>(new Map());
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -479,6 +500,8 @@ export default function AgentHubIM(): JSX.Element {
       flushStreamBuffer(sid);
       setSessionBuffer(sid, null);
       setSessionStreaming(sid, false);
+      // 清理该 session 的中断标记
+      streamInterruptedAtRef.current.delete(sid);
       // 仅当用户当前还在这个 session 才重连
       if (currentSessionRef.current === sid) {
         reconnectAttemptsRef.current += 1;
@@ -490,6 +513,10 @@ export default function AgentHubIM(): JSX.Element {
     ws.onerror = () => {
       wsReadyRef.current.delete(sid);
       setConnected(false);
+      // Ensure cleanup even if browser doesn't fire onclose after error
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        try { ws.close(); } catch { /* best-effort */ }
+      }
     };
 
     ws.onmessage = (event: MessageEvent<string>) => {
@@ -527,12 +554,31 @@ export default function AgentHubIM(): JSX.Element {
       }
 
       if (evt === 'task_update') {
-        setDag({ total: raw.total as number || 0, completed: raw.completed as number || 0, nodes: raw.nodes as DagState['nodes'] || [] });
+        // Per-node incremental update — merge into existing dag state
+        const tu = raw as { nodeId: string; status: string; detail?: { error?: string; retries?: number }; sessionId: string };
+        if (tu.nodeId && tu.status) {
+          setDag(prev => {
+            const nodes = prev.nodes.map(n =>
+              n.id === tu.nodeId ? { ...n, status: tu.status, error: tu.detail?.error } : n
+            );
+            return {
+              ...prev,
+              nodes,
+              completed: nodes.filter(n => n.status === 'SUCCESS' || n.status === 'FAILED').length,
+            };
+          });
+        }
       }
 
       if (evt === 'message_chunk') {
         const chunk = raw as unknown as StreamChunk;
         const cSessionId = chunk.sessionId || chunkSessionId;
+        // ★ 中断守卫：stream_interrupted 后 800ms 内的迟到的 chunk 直接丢弃，
+        //   避免旧 buffer 的残余内容被写入新会话的渲染区。
+        const interruptedAt = streamInterruptedAtRef.current.get(cSessionId);
+        if (interruptedAt && Date.now() - interruptedAt < 800) {
+          return;
+        }
         setSessionStreaming(cSessionId, !chunk.isFinal);
 
         const existingBuf = getSessionBuffer(cSessionId);
@@ -552,6 +598,8 @@ export default function AgentHubIM(): JSX.Element {
             chunks: [],
             isFinal: false,
           });
+          // ★ 全新流开始了，清除该 session 的打断标记
+          streamInterruptedAtRef.current.delete(cSessionId);
         }
 
         // 把 chunk 追加到对应 session 的 buffer
@@ -578,13 +626,24 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'stream_interrupted') {
         const iSessionId = chunkSessionId;
+        // ★ 强制定位：清除该 session 的所有 streaming 状态、buffer、待调度 RAF
+        //   以及流式 filter 状态。即便后续 stream_chunk 因为竞态到达，buffer
+        //   已经被清空，flush 时不会把老内容写入新消息。
         setSessionStreaming(iSessionId, false);
+        setSessionBuffer(iSessionId, null);
+        const pendingRaf = streamFlushRafRef.current.get(iSessionId);
+        if (pendingRaf) {
+          window.cancelAnimationFrame(pendingRaf);
+          streamFlushRafRef.current.delete(iSessionId);
+        }
+        // 记录打断时刻；800ms 内的 agent_thinking / stream_chunk 会被忽略
+        streamInterruptedAtRef.current.set(iSessionId, Date.now());
         updateSessionMessages(iSessionId, (prev) => {
           const updated = [...prev];
           let changed = false;
           for (let i = updated.length - 1; i >= 0; i--) {
             if (updated[i].isStreaming) {
-              // If it's a thinking placeholder (empty or progress text), remove it entirely
+              // thinking placeholder（空或"正在..."进度文案）整体删除
               if (!updated[i].content || updated[i].content.startsWith('正在')) {
                 updated.splice(i, 1);
               } else {
@@ -609,6 +668,17 @@ export default function AgentHubIM(): JSX.Element {
           phase?: string;
           details?: string;
         };
+        // ★ 中断守卫：如果该 session 在 800ms 内被 stream_interrupted，
+        //   迟到的 agent_thinking 事件不应该重新激活流式状态，否则标题
+        //   栏"AI streaming..."会卡死。 直接 return，等下一次新会话。
+        const interruptedAt = streamInterruptedAtRef.current.get(chunkSessionId);
+        if (interruptedAt && Date.now() - interruptedAt < 800) {
+          return;
+        }
+        // 过了窗口期就清掉标记，避免污染下一次正常流
+        if (interruptedAt) {
+          streamInterruptedAtRef.current.delete(chunkSessionId);
+        }
         setSessionStreaming(chunkSessionId, true);
         // Insert or update the thinking placeholder with phase details.
         // Subsequent agent_thinking events (e.g. "executing", "synthesizing")
@@ -811,6 +881,18 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'task_preview') {
         const payload = raw as unknown as import('../types').TaskPreviewEvent;
+        // Initialize DAG state for real-time node status tracking
+        setDag({
+          total: payload.tasks.length,
+          completed: 0,
+          nodes: payload.tasks.map(t => ({
+            id: t.id,
+            agent: t.agent,
+            description: t.description,
+            dependencies: t.dependencies,
+            status: 'PENDING',
+          })),
+        });
         updateSessionMessages(chunkSessionId, (prev) => [
           ...prev,
           {
@@ -1557,6 +1639,7 @@ export default function AgentHubIM(): JSX.Element {
       type: 'text',
       attachments: currentFiles,
       quoteReferences: quoteReferences.length > 0 ? quoteReferences : undefined,
+      exec_permission: execPermission,
     };
 
     if (isStreaming) {
@@ -2110,6 +2193,8 @@ export default function AgentHubIM(): JSX.Element {
           onSendPMEvent={handleSendPMEvent}
         />
 
+        {/* ── Permission Mode Toggle 已被挪入 ChatInput 工具栏（next to 工具） ── */}
+
         <ChatInput
           input={input}
           isStreaming={isStreaming}
@@ -2141,6 +2226,8 @@ export default function AgentHubIM(): JSX.Element {
           onMentionSearchChange={handleMentionSearchChange}
           onMentionActiveIndexChange={handleMentionActiveIndexChange}
           onRiskLevelChange={handleRiskLevelChange}
+          execPermission={execPermission}
+          onExecPermissionChange={setExecPermission}
           fileReferences={fileReferences}
           onRemoveReference={handleRemoveReference}
           onClearAllReferences={handleClearAllReferences}

@@ -641,6 +641,47 @@ async def batch_delete_memories(req: BatchDeleteRequest):
     return {"status": "ok", "deleted": deleted, "count": len(deleted), "not_found": not_found}
 
 
+# -- Trash / Recovery Endpoints -------------------------------------------
+
+TRASH_RETENTION_DAYS = 30
+
+
+@router.get("/trash")
+async def list_trash():
+    """List all files in the trash with deletion time and days remaining."""
+    storage = _get_storage()
+    items = await storage.list_trash()
+    return {"trash": items, "count": len(items), "retention_days": TRASH_RETENTION_DAYS}
+
+
+@router.post("/trash/{trash_name}/recover")
+async def recover_from_trash(trash_name: str):
+    """Recover a file from trash back to the main memory directory."""
+    storage = _get_storage()
+    ok = await storage.recover_from_trash(trash_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"回收站中找不到文件 '{trash_name}'")
+    return {"status": "recovered", "trash_name": trash_name}
+
+
+@router.delete("/trash/{trash_name}")
+async def purge_trash_item(trash_name: str):
+    """Permanently delete a file from trash (no recovery)."""
+    storage = _get_storage()
+    ok = await storage.purge_trash_item(trash_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"回收站中找不到文件 '{trash_name}'")
+    return {"status": "purged", "trash_name": trash_name}
+
+
+@router.post("/trash/cleanup")
+async def cleanup_trash():
+    """Run trash cleanup — permanently deletes files older than retention period."""
+    storage = _get_storage()
+    purged = await storage.cleanup_trash(TRASH_RETENTION_DAYS)
+    return {"status": "ok", "purged": purged, "retention_days": TRASH_RETENTION_DAYS}
+
+
 # -- Search Endpoint -----------------------------------------------------
 
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, type JSX } from 'react';
+import { memo, useEffect, useRef, useState, useCallback, type JSX } from 'react';
 import { Copy, Check, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
 
 interface TerminalBubbleProps {
@@ -9,7 +9,7 @@ interface TerminalBubbleProps {
   language?: string;
 }
 
-export default function TerminalBubble({
+const TerminalBubble = memo(function TerminalBubble({
   content,
   isStreaming,
   language = 'bash',
@@ -99,4 +99,6 @@ export default function TerminalBubble({
       )}
     </div>
   );
-}
+});
+
+export default TerminalBubble;

@@ -159,18 +159,30 @@ export default function HTMLPreviewBlock({
   }, [code, index]);
 
   /**
-   * iframe onLoad: 多时机快照测量 (0/300ms/1s/2.5s), 捕获图片/字体/异步内容
+   * iframe onLoad: 多时机快照测量 (0/300ms/1s/2.5s/5s), 捕获图片/字体/异步内容
    * 关键: 不订阅 ResizeObserver, 因为 .hero { min-height: 100vh } 会在
    * "iframe 高度变化 -> 100vh 变化 -> body 变化" 之间形成自反馈循环
+   *
+   * FIX: React onLoad 不接受 cleanup 返回值。改用 ref 追踪 timer IDs，
+   * useEffect cleanup 在组件卸载或 contentKey 变化时清除所有 pending timers。
    */
+  const measureTimersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      measureTimersRef.current.forEach((t) => clearTimeout(t));
+      measureTimersRef.current = [];
+    };
+  }, [contentKey]);
+
   const handleIframeLoad = useCallback(() => {
     measureIframe();
-    const timers: number[] = [];
+    measureTimersRef.current.forEach((t) => clearTimeout(t));
+    measureTimersRef.current = [];
     [300, 1000, 2500, 5000].forEach((t) => {
-      timers.push(window.setTimeout(measureIframe, t));
+      measureTimersRef.current.push(window.setTimeout(measureIframe, t));
     });
-    return () => timers.forEach((t) => clearTimeout(t));
-  }, [measureIframe]);
+  }, [measureIframe, contentKey]);
 
   const lineCount = useMemo(() => code.split('\n').length, [code]);
 

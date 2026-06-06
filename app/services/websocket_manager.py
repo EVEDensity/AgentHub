@@ -10,6 +10,8 @@ from typing import Any
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+from app.db.init_db import now as db_now
+
 logger = logging.getLogger("agenthub.websocket")
 
 # ── Constants ────────────────────────────────────────────────────────
@@ -17,6 +19,7 @@ HEARTBEAT_INTERVAL = 25       # seconds between server → client pings
 HEARTBEAT_TIMEOUT = 60        # seconds without pong before considering dead
 MESSAGE_QUEUE_SIZE = 200      # max recent messages kept per session for recovery
 MAX_BACKLOG_MESSAGES = 500    # per-session cap before degrading to summary
+BROADCAST_SEND_TIMEOUT = 5.0  # seconds per websocket.send_json (prevents slow-client stall)
 
 
 class StreamToken:
@@ -113,22 +116,75 @@ class WebSocketManager:
     async def broadcast(self, session_id: str, payload: dict[str, Any]) -> None:
         """Send a payload to every connection in *session_id*.
 
-        Dead connections are automatically pruned during the send loop.
+        All connections are sent **concurrently** via ``asyncio.gather`` so
+        one slow or dead client cannot block others.  A per-send timeout
+        (BROADCAST_SEND_TIMEOUT) prevents stalled TCP buffers from holding
+        the gather forever.  Dead connections are pruned after the sends
+        complete.
+
         Payloads are also pushed into the per-session ring buffer for
         reconnection catch-up.
         """
         self._push_recent(session_id, payload)
         conns = self._connections.get(session_id, [])
-        dead: list[tuple[str, WebSocket, str, float]] = []
-        for cid, ws, uid, ts in conns:
-            if not await self._send_safe(ws, payload):
-                dead.append((cid, ws, uid, ts))
-        for item in dead:
-            conns.remove(item)
-            self._heartbeats.pop((session_id, item[0]), None)
-            logger.warning("ws dead connection pruned session=%s conn=%s", session_id, item[0])
-        if not conns and session_id in self._connections:
-            self._connections.pop(session_id, None)
+        if not conns:
+            return
+
+        # ── Parallel send to all connections ──────────────────────────
+        broadcast_start = time.monotonic()
+
+        async def _send_one(cid: str, ws: WebSocket, uid: str, ts: float) -> tuple[str, bool]:
+            """Send to one connection with a timeout.  Returns (cid, alive)."""
+            try:
+                ok = await asyncio.wait_for(
+                    self._send_safe(ws, payload),
+                    timeout=BROADCAST_SEND_TIMEOUT,
+                )
+                return (cid, ok)
+            except asyncio.TimeoutError:
+                logger.warning("ws broadcast timeout session=%s conn=%s", session_id, cid)
+                return (cid, False)
+            except Exception:
+                return (cid, False)
+
+        results = await asyncio.gather(
+            *[_send_one(cid, ws, uid, ts) for cid, ws, uid, ts in conns],
+            return_exceptions=True,
+        )
+
+        broadcast_elapsed = (time.monotonic() - broadcast_start) * 1000
+
+        # ── Prune dead connections ────────────────────────────────────
+        dead_cids: set[str] = set()
+        for result in results:
+            if isinstance(result, tuple) and not result[1]:
+                dead_cids.add(result[0])
+            elif isinstance(result, Exception):
+                logger.warning("ws broadcast unexpected error session=%s: %s", session_id, result)
+
+        if dead_cids:
+            surviving: list[tuple[str, WebSocket, str, float]] = []
+            for item in conns:
+                if item[0] in dead_cids:
+                    self._heartbeats.pop((session_id, item[0]), None)
+                    logger.warning("ws dead connection pruned session=%s conn=%s", session_id, item[0])
+                else:
+                    surviving.append(item)
+            if surviving:
+                self._connections[session_id] = surviving
+            else:
+                self._connections.pop(session_id, None)
+
+        # ── Record broadcast performance ─────────────────────────────
+        ok_count = len(conns) - len(dead_cids)
+        try:
+            from app.services.performance_monitor import monitor
+            monitor.record_broadcast(
+                session_id, len(conns), ok_count,
+                broadcast_elapsed, 0,
+            )
+        except Exception:
+            pass
 
     # ── Streaming helpers ────────────────────────────────────────────
 
@@ -272,7 +328,7 @@ class WebSocketManager:
             "question": question,
             "options": options,
             "allowCustomAnswer": allow_custom,
-            "timestamp": __import__("app.db.init_db").now(),
+            "timestamp": db_now(),
         })
 
     async def broadcast_progress_update(
@@ -289,7 +345,7 @@ class WebSocketManager:
             "completedSteps": completed,
             "totalSteps": total,
             "currentStep": current_step,
-            "timestamp": __import__("app.db.init_db").now(),
+            "timestamp": db_now(),
         }
         if eta_seconds is not None:
             payload["estimatedRemainingSeconds"] = eta_seconds
@@ -310,7 +366,7 @@ class WebSocketManager:
             "title": title,
             "description": description,
             "actions": actions,
-            "timestamp": __import__("app.db.init_db").now(),
+            "timestamp": db_now(),
         })
 
     async def broadcast_agent_todo(
@@ -328,7 +384,7 @@ class WebSocketManager:
             "description": description,
             "actions": actions,
             "priority": priority,
-            "timestamp": __import__("app.db.init_db").now(),
+            "timestamp": db_now(),
         })
 
     async def broadcast_pm_state(
@@ -342,7 +398,7 @@ class WebSocketManager:
             "state": state,
             "previousState": previous_state,
             "details": details,
-            "timestamp": __import__("app.db.init_db").now(),
+            "timestamp": db_now(),
         })
 
     async def broadcast_task_preview(
@@ -355,7 +411,7 @@ class WebSocketManager:
             "sessionId": session_id,
             "messageId": message_id,
             "tasks": tasks,
-            "timestamp": __import__("app.db.init_db").now(),
+            "timestamp": db_now(),
         }
         if eta_seconds is not None:
             payload["estimatedTotalSeconds"] = eta_seconds
@@ -377,7 +433,7 @@ class WebSocketManager:
                 "failedModels": failed_models,
                 "recoveryAttempts": recovery_attempts,
             },
-            "timestamp": __import__("app.db.init_db").now(),
+            "timestamp": db_now(),
         })
 
     # ── Session cleanup ──────────────────────────────────────────────

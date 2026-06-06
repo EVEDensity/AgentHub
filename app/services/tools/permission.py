@@ -16,6 +16,33 @@ class PermissionMode(str, Enum):
     DEFAULT = "default"   # User confirmation required for L2+ tools
     BYPASS = "bypass"     # Auto-allow all operations
     AUTO = "auto"         # Rule-based auto-decision
+    PLAN = "plan"         # Read-only: deny all write/delete/shell ops
+
+
+# ── Session exec_permission store ──────────────────────────────────
+# 1 = 询问 (ask), 2 = 跳过 (bypass), 3 = 计划 (plan/read-only)
+_session_exec_perm: dict[str, int] = {}
+
+
+def set_exec_permission(session_id: str, mode: int) -> None:
+    """Store the exec_permission mode for a session."""
+    if mode in (1, 2, 3):
+        _session_exec_perm[session_id] = mode
+
+
+def get_exec_permission(session_id: str) -> int:
+    """Get the exec_permission mode for a session (default 1 = ask)."""
+    return _session_exec_perm.get(session_id, 1)
+
+
+def get_permission_mode_for_session(session_id: str) -> PermissionMode:
+    """Map session exec_permission to PermissionMode."""
+    mode = get_exec_permission(session_id)
+    if mode == 2:
+        return PermissionMode.BYPASS
+    elif mode == 3:
+        return PermissionMode.PLAN
+    return PermissionMode.DEFAULT
 
 
 class PermissionBehavior(str, Enum):
@@ -192,6 +219,38 @@ class PermissionManager:
                 behavior=PermissionBehavior.ALLOW,
                 reason="Bypass mode active",
                 source="mode:bypass",
+            )
+
+        # ── Plan mode: read-only — deny all write/delete/shell ops ──
+        if context.mode == PermissionMode.PLAN:
+            # Tools that modify the filesystem or execute code
+            _WRITE_TOOLS = {
+                "file_write", "file_delete", "file_move", "file_copy",
+                "bash", "bash_parallel", "code_exec", "shell_exec",
+                "git_commit", "git_push", "git_tag",
+                "db_execute", "db_migrate",
+                "pip_install", "npm_install",
+            }
+            if tool_name in _WRITE_TOOLS:
+                return PermissionResult(
+                    behavior=PermissionBehavior.DENY,
+                    reason=f"计划模式：禁止执行 '{tool_name}'（只读模式，不允许写/删/执行操作）",
+                    source="mode:plan",
+                )
+            # For path-based write tools, check the operation type in arguments
+            if tool_name.startswith("file_"):
+                operation = arguments.get("operation", arguments.get("action", ""))
+                if operation in ("write", "delete", "move", "copy", "create", "mkdir"):
+                    return PermissionResult(
+                        behavior=PermissionBehavior.DENY,
+                        reason=f"计划模式：禁止文件 '{operation}' 操作",
+                        source="mode:plan",
+                    )
+            # All other tools (read/search/list) are allowed in plan mode
+            return PermissionResult(
+                behavior=PermissionBehavior.ALLOW,
+                reason="Plan mode — read-only operations allowed",
+                source="mode:plan",
             )
 
         if context.auth_role == "admin" and context.mode == PermissionMode.AUTO:

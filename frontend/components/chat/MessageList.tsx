@@ -1,9 +1,18 @@
 import { memo, useCallback, useRef, useState, type JSX } from 'react';
+import dynamic from 'next/dynamic';
 import type { ContentSegment, GeneratedData, Message, QuoteReference, User } from '../../types';
 import { MessageSquareQuote } from 'lucide-react';
-import DiffBubble from './DiffBubble';
-import CodeReviewPanel from './CodeReviewPanel';
 import CodeGenResultPanel, { isCodeGenOutput } from './CodeGenResultPanel';
+
+// Lazy-load heavy diff viewers — Monaco & CodeReview are only used for diff messages
+const DiffBubble = dynamic(() => import('./DiffBubble'), {
+  ssr: false,
+  loading: () => null,
+});
+const CodeReviewPanel = dynamic(() => import('./CodeReviewPanel'), {
+  ssr: false,
+  loading: () => null,
+});
 
 import MarkdownRenderer from './MarkdownRenderer';
 import SafetyBlockAlert from './SafetyBlockAlert';

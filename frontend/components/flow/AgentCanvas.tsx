@@ -1,4 +1,3 @@
-import axios from 'axios';
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { Circle, Group, Layer, Line, Rect, Stage, Text, Transformer, Arrow } from 'react-konva';
 import type Konva from 'konva';
@@ -117,16 +116,16 @@ export default function AgentCanvas(props?:{
    setMsg('工作流已保存');
    return;
   }
-  const ok=await axios.post('/api/canvas/save',{id:CID,name:'Agent Workflow Canvas',data:doc}).then(()=>true).catch(()=>false);
+  const ok=await fetch('/api/canvas/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:CID,name:'Agent Workflow Canvas',data:doc})}).then(()=>true).catch(()=>false);
   setMsg(ok?'画布已保存':'保存失败')
  }
- async function exp(){const r=await axios.post<{url:string}>('/api/canvas/export',{id:CID,image:stage.current?.toDataURL({pixelRatio:2}),data:doc}).catch(()=>null);if(r?.data.url)window.open(r.data.url,'_blank');setMsg(r?'已导出 PNG':'导出失败')}
+ async function exp(){const r=await fetch('/api/canvas/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:CID,image:stage.current?.toDataURL({pixelRatio:2}),data:doc})}).then(r=>r.ok?r.json():null).catch(()=>null);if(r?.url)window.open(r.url,'_blank');setMsg(r?'已导出 PNG':'导出失败')}
 
  useEffect(()=>{const el=wrap.current;if(!el)return;const f=()=>{const b=el.getBoundingClientRect();setSz({width:Math.max(Math.floor(b.width),720),height:Math.max(Math.floor(b.height),520)})};f();const ro=new ResizeObserver(f);ro.observe(el);return()=>ro.disconnect()},[]);
 
  useEffect(()=>{
   if(embedded)return;
-  axios.get<{data:D|null}>(`/api/canvas/${CID}`).then(r=>{const d=normalize(r.data.data||init);setDoc(d);setHist([cp(d)]);hiRef.current=0;setHi(0)}).catch(()=>setMsg('加载失败，已使用默认模板'))
+  fetch(`/api/canvas/${CID}`).then(r=>r.json()).then(r=>{const d=normalize(r.data||init);setDoc(d);setHist([cp(d)]);hiRef.current=0;setHi(0)}).catch(()=>setMsg('加载失败，已使用默认模板'))
  },[]);
 
  useEffect(()=>{const n=sel?refs.current[sel]:null;tr.current?.nodes(n?[n]:[]);tr.current?.getLayer()?.batchDraw()},[sel,doc.nodes]);

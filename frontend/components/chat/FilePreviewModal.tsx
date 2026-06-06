@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
@@ -435,12 +435,24 @@ function PptBody({ content, fileName, slideCount }: {
     } catch { /* cross-origin */ }
   }, []);
 
+  // Track deferred measure timers so they can be cleaned up on unmount / reload
+  const measureTimersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      measureTimersRef.current.forEach((t) => clearTimeout(t));
+      measureTimersRef.current = [];
+    };
+  }, [content]);
+
   const handleLoad = useCallback(() => {
     measure();
-    setTimeout(measure, 300);
-    setTimeout(measure, 1000);
-    setTimeout(measure, 2500);
-  }, [measure]);
+    measureTimersRef.current.forEach((t) => clearTimeout(t));
+    measureTimersRef.current = [];
+    [300, 1000, 2500].forEach((t) => {
+      measureTimersRef.current.push(window.setTimeout(measure, t));
+    });
+  }, [measure, content]);
 
   return (
     <div className="bg-[#f0f2f5]" style={{ minHeight: '300px' }}>
@@ -533,7 +545,7 @@ function LoadingBody({ fileName }: { fileName: string }): JSX.Element {
 // Main modal
 // ══════════════════════════════════════════════════════════════════════════════
 
-export default function FilePreviewModal({
+const FilePreviewModal = memo(function FilePreviewModal({
   file,
   onClose,
   authToken,
@@ -868,4 +880,6 @@ export default function FilePreviewModal({
       </div>
     </div>
   );
-}
+});
+
+export default FilePreviewModal;

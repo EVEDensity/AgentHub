@@ -332,6 +332,7 @@ async def _search_bing(
     Docs: https://learn.microsoft.com/en-us/bing/search-apis/bing-web-search/
     """
     import httpx
+    from app.services.adapter_manager import _get_client
 
     from app.config import BING_API_KEY
 
@@ -347,25 +348,25 @@ async def _search_bing(
         "textFormat": "Raw",
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        resp = await client.get(url, headers=headers, params=params)
-        if resp.status_code >= 400:
-            body = resp.text[:300]
-            raise Exception(f"HTTP {resp.status_code}: {body}")
+    client = _get_client()
+    resp = await client.get(url, headers=headers, params=params, timeout=httpx.Timeout(10.0))
+    if resp.status_code >= 400:
+        body = resp.text[:300]
+        raise Exception(f"HTTP {resp.status_code}: {body}")
 
-        data = resp.json()
-        web_pages = data.get("webPages", {}).get("value", [])
-        if not web_pages:
-            return None
+    data = resp.json()
+    web_pages = data.get("webPages", {}).get("value", [])
+    if not web_pages:
+        return None
 
-        return [
-            {
-                "title": page.get("name", ""),
-                "url": page.get("url", ""),
-                "snippet": (page.get("snippet", ""))[:500],
-            }
-            for page in web_pages[:max_results]
-        ]
+    return [
+        {
+            "title": page.get("name", ""),
+            "url": page.get("url", ""),
+            "snippet": (page.get("snippet", ""))[:500],
+        }
+        for page in web_pages[:max_results]
+    ]
 
 
 async def _search_tavily(
@@ -380,6 +381,7 @@ async def _search_tavily(
     Docs: https://docs.tavily.com/
     """
     import httpx
+    from app.services.adapter_manager import _get_client
 
     from app.config import TAVILY_API_KEY
 
@@ -402,25 +404,25 @@ async def _search_tavily(
     if blocked_domains:
         body["exclude_domains"] = blocked_domains
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
-        resp = await client.post(url, json=body, headers=headers)
-        if resp.status_code >= 400:
-            raise Exception(f"HTTP {resp.status_code}: {resp.text[:300]}")
+    client = _get_client()
+    resp = await client.post(url, json=body, headers=headers, timeout=httpx.Timeout(15.0))
+    if resp.status_code >= 400:
+        raise Exception(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
-        data = resp.json()
-        hits = data.get("results", [])
-        if not hits:
-            return None
+    data = resp.json()
+    hits = data.get("results", [])
+    if not hits:
+        return None
 
-        return [
-            {
-                "title": hit.get("title", ""),
-                "url": hit.get("url", ""),
-                "snippet": (hit.get("content", ""))[:500],
-            }
-            for hit in hits[:max_results]
-            if isinstance(hit.get("title"), str) and isinstance(hit.get("url"), str)
-        ]
+    return [
+        {
+            "title": hit.get("title", ""),
+            "url": hit.get("url", ""),
+            "snippet": (hit.get("content", ""))[:500],
+        }
+        for hit in hits[:max_results]
+        if isinstance(hit.get("title"), str) and isinstance(hit.get("url"), str)
+    ]
 
 
 async def _search_brave(
@@ -437,6 +439,7 @@ async def _search_brave(
     """
     import urllib.parse
     import httpx
+    from app.services.adapter_manager import _get_client
 
     from app.config import BRAVE_API_KEY
 
@@ -453,27 +456,27 @@ async def _search_brave(
         "count": min(max_results, 20),
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        resp = await client.get(url, params=params, headers={
-            "Accept": "application/json",
-            "X-Subscription-Token": BRAVE_API_KEY,
-        })
-        if resp.status_code >= 400:
-            raise Exception(f"HTTP {resp.status_code}: {resp.text[:300]}")
+    client = _get_client()
+    resp = await client.get(url, params=params, headers={
+        "Accept": "application/json",
+        "X-Subscription-Token": BRAVE_API_KEY,
+    }, timeout=httpx.Timeout(10.0))
+    if resp.status_code >= 400:
+        raise Exception(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
-        data = resp.json()
-        hits = data.get("web", {}).get("results", [])
-        if not hits:
-            return None
+    data = resp.json()
+    hits = data.get("web", {}).get("results", [])
+    if not hits:
+        return None
 
-        return [
-            {
-                "title": hit.get("title", ""),
-                "url": hit.get("url", ""),
-                "snippet": (hit.get("description", ""))[:500],
-            }
-            for hit in hits[:max_results]
-        ]
+    return [
+        {
+            "title": hit.get("title", ""),
+            "url": hit.get("url", ""),
+            "snippet": (hit.get("description", ""))[:500],
+        }
+        for hit in hits[:max_results]
+    ]
 
 
 async def _search_serpapi(
@@ -487,6 +490,7 @@ async def _search_serpapi(
     Docs: https://serpapi.com/search-api
     """
     import httpx
+    from app.services.adapter_manager import _get_client
 
     from app.config import SERPAPI_API_KEY
 
@@ -503,32 +507,32 @@ async def _search_serpapi(
         "gl": "cn" if language == "zh" else "us",
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0)) as client:
-        resp = await client.get(url, params=params)
-        if resp.status_code >= 400:
-            raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+    client = _get_client()
+    resp = await client.get(url, params=params, timeout=httpx.Timeout(12.0))
+    if resp.status_code >= 400:
+        raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-        data = resp.json()
-        organic = data.get("organic_results", [])
-        if not organic:
-            # Check for answer_box / knowledge_graph as fallback
-            answer = data.get("answer_box") or data.get("knowledge_graph")
-            if answer:
-                return [{
-                    "title": answer.get("title", query),
-                    "url": answer.get("link", ""),
-                    "snippet": (answer.get("snippet") or answer.get("answer", ""))[:500],
-                }]
-            return None
+    data = resp.json()
+    organic = data.get("organic_results", [])
+    if not organic:
+        # Check for answer_box / knowledge_graph as fallback
+        answer = data.get("answer_box") or data.get("knowledge_graph")
+        if answer:
+            return [{
+                "title": answer.get("title", query),
+                "url": answer.get("link", ""),
+                "snippet": (answer.get("snippet") or answer.get("answer", ""))[:500],
+            }]
+        return None
 
-        return [
-            {
-                "title": r.get("title", ""),
-                "url": r.get("link", ""),
-                "snippet": (r.get("snippet", ""))[:500],
-            }
-            for r in organic[:max_results]
-        ]
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("link", ""),
+            "snippet": (r.get("snippet", ""))[:500],
+        }
+        for r in organic[:max_results]
+    ]
 
 
 async def _search_google_cse(
@@ -543,6 +547,7 @@ async def _search_google_cse(
     Docs: https://developers.google.com/custom-search/v1/overview
     """
     import httpx
+    from app.services.adapter_manager import _get_client
 
     from app.config import GOOGLE_API_KEY, GOOGLE_CSE_ID
 
@@ -558,24 +563,24 @@ async def _search_google_cse(
         "lr": f"lang_{language}" if language != "zh" else "lang_zh-CN",
     }
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        resp = await client.get(url, params=params)
-        if resp.status_code >= 400:
-            raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+    client = _get_client()
+    resp = await client.get(url, params=params, timeout=httpx.Timeout(10.0))
+    if resp.status_code >= 400:
+        raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-        data = resp.json()
-        items = data.get("items", [])
-        if not items:
-            return None
+    data = resp.json()
+    items = data.get("items", [])
+    if not items:
+        return None
 
-        return [
-            {
-                "title": item.get("title", ""),
-                "url": item.get("link", ""),
-                "snippet": (item.get("snippet", ""))[:500],
-            }
-            for item in items[:max_results]
-        ]
+    return [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("link", ""),
+            "snippet": (item.get("snippet", ""))[:500],
+        }
+        for item in items[:max_results]
+    ]
 
 
 async def _search_duckduckgo(
@@ -590,27 +595,28 @@ async def _search_duckduckgo(
     """
     import urllib.parse
     import httpx
+    from app.services.adapter_manager import _get_client
 
     results: list[dict] = []
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(8.0)) as client:
-        url = (
-            "https://api.duckduckgo.com/?"
-            f"q={urllib.parse.quote(query)}&format=json&no_html=1&skip_disambig=1"
-        )
-        resp = await client.get(url, headers={"User-Agent": "AgentHub/3.1"})
+    url = (
+        "https://api.duckduckgo.com/?"
+        f"q={urllib.parse.quote(query)}&format=json&no_html=1&skip_disambig=1"
+    )
+    client = _get_client()
+    resp = await client.get(url, headers={"User-Agent": "AgentHub/3.1"}, timeout=httpx.Timeout(8.0))
 
-        if resp.status_code >= 400:
-            raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+    if resp.status_code >= 400:
+        raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-        content_type = resp.headers.get("content-type", "")
-        if "text/html" in content_type:
-            raise Exception("DuckDuckGo returned HTML (likely rate-limited)")
+    content_type = resp.headers.get("content-type", "")
+    if "text/html" in content_type:
+        raise Exception("DuckDuckGo returned HTML (likely rate-limited)")
 
-        try:
-            data = resp.json()
-        except Exception as json_err:
-            raise Exception(f"JSON parse error: {json_err}")
+    try:
+        data = resp.json()
+    except Exception as json_err:
+        raise Exception(f"JSON parse error: {json_err}")
 
     # Abstract / definition
     if data.get("AbstractText"):

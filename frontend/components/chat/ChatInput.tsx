@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { MessageSquareQuote } from 'lucide-react';
 import type { Agent, AttachedFile, FileReference, QuoteReference, SkillMeta, WorkflowSummary } from '../../types';
 import { PLATFORM_LABELS, PLATFORM_COLORS } from '../../types';
+import PermissionModePopover, { type ExecPermission } from './PermissionModePopover';
 
 const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]; mimePattern: RegExp }> = {
   code: { label: 'Code', extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'], mimePattern: /^(text\/|\b(?:javascript|typescript|json)\b)/ },
@@ -112,6 +113,9 @@ interface ChatInputProps {
   onMentionSearchChange: (q: string) => void;
   onMentionActiveIndexChange: (idx: number) => void;
   onRiskLevelChange: (level: string) => void;
+  // ── 执行权限 ──
+  execPermission: ExecPermission;
+  onExecPermissionChange: (mode: ExecPermission) => void;
 }
 
 const ChatInput = memo(function ChatInput({
@@ -124,6 +128,7 @@ const ChatInput = memo(function ChatInput({
   onMentionSearchChange, onMentionActiveIndexChange, onRiskLevelChange,
   fileReferences, onRemoveReference, onClearAllReferences, onJumpToReference,
   quoteReferences, onRemoveQuoteReference, onClearAllQuoteReferences,
+  execPermission, onExecPermissionChange,
 }: ChatInputProps) {
   // Emoji popover state. The panel is positioned via fixed offsets so
   // it always lands above the toolbar, regardless of scroll position.
@@ -150,6 +155,17 @@ const ChatInput = memo(function ChatInput({
       document.removeEventListener('keydown', onEsc);
     };
   }, [emojiOpen]);
+
+  // Auto-scroll to keep the active mention item visible during keyboard navigation
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const container = mentionPanelRef.current;
+    if (!container) return;
+    const el = container.querySelector(`[data-mention-index="${mentionActiveIndex}"]`);
+    if (el) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [mentionActiveIndex, mentionOpen]);
 
   function handleEmojiSelect(emoji: string) {
     const ta = textareaRef.current;
@@ -219,6 +235,7 @@ const ChatInput = memo(function ChatInput({
               placeholder="搜索agent..."
               value={mentionSearch}
               onChange={(e) => { onMentionSearchChange(e.target.value); onMentionActiveIndexChange(0); }}
+              onKeyDown={onKeyDown as any}
               className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
@@ -245,6 +262,7 @@ const ChatInput = memo(function ChatInput({
                 filteredAgents.map((agent, idx) => (
                   <button
                     key={agent.agentId}
+                    data-mention-index={idx}
                     className={`rounded-lg px-3 py-2 text-left border ${
                       idx === mentionActiveIndex
                         ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
@@ -256,7 +274,7 @@ const ChatInput = memo(function ChatInput({
                     <div className="flex items-center gap-2">
                       {/* Avatar or fallback initial */}
                       {agent.avatarUrl ? (
-                        <img src={agent.avatarUrl} className="h-7 w-7 rounded-full object-cover shrink-0" alt={agent.displayName || agent.agentId} />
+                        <img src={agent.avatarUrl} className="h-7 w-7 rounded-full object-cover shrink-0" alt={agent.displayName || agent.agentId} loading="lazy" decoding="async" />
                       ) : (
                         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-warm-200 text-warm-600 text-xs font-bold">
                           {(agent.displayName || agent.agentId)[0]}
@@ -267,6 +285,22 @@ const ChatInput = memo(function ChatInput({
                           <span className="font-medium text-warm-700 text-sm">@{agent.agentId}</span>
                           {agent.displayName && (
                             <span className="text-xs text-warm-500">{agent.displayName}</span>
+                          )}
+                          {agent.agentId === 'Architect' && (
+                            <span
+                              className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm"
+                              title="主 Agent（PM / PMO）：负责任务拆解、调度、降级、仲裁与人工交接"
+                            >
+                              <svg
+                                className="h-2.5 w-2.5"
+                                viewBox="0 0 24 24"
+                                fill="currentColor"
+                                aria-hidden="true"
+                              >
+                                <path d="M5 16h14l1.5-9-4.5 3-4-6-4 6L3.5 7 5 16Zm0 2v2h14v-2H5Z" />
+                              </svg>
+                              主 Agent
+                            </span>
                           )}
                           <span
                             className="rounded px-1.5 py-0.5 text-[9px] font-medium"
@@ -310,6 +344,7 @@ const ChatInput = memo(function ChatInput({
               placeholder="搜索工作流..."
               value={mentionSearch}
               onChange={(e) => { onMentionSearchChange(e.target.value); onMentionActiveIndexChange(0); }}
+              onKeyDown={onKeyDown as any}
               className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
@@ -321,6 +356,7 @@ const ChatInput = memo(function ChatInput({
                 filteredWorkflows.map((wf, idx) => (
                   <button
                     key={wf.routeId}
+                    data-mention-index={idx}
                     className={`w-full rounded-lg px-3 py-2 text-left border ${
                       idx === mentionActiveIndex
                         ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
@@ -360,6 +396,7 @@ const ChatInput = memo(function ChatInput({
               placeholder="搜索技能..."
               value={mentionSearch}
               onChange={(e) => { onMentionSearchChange(e.target.value); onMentionActiveIndexChange(0); }}
+              onKeyDown={onKeyDown as any}
               className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
@@ -380,6 +417,7 @@ const ChatInput = memo(function ChatInput({
                 filteredSkills.map((skill, idx) => (
                   <button
                     key={skill.name}
+                    data-mention-index={idx}
                     className={`w-full rounded-lg px-3 py-2 text-left border ${
                       idx === mentionActiveIndex
                         ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
@@ -451,7 +489,7 @@ const ChatInput = memo(function ChatInput({
           2) 工具栏层    – emoji / paperclip / skill icons on the left, Send on the right
           3) 输入框层    – multi-line textarea
       */}
-      <div className="grid gap-3 items-end overflow-hidden" style={{ gridTemplateColumns: '1fr auto' }}>
+      <div className="grid gap-3 items-end overflow-visible" style={{ gridTemplateColumns: '1fr auto' }}>
         <div className="flex flex-col gap-2 min-w-0">
           {/* ── Layer 1: attachment chips ─────────────────────── */}
           {attachedFiles.length > 0 && (
@@ -477,7 +515,7 @@ const ChatInput = memo(function ChatInput({
                         className={`group relative inline-flex items-center gap-1.5 rounded-lg pl-2 pr-1 py-1 text-xs border shrink-0 transition-colors ${chipClass}`}
                       >
                         {isImage ? (
-                          <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" />
+                          <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" loading="lazy" decoding="async" />
                         ) : (
                           <span
                             className={`shrink-0 flex items-center justify-center h-5 w-5 rounded ${isUploading || isErrored ? 'bg-white/40' : 'bg-primary-500/20'}`}
@@ -786,6 +824,15 @@ const ChatInput = memo(function ChatInput({
                 <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
               </svg>
             </button>
+
+            {/* 视觉分隔 — 在工具按钮组和权限模式之间留 1px breathing room */}
+            <span className="mx-0.5 h-5 w-px bg-warm-150" aria-hidden />
+
+            {/* 权限模式 popover（替代原独立 PermissionToggle 行） */}
+            <PermissionModePopover
+              value={execPermission}
+              onChange={onExecPermissionChange}
+            />
           </div>
 
           {/* ── Layer 3: textarea ─────────────────────────────── */}

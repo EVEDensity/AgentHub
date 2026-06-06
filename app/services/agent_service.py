@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
@@ -113,6 +114,12 @@ async def _check_degradation_recovery(session_id: str) -> bool:
             await _mgr2.broadcast_degradation_change(
                 session_id, False, "", "", [], 0,
             )
+            # ── Record degradation exit for monitoring ──────────
+            try:
+                from app.services.performance_monitor import monitor
+                monitor.record_degradation_exit(session_id, info.get("recovery_attempts", 0))
+            except Exception:
+                pass
             logger.info("degradation_recovery: session=%s model recovered", session_id)
             return True
     except Exception:
@@ -136,6 +143,12 @@ async def _enter_degradation(session_id: str, reason: str, failed_models: list[s
     await _mgr.broadcast_degradation_change(
         session_id, True, reason, info["started_at"], failed_models, 0,
     )
+    # ── Record degradation for performance monitoring ──────────
+    try:
+        from app.services.performance_monitor import monitor
+        monitor.record_degradation_enter(session_id, reason, failed_models)
+    except Exception:
+        pass
     logger.warning("degradation_enter: session=%s reason=%s models=%s",
                    session_id, reason, failed_models)
 
@@ -468,11 +481,12 @@ async def candidate_models_for_role(role: str) -> list[dict]:
         role,
     )
     if rows:
+        logger.info("model_for agent=%s source=role_binding count=%d", role, len(rows))
         return rows
     # 2) Agent's own config in agent_registry (adapter_type + base_model_name + base_url + api_key)
     agent_row = await afetch_one("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=$1", role)
     if agent_row and agent_row.get("adapter_type") and agent_row.get("adapter_type") != "mock":
-        return [{
+        result = [{
             "id": 0,
             "provider": agent_row["adapter_type"],
             "model_name": agent_row.get("base_model_name") or "ping",  # "ping" → adapter uses its default_model
@@ -480,8 +494,20 @@ async def candidate_models_for_role(role: str) -> list[dict]:
             "base_url": agent_row.get("base_url") or "",
             "prompt": "",
         }]
-    # 3) Fallback: any active model_config
+        logger.info("model_for agent=%s source=agent_registry provider=%s model=%s", role, agent_row["adapter_type"], agent_row.get("base_model_name"))
+        return result
+    # 3) Fallback: any active model_config, rotated per-role so agents
+    #    don't all crowd onto the same first model.
     rows = await afetch_all("SELECT id,provider,model_name,api_key,base_url,'' AS prompt FROM model_configs WHERE is_active=1 ORDER BY id DESC")
+    if rows and len(rows) > 1:
+        # Deterministic rotation: each role gets a different primary model
+        offset = hash(role) % len(rows)
+        rows = rows[offset:] + rows[:offset]
+        logger.info("model_for agent=%s source=model_configs_rotated count=%d offset=%d primary=%s/%s",
+                     role, len(rows), offset, rows[0].get("provider"), rows[0].get("model_name"))
+    elif rows:
+        logger.info("model_for agent=%s source=model_configs_single provider=%s model=%s",
+                     role, rows[0].get("provider"), rows[0].get("model_name"))
     return rows or [{"id": 0, "provider": "mock", "model_name": "mock", "api_key": "", "base_url": "", "prompt": ""}]
 
 
@@ -507,6 +533,170 @@ def _update_runtime(model: dict, ok: bool, latency_ms: float) -> None:
     else:
         state["fail"] += 1
     state["latency"] = state["latency"] * 0.7 + latency_ms * 0.3
+    # ── Record to performance monitor ──────────────────────────────
+    try:
+        from app.services.performance_monitor import monitor
+        provider = str(model.get("provider", "unknown"))
+        model_name = str(model.get("model_name", "unknown"))
+        monitor.record_llm_call(provider, model_name, ok=ok, latency_ms=latency_ms)
+    except Exception:
+        pass
+
+
+async def record_task_execution(
+    task_type: str,
+    agent_id: str,
+    success: bool,
+    duration_ms: int,
+    tool_calls_count: int = 0,
+    retry_count: int = 0,
+    error_type: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    """Record a task execution for the learning/optimization feedback loop.
+
+    Called after each agent invocation completes (success or failure).
+    The data feeds into AgentSelector for future agent selection decisions.
+    """
+    try:
+        from app.db.init_db import now as db_now
+        await aexecute(
+            """INSERT INTO task_execution_history
+               (task_type, assigned_agent, success, duration_ms, tool_calls_count,
+                retry_count, error_type, session_id, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+            task_type, agent_id, success, duration_ms, tool_calls_count,
+            retry_count, error_type, session_id, db_now(),
+        )
+        logger.debug(
+            "record_task_execution: agent=%s type=%s success=%s duration=%dms",
+            agent_id, task_type, success, duration_ms,
+        )
+    except Exception:
+        logger.debug("record_task_execution: failed to write (table may not exist yet)")
+
+
+async def _race_models(
+    prompt: str,
+    models: list[dict],
+    iteration: int,
+    native_tools: list[dict] | None,
+    token: Any,
+) -> tuple[str, dict, Any, list[str]]:
+    """Race the top N models concurrently — first successful response wins.
+
+    This turns the serial ``for model in models: try...`` cascade into a
+    concurrent fan-out for iteration 0 where we only need ONE model to
+    produce tool calls or a text response.  The slowest model no longer
+    dictates wall-clock latency.
+
+    Only 2 models are raced per batch to balance latency reduction against
+    wasted API credit burn.  If all racers fail, we continue to the next
+    batch.
+
+    Returns ``(result, model_dict, adapter, errors)`` where *result* is
+    non-empty on success.
+    """
+    from app.services.adapter_manager import adapter_manager as _am
+
+    BATCH = 2  # race 2 models at a time
+
+    errors: list[str] = []
+    for batch_start in range(0, len(models), BATCH):
+        batch = models[batch_start:batch_start + BATCH]
+        if len(batch) == 1:
+            # Only one left — no point racing, just call serially
+            model = batch[0]
+            if token and token.cancelled:
+                return ("", model, None, errors)
+            adapter = _am.get_adapter(model.get("provider", "mock"))
+            started = time.perf_counter()
+            try:
+                result = await adapter.execute_prompt(
+                    prompt,
+                    model.get("model_name", "mock"),
+                    decrypt_secret(model.get("api_key", "")),
+                    model.get("base_url", ""),
+                    tools=native_tools if native_tools else None,
+                )
+                elapsed = (time.perf_counter() - started) * 1000
+                _update_runtime(model, True, elapsed)
+                logger.info(
+                    "race batch=%d solo win: provider=%s model=%s elapsed=%.0fms",
+                    batch_start, model.get("provider"), model.get("model_name"), elapsed,
+                )
+                return (result, model, adapter, errors)
+            except Exception as exc:
+                elapsed = (time.perf_counter() - started) * 1000
+                _update_runtime(model, False, elapsed)
+                errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
+                continue
+
+        # ── Race 2 models concurrently ──────────────────────────────
+        async def _call_one(model: dict) -> tuple[dict, str | None, Any | None, Exception | None]:
+            if token and token.cancelled:
+                return (model, None, None, None)
+            adapter = _am.get_adapter(model.get("provider", "mock"))
+            started = time.perf_counter()
+            try:
+                result = await adapter.execute_prompt(
+                    prompt,
+                    model.get("model_name", "mock"),
+                    decrypt_secret(model.get("api_key", "")),
+                    model.get("base_url", ""),
+                    tools=native_tools if native_tools else None,
+                )
+                elapsed = (time.perf_counter() - started) * 1000
+                _update_runtime(model, True, elapsed)
+                return (model, result, adapter, None)
+            except Exception as exc:
+                elapsed = (time.perf_counter() - started) * 1000
+                _update_runtime(model, False, elapsed)
+                return (model, None, None, exc)
+
+        tasks = [asyncio.create_task(_call_one(m)) for m in batch]
+
+        # Wait for the FIRST successful response
+        winner_result: str | None = None
+        winner_model: dict | None = None
+        winner_adapter: Any | None = None
+        pending = set(tasks)
+
+        while pending and winner_result is None:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                model, result, adapter, exc = t.result()
+                if result is not None:
+                    winner_result = result
+                    winner_model = model
+                    winner_adapter = adapter
+                    logger.info(
+                        "race batch=%d winner: provider=%s model=%s",
+                        batch_start, model.get("provider"), model.get("model_name"),
+                    )
+                    # Cancel remaining tasks
+                    for pt in pending:
+                        pt.cancel()
+                    break
+                elif exc is not None:
+                    errors.append(
+                        f"{model.get('provider')}/{model.get('model_name')}: {exc}"
+                    )
+                    logger.warning(
+                        "race batch=%d loser: provider=%s model=%s error=%s",
+                        batch_start, model.get("provider"), model.get("model_name"), exc,
+                    )
+
+        # Clean up any remaining pending tasks
+        for pt in pending:
+            pt.cancel()
+
+        if winner_result is not None:
+            return (winner_result, winner_model, winner_adapter, errors)
+
+        # Both racers in this batch failed — continue to next batch
+
+    return ("", models[0] if models else {}, None, errors)
 
 
 async def save_message(
@@ -668,7 +858,13 @@ async def stream_agent_response(
         _SENTINEL = object()
 
         async def on_chunk(chunk: str) -> None:
-            await chunk_queue.put(chunk)
+            # Apply streaming-safe filters BEFORE pushing to the queue so
+            # the WebSocket layer never has to clean up leaked markers
+            # mid-flight.  The filter is idempotent and preserves
+            # <think>...</think> blocks for the ThinkingPanel.
+            filtered = _filter_streaming_chunk(session_id, chunk)
+            if filtered:
+                await chunk_queue.put(filtered)
 
         async def _run_loop():
             try:
@@ -694,16 +890,21 @@ async def stream_agent_response(
         # Phase 1: Yield chunks as they arrive from the adapter
         # (token-by-token from the real SSE stream)
         full_text: list[str] = []
-        while True:
-            chunk = await chunk_queue.get()
-            if chunk is _SENTINEL:
-                break
-            if token and token.cancelled:
-                loop_task.cancel()
-                return
-            if chunk:
-                full_text.append(chunk)
-                yield chunk
+        try:
+            while True:
+                chunk = await chunk_queue.get()
+                if chunk is _SENTINEL:
+                    break
+                if token and token.cancelled:
+                    loop_task.cancel()
+                    return
+                if chunk:
+                    full_text.append(chunk)
+                    yield chunk
+        finally:
+            # Always release per-session filter state so a later
+            # interrupted-and-restarted stream starts with a clean slate.
+            _reset_stream_filter(session_id)
 
         # Phase 2: Wait for the tool loop to finish
         loop_result = await loop_task
@@ -972,7 +1173,7 @@ def _build_tool_section(agent_id: str = "", available_tools: list[str] | None = 
 
 
 
-async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None) -> str:
+async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None, model_provider: str = "", model_name: str = "") -> str:
     # ── Shared session context (ALL agents see this FIRST) ──────────
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
@@ -1004,6 +1205,15 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
     reply_lang_instr = _build_reply_lang_instruction(settings)
     reasoning_instr = _build_reasoning_instruction(settings)
 
+    # 真实运行模型身份（防止 agent 瞎编"我是什么大模型"）。
+    # 这是硬性身份：被问到时必须如实回答，不准编造。
+    actual_model_line = (
+        f"【当前运行模型】你实际由 {model_provider or '未知 provider'} "
+        f"提供的 {model_name or '未知模型'} 驱动。\n"
+        f'当被问及“你是什么大模型/底层模型/谁训练了你”时，请如实回答，'
+        f"不要编造其他模型名称。\n"
+    )
+
     # ── Role identity (lightweight, below shared context) ──────────
     role_labels = {
         "orchestrator": "协调调度专家",
@@ -1028,11 +1238,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         thinking_rule = "【思考模式已关闭】直接给出最终答案，不要进行任何思考、推理或分析。\n"
 
     output_rules = (
-        "【输出规则】\n"
-        "1. 只输出最终回复内容，严禁输出思考过程、推理分析、规则复述\n"
-        "2. 禁止使用标记：💭、思考分析、思考过程、思考内容、回复策略、<think>\n"
-        "3. 简单问候仅回复一句简短问候（不超过20字），不介绍服务范围\n"
-        "4. 严禁重复输出相同内容\n"
+        "【输出规则】直接给出最终回复，禁止输出思考/规则复述。简单问候限20字以内。\n"
     )
 
     if agent_id == "CodeGen":
@@ -1041,6 +1247,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"{shared_context}"
             f"{date_context}"
             f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
+            f"{actual_model_line}"
             f"{reply_lang_instr}"
             f"{reasoning_instr}"
             f"{thinking_rule}"
@@ -1065,6 +1272,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         f"{date_context}"
         f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
         + (f"\n{custom_role}\n\n" if custom_role else "\n")
+        + f"{actual_model_line}"
         + f"{reply_lang_instr}"
         f"{reasoning_instr}"
         f"{thinking_rule}"
@@ -1251,6 +1459,8 @@ async def _run_tool_call_loop(
                 models[0].get("prompt", "") if models else "",
                 collab_ctx, history, memory_ctx,
                 tools_enabled=True, available_tools=available_tools,
+                model_provider=(models[0].get("provider", "") if models else ""),
+                model_name=(models[0].get("model_name", "") if models else ""),
             )
 
             logger.info(
@@ -1259,54 +1469,67 @@ async def _run_tool_call_loop(
                 "tool_calls" in prompt.lower(),
             )
 
-            # Try each model
+            # Try each model — race on iteration 0, serial fallback thereafter
             result = ""
             errors: list[str] = []
-            for model in models:
-                if token and token.cancelled:
-                    return "流式响应已被中断。", usage, selected
-                selected = model
-                adapter = adapter_manager.get_adapter(model.get("provider", "mock"))
-                started = time.perf_counter()
-                try:
-                    # Native OpenAI-format tools for iteration 0 only.
-                    native_tools = None
-                    if iteration == 0:
-                        native_tools = (
-                            tool_registry.build_openai_tools(available_tools)
-                            if available_tools is not None
-                            else tool_registry.build_openai_tools()
-                        )
-                        if native_tools:
-                            logger.info(
-                                "tool_loop iter=0: using native function calling with %d tools",
-                                len(native_tools),
-                            )
-                    result = await adapter.execute_prompt(
-                        prompt,
-                        model.get("model_name", "mock"),
-                        decrypt_secret(model.get("api_key", "")),
-                        model.get("base_url", ""),
-                        tools=native_tools if native_tools else None,
-                    )
-                    elapsed = (time.perf_counter() - started) * 1000
-                    _update_runtime(model, True, elapsed)
+            native_tools = None
+            if iteration == 0:
+                native_tools = (
+                    tool_registry.build_openai_tools(available_tools)
+                    if available_tools is not None
+                    else tool_registry.build_openai_tools()
+                )
+                if native_tools:
                     logger.info(
-                        "tool_loop iter=%d llm_call: provider=%s model=%s elapsed=%.0fms result_len=%d",
-                        iteration, model.get("provider"), model.get("model_name"),
-                        elapsed, len(result),
+                        "tool_loop iter=0: using native function calling with %d tools",
+                        len(native_tools),
                     )
-                    break
-                except Exception as exc:
-                    elapsed = (time.perf_counter() - started) * 1000
-                    _update_runtime(model, False, elapsed)
-                    errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
-                    logger.warning(
-                        "tool_loop iter=%d llm_fail: provider=%s model=%s elapsed=%.0fms error=%s",
-                        iteration, model.get("provider"), model.get("model_name"),
-                        elapsed, exc,
+
+            if iteration == 0 and len(models) >= 2:
+                # ── Race top models concurrently (first success wins) ──
+                result, selected, adapter, errors = await _race_models(
+                    prompt, models, iteration, native_tools, token,
+                )
+                if result:
+                    logger.info(
+                        "tool_loop iter=%d race_win: provider=%s model=%s result_len=%d",
+                        iteration, selected.get("provider"), selected.get("model_name"),
+                        len(result),
                     )
-                    result = ""
+            else:
+                # ── Serial fallback (single model or post-tool-call iterations) ──
+                for model in models:
+                    if token and token.cancelled:
+                        return "流式响应已被中断。", usage, selected
+                    selected = model
+                    adapter = adapter_manager.get_adapter(model.get("provider", "mock"))
+                    started = time.perf_counter()
+                    try:
+                        result = await adapter.execute_prompt(
+                            prompt,
+                            model.get("model_name", "mock"),
+                            decrypt_secret(model.get("api_key", "")),
+                            model.get("base_url", ""),
+                            tools=native_tools if native_tools else None,
+                        )
+                        elapsed = (time.perf_counter() - started) * 1000
+                        _update_runtime(model, True, elapsed)
+                        logger.info(
+                            "tool_loop iter=%d llm_call: provider=%s model=%s elapsed=%.0fms result_len=%d",
+                            iteration, model.get("provider"), model.get("model_name"),
+                            elapsed, len(result),
+                        )
+                        break
+                    except Exception as exc:
+                        elapsed = (time.perf_counter() - started) * 1000
+                        _update_runtime(model, False, elapsed)
+                        errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
+                        logger.warning(
+                            "tool_loop iter=%d llm_fail: provider=%s model=%s elapsed=%.0fms error=%s",
+                            iteration, model.get("provider"), model.get("model_name"),
+                            elapsed, exc,
+                        )
+                        result = ""
 
             if token and token.cancelled:
                 return "流式响应已被中断。", usage, selected
@@ -1365,6 +1588,7 @@ async def _run_tool_call_loop(
                             pass
 
                     if streaming_executor is not None:
+                        streaming_executor.set_context(session_id=session_id, agent_id=agent["agent_id"], user_id=user_id)
                         for tc in tool_calls:
                             name = tc.get("name", "")
                             streaming_executor.enqueue(
@@ -1455,6 +1679,13 @@ async def _run_tool_call_loop(
         selected = models[0] if models else {
             "provider": "mock", "model_name": "mock", "api_key": "", "base_url": "",
         }
+
+    # ── Record tool-call loop for performance monitoring ──────────
+    try:
+        from app.services.performance_monitor import monitor
+        monitor.record_tool_call_loop(1)  # count each complete loop
+    except Exception:
+        pass
 
     return final_text, usage_dict, selected
 
@@ -1581,6 +1812,69 @@ def _strip_think_tags(text: str) -> str:
     conversation history — strip them before persistence.
     """
     return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+
+
+# ── Streaming filter state (per-session) ────────────────────────────
+# Track cross-chunk state so the filter can correctly handle <think> tags
+# that split across token boundaries. Keyed by session_id.
+_STREAM_FILTER_STATE: dict[str, dict] = {}
+
+
+def _reset_stream_filter(session_id: str) -> None:
+    """Clear per-session streaming filter state (call on stream end / interrupt)."""
+    _STREAM_FILTER_STATE.pop(session_id, None)
+
+
+def _filter_streaming_chunk(session_id: str, chunk: str) -> str:
+    """Apply SAFE incremental filters to a streaming chunk.
+
+    Critical: this MUST be idempotent and MUST NOT destroy <think>...</think>
+    blocks — the frontend ThinkingPanel relies on them being intact in the
+    rendered message so users can expand/collapse the reasoning trace.
+
+    Filters applied (in order):
+    1. Unescape common literal escape sequences (``\\n``, ``\\t``, ``\\xml``)
+       that some models emit as raw text — the model was confused and printed
+       the escape sequence as a literal; turn it back into a real char.
+    2. LaTeX-to-Unicode (\\div, \\times, etc.) — same as final-pass.
+    3. Strip Kimi ``【正式回复】`` marker — it leaks into the visible message
+       and renders as inline code instead of a section divider.
+    4. Strip leftover ``【思考分析】`` markers that the model may have
+       emitted outside a <think> block.
+
+    NOTE: We deliberately do NOT call _strip_think_tags() here — that would
+    delete the <think> block the ThinkingPanel needs. The frontend's
+    ``parseThinkSegments`` correctly extracts the think block on render.
+    """
+    if not chunk:
+        return chunk
+
+    # 1) Unescape literal backslash sequences the model emitted as text.
+    #    Conservative: only unescape sequences that have no business being
+    #    literal in a chat reply.  We don't touch ``\\n`` in code blocks
+    #    because by the time we see a chunk, we don't know if the rest of
+    #    the code block has already arrived or is in the next chunk.  The
+    #    case we care about is when the model prints ``\xml`` (with the
+    #    leading backslash literally) as part of leaked thinking.
+    chunk = chunk.replace("\\`", "`").replace('\\"', '"').replace("\\'", "'")
+
+    # 2) LaTeX-to-Unicode (safe, idempotent, doesn't touch <think> content
+    #    because the LaTeX commands are mathematical and wouldn't appear in
+    #    a model's reasoning).
+    chunk = _latex_to_unicode(chunk)
+
+    # 3) Strip Kimi 正式回复 marker — this is meant to be a section
+    #    divider, but the frontend renders it as inline code, polluting
+    #    the visible message.  We strip it because the model has already
+    #    crossed the boundary by the time the marker appears.
+    chunk = chunk.replace("【正式回复】\n", "").replace("【正式回复】", "")
+
+    # 4) Strip leftover 【思考分析】 markers that the model may have
+    #    emitted outside a <think> block (e.g. after a tool call).
+    chunk = re.sub(r"【思考分析】已完成\s*\(\d+字\)", "", chunk)
+    chunk = re.sub(r"【思考分析】", "", chunk)
+
+    return chunk
 
 
 def _strip_codegen_prefix(text: str) -> str:

@@ -82,6 +82,19 @@ _PG_DDL = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS task_execution_history (
+        id SERIAL PRIMARY KEY,
+        task_type TEXT NOT NULL,
+        assigned_agent TEXT NOT NULL,
+        success BOOLEAN NOT NULL,
+        duration_ms INTEGER,
+        tool_calls_count INTEGER DEFAULT 0,
+        retry_count INTEGER DEFAULT 0,
+        error_type TEXT,
+        session_id TEXT,
+        created_at TEXT NOT NULL
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_teh_agent_type ON task_execution_history(assigned_agent, task_type)""",
     """CREATE TABLE IF NOT EXISTS dag_templates (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
@@ -249,6 +262,11 @@ async def _migrate_agent_registry_pg(conn) -> None:
         "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS capability_tags TEXT NOT NULL DEFAULT '[]'",
+        # ── Avatar DB storage (v3.2): BYTEA + MIME type ────────────
+        #   Moves avatar binary from filesystem to PostgreSQL so DB
+        #   backups naturally cover avatar data.  NULL = no avatar.
+        "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS avatar_data BYTEA",
+        "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS avatar_mime TEXT NOT NULL DEFAULT ''",
     ]
     for m in migrations:
         try:

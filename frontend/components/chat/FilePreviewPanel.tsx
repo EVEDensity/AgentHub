@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import type { FileReference, WorkspacePreviewTab } from '../../types';
 import MarkdownRenderer from './MarkdownRenderer';
 import ResizableDivider from '../common/ResizableDivider';
@@ -815,7 +815,7 @@ interface FilePreviewPanelProps {
   pendingScrollRef?: { id: string; nonce: number } | null;
 }
 
-export default function FilePreviewPanel({
+const FilePreviewPanel = memo(function FilePreviewPanel({
   tabs,
   activeTabId,
   onSelectTab,
@@ -1219,6 +1219,8 @@ export default function FilePreviewPanel({
 
     </div>
   );
-}
+});
+
+export default FilePreviewPanel;
 
 export { getLanguageFromPath, isMarkdownFile, isImageFile };

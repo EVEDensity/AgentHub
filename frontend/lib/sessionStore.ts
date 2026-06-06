@@ -86,7 +86,22 @@ class SessionStore {
   }
 
   private evictIfNeeded(): void {
+    let iterations = 0;
+    const maxIterations = this.lru.length * 2;
     while (this.lru.length > MAX_CACHED_SESSIONS) {
+      if (iterations++ > maxIterations) {
+        // Safety valve: if all sessions are pinned, break to avoid infinite loop.
+        // Falls back to evicting the oldest pinned session.
+        console.warn(
+          '[SessionStore] LRU eviction stuck — all sessions pinned. Evicting oldest pinned session.',
+        );
+        const fallbackId = this.lru.shift();
+        if (fallbackId) {
+          this.pinned.delete(fallbackId);
+          this.sessions.delete(fallbackId);
+        }
+        continue;
+      }
       const evictId = this.lru[0];
       if (this.pinned.has(evictId)) {
         // 被 pin 的不能踢，把它移到队尾重新排队

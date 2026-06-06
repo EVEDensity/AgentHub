@@ -167,3 +167,27 @@ async def get_adapter(adapter_id: str) -> dict:
         "requires_api_key": metadata.get("requires_api_key", True),
         "category": metadata.get("category", "cloud"),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Performance Monitoring API
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.get("/metrics")
+async def get_metrics() -> dict:
+    """Return full performance metrics snapshot.
+
+    Includes per-model latency (avg/p50/p95/p99), success rates,
+    streaming performance (TTFT, chunk gaps), WebSocket broadcast
+    timing, and recent degradation events.
+    """
+    from app.services.performance_monitor import monitor
+    return monitor.snapshot()
+
+
+@router.get("/metrics/health")
+async def get_metrics_health() -> dict:
+    """Lightweight health check — model status, active degradations, retries."""
+    from app.services.performance_monitor import monitor
+    return monitor.model_health()

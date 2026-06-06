@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type JSX } from 'react';
+import { memo, useState, type JSX } from 'react';
 import { ClipboardList, Check, X, Edit3 } from 'lucide-react';
 import type { AgentTodoEvent, AgentTodoAction } from '../../types';
 
@@ -22,7 +22,7 @@ const PRIORITY_LABELS: Record<string, string> = {
   low: '低优先级',
 };
 
-export default function AgentTodoBubble({ data, isStreaming, onSendEvent }: AgentTodoBubbleProps): JSX.Element {
+const AgentTodoBubble = memo(function AgentTodoBubble({ data, isStreaming, onSendEvent }: AgentTodoBubbleProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [comment, setComment] = useState('');
@@ -148,4 +148,6 @@ export default function AgentTodoBubble({ data, isStreaming, onSendEvent }: Agen
       </div>
     </div>
   );
-}
+});
+
+export default AgentTodoBubble;
