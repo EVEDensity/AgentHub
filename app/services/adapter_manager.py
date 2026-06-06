@@ -372,17 +372,26 @@ class OpenAICompatibleAdapter(BaseAdapter):
             "total_tokens": usage.get("total_tokens") or 0,
         }
 
-        message = data["choices"][0]["message"]
-        finish_reason = data["choices"][0].get("finish_reason", "")
+        message = data["choices"][0].get("message") if isinstance(data.get("choices", [None])[0], dict) else None
+        finish_reason = data["choices"][0].get("finish_reason", "") if isinstance(data.get("choices", [None])[0], dict) else ""
+
+        # Guard: some providers return "message": null when the response is malformed
+        # (e.g. token-limit truncation or provider-side errors).
+        if not isinstance(message, dict):
+            message = {}
 
         # ── Native tool_calls → internal JSON format ─────────────────
         native_tool_calls = message.get("tool_calls") or []
         if native_tool_calls:
             converted: list[dict[str, Any]] = []
             for tc in native_tool_calls:
-                func = tc.get("function", {})
-                name = func.get("name", "")
-                args_str = func.get("arguments", "{}")
+                # Guard against malformed entries: tc itself may be None,
+                # and tc["function"] may be null instead of a dict.
+                if not isinstance(tc, dict):
+                    continue
+                func = tc.get("function") or {}
+                name = func.get("name", "") if isinstance(func, dict) else ""
+                args_str = func.get("arguments", "{}") if isinstance(func, dict) else "{}"
                 try:
                     arguments = json.loads(args_str) if isinstance(args_str, str) else args_str
                 except (json.JSONDecodeError, TypeError):
@@ -459,7 +468,16 @@ class OpenAICompatibleAdapter(BaseAdapter):
                         break
                     try:
                         obj = json.loads(data)
-                        delta = obj["choices"][0].get("delta", {})
+                        # Guard: some providers send null choices[0] or "delta": null in final/empty chunks.
+                        choices = obj.get("choices")
+                        if not choices or not isinstance(choices, list):
+                            continue
+                        choice = choices[0]
+                        if not isinstance(choice, dict):
+                            continue
+                        delta = choice.get("delta") or {}
+                        if not isinstance(delta, dict):
+                            delta = {}
                         reasoning = delta.get("reasoning_content", "")
                         content = delta.get("content", "")
                         if reasoning:
@@ -479,7 +497,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
                         if "usage" in obj:
                             u = obj["usage"]
                             self.last_usage = {"prompt_tokens": u.get("prompt_tokens", 0), "completion_tokens": u.get("completion_tokens", 0), "total_tokens": u.get("total_tokens", 0)}
-                    except (json.JSONDecodeError, KeyError, IndexError):
+                    except (json.JSONDecodeError, KeyError, IndexError, AttributeError, TypeError):
                         continue
                 if reasoning_open:
                     full_text += "</think>"
@@ -553,12 +571,15 @@ class AnthropicAdapter(BaseAdapter):
             raise LLMAdapterError(response.text)
         data = response.json()
         usage = data.get("usage", {})
+        # Guard: Anthropic may return null entries in content array
+        content_blocks = data.get("content") or []
+        first_block = (content_blocks[0] if isinstance(content_blocks[0], dict) else {}) if content_blocks else {}
         self.last_usage = {
             "prompt_tokens": usage.get("input_tokens") or max(1, len(prompt) // 4),
-            "completion_tokens": usage.get("output_tokens") or max(1, len(data.get("content", [{}])[0].get("text", "")) // 4),
-            "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or max(1, len(prompt) // 4) + max(1, len(data.get("content", [{}])[0].get("text", "")) // 4),
+            "completion_tokens": usage.get("output_tokens") or max(1, len(first_block.get("text", "")) // 4),
+            "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or max(1, len(prompt) // 4) + max(1, len(first_block.get("text", "")) // 4),
         }
-        return "\n".join(block.get("text", "") for block in data.get("content", []) if block.get("type") == "text")
+        return "\n".join(block.get("text", "") for block in content_blocks if isinstance(block, dict) and block.get("type") == "text")
 
 
 class OllamaAdapter(BaseAdapter):
@@ -636,7 +657,15 @@ class AdapterManager:
         }
 
     def get_adapter(self, provider: str) -> BaseAdapter:
-        return self.adapters.get((provider or "mock").lower(), self.adapters["mock"])
+        key = (provider or "mock").lower()
+        # cloud_code is lazy-loaded to avoid circular imports
+        # (CloudCodeAdapter imports from this module for BaseAdapter/MockAdapter)
+        if key == "cloud_code":
+            if "cloud_code" not in self.adapters:
+                from app.services.adapters.cloudcode_adapter import CloudCodeAdapter
+                self.adapters["cloud_code"] = CloudCodeAdapter()
+            return self.adapters["cloud_code"]
+        return self.adapters.get(key, self.adapters["mock"])
 
 
 adapter_manager = AdapterManager()

@@ -59,6 +59,101 @@ _ROLE_LABELS: dict[str, str] = {
     "deploy": "部署发布",
 }
 
+# ── PM state machine ───────────────────────────────────────────────────
+# Tracks the PM agent's current phase during a session.
+_PM_STATES: dict[str, str] = {}  # session_id → PMState
+
+async def _set_pm_state(session_id: str, state: str, details: str = "") -> None:
+    """Transition the PM state and broadcast to connected clients."""
+    from app.services.websocket_manager import manager as _mgr
+    prev = _PM_STATES.get(session_id, "IDLE")
+    if prev == state:
+        return
+    _PM_STATES[session_id] = state
+    try:
+        await _mgr.broadcast_pm_state(session_id, state, prev, details)
+    except Exception:
+        pass
+
+def _get_pm_state(session_id: str) -> str:
+    return _PM_STATES.get(session_id, "IDLE")
+
+# ── Degradation tracking ──────────────────────────────────────────────
+_DEGRADATION: dict[str, dict] = {}  # session_id → degradation info
+_RECOVERY_CHECK_INTERVAL = 60  # seconds between recovery probes
+
+async def _check_degradation_recovery(session_id: str) -> bool:
+    """Probe whether models have recovered from degradation.
+    Returns True if recovery succeeded (degradation ended)."""
+    info = _DEGRADATION.get(session_id)
+    if not info or not info.get("active"):
+        return True  # not degraded
+    # Try a lightweight health check on the first failed model
+    from app.services.adapter_manager import adapter_manager as _am
+    from app.db.session import afetch_all
+    rows = await afetch_all(
+        "SELECT provider, model_name, base_url, api_key FROM model_configs WHERE is_active=true"
+    )
+    if not rows:
+        return False
+    row = rows[0]
+    try:
+        adapter = _am.get_adapter(row.get("provider", "mock"))
+        test_prompt = "Hello, respond with 'OK' only."
+        result = await adapter.execute_prompt(
+            test_prompt,
+            row.get("model_name", ""),
+            row.get("api_key", ""),
+            row.get("base_url", ""),
+        )
+        if result and len(result.strip()) > 0:
+            # Recovery success — clear degradation
+            _DEGRADATION.pop(session_id, None)
+            from app.services.websocket_manager import manager as _mgr2
+            await _mgr2.broadcast_degradation_change(
+                session_id, False, "", "", [], 0,
+            )
+            logger.info("degradation_recovery: session=%s model recovered", session_id)
+            return True
+    except Exception:
+        pass
+    # Increment recovery attempts
+    info["recovery_attempts"] = info.get("recovery_attempts", 0) + 1
+    info["last_recovery_attempt"] = time.time()
+    return False
+
+async def _enter_degradation(session_id: str, reason: str, failed_models: list[str]) -> None:
+    """Enter degradation mode for a session."""
+    from app.services.websocket_manager import manager as _mgr
+    info = {
+        "active": True,
+        "reason": reason,
+        "started_at": now(),
+        "failed_models": failed_models,
+        "recovery_attempts": 0,
+    }
+    _DEGRADATION[session_id] = info
+    await _mgr.broadcast_degradation_change(
+        session_id, True, reason, info["started_at"], failed_models, 0,
+    )
+    logger.warning("degradation_enter: session=%s reason=%s models=%s",
+                   session_id, reason, failed_models)
+
+
+async def _schedule_recovery_check(session_id: str) -> None:
+    """Background task: periodically check if models have recovered."""
+    import asyncio as _asyncio
+    for i in range(5):  # Try up to 5 times
+        await _asyncio.sleep(_RECOVERY_CHECK_INTERVAL)
+        info = _DEGRADATION.get(session_id)
+        if not info or not info.get("active"):
+            return  # already recovered or cleared
+        recovered = await _check_degradation_recovery(session_id)
+        if recovered:
+            return
+    # After 5 attempts, stop trying — user can trigger recheck by sending new message
+    logger.info("degradation_recovery: exhausted attempts for session=%s", session_id)
+
 
 class CollaborationContext:
     """Shared memory for one multi-agent collaboration turn.
@@ -204,6 +299,39 @@ def _build_attachment_context(attachments: list[dict[str, Any]] | None) -> tuple
         clean.append({"name": name, "type": file_type, "size": size})
 
     return "\\n\\n".join(blocks), clean
+
+
+def _build_quote_context(quote_references: list[dict[str, Any]] | None) -> str:
+    """Format quoted chat messages as a context block for the AI prompt.
+
+    Injects a ``[用户引用的历史消息]`` section above the current question,
+    giving the model visibility into what the user is referencing.
+    """
+    if not quote_references:
+        return ""
+
+    blocks: list[str] = []
+    for idx, qr in enumerate(quote_references, start=1):
+        original_sender = str(qr.get("originalSender", "unknown"))
+        original_timestamp = str(qr.get("originalTimestamp", ""))
+        quoted_text = str(qr.get("quotedText", ""))
+        is_full_message = bool(qr.get("isFullMessage", False))
+
+        truncation_note = ""
+        display_text = quoted_text
+        if len(quoted_text) > 2000:
+            display_text = quoted_text[:2000] + "\n… [已截断]"
+            truncation_note = " (已截断)"
+
+        msg_type = "完整消息" if is_full_message else "消息片段"
+
+        blocks.append(
+            f"[引自历史消息 {idx}] 发送者: {original_sender}, "
+            f"时间: {original_timestamp}, 类型: {msg_type}{truncation_note}\n"
+            f"---\n{display_text}\n---"
+        )
+
+    return "[用户引用的历史消息]\n\n" + "\n\n".join(blocks)
 
 
 def extract_mentions(content: str) -> list[str]:
@@ -420,16 +548,19 @@ async def list_messages(session_id: str) -> list[dict]:
     return items
 
 
-async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "", token: Any = None, on_tool_event: Any = None) -> dict:
+async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "", token: Any = None, on_tool_event: Any = None, quote_references: list[dict[str, Any]] | None = None) -> dict:
     if agent is None:
         agent = await resolve_agent(content)
     domain = agent["domain"]
     msg_type = "code" if domain == "codegen" or any(word in content.lower() for word in ["code", "fastapi", "react", "代码", "实现"]) else "text"
 
     attachment_context, attachment_meta = _build_attachment_context(attachments)
+    quote_context = _build_quote_context(quote_references)
     llm_input = content
+    if quote_context:
+        llm_input = f"{quote_context}\n\n[用户当前问题]\n{content}"
     if attachment_context:
-        llm_input = f"{content}\n\n[用户上传附件上下文]\n{attachment_context}"
+        llm_input = f"{llm_input}\n\n[用户上传附件上下文]\n{attachment_context}"
 
     symbolic = generate_symbolic_message(
         llm_input, msg_type, session_id,
@@ -496,6 +627,7 @@ async def stream_agent_response(
     agent: dict | None = None,
     collab_ctx: str = "",
     on_tool_event: Any = None,
+    quote_references: list[dict[str, Any]] | None = None,
 ) -> AsyncGenerator[str, None] | None:
     """Stream an agent response with full tool-calling support.
 
@@ -504,14 +636,25 @@ async def stream_agent_response(
     """
     if agent is None:
         agent = await resolve_agent(content)
+
+    # ── CloudCode adapter: subprocess-based, no model resolution needed ──
+    if agent.get("adapter_type") == "cloud_code":
+        return await _stream_cloudcode_response(
+            session_id, content, user_id, agent, token=token,
+            attachments=attachments, quote_references=quote_references,
+        )
+
     models = choose_models(await candidate_models_for_role(agent["agent_id"]))
     if not models:
         return None
 
     attachment_context, _ = _build_attachment_context(attachments)
+    quote_context = _build_quote_context(quote_references)
     llm_input = content
+    if quote_context:
+        llm_input = f"{quote_context}\n\n[用户当前问题]\n{content}"
     if attachment_context:
-        llm_input = f"{content}\n\n[用户上传附件上下文]\n{attachment_context}"
+        llm_input = f"{llm_input}\n\n[用户上传附件上下文]\n{attachment_context}"
 
     async def stream():
         # ── Real SSE streaming via asyncio.Queue bridge ────────────
@@ -1170,6 +1313,13 @@ async def _run_tool_call_loop(
 
             if not result:
                 final_text = "模型调用失败，已降级为本地响应：" + " | ".join(errors[:2])
+                # Enter degradation mode and notify frontend
+                failed_model_ids = [f"{m.get('provider')}/{m.get('model_name')}" for m in models[:3]]
+                await _enter_degradation(
+                    session_id, " | ".join(errors[:2]), failed_model_ids,
+                )
+                # Schedule a background recovery check
+                asyncio.create_task(_schedule_recovery_check(session_id))
                 break
 
             # Check for tool calls
@@ -1645,3 +1795,243 @@ def normalize_agent_output(agent_id: str, model_output: str, original: str) -> s
         "3. 当前会话的消息已保存，模型恢复后可继续处理\n\n"
         "如有紧急需求，请通过管理后台切换至可用模型或联系系统管理员。"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CloudCode subprocess-based streaming
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _stream_cloudcode_response(
+    session_id: str,
+    content: str,
+    user_id: str,
+    agent: dict,
+    token: Any = None,
+    attachments: list[dict[str, Any]] | None = None,
+    quote_references: list[dict[str, Any]] | None = None,
+) -> AsyncGenerator[str, None] | None:
+    """Stream a CloudCode (subprocess-based) agent response.
+
+    Unlike the standard tool-call loop which calls HTTP LLM APIs, this
+    function talks to a subprocess via JSON Lines on stdout.  Each JSON
+    Line is parsed, dispatched as a WebSocket event to the frontend, and
+    text chunks are yielded for the SSE stream.
+
+    Parameters
+    ----------
+    session_id : str
+    content : str
+        The user's prompt (passed to subprocess stdin).
+    user_id : str
+    agent : dict
+        Agent registry row with at least ``agent_id`` and ``adapter_type``.
+    token : StreamToken or None
+        Cancellation token.
+    """
+    import asyncio as _asyncio
+
+    from app.services.adapter_manager import adapter_manager
+    from app.services.event_mapper import is_diff_event, is_terminal_event
+    from app.services.websocket_manager import manager as ws_manager
+
+    adapter = adapter_manager.get_adapter("cloud_code")
+    message_id = str(uuid.uuid4())
+
+    # Build attachment / quote context (same as normal stream path)
+    attachment_context, _ = _build_attachment_context(attachments)
+    quote_context = _build_quote_context(quote_references)
+    llm_input = content
+    if quote_context:
+        llm_input = f"{quote_context}\n\n[用户当前问题]\n{content}"
+    if attachment_context:
+        llm_input = f"{llm_input}\n\n[用户上传附件上下文]\n{attachment_context}"
+
+    full_text: list[str] = []
+
+    async def stream():
+        nonlocal full_text
+
+        try:
+            async for json_line in adapter.stream_prompt(llm_input, "cloud-code"):
+                # Check cancellation
+                if token and token.cancelled:
+                    adapter.cancel()
+                    yield "\n[已中断 CloudCode 执行]"
+                    return
+
+                if not json_line:
+                    continue  # skip empty lines / sentinel (end-of-stream marker)
+
+                # Parse JSON
+                try:
+                    obj = json.loads(json_line)
+                except json.JSONDecodeError:
+                    # Non-JSON line → treat as raw text chunk
+                    full_text.append(json_line)
+                    yield json_line
+                    continue
+
+                evt_type = obj.get("type", "")
+
+                # ── Text event → yield for SSE + collect ──────────
+                if evt_type == "text":
+                    chunk = obj.get("content", "")
+                    if chunk:
+                        full_text.append(chunk)
+                        yield chunk
+
+                # ── Tool use → broadcast to frontend ──────────────
+                elif evt_type == "tool_use":
+                    tool_name = obj.get("name", "unknown")
+                    tool_args = obj.get("args", obj.get("arguments", {}))
+
+                    # Broadcast tool_call event
+                    await ws_manager.broadcast(
+                        session_id,
+                        {
+                            "event": "tool_call",
+                            "sessionId": session_id,
+                            "messageId": message_id,
+                            "toolCalls": [
+                                {
+                                    "name": tool_name,
+                                    "arguments": tool_args,
+                                    "status": "calling",
+                                }
+                            ],
+                        },
+                    )
+
+                    # Diff events → also broadcast as diff_update
+                    if is_diff_event(obj):
+                        await ws_manager.broadcast(
+                            session_id,
+                            {
+                                "event": "diff_update",
+                                "sessionId": session_id,
+                                "messageId": message_id,
+                                "path": obj.get("path", ""),
+                                "diff": obj.get("diff", ""),
+                                "timestamp": now(),
+                            },
+                        )
+
+                    # Terminal events → broadcast terminal_output
+                    if is_terminal_event(obj):
+                        cmd_output = obj.get("output", obj.get("stdout", ""))
+                        if cmd_output:
+                            await ws_manager.broadcast(
+                                session_id,
+                                {
+                                    "event": "terminal_output",
+                                    "sessionId": session_id,
+                                    "messageId": message_id,
+                                    "content": cmd_output,
+                                    "sender": agent["agent_id"],
+                                    "timestamp": now(),
+                                },
+                            )
+
+                # ── End event → finalise ──────────────────────────
+                elif evt_type == "end":
+                    final_text = obj.get("content", "") or "\n".join(full_text)
+                    if final_text:
+                        # Broadcast final message
+                        await ws_manager.broadcast(
+                            session_id,
+                            {
+                                "event": "message",
+                                "sessionId": session_id,
+                                "messageId": message_id,
+                                "content": final_text,
+                                "sender": agent["agent_id"],
+                                "timestamp": now(),
+                                "type": "text",
+                            },
+                        )
+
+                    # Persist the message
+                    try:
+                        pt = max(1, len(llm_input) // 4)
+                        ct = max(1, len(final_text) // 4)
+                        await save_message(
+                            session_id, agent["agent_id"], final_text, "text", 0.0,
+                            public_symbolic(
+                                generate_symbolic_message(
+                                    llm_input, "text", session_id,
+                                    sender_role=agent["agent_id"],
+                                    intent_type=_intent_from_domain(agent.get("domain", ""), content),
+                                    risk_level=agent.get("risk_level", "L1"),
+                                )
+                            ),
+                            pt, ct, pt + ct,
+                        )
+                    except Exception:
+                        logger.debug("save_message failed in cloudcode stream", exc_info=True)
+
+                    # Trigger post-agent pipeline (background)
+                    _asyncio.create_task(
+                        _run_cloudcode_post_hooks(session_id, agent["agent_id"])
+                    )
+                    return
+
+        except Exception as exc:
+            logger.exception("CloudCode stream crashed session=%s agent=%s", session_id, agent["agent_id"])
+            yield f"\n[CloudCode 执行异常：{exc}]"
+
+    return stream()
+
+
+async def _run_cloudcode_post_hooks(session_id: str, agent_id: str) -> None:
+    """Background task: register artifacts and trigger pipeline after CloudCode completes."""
+    try:
+        from app.services.git_service import git_service
+        from app.services.pipeline import run_post_agent_pipeline
+        import uuid as _uuid
+
+        # Check for changed files via git diff
+        git_service.ensure_repo()
+        diff_output = git_service.diff()
+        diff_text = diff_output.get("diff", "")
+
+        if diff_text.strip():
+            changed_files = _parse_changed_files_from_diff(diff_text)
+            for file_path in changed_files:
+                try:
+                    content = _read_file_content(file_path)
+                    if content:
+                        await aexecute(
+                            "INSERT INTO artifacts(id, session_id, file_path, content, version, created_at) "
+                            "VALUES($1,$2,$3,$4,$5,$6)",
+                            str(_uuid.uuid4()), session_id, file_path, content, 1, now(),
+                        )
+                except Exception:
+                    pass
+
+        await run_post_agent_pipeline(session_id, agent_id)
+
+    except Exception:
+        logger.debug("cloudcode post-hooks failed", exc_info=True)
+
+
+def _parse_changed_files_from_diff(diff_text: str) -> list[str]:
+    """Extract changed file paths from git diff output."""
+    paths: list[str] = []
+    for line in diff_text.split("\n"):
+        m = re.match(r"^diff --git a/(.+) b/\1$", line)
+        if m:
+            paths.append(m.group(1))
+    return list(set(paths))
+
+
+def _read_file_content(file_path: str) -> str | None:
+    """Read a file's content from the workspace."""
+    from pathlib import Path
+    from app.config import PROJECT_ROOT
+    try:
+        full = Path(PROJECT_ROOT) / file_path if not Path(file_path).is_absolute() else Path(file_path)
+        if full.exists() and full.is_file():
+            return full.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    return None

@@ -1,5 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import type { Agent, AttachedFile, FileReference, SkillMeta, WorkflowSummary } from '../../types';
+import { MessageSquareQuote } from 'lucide-react';
+import type { Agent, AttachedFile, FileReference, QuoteReference, SkillMeta, WorkflowSummary } from '../../types';
+import { PLATFORM_LABELS, PLATFORM_COLORS } from '../../types';
 
 const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]; mimePattern: RegExp }> = {
   code: { label: 'Code', extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'], mimePattern: /^(text\/|\b(?:javascript|typescript|json)\b)/ },
@@ -7,6 +9,7 @@ const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]
   image: { label: 'Image', extensions: ['png','jpg','jpeg','gif','svg','webp','bmp','ico'], mimePattern: /^image\// },
   archive: { label: 'Archive', extensions: ['zip','rar','7z','tar','gz','bz2','xz'], mimePattern: /^(application\/zip|application\/x-rar|application\/x-7z|application\/gzip|application\/x-tar)/ },
   spreadsheet: { label: 'Sheet', extensions: ['xlsx','xls','csv','tsv'], mimePattern: /^(application\/vnd\.(ms-excel|openxmlformats-officedocument\.spreadsheetml)|text\/csv)/ },
+  presentation: { label: 'Slide', extensions: ['pptx','ppt'], mimePattern: /^application\/vnd\.(ms-powerpoint|openxmlformats-officedocument\.presentationml)/ },
   config: { label: 'Config', extensions: ['json','yaml','yml','xml','toml','ini','cfg','env','conf','cnf','editorconfig','gitignore','dockerfile','makefile','prisma','graphql','proto'], mimePattern: /^(application\/json|application\/xml|text\/(xml|yaml|toml))/ },
   unknown: { label: 'File', extensions: [], mimePattern: /^$/ },
 };
@@ -54,6 +57,8 @@ function FileIcon({ category, size }: { category: string; size: number }) {
       return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>;
     case 'spreadsheet':
       return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>;
+    case 'presentation':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>;
     case 'config':
       return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>;
     default:
@@ -97,6 +102,9 @@ interface ChatInputProps {
    * 不传则芯片仅展示用，不可点击。
    */
   onJumpToReference?: (ref: FileReference) => void;
+  quoteReferences?: QuoteReference[];
+  onRemoveQuoteReference?: (index: number) => void;
+  onClearAllQuoteReferences?: () => void;
   onInsertMention: (agentId: string) => void;
   onInsertAllMentions: () => void;
   onInsertWorkflow: (wf: WorkflowSummary) => void;
@@ -115,6 +123,7 @@ const ChatInput = memo(function ChatInput({
   onInsertMention, onInsertAllMentions, onInsertWorkflow, onInsertSkill,
   onMentionSearchChange, onMentionActiveIndexChange, onRiskLevelChange,
   fileReferences, onRemoveReference, onClearAllReferences, onJumpToReference,
+  quoteReferences, onRemoveQuoteReference, onClearAllQuoteReferences,
 }: ChatInputProps) {
   // Emoji popover state. The panel is positioned via fixed offsets so
   // it always lands above the toolbar, regardless of scroll position.
@@ -194,7 +203,7 @@ const ChatInput = memo(function ChatInput({
     }
   }
 
-  const canSend = input.trim().length > 0 || attachedFiles.length > 0 || (fileReferences && fileReferences.length > 0);
+  const canSend = input.trim().length > 0 || attachedFiles.length > 0 || (fileReferences && fileReferences.length > 0) || (quoteReferences && quoteReferences.length > 0);
 
   return (
     <footer className="shrink-0 relative border-t border-warm-150 bg-white px-6 py-4">
@@ -244,8 +253,43 @@ const ChatInput = memo(function ChatInput({
                     onClick={() => onInsertMention(agent.agentId)}
                     onMouseEnter={() => onMentionActiveIndexChange(idx)}
                   >
-                    <div className="font-medium text-warm-700">@{agent.agentId}</div>
-                    <div className="text-caption text-warm-500">{agent.domain} / {agent.rankLevel || 'L1'}</div>
+                    <div className="flex items-center gap-2">
+                      {/* Avatar or fallback initial */}
+                      {agent.avatarUrl ? (
+                        <img src={agent.avatarUrl} className="h-7 w-7 rounded-full object-cover shrink-0" alt={agent.displayName || agent.agentId} />
+                      ) : (
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-warm-200 text-warm-600 text-xs font-bold">
+                          {(agent.displayName || agent.agentId)[0]}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium text-warm-700 text-sm">@{agent.agentId}</span>
+                          {agent.displayName && (
+                            <span className="text-xs text-warm-500">{agent.displayName}</span>
+                          )}
+                          <span
+                            className="rounded px-1.5 py-0.5 text-[9px] font-medium"
+                            style={{
+                              backgroundColor: (PLATFORM_COLORS[agent.adapterType] || '#6b7280') + '18',
+                              color: PLATFORM_COLORS[agent.adapterType] || '#6b7280',
+                            }}
+                          >
+                            {PLATFORM_LABELS[agent.adapterType] || agent.adapterType}
+                          </span>
+                        </div>
+                        {agent.capabilityTags && agent.capabilityTags.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {agent.capabilityTags.slice(0, 3).map((tag) => (
+                              <span key={tag} className="rounded bg-warm-100 px-1.5 py-0.5 text-[10px] text-warm-500">{tag}</span>
+                            ))}
+                            {agent.capabilityTags.length > 3 && (
+                              <span className="text-[10px] text-warm-400">+{agent.capabilityTags.length - 3}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </button>
                 ))
               )}
@@ -533,6 +577,58 @@ const ChatInput = memo(function ChatInput({
                 </svg>
                 清空
               </button>
+            </div>
+          )}
+
+          {/* ── Layer 1.2: quote reference chips (quoted chat messages) ── */}
+          {quoteReferences && quoteReferences.length > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin max-w-full" style={{ scrollbarWidth: 'thin', scrollbarColor: '#93c5fd transparent' }}>
+                {quoteReferences.map((qr, i) => (
+                  <span
+                    key={qr.id}
+                    className="group shrink-0 inline-flex items-center gap-1 rounded-full pl-2 pr-1 py-1 text-[11px] font-medium bg-blue-50 border border-blue-200 text-blue-700 shadow-sm transition hover:border-blue-300"
+                    title={`引用自: ${qr.originalSender}\n${qr.originalTimestamp}\n\n${qr.quotedText}`}
+                  >
+                    <MessageSquareQuote className="h-3 w-3 shrink-0 text-blue-500" />
+                    <span className="max-w-[100px] truncate">{qr.originalSender}</span>
+                    <span className="max-w-[160px] truncate text-blue-400">
+                      {qr.quotedText.length > 30 ? `${qr.quotedText.slice(0, 30)}…` : qr.quotedText}
+                    </span>
+                    {qr.isFullMessage && (
+                      <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-500 shrink-0">全文</span>
+                    )}
+                    {onRemoveQuoteReference && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onRemoveQuoteReference(i); }}
+                        className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-blue-400 hover:bg-blue-200 hover:text-blue-700 transition-colors"
+                        title="移除此引用"
+                        aria-label="移除此引用"
+                      >
+                        <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+              {onClearAllQuoteReferences && (
+                <button
+                  type="button"
+                  onClick={onClearAllQuoteReferences}
+                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-600 transition-colors hover:border-blue-300 hover:bg-blue-100"
+                  title="清空全部引用"
+                >
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6M14 11v6"/>
+                  </svg>
+                  清空引用
+                </button>
+              )}
             </div>
           )}
 

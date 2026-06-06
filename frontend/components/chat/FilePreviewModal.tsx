@@ -43,7 +43,7 @@ interface PreviewResponse {
   ext: string;
   size: number;
   category: string;
-  kind: 'text' | 'markdown' | 'docx' | 'pdf' | 'image' | 'binary';
+  kind: 'text' | 'markdown' | 'docx' | 'pptx' | 'pdf' | 'image' | 'binary';
   state: 'ok' | 'too_large' | 'binary' | 'missing';
   content?: string;
   contentType?: 'text' | 'html';
@@ -51,6 +51,7 @@ interface PreviewResponse {
   totalChars?: number;
   textLength?: number;
   imageCount?: number;
+  slideCount?: number;
   error?: string;
   mimeType?: string;
   pageCount?: number;
@@ -408,6 +409,69 @@ function DocxHtmlBody({ content, fileName }: {
   );
 }
 
+function PptBody({ content, fileName, slideCount }: {
+  content: string;
+  fileName: string;
+  slideCount?: number;
+}): JSX.Element {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [iframeH, setIframeH] = useState(600);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Auto-height the iframe after load
+  const measure = useCallback(() => {
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (doc) {
+        const h = Math.max(
+          doc.documentElement.scrollHeight,
+          doc.body.scrollHeight,
+          doc.documentElement.offsetHeight,
+          doc.body.offsetHeight
+        );
+        if (h > 100) setIframeH(h + 16);
+      }
+    } catch { /* cross-origin */ }
+  }, []);
+
+  const handleLoad = useCallback(() => {
+    measure();
+    setTimeout(measure, 300);
+    setTimeout(measure, 1000);
+    setTimeout(measure, 2500);
+  }, [measure]);
+
+  return (
+    <div className="bg-[#f0f2f5]" style={{ minHeight: '300px' }}>
+      {/* Toolbar */}
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-4 py-2 bg-white/95 border-b border-warm-200 backdrop-blur-sm">
+        <div className="text-[11px] text-warm-500 truncate">
+          {fileName}{slideCount ? ` · ${slideCount} 页` : ''}
+        </div>
+      </div>
+
+      {/* Scrollable iframe wrapper */}
+      <div
+        ref={bodyRef}
+        className="overflow-auto"
+        style={{ maxHeight: '75vh' }}
+        onScroll={(e) => setShowScrollTop(e.currentTarget.scrollTop > 200)}
+      >
+        <iframe
+          ref={iframeRef}
+          srcDoc={content}
+          title={`PPT 预览: ${fileName}`}
+          sandbox="allow-scripts allow-same-origin"
+          className="w-full border-0 block"
+          style={{ height: iframeH, minHeight: 400 }}
+          onLoad={handleLoad}
+        />
+      </div>
+    </div>
+  );
+}
+
 function BinaryBody({ fileName, size, hint }: {
   fileName: string;
   size?: number;
@@ -676,6 +740,8 @@ export default function FilePreviewModal({
     body = (result.contentType === 'html')
       ? <DocxHtmlBody content={result.content} fileName={file.name} />
       : <PlainTextBody content={result.content} fileName={file.name} />;
+  } else if (result.kind === 'pptx' && result.content !== undefined) {
+    body = <PptBody content={result.content} fileName={file.name} slideCount={result.slideCount} />;
   } else if (result.kind === 'pdf' && result.content !== undefined) {
     body = <PdfBody content={result.content} pageCount={result.pageCount} fileName={file.name} />;
   } else if (result.kind === 'image' && result.content !== undefined) {
@@ -731,6 +797,7 @@ export default function FilePreviewModal({
             <div className="text-[11px] text-warm-500 truncate">
               {fileSize ? `${formatSize(fileSize)} · ` : ''}{ext ? ext.toUpperCase().replace('.', '') || '文件' : '文件'}
               {result?.kind ? ` · ${result.kind}` : ''}
+              {result?.slideCount ? ` · ${result.slideCount} 页` : ''}
               {result?.imageCount ? ` · ${result.imageCount} 张图片` : ''}
               {result?.textLength ? ` · ${result.textLength.toLocaleString()} 字` : ''}
               {truncated && totalChars ? ` · 已截断 (${totalChars.toLocaleString()} 字符)` : ''}

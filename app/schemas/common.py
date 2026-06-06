@@ -43,7 +43,7 @@ class MessageOut(BaseModel):
 
 
 class ModelConfigRequest(BaseModel):
-    provider: str = Field(pattern="^(openai|anthropic|ollama|mock|deepseek|minimax|zhipu|qwen|doubao|custom_openai)$")
+    provider: str = Field(pattern="^(openai|anthropic|ollama|mock|deepseek|minimax|zhipu|qwen|doubao|custom_openai|kimi|cloud_code)$")
     modelName: str
     apiKey: str = ""
     baseUrl: str = ""
@@ -93,6 +93,9 @@ class AgentCreateRequest(BaseModel):
     baseModelName: str = ""
     rankLevel: str = "L1"
     dutyNote: str = ""
+    displayName: str = ""
+    avatarUrl: str = ""
+    capabilityTags: list[str] = Field(default_factory=list)
     baseUrl: str = ""
     apiKey: str = ""
 
@@ -104,6 +107,9 @@ class AgentUpdateRequest(BaseModel):
     baseModelName: str = ""
     rankLevel: str = "L1"
     dutyNote: str = ""
+    displayName: str = ""
+    avatarUrl: str = ""
+    capabilityTags: list[str] = Field(default_factory=list)
     baseUrl: str = ""
     apiKey: str = ""
 

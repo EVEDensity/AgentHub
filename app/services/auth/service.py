@@ -143,6 +143,20 @@ class AuthService:
         return audit_id
 
 
+# ── Module-level aliases (backward compatibility) ──────────────────
+# Older code (e.g. app/api/artifacts.py) imports these as module-level
+# names. Mirror what app/services/auth_service.py already does so both
+# import styles keep working.
+get_current_user = AuthService.get_current_user
+require_admin = AuthService.require_admin
+websocket_user = AuthService.websocket_user
+write_audit = AuthService.write_audit
+create_user = AuthService.create_user
+authenticate_user = AuthService.authenticate_user
+create_access_token = AuthService.create_access_token
+decode_access_token = AuthService.decode_access_token
+
+
 async def _write_audit_async(
     audit_id: str,
     user_id: str,

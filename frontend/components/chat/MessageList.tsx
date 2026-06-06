@@ -1,5 +1,6 @@
-import { memo, type JSX } from 'react';
-import type { ContentSegment, GeneratedData, Message, User } from '../../types';
+import { memo, useCallback, useRef, useState, type JSX } from 'react';
+import type { ContentSegment, GeneratedData, Message, QuoteReference, User } from '../../types';
+import { MessageSquareQuote } from 'lucide-react';
 import DiffBubble from './DiffBubble';
 import CodeReviewPanel from './CodeReviewPanel';
 import CodeGenResultPanel, { isCodeGenOutput } from './CodeGenResultPanel';
@@ -9,6 +10,12 @@ import SafetyBlockAlert from './SafetyBlockAlert';
 import ThinkingPanel from './ThinkingPanel';
 import ToolCallBubble from './ToolCallBubble';
 import GeneratedFilesPanel from '../git/GeneratedFilesPanel';
+import AgentQuestionBubble from './AgentQuestionBubble';
+import ProgressBubble from './ProgressBubble';
+import RiskAlertBubble from './RiskAlertBubble';
+import AgentTodoBubble from './AgentTodoBubble';
+import TaskPreviewCard from './TaskPreviewCard';
+import TerminalBubble from './TerminalBubble';
 
 function normalizeStructuredStreamContent(content: string): string {
   return content ? content.replace(/<\/?thinking>/g, '') : content;
@@ -70,9 +77,11 @@ interface MessageListProps {
   onCommit: () => void;
   messagesContainerRef: React.RefObject<HTMLElement | null>;
   bottomRef: React.RefObject<HTMLDivElement | null>;
+  onQuoteMessage?: (msg: Message, selectedText?: string) => void;
+  onSendPMEvent?: (event: Record<string, unknown>) => void;
 }
 
-const MessageList = memo(function MessageList({ messages, user, generated, onCommit, messagesContainerRef, bottomRef }: MessageListProps) {
+const MessageList = memo(function MessageList({ messages, user, generated, onCommit, messagesContainerRef, bottomRef, onQuoteMessage, onSendPMEvent }: MessageListProps) {
   function renderMessage(msg: Message, index: number): JSX.Element {
     // 用户消息判定：
     // 1. sender === 'user' (本地立即创建的消息)
@@ -127,9 +136,42 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
       );
     }
 
+    // ── Terminal output from CloudCode (run_command) ────────────────
+    if (msg.type === 'terminal') {
+      return (
+        <div key={`${msg.timestamp}-${index}`} className="mb-3">
+          <div className="mb-1 flex items-center gap-2 text-xs text-warm-500">
+            <span className="font-semibold text-warm-700">{msg.sender || 'agent'}</span>
+            <span className="tag tag-warm">terminal</span>
+            {showCursor && <span className="inline-block h-3 w-0.5 animate-pulse bg-primary-500" />}
+          </div>
+          <TerminalBubble content={msg.content} isStreaming={!!showCursor} />
+        </div>
+      );
+    }
+
     if (isCode) {
       // Auto-detect: multi-file git diff → CodeReviewPanel, else Monaco DiffBubble
       const isGitDiff = msg.content.includes('diff --git ');
+      const diffProps = (onSendPMEvent && msg.diffDecisionState !== undefined)
+        ? {
+            onAccept: () => onSendPMEvent({
+              event: 'diff_decision',
+              sessionId: msg.sessionId,
+              messageId: msg.messageId || msg.id,
+              decision: 'accept' as const,
+              path: msg.diffFilePath || '',
+            }),
+            onReject: () => onSendPMEvent({
+              event: 'diff_decision',
+              sessionId: msg.sessionId,
+              messageId: msg.messageId || msg.id,
+              decision: 'reject' as const,
+              path: msg.diffFilePath || '',
+            }),
+            decisionState: msg.diffDecisionState,
+          }
+        : {};
       return (
         <div key={`${msg.timestamp}-${index}`} className="-mx-6 mb-4 px-6">
           <div className="mb-2 flex items-center gap-2 text-xs text-warm-500">
@@ -140,14 +182,88 @@ const MessageList = memo(function MessageList({ messages, user, generated, onCom
           {isGitDiff ? (
             <CodeReviewPanel content={msg.content} />
           ) : (
-            <DiffBubble value={msg.content} />
+            <DiffBubble value={msg.content} {...diffProps} />
           )}
         </div>
       );
     }
+
+    // ── PM/PMO interaction bubbles ────────────────────────────────
+
+    if (msg.type === 'agent_question' && msg.questionData && onSendPMEvent) {
+      return (
+        <AgentQuestionBubble
+          key={`${msg.timestamp}-${index}`}
+          data={msg.questionData}
+          isStreaming={!!showCursor}
+          onSendEvent={onSendPMEvent}
+        />
+      );
+    }
+
+    if (msg.type === 'progress_update' && msg.progressData) {
+      return (
+        <ProgressBubble
+          key={`${msg.timestamp}-${index}`}
+          data={msg.progressData}
+          isStreaming={!!showCursor}
+        />
+      );
+    }
+
+    if (msg.type === 'risk_warning' && msg.riskWarningData && onSendPMEvent) {
+      return (
+        <RiskAlertBubble
+          key={`${msg.timestamp}-${index}`}
+          data={msg.riskWarningData}
+          isStreaming={!!showCursor}
+          onSendEvent={onSendPMEvent}
+        />
+      );
+    }
+
+    if (msg.type === 'agent_todo' && msg.todoData && onSendPMEvent) {
+      return (
+        <AgentTodoBubble
+          key={`${msg.timestamp}-${index}`}
+          data={msg.todoData}
+          isStreaming={!!showCursor}
+          onSendEvent={onSendPMEvent}
+        />
+      );
+    }
+
+    if (msg.type === 'task_preview' && msg.taskPreviewData && onSendPMEvent) {
+      return (
+        <TaskPreviewCard
+          key={`${msg.timestamp}-${index}`}
+          data={msg.taskPreviewData}
+          isStreaming={!!showCursor}
+          onSendEvent={onSendPMEvent}
+        />
+      );
+    }
+
     return (
-      <div key={`${msg.timestamp}-${index}`} className={`mb-4 flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-        <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800 border border-warm-150'}`}>
+      <div key={`${msg.timestamp}-${index}`} className={`mb-4 flex ${isUser ? 'justify-end' : 'justify-start'} group relative`}>
+        <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800 border border-warm-150'} ${!isUser ? 'relative' : ''}`}>
+          {/* Hover quote button – only on agent messages, positioned at right edge of bubble */}
+          {onQuoteMessage && !isUser && (
+            <button
+              type="button"
+              onClick={() => {
+                const sel = window.getSelection();
+                const selectedText = (sel && !sel.isCollapsed) ? sel.toString().trim() : '';
+                onQuoteMessage(msg, selectedText || undefined);
+              }}
+              className="absolute left-full ml-1 top-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-medium bg-white/90 border border-warm-200 text-warm-500 hover:text-primary-600 hover:border-primary-300 shadow-sm whitespace-nowrap"
+              title="引用Agent的回复（选中文字可引用片段）"
+            >
+              <MessageSquareQuote className="h-3 w-3" />
+              引用
+            </button>
+          )}
+
           <div className="mb-1 flex items-center gap-2 text-xs opacity-80">
             <span className="font-semibold">{msg.sender || 'agent'}</span>
             <span className={`rounded px-2 py-0.5 ${isUser ? 'bg-white/20 text-white' : 'bg-warm-100 text-warm-600'}`}>{badge}</span>

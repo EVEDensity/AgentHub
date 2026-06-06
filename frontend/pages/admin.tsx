@@ -1,11 +1,13 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
 import type { Agent, AgentRoute, AgentRouteNode, ConsolidationResult, MemoryDetail, MemoryFileInfo, MemorySearchResult, SessionSummary, SkillMeta, SkillDetail, User } from '../types';
+import { PLATFORM_LABELS, PLATFORM_COLORS } from '../types';
 import TokenUsageHeatmap from '../components/heatmap/TokenUsageHeatmap';
 import AgentCanvas from '../components/flow/AgentCanvas';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
 import CodeReviewPanel from '../components/chat/CodeReviewPanel';
 import AuditLogList from '../components/admin/AuditLogList';
+import TagInput from '../components/admin/TagInput';
 
 const SETTINGS_MENU = [
   '服务商',
@@ -44,6 +46,9 @@ export default function AdminPage(): JSX.Element {
     baseModelName: '',
     rankLevel: 'L1',
     dutyNote: '',
+    displayName: '',
+    avatarUrl: '',
+    capabilityTags: [] as string[],
     baseUrl: '',
     apiKey: '',
   });
@@ -60,6 +65,9 @@ export default function AdminPage(): JSX.Element {
     baseModelName: '',
     rankLevel: 'L1',
     dutyNote: '',
+    displayName: '',
+    avatarUrl: '',
+    capabilityTags: [] as string[],
     baseUrl: '',
     apiKey: '',
   });
@@ -662,6 +670,9 @@ export default function AdminPage(): JSX.Element {
         baseModelName: '',
         rankLevel: 'L1',
         dutyNote: '',
+        displayName: '',
+        avatarUrl: '',
+        capabilityTags: [],
         baseUrl: '',
         apiKey: '',
       });
@@ -709,6 +720,9 @@ export default function AdminPage(): JSX.Element {
       baseModelName: agent.baseModelName || '',
       rankLevel: agent.rankLevel || 'L1',
       dutyNote: agent.dutyNote || '',
+      displayName: agent.displayName || '',
+      avatarUrl: agent.avatarUrl || '',
+      capabilityTags: agent.capabilityTags || [],
       baseUrl: agent.baseUrl || '',
       apiKey: '',
     });
@@ -724,6 +738,9 @@ export default function AdminPage(): JSX.Element {
       baseModelName: '',
       rankLevel: 'L1',
       dutyNote: '',
+      displayName: '',
+      avatarUrl: '',
+      capabilityTags: [],
       baseUrl: '',
       apiKey: '',
     });
@@ -846,18 +863,46 @@ export default function AdminPage(): JSX.Element {
                 className={`rounded-2xl border bg-white px-5 py-4 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-green-400' : 'border-warm-200'}`}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-green-500' : 'bg-warm-400'}`} />
-                      <span className="truncate text-2xl font-semibold text-warm-900">{a.agentId}</span>
-                      <span className="rounded bg-warm-100 px-2 py-0.5 text-xs text-warm-600">{a.adapterType}</span>
-                      {isDefaultAgent ? <span className="rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700">默认对话模型</span> : null}
-                    </div>
-                    <div className="mt-1 truncate text-sm text-warm-500">
-                      {a.baseUrl || '未配置地址'} · {a.baseModelName || '未配置模型'}
-                    </div>
-                    <div className="mt-1 text-xs text-warm-400">
-                      Domain: {a.domain} · 职责: {a.dutyNote || '无'} · 位次: {a.rankLevel || 'L1'}
+                  <div className="min-w-0 flex items-start gap-3">
+                    {/* Avatar or fallback */}
+                    {a.avatarUrl ? (
+                      <img src={a.avatarUrl} className="h-10 w-10 rounded-full object-cover shrink-0" alt={a.displayName || a.agentId} />
+                    ) : (
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-warm-200 text-warm-600 text-sm font-bold">
+                        {(a.displayName || a.agentId)[0]}
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-green-500' : 'bg-warm-400'}`} />
+                        <span className="truncate text-2xl font-semibold text-warm-900">{a.agentId}</span>
+                        {a.displayName && (
+                          <span className="text-sm text-warm-500">{a.displayName}</span>
+                        )}
+                        <span
+                          className="rounded px-2 py-0.5 text-xs font-medium"
+                          style={{
+                            backgroundColor: (PLATFORM_COLORS[a.adapterType] || '#6b7280') + '18',
+                            color: PLATFORM_COLORS[a.adapterType] || '#6b7280',
+                          }}
+                        >
+                          {PLATFORM_LABELS[a.adapterType] || a.adapterType}
+                        </span>
+                        {isDefaultAgent ? <span className="rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700">默认对话模型</span> : null}
+                      </div>
+                      <div className="mt-1 truncate text-sm text-warm-500">
+                        {a.baseUrl || '未配置地址'} · {a.baseModelName || '未配置模型'}
+                      </div>
+                      <div className="mt-1 text-xs text-warm-400">
+                        Domain: {a.domain} · 职责: {a.dutyNote || '无'} · 位次: {a.rankLevel || 'L1'}
+                      </div>
+                      {a.capabilityTags && a.capabilityTags.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {a.capabilityTags.map((tag) => (
+                            <span key={tag} className="rounded bg-warm-100 px-2 py-0.5 text-[10px] text-warm-500">{tag}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -2341,6 +2386,7 @@ index a1b2c3d..e4f5g6h 100644
               {isCreatingAgent ? (
                 <form onSubmit={createAgent} className="grid gap-3 md:grid-cols-2">
                   <input className="input-field" placeholder="自定义名称（Agent ID）" value={newAgent.agentId} onChange={(e) => setNewAgent((p) => ({ ...p, agentId: e.target.value }))} />
+                  <input className="input-field" placeholder="展示名称（如：代码生成器）" value={newAgent.displayName} onChange={(e) => setNewAgent((p) => ({ ...p, displayName: e.target.value }))} />
                   <input className="input-field" placeholder="业务 Domain（如 codegen）" value={newAgent.domain} onChange={(e) => setNewAgent((p) => ({ ...p, domain: e.target.value }))} />
                   <div className="flex flex-col gap-1">
                     <select className="input-field" value={newAgent.adapterType} onChange={(e) => handleAdapterChange(e.target.value, 'create')}>
@@ -2374,6 +2420,37 @@ index a1b2c3d..e4f5g6h 100644
                   </select>
                   <input className="input-field" placeholder="API Base URL（可选）" value={newAgent.baseUrl} onChange={(e) => setNewAgent((p) => ({ ...p, baseUrl: e.target.value }))} />
                   <textarea className="input-field md:col-span-2" rows={2} placeholder="职责备注（可选）" value={newAgent.dutyNote} onChange={(e) => setNewAgent((p) => ({ ...p, dutyNote: e.target.value }))} />
+                  <input className="input-field" placeholder="头像 URL（可选，或使用下方上传）" value={newAgent.avatarUrl} onChange={(e) => setNewAgent((p) => ({ ...p, avatarUrl: e.target.value }))} />
+                  <div className="flex items-end">
+                    <label className="btn-secondary px-3 py-2 text-sm cursor-pointer">
+                      上传头像
+                      <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        try {
+                          const res = await fetch('/api/agent/registry/avatar', { method: 'POST', headers: authHeaders(), body: formData });
+                          const data = await res.json();
+                          if (res.ok && data.avatarUrl) {
+                            setNewAgent((p) => ({ ...p, avatarUrl: data.avatarUrl }));
+                            setNotice('头像上传成功');
+                          } else {
+                            setNotice(fmtErr(data.detail, '上传失败'));
+                          }
+                        } catch { setNotice('上传失败，请检查网络'); }
+                      }} />
+                    </label>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-sm font-medium text-warm-600">能力标签</label>
+                    <TagInput
+                      tags={newAgent.capabilityTags}
+                      onChange={(tags) => setNewAgent((p) => ({ ...p, capabilityTags: tags }))}
+                      placeholder="输入标签后按 Enter 添加..."
+                      maxTags={8}
+                    />
+                  </div>
                   <input className="input-field md:col-span-2" placeholder="API Key（可选）" type="password" value={newAgent.apiKey} onChange={(e) => setNewAgent((p) => ({ ...p, apiKey: e.target.value }))} />
                   <div className="md:col-span-2 flex justify-end gap-2">
                     <button type="button" className="btn-secondary" onClick={() => setIsCreatingAgent(false)}>取消</button>
@@ -2385,6 +2462,7 @@ index a1b2c3d..e4f5g6h 100644
               {editingAgentId ? (
                 <form onSubmit={saveAgentEdit} className="grid gap-3 md:grid-cols-2">
                   <input className="input-field" value={editAgent.agentId} disabled />
+                  <input className="input-field" placeholder="展示名称（如：代码生成器）" value={editAgent.displayName} onChange={(e) => setEditAgent((p) => ({ ...p, displayName: e.target.value }))} />
                   <input className="input-field" placeholder="业务 Domain" value={editAgent.domain} onChange={(e) => setEditAgent((p) => ({ ...p, domain: e.target.value }))} />
                   <div className="flex flex-col gap-1">
                     <select className="input-field" value={editAgent.adapterType} onChange={(e) => handleAdapterChange(e.target.value, 'edit')}>
@@ -2415,6 +2493,37 @@ index a1b2c3d..e4f5g6h 100644
                   </select>
                   <input className="input-field" placeholder="API Base URL" value={editAgent.baseUrl} onChange={(e) => setEditAgent((p) => ({ ...p, baseUrl: e.target.value }))} />
                   <textarea className="input-field md:col-span-2" rows={2} placeholder="职责备注" value={editAgent.dutyNote} onChange={(e) => setEditAgent((p) => ({ ...p, dutyNote: e.target.value }))} />
+                  <input className="input-field" placeholder="头像 URL（可选）" value={editAgent.avatarUrl} onChange={(e) => setEditAgent((p) => ({ ...p, avatarUrl: e.target.value }))} />
+                  <div className="flex items-end">
+                    <label className="btn-secondary px-3 py-2 text-sm cursor-pointer">
+                      上传头像
+                      <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        try {
+                          const res = await fetch('/api/agent/registry/avatar', { method: 'POST', headers: authHeaders(), body: formData });
+                          const data = await res.json();
+                          if (res.ok && data.avatarUrl) {
+                            setEditAgent((p) => ({ ...p, avatarUrl: data.avatarUrl }));
+                            setNotice('头像上传成功');
+                          } else {
+                            setNotice(fmtErr(data.detail, '上传失败'));
+                          }
+                        } catch { setNotice('上传失败，请检查网络'); }
+                      }} />
+                    </label>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-sm font-medium text-warm-600">能力标签</label>
+                    <TagInput
+                      tags={editAgent.capabilityTags}
+                      onChange={(tags) => setEditAgent((p) => ({ ...p, capabilityTags: tags }))}
+                      placeholder="输入标签后按 Enter 添加..."
+                      maxTags={8}
+                    />
+                  </div>
                   <input className="input-field md:col-span-2" placeholder="API Key（留空则保持不变，输入新值将替换）" type="password" value={editAgent.apiKey} onChange={(e) => setEditAgent((p) => ({ ...p, apiKey: e.target.value }))} />
                   <div className="md:col-span-2 flex justify-end gap-2">
                     <button type="button" className="btn-secondary" onClick={cancelEditAgent}>取消</button>

@@ -121,6 +121,157 @@ def _handle_permission_response(session_id: str, request_id: str, decision: str)
     return False
 
 
+# ── PM/PMO interaction response handlers ───────────────────────────────
+# Store pending PM interaction state so the agent can await user responses.
+
+# {session_id: {message_id: {"event": asyncio.Event, "response": dict}}}
+_pm_pending_questions: dict[str, dict[str, dict]] = {}
+_pm_pending_warnings: dict[str, dict[str, dict]] = {}
+_pm_pending_todos: dict[str, dict[str, dict]] = {}
+
+
+async def _handle_agent_question_response(session_id: str, data: dict) -> None:
+    """User clicked an option on an agent_question bubble."""
+    question_msg_id = data.get("questionMessageId", "")
+    selected = data.get("selectedOptionId", "")
+    custom = data.get("customAnswer", "")
+    session_qs = _pm_pending_questions.get(session_id, {})
+    entry = session_qs.get(question_msg_id)
+    if entry:
+        entry["response"] = {"selectedOptionId": selected, "customAnswer": custom}
+        entry["event"].set()
+    # Echo the user's choice as a message in the chat
+    from app.db.init_db import now as _now
+    choice_text = custom or f"[选择了选项: {selected}]"
+    await save_message(session_id, data.get("sender", "user"), choice_text, "text")
+    await manager.broadcast(session_id, {
+        "event": "message",
+        "sessionId": session_id,
+        "content": choice_text,
+        "sender": data.get("sender", "user"),
+        "timestamp": _now(),
+        "type": "text",
+    })
+
+
+async def _handle_risk_warning_response(session_id: str, data: dict) -> None:
+    """User clicked an action on a risk_warning bubble."""
+    warning_msg_id = data.get("warningMessageId", "")
+    selected = data.get("selectedActionId", "")
+    session_ws = _pm_pending_warnings.get(session_id, {})
+    entry = session_ws.get(warning_msg_id)
+    if entry:
+        entry["response"] = {"selectedActionId": selected}
+        entry["event"].set()
+    from app.db.init_db import now as _now
+    await save_message(session_id, data.get("sender", "user"),
+                       f"[风险应对: {selected}]", "text")
+    await manager.broadcast(session_id, {
+        "event": "message",
+        "sessionId": session_id,
+        "content": f"⚠️ 风险应对: {selected}",
+        "sender": data.get("sender", "user"),
+        "timestamp": _now(),
+        "type": "text",
+    })
+
+
+async def _handle_agent_todo_response(session_id: str, data: dict) -> None:
+    """User clicked approve/reject on an agent_todo bubble."""
+    todo_msg_id = data.get("todoMessageId", "")
+    selected = data.get("selectedActionId", "")
+    comment = data.get("comment", "")
+    session_tds = _pm_pending_todos.get(session_id, {})
+    entry = session_tds.get(todo_msg_id)
+    if entry:
+        entry["response"] = {"selectedActionId": selected, "comment": comment}
+        entry["event"].set()
+    from app.db.init_db import now as _now
+    action_label = "批准" if "approve" in selected else ("拒绝" if "reject" in selected else selected)
+    await save_message(session_id, data.get("sender", "user"),
+                       f"[{action_label}]: {comment or ''}", "text")
+    await manager.broadcast(session_id, {
+        "event": "message",
+        "sessionId": session_id,
+        "content": f"📋 {action_label}: {comment or ''}",
+        "sender": data.get("sender", "user"),
+        "timestamp": _now(),
+        "type": "text",
+    })
+
+
+async def _handle_task_preview_response(
+    session_id: str, data: dict, user_id: str, user_name: str,
+) -> None:
+    """User confirmed or modified a task preview."""
+    decision = data.get("decision", "confirm")
+    modifications = data.get("modifications", "")
+    from app.db.init_db import now as _now
+    if decision == "cancel":
+        await save_message(session_id, user_name, "[取消了任务执行]", "text")
+        await manager.broadcast(session_id, {
+            "event": "message", "sessionId": session_id,
+            "content": "❌ 任务已取消",
+            "sender": "system", "timestamp": _now(), "type": "system",
+        })
+    elif decision == "modify":
+        # Re-process with user modifications
+        modified_content = f"[用户修改了任务计划]\n{modifications}"
+        await _process_and_stream(session_id, modified_content, user_name, user_id)
+    else:
+        # Confirm — the task execution continues in the current flow
+        await save_message(session_id, user_name, "[确认执行任务计划]", "text")
+        await manager.broadcast(session_id, {
+            "event": "message", "sessionId": session_id,
+            "content": "✅ 任务计划已确认，开始执行...",
+            "sender": "system", "timestamp": _now(), "type": "system",
+        })
+
+
+async def _handle_diff_decision(session_id: str, data: dict) -> None:
+    """User clicked Accept or Reject on a diff bubble from CloudCode."""
+    decision = data.get("decision", "reject")
+    file_path = data.get("path", "")
+
+    if decision == "accept":
+        # Register the accepted file as an artifact
+        try:
+            import uuid as _uuid
+
+            from app.db.session import aexecute
+            from pathlib import Path
+
+            from app.config import PROJECT_ROOT
+
+            full_path = (
+                Path(PROJECT_ROOT) / file_path
+                if not Path(file_path).is_absolute()
+                else Path(file_path)
+            )
+            if full_path.exists() and full_path.is_file():
+                content = full_path.read_text(encoding="utf-8", errors="replace")
+                await aexecute(
+                    "INSERT INTO artifacts(id, session_id, file_path, content, version, created_at) "
+                    "VALUES($1,$2,$3,$4,$5,$6)",
+                    str(_uuid.uuid4()), session_id, file_path, content, 1, _now(),
+                )
+        except Exception:
+            logger.debug("diff_decision artifact registration failed", exc_info=True)
+
+    # Broadcast confirmation
+    await manager.broadcast(
+        session_id,
+        {
+            "event": "message",
+            "sessionId": session_id,
+            "content": f"Diff {file_path}: {'Accepted ✓' if decision == 'accept' else 'Rejected ✗'}",
+            "sender": "system",
+            "timestamp": _now(),
+            "type": "system",
+        },
+    )
+
+
 async def _auto_name_and_broadcast(session_id: str) -> None:
     """Background task: generate an auto-name and broadcast it to connected clients."""
     try:
@@ -237,6 +388,27 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
                     _handle_permission_response(session_id, request_id, decision)
                 continue
 
+            # ── PM/PMO interaction responses ──────────────────────────
+            if data.get("event") == "agent_question_response":
+                await _handle_agent_question_response(session_id, data)
+                continue
+
+            if data.get("event") == "risk_warning_response":
+                await _handle_risk_warning_response(session_id, data)
+                continue
+
+            if data.get("event") == "agent_todo_response":
+                await _handle_agent_todo_response(session_id, data)
+                continue
+
+            if data.get("event") == "task_preview_response":
+                await _handle_task_preview_response(session_id, data, user_id, user["name"])
+                continue
+
+            if data.get("event") == "diff_decision":
+                await _handle_diff_decision(session_id, data)
+                continue
+
             content = str(data.get("content", "")).strip()
             if not content:
                 continue
@@ -263,6 +435,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
                     data.get("sender", user["name"]),
                     user_id,
                     data.get("attachments", []),
+                    quote_references=data.get("quoteReferences", []),
                 )
             )
             task.add_done_callback(
@@ -314,6 +487,7 @@ async def _process_and_stream(
     sender: str,
     user_id: str,
     attachments: list[dict] | None = None,
+    quote_references: list[dict] | None = None,
 ) -> None:
     """Process one user message with the per-session lock held."""
     lock = manager.get_session_lock(session_id)
@@ -401,6 +575,30 @@ async def _process_and_stream(
                 for a in target_agents:
                     collab.register(a)
 
+                # ── 🟡 Trigger 1: Task Preview ──────────────────────────
+                # After task decomposition (agents resolved) but BEFORE
+                # execution starts, broadcast a task_preview so the user
+                # sees what will happen and can confirm/cancel/modify.
+                task_preview_msg_id = str(uuid.uuid4())
+                task_items = []
+                for i, a in enumerate(target_agents):
+                    domain_label = {
+                        "orchestrator": "协调调度", "architect": "架构设计",
+                        "codegen": "代码生成", "review": "代码审查",
+                        "test": "测试验证", "deploy": "部署发布",
+                    }.get(a.get("domain", ""), a.get("domain", "general"))
+                    task_items.append({
+                        "id": f"task_{i}",
+                        "description": f"{a['agent_id']} ({domain_label}): 处理用户需求",
+                        "agent": a["agent_id"],
+                        "dependencies": [target_agents[j]["agent_id"] for j in range(i)] if i > 0 else [],
+                        "estimatedSeconds": 30 + i * 15,
+                    })
+                await manager.broadcast_task_preview(
+                    session_id, task_preview_msg_id, task_items,
+                    eta_seconds=sum(t.get("estimatedSeconds", 30) for t in task_items),
+                )
+
                 for agent in target_agents:
                     if token.cancelled:
                         return
@@ -409,6 +607,7 @@ async def _process_and_stream(
                         response_text = await _invoke_agent(
                             session_id, content, agent, user_id, token, attachments or [],
                             collab_ctx=ctx,
+                            quote_references=quote_references,
                         )
                         if not token.cancelled and response_text:
                             collab.record(agent["agent_id"], agent.get("domain", ""), response_text)
@@ -440,14 +639,117 @@ async def _process_and_stream(
                             "type": "system",
                         },
                     )
+
+                # ── 🟡 Trigger 5: Agent Todo ────────────────────────────
+                # After all agents complete, broadcast a follow-up todo
+                # list suggesting next steps based on which agents ran.
+                if not token.cancelled:
+                    todo_items = []
+                    agent_domains = {a.get("domain", "") for a in target_agents}
+                    if "codegen" in agent_domains or "CodeGen" in {a["agent_id"] for a in target_agents}:
+                        todo_items.append({
+                            "id": "todo_test",
+                            "label": "运行测试验证生成的代码",
+                            "intent": "approve",
+                            "description": "建议运行单元测试和集成测试确保代码正确性",
+                        })
+                    if "review" in agent_domains or "Review" in {a["agent_id"] for a in target_agents}:
+                        todo_items.append({
+                            "id": "todo_fix",
+                            "label": "根据审查意见修改代码",
+                            "intent": "approve",
+                            "description": "Review Agent 已提出修改建议，请检查并应用",
+                        })
+                    if "deploy" in agent_domains or "Deploy" in {a["agent_id"] for a in target_agents}:
+                        todo_items.append({
+                            "id": "todo_verify_deploy",
+                            "label": "验证部署结果",
+                            "intent": "approve",
+                            "description": "检查生产环境是否正常运行，监控日志和指标",
+                        })
+                    # Always include a generic follow-up
+                    todo_items.append({
+                        "id": "todo_feedback",
+                        "label": "提供反馈或继续迭代",
+                        "intent": "approve",
+                        "description": "如果结果不满意可以提出修改意见，或开启新一轮协作",
+                    })
+                    await manager.broadcast_agent_todo(
+                        session_id,
+                        str(uuid.uuid4()),
+                        "PM",
+                        "协作完成 — 建议后续步骤",
+                        f"以下 Agent 已完成本轮协作：{', '.join(a['agent_id'] for a in target_agents)}。建议检查结果并继续推进：",
+                        todo_items,
+                        priority="medium",
+                    )
+
                 return
 
             # ── Single-agent path ─────────────────────────────────────
             agent = target_agents[0] if target_agents else None
+
+            # ── 🟡 Trigger 1 (single): Task Preview ───────────────────
+            # For single-agent invocations, broadcast a lightweight task
+            # preview so the user knows which agent will process their request.
+            if agent and not token.cancelled:
+                agent_domain_label = {
+                    "orchestrator": "协调调度", "architect": "架构设计",
+                    "codegen": "代码生成", "review": "代码审查",
+                    "test": "测试验证", "deploy": "部署发布",
+                }.get(agent.get("domain", ""), agent.get("domain", "general"))
+                await manager.broadcast_task_preview(
+                    session_id,
+                    str(uuid.uuid4()),
+                    [{
+                        "id": "task_0",
+                        "description": f"{agent['agent_id']} ({agent_domain_label}): 处理您的请求",
+                        "agent": agent["agent_id"],
+                        "dependencies": [],
+                        "estimatedSeconds": 30,
+                    }],
+                    eta_seconds=30,
+                )
+
             await _invoke_agent(
                 session_id, content, agent, user_id, token, attachments or [],
                 sender_override=sender,
+                quote_references=quote_references,
             )
+
+            # ── 🟡 Trigger 5 (single): Agent Todo ──────────────────────
+            # After single agent completes, suggest logical next steps.
+            if agent and not token.cancelled:
+                single_todo_items = [{
+                    "id": "todo_feedback",
+                    "label": "检查结果并提供反馈",
+                    "intent": "approve",
+                    "description": f"{agent['agent_id']} 已完成处理，请检查结果是否符合预期",
+                }]
+                agent_domain = agent.get("domain", "")
+                if agent_domain == "codegen" or agent["agent_id"] == "CodeGen":
+                    single_todo_items.insert(0, {
+                        "id": "todo_review",
+                        "label": "发送代码审查",
+                        "intent": "approve",
+                        "description": "建议 @Review 审查生成的代码质量和安全性",
+                    })
+                elif agent_domain == "review" or agent["agent_id"] == "Review":
+                    single_todo_items.insert(0, {
+                        "id": "todo_apply_fixes",
+                        "label": "应用审查建议",
+                        "intent": "approve",
+                        "description": "根据 Review 的意见修改代码，然后 @CodeGen 重新生成",
+                    })
+                await manager.broadcast_agent_todo(
+                    session_id,
+                    str(uuid.uuid4()),
+                    agent["agent_id"],
+                    f"{agent['agent_id']} 任务完成",
+                    f"Agent 已完成本轮处理。建议下一步：",
+                    single_todo_items,
+                    priority="low",
+                )
 
         except Exception:
             logger.exception("ws _process_and_stream failed session=%s", session_id)
@@ -508,6 +810,7 @@ async def _invoke_agent(
     attachments: list[dict],
     collab_ctx: str = "",
     sender_override: str | None = None,
+    quote_references: list[dict] | None = None,
 ) -> str:
     """Invoke a single agent — streaming first, non-streaming fallback.
 
@@ -570,6 +873,61 @@ async def _invoke_agent(
                     "timestamp": now(),
                 },
             )
+
+            # ── 🟡 Trigger 4: Risk Warning ──────────────────────────
+            # When the tool-call loop detects high-risk operations, broadcast
+            # a risk_warning event so the PM proactively alerts the user.
+            # tool_calls here may contain risk-classified entries with
+            # {"name", "arguments", "risk": {...}} from classify_tool_risk.
+            for tc in tool_calls:
+                risk = tc.get("risk")
+                if risk and risk.get("flags"):
+                    risk_flags = risk.get("flags", [])
+                    risk_level = "critical" if any(
+                        f.get("severity") == "block" for f in risk_flags
+                    ) else "high" if any(
+                        f.get("severity") == "confirm" for f in risk_flags
+                    ) else "medium"
+                    risk_msgs = [f.get("message", "") for f in risk_flags if f.get("message")]
+                    await manager.broadcast_risk_warning(
+                        session_id,
+                        str(uuid.uuid4()),
+                        agent_id,
+                        risk_level,
+                        f"高风险操作: {tc.get('name', 'unknown')}",
+                        "; ".join(risk_msgs) or f"工具 {tc.get('name', 'unknown')} 需要确认",
+                        [
+                            {"id": "continue", "label": "继续执行", "intent": "continue"},
+                            {"id": "cancel", "label": "取消操作", "intent": "cancel"},
+                        ],
+                    )
+
+        elif status == "risk_warning":
+            # ── 🟡 Trigger 4 (from tool loop): High-risk tool detected ──
+            # The _run_tool_call_loop sends risk_warning status with
+            # high_risk_tools list [{name, arguments, risk}].
+            for rt in tool_calls:
+                risk_info = rt.get("risk", {})
+                risk_flags = risk_info.get("flags", [])
+                risk_level = "critical" if any(
+                    f.get("severity") == "block" for f in risk_flags
+                ) else "high" if any(
+                    f.get("severity") == "confirm" for f in risk_flags
+                ) else "medium"
+                risk_msgs = [f.get("message", "") for f in risk_flags if f.get("message")]
+                await manager.broadcast_risk_warning(
+                    session_id,
+                    str(uuid.uuid4()),
+                    agent_id,
+                    risk_level,
+                    f"⚠️ 高风险操作: {rt.get('name', 'unknown')}",
+                    "; ".join(risk_msgs) or f"Agent 尝试执行高风险工具 {rt.get('name', 'unknown')}，需用户确认",
+                    [
+                        {"id": "continue", "label": "继续执行", "intent": "continue"},
+                        {"id": "cancel", "label": "取消操作", "intent": "cancel"},
+                    ],
+                )
+
         elif status == "done" and tool_results:
             await manager.broadcast(
                 session_id,
@@ -603,10 +961,60 @@ async def _invoke_agent(
                 },
             )
 
+            # ── 🟡 Trigger 3: Progress Update ───────────────────────
+            # After each tool iteration completes, broadcast progress so
+            # the frontend ProgressBubble updates in real time.
+            # Estimate remaining iterations based on results complexity.
+            total_estimate = max(thinking_sent_iterations + 1, thinking_sent_iterations + len(tool_results))
+            await manager.broadcast_progress_update(
+                session_id,
+                str(uuid.uuid4()),
+                agent_id,
+                thinking_sent_iterations,  # completed steps
+                total_estimate,             # estimated total
+                f"第 {thinking_sent_iterations} 轮工具调用完成",
+            )
+
+            # ── 🟡 Trigger 2: Agent Question detection ──────────────
+            # Detect when tool results indicate ambiguity or the agent
+            # needs user clarification (e.g., multiple file matches,
+            # ambiguous search results, conflicting configurations).
+            for tr in tool_results:
+                result_data = tr.get("result")
+                if isinstance(result_data, dict):
+                    # Check for explicit ask_user flag from tools
+                    if result_data.get("ask_user"):
+                        question_text = result_data.get("question", "需要您的确认")
+                        opts = result_data.get("options", [])
+                        await manager.broadcast_agent_question(
+                            session_id,
+                            str(uuid.uuid4()),
+                            agent_id,
+                            str(question_text),
+                            opts if isinstance(opts, list) else [],
+                            allow_custom=True,
+                        )
+                    # Check for ambiguity markers in tool output
+                    ambiguity = result_data.get("ambiguous") or result_data.get("multiple_matches")
+                    if ambiguity and isinstance(ambiguity, list) and len(ambiguity) > 1:
+                        options = [
+                            {"id": f"opt_{i}", "label": str(item.get("name", item)), "description": str(item.get("path", ""))}
+                            for i, item in enumerate(ambiguity[:5])
+                        ]
+                        await manager.broadcast_agent_question(
+                            session_id,
+                            str(uuid.uuid4()),
+                            agent_id,
+                            f"找到 {len(ambiguity)} 个匹配项，请选择目标：",
+                            options,
+                            allow_custom=True,
+                        )
+
     stream_result = await stream_message(
         session_id, content, agent_id, user_id, token,
         attachments, agent=agent, collab_ctx=collab_ctx,
         on_tool_event=_on_tool_event,
+        quote_references=quote_references,
     )
 
     # Non-streaming fallback
@@ -619,7 +1027,7 @@ async def _invoke_agent(
         )
         if agent:
             from app.services.agent_service import call_agent as _call
-            response = await _call(session_id, content, user_id, attachments, agent=agent, collab_ctx=collab_ctx, token=token, on_tool_event=_on_tool_event)
+            response = await _call(session_id, content, user_id, attachments, agent=agent, collab_ctx=collab_ctx, token=token, on_tool_event=_on_tool_event, quote_references=quote_references)
         else:
             response = await route_message(session_id, content, sender_override or "user", user_id, attachments, on_tool_event=_on_tool_event)
 

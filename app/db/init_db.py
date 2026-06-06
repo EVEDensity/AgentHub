@@ -65,6 +65,9 @@ _PG_DDL = [
         config TEXT NOT NULL DEFAULT '{}',
         risk_level TEXT NOT NULL DEFAULT 'L1',
         duty_note TEXT NOT NULL DEFAULT '',
+        display_name TEXT NOT NULL DEFAULT '',
+        avatar_url TEXT NOT NULL DEFAULT '',
+        capability_tags TEXT NOT NULL DEFAULT '[]',
         base_url TEXT NOT NULL DEFAULT '',
         api_key TEXT NOT NULL DEFAULT ''
     )""",
@@ -183,6 +186,14 @@ _PG_DDL = [
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        content TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+    )""",
 ]
 
 
@@ -219,6 +230,9 @@ async def _ainit_postgresql() -> None:
 
         logger.info("init_db: PostgreSQL tables created (%d DDL statements)", len(_PG_DDL))
 
+        # ── Runtime migrations for existing databases ──────────────
+        await _migrate_agent_registry_pg(conn)
+
         # ── Seed default data (ON CONFLICT DO NOTHING = idempotent) ──
         await _seed_users_pg(conn)
         await _seed_session_pg(conn)
@@ -227,6 +241,20 @@ async def _ainit_postgresql() -> None:
         await _seed_agent_routes_pg(conn)
 
         logger.info("init_db: PostgreSQL seed data inserted")
+
+
+async def _migrate_agent_registry_pg(conn) -> None:
+    """Add columns that may not exist in older deployments (idempotent)."""
+    migrations = [
+        "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS capability_tags TEXT NOT NULL DEFAULT '[]'",
+    ]
+    for m in migrations:
+        try:
+            await conn.execute(m)
+        except Exception as exc:
+            logger.warning("agent_registry migration skipped: %s", exc)
 
 
 async def _seed_users_pg(conn) -> None:
@@ -259,39 +287,51 @@ async def _seed_agents_pg(conn) -> None:
             "Orchestrator", "orchestrator", "L2",
             "元调度器：接收用户意图，拆解任务并分派给领域 Agent，汇总结果。"
             "输入：用户原始需求 | 输出：任务分派方案、Agent 协同调度 | 约束：不替代领域 Agent 产出",
+            "编排调度器",
+            ["任务拆解", "Agent调度", "结果汇总"],
         ),
         (
             "Architect", "architect", "L1",
             "架构师：分析用户意图与项目结构，输出技术方案与文件影响范围。"
             "输入：用户意图、项目结构摘要 | 输出：技术方案、文件影响范围 | 约束：不直接写代码",
+            "架构设计师",
+            ["架构设计", "技术选型", "方案输出"],
         ),
         (
             "CodeGen", "codegen", "L2",
             "代码生成器：根据架构方案和上下文索引生成代码文件与 Diff 草案。"
             "输入：架构方案、上下文索引 | 输出：代码文件、Diff 草案 | 约束：不直接提交 Git",
+            "代码生成器",
+            ["代码生成", "文件创建", "多语言支持"],
         ),
         (
             "Review", "review", "L1",
             "代码审查员：审查 Diff 变更，对照规范与风险策略输出审查意见。"
             "输入：Diff、规范、风险策略 | 输出：审查意见、风险等级 | 约束：不修改部署配置",
+            "代码审查员",
+            ["代码审查", "安全审计", "规范检查"],
         ),
         (
             "Test", "test", "L1",
             "测试工程师：根据代码变更和测试策略生成测试用例与验证结果。"
             "输入：代码变更、测试策略 | 输出：测试结果、失败原因 | 约束：不绕过 Review 直接修改代码",
+            "测试工程师",
+            ["测试用例", "验证策略", "边界测试"],
         ),
         (
             "Deploy", "deploy", "L3",
             "部署工程师：在 Review 通过后执行部署，生成预览 URL 和部署状态报告。"
             "输入：已确认 Diff、部署目标 | 输出：预览 URL、部署状态 | 约束：不部署未审查代码",
+            "部署工程师",
+            ["部署发布", "环境配置", "上线管理"],
         ),
     ]
-    for agent_id, domain, risk, duty_note in agents:
+    for agent_id, domain, risk, duty_note, display_name, capability_tags in agents:
         await conn.execute(
-            "INSERT INTO agent_registry(agent_id,domain,status,adapter_type,risk_level,duty_note) "
-            "VALUES($1,$2,$3,$4,$5,$6) "
-            "ON CONFLICT(agent_id) DO NOTHING",
-            agent_id, domain, "sleeping", "mock", risk, duty_note,
+            "INSERT INTO agent_registry(agent_id,domain,status,adapter_type,risk_level,duty_note,display_name,capability_tags) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8) "
+            "ON CONFLICT(agent_id) DO UPDATE SET display_name=EXCLUDED.display_name, capability_tags=EXCLUDED.capability_tags",
+            agent_id, domain, "sleeping", "mock", risk, duty_note, display_name, json.dumps(capability_tags, ensure_ascii=False),
         )
 
 

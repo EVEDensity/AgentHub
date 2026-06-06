@@ -1,4 +1,4 @@
-export type FileCategory = 'code' | 'document' | 'image' | 'archive' | 'spreadsheet' | 'config' | 'unknown';
+export type FileCategory = 'code' | 'document' | 'image' | 'archive' | 'spreadsheet' | 'presentation' | 'config' | 'unknown';
 
 export interface AttachmentMeta {
   name: string;
@@ -52,7 +52,7 @@ export interface Message {
   sessionId: string;
   sender: string;
   content: string;
-  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result';
+  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result' | 'agent_question' | 'progress_update' | 'risk_warning' | 'agent_todo' | 'task_preview' | 'terminal';
   timestamp: string;
   guardrailResult?: GuardrailResult;
   symbolic?: SymbolicData & {
@@ -63,6 +63,15 @@ export interface Message {
   toolCallData?: ToolCallData;
   toolResultData?: ToolResultData;
   attachments?: AttachmentMeta[];
+  /** PM interaction payloads */
+  questionData?: AgentQuestionEvent;
+  progressData?: ProgressUpdateEvent;
+  riskWarningData?: RiskWarningEvent;
+  todoData?: AgentTodoEvent;
+  taskPreviewData?: TaskPreviewEvent;
+  /** Diff accept/reject */
+  diffDecisionState?: 'pending' | 'accepted' | 'rejected';
+  diffFilePath?: string;
 }
 
 export interface StreamChunk {
@@ -110,8 +119,43 @@ export interface Agent {
   baseModelName?: string;
   rankLevel?: string;
   dutyNote?: string;
+  displayName?: string;
+  avatarUrl?: string;
+  capabilityTags?: string[];
   baseUrl?: string;
 }
+
+// ── Platform labels & colors for agent adapter types ──────────────
+
+export const PLATFORM_LABELS: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  ollama: 'Ollama',
+  deepseek: 'DeepSeek',
+  minimax: 'MiniMax',
+  zhipu: '智谱AI',
+  qwen: '通义千问',
+  doubao: '字节豆包',
+  kimi: 'Kimi',
+  custom_openai: '自定义',
+  cloud_code: 'CloudCode',
+  mock: 'Mock',
+};
+
+export const PLATFORM_COLORS: Record<string, string> = {
+  openai: '#10a37f',
+  anthropic: '#d97706',
+  ollama: '#1a1a1a',
+  deepseek: '#4f46e5',
+  minimax: '#6366f1',
+  zhipu: '#dc2626',
+  qwen: '#6d28d9',
+  doubao: '#0891b2',
+  kimi: '#f59e0b',
+  custom_openai: '#0ea5e9',
+  cloud_code: '#8b5cf6',
+  mock: '#6b7280',
+};
 
 export interface Task {
   taskId: string;
@@ -164,6 +208,15 @@ export interface AuthFormState {
   password: string;
 }
 
+export interface QuoteReference {
+  id: string;
+  messageId: string;
+  quotedText: string;
+  originalSender: string;
+  originalTimestamp: string;
+  isFullMessage: boolean;
+}
+
 export interface PendingMessage {
   sessionId: string;
   content: string;
@@ -171,6 +224,7 @@ export interface PendingMessage {
   timestamp: string;
   type: 'text' | 'code' | 'system' | 'diff';
   attachments?: AttachmentMeta[];
+  quoteReferences?: QuoteReference[];
 }
 
 export interface GeneratedFileDetail {
@@ -583,4 +637,214 @@ export interface FileReference {
   lineEnd?: number;
   quote?: string;
   kind?: 'file' | 'folder' | 'chat-selection' | 'markdown-paragraph';
+}
+
+// ── PM/PMO Agent Interaction Types ───────────────────────────────────
+
+/** PM agent state machine */
+export type PMState = 'DECOMPOSING' | 'DISPATCHING' | 'WAITING_USER' | 'EXECUTING' | 'SUMMARIZING' | 'IDLE';
+
+/** PM state labels for UI display */
+export const PM_STATE_LABELS: Record<PMState, string> = {
+  IDLE: '就绪',
+  DECOMPOSING: '拆解中',
+  DISPATCHING: '调度中',
+  WAITING_USER: '等待用户',
+  EXECUTING: '执行中',
+  SUMMARIZING: '汇总中',
+};
+
+/** PM state change event from backend */
+export interface PMStateChangeEvent {
+  event: 'pm_state_change';
+  sessionId: string;
+  state: PMState;
+  previousState: PMState;
+  details?: string;
+  timestamp: string;
+}
+
+/** Agent asks user a clarifying question with clickable options */
+export interface AgentQuestionEvent {
+  event: 'agent_question';
+  sessionId: string;
+  messageId: string;
+  agentId: string;
+  question: string;
+  options: AgentQuestionOption[];
+  allowCustomAnswer: boolean;
+  timestamp: string;
+}
+
+export interface AgentQuestionOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/** User's response to an agent question */
+export interface AgentQuestionResponse {
+  event: 'agent_question_response';
+  sessionId: string;
+  messageId: string;
+  questionMessageId: string;
+  selectedOptionId?: string;
+  customAnswer?: string;
+}
+
+/** PM reports progress update */
+export interface ProgressUpdateEvent {
+  event: 'progress_update';
+  sessionId: string;
+  messageId: string;
+  completedSteps: number;
+  totalSteps: number;
+  currentStep: string;
+  estimatedRemainingSeconds?: number;
+  agentId: string;
+  timestamp: string;
+}
+
+/** PM warns about a risk */
+export interface RiskWarningEvent {
+  event: 'risk_warning';
+  sessionId: string;
+  messageId: string;
+  agentId: string;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  title: string;
+  description: string;
+  actions: RiskWarningAction[];
+  timestamp: string;
+}
+
+export interface RiskWarningAction {
+  id: string;
+  label: string;
+  /** 'continue' = proceed anyway, 'mitigate' = apply mitigation, 'cancel' = stop */
+  intent: 'continue' | 'mitigate' | 'cancel';
+  description?: string;
+}
+
+/** User's response to a risk warning */
+export interface RiskWarningResponse {
+  event: 'risk_warning_response';
+  sessionId: string;
+  warningMessageId: string;
+  selectedActionId: string;
+  timestamp: string;
+}
+
+/** PM pushes a decision/todo to user */
+export interface AgentTodoEvent {
+  event: 'agent_todo';
+  sessionId: string;
+  messageId: string;
+  agentId: string;
+  title: string;
+  description: string;
+  actions: AgentTodoAction[];
+  priority: 'low' | 'medium' | 'high';
+  timestamp: string;
+}
+
+export interface AgentTodoAction {
+  id: string;
+  label: string;
+  intent: 'approve' | 'reject' | 'modify';
+  description?: string;
+}
+
+/** User's response to an agent todo */
+export interface AgentTodoResponse {
+  event: 'agent_todo_response';
+  sessionId: string;
+  todoMessageId: string;
+  selectedActionId: string;
+  comment?: string;
+  timestamp: string;
+}
+
+/** Degradation mode status */
+export interface DegradationStatus {
+  active: boolean;
+  reason: string;
+  startedAt: string;
+  failedModels: string[];
+  recoveryAttempts: number;
+  lastRecoveryAttempt?: string;
+}
+
+/** Degradation state change event */
+export interface DegradationEvent {
+  event: 'degradation_change';
+  sessionId: string;
+  status: DegradationStatus;
+  timestamp: string;
+}
+
+/** PM task preview for user confirmation */
+export interface TaskPreviewEvent {
+  event: 'task_preview';
+  sessionId: string;
+  messageId: string;
+  tasks: TaskPreviewItem[];
+  estimatedTotalSeconds?: number;
+  timestamp: string;
+}
+
+export interface TaskPreviewItem {
+  id: string;
+  description: string;
+  agent: string;
+  dependencies: string[];
+  estimatedSeconds?: number;
+}
+
+/** User confirms or modifies task preview */
+export interface TaskPreviewResponse {
+  event: 'task_preview_response';
+  sessionId: string;
+  previewMessageId: string;
+  decision: 'confirm' | 'cancel' | 'modify';
+  modifications?: string;
+  timestamp: string;
+}
+
+// ── CloudCode: diff events ───────────────────────────────────────
+
+/** Real-time diff update from CloudCode agent (edit_file tool use) */
+export interface DiffUpdateEvent {
+  event: 'diff_update';
+  sessionId: string;
+  messageId: string;
+  path: string;
+  diff: string;
+  timestamp: string;
+}
+
+/** User accepts or rejects a diff displayed in DiffBubble */
+export interface DiffDecisionEvent {
+  event: 'diff_decision';
+  sessionId: string;
+  messageId: string;
+  decision: 'accept' | 'reject';
+  path: string;
+}
+
+/** Terminal output streaming from CloudCode agent (run_command tool use) */
+export interface TerminalOutputEvent {
+  event: 'terminal_output';
+  sessionId: string;
+  messageId: string;
+  content: string;
+  sender: string;
+  timestamp: string;
+}
+
+/** Session badge for pending user decisions */
+export interface SessionBadge {
+  pendingDecisions: number;
+  hasRiskWarnings: boolean;
+  hasQuestions: boolean;
 }

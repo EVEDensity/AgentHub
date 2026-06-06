@@ -28,6 +28,7 @@ ALLOWED_EXTENSIONS: dict[str, set[str]] = {
     "image": {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"},
     "archive": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
     "spreadsheet": {".xlsx", ".xls", ".csv", ".tsv"},
+    "presentation": {".pptx", ".ppt"},
     "config": {".json", ".yaml", ".yml", ".xml", ".toml", ".ini", ".cfg", ".env", ".conf", ".cnf", ".editorconfig", ".gitignore", ".dockerfile", ".makefile", ".gemfile", ".prisma", ".graphql", ".proto"},
 }
 
@@ -245,6 +246,8 @@ def _detect_preview_kind(ext: str) -> str:
         return "markdown"
     if ext == ".docx":
         return "docx"
+    if ext in {".pptx", ".ppt"}:
+        return "pptx"
     if ext == ".pdf":
         return "pdf"
     if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}:
@@ -502,6 +505,232 @@ def _extract_docx_html(file_path: str, max_chars: int) -> dict:
     }
 
 
+def _extract_pptx_html(file_path: str, max_chars: int) -> dict:
+    """Parse a .pptx file and return HTML with inline base64 images.
+
+    Opens the .pptx as a ZIP, enumerates ``ppt/slides/slideN.xml``,
+    extracts images from ``ppt/media/*``, and converts every slide to a
+    styled card in a self-contained HTML document.
+
+    Returns a dict with keys:
+
+    * ``content``       – full HTML string (truncated to *max_chars*)
+    * ``contentType``   – ``"html"``
+    * ``totalChars``    – original HTML length before truncation
+    * ``truncated``     – whether the HTML was truncated
+    * ``imageCount``    – number of embedded images found
+    * ``textLength``    – plain-text character count
+    * ``slideCount``    – number of slides
+    """
+    import re
+    import xml.etree.ElementTree as ET
+    import zipfile
+    from base64 import b64encode
+
+    MIME_BY_EXT: dict[str, str] = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+        ".svg": "image/svg+xml", ".tiff": "image/tiff", ".tif": "image/tiff",
+    }
+
+    P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+    def _qname(ns: str, local: str) -> str:
+        return f"{{{ns}}}{local}"
+
+    def _xml_text(el: ET.Element) -> str:
+        """Recursively collect all text from ``<a:t>`` descendants."""
+        parts: list[str] = []
+        for t in el.iter(_qname(A_NS, "t")):
+            if t.text:
+                parts.append(t.text)
+        return "".join(parts)
+
+    # ------------------------------------------------------------------
+    # Step 1 – Open ZIP, enumerate slides
+    # ------------------------------------------------------------------
+    with zipfile.ZipFile(file_path, "r") as zf:
+        slide_names = sorted(
+            [n for n in zf.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)],
+            key=lambda n: int(re.search(r"slide(\d+)", n).group(1))  # type: ignore[union-attr]
+        )
+
+        if not slide_names:
+            # Old .ppt format (binary OLE2) – zipfile sees nothing useful
+            return {
+                "content": "<p>(无法解析旧版 .ppt 格式；仅支持 .pptx)</p>",
+                "contentType": "html",
+                "totalChars": 0,
+                "truncated": False,
+                "imageCount": 0,
+                "textLength": 0,
+                "slideCount": 0,
+            }
+
+        # --- Load all media blobs into memory ---
+        media_data: dict[str, str] = {}  # relative_path → base64
+        for name in zf.namelist():
+            if name.startswith("ppt/media/") and not name.endswith("/"):
+                ext = Path(name).suffix.lower()
+                mime = MIME_BY_EXT.get(ext, "application/octet-stream")
+                blob = zf.read(name)
+                media_data[name] = f"data:{mime};base64,{b64encode(blob).decode('ascii')}"
+
+        # ------------------------------------------------------------------
+        # Step 2 – Process each slide
+        # ------------------------------------------------------------------
+        slide_cards: list[str] = []
+        total_text_len = 0
+        total_images = 0
+
+        for idx, slide_name in enumerate(slide_names, start=1):
+            # --- 2a. Relationships: rId → media target ---
+            rels_map: dict[str, str] = {}  # rId → media data-URI
+            rels_name = f"ppt/slides/_rels/slide{idx}.xml.rels"
+            try:
+                rels_xml = zf.read(rels_name)
+                rels_root = ET.fromstring(rels_xml)
+                for rel_el in rels_root:
+                    rid = rel_el.get("Id")
+                    target = rel_el.get("Target", "")
+                    rtype = rel_el.get("Type", "")
+                    if rid and "image" in rtype.lower():
+                        # target = "../media/image1.png"
+                        normalized = f"ppt/media/{target.split('/')[-1]}"
+                        if normalized in media_data:
+                            rels_map[rid] = media_data[normalized]
+            except (KeyError, ET.ParseError):
+                pass
+
+            # --- 2b. Parse slide XML ---
+            slide_xml = zf.read(slide_name)
+            slide_root = ET.fromstring(slide_xml)
+
+            # --- 2c. Slide dimensions ---
+            sld_sz = slide_root.find(_qname(P_NS, "sldSz"))
+            slide_w_emu = int(sld_sz.get("cx", "12192000")) if sld_sz is not None else 12192000
+            slide_h_emu = int(sld_sz.get("cy", "6858000")) if sld_sz is not None else 6858000
+            # EMU → CSS px (1 EMU = 1/914400 inch → 1 EMU ≈ 96/914400 px)
+            slide_w_px = max(300, slide_w_emu * 96 // 914400)
+            slide_h_px = max(200, slide_h_emu * 96 // 914400)
+
+            # --- 2d. Walk shapes ---
+            shape_html: list[str] = []
+            shape_text: list[str] = []
+            for sp in slide_root.iter(_qname(P_NS, "sp")):
+                # --- Position & size ---
+                xfrm = sp.find(_qname(P_NS, "spPr"))
+                off = {"x": 0, "y": 0}
+                ext = {"cx": slide_w_emu, "cy": slide_h_emu}
+                if xfrm is not None:
+                    xfrm_el = xfrm.find(_qname(A_NS, "xfrm"))
+                    if xfrm_el is not None:
+                        off_el = xfrm_el.find(_qname(A_NS, "off"))
+                        ext_el = xfrm_el.find(_qname(A_NS, "ext"))
+                        if off_el is not None:
+                            off["x"] = int(off_el.get("x", "0"))
+                            off["y"] = int(off_el.get("y", "0"))
+                        if ext_el is not None:
+                            ext["cx"] = int(ext_el.get("cx", str(slide_w_emu)))
+                            ext["cy"] = int(ext_el.get("cy", str(slide_h_emu)))
+
+                left_pct = off["x"] * 100 / slide_w_emu
+                top_pct = off["y"] * 100 / slide_h_emu
+                w_pct = ext["cx"] * 100 / slide_w_emu
+                h_pct = ext["cy"] * 100 / slide_h_emu
+
+                # --- Images ---
+                for blip in sp.iter(_qname(A_NS, "blip")):
+                    embed = blip.get(_qname(R_NS, "embed"))
+                    if embed and embed in rels_map:
+                        shape_html.append(
+                            f'<img src="{rels_map[embed]}" '
+                            f'style="position:absolute;left:{left_pct:.1f}%;top:{top_pct:.1f}%;'
+                            f'width:{w_pct:.1f}%;height:{h_pct:.1f}%;object-fit:contain;" '
+                            f'alt="Slide {idx} image" />'
+                        )
+                        shape_text.append("[图片]")
+                        total_images += 1
+
+                # --- Text ---
+                txt = _xml_text(sp)
+                if txt.strip():
+                    escaped = txt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    # Heuristic font-size from EMU height (default ~14px at 96dpi)
+                    font_px = max(8, min(48, ext["cy"] * 96 // 914400 // 3))
+                    shape_html.append(
+                        f'<div style="position:absolute;left:{left_pct:.1f}%;top:{top_pct:.1f}%;'
+                        f'width:{w_pct:.1f}%;height:{h_pct:.1f}%;'
+                        f'display:flex;align-items:center;justify-content:center;'
+                        f'font-size:{font_px}px;overflow:hidden;padding:2px;'
+                        f'text-align:center;color:#333;">{escaped}</div>'
+                    )
+                    shape_text.append(txt)
+
+            combined_text = " ".join(shape_text).strip()
+            total_text_len += len(combined_text)
+
+            slide_cards.append(
+                f'<div class="slide-card" style="position:relative;'
+                f'width:{slide_w_px}px;height:{slide_h_px}px;'
+                f'max-width:100%;'
+                f'background:#fff;border-radius:8px;'
+                f'box-shadow:0 1px 6px rgba(0,0,0,.1);overflow:hidden;'
+                f'margin:0 auto 24px;flex-shrink:0;">'
+                + "\n".join(shape_html) +
+                f'</div>'
+            )
+
+    # ------------------------------------------------------------------
+    # Step 3 – Assemble full HTML
+    # ------------------------------------------------------------------
+    body_html = "\n".join(slide_cards)
+    full_html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#f0f2f5; padding:24px 16px;
+    display:flex; flex-direction:column; align-items:center;
+  }}
+  .slide-card {{
+    transition: box-shadow .2s;
+  }}
+  .slide-card:hover {{
+    box-shadow: 0 4px 20px rgba(0,0,0,.15);
+  }}
+  .slide-number {{
+    text-align:center; font-size:12px; color:#999; margin-bottom:8px;
+  }}
+</style>
+</head>
+<body>
+{body_html}
+</body>
+</html>"""
+
+    total_chars = len(full_html)
+    truncated = total_chars > max_chars
+    content = full_html[:max_chars] if truncated else full_html
+
+    return {
+        "content": content,
+        "contentType": "html",
+        "totalChars": total_chars,
+        "truncated": truncated,
+        "imageCount": total_images,
+        "textLength": total_text_len,
+        "slideCount": len(slide_cards),
+    }
+
+
 @router.get("/preview/{file_id}")
 async def preview_uploaded_file(
     file_id: str,
@@ -600,6 +829,18 @@ async def preview_uploaded_file(
                 "state": "binary",
                 "size": file_size,
                 "error": f"docx 解析失败: {exc}",
+            }
+
+    if kind == "pptx":
+        try:
+            result = await asyncio.to_thread(_extract_pptx_html, str(file_path), max_chars)
+            return {**base, "state": "ok", **result}
+        except Exception as exc:  # noqa: BLE001
+            return {
+                **base,
+                "state": "binary",
+                "size": file_size,
+                "error": f"pptx 解析失败: {exc}",
             }
 
     if kind in ("pdf", "image"):

@@ -255,6 +255,133 @@ class WebSocketManager:
 
     # ── Session cleanup ──────────────────────────────────────────────
 
+    # ── PM/PMO event broadcasting ─────────────────────────────────────
+    # Convenience helpers for PM → user interactions. Each broadcasts a
+    # typed event that the frontend renders as an interactive bubble.
+
+    async def broadcast_agent_question(
+        self, session_id: str, message_id: str, agent_id: str,
+        question: str, options: list[dict], allow_custom: bool = True,
+    ) -> None:
+        """Broadcast an agent_question event (PM asks user a clarifying question)."""
+        await self.broadcast(session_id, {
+            "event": "agent_question",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "agentId": agent_id,
+            "question": question,
+            "options": options,
+            "allowCustomAnswer": allow_custom,
+            "timestamp": __import__("app.db.init_db").now(),
+        })
+
+    async def broadcast_progress_update(
+        self, session_id: str, message_id: str, agent_id: str,
+        completed: int, total: int, current_step: str,
+        eta_seconds: int | None = None,
+    ) -> None:
+        """Broadcast a progress_update event (PM reports task progress)."""
+        payload: dict = {
+            "event": "progress_update",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "agentId": agent_id,
+            "completedSteps": completed,
+            "totalSteps": total,
+            "currentStep": current_step,
+            "timestamp": __import__("app.db.init_db").now(),
+        }
+        if eta_seconds is not None:
+            payload["estimatedRemainingSeconds"] = eta_seconds
+        await self.broadcast(session_id, payload)
+
+    async def broadcast_risk_warning(
+        self, session_id: str, message_id: str, agent_id: str,
+        risk_level: str, title: str, description: str,
+        actions: list[dict],
+    ) -> None:
+        """Broadcast a risk_warning event (PM warns about a risk)."""
+        await self.broadcast(session_id, {
+            "event": "risk_warning",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "agentId": agent_id,
+            "riskLevel": risk_level,
+            "title": title,
+            "description": description,
+            "actions": actions,
+            "timestamp": __import__("app.db.init_db").now(),
+        })
+
+    async def broadcast_agent_todo(
+        self, session_id: str, message_id: str, agent_id: str,
+        title: str, description: str, actions: list[dict],
+        priority: str = "medium",
+    ) -> None:
+        """Broadcast an agent_todo event (PM pushes a decision to user)."""
+        await self.broadcast(session_id, {
+            "event": "agent_todo",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "agentId": agent_id,
+            "title": title,
+            "description": description,
+            "actions": actions,
+            "priority": priority,
+            "timestamp": __import__("app.db.init_db").now(),
+        })
+
+    async def broadcast_pm_state(
+        self, session_id: str, state: str, previous_state: str,
+        details: str = "",
+    ) -> None:
+        """Broadcast a pm_state_change event (PM state machine transition)."""
+        await self.broadcast(session_id, {
+            "event": "pm_state_change",
+            "sessionId": session_id,
+            "state": state,
+            "previousState": previous_state,
+            "details": details,
+            "timestamp": __import__("app.db.init_db").now(),
+        })
+
+    async def broadcast_task_preview(
+        self, session_id: str, message_id: str,
+        tasks: list[dict], eta_seconds: int | None = None,
+    ) -> None:
+        """Broadcast a task_preview event for user confirmation."""
+        payload: dict = {
+            "event": "task_preview",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "tasks": tasks,
+            "timestamp": __import__("app.db.init_db").now(),
+        }
+        if eta_seconds is not None:
+            payload["estimatedTotalSeconds"] = eta_seconds
+        await self.broadcast(session_id, payload)
+
+    async def broadcast_degradation_change(
+        self, session_id: str, active: bool, reason: str,
+        started_at: str, failed_models: list[str],
+        recovery_attempts: int = 0,
+    ) -> None:
+        """Broadcast a degradation_change event."""
+        await self.broadcast(session_id, {
+            "event": "degradation_change",
+            "sessionId": session_id,
+            "status": {
+                "active": active,
+                "reason": reason,
+                "startedAt": started_at,
+                "failedModels": failed_models,
+                "recoveryAttempts": recovery_attempts,
+            },
+            "timestamp": __import__("app.db.init_db").now(),
+        })
+
+    # ── Session cleanup ──────────────────────────────────────────────
+
     def teardown_session(self, session_id: str) -> None:
         self.cancel_token(session_id)
         self._tokens.pop(session_id, None)

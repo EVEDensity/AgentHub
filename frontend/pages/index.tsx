@@ -25,7 +25,7 @@ import {
   unpinSession,
   type StreamBuffer,
 } from '../lib/sessionStore';
-import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
+import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
 
 const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
@@ -55,6 +55,7 @@ function detectFileCategory(name: string, _mimeType: string): string {
     image: { extensions: ['png','jpg','jpeg','gif','svg','webp','bmp','ico'] },
     archive: { extensions: ['zip','rar','7z','tar','gz','bz2','xz'] },
     spreadsheet: { extensions: ['xlsx','xls','csv','tsv'] },
+    presentation: { extensions: ['pptx','ppt'] },
     config: { extensions: ['json','yaml','yml','xml','toml','ini','cfg','env','conf','cnf','editorconfig','gitignore','dockerfile','makefile','prisma','graphql','proto'] },
   };
   for (const [cat, cfg] of Object.entries(configs)) {
@@ -109,6 +110,9 @@ export default function AgentHubIM(): JSX.Element {
   const [editingId, setEditingId] = useState<string>('');
   const [editName, setEditName] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [quoteReferences, setQuoteReferences] = useState<QuoteReference[]>([]);
+  const [pmState, setPmState] = useState<import('../types').PMState>('IDLE');
+  const [degradationStatus, setDegradationStatus] = useState<import('../types').DegradationStatus | null>(null);
   // 附件卡片的全屏预览弹窗 (点击眼睛按钮触发)
   const [previewFile, setPreviewFile] = useState<FilePreviewTarget | null>(null);
   const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
@@ -708,6 +712,200 @@ export default function AgentHubIM(): JSX.Element {
         }
       }
 
+      // ── PM state & degradation events ────────────────────────────
+
+      if (evt === 'pm_state_change') {
+        const payload = raw as unknown as import('../types').PMStateChangeEvent;
+        setPmState(payload.state);
+      }
+
+      if (evt === 'degradation_change') {
+        const payload = raw as unknown as import('../types').DegradationEvent;
+        setDegradationStatus(payload.status);
+      }
+
+      // ── PM/PMO agent interaction events ──────────────────────────
+
+      if (evt === 'agent_question') {
+        const payload = raw as unknown as import('../types').AgentQuestionEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'PM',
+            content: payload.question,
+            type: 'agent_question' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            questionData: payload,
+          },
+        ]);
+      }
+
+      if (evt === 'progress_update') {
+        const payload = raw as unknown as import('../types').ProgressUpdateEvent;
+        // Replace existing progress message with same messageId, or append new
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const existingIdx = prev.findIndex(
+            (m) => m.messageId === payload.messageId && m.type === 'progress_update'
+          );
+          if (existingIdx >= 0) {
+            const updated = [...prev];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              content: payload.currentStep,
+              progressData: payload,
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              event: 'message',
+              sessionId: chunkSessionId,
+              sender: payload.agentId || 'PM',
+              content: payload.currentStep,
+              type: 'progress_update' as const,
+              timestamp: payload.timestamp,
+              messageId: payload.messageId,
+              progressData: payload,
+            },
+          ];
+        });
+      }
+
+      if (evt === 'risk_warning') {
+        const payload = raw as unknown as import('../types').RiskWarningEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'PM',
+            content: payload.title + '\n' + payload.description,
+            type: 'risk_warning' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            riskWarningData: payload,
+          },
+        ]);
+      }
+
+      if (evt === 'agent_todo') {
+        const payload = raw as unknown as import('../types').AgentTodoEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'PM',
+            content: payload.title + '\n' + payload.description,
+            type: 'agent_todo' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            todoData: payload,
+          },
+        ]);
+      }
+
+      if (evt === 'task_preview') {
+        const payload = raw as unknown as import('../types').TaskPreviewEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: 'system',
+            content: '任务预览',
+            type: 'task_preview' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            taskPreviewData: payload,
+          },
+        ]);
+      }
+
+      // ── CloudCode: terminal output (streaming) ────────────────────
+      if (evt === 'terminal_output') {
+        const payload = raw as unknown as import('../types').TerminalOutputEvent;
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const existingIdx = prev.findIndex(
+            (m) => m.messageId === payload.messageId && m.type === 'terminal'
+          );
+          if (existingIdx >= 0) {
+            const updated = [...prev];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              content: updated[existingIdx].content + payload.content,
+              isStreaming: true,
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              event: 'message',
+              sessionId: chunkSessionId,
+              sender: payload.sender || 'system',
+              content: payload.content,
+              type: 'terminal' as const,
+              timestamp: payload.timestamp,
+              messageId: payload.messageId,
+              isStreaming: true,
+            },
+          ];
+        });
+      }
+
+      // ── CloudCode: diff update ────────────────────────────────────
+      if (evt === 'diff_update') {
+        const payload = raw as unknown as import('../types').DiffUpdateEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: 'system',
+            content: payload.diff,
+            type: 'diff' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            diffFilePath: payload.path,
+            diffDecisionState: 'pending' as const,
+          },
+        ]);
+      }
+
+      // ── Diff decision (user clicked Accept/Reject on a diff bubble) ──
+      if (evt === 'diff_decision') {
+        const payload = raw as unknown as import('../types').DiffDecisionEvent;
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].messageId === payload.messageId && updated[i].type === 'diff') {
+              updated[i] = {
+                ...updated[i],
+                diffDecisionState: payload.decision === 'accept' ? 'accepted' : 'rejected',
+              };
+              // Forward decision to server
+              const targetWs = wsRef.current.get(chunkSessionId);
+              if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+                targetWs.send(JSON.stringify({
+                  event: 'diff_decision',
+                  sessionId: payload.sessionId,
+                  messageId: payload.messageId,
+                  decision: payload.decision,
+                  path: payload.path,
+                }));
+              }
+              break;
+            }
+          }
+          return updated;
+        });
+      }
+
       if (evt === 'session_renamed') {
         const payload = raw as { sessionId: string; name: string };
         setSessions((prev) => prev.map((s) => (s.id === payload.sessionId ? { ...s, name: payload.name } : s)));
@@ -891,9 +1089,10 @@ export default function AgentHubIM(): JSX.Element {
     // eslint-disable-next-line no-console
     console.log('[agenthub] select session', { from: currentSessionRef.current, to: id });
     currentSessionRef.current = id;
-    activeSessionIdRef.current = id;  // 立即同步给“当前活跃 session” ref，避免下一帧前就发消息
+    activeSessionIdRef.current = id;  // 立即同步给”当前活跃 session” ref，避免下一帧前就发消息
     setSessionId(id);
     setTaskOpen(false);
+    setQuoteReferences([]);
   }, []);
 
   const handleDeleteSession = useCallback((id: string) => {
@@ -1357,6 +1556,7 @@ export default function AgentHubIM(): JSX.Element {
       timestamp: new Date().toISOString(),
       type: 'text',
       attachments: currentFiles,
+      quoteReferences: quoteReferences.length > 0 ? quoteReferences : undefined,
     };
 
     if (isStreaming) {
@@ -1377,7 +1577,8 @@ export default function AgentHubIM(): JSX.Element {
     setInput('');
     setAttachedFiles([]);
     setFileReferences([]);
-  }, [sessionId, user, isStreaming, fileReferences]);
+    setQuoteReferences([]);
+  }, [sessionId, user, isStreaming, fileReferences, quoteReferences]);
 
   const handleRetryMessage = useCallback((msg: PendingMessage) => {
     const targetWs = wsRef.current.get(msg.sessionId);
@@ -1708,6 +1909,44 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   // 点击附件卡片上的预览按钮: 弹出全屏预览模态
+  // ── PM/PMO 事件发送 ────────────────────────────────────────────────
+  const handleSendPMEvent = useCallback((event: Record<string, unknown>) => {
+    const activeSessionId = activeSessionIdRef.current;
+    if (!activeSessionId) return;
+    const targetWs = wsRef.current.get(activeSessionId);
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify(event));
+    }
+  }, []);
+
+  // ── 对话引用 ──────────────────────────────────────────────────────
+  const handleQuoteMessage = useCallback((msg: Message, selectedText?: string) => {
+    setQuoteReferences((prev) => {
+      const quoteRef: QuoteReference = {
+        id: `quote-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        messageId: msg.messageId || msg.id || '',
+        quotedText: selectedText || msg.content,
+        originalSender: msg.sender,
+        originalTimestamp: msg.timestamp,
+        isFullMessage: !selectedText,
+      };
+      // 去重：同一消息 + 相同引文片段
+      const exists = prev.some(
+        (r) => r.messageId === quoteRef.messageId && r.quotedText === quoteRef.quotedText
+      );
+      if (exists) return prev;
+      return [...prev, quoteRef];
+    });
+  }, []);
+
+  const handleRemoveQuoteReference = useCallback((index: number) => {
+    setQuoteReferences((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleClearAllQuoteReferences = useCallback(() => {
+    setQuoteReferences([]);
+  }, []);
+
   // 支持两种路径：
   //   1. 内联文件（小文件 <2MB）— 内容已在 file.content 中，走 FilePreviewModal 的 inlineContent 快速路径
   //   2. 大文件（已上传）        — 通过 fileId 走 /api/files/preview/{fileId} 获取内容
@@ -1856,6 +2095,8 @@ export default function AgentHubIM(): JSX.Element {
               /* ignore */
             }
           }}
+          pmState={pmState}
+          degradationStatus={degradationStatus}
         />
 
         <MessageList
@@ -1865,6 +2106,8 @@ export default function AgentHubIM(): JSX.Element {
           onCommit={handleCommit}
           messagesContainerRef={messagesContainerRef}
           bottomRef={bottomRef}
+          onQuoteMessage={handleQuoteMessage}
+          onSendPMEvent={handleSendPMEvent}
         />
 
         <ChatInput
@@ -1902,6 +2145,9 @@ export default function AgentHubIM(): JSX.Element {
           onRemoveReference={handleRemoveReference}
           onClearAllReferences={handleClearAllReferences}
           onJumpToReference={handleJumpToReference}
+          quoteReferences={quoteReferences}
+          onRemoveQuoteReference={handleRemoveQuoteReference}
+          onClearAllQuoteReferences={handleClearAllQuoteReferences}
         />
       </main>
 
