@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.db.init_db import now
 from app.db.session import afetch_one, aexecute
 from app.schemas.common import DefaultChatAgentRequest
+from app.services.agent_service import lookup_agent
 from app.services.auth_service import get_current_user, require_admin, write_audit
 
 router = APIRouter(prefix="/chat-defaults", tags=["admin-chat-defaults"])
@@ -30,7 +31,7 @@ async def set_default(data: DefaultChatAgentRequest, user: dict = Depends(get_cu
     """Promote an agent to be the default for un-directed chat messages."""
     require_admin(user)
 
-    agent = await afetch_one("SELECT agent_id FROM agent_registry WHERE agent_id = $1", data.agentId)
+    agent = await lookup_agent(data.agentId, user["id"], columns="agent_id")
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent not found: {data.agentId}")
 

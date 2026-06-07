@@ -5,19 +5,36 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertCircle, ChevronUp, Download, Eye, FileText, Loader2, X } from 'lucide-react';
 
-// pdfjs-dist 在 Next.js SSR 下需要动态加载 (使用 window) - 通过 useEffect 引入
-type PdfJsModule = typeof import('pdfjs-dist');
+// pdfjs-dist 在 Next.js SSR 下不能直接走包入口，否则 Next 会在构建时
+// 解析 pdf.mjs 里的 dynamic import(workerSrc) 并报错。这里改为：
+// 1. postinstall 把 pdf.min.mjs / pdf.worker.min.mjs 复制到 /public
+// 2. 浏览器端直接 import 静态 public 资源，彻底绕开 webpack 对 pdfjs-dist 的分析
+interface PdfJsModule {
+  getDocument: (src: { data: Uint8Array }) => { promise: Promise<any> };
+  GlobalWorkerOptions: { workerSrc: string };
+}
 
 // Worker 通过 npm postinstall 复制到 /public/pdf.worker.min.mjs,
 // 这里直接引用静态资源, 避免 webpack 解析 .mjs worker 时报错
+const PDF_RUNTIME_URL = '/pdf.min.mjs';
 const PDF_WORKER_URL = '/pdf.worker.min.mjs';
 
 async function loadPdfJs(): Promise<PdfJsModule> {
-  const mod = await import('pdfjs-dist');
-  if (typeof window !== 'undefined') {
-    mod.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+  if (typeof window === 'undefined') {
+    throw new Error('PDF runtime 仅可在浏览器端加载');
   }
-  return mod;
+
+  try {
+    const mod = (await import(/* webpackIgnore: true */ PDF_RUNTIME_URL)) as PdfJsModule;
+    mod.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+    return mod;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      'PDF 预览运行时加载失败。请在 frontend 目录执行 `npm run postinstall`，确认 `public/pdf.min.mjs` 与 `public/pdf.worker.min.mjs` 已生成后再重试。'
+      + (detail ? `\n\n底层错误: ${detail}` : '')
+    );
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

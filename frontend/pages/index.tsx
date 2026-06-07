@@ -3,6 +3,12 @@ import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
 import ChatHeader from '../components/chat/ChatHeader';
 import ChatInput from '../components/chat/ChatInput';
+
+import UserRoster from '../components/collaboration/UserRoster';
+import TypingIndicator from '../components/collaboration/TypingIndicator';
+import { getPresenceStore } from '../lib/presenceStore';
+import { getCollaborationStore } from '../lib/collaborationStore';
+import ShareDialog from '../components/collaboration/ShareDialog';
 import MessageList from '../components/chat/MessageList';
 import { type ExecPermission } from '../components/chat/PermissionModePopover';
 import SessionSidebar from '../components/chat/SessionSidebar';
@@ -41,7 +47,7 @@ const DagModal = dynamic(() => import('../components/chat/DagModal'), {
   loading: () => null,
 });
 
-const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
+const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy', 'Implement'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
   agentId,
   domain: agentId.toLowerCase(),
@@ -126,6 +132,9 @@ export default function AgentHubIM(): JSX.Element {
   const [quoteReferences, setQuoteReferences] = useState<QuoteReference[]>([]);
   const [pmState, setPmState] = useState<import('../types').PMState>('IDLE');
   const [degradationStatus, setDegradationStatus] = useState<import('../types').DegradationStatus | null>(null);
+  // ── Share dialog state ─────────────────────────────────────────
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sessionVisibility, setSessionVisibility] = useState<string>('');
   // 附件卡片的全屏预览弹窗 (点击眼睛按钮触发)
   const [previewFile, setPreviewFile] = useState<FilePreviewTarget | null>(null);
   const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
@@ -142,6 +151,10 @@ export default function AgentHubIM(): JSX.Element {
   // ── 执行权限模式 ─────────────────────────────────────────────────
   // 1=询问权限  2=跳过权限  3=计划模式
   const [execPermission, setExecPermission] = useState<ExecPermission>(1);
+  // 自动回复模式：为 true 时，无@Agent的对话自动使用默认Agent回复
+  const [autoReply, setAutoReply] = useState(true);
+  const autoReplyRef = useRef(autoReply);
+  autoReplyRef.current = autoReply;
 
   // ── 可调整布局尺寸（localStorage 持久化） ──────────────
   // 左侧会话栏宽度：默认 320px，可在 240-480 之间调整
@@ -226,6 +239,22 @@ export default function AgentHubIM(): JSX.Element {
     document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
     document.body.style.zoom = `${zoom}%`;
   }, []);
+
+  // Load user settings from backend and merge into localStorage
+  useEffect(() => {
+    const token = localStorage.getItem('agenthub_token');
+    if (!token) return;
+    fetch('/api/user/settings', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: { settings?: Record<string, string> } | null) => {
+        if (!data?.settings) return;
+        const s = data.settings;
+        if (s.theme && !localStorage.getItem('agenthub_theme')) { localStorage.setItem('agenthub_theme', s.theme); document.documentElement.setAttribute('data-theme', s.theme); }
+        if (s.lang && !localStorage.getItem('agenthub_lang')) { localStorage.setItem('agenthub_lang', s.lang); document.documentElement.lang = s.lang === 'en' ? 'en' : 'zh-CN'; }
+        if (s.zoom && !localStorage.getItem('agenthub_zoom')) { localStorage.setItem('agenthub_zoom', s.zoom); document.body.style.zoom = `${s.zoom}%`; }
+      })
+      .catch(() => { /* backend off — use localStorage defaults */ });
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
@@ -436,7 +465,7 @@ export default function AgentHubIM(): JSX.Element {
     const sid = targetSid || currentSessionRef.current;
     currentSessionRef.current = sid;
     // eslint-disable-next-line no-console
-    console.log('[agenthub] connectWs called', { targetSid, ref: currentSessionRef.current, finalSid: sid, alreadyHas: wsRef.current.has(sid), wsMapKeys: Array.from(wsRef.current.keys()) });
+    if (process.env.NODE_ENV === "development") { console.log("[agenthub] connectWs", { targetSid, finalSid: sid, hasSocket: wsRef.current.has(sid) }); }
     // ★ 关键修复：如果该 session 已有 ws 但已 CLOSED/CLOSING，删掉重建。
     // 仅当 ws 是 OPEN/CONNECTING 时才跳过。
     const existing = wsRef.current.get(sid);
@@ -792,6 +821,74 @@ export default function AgentHubIM(): JSX.Element {
       if (evt === 'degradation_change') {
         const payload = raw as unknown as import('../types').DegradationEvent;
         setDegradationStatus(payload.status);
+      }
+
+      // ── Multi-user collaboration events ───────────────────────────
+
+      if (evt === 'user_roster') {
+        // Initial roster of online users when connecting
+        const roster = raw as unknown as import('../types').UserRosterEvent;
+        getPresenceStore().setRoster(chunkSessionId, roster.users);
+      }
+
+      if (evt === 'user_joined') {
+        const joined = raw as unknown as import('../types').UserJoinedEvent;
+        getPresenceStore().addUser(chunkSessionId, {
+          userId: joined.userId,
+          name: joined.userName,
+          role: joined.role,
+          status: 'online',
+        });
+      }
+
+      if (evt === 'user_left') {
+        const left = raw as unknown as import('../types').UserLeftEvent;
+        getPresenceStore().removeUser(chunkSessionId, left.userId);
+        getCollaborationStore().setTyping(chunkSessionId, left.userId, left.userName, false);
+      }
+
+      if (evt === 'presence_update') {
+        const pu = raw as unknown as import('../types').PresenceUpdateEvent;
+        getPresenceStore().bulkUpdateStatus(chunkSessionId, pu.users);
+      }
+
+      if (evt === 'typing_indicator') {
+        const ti = raw as unknown as import('../types').TypingIndicatorEvent;
+        getCollaborationStore().setTyping(chunkSessionId, ti.userId, ti.userName, ti.isTyping);
+      }
+
+      // ── PM interaction state sync ─────────────────────────────────
+
+      if (evt === 'interaction_already_resolved') {
+        const iar = raw as unknown as import('../types').InteractionAlreadyResolvedEvent;
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            const m = updated[i];
+            if ((m.messageId || m.id) === iar.messageId) {
+              // Update all PM interaction data types with resolvedBy
+              const resolver = { resolvedBy: iar.resolvedBy, resolvedByName: iar.userName };
+              if (m.questionData) {
+                updated[i] = { ...m, questionData: { ...m.questionData, ...resolver } };
+              } else if (m.riskWarningData) {
+                updated[i] = { ...m, riskWarningData: { ...m.riskWarningData, ...resolver } };
+              } else if (m.todoData) {
+                updated[i] = { ...m, todoData: { ...m.todoData, ...resolver } };
+              } else if (m.taskPreviewData) {
+                updated[i] = { ...m, taskPreviewData: { ...m.taskPreviewData, ...resolver } };
+              }
+              break;
+            }
+          }
+          return updated;
+        });
+      }
+
+      if (evt === 'permission_mode_changed') {
+        const pmc = raw as unknown as import('../types').PermissionModeChangedEvent;
+        if (pmc.mode === 1 || pmc.mode === 2 || pmc.mode === 3) {
+          setExecPermission(pmc.mode as ExecPermission);
+        }
       }
 
       // ── PM/PMO agent interaction events ──────────────────────────
@@ -1169,7 +1266,7 @@ export default function AgentHubIM(): JSX.Element {
 
   const handleSelectSession = useCallback((id: string) => {
     // eslint-disable-next-line no-console
-    console.log('[agenthub] select session', { from: currentSessionRef.current, to: id });
+    if (process.env.NODE_ENV === "development") { console.log("[agenthub] select session", { from: currentSessionRef.current, to: id }); }
     currentSessionRef.current = id;
     activeSessionIdRef.current = id;  // 立即同步给”当前活跃 session” ref，避免下一帧前就发消息
     setSessionId(id);
@@ -1610,14 +1707,9 @@ export default function AgentHubIM(): JSX.Element {
 
     const displayContent = text || (currentFiles.length > 0 ? `发送了 ${currentFiles.length} 个文件` : '');
 
-    // eslint-disable-next-line no-console
-    console.log('[agenthub] handleSend', {
-      closureSessionId: sessionId,
-      refSessionId: activeSessionId,
-      text,
-      wsMapKeys: Array.from(wsRef.current.keys()),
-      targetWsState: wsRef.current.get(activeSessionId)?.readyState,
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[agenthub] handleSend', { sessionId: activeSessionId, text });
+    }
 
     const clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const localMsg: Message = {
@@ -1626,6 +1718,7 @@ export default function AgentHubIM(): JSX.Element {
       sessionId: activeSessionId,
       content: displayContent,
       sender: user?.name || 'user',
+      userId: user?.id || '',
       timestamp: new Date().toISOString(),
       type: 'text',
       attachments: fileMetas.length > 0 ? fileMetas : undefined,
@@ -1640,6 +1733,7 @@ export default function AgentHubIM(): JSX.Element {
       attachments: currentFiles,
       quoteReferences: quoteReferences.length > 0 ? quoteReferences : undefined,
       exec_permission: execPermission,
+      auto_reply: autoReplyRef.current,
     };
 
     if (isStreaming) {
@@ -1993,14 +2087,20 @@ export default function AgentHubIM(): JSX.Element {
 
   // 点击附件卡片上的预览按钮: 弹出全屏预览模态
   // ── PM/PMO 事件发送 ────────────────────────────────────────────────
+  // Automatically injects sender / userId so bubble components don't
+  // need to know the current user.
   const handleSendPMEvent = useCallback((event: Record<string, unknown>) => {
     const activeSessionId = activeSessionIdRef.current;
     if (!activeSessionId) return;
     const targetWs = wsRef.current.get(activeSessionId);
     if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-      targetWs.send(JSON.stringify(event));
+      targetWs.send(JSON.stringify({
+        ...event,
+        sender: user?.name || 'user',
+        userId: user?.id || '',
+      }));
     }
-  }, []);
+  }, [user]);
 
   // ── 对话引用 ──────────────────────────────────────────────────────
   const handleQuoteMessage = useCallback((msg: Message, selectedText?: string) => {
@@ -2029,6 +2129,14 @@ export default function AgentHubIM(): JSX.Element {
   const handleClearAllQuoteReferences = useCallback(() => {
     setQuoteReferences([]);
   }, []);
+
+  // ── Share dialog ────────────────────────────────────────────────
+  const handleOpenShare = useCallback(() => setShareOpen(true), []);
+  const handleCloseShare = useCallback(() => setShareOpen(false), []);
+  const handleVisibilityChange = useCallback((vis: string) => {
+    setSessionVisibility(vis);
+    setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, visibility: vis } : s)));
+  }, [sessionId]);
 
   // 支持两种路径：
   //   1. 内联文件（小文件 <2MB）— 内容已在 file.content 中，走 FilePreviewModal 的 inlineContent 快速路径
@@ -2134,6 +2242,10 @@ export default function AgentHubIM(): JSX.Element {
         onEditNameKeyDown={handleEditNameKeyDown}
         onEditNameBlur={handleEditNameBlur}
         onLogout={handleLogout}
+        onOpenShare={handleOpenShare}
+        currentRole={sessions.find((s) => s.id === sessionId)?.myRole}
+        currentVisibility={sessions.find((s) => s.id === sessionId)?.visibility || sessionVisibility}
+        authHeaders={authHeaders()}
         width={sidebarWidthLive ?? sidebarWidth}
       />
 
@@ -2156,31 +2268,62 @@ export default function AgentHubIM(): JSX.Element {
       />
 
       <main className="flex flex-1 flex-col min-h-0">
-        <ChatHeader
-          sessionName={sessionName}
-          sessionId={sessionId}
-          connected={connected}
-          isStreaming={isStreaming}
-          isAutoNaming={isAutoNaming}
-          percent={percent}
-          onTaskClick={handleTaskClick}
-          onRenameSession={handleChatHeaderRename}
-          onRegenerateName={() => handleRegenerateName()}
-          onTogglePreview={handleTogglePreviewPanel}
-          previewOpen={previewPanelOpen}
-          onResetLayout={() => {
-            resetSidebarWidth();
-            resetPreviewWidth();
-            try {
-              window.localStorage.removeItem('agenthub.layout.previewTreeWidth');
-              window.location.reload();
-            } catch {
-              /* ignore */
-            }
-          }}
-          pmState={pmState}
-          degradationStatus={degradationStatus}
-        />
+        {/* ── Unified Top Bar: Title + Task Controls + UserRoster + Share ── */}
+        <header className="border-b border-warm-150 bg-white shrink-0">
+          <div className="flex items-stretch">
+            <div className="flex-1 min-w-0">
+              <ChatHeader
+                sessionName={sessionName}
+                sessionId={sessionId}
+                connected={connected}
+                isStreaming={isStreaming}
+                isAutoNaming={isAutoNaming}
+                percent={percent}
+                onTaskClick={handleTaskClick}
+                onRenameSession={handleChatHeaderRename}
+                onRegenerateName={() => handleRegenerateName()}
+                onTogglePreview={handleTogglePreviewPanel}
+                previewOpen={previewPanelOpen}
+                onResetLayout={() => {
+                  resetSidebarWidth();
+                  resetPreviewWidth();
+                  try {
+                    window.localStorage.removeItem('agenthub.layout.previewTreeWidth');
+                    window.location.reload();
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                pmState={pmState}
+                degradationStatus={degradationStatus}
+              />
+            </div>
+            {/* Right accessory strip: UserRoster + Share */}
+            {sessionId && (
+              <div className="flex items-center gap-1 shrink-0 self-center pr-4 pl-2 border-l border-warm-100">
+                <UserRoster sessionId={sessionId} />
+                <span className="h-5 w-px bg-warm-150" />
+                <button
+                  onClick={handleOpenShare}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-warm-500 hover:text-primary-600 hover:bg-warm-100 transition-colors"
+                  title="分享会话 / 管理成员"
+                  aria-label="分享会话"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="18" cy="5" r="3" />
+                    <circle cx="6" cy="12" r="3" />
+                    <circle cx="18" cy="19" r="3" />
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                  </svg>
+                  <span className="text-xs font-medium">分享</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </header>
+
+
 
         <MessageList
           messages={messages}
@@ -2191,6 +2334,8 @@ export default function AgentHubIM(): JSX.Element {
           bottomRef={bottomRef}
           onQuoteMessage={handleQuoteMessage}
           onSendPMEvent={handleSendPMEvent}
+          agents={agents}
+          sessionId={sessionId}
         />
 
         {/* ── Permission Mode Toggle 已被挪入 ChatInput 工具栏（next to 工具） ── */}
@@ -2227,7 +2372,15 @@ export default function AgentHubIM(): JSX.Element {
           onMentionActiveIndexChange={handleMentionActiveIndexChange}
           onRiskLevelChange={handleRiskLevelChange}
           execPermission={execPermission}
-          onExecPermissionChange={setExecPermission}
+          onExecPermissionChange={(mode: ExecPermission) => {
+              setExecPermission(mode);
+              const ws = wsRef.current.get(activeSessionIdRef.current);
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ event: 'set_exec_permission', mode }));
+              }
+            }}
+          autoReply={autoReply}
+          onAutoReplyChange={setAutoReply}
           fileReferences={fileReferences}
           onRemoveReference={handleRemoveReference}
           onClearAllReferences={handleClearAllReferences}
@@ -2236,6 +2389,7 @@ export default function AgentHubIM(): JSX.Element {
           onRemoveQuoteReference={handleRemoveQuoteReference}
           onClearAllQuoteReferences={handleClearAllQuoteReferences}
         />
+        <TypingIndicator sessionId={sessionId} />
       </main>
 
       {/* ── File Preview Panel (right side) ──────────────────── */}
@@ -2312,6 +2466,18 @@ export default function AgentHubIM(): JSX.Element {
         variant="danger"
         onConfirm={performDeleteSession}
         onCancel={cancelDeleteSession}
+      />
+
+      {/* ── Session sharing dialog ─────────────────────────────── */}
+      <ShareDialog
+        open={shareOpen}
+        sessionId={sessionId}
+        sessionName={sessionName}
+        userRole={sessions.find((s) => s.id === sessionId)?.myRole || 'viewer'}
+        visibility={sessions.find((s) => s.id === sessionId)?.visibility || sessionVisibility}
+        authHeaders={authHeaders()}
+        onClose={handleCloseShare}
+        onVisibilityChange={handleVisibilityChange}
       />
 
       {/* 附件文件全屏预览弹窗 - 点击附件卡片上的眼睛按钮触发 */}

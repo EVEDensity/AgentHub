@@ -41,7 +41,9 @@ _PG_DDL = [
         active INTEGER NOT NULL DEFAULT 1,
         is_pinned INTEGER NOT NULL DEFAULT 0,
         last_message_at TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        owner_id TEXT NOT NULL DEFAULT '',
+        visibility TEXT NOT NULL DEFAULT 'private'
     )""",
     """CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
@@ -54,10 +56,12 @@ _PG_DDL = [
         prompt_tokens INTEGER NOT NULL DEFAULT 0,
         completion_tokens INTEGER NOT NULL DEFAULT 0,
         total_tokens INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        user_id TEXT NOT NULL DEFAULT ''
     )""",
     """CREATE TABLE IF NOT EXISTS agent_registry (
-        agent_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        user_id TEXT NOT NULL DEFAULT '',
         domain TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'sleeping',
         adapter_type TEXT NOT NULL DEFAULT 'mock',
@@ -69,7 +73,8 @@ _PG_DDL = [
         avatar_url TEXT NOT NULL DEFAULT '',
         capability_tags TEXT NOT NULL DEFAULT '[]',
         base_url TEXT NOT NULL DEFAULT '',
-        api_key TEXT NOT NULL DEFAULT ''
+        api_key TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (agent_id, user_id)
     )""",
     """CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
@@ -207,6 +212,31 @@ _PG_DDL = [
         version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL
     )""",
+    # ── Multi-user collaboration tables ───────────────────────────
+    """CREATE TABLE IF NOT EXISTS session_members (
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'member',
+        invited_by TEXT NOT NULL DEFAULT '',
+        joined_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, user_id)
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_sm_user ON session_members(user_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_sm_session ON session_members(session_id)""",
+    """CREATE TABLE IF NOT EXISTS user_presence (
+        user_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'online',
+        last_heartbeat TEXT NOT NULL,
+        PRIMARY KEY (user_id, session_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS user_settings (
+        user_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, key)
+    )""",
 ]
 
 
@@ -245,6 +275,7 @@ async def _ainit_postgresql() -> None:
 
         # ── Runtime migrations for existing databases ──────────────
         await _migrate_agent_registry_pg(conn)
+        await _migrate_multi_user_pg(conn)
 
         # ── Seed default data (ON CONFLICT DO NOTHING = idempotent) ──
         await _seed_users_pg(conn)
@@ -267,12 +298,144 @@ async def _migrate_agent_registry_pg(conn) -> None:
         #   backups naturally cover avatar data.  NULL = no avatar.
         "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS avatar_data BYTEA",
         "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS avatar_mime TEXT NOT NULL DEFAULT ''",
+        # ── Per-user agent separation: user_id + composite PK ─────
+        "ALTER TABLE agent_registry ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''",
     ]
     for m in migrations:
         try:
             await conn.execute(m)
         except Exception as exc:
             logger.warning("agent_registry migration skipped: %s", exc)
+
+    # ── Convert single-column PK (agent_id) → composite PK (agent_id, user_id) ──
+    # This is idempotent: if the composite PK already exists the DO block is a no-op.
+    try:
+        await conn.execute(
+            """DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'agent_registry_pkey' AND contype = 'p'
+              ) THEN
+                -- Only proceed if user_id is NOT yet part of the PK
+                IF NOT EXISTS (
+                  SELECT 1 FROM information_schema.key_column_usage
+                  WHERE constraint_name = 'agent_registry_pkey' AND column_name = 'user_id'
+                ) THEN
+                  ALTER TABLE agent_registry DROP CONSTRAINT agent_registry_pkey;
+                  ALTER TABLE agent_registry ADD PRIMARY KEY (agent_id, user_id);
+                END IF;
+              END IF;
+            END $$;"""
+        )
+    except Exception as exc:
+        logger.warning("agent_registry PK migration skipped: %s", exc)
+
+
+async def _migrate_multi_user_pg(conn) -> None:
+    """Add multi-user collaboration columns and backfill existing data (idempotent)."""
+    now_ts = now()
+
+    # 1. Add new columns to existing tables
+    col_migrations = [
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS owner_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private'",
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''",
+    ]
+    for m in col_migrations:
+        try:
+            await conn.execute(m)
+        except Exception as exc:
+            logger.warning("multi_user migration skipped: %s", exc)
+
+    # 2. Create session_members table if not exists
+    try:
+        await conn.execute(
+            """CREATE TABLE IF NOT EXISTS session_members (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                role TEXT NOT NULL DEFAULT 'member',
+                invited_by TEXT NOT NULL DEFAULT '',
+                joined_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, user_id)
+            )"""
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sm_user ON session_members(user_id)"
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sm_session ON session_members(session_id)"
+        )
+    except Exception as exc:
+        logger.warning("session_members migration skipped: %s", exc)
+
+    # 3. Create user_presence table if not exists
+    try:
+        await conn.execute(
+            """CREATE TABLE IF NOT EXISTS user_presence (
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'online',
+                last_heartbeat TEXT NOT NULL,
+                PRIMARY KEY (user_id, session_id)
+            )"""
+        )
+    except Exception as exc:
+        logger.warning("user_presence migration skipped: %s", exc)
+
+    # 4. Backfill owner_id for sessions that have no owner
+    orphan_sessions = await conn.fetch(
+        "SELECT id FROM sessions WHERE owner_id = '' OR owner_id IS NULL"
+    )
+    for row in orphan_sessions:
+        sid = row["id"]
+        # Try to find the first human message sender in this session
+        msg = await conn.fetchrow(
+            "SELECT sender FROM messages WHERE session_id=$1 "
+            "AND sender NOT IN ('system', 'Orchestrator', 'Architect', "
+            "'CodeGen', 'Review', 'Test', 'Deploy', 'PM') "
+            "ORDER BY created_at ASC LIMIT 1",
+            sid,
+        )
+        owner_id = ""
+        if msg:
+            user_row = await conn.fetchrow(
+                "SELECT id FROM users WHERE name=$1", msg["sender"]
+            )
+            if user_row:
+                owner_id = user_row["id"]
+
+        # Fallback: assign to admin
+        if not owner_id:
+            admin_row = await conn.fetchrow(
+                "SELECT id FROM users WHERE role='admin' LIMIT 1"
+            )
+            if admin_row:
+                owner_id = admin_row["id"]
+            else:
+                owner_id = DEFAULT_USER_ID
+
+        await conn.execute(
+            "UPDATE sessions SET owner_id=$1 WHERE id=$2", owner_id, sid
+        )
+
+        # Add owner as a session_member
+        await conn.execute(
+            "INSERT INTO session_members(session_id,user_id,role,joined_at) "
+            "VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+            sid, owner_id, "owner", now_ts,
+        )
+
+    # 5. Make the default session public (so new users can see it)
+    await conn.execute(
+        "UPDATE sessions SET visibility='public' WHERE id=$1 AND visibility='private'",
+        DEFAULT_SESSION_ID,
+    )
+
+    logger.info(
+        "multi_user migration: %d sessions backfilled with owners",
+        len(orphan_sessions),
+    )
 
 
 async def _seed_users_pg(conn) -> None:
@@ -337,6 +500,13 @@ async def _seed_agents_pg(conn) -> None:
             ["测试用例", "验证策略", "边界测试"],
         ),
         (
+            "Implement", "implement", "L2",
+            "实施工程师：将 CodeGen 生成的 Diff 落盘到工作区，处理合并冲突并跟踪落盘结果。"
+            "输入：已审查 Diff | 输出：落盘文件清单、冲突报告 | 约束：不修改未审查代码",
+            "实施工程师",
+            ["文件落盘", "冲突解决", "变更跟踪"],
+        ),
+        (
             "Deploy", "deploy", "L3",
             "部署工程师：在 Review 通过后执行部署，生成预览 URL 和部署状态报告。"
             "输入：已确认 Diff、部署目标 | 输出：预览 URL、部署状态 | 约束：不部署未审查代码",
@@ -346,10 +516,10 @@ async def _seed_agents_pg(conn) -> None:
     ]
     for agent_id, domain, risk, duty_note, display_name, capability_tags in agents:
         await conn.execute(
-            "INSERT INTO agent_registry(agent_id,domain,status,adapter_type,risk_level,duty_note,display_name,capability_tags) "
-            "VALUES($1,$2,$3,$4,$5,$6,$7,$8) "
-            "ON CONFLICT(agent_id) DO UPDATE SET display_name=EXCLUDED.display_name, capability_tags=EXCLUDED.capability_tags",
-            agent_id, domain, "sleeping", "mock", risk, duty_note, display_name, json.dumps(capability_tags, ensure_ascii=False),
+            "INSERT INTO agent_registry(agent_id,user_id,domain,status,adapter_type,risk_level,duty_note,display_name,capability_tags) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) "
+            "ON CONFLICT(agent_id, user_id) DO UPDATE SET adapter_type=EXCLUDED.adapter_type, display_name=EXCLUDED.display_name, capability_tags=EXCLUDED.capability_tags",
+            agent_id, "", domain, "sleeping", "", risk, duty_note, display_name, json.dumps(capability_tags, ensure_ascii=False),
         )
 
 

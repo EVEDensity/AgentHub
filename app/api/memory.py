@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.config import AUTO_MEMORY_ENABLED, MEMORY_DIR
@@ -12,52 +12,83 @@ from app.services.memory import MemoryDocument, MemoryHeader, MemoryScanner, Mem
 from app.services.memory.consolidator import MemoryConsolidator
 from app.services.memory.extractor import MemoryExtractor
 from app.services.memory.session_memory import SessionMemoryManager
+from app.services.auth.service import get_current_user
+from app.services.auth.session_guard import check_session_access
+from app.db.session import afetch_all
 from app.utils.async_file import aexists, aread_text
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
 
-# -- singleton storage / extractor ---------------------------------------
+# -- Per-user storage singletons -----------------------------------------
+# Each user gets their own memory directory: .claude/memory/users/{user_id}/
 
-_storage: Optional[MemoryStorage] = None
-_scanner: Optional[MemoryScanner] = None
-_extractor: Optional[MemoryExtractor] = None
-_consolidator: Optional[MemoryConsolidator] = None
-_session_mgr: Optional[SessionMemoryManager] = None
-
-
-def _get_storage() -> MemoryStorage:
-    global _storage
-    if _storage is None:
-        _storage = MemoryStorage(MEMORY_DIR)
-    return _storage
+_storages: dict[str, MemoryStorage] = {}
+_scanners: dict[str, MemoryScanner] = {}
+_extractors: dict[str, MemoryExtractor] = {}
+_consolidators: dict[str, MemoryConsolidator] = {}
+_session_mgrs: dict[str, SessionMemoryManager] = {}
+# Shared (non-user-scoped) singletons for backward compat
+_storage_shared: Optional[MemoryStorage] = None
+_scanner_shared: Optional[MemoryScanner] = None
+_session_mgr_shared: Optional[SessionMemoryManager] = None
 
 
-def _get_scanner() -> MemoryScanner:
-    global _scanner
-    if _scanner is None:
-        _scanner = MemoryScanner(_get_storage())
-    return _scanner
+def _get_user_memory_dir(user_id: str) -> Path:
+    """Return the per-user memory directory path."""
+    return MEMORY_DIR / "users" / user_id
 
 
-def _get_extractor() -> MemoryExtractor:
-    global _extractor
-    if _extractor is None:
-        _extractor = MemoryExtractor(_get_storage())
-    return _extractor
+def _get_storage(user_id: str = "") -> MemoryStorage:
+    """Get memory storage scoped to a user (or shared if user_id is empty)."""
+    if user_id:
+        if user_id not in _storages:
+            _storages[user_id] = MemoryStorage(_get_user_memory_dir(user_id))
+        return _storages[user_id]
+    global _storage_shared
+    if _storage_shared is None:
+        _storage_shared = MemoryStorage(MEMORY_DIR)
+    return _storage_shared
 
 
-def _get_consolidator() -> MemoryConsolidator:
-    global _consolidator
-    if _consolidator is None:
-        _consolidator = MemoryConsolidator(_get_storage())
-    return _consolidator
+def _get_scanner(user_id: str = "") -> MemoryScanner:
+    if user_id:
+        if user_id not in _scanners:
+            _scanners[user_id] = MemoryScanner(_get_storage(user_id))
+        return _scanners[user_id]
+    global _scanner_shared
+    if _scanner_shared is None:
+        _scanner_shared = MemoryScanner(_get_storage(""))
+    return _scanner_shared
 
 
-def _get_session_mgr() -> SessionMemoryManager:
-    global _session_mgr
-    if _session_mgr is None:
-        _session_mgr = SessionMemoryManager(_get_storage())
-    return _session_mgr
+def _get_extractor(user_id: str = "") -> MemoryExtractor:
+    if user_id:
+        if user_id not in _extractors:
+            _extractors[user_id] = MemoryExtractor(_get_storage(user_id))
+        return _extractors[user_id]
+    # fallback to shared
+    from app.services.memory.extractor import MemoryExtractor as ME
+    return ME(_get_storage(""))
+
+
+def _get_consolidator(user_id: str = "") -> MemoryConsolidator:
+    if user_id:
+        if user_id not in _consolidators:
+            _consolidators[user_id] = MemoryConsolidator(_get_storage(user_id))
+        return _consolidators[user_id]
+    from app.services.memory.consolidator import MemoryConsolidator as MC
+    return MC(_get_storage(""))
+
+
+def _get_session_mgr(user_id: str = "") -> SessionMemoryManager:
+    if user_id:
+        if user_id not in _session_mgrs:
+            _session_mgrs[user_id] = SessionMemoryManager(_get_storage(user_id))
+        return _session_mgrs[user_id]
+    global _session_mgr_shared
+    if _session_mgr_shared is None:
+        _session_mgr_shared = SessionMemoryManager(_get_storage(""))
+    return _session_mgr_shared
 
 
 # -- Pydantic request/response models -----------------------------------
@@ -123,9 +154,13 @@ class SessionTransferRequest(BaseModel):
 
 
 @router.get("/files", response_model=list[MemoryFileInfo])
-async def list_memories(type_filter: Optional[str] = Query(None, alias="type")):
+async def list_memories(
+    type_filter: Optional[str] = Query(None, alias="type"),
+    user: dict = Depends(get_current_user),
+):
     """List all memory files with headers, optionally filtered by type."""
-    scanner = _get_scanner()
+    uid = user["id"]
+    scanner = _get_scanner(uid)
     headers = await scanner.scan()
     if type_filter:
         try:
@@ -148,9 +183,10 @@ async def list_memories(type_filter: Optional[str] = Query(None, alias="type")):
 
 
 @router.get("/files/{filename}", response_model=MemoryDetail)
-async def read_memory(filename: str):
+async def read_memory(filename: str, user: dict = Depends(get_current_user)):
     """Read a single memory file by filename."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     doc = await storage.get(filename)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在")
@@ -168,11 +204,12 @@ async def read_memory(filename: str):
 
 
 @router.get("/files/{filename}/export")
-async def export_memory(filename: str):
+async def export_memory(filename: str, user: dict = Depends(get_current_user)):
     """Export a single memory file as raw markdown download."""
     from fastapi.responses import PlainTextResponse
 
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     doc = await storage.get(filename)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在")
@@ -198,11 +235,12 @@ async def export_memory(filename: str):
 
 
 @router.post("/batch/export")
-async def batch_export_memories(req: BatchDeleteRequest):
+async def batch_export_memories(req: BatchDeleteRequest, user: dict = Depends(get_current_user)):
     """Export multiple memory files as a single markdown document download."""
     from fastapi.responses import PlainTextResponse
 
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     parts: list[str] = []
     missing: list[str] = []
 
@@ -235,6 +273,7 @@ async def batch_export_memories(req: BatchDeleteRequest):
 async def import_memories(
     file: UploadFile = File(...),
     target_filename: str = Query("", alias="target", description="可选：拼接到的目标文件名（当前编辑器选中的文件）"),
+    user: dict = Depends(get_current_user),
 ):
     """Import a markdown file — supports two modes:
 
@@ -262,7 +301,8 @@ async def import_memories(
     if not content.strip():
         raise HTTPException(status_code=400, detail="上传的文件内容为空")
 
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
 
     # ── Append mode: merge into existing target file ──────────────────
     if target_filename:
@@ -346,9 +386,10 @@ async def import_memories(
 
 
 @router.post("/files", response_model=MemoryFileInfo)
-async def create_memory(req: MemoryCreateRequest):
+async def create_memory(req: MemoryCreateRequest, user: dict = Depends(get_current_user)):
     """Create a new memory file."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     doc = await storage.save(
         name=req.name,
         description=req.description,
@@ -369,9 +410,10 @@ async def create_memory(req: MemoryCreateRequest):
 
 
 @router.put("/files/{filename}", response_model=MemoryFileInfo)
-async def update_memory(filename: str, req: MemoryUpdateRequest):
+async def update_memory(filename: str, req: MemoryUpdateRequest, user: dict = Depends(get_current_user)):
     """Update an existing memory file (partial update)."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     doc = await storage.get(filename)
     if doc is None:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在")
@@ -404,9 +446,10 @@ async def update_memory(filename: str, req: MemoryUpdateRequest):
 
 
 @router.delete("/files/{filename}")
-async def delete_memory(filename: str):
+async def delete_memory(filename: str, user: dict = Depends(get_current_user)):
     """Delete a memory file."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     ok = await storage.delete(filename)
     if not ok:
         raise HTTPException(status_code=404, detail=f"记忆文件 '{filename}' 不存在或无法删除")
@@ -414,33 +457,37 @@ async def delete_memory(filename: str):
 
 
 @router.get("/index")
-async def get_index():
+async def get_index(user: dict = Depends(get_current_user)):
     """Get the MEMORY.md index content."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     content = await storage.get_index_content()
     return {"content": content, "path": str(storage.index_path)}
 
 
 @router.post("/rebuild")
-async def rebuild_index():
+async def rebuild_index(user: dict = Depends(get_current_user)):
     """Force-rebuild the MEMORY.md index from current files."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     content = await storage.rebuild_index()
     return {"status": "ok", "content": content}
 
 
 @router.get("/manifest")
-async def get_manifest():
+async def get_manifest(user: dict = Depends(get_current_user)):
     """Get a formatted text manifest of all memories."""
-    scanner = _get_scanner()
+    uid = user["id"]
+    scanner = _get_scanner(uid)
     manifest = await scanner.format_manifest()
     return {"manifest": manifest}
 
 
 @router.get("/freshness")
-async def get_freshness():
+async def get_freshness(user: dict = Depends(get_current_user)):
     """Get freshness info for all memory files."""
-    scanner = _get_scanner()
+    uid = user["id"]
+    scanner = _get_scanner(uid)
     headers = await scanner.scan()
     result = []
     for h in headers:
@@ -461,9 +508,10 @@ async def get_freshness():
 
 
 @router.get("/extraction/status")
-async def get_extraction_status():
+async def get_extraction_status(user: dict = Depends(get_current_user)):
     """Get extraction state: cursors per session and config."""
-    extractor = _get_extractor()
+    uid = user["id"]
+    extractor = _get_extractor(uid)
     sessions = extractor._state.get("sessions", {})
     return {
         "enabled": AUTO_MEMORY_ENABLED,
@@ -474,7 +522,7 @@ async def get_extraction_status():
 
 
 @router.post("/extraction/backfill")
-async def backfill_extraction(session_id: Optional[str] = Query(None)):
+async def backfill_extraction(session_id: Optional[str] = Query(None), user: dict = Depends(get_current_user)):
     """Extract memories from existing sessions.
 
     If session_id is provided, extract only from that session.
@@ -483,7 +531,8 @@ async def backfill_extraction(session_id: Optional[str] = Query(None)):
     if not AUTO_MEMORY_ENABLED:
         raise HTTPException(status_code=400, detail="Auto memory extraction is disabled")
 
-    extractor = _get_extractor()
+    uid = user["id"]
+    extractor = _get_extractor(uid)
     if session_id:
         count = await extractor.extract_from_session(session_id)
         return {"status": "ok", "session_id": session_id, "memories_saved": count}
@@ -499,13 +548,14 @@ async def backfill_extraction(session_id: Optional[str] = Query(None)):
 
 
 @router.post("/extraction/reset")
-async def reset_extraction(session_id: Optional[str] = Query(None)):
+async def reset_extraction(session_id: Optional[str] = Query(None), user: dict = Depends(get_current_user)):
     """Reset extraction cursors.
 
     If session_id is provided, reset only that session.
     Otherwise, reset ALL sessions (forces full re-extraction on next run).
     """
-    extractor = _get_extractor()
+    uid = user["id"]
+    extractor = _get_extractor(uid)
     if session_id:
         extractor.reset_session(session_id)
         return {"status": "ok", "session_id": session_id, "reset": True}
@@ -516,11 +566,12 @@ async def reset_extraction(session_id: Optional[str] = Query(None)):
 
 
 @router.post("/extraction/run")
-async def run_extraction_now(session_id: str = Query(..., description="Session ID to extract from")):
+async def run_extraction_now(session_id: str = Query(..., description="Session ID to extract from"), user: dict = Depends(get_current_user)):
     """Run extraction immediately on a specific session."""
     if not AUTO_MEMORY_ENABLED:
         raise HTTPException(status_code=400, detail="Auto memory extraction is disabled")
-    extractor = _get_extractor()
+    uid = user["id"]
+    extractor = _get_extractor(uid)
     count = await extractor.extract_from_session(session_id)
     return {"status": "ok", "session_id": session_id, "memories_saved": count}
 
@@ -529,21 +580,23 @@ async def run_extraction_now(session_id: str = Query(..., description="Session I
 
 
 @router.post("/consolidate")
-async def consolidate_memories(req: ConsolidateRequest):
+async def consolidate_memories(req: ConsolidateRequest, user: dict = Depends(get_current_user)):
     """Analyze all memories for dedup/merge/delete (AutoDream).
 
     dry_run=true: return proposed actions without executing.
     dry_run=false (default): execute merge/delete actions.
     """
-    consolidator = _get_consolidator()
+    uid = user["id"]
+    consolidator = _get_consolidator(uid)
     result = await consolidator.consolidate(dry_run=req.dry_run)
     return result
 
 
 @router.get("/consolidation/status")
-async def get_consolidation_status():
+async def get_consolidation_status(user: dict = Depends(get_current_user)):
     """Get consolidation state: last run, count, merged files history."""
-    consolidator = _get_consolidator()
+    uid = user["id"]
+    consolidator = _get_consolidator(uid)
     return consolidator.get_status()
 
 
@@ -551,14 +604,15 @@ async def get_consolidation_status():
 
 
 @router.post("/transfer")
-async def transfer_memories(req: TransferRequest):
+async def transfer_memories(req: TransferRequest, user: dict = Depends(get_current_user)):
     """Transfer memory files to another directory.
 
     Files are copied to the target directory and optionally removed from current.
     """
     import shutil
 
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     target = Path(req.target_dir)
     if not target.exists():
         raise HTTPException(status_code=400, detail=f"目标目录不存在: {req.target_dir}")
@@ -593,11 +647,12 @@ async def transfer_memories(req: TransferRequest):
 
 
 @router.post("/batch/merge")
-async def batch_merge_memories(req: BatchMergeRequest):
+async def batch_merge_memories(req: BatchMergeRequest, user: dict = Depends(get_current_user)):
     """Merge multiple memory files into one."""
     from app.services.memory.models import sanitize_filename
 
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     bodies: list[str] = []
     mem_type: MemoryType = MemoryType.REFERENCE
 
@@ -625,9 +680,10 @@ async def batch_merge_memories(req: BatchMergeRequest):
 
 
 @router.post("/batch/delete")
-async def batch_delete_memories(req: BatchDeleteRequest):
+async def batch_delete_memories(req: BatchDeleteRequest, user: dict = Depends(get_current_user)):
     """Delete multiple memory files at once."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     deleted: list[str] = []
     not_found: list[str] = []
 
@@ -647,17 +703,19 @@ TRASH_RETENTION_DAYS = 30
 
 
 @router.get("/trash")
-async def list_trash():
+async def list_trash(user: dict = Depends(get_current_user)):
     """List all files in the trash with deletion time and days remaining."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     items = await storage.list_trash()
     return {"trash": items, "count": len(items), "retention_days": TRASH_RETENTION_DAYS}
 
 
 @router.post("/trash/{trash_name}/recover")
-async def recover_from_trash(trash_name: str):
+async def recover_from_trash(trash_name: str, user: dict = Depends(get_current_user)):
     """Recover a file from trash back to the main memory directory."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     ok = await storage.recover_from_trash(trash_name)
     if not ok:
         raise HTTPException(status_code=404, detail=f"回收站中找不到文件 '{trash_name}'")
@@ -665,9 +723,10 @@ async def recover_from_trash(trash_name: str):
 
 
 @router.delete("/trash/{trash_name}")
-async def purge_trash_item(trash_name: str):
+async def purge_trash_item(trash_name: str, user: dict = Depends(get_current_user)):
     """Permanently delete a file from trash (no recovery)."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     ok = await storage.purge_trash_item(trash_name)
     if not ok:
         raise HTTPException(status_code=404, detail=f"回收站中找不到文件 '{trash_name}'")
@@ -675,9 +734,10 @@ async def purge_trash_item(trash_name: str):
 
 
 @router.post("/trash/cleanup")
-async def cleanup_trash():
+async def cleanup_trash(user: dict = Depends(get_current_user)):
     """Run trash cleanup — permanently deletes files older than retention period."""
-    storage = _get_storage()
+    uid = user["id"]
+    storage = _get_storage(uid)
     purged = await storage.cleanup_trash(TRASH_RETENTION_DAYS)
     return {"status": "ok", "purged": purged, "retention_days": TRASH_RETENTION_DAYS}
 
@@ -686,11 +746,15 @@ async def cleanup_trash():
 
 
 @router.get("/search")
-async def search_memories(q: str = Query(..., min_length=1, description="搜索关键词")):
+async def search_memories(
+    q: str = Query(..., min_length=1, description="搜索关键词"),
+    user: dict = Depends(get_current_user),
+):
     """Search memory file names, descriptions, and bodies for a keyword."""
-    scanner = _get_scanner()
+    uid = user["id"]
+    scanner = _get_scanner(uid)
     headers = await scanner.scan()
-    storage = _get_storage()
+    storage = _get_storage(uid)
     keyword = q.lower()
     results: list[dict] = []
 
@@ -732,17 +796,33 @@ async def search_memories(q: str = Query(..., min_length=1, description="搜索�
 
 
 @router.get("/sessions")
-async def list_session_summaries():
-    """List all session memory summaries."""
-    session_mgr = _get_session_mgr()
+async def list_session_summaries(user: dict = Depends(get_current_user)):
+    """List session memory summaries — only for sessions the user can access."""
+    uid = user["id"]
+    session_mgr = _get_session_mgr(uid)
+
+    # Collect session IDs the user is a member of (or public sessions)
+    member_rows = await afetch_all(
+        "SELECT sm.session_id FROM session_members sm WHERE sm.user_id=$1 "
+        "UNION "
+        "SELECT s.id FROM sessions s WHERE s.visibility='public'",
+        uid,
+    )
+    allowed_ids = {row["session_id"] for row in member_rows}
+
     summaries = await session_mgr.list_session_summaries()
-    return {"sessions": summaries, "count": len(summaries)}
+    # Filter: only return summaries for sessions the user can access
+    filtered = [s for s in summaries if s.get("session_id") in allowed_ids]
+    return {"sessions": filtered, "count": len(filtered)}
 
 
 @router.get("/sessions/{session_id}")
-async def get_session_summary(session_id: str):
-    """Get the cached summary for a specific session."""
-    session_mgr = _get_session_mgr()
+async def get_session_summary(session_id: str, user: dict = Depends(get_current_user)):
+    """Get the cached summary for a specific session. Only accessible by session members."""
+    # Verify the user has access to this session
+    await check_session_access(session_id, user)
+    uid = user["id"]
+    session_mgr = _get_session_mgr(uid)
     summary = await session_mgr.get_session_summary(session_id)
     if not summary:
         raise HTTPException(status_code=404, detail=f"会话 '{session_id}' 没有已缓存的摘要")
@@ -750,9 +830,10 @@ async def get_session_summary(session_id: str):
 
 
 @router.get("/global-summary")
-async def get_global_summary():
+async def get_global_summary(user: dict = Depends(get_current_user)):
     """Get the global aggregated summary across all sessions."""
-    session_mgr = _get_session_mgr()
+    uid = user["id"]
+    session_mgr = _get_session_mgr(uid)
     summary = await session_mgr.get_global_summary()
     if not summary:
         return {"global_summary": "", "message": "暂无全局摘要"}
@@ -760,9 +841,10 @@ async def get_global_summary():
 
 
 @router.post("/global-summary/refresh")
-async def refresh_global_summary():
+async def refresh_global_summary(user: dict = Depends(get_current_user)):
     """Force-refresh the global aggregated summary."""
-    session_mgr = _get_session_mgr()
+    uid = user["id"]
+    session_mgr = _get_session_mgr(uid)
     summary = await session_mgr.update_global_summary()
     if not summary:
         return {"status": "ok", "message": "没有可聚合的会话摘要"}
@@ -770,21 +852,37 @@ async def refresh_global_summary():
 
 
 @router.post("/sessions/reset/{session_id}")
-async def reset_session_memory(session_id: str):
-    """Reset cursor and delete summary for a session."""
-    session_mgr = _get_session_mgr()
+async def reset_session_memory(session_id: str, user: dict = Depends(get_current_user)):
+    """Reset cursor and delete summary for a session. Only the session owner can do this."""
+    from app.services.auth.session_guard import SessionRole, require_session_role
+    # Only the session owner can reset memory
+    access = await check_session_access(session_id, user)
+    if not access.can_manage:
+        raise HTTPException(status_code=403, detail="Only the session owner can reset session memory")
+    uid = user["id"]
+    session_mgr = _get_session_mgr(uid)
     await session_mgr.reset_session(session_id)
     return {"status": "ok", "session_id": session_id, "reset": True}
 
 
 @router.post("/sessions/transfer")
-async def transfer_session_memory(req: SessionTransferRequest):
+async def transfer_session_memory(req: SessionTransferRequest, user: dict = Depends(get_current_user)):
     """Transfer (copy/merge) memory summary from one session to another.
 
     - mode="append":  Append source summary to target session's summary.
     - mode="overwrite": Replace target session's summary with source's.
+
+    User must have read access to the source session and write access to the target.
     """
-    session_mgr = _get_session_mgr()
+    uid = user["id"]
+
+    # Verify access to both sessions
+    source_access = await check_session_access(req.source_session_id, user)
+    target_access = await check_session_access(req.target_session_id, user)
+    if not target_access.can_write:
+        raise HTTPException(status_code=403, detail="No write permission on target session")
+
+    session_mgr = _get_session_mgr(uid)
 
     source_summary = await session_mgr.get_session_summary(req.source_session_id)
     if not source_summary:

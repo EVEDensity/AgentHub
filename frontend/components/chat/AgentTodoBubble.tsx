@@ -24,9 +24,12 @@ const PRIORITY_LABELS: Record<string, string> = {
 
 const AgentTodoBubble = memo(function AgentTodoBubble({ data, isStreaming, onSendEvent }: AgentTodoBubbleProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState(false);
+  const [submittedLocal, setSubmittedLocal] = useState(false);
   const [comment, setComment] = useState('');
   const [showComment, setShowComment] = useState(false);
+  // Shared state: derived from interaction_already_resolved broadcast or local click
+  const submitted = submittedLocal || !!data.resolvedBy;
+  const resolvedByName = data.resolvedByName || '';
   const pc = PRIORITY_CONFIG[data.priority] || PRIORITY_CONFIG.medium;
 
   function handleAction(action: AgentTodoAction) {
@@ -36,6 +39,7 @@ const AgentTodoBubble = memo(function AgentTodoBubble({ data, isStreaming, onSen
       setShowComment(true);
       return;
     }
+    setSubmittedLocal(true);
     onSendEvent({
       event: 'agent_todo_response',
       sessionId: data.sessionId,
@@ -43,11 +47,11 @@ const AgentTodoBubble = memo(function AgentTodoBubble({ data, isStreaming, onSen
       selectedActionId: action.id,
       comment: comment.trim() || undefined,
     });
-    setSubmitted(true);
   }
 
   function handleSubmitWithComment() {
     if (submitted) return;
+    setSubmittedLocal(true);
     onSendEvent({
       event: 'agent_todo_response',
       sessionId: data.sessionId,
@@ -55,7 +59,6 @@ const AgentTodoBubble = memo(function AgentTodoBubble({ data, isStreaming, onSen
       selectedActionId: selected || '',
       comment: comment.trim() || undefined,
     });
-    setSubmitted(true);
   }
 
   return (
@@ -138,11 +141,11 @@ const AgentTodoBubble = memo(function AgentTodoBubble({ data, isStreaming, onSen
           </div>
         )}
 
-        {/* Confirmed state */}
+        {/* Confirmed state — shared across users */}
         {submitted && (
-          <div className="mt-2 text-xs text-warm-500 flex items-center gap-1">
+          <div className={`mt-2 text-xs flex items-center gap-1 ${resolvedByName ? 'text-amber-600' : 'text-warm-500'}`}>
             <Check className="h-3 w-3" />
-            已处理
+            {resolvedByName ? `已由 ${resolvedByName} 处理` : '已处理'}
           </div>
         )}
       </div>

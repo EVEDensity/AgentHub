@@ -4,12 +4,17 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db.init_db import now
 from app.db.session import afetch_all, afetch_one, aexecute
 from app.schemas.common import ChatTaskRequest
 from app.services.auth_service import get_current_user
+from app.services.auth.session_guard import (
+    SessionAccess,
+    SessionRole,
+    check_session_access,
+)
 from app.services.agent_service import list_messages
 from app.services.task_state_machine import task_state_machine
 
@@ -20,29 +25,76 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 class SessionCreateRequest(BaseModel):
     name: str = "新建会话"
+    visibility: str = "private"  # 'private' | 'public'
+
+
+class InviteRequest(BaseModel):
+    model_config = {"populate_by_name": True}
+    user_id: str = Field(default="", validation_alias="userId")       # direct user ID (preferred)
+    user_name: str = Field(default="", validation_alias="userName")   # alternative: resolve by username
+    role: str = "member"                                              # 'member' | 'viewer'
+
+
+class RoleChangeRequest(BaseModel):
+    role: str  # 'member' | 'viewer'
 
 
 @router.get("/sessions")
-async def sessions() -> list[dict]:
+async def sessions(user: dict = Depends(get_current_user)) -> list[dict]:
+    """Return sessions the current user can access.
+
+    Includes sessions where the user is a member (any role) plus
+    public sessions that are visible to all authenticated users.
+    """
+    user_id = user["id"]
     return await afetch_all(
-        "SELECT id,name,type,active,created_at AS \"createdAt\",is_pinned AS \"isPinned\",last_message_at AS \"lastMessageAt\" "
-        "FROM sessions ORDER BY is_pinned DESC, "
-        "CASE WHEN last_message_at != '' THEN last_message_at ELSE created_at END DESC"
+        """SELECT s.id, s.name, s.type, s.active,
+                  s.created_at AS "createdAt",
+                  s.is_pinned AS "isPinned",
+                  s.last_message_at AS "lastMessageAt",
+                  s.owner_id AS "ownerId",
+                  s.visibility,
+                  COALESCE(sm.role, 'viewer') AS "myRole"
+           FROM sessions s
+           LEFT JOIN session_members sm ON s.id = sm.session_id AND sm.user_id = $1
+           WHERE s.visibility = 'public'
+              OR sm.user_id = $1
+           ORDER BY s.is_pinned DESC,
+                    CASE WHEN s.last_message_at != '' THEN s.last_message_at
+                         ELSE s.created_at END DESC""",
+        user_id,
     )
 
 
 @router.post("/sessions")
-async def create_session(data: SessionCreateRequest, user: dict = Depends(get_current_user)) -> dict:
+async def create_session(
+    data: SessionCreateRequest, user: dict = Depends(get_current_user)
+) -> dict:
     session_id = f"session-{uuid.uuid4().hex[:8]}"
+    ts = now()
+    name = data.name.strip() or "新建会话"
+    visibility = data.visibility if data.visibility in ("private", "public") else "private"
+
     await aexecute(
-        "INSERT INTO sessions(id,name,type,participants,active,created_at) VALUES($1,$2,$3,$4,$5,$6)",
-        session_id, data.name.strip() or "新建会话", "group", "[]", 1, now(),
+        "INSERT INTO sessions(id,name,type,participants,active,created_at,owner_id,visibility) "
+        "VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+        session_id, name, "group", "[]", 1, ts, user["id"], visibility,
     )
-    return {"id": session_id, "name": data.name.strip() or "新建会话", "createdAt": now(), "active": 1, "type": "group"}
+    # Add creator as owner
+    await aexecute(
+        "INSERT INTO session_members(session_id,user_id,role,joined_at) VALUES($1,$2,$3,$4)",
+        session_id, user["id"], "owner", ts,
+    )
+    return {
+        "id": session_id, "name": name, "createdAt": ts,
+        "active": 1, "type": "group", "ownerId": user["id"],
+        "visibility": visibility, "myRole": "owner",
+    }
 
 
 @router.get("/sessions/{session_id}/messages")
-async def messages(session_id: str) -> list[dict]:
+async def messages(session_id: str, user: dict = Depends(get_current_user)) -> list[dict]:
+    access = await check_session_access(session_id, user)
     return await list_messages(session_id)
 
 
@@ -50,6 +102,11 @@ async def messages(session_id: str) -> list[dict]:
 async def delete_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
     from pathlib import Path
     from app.utils.async_file import aexists, aisfile, aunlink, aglob_simple, aread_json, awrite_json
+
+    # ── 0. Access control: only owner can delete ─────────────────────
+    access = await check_session_access(session_id, user)
+    if not access.can_manage:
+        raise HTTPException(status_code=403, detail="Only the session owner can delete it")
 
     # ── 1. Get session name before deletion (needed for memory cleanup) ──
     session_name: str | None = None
@@ -60,6 +117,8 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
     # ── 2. Delete from PostgreSQL ─────────────────────────────────────
     await aexecute("DELETE FROM messages WHERE session_id=$1", session_id)
     await aexecute("DELETE FROM tasks WHERE session_id=$1", session_id)
+    await aexecute("DELETE FROM session_members WHERE session_id=$1", session_id)
+    await aexecute("DELETE FROM user_presence WHERE session_id=$1", session_id)
     deleted = await afetch_one("DELETE FROM sessions WHERE id=$1 RETURNING id", session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -168,9 +227,30 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
 
 @router.put("/sessions/{session_id}")
 async def rename_session(session_id: str, data: dict, user: dict = Depends(get_current_user)) -> dict:
+    access = await check_session_access(session_id, user)
+
+    # Handle visibility change (owner only)
+    visibility = data.get("visibility")
+    if visibility and visibility in ("private", "public"):
+        if not access.can_manage:
+            raise HTTPException(status_code=403, detail="Only the owner can change visibility")
+        await aexecute(
+            "UPDATE sessions SET visibility=$1 WHERE id=$2", visibility, session_id,
+        )
+        from app.services.auth.session_guard import audit_session_event
+        await audit_session_event(
+            session_id, user["id"], "visibility_changed",
+            details=f"Changed to {visibility}",
+        )
+        return {"status": "success", "sessionId": session_id, "visibility": visibility}
+
+    # Handle name change
     name = (data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
+
+    if not access.can_write:
+        raise HTTPException(status_code=403, detail="No permission to rename this session")
 
     updated = await afetch_one(
         "UPDATE sessions SET name=$1 WHERE id=$2 RETURNING id", name, session_id,
@@ -182,12 +262,223 @@ async def rename_session(session_id: str, data: dict, user: dict = Depends(get_c
 
 @router.put("/sessions/{session_id}/pin")
 async def toggle_pin_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
+    access = await check_session_access(session_id, user)
+    # Pin is per-user preference — allow any member to pin
     row = await afetch_one("SELECT is_pinned FROM sessions WHERE id=$1", session_id)
     if not row:
         raise HTTPException(status_code=404, detail="Session not found")
     new_val = 0 if row.get("is_pinned") else 1
     await aexecute("UPDATE sessions SET is_pinned=$1 WHERE id=$2", new_val, session_id)
     return {"status": "success", "sessionId": session_id, "isPinned": new_val}
+
+
+# ── Multi-user membership endpoints ────────────────────────────────────
+
+
+@router.get("/sessions/{session_id}/members")
+async def list_members(session_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """List all members of a session. Any member can view the member list."""
+    access = await check_session_access(session_id, user)
+    rows = await afetch_all(
+        """SELECT sm.user_id AS "userId", u.name AS "userName", u.role AS "userRole",
+                  sm.role, sm.invited_by AS "invitedBy", sm.joined_at AS "joinedAt"
+           FROM session_members sm
+           JOIN users u ON sm.user_id = u.id
+           WHERE sm.session_id = $1
+           ORDER BY CASE sm.role WHEN 'owner' THEN 0 WHEN 'member' THEN 1 ELSE 2 END,
+                    sm.joined_at ASC""",
+        session_id,
+    )
+    # Attach online status from user_presence
+    presence_rows = await afetch_all(
+        "SELECT user_id, status FROM user_presence WHERE session_id=$1", session_id
+    )
+    presence_map = {p["user_id"]: p["status"] for p in presence_rows}
+
+    result = []
+    for r in rows:
+        r["onlineStatus"] = presence_map.get(r["userId"], "offline")
+        result.append(r)
+    return {"members": result}
+
+
+@router.post("/sessions/{session_id}/members")
+async def invite_member(
+    session_id: str, data: InviteRequest, user: dict = Depends(get_current_user)
+) -> dict:
+    """Invite a user to the session. Only owner can invite."""
+    access = await check_session_access(session_id, user)
+    if not access.can_invite:
+        raise HTTPException(status_code=403, detail="Only the owner can invite members")
+
+    # Resolve target user: prefer user_id, fall back to user_name lookup
+    target_user_id = data.user_id.strip()
+    if not target_user_id and data.user_name.strip():
+        target = await afetch_one(
+            "SELECT id, name FROM users WHERE name=$1", data.user_name.strip()
+        )
+        if target:
+            target_user_id = target["id"]
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="user_id or userName is required")
+
+    # Verify the target user exists
+    target = await afetch_one("SELECT id, name FROM users WHERE id=$1", target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    role = data.role if data.role in ("member", "viewer") else "member"
+    ts = now()
+    await aexecute(
+        "INSERT INTO session_members(session_id,user_id,role,invited_by,joined_at) "
+        "VALUES($1,$2,$3,$4,$5) ON CONFLICT(session_id,user_id) DO UPDATE SET role=$3",
+        session_id, target_user_id, role, user["id"], ts,
+    )
+
+    # If session is private, make sure the invited user can see it
+    await aexecute(
+        "UPDATE sessions SET visibility='private' WHERE id=$1 AND visibility='private'",
+        session_id,
+    )
+
+    return {
+        "status": "success",
+        "sessionId": session_id,
+        "userId": target_user_id,
+        "userName": target["name"],
+        "role": role,
+        "joinedAt": ts,
+    }
+
+
+@router.put("/sessions/{session_id}/members/{target_user_id}")
+async def change_member_role(
+    session_id: str, target_user_id: str,
+    data: RoleChangeRequest, user: dict = Depends(get_current_user),
+) -> dict:
+    """Change a member's role. Only owner can change roles."""
+    access = await check_session_access(session_id, user)
+    if not access.can_manage:
+        raise HTTPException(status_code=403, detail="Only the owner can change roles")
+
+    if data.role not in ("member", "viewer"):
+        raise HTTPException(status_code=400, detail="Invalid role (use 'member' or 'viewer')")
+
+    # Cannot change owner's role
+    existing = await afetch_one(
+        "SELECT role FROM session_members WHERE session_id=$1 AND user_id=$2",
+        session_id, target_user_id,
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Member not found")
+    if existing["role"] == "owner":
+        raise HTTPException(status_code=400, detail="Cannot change the owner's role")
+
+    await aexecute(
+        "UPDATE session_members SET role=$1 WHERE session_id=$2 AND user_id=$3",
+        data.role, session_id, target_user_id,
+    )
+    return {"status": "success", "sessionId": session_id, "userId": target_user_id, "role": data.role}
+
+
+@router.delete("/sessions/{session_id}/members/{target_user_id}")
+async def remove_member(
+    session_id: str, target_user_id: str, user: dict = Depends(get_current_user)
+) -> dict:
+    """Remove a member from the session. Owner can remove anyone.
+    Members can remove themselves (leave the session)."""
+    access = await check_session_access(session_id, user)
+
+    is_self = target_user_id == user["id"]
+    if not is_self and not access.can_manage:
+        raise HTTPException(status_code=403, detail="Only the owner can remove other members")
+
+    # Cannot remove the owner
+    existing = await afetch_one(
+        "SELECT role FROM session_members WHERE session_id=$1 AND user_id=$2",
+        session_id, target_user_id,
+    )
+    if not existing:
+        raise HTTPException(status_code=404, detail="Member not found")
+    if existing["role"] == "owner" and not is_self:
+        raise HTTPException(status_code=400, detail="Cannot remove the owner. Transfer ownership first.")
+
+    await aexecute(
+        "DELETE FROM session_members WHERE session_id=$1 AND user_id=$2",
+        session_id, target_user_id,
+    )
+    await aexecute(
+        "DELETE FROM user_presence WHERE session_id=$1 AND user_id=$2",
+        session_id, target_user_id,
+    )
+    return {"status": "success", "sessionId": session_id, "userId": target_user_id}
+
+
+@router.post("/sessions/{session_id}/join")
+async def join_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """Join a public session as a viewer. Private sessions require an invitation."""
+    sess = await afetch_one(
+        "SELECT id, name, visibility FROM sessions WHERE id=$1", session_id
+    )
+    if not sess:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Check existing membership
+    existing = await afetch_one(
+        "SELECT role FROM session_members WHERE session_id=$1 AND user_id=$2",
+        session_id, user["id"],
+    )
+    if existing:
+        return {"status": "already_member", "sessionId": session_id, "role": existing["role"]}
+
+    if sess["visibility"] != "public":
+        raise HTTPException(status_code=403, detail="This session is private. You need an invitation to join.")
+
+    ts = now()
+    await aexecute(
+        "INSERT INTO session_members(session_id,user_id,role,joined_at) VALUES($1,$2,$3,$4)",
+        session_id, user["id"], "viewer", ts,
+    )
+    return {"status": "success", "sessionId": session_id, "role": "viewer", "joinedAt": ts}
+
+
+@router.post("/sessions/{session_id}/transfer")
+async def transfer_ownership(
+    session_id: str, data: dict, user: dict = Depends(get_current_user)
+) -> dict:
+    """Transfer session ownership to another member. Only the current owner can do this."""
+    access = await check_session_access(session_id, user)
+    if not access.can_manage:
+        raise HTTPException(status_code=403, detail="Only the owner can transfer ownership")
+
+    target_user_id = data.get("userId", "")
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="userId is required")
+
+    # Verify target is a member
+    target = await afetch_one(
+        "SELECT role FROM session_members WHERE session_id=$1 AND user_id=$2",
+        session_id, target_user_id,
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Target user is not a member of this session")
+
+    ts = now()
+    # Demote current owner to member
+    await aexecute(
+        "UPDATE session_members SET role='member' WHERE session_id=$1 AND user_id=$2",
+        session_id, user["id"],
+    )
+    # Promote target to owner
+    await aexecute(
+        "UPDATE session_members SET role='owner' WHERE session_id=$1 AND user_id=$2",
+        session_id, target_user_id,
+    )
+    # Update sessions table owner_id
+    await aexecute(
+        "UPDATE sessions SET owner_id=$1 WHERE id=$2", target_user_id, session_id,
+    )
+    return {"status": "success", "sessionId": session_id, "newOwnerId": target_user_id}
 
 
 # ── Auto-name helpers ──────────────────────────────────────────
@@ -402,6 +693,10 @@ async def _call_llm_for_name(prompt: str) -> str | None:
 @router.post("/sessions/{session_id}/auto-name")
 async def auto_name_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Generate a session name automatically from conversation content."""
+    access = await check_session_access(session_id, user)
+    if not access.can_write:
+        raise HTTPException(status_code=403, detail="No permission to rename this session")
+
     session = await afetch_one("SELECT id, name FROM sessions WHERE id=$1", session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -478,6 +773,9 @@ async def try_auto_name_session(session_id: str) -> str | None:
 async def create_task(data: ChatTaskRequest, user: dict = Depends(get_current_user)) -> dict:
     if not data.message.strip():
         raise HTTPException(status_code=400, detail="message is required")
+    access = await check_session_access(data.sessionId, user)
+    if not access.can_write:
+        raise HTTPException(status_code=403, detail="No permission to send messages in this session")
     return await task_state_machine.create_task(data.sessionId, data.message)
 
 

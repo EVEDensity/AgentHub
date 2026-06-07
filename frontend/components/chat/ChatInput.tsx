@@ -116,6 +116,9 @@ interface ChatInputProps {
   // ── 执行权限 ──
   execPermission: ExecPermission;
   onExecPermissionChange: (mode: ExecPermission) => void;
+  // ── 自动回复：无@Agent 时是否用默认Agent回复 ──
+  autoReply: boolean;
+  onAutoReplyChange: (mode: boolean) => void;
 }
 
 const ChatInput = memo(function ChatInput({
@@ -129,6 +132,7 @@ const ChatInput = memo(function ChatInput({
   fileReferences, onRemoveReference, onClearAllReferences, onJumpToReference,
   quoteReferences, onRemoveQuoteReference, onClearAllQuoteReferences,
   execPermission, onExecPermissionChange,
+  autoReply, onAutoReplyChange,
 }: ChatInputProps) {
   // Emoji popover state. The panel is positioned via fixed offsets so
   // it always lands above the toolbar, regardless of scroll position.
@@ -833,6 +837,21 @@ const ChatInput = memo(function ChatInput({
               value={execPermission}
               onChange={onExecPermissionChange}
             />
+
+            {/* 自动回复 toggle — 无@Agent时是否自动用默认Agent回复 */}
+            <button
+              type="button"
+              onClick={() => onAutoReplyChange(!autoReply)}
+              className={`relative inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border transition-all duration-150 ease-out ${
+                autoReply
+                  ? 'bg-teal-500 text-white border-teal-500 shadow-sm'
+                  : 'border-warm-200 text-warm-400 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-600'
+              }`}
+              title={autoReply ? '自动回复已启用：无@Agent时默认Agent回复' : '仅发送模式：无@Agent时只发送消息不回复。@Agent始终有效'}
+            >
+              <span className="text-sm leading-none">{autoReply ? '🤖' : '💬'}</span>
+              <span>{autoReply ? '自动' : '仅发送'}</span>
+            </button>
           </div>
 
           {/* ── Layer 3: textarea ─────────────────────────────── */}

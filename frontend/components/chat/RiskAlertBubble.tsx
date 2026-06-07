@@ -50,19 +50,22 @@ const RISK_LABELS: Record<string, string> = {
 
 const RiskAlertBubble = memo(function RiskAlertBubble({ data, isStreaming, onSendEvent }: RiskAlertBubbleProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState(false);
+  const [submittedLocal, setSubmittedLocal] = useState(false);
+  // Shared state: derived from interaction_already_resolved broadcast or local click
+  const submitted = submittedLocal || !!data.resolvedBy;
+  const resolvedByName = data.resolvedByName || '';
   const colors = RISK_COLORS[data.riskLevel] || RISK_COLORS.medium;
 
   function handleAction(action: RiskWarningAction) {
     if (submitted) return;
     setSelected(action.id);
+    setSubmittedLocal(true);
     onSendEvent({
       event: 'risk_warning_response',
       sessionId: data.sessionId,
       warningMessageId: data.messageId,
       selectedActionId: action.id,
     });
-    setSubmitted(true);
   }
 
   const IntentIcon = data.riskLevel === 'critical' ? ShieldAlert : AlertTriangle;
@@ -119,11 +122,11 @@ const RiskAlertBubble = memo(function RiskAlertBubble({ data, isStreaming, onSen
           ))}
         </div>
 
-        {/* Submitted state */}
+        {/* Submitted state — shared across users */}
         {submitted && (
-          <div className="mt-2 text-xs text-warm-500 flex items-center gap-1">
+          <div className={`mt-2 text-xs flex items-center gap-1 ${resolvedByName ? 'text-amber-600' : 'text-warm-500'}`}>
             <X className="h-3 w-3" />
-            已选择应对方案
+            {resolvedByName ? `已由 ${resolvedByName} 选择应对方案` : '已选择应对方案'}
           </div>
         )}
       </div>

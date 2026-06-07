@@ -9,8 +9,9 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.db.init_db import now
 from app.db.session import afetch_all, afetch_one
-from app.services.agent_service import extract_mentions, save_message
+from app.services.agent_service import extract_mentions, get_direct_chat_agent, lookup_agent, save_message
 from app.services.auth_service import websocket_user
+from app.services.auth.session_guard import check_session_access, SessionRole
 from app.services.message_router import route_message, stream_message
 
 from app.services.guardrails import scan_input as _guardrails_scan
@@ -144,72 +145,202 @@ _pm_pending_questions: dict[str, dict[str, dict]] = {}
 _pm_pending_warnings: dict[str, dict[str, dict]] = {}
 _pm_pending_todos: dict[str, dict[str, dict]] = {}
 
+# ── Task preview confirmation wait ─────────────────────────────────
+# {session_id: {preview_msg_id: {"event": asyncio.Event, "decision": str, "modifications": str}}}
+_pending_task_previews: dict[str, dict[str, dict]] = {}
 
-async def _handle_agent_question_response(session_id: str, data: dict) -> None:
+
+async def _wait_for_task_confirmation(
+    session_id: str, preview_msg_id: str, token,
+) -> tuple[str, str]:
+    """Wait for the user to confirm/modify/cancel a task preview.
+
+    Returns ``(decision, modifications)`` where *decision* is one of
+    ``"confirm"``, ``"cancel"``, ``"modify"`` or ``"timeout"``.
+    """
+    event = asyncio.Event()
+    _pending_task_previews.setdefault(session_id, {})[preview_msg_id] = {
+        "event": event,
+        "decision": "confirm",
+        "modifications": "",
+    }
+
+    try:
+        await asyncio.wait_for(event.wait(), timeout=300)
+    except asyncio.TimeoutError:
+        _pending_task_previews.get(session_id, {}).pop(preview_msg_id, None)
+        logger.info(
+            "task_preview_wait timeout session=%s preview=%s — proceeding with execution",
+            session_id, preview_msg_id,
+        )
+        return "confirm", ""
+
+    if token and token.cancelled:
+        return "cancel", ""
+
+    entry = _pending_task_previews.get(session_id, {}).pop(preview_msg_id, None)
+    if entry:
+        return entry["decision"], entry.get("modifications", "")
+    return "confirm", ""
+
+
+def _resolve_pending_task_preview(
+    session_id: str, preview_msg_id: str, decision: str, modifications: str = "",
+) -> bool:
+    """Signal a waiting task preview. Returns True if it was actually pending."""
+    entry = _pending_task_previews.get(session_id, {}).get(preview_msg_id)
+    if entry:
+        entry["decision"] = decision
+        entry["modifications"] = modifications
+        entry["event"].set()
+        return True
+    return False
+
+# ── Resolved interaction tracking (for first-wins + broadcast to peers) ─
+# {session_id: {message_id: {"resolvedBy": user_id, "userName": str, "timestamp": str}}}
+_resolved_interactions: dict[str, dict[str, dict]] = {}
+
+
+def _mark_interaction_resolved(session_id: str, message_id: str, user_id: str, user_name: str) -> bool:
+    """Atomically mark an interaction as resolved. Returns True if this is the first resolver (wins)."""
+    session_map = _resolved_interactions.setdefault(session_id, {})
+    if message_id in session_map:
+        return False  # already resolved
+    session_map[message_id] = {"resolvedBy": user_id, "userName": user_name, "timestamp": now()}
+    return True
+
+
+def _get_resolved_by(session_id: str, message_id: str) -> dict | None:
+    """Return resolver info if already resolved, or None."""
+    return _resolved_interactions.get(session_id, {}).get(message_id)
+
+
+async def _handle_agent_question_response(session_id: str, data: dict, user_id: str = "", user_name: str = "") -> None:
     """User clicked an option on an agent_question bubble."""
     question_msg_id = data.get("questionMessageId", "")
     selected = data.get("selectedOptionId", "")
     custom = data.get("customAnswer", "")
+    # Security: derive sender from JWT, NOT from client-supplied data
+    sender_name = user_name or "user"
+    sender_id = user_id or ""
+
+    # ── First-wins: check if already resolved ────────────────────────
+    if not _mark_interaction_resolved(session_id, question_msg_id, sender_id, sender_name):
+        # Already resolved — notify the late responder
+        resolver = _get_resolved_by(session_id, question_msg_id)
+        await manager.broadcast_interaction_already_resolved(
+            session_id, question_msg_id, resolver or {},
+        )
+        return
+
+    # Wake up the waiting agent
     session_qs = _pm_pending_questions.get(session_id, {})
     entry = session_qs.get(question_msg_id)
     if entry:
         entry["response"] = {"selectedOptionId": selected, "customAnswer": custom}
         entry["event"].set()
+
+    # Broadcast to peers so their bubbles update
+    await manager.broadcast_interaction_already_resolved(
+        session_id, question_msg_id,
+        {"resolvedBy": sender_id, "userName": sender_name, "timestamp": now()},
+    )
+
     # Echo the user's choice as a message in the chat
     from app.db.init_db import now as _now
     choice_text = custom or f"[选择了选项: {selected}]"
-    await save_message(session_id, data.get("sender", "user"), choice_text, "text")
+    await save_message(session_id, sender_name, choice_text, "text", user_id=sender_id)
     await manager.broadcast(session_id, {
         "event": "message",
         "sessionId": session_id,
         "content": choice_text,
-        "sender": data.get("sender", "user"),
+        "sender": sender_name,
         "timestamp": _now(),
         "type": "text",
     })
 
 
-async def _handle_risk_warning_response(session_id: str, data: dict) -> None:
+async def _handle_risk_warning_response(session_id: str, data: dict, user_id: str = "", user_name: str = "") -> None:
     """User clicked an action on a risk_warning bubble."""
     warning_msg_id = data.get("warningMessageId", "")
     selected = data.get("selectedActionId", "")
+    # Security: derive sender from JWT, NOT from client-supplied data
+    sender_name = user_name or "user"
+    sender_id = user_id or ""
+
+    # ── First-wins: check if already resolved ────────────────────────
+    if not _mark_interaction_resolved(session_id, warning_msg_id, sender_id, sender_name):
+        resolver = _get_resolved_by(session_id, warning_msg_id)
+        await manager.broadcast_interaction_already_resolved(
+            session_id, warning_msg_id, resolver or {},
+        )
+        return
+
+    # Wake up the waiting agent
     session_ws = _pm_pending_warnings.get(session_id, {})
     entry = session_ws.get(warning_msg_id)
     if entry:
         entry["response"] = {"selectedActionId": selected}
         entry["event"].set()
+
+    # Broadcast to peers
+    await manager.broadcast_interaction_already_resolved(
+        session_id, warning_msg_id,
+        {"resolvedBy": sender_id, "userName": sender_name, "timestamp": now()},
+    )
+
     from app.db.init_db import now as _now
-    await save_message(session_id, data.get("sender", "user"),
-                       f"[风险应对: {selected}]", "text")
+    await save_message(session_id, sender_name,
+                       f"[风险应对: {selected}]", "text", user_id=sender_id)
     await manager.broadcast(session_id, {
         "event": "message",
         "sessionId": session_id,
         "content": f"⚠️ 风险应对: {selected}",
-        "sender": data.get("sender", "user"),
+        "sender": sender_name,
         "timestamp": _now(),
         "type": "text",
     })
 
 
-async def _handle_agent_todo_response(session_id: str, data: dict) -> None:
+async def _handle_agent_todo_response(session_id: str, data: dict, user_id: str = "", user_name: str = "") -> None:
     """User clicked approve/reject on an agent_todo bubble."""
     todo_msg_id = data.get("todoMessageId", "")
     selected = data.get("selectedActionId", "")
     comment = data.get("comment", "")
+    # Security: derive sender from JWT, NOT from client-supplied data
+    sender_name = user_name or "user"
+    sender_id = user_id or ""
+
+    # ── First-wins: check if already resolved ────────────────────────
+    if not _mark_interaction_resolved(session_id, todo_msg_id, sender_id, sender_name):
+        resolver = _get_resolved_by(session_id, todo_msg_id)
+        await manager.broadcast_interaction_already_resolved(
+            session_id, todo_msg_id, resolver or {},
+        )
+        return
+
+    # Wake up the waiting agent
     session_tds = _pm_pending_todos.get(session_id, {})
     entry = session_tds.get(todo_msg_id)
     if entry:
         entry["response"] = {"selectedActionId": selected, "comment": comment}
         entry["event"].set()
+
+    # Broadcast to peers
+    await manager.broadcast_interaction_already_resolved(
+        session_id, todo_msg_id,
+        {"resolvedBy": sender_id, "userName": sender_name, "timestamp": now()},
+    )
+
     from app.db.init_db import now as _now
     action_label = "批准" if "approve" in selected else ("拒绝" if "reject" in selected else selected)
-    await save_message(session_id, data.get("sender", "user"),
-                       f"[{action_label}]: {comment or ''}", "text")
+    await save_message(session_id, sender_name,
+                       f"[{action_label}]: {comment or ''}", "text", user_id=sender_id)
     await manager.broadcast(session_id, {
         "event": "message",
         "sessionId": session_id,
         "content": f"📋 {action_label}: {comment or ''}",
-        "sender": data.get("sender", "user"),
+        "sender": sender_name,
         "timestamp": _now(),
         "type": "text",
     })
@@ -221,9 +352,35 @@ async def _handle_task_preview_response(
     """User confirmed or modified a task preview."""
     decision = data.get("decision", "confirm")
     modifications = data.get("modifications", "")
+    preview_msg_id = data.get("previewMessageId", "")
+
+    # ── First-wins: check if already resolved ────────────────────────
+    if not _mark_interaction_resolved(session_id, preview_msg_id, user_id, user_name):
+        resolver = _get_resolved_by(session_id, preview_msg_id)
+        await manager.broadcast_interaction_already_resolved(
+            session_id, preview_msg_id, resolver or {},
+        )
+        return
+
+    # Broadcast to peers
+    await manager.broadcast_interaction_already_resolved(
+        session_id, preview_msg_id,
+        {"resolvedBy": user_id, "userName": user_name, "timestamp": now()},
+    )
+
     from app.db.init_db import now as _now
+
+    # ── If a _process_and_stream call is waiting on this preview,
+    #     signal it so it can proceed / cancel / modify in-line ──────
+    if _resolve_pending_task_preview(session_id, preview_msg_id, decision, modifications):
+        # The waiting flow will handle broadcasting the status message.
+        # Still save the user action for the transcript.
+        action_label = {"confirm": "确认执行", "cancel": "取消了任务执行", "modify": "修改计划"}.get(decision, decision)
+        await save_message(session_id, user_name, f"[{action_label}]: {modifications or ''}", "text", user_id=user_id)
+        return
+
     if decision == "cancel":
-        await save_message(session_id, user_name, "[取消了任务执行]", "text")
+        await save_message(session_id, user_name, "[取消了任务执行]", "text", user_id=user_id)
         await manager.broadcast(session_id, {
             "event": "message", "sessionId": session_id,
             "content": "❌ 任务已取消",
@@ -235,7 +392,7 @@ async def _handle_task_preview_response(
         await _process_and_stream(session_id, modified_content, user_name, user_id)
     else:
         # Confirm — the task execution continues in the current flow
-        await save_message(session_id, user_name, "[确认执行任务计划]", "text")
+        await save_message(session_id, user_name, "[确认执行任务计划]", "text", user_id=user_id)
         await manager.broadcast(session_id, {
             "event": "message", "sessionId": session_id,
             "content": "✅ 任务计划已确认，开始执行...",
@@ -365,7 +522,30 @@ def _chunk_text_for_streaming(text: str, chunk_size: int = 120) -> list[str]:
 async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str | None = Query(default=None)) -> None:
     user = await websocket_user(token)
     user_id = user["id"]
-    conn_id = await manager.connect(session_id, websocket, user_id)
+    user_name = user["name"]
+
+    # ── Session access control ─────────────────────────────────────
+    access = await check_session_access(session_id, user)
+
+    conn_id = await manager.connect(session_id, websocket, user_id, access.role.value, user_name)
+
+    # ── Broadcast user_joined to other connected users ─────────────
+    await manager.broadcast_user_event(session_id, {
+        "event": "user_joined",
+        "sessionId": session_id,
+        "userId": user_id,
+        "userName": user_name,
+        "role": access.role.value,
+        "timestamp": now(),
+    }, exclude_user=user_id)
+
+    # ── Send current user roster to the newly connected client ─────
+    online_users = manager.get_online_users(session_id)
+    await manager._send_safe(websocket, {
+        "event": "user_roster",
+        "sessionId": session_id,
+        "users": online_users,
+    })
 
     # Start per-connection heartbeat
     heartbeat_task = asyncio.create_task(
@@ -382,6 +562,28 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             # Handle client pong responses
             if data.get("event") == "pong":
                 manager.record_pong(session_id, conn_id)
+                continue
+
+            # ── Presence & typing indicators ────────────────────────────
+            if data.get("event") == "set_presence":
+                status = data.get("status", "online")
+                manager.set_user_presence(session_id, user_id, status)
+                await manager.broadcast_user_event(session_id, {
+                    "event": "presence_update",
+                    "sessionId": session_id,
+                    "users": [{"userId": user_id, "status": status}],
+                }, exclude_user=user_id)
+                continue
+
+            if data.get("event") == "typing":
+                is_typing = data.get("isTyping", False)
+                await manager.broadcast_user_event(session_id, {
+                    "event": "typing_indicator",
+                    "sessionId": session_id,
+                    "userId": user_id,
+                    "userName": user_name,
+                    "isTyping": is_typing,
+                }, exclude_user=user_id)
                 continue
 
             # Handle reconnection sync request
@@ -405,15 +607,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
 
             # ── PM/PMO interaction responses ──────────────────────────
             if data.get("event") == "agent_question_response":
-                await _handle_agent_question_response(session_id, data)
+                await _handle_agent_question_response(session_id, data, user_id, user["name"])
                 continue
 
             if data.get("event") == "risk_warning_response":
-                await _handle_risk_warning_response(session_id, data)
+                await _handle_risk_warning_response(session_id, data, user_id, user["name"])
                 continue
 
             if data.get("event") == "agent_todo_response":
-                await _handle_agent_todo_response(session_id, data)
+                await _handle_agent_todo_response(session_id, data, user_id, user["name"])
                 continue
 
             if data.get("event") == "task_preview_response":
@@ -424,8 +626,30 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
                 await _handle_diff_decision(session_id, data)
                 continue
 
+            # ── Execution permission mode change (real-time sync) ──────
+            if data.get("event") == "set_exec_permission":
+                exec_perm = data.get("mode")
+                if isinstance(exec_perm, int) and exec_perm in (1, 2, 3):
+                    set_session_exec_permission(session_id, exec_perm)
+                    from app.services.tools.permission import set_exec_permission
+                    set_exec_permission(session_id, exec_perm)
+                    await manager.broadcast_permission_mode_changed(
+                        session_id, exec_perm, user_id, user_name,
+                    )
+                continue
+
             content = str(data.get("content", "")).strip()
             if not content:
+                continue
+
+            # ── Write access check: viewers cannot send messages ───
+            if not access.can_write:
+                await manager._send_safe(websocket, {
+                    "event": "system",
+                    "sessionId": session_id,
+                    "content": "You do not have permission to send messages in this session.",
+                    "timestamp": now(),
+                })
                 continue
 
             # ── Store exec permission mode for this session ────────
@@ -455,10 +679,11 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             task = asyncio.create_task(
                 _process_and_stream(
                     session_id, content,
-                    data.get("sender", user["name"]),
+                    user["name"],
                     user_id,
                     data.get("attachments", []),
                     quote_references=data.get("quoteReferences", []),
+                    auto_reply=data.get("auto_reply", True),
                 )
             )
             task.add_done_callback(
@@ -473,6 +698,19 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             await heartbeat_task
         except (asyncio.CancelledError, Exception):
             pass
+
+        # ── Broadcast user_left before disconnecting ────────────────
+        try:
+            await manager.broadcast_user_event(session_id, {
+                "event": "user_left",
+                "sessionId": session_id,
+                "userId": user_id,
+                "userName": user_name,
+                "timestamp": now(),
+            }, exclude_user=user_id)
+        except Exception:
+            pass
+
         manager.disconnect(session_id, websocket)
         # Only teardown if this was the last connection
         if manager._connection_count(session_id) == 0:
@@ -511,14 +749,20 @@ async def _process_and_stream(
     user_id: str,
     attachments: list[dict] | None = None,
     quote_references: list[dict] | None = None,
+    auto_reply: bool = True,
 ) -> None:
-    """Process one user message with the per-session lock held."""
+    """Process one user message with the per-session lock held.
+
+    @mentions always take priority. When no agent is @mentioned:
+      - *auto_reply=True*   → the default chat agent responds automatically
+      - *auto_reply=False*  → no agent is invoked (message is saved only)
+    """
     lock = manager.get_session_lock(session_id)
     async with lock:
         token = manager.create_token(session_id)
 
         try:
-            await save_message(session_id, sender, content, "text")
+            await save_message(session_id, sender, content, "text", user_id=user_id)
 
             # ── Safety guardrail scan (Tier 1: auto-block) ──────────
             guard_result = _guardrails_scan(content)
@@ -576,6 +820,7 @@ async def _process_and_stream(
                     # Prepend skill context to the user content
                     content = skill_context + content
 
+            # ── Extract @mentions — they always take priority ────────
             mentioned = extract_mentions(content)
             target_agents: list[dict] = []
             seen: set[str] = set()
@@ -583,10 +828,7 @@ async def _process_and_stream(
                 if name in seen:
                     continue
                 seen.add(name)
-                row = await afetch_one(
-                    "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1",
-                    name,
-                )
+                row = await lookup_agent(name, user_id)
                 if row:
                     target_agents.append(row)
 
@@ -649,11 +891,33 @@ async def _process_and_stream(
                     eta_seconds=sum(t.get("estimatedSeconds", 45) for t in task_items),
                 )
 
+                # ── Wait for user confirmation before executing DAG ──
+                if not token.cancelled:
+                    multi_decision, multi_modifications = await _wait_for_task_confirmation(
+                        session_id, task_preview_msg_id, token,
+                    )
+                    if token.cancelled:
+                        return
+                    if multi_decision == "cancel":
+                        await manager.broadcast(session_id, {
+                            "event": "message", "sessionId": session_id,
+                            "content": "❌ 协作任务已取消",
+                            "sender": "system", "timestamp": now(), "type": "system",
+                        })
+                        return
+                    if multi_decision == "modify":
+                        # Re-process with user modifications
+                        modified_content = f"[用户修改了任务计划]\n{multi_modifications}"
+                        await _process_and_stream(
+                            session_id, modified_content, sender, user_id,
+                            attachments, quote_references, auto_reply,
+                        )
+                        return
+                    # "confirm" or "timeout" → proceed
+
                 # ── Step 2: Execute DAG with real agent invocations ──
                 async def _dag_invoke(sid, agent_id, content, extra_context=""):
-                    agent_row = await afetch_one(
-                        "SELECT * FROM agent_registry WHERE agent_id=$1", agent_id,
-                    )
+                    agent_row = await lookup_agent(agent_id, user_id, columns="*")
                     if not agent_row:
                         return f"[错误] Agent '{agent_id}' 未在注册表中找到"
                     collab_ctx = collab.context_for(agent_id) if collab else ""
@@ -685,9 +949,7 @@ async def _process_and_stream(
                 # ── Step 3: Synthesize results ────────────────────────
                 if not token.cancelled:
                     async def _synthesize_invoke(prompt):
-                        architect_row = await afetch_one(
-                            "SELECT * FROM agent_registry WHERE agent_id='Architect'",
-                        )
+                        architect_row = await lookup_agent("Architect", user_id, columns="*")
                         if not architect_row:
                             return None
                         return await _invoke_agent(
@@ -705,10 +967,13 @@ async def _process_and_stream(
                     )
 
                     if final_response and not token.cancelled:
-                        # Save final synthesized message
+                        # Save final synthesized message — attach the user who
+                        # triggered this DAG so the frontend can show the
+                        # owner label "X 的 Architect" on the message.
                         await save_message(
                             session_id, final_response, "Architect",
                             "text", None, None,
+                            user_id=user_id or "",
                         )
                         await manager.broadcast(
                             session_id,
@@ -719,6 +984,7 @@ async def _process_and_stream(
                                 "sender": "Architect",
                                 "timestamp": now(),
                                 "type": "text",
+                                "userId": user_id or "",
                             },
                         )
 
@@ -768,21 +1034,58 @@ async def _process_and_stream(
 
                 return
 
-            # ── Single-agent path ─────────────────────────────────────
-            agent = target_agents[0] if target_agents else None
+            # ── Resolve target agent ──────────────────────────────────
+            # Behavior matrix (is_direct_mention flag):
+            #   ┌──────────────────────────┬──────────────────────────────────┐
+            #   │ Scenario                 │ Behavior                         │
+            #   ├──────────────────────────┼──────────────────────────────────┤
+            #   │ @Agent do X              │ Direct execution, no preview,    │
+            #   │                          │ no wait (user chose the agent)   │
+            #   ├──────────────────────────┼──────────────────────────────────┤
+            #   │ do X + autoReply ON      │ Task preview → wait for confirm  │
+            #   │                          │ → execute (Orchestrator plans)   │
+            #   ├──────────────────────────┼──────────────────────────────────┤
+            #   │ do X + autoReply OFF     │ Save message only, no agent call │
+            #   ├──────────────────────────┼──────────────────────────────────┤
+            #   │ @A @B @C do X            │ DAG task preview → wait for      │
+            #   │ (multi-agent, handled    │ confirm → execute (handled in    │
+            #   │  earlier at line ~836)   │ multi-agent path above)          │
+            #   └──────────────────────────┴──────────────────────────────────┘
+            is_direct_mention = bool(target_agents)  # user explicitly @mentioned an agent
+            if target_agents:
+                # Single @mentioned agent → use it directly, no preview
+                agent = target_agents[0]
+            elif auto_reply:
+                # No @mention + auto-reply ON → fall back to default chat agent
+                logger.info(
+                    "ws auto_reply mode session=%s user=%s",
+                    session_id, user_id,
+                )
+                agent = await get_direct_chat_agent(user_id)
+            else:
+                # No @mention + auto-reply OFF → message saved only, no agent
+                logger.info(
+                    "ws no_agent mode session=%s user=%s (message saved, no agent invoked)",
+                    session_id, user_id,
+                )
+                return
 
             # ── 🟡 Trigger 1 (single): Task Preview ───────────────────
-            # For single-agent invocations, broadcast a lightweight task
-            # preview so the user knows which agent will process their request.
-            if agent and not token.cancelled:
+            # Only show + wait when the *default agent* (Orchestrator) handles
+            # an un-directed message — the user needs to review the plan before
+            # the Orchestrator dispatches to other agents.
+            # Direct @mentions skip this: the user already chose their agent.
+            preview_msg_id: str = ""
+            if agent and not token.cancelled and not is_direct_mention:
                 agent_domain_label = {
                     "orchestrator": "协调调度", "architect": "架构设计",
                     "codegen": "代码生成", "review": "代码审查",
                     "test": "测试验证", "deploy": "部署发布",
                 }.get(agent.get("domain", ""), agent.get("domain", "general"))
+                preview_msg_id = str(uuid.uuid4())
                 await manager.broadcast_task_preview(
                     session_id,
-                    str(uuid.uuid4()),
+                    preview_msg_id,
                     [{
                         "id": "task_0",
                         "description": f"{agent['agent_id']} ({agent_domain_label}): 处理您的请求",
@@ -792,6 +1095,30 @@ async def _process_and_stream(
                     }],
                     eta_seconds=30,
                 )
+
+            # ── Wait for user confirmation before executing ──────────
+            if preview_msg_id and not token.cancelled:
+                decision, modifications = await _wait_for_task_confirmation(
+                    session_id, preview_msg_id, token,
+                )
+                if token.cancelled:
+                    return
+                if decision == "cancel":
+                    await manager.broadcast(session_id, {
+                        "event": "message", "sessionId": session_id,
+                        "content": "❌ 任务已取消",
+                        "sender": "system", "timestamp": now(), "type": "system",
+                    })
+                    return
+                if decision == "modify":
+                    # Re-process with user modifications
+                    modified_content = f"[用户修改了任务计划]\n{modifications}"
+                    await _process_and_stream(
+                        session_id, modified_content, sender, user_id,
+                        attachments, quote_references, auto_reply,
+                    )
+                    return
+                # decision == "confirm" or "timeout" → proceed
 
             await _invoke_agent(
                 session_id, content, agent, user_id, token, attachments or [],
@@ -1010,6 +1337,43 @@ async def _invoke_agent(
                     ],
                 )
 
+        elif status == "circuit_breaker":
+            # ── 🟡 Trigger 6: Circuit Breaker — tool loop interrupted ──
+            # The tool-call loop detected a dead-loop pattern (same tool
+            # failing repeatedly) and was force-stopped to prevent infinite
+            # retries.  Notify the user so they understand the interruption.
+            breaker_tier = tool_results[0].get("tier", "unknown") if tool_results else "unknown"
+            failed_tools = [tc.get("name", "?") for tc in tool_calls]
+            tier_desc = {
+                "tier1": f"工具 {'/'.join(failed_tools)} 连续失败（相同错误），已自动熔断",
+                "tier2": f"工具 {'/'.join(failed_tools)} 连续缺少必要参数，已自动熔断",
+                "tier3": f"工具 {'/'.join(failed_tools)} 连续多轮全部失败，已自动熔断",
+            }.get(breaker_tier, f"工具调用循环异常中断（{breaker_tier}）")
+            await manager.broadcast(
+                session_id,
+                {
+                    "event": "message",
+                    "sessionId": session_id,
+                    "content": f"⚡ {tier_desc}\n\nAgent 将基于已有结果生成回复。您可以调整问题后重试，或 @ 指定其他 Agent 处理。",
+                    "sender": "system",
+                    "timestamp": now(),
+                    "type": "system",
+                },
+            )
+            # Update thinking: circuit breaker tripped
+            await manager.broadcast(
+                session_id,
+                {
+                    "event": "agent_thinking",
+                    "sessionId": session_id,
+                    "messageId": thinking_msg_id,
+                    "agentId": agent_id,
+                    "phase": "synthesizing",
+                    "details": f"工具调用已熔断 — {tier_desc}",
+                    "timestamp": now(),
+                },
+            )
+
         elif status == "done" and tool_results:
             await manager.broadcast(
                 session_id,
@@ -1207,7 +1571,7 @@ async def _broadcast_final_message(session_id: str, message_id: str, response: d
 
 async def _broadcast_final_db_message(session_id: str, message_id: str) -> None:
     rows = await afetch_all(
-        "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1",
+        "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,user_id AS \"userId\",created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1",
         session_id,
     )
     if rows:

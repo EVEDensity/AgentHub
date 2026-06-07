@@ -1,20 +1,12 @@
 import { useRouter } from 'next/router';
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
-import type { Agent, AgentRoute, AgentRouteNode, ConsolidationResult, MemoryDetail, MemoryFileInfo, MemorySearchResult, SessionSummary, SkillMeta, SkillDetail, User } from '../types';
+import type { Agent, ConsolidationResult, MemoryDetail, MemoryFileInfo, MemorySearchResult, SessionSummary, SkillMeta, SkillDetail, User } from '../types';
 import { PLATFORM_LABELS, PLATFORM_COLORS } from '../types';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
 import TagInput from '../components/admin/TagInput';
 
 // ── Dynamic imports for heavy / conditionally-rendered sections ──
-const TokenUsageHeatmap = dynamic(() => import('../components/heatmap/TokenUsageHeatmap'), {
-  ssr: false,
-  loading: () => null,
-});
-const AgentCanvas = dynamic(() => import('../components/flow/AgentCanvas'), {
-  ssr: false,
-  loading: () => null,
-});
 const CodeReviewPanel = dynamic(() => import('../components/chat/CodeReviewPanel'), {
   ssr: false,
   loading: () => null,
@@ -30,13 +22,12 @@ const SETTINGS_MENU = [
   '通用',
   'IM 接入',
   'MCP',
-  'Agent Flow',
   '技能',
   '记忆',
   '插件',
   'Computer Use',
-  'Token 用量',
   '审计日志',
+  '用户管理',
 ] as const;
 
 type MenuItem = (typeof SETTINGS_MENU)[number];
@@ -52,7 +43,6 @@ export default function AdminPage(): JSX.Element {
     return fallback;
   }
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [routes, setRoutes] = useState<AgentRoute[]>([]);
   const [activeMenu, setActiveMenu] = useState<MenuItem>('服务商');
   const [newAgent, setNewAgent] = useState({
     agentId: '',
@@ -85,12 +75,6 @@ export default function AdminPage(): JSX.Element {
     capabilityTags: [] as string[],
     baseUrl: '',
     apiKey: '',
-  });
-  const [form, setForm] = useState<{ name: string; description: string; triggerKeywords: string; nodes: AgentRouteNode[] }>({
-    name: '', description: '', triggerKeywords: '', nodes: [
-      { id: 'orchestrator', domain: 'orchestrator', agent: 'Orchestrator', description: '元调度', dependencies: [], status: 'PENDING', layer: 'meta' },
-      { id: 'codegen', domain: 'codegen', agent: 'CodeGen', description: '代码生成', dependencies: ['orchestrator'], status: 'PENDING', layer: 'domain' },
-    ],
   });
 
   const [memoryLoading, setMemoryLoading] = useState(false);
@@ -167,33 +151,67 @@ export default function AdminPage(): JSX.Element {
   );
   const [generalSettingsLoaded, setGeneralSettingsLoaded] = useState(false);
 
+  // ── Token usage state (embedded in 用户管理) ─────────────────────
+  const [tokenData, setTokenData] = useState<{
+    range: { start: string; end: string };
+    today: { sessions: number; messages: number; tokens: number };
+    yesterday: { sessions: number; messages: number; tokens: number };
+    last30: { sessions: number; messages: number; tokens: number };
+    days: Array<{ date: string; sessions: number; messages: number; tokens: number }>;
+    generatedAt: string;
+  } | null>(null);
+  const [tokenLoading, setTokenLoading] = useState(false);
+  const [tokenError, setTokenError] = useState('');
+
+  // ── User profile card state ────────────────────────────────────
+  const [profileBio, setProfileBio] = useState('Full‑stack developer & AI enthusiast. Building the future of collaborative agent‑driven development.');
+  const [profileEditingField, setProfileEditingField] = useState<string | null>(null);
+  const [profileFieldDraft, setProfileFieldDraft] = useState('');
+  const [profileLocation, setProfileLocation] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profileOrg, setProfileOrg] = useState('');
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
+  const [profileUploading, setProfileUploading] = useState(false);
+
+  // ── User management state ──────────────────────────────────────
+  const [userList, setUserList] = useState<Array<{ id: string; name: string; role: string; created_at: string }>>([]);
+  const [userListLoading, setUserListLoading] = useState(false);
+  const [userListError, setUserListError] = useState('');
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [newUserRole, setNewUserRole] = useState('developer');
+  const [creatingUser, setCreatingUser] = useState(false);
+
   // ── Load settings from backend on mount ──────────────────────────
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    fetch('/api/settings')
+    // Try per-user settings first, fall back to global settings
+    fetch('/api/user/settings', { headers: authHeaders() })
       .then((r) => r.ok ? r.json() : null)
-      .then((data: Record<string, unknown> | null) => {
-        if (!data) return;
-        // Merge backend values, preferring backend over localStorage defaults
-        if (typeof data.theme === 'string') { setGeneralTheme(data.theme); localStorage.setItem('agenthub_theme', data.theme); }
-        if (typeof data.lang === 'string') { setGeneralLang(data.lang); localStorage.setItem('agenthub_lang', data.lang); }
-        if (typeof data.reply_lang === 'string') { setGeneralReplyLang(data.reply_lang); localStorage.setItem('agenthub_reply_lang', data.reply_lang); }
-        if (typeof data.reasoning === 'number') { setGeneralReasoning(data.reasoning); localStorage.setItem('agenthub_reasoning', String(data.reasoning)); }
-        if (typeof data.thinking === 'boolean') { setGeneralThinking(data.thinking); localStorage.setItem('agenthub_thinking', String(data.thinking)); }
-        if (typeof data.notify === 'boolean') { setGeneralNotify(data.notify); localStorage.setItem('agenthub_notify', String(data.notify)); }
-        if (typeof data.zoom === 'number') { setGeneralZoom(data.zoom); localStorage.setItem('agenthub_zoom', String(data.zoom)); }
+      .then((data: { settings?: Record<string, string> } | null) => {
+        if (!data?.settings) return;
+        const s = data.settings;
+        if (typeof s.theme === 'string') { setGeneralTheme(s.theme); localStorage.setItem('agenthub_theme', s.theme); }
+        if (typeof s.lang === 'string') { setGeneralLang(s.lang); localStorage.setItem('agenthub_lang', s.lang); }
+        if (typeof s.reply_lang === 'string') { setGeneralReplyLang(s.reply_lang); localStorage.setItem('agenthub_reply_lang', s.reply_lang); }
+        if (typeof s.reasoning === 'string') { const v = parseInt(s.reasoning, 10); if (!isNaN(v)) { setGeneralReasoning(v); localStorage.setItem('agenthub_reasoning', s.reasoning); } }
+        if (typeof s.thinking === 'string') { const v = s.thinking !== 'false'; setGeneralThinking(v); localStorage.setItem('agenthub_thinking', s.thinking); }
+        if (typeof s.notify === 'string') { const v = s.notify !== 'false'; setGeneralNotify(v); localStorage.setItem('agenthub_notify', s.notify); }
+        if (typeof s.zoom === 'string') { const v = parseInt(s.zoom, 10); if (!isNaN(v)) { setGeneralZoom(v); localStorage.setItem('agenthub_zoom', s.zoom); } }
       })
       .catch(() => { /* backend may not be running — use localStorage defaults */ })
       .finally(() => setGeneralSettingsLoaded(true));
   }, []);
 
-  // ── Sync helper: persist a single setting to backend ────────────
+  // ── Sync helper: persist settings to per-user backend ──────────
   function syncSetting(key: string, value: unknown): void {
     if (typeof window === 'undefined') return;
-    fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ [key]: value }),
+    const token = localStorage.getItem('agenthub_token');
+    if (!token) return;
+    fetch('/api/user/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ key, value: String(value) }),
     }).catch(() => { /* backend off — saved in localStorage only */ });
   }
 
@@ -280,6 +298,11 @@ export default function AdminPage(): JSX.Element {
     }
     if (activeMenu === '技能') {
       void loadSkills();
+    }
+    if (activeMenu === '用户管理') {
+      void loadUsers();
+      void loadTokenUsage();
+      void loadProfile();
     }
   }, [activeMenu]);
 
@@ -383,21 +406,202 @@ export default function AdminPage(): JSX.Element {
   const [defaultChatAgent, setDefaultChatAgent] = useState<string>('Orchestrator');
 
   async function refresh(): Promise<void> {
-    const [a, r, d] = await Promise.all([
+    const [a, d] = await Promise.all([
       fetch('/api/agent/registry', { headers: authHeaders() }),
-      fetch('/api/admin/workflows', { headers: authHeaders() }),
       fetch('/api/admin/chat-defaults', { headers: authHeaders() }),
     ]);
     if (a.ok) setAgents((await a.json()) as Agent[]);
-    if (r.ok) setRoutes((await r.json()) as AgentRoute[]);
     if (d.ok) setDefaultChatAgent(((await d.json()) as { agentId: string }).agentId);
+  }
+
+  // ── User management helpers ──────────────────────────────────
+
+  async function loadUsers(): Promise<void> {
+    setUserListLoading(true);
+    setUserListError('');
+    try {
+      const res = await fetch('/api/user/list', { headers: authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setUserList(data.users || []);
+    } catch (e) {
+      setUserListError(e instanceof Error ? e.message : 'Failed to load users');
+    } finally {
+      setUserListLoading(false);
+    }
+  }
+
+  // ── Token usage helpers ──────────────────────────────────────
+
+  function formatTokens(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M tokens`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K tokens`;
+    return `${n} tokens`;
+  }
+
+  async function loadTokenUsage(): Promise<void> {
+    setTokenLoading(true);
+    setTokenError('');
+    try {
+      const token = localStorage.getItem('agenthub_token');
+      const res = await fetch('/api/admin/analytics/token-usage', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data && typeof data === 'object' && Array.isArray(data.days)) {
+        setTokenData(data);
+      }
+    } catch (e) {
+      setTokenError(e instanceof Error ? e.message : 'Failed to load token data');
+    } finally {
+      setTokenLoading(false);
+    }
+  }
+
+  // ── User profile helpers ─────────────────────────────────────
+
+  async function loadProfile(): Promise<void> {
+    try {
+      const settingsRes = await fetch('/api/user/settings', { headers: authHeaders() });
+      if (settingsRes.ok) {
+        const data = await settingsRes.json() as { settings?: Record<string, string> };
+        if (data?.settings) {
+          if (data.settings.bio) setProfileBio(data.settings.bio);
+          if (data.settings.location) setProfileLocation(data.settings.location);
+          if (data.settings.email) setProfileEmail(data.settings.email);
+          if (data.settings.org) setProfileOrg(data.settings.org);
+          if (data.settings.avatarUrl) setProfileAvatarUrl(data.settings.avatarUrl);
+        }
+      }
+    } catch { /* use defaults */ }
+  }
+
+  async function saveProfileSetting(key: string, value: string): Promise<void> {
+    try {
+      await fetch('/api/user/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ key, value }),
+      });
+    } catch { /* ignore */ }
+  }
+
+  function handleStartEditField(field: string, currentValue: string): void {
+    setProfileFieldDraft(currentValue);
+    setProfileEditingField(field);
+  }
+
+  async function handleSaveField(): Promise<void> {
+    const field = profileEditingField;
+    if (!field) return;
+    const newValue = profileFieldDraft.trim();
+    // Update local state based on field
+    switch (field) {
+      case 'bio': setProfileBio(newValue); break;
+      case 'location': setProfileLocation(newValue); break;
+      case 'email': setProfileEmail(newValue); break;
+      case 'org': setProfileOrg(newValue); break;
+    }
+    setProfileEditingField(null);
+    setProfileFieldDraft('');
+    await saveProfileSetting(field, newValue);
+  }
+
+  function handleCancelEditField(): void {
+    setProfileEditingField(null);
+    setProfileFieldDraft('');
+  }
+
+  async function handleUploadProfileAvatar(e: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setProfileUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/agent/registry/avatar', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok && data.avatarUrl) {
+        setProfileAvatarUrl(data.avatarUrl);
+        await saveProfileSetting('avatarUrl', data.avatarUrl);
+        setNotice('头像已更新');
+      } else {
+        setNotice(fmtErr(data.detail, '上传失败'));
+      }
+    } catch { setNotice('头像上传失败'); }
+    finally { setProfileUploading(false); }
+  }
+
+  async function handleCreateUser(e: FormEvent): Promise<void> {
+    e.preventDefault();
+    if (!newUserName.trim() || !newUserPassword.trim()) return;
+    setCreatingUser(true);
+    setUserListError('');
+    try {
+      const res = await fetch('/api/user/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ name: newUserName.trim(), password: newUserPassword, role: newUserRole }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || 'Create failed');
+      }
+      setNewUserName('');
+      setNewUserPassword('');
+      setNewUserRole('developer');
+      await loadUsers();
+    } catch (e) {
+      setUserListError(e instanceof Error ? e.message : 'Create failed');
+    } finally {
+      setCreatingUser(false);
+    }
+  }
+
+  async function handleChangeUserRole(userId: string, newRole: string): Promise<void> {
+    try {
+      const res = await fetch(`/api/user/${userId}/role`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ role: newRole }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || 'Role change failed');
+      }
+      await loadUsers();
+    } catch (e) {
+      setUserListError(e instanceof Error ? e.message : 'Role change failed');
+    }
+  }
+
+  async function handleDeleteUser(userId: string, userName: string): Promise<void> {
+    if (!confirm(`确定要删除用户 \"${userName}\" 吗？此操作不可撤销。`)) return;
+    try {
+      const res = await fetch(`/api/user/${userId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || 'Delete failed');
+      }
+      await loadUsers();
+    } catch (e) {
+      setUserListError(e instanceof Error ? e.message : 'Delete failed');
+    }
   }
 
   async function loadMemoryFiles(): Promise<void> {
     setMemoryLoading(true);
     setMemoryError('');
     try {
-      const res = await fetch('/api/memory/files');
+      const res = await fetch('/api/memory/files', { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as MemoryFileInfo[];
       setMemoryFiles(data);
@@ -423,7 +627,7 @@ export default function AdminPage(): JSX.Element {
 
   async function loadMemoryDetail(filename: string): Promise<void> {
     try {
-      const res = await fetch(`/api/memory/files/${encodeURIComponent(filename)}`);
+      const res = await fetch(`/api/memory/files/${encodeURIComponent(filename)}`, { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const detail = (await res.json()) as MemoryDetail;
       setMemoryDetail(detail);
@@ -440,7 +644,7 @@ export default function AdminPage(): JSX.Element {
     try {
       const res = await fetch(`/api/memory/files/${encodeURIComponent(activeMemoryFile)}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
           name: memoryDetail.meta.name,
           description: memoryDetail.meta.description,
@@ -484,6 +688,7 @@ export default function AdminPage(): JSX.Element {
     try {
       const res = await fetch(url, {
         method: 'POST',
+        headers: authHeaders(),
         body: formData,
       });
       const data = await res.json();
@@ -524,6 +729,7 @@ export default function AdminPage(): JSX.Element {
     try {
       const res = await fetch(`/api/memory/files/${encodeURIComponent(pendingDeleteFile.filename)}`, {
         method: 'DELETE',
+        headers: authHeaders(),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setNotice(`已删除「${pendingDeleteFile.name}」，可在暂存区 30 天内恢复`);
@@ -543,7 +749,7 @@ export default function AdminPage(): JSX.Element {
   async function loadTrash(): Promise<void> {
     setTrashLoading(true);
     try {
-      const res = await fetch('/api/memory/trash');
+      const res = await fetch('/api/memory/trash', { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setTrashItems(data.trash || []);
@@ -556,7 +762,7 @@ export default function AdminPage(): JSX.Element {
 
   async function handleRecoverFromTrash(trashName: string): Promise<void> {
     try {
-      const res = await fetch(`/api/memory/trash/${encodeURIComponent(trashName)}/recover`, { method: 'POST' });
+      const res = await fetch(`/api/memory/trash/${encodeURIComponent(trashName)}/recover`, { method: 'POST', headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setNotice('记忆已从暂存区恢复');
       await loadMemoryFiles();
@@ -568,7 +774,7 @@ export default function AdminPage(): JSX.Element {
 
   async function handlePurgeFromTrash(trashName: string): Promise<void> {
     try {
-      const res = await fetch(`/api/memory/trash/${encodeURIComponent(trashName)}`, { method: 'DELETE' });
+      const res = await fetch(`/api/memory/trash/${encodeURIComponent(trashName)}`, { method: 'DELETE', headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setNotice('记忆已永久删除');
       await loadTrash();
@@ -582,7 +788,7 @@ export default function AdminPage(): JSX.Element {
   async function loadSessionSummaries(): Promise<void> {
     setSessionsLoading(true);
     try {
-      const res = await fetch('/api/memory/sessions');
+      const res = await fetch('/api/memory/sessions', { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { sessions: SessionSummary[]; count: number };
       setSessionList(data.sessions || []);
@@ -595,7 +801,7 @@ export default function AdminPage(): JSX.Element {
 
   async function loadSessionDetail(sessionId: string): Promise<void> {
     try {
-      const res = await fetch(`/api/memory/sessions/${encodeURIComponent(sessionId)}`);
+      const res = await fetch(`/api/memory/sessions/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { session_id: string; summary: string };
       setActiveSessionId(sessionId);
@@ -608,7 +814,7 @@ export default function AdminPage(): JSX.Element {
   async function loadGlobalSummary(): Promise<void> {
     setGlobalSummaryLoading(true);
     try {
-      const res = await fetch('/api/memory/global-summary');
+      const res = await fetch('/api/memory/global-summary', { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { global_summary: string };
       setGlobalSummary(data.global_summary || '');
@@ -622,7 +828,7 @@ export default function AdminPage(): JSX.Element {
   async function refreshGlobalSummary(): Promise<void> {
     setGlobalSummaryLoading(true);
     try {
-      const res = await fetch('/api/memory/global-summary/refresh', { method: 'POST' });
+      const res = await fetch('/api/memory/global-summary/refresh', { method: 'POST', headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { global_summary: string };
       setGlobalSummary(data.global_summary || '');
@@ -642,7 +848,7 @@ export default function AdminPage(): JSX.Element {
     try {
       const res = await fetch('/api/memory/consolidate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ dry_run: dryRun }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -669,7 +875,7 @@ export default function AdminPage(): JSX.Element {
     }
     setMemorySearchLoading(true);
     try {
-      const res = await fetch(`/api/memory/search?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`/api/memory/search?q=${encodeURIComponent(q)}`, { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { results: MemorySearchResult[] };
       setMemorySearchResults(data.results || []);
@@ -858,51 +1064,6 @@ export default function AdminPage(): JSX.Element {
     }
   }
 
-  function addNode(layer: 'meta' | 'domain' | 'micro'): void {
-    const picked = agents[0];
-    if (!picked) return;
-    setForm((p) => ({ ...p, nodes: [...p.nodes, { id: `${picked.agentId.toLowerCase()}-${Date.now()}`, domain: picked.domain, agent: picked.agentId, description: `执行 ${picked.agentId}`, dependencies: [], status: 'PENDING', layer }] }));
-  }
-
-  function moveNode(i: number, d: -1 | 1): void {
-    setForm((p) => {
-      const n = [...p.nodes];
-      const t = i + d;
-      if (t < 0 || t >= n.length) return p;
-      [n[i], n[t]] = [n[t], n[i]];
-      return { ...p, nodes: n };
-    });
-  }
-
-  function patchNode(i: number, patch: Partial<AgentRouteNode>): void {
-    setForm((p) => ({ ...p, nodes: p.nodes.map((n, idx) => idx === i ? { ...n, ...patch } : n) }));
-  }
-
-  async function createRoute(e: FormEvent<HTMLFormElement>): Promise<void> {
-    e.preventDefault();
-    const payload = { name: form.name, description: form.description, triggerKeywords: form.triggerKeywords.split(',').map((x) => x.trim()).filter(Boolean), nodes: form.nodes, isDefault: false };
-    const res = await fetch('/api/admin/workflows', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify(payload) });
-    const data = await res.json();
-    setNotice(res.ok ? `路线创建成功：${form.name}` : fmtErr(data.detail, '路线创建失败'));
-    if (res.ok) await refresh();
-  }
-
-  async function setDefaultRoute(id: number): Promise<void> {
-    const res = await fetch(`/api/admin/workflows/${id}/default`, { method: 'POST', headers: authHeaders() });
-    setNotice(res.ok ? '默认路线已更新' : '设置失败');
-    if (res.ok) await refresh();
-  }
-
-  async function toggleRoute(route: AgentRoute): Promise<void> {
-    const res = await fetch(`/api/admin/workflows/${route.id}/active`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ active: !route.active }),
-    });
-    setNotice(res.ok ? `路线已${route.active ? '禁用' : '启用'}` : '操作失败');
-    if (res.ok) await refresh();
-  }
-
   async function handleSetDefaultChatAgent(agentId: string): Promise<void> {
     const res = await fetch('/api/admin/chat-defaults', {
       method: 'POST',
@@ -1048,31 +1209,6 @@ export default function AdminPage(): JSX.Element {
     );
   }
 
-  function renderAgentsModule(): JSX.Element {
-    return (
-      <section className="space-y-6">
-        <div className="card p-6">
-          <h2 className="text-h3">新建 Agent 路线（低代码）</h2>
-          <form onSubmit={createRoute} className="mt-4 space-y-3">
-            <input className="input-field" placeholder="路线名称" value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} />
-            <input className="input-field" placeholder="关键词（逗号）" value={form.triggerKeywords} onChange={(e) => setForm((p) => ({ ...p, triggerKeywords: e.target.value }))} />
-            <textarea className="input-field" rows={2} placeholder="描述" value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} />
-            <div className="flex gap-2"><button type="button" className="btn-secondary" onClick={() => addNode('meta')}>+Layer1</button><button type="button" className="btn-secondary" onClick={() => addNode('domain')}>+Layer2</button><button type="button" className="btn-secondary" onClick={() => addNode('micro')}>+Layer3</button></div>
-            <div className="space-y-2">{form.nodes.map((n, i) => <div key={n.id + i} className="rounded border border-warm-150 p-2"><div className="mb-2 flex items-center gap-2"><select className="input-field h-8 py-1 text-xs" value={n.agent} onChange={(e) => patchNode(i, { agent: e.target.value })}>{agents.map((a) => <option key={a.agentId} value={a.agentId}>{a.agentId}</option>)}</select><select className="input-field h-8 py-1 text-xs" value={n.layer || 'domain'} onChange={(e) => patchNode(i, { layer: e.target.value as 'meta' | 'domain' | 'micro' })}><option value="meta">Layer1</option><option value="domain">Layer2</option><option value="micro">Layer3</option></select><button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => moveNode(i, -1)}>↑</button><button type="button" className="btn-ghost px-2 py-1 text-xs" onClick={() => moveNode(i, 1)}>↓</button></div><input className="input-field h-8 py-1 text-xs" placeholder="依赖节点ID，逗号分隔" value={n.dependencies.join(',')} onChange={(e) => patchNode(i, { dependencies: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></div>)}</div>
-            <button className="btn-primary">新建路线</button>
-          </form>
-        </div>
-
-        <div className="card p-6">
-          <h2 className="text-h3">路线列表（默认/启用）</h2>
-          <div className="mt-4 space-y-3">{routes.map((r) => <div key={r.id} className="rounded-lg border border-warm-150 bg-white p-4"><div className="flex items-center justify-between"><div><div className="text-h4">{r.name} {r.isDefault ? <span className="tag tag-green ml-2">默认</span> : null} {!r.active ? <span className="tag tag-red ml-2">禁用</span> : null}</div><div className="text-caption text-warm-500">{r.description || '无描述'}</div></div><div className="flex gap-2"><button className="btn-secondary" onClick={() => setDefaultRoute(r.id)}>设为默认</button><button className="btn-ghost" onClick={() => toggleRoute(r)}>{r.active ? '禁用' : '启用'}</button></div></div><div className="mt-3 rounded bg-warm-50 p-3 text-sm">{r.nodes.map((n) => <div key={n.id}><span className="tag tag-blue mr-2">{n.layer || 'domain'}</span>{n.id} → {n.agent} · dep: {n.dependencies.join(',') || '无'}</div>)}</div></div>)}{!routes.length && <div className="text-caption text-warm-400">暂无路线</div>}</div>
-        </div>
-      </section>
-    );
-  }
-
-  const [flowMode, setFlowMode] = useState<'list' | 'canvas'>('list');
-  const [editingFlow, setEditingFlow] = useState<AgentRoute | null>(null);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -1081,170 +1217,6 @@ export default function AdminPage(): JSX.Element {
       setActiveMenu(menu as MenuItem);
     }
   }, [router.isReady, router.query.menu]);
-
-  async function deleteFlow(routeId: number) {
-    const res = await fetch(`/api/admin/workflows/${routeId}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    });
-    const result = await res.json();
-    setNotice(res.ok ? '工作流已删除' : fmtErr(result.detail, '删除失败'));
-    if (res.ok) {
-      setFlowMode('list');
-      setEditingFlow(null);
-      await refresh();
-    }
-  }
-
-  async function saveFlow(data: {
-    id?: number;
-    name: string;
-    description: string;
-    triggerKeywords: string[];
-    nodes: Array<{
-      id: string;
-      type: string;
-      name: string;
-      description: string;
-      x: number;
-      y: number;
-      agent?: string;
-      layer?: string;
-      dependencies: string[];
-    }>;
-    edges: Array<{ from: string; to: string; label?: string }>;
-    isDefault: boolean;
-    active: boolean;
-  }) {
-    const payload = {
-      name: data.name,
-      description: data.description,
-      triggerKeywords: data.triggerKeywords,
-      nodes: data.nodes.map((n) => ({
-        id: n.id,
-        domain: n.agent ? agents.find((a) => a.agentId === n.agent)?.domain || 'orchestrator' : 'orchestrator',
-        agent: n.agent || n.name,
-        description: n.description,
-        dependencies: n.dependencies,
-        status: 'PENDING',
-        layer: n.layer || 'domain',
-      })),
-      isDefault: data.isDefault,
-    };
-    const url = data.id ? `/api/admin/workflows/${data.id}` : '/api/admin/workflows';
-    const method = data.id ? 'PUT' : 'POST';
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify(payload),
-    });
-    const result = await res.json();
-    setNotice(res.ok ? `工作流已保存：${data.name}` : fmtErr(result.detail, '保存失败'));
-    if (res.ok) {
-      setFlowMode('list');
-      setEditingFlow(null);
-      await refresh();
-    }
-  }
-
-  function renderAgentFlowModule(): JSX.Element {
-    if (flowMode === 'canvas') {
-      const initialData = editingFlow
-        ? {
-            id: editingFlow.id,
-            name: editingFlow.name,
-            description: editingFlow.description,
-            triggerKeywords: editingFlow.triggerKeywords,
-            nodes: editingFlow.nodes.map((n) => ({
-              id: n.id,
-              type: (n.layer === 'meta' ? 'start' : n.layer === 'micro' ? 'end' : 'agent') as 'start' | 'agent' | 'tool' | 'ifelse' | 'end',
-              name: n.agent,
-              description: n.description,
-              x: 300 + Math.random() * 400,
-              y: 200 + Math.random() * 300,
-              agent: n.agent,
-              layer: n.layer,
-              dependencies: n.dependencies,
-            })),
-            edges: editingFlow.nodes.flatMap((n) =>
-              n.dependencies.map((dep) => ({ from: dep, to: n.id }))
-            ),
-            isDefault: editingFlow.isDefault,
-            active: editingFlow.active,
-          }
-        : undefined;
-      return (
-        <AgentCanvas
-          embedded
-          initialData={initialData}
-          agents={agents}
-          onSave={saveFlow}
-          onDelete={() => editingFlow && deleteFlow(editingFlow.id)}
-        />
-      );
-    }
-
-    return (
-      <section className="space-y-6">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-[28px] font-semibold text-warm-900">Agent Flow</h2>
-            <p className="mt-1 text-sm text-warm-500">低代码 Agent 连接画布，拖拽构建业务流。</p>
-          </div>
-          <button className="btn-primary" onClick={() => { setEditingFlow(null); setFlowMode('canvas'); }}>
-            + 新建工作流
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          {routes.map((r) => (
-            <div key={r.id} className="rounded-2xl border border-warm-200 bg-white px-5 py-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-lg font-semibold text-warm-900">{r.name}</span>
-                    {r.isDefault ? <span className="tag tag-green">默认</span> : null}
-                    {!r.active ? <span className="tag tag-red">禁用</span> : null}
-                  </div>
-                  <div className="mt-1 text-sm text-warm-500">{r.description || '无描述'}</div>
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {r.triggerKeywords.map((k) => (
-                      <span key={k} className="tag tag-warm text-[10px]">{k}</span>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex shrink-0 gap-2">
-                  <button className="btn-secondary text-sm" onClick={() => { setEditingFlow(r); setFlowMode('canvas'); }}>
-                    编辑
-                  </button>
-                  <button className="btn-secondary text-sm" onClick={() => setDefaultRoute(r.id)}>
-                    设为默认
-                  </button>
-                  <button className="btn-ghost text-sm" onClick={() => toggleRoute(r)}>
-                    {r.active ? '禁用' : '启用'}
-                  </button>
-                </div>
-              </div>
-              <div className="mt-3 rounded-lg bg-warm-50 p-3">
-                <div className="flex flex-wrap gap-2">
-                  {r.nodes.map((n) => (
-                    <div key={n.id} className="flex items-center gap-1 text-xs text-warm-600">
-                      <span className="tag tag-blue text-[10px]">{n.layer || 'domain'}</span>
-                      <span>{n.agent}</span>
-                      {n.dependencies.length > 0 && (
-                        <span className="text-warm-400">← {n.dependencies.join(',')}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ))}
-          {!routes.length && <div className="text-caption text-warm-400">暂无工作流</div>}
-        </div>
-      </section>
-    );
-  }
 
   function renderMemoryModule(): JSX.Element {
     const SUB_TABS: Array<{ key: typeof memorySubTab; label: string }> = [
@@ -1591,7 +1563,7 @@ export default function AdminPage(): JSX.Element {
                 className="btn-ghost px-3 py-1.5 text-xs text-red-500"
                 onClick={async () => {
                   if (!window.confirm(`确认重置会话 ${activeSessionId} 的摘要？`)) return;
-                  await fetch(`/api/memory/sessions/reset/${encodeURIComponent(activeSessionId)}`, { method: 'POST' });
+                  await fetch(`/api/memory/sessions/reset/${encodeURIComponent(activeSessionId)}`, { method: 'POST', headers: authHeaders() });
                   setActiveSessionId(null);
                   setActiveSessionSummary('');
                   void loadSessionSummaries();
@@ -2516,14 +2488,459 @@ index a1b2c3d..e4f5g6h 100644
     );
   }
 
+  function renderUserManagementModule(): JSX.Element {
+    const ROLE_LABELS: Record<string, string> = { admin: '管理员', developer: '开发者', viewer: '观察者' };
+    const ROLE_COLORS: Record<string, string> = { admin: 'text-red-600 bg-red-50', developer: 'text-blue-600 bg-blue-50', viewer: 'text-warm-500 bg-warm-100' };
+
+    const maxTokens = tokenData?.days.length
+      ? Math.max(...tokenData.days.map((d) => d.tokens))
+      : 0;
+
+    // Heatmap helpers (inline for compact layout)
+    function buildWeeks(days: Array<{ date: string; sessions: number; messages: number; tokens: number }>): (typeof days[0] | null)[][] {
+      if (!days.length) return [];
+      const firstDate = new Date(days[0].date);
+      const dayOfWeek = (firstDate.getDay() + 6) % 7;
+      const padded: (typeof days[0] | null)[] = Array(dayOfWeek).fill(null).concat(days);
+      const weeks: (typeof days[0] | null)[][] = [];
+      for (let i = 0; i < padded.length; i += 7) weeks.push(padded.slice(i, i + 7));
+      return weeks;
+    }
+    function getLevel(tokens: number, max: number): number {
+      if (tokens === 0 || max === 0) return 0;
+      const r = tokens / max;
+      if (r <= 0.15) return 1; if (r <= 0.35) return 2; if (r <= 0.55) return 3; if (r <= 0.75) return 4; return 5;
+    }
+    const HEAT = ['bg-[#e8e6e1]', 'bg-[#d4cfc6]', 'bg-[#b0a89a]', 'bg-[#8c8170]', 'bg-[#6b5f4f]', 'bg-[#403a32]'];
+    const weeks = tokenData ? buildWeeks(tokenData.days) : [];
+
+    return (
+      <section className="space-y-6">
+        {/* ══════ Hero: Profile Card (left) + Token Stats (right) ══════ */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+
+          {/* ── Left: User Profile Card ─────────────────────────────── */}
+          <div className="lg:col-span-2 rounded-2xl border border-warm-200 bg-white overflow-hidden shadow-sm">
+            {/* Teal gradient header band */}
+            <div className="h-20 bg-gradient-to-r from-teal-500 to-cyan-600" />
+            <div className="px-6 pb-6 relative">
+              {/* Avatar — overlapped on gradient band */}
+              <div className="flex items-end -mt-10 mb-3">
+                <div className="relative group">
+                  {profileAvatarUrl ? (
+                    <img src={profileAvatarUrl} className="h-20 w-20 rounded-full object-cover border-4 border-white shadow-sm ring-1 ring-warm-150" alt={user?.name || ''} />
+                  ) : (
+                    <span className="flex h-20 w-20 rounded-full items-center justify-center border-4 border-white shadow-sm ring-1 ring-warm-150 text-2xl font-bold text-white select-none"
+                      style={{ background: 'linear-gradient(135deg, #14b8a6, #06b6d4)' }}>
+                      {(user?.name || 'U')[0].toUpperCase()}
+                    </span>
+                  )}
+                  {/* Upload overlay */}
+                  <label className="absolute inset-0 flex items-center justify-center rounded-full bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                    title="点击更换头像">
+                    {profileUploading ? (
+                      <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <svg className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                        <circle cx="12" cy="13" r="4" />
+                      </svg>
+                    )}
+                    <input type="file" accept="image/*" className="hidden" onChange={(e) => { void handleUploadProfileAvatar(e); }} />
+                  </label>
+                </div>
+              </div>
+
+              {/* Name + role */}
+              <div className="mb-1">
+                <h2 className="text-xl font-bold text-warm-900 leading-tight">{user?.name || '用户'}</h2>
+                <span className={`inline-block mt-0.5 text-xs font-semibold px-2 py-0.5 rounded-full ${user?.role === 'admin' ? 'bg-red-100 text-red-700' : user?.role === 'developer' ? 'bg-blue-100 text-blue-700' : 'bg-warm-100 text-warm-600'}`}>
+                  {ROLE_LABELS[user?.role || ''] || user?.role || '开发者'}
+                </span>
+              </div>
+
+              {/* Bio */}
+              <div className="mt-3 mb-4">
+                {profileEditingField === 'bio' ? (
+                  <div className="space-y-2">
+                    <textarea
+                      className="w-full resize-none rounded-lg border border-teal-300 bg-teal-50/30 px-3 py-2 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-teal-200"
+                      rows={2}
+                      value={profileFieldDraft}
+                      onChange={(e) => setProfileFieldDraft(e.target.value)}
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <button className="text-xs px-3 py-1 rounded-md bg-teal-600 text-white hover:bg-teal-700 transition-colors" onClick={() => { void handleSaveField(); }}>保存</button>
+                      <button className="text-xs px-3 py-1 rounded-md border border-warm-200 text-warm-500 hover:bg-warm-50 transition-colors" onClick={handleCancelEditField}>取消</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="group relative">
+                    <p className="text-sm text-warm-600 leading-relaxed">{profileBio || '暂无简介 — 介绍一下自己吧'}</p>
+                    <button
+                      className="absolute -right-1 -top-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity text-warm-400 hover:text-teal-600 hover:bg-teal-50"
+                      onClick={() => handleStartEditField('bio', profileBio)}
+                      title="编辑简介"
+                    >
+                      <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Detail items (editable on hover) */}
+              <div className="space-y-2.5">
+                {/* Location */}
+                {profileEditingField === 'location' ? (
+                  <div className="flex items-center gap-2">
+                    <svg className="h-4 w-4 shrink-0 text-teal-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" />
+                    </svg>
+                    <input
+                      className="flex-1 rounded border border-teal-300 bg-teal-50/30 px-2 py-1 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-teal-200"
+                      value={profileFieldDraft}
+                      onChange={(e) => setProfileFieldDraft(e.target.value)}
+                      placeholder="输入所在地..."
+                      autoFocus
+                    />
+                    <button className="text-xs px-2 py-1 rounded bg-teal-600 text-white hover:bg-teal-700 transition-colors" onClick={() => { void handleSaveField(); }}>保存</button>
+                    <button className="text-xs px-2 py-1 rounded border border-warm-200 text-warm-500 hover:bg-warm-50 transition-colors" onClick={handleCancelEditField}>取消</button>
+                  </div>
+                ) : (
+                  <div className="group flex items-center gap-2.5 text-sm text-warm-600 cursor-pointer" onClick={() => handleStartEditField('location', profileLocation)} title="点击编辑所在地">
+                    <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-teal-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" />
+                    </svg>
+                    <span className="group-hover:text-teal-600 transition-colors">{profileLocation || '点击设置所在地'}</span>
+                    <svg className="h-3 w-3 shrink-0 text-warm-300 opacity-0 group-hover:opacity-100 transition-opacity" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </div>
+                )}
+
+                {/* Email */}
+                {profileEditingField === 'email' ? (
+                  <div className="flex items-center gap-2">
+                    <svg className="h-4 w-4 shrink-0 text-teal-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>
+                    </svg>
+                    <input
+                      className="flex-1 rounded border border-teal-300 bg-teal-50/30 px-2 py-1 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-teal-200"
+                      value={profileFieldDraft}
+                      onChange={(e) => setProfileFieldDraft(e.target.value)}
+                      placeholder="输入邮箱..."
+                      autoFocus
+                    />
+                    <button className="text-xs px-2 py-1 rounded bg-teal-600 text-white hover:bg-teal-700 transition-colors" onClick={() => { void handleSaveField(); }}>保存</button>
+                    <button className="text-xs px-2 py-1 rounded border border-warm-200 text-warm-500 hover:bg-warm-50 transition-colors" onClick={handleCancelEditField}>取消</button>
+                  </div>
+                ) : (
+                  <div className="group flex items-center gap-2.5 text-sm text-warm-600 cursor-pointer" onClick={() => handleStartEditField('email', profileEmail)} title="点击编辑邮箱">
+                    <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-teal-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>
+                    </svg>
+                    <span className="group-hover:text-teal-600 transition-colors">{profileEmail || '点击设置邮箱'}</span>
+                    <svg className="h-3 w-3 shrink-0 text-warm-300 opacity-0 group-hover:opacity-100 transition-opacity" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </div>
+                )}
+
+                {/* Organization */}
+                {profileEditingField === 'org' ? (
+                  <div className="flex items-center gap-2">
+                    <svg className="h-4 w-4 shrink-0 text-teal-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                    <input
+                      className="flex-1 rounded border border-teal-300 bg-teal-50/30 px-2 py-1 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-teal-200"
+                      value={profileFieldDraft}
+                      onChange={(e) => setProfileFieldDraft(e.target.value)}
+                      placeholder="输入公司/组织..."
+                      autoFocus
+                    />
+                    <button className="text-xs px-2 py-1 rounded bg-teal-600 text-white hover:bg-teal-700 transition-colors" onClick={() => { void handleSaveField(); }}>保存</button>
+                    <button className="text-xs px-2 py-1 rounded border border-warm-200 text-warm-500 hover:bg-warm-50 transition-colors" onClick={handleCancelEditField}>取消</button>
+                  </div>
+                ) : (
+                  <div className="group flex items-center gap-2.5 text-sm text-warm-600 cursor-pointer" onClick={() => handleStartEditField('org', profileOrg)} title="点击编辑组织">
+                    <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-teal-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                    <span className="group-hover:text-teal-600 transition-colors">{profileOrg || '点击设置组织'}</span>
+                    <svg className="h-3 w-3 shrink-0 text-warm-300 opacity-0 group-hover:opacity-100 transition-opacity" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </div>
+                )}
+
+                {/* Joined date — shows actual registration time */}
+                <div className="flex items-center gap-2.5 text-sm text-warm-600">
+                  <svg className="h-4 w-4 shrink-0 text-warm-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                  </svg>
+                  <span>加入于 {user?.created_at ? new Date(user.created_at).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Right: Token Usage Statistics ────────────────────────── */}
+          <div className="lg:col-span-3 space-y-5">
+            {/* Stat cards */}
+            {tokenLoading ? (
+              <div className="grid grid-cols-3 gap-3">
+                {[0,1,2].map((i) => (
+                  <div key={i} className="rounded-xl border border-warm-150 bg-white p-4 animate-pulse">
+                    <div className="h-3 w-12 bg-warm-150 rounded mb-2" />
+                    <div className="h-6 w-20 bg-warm-100 rounded mb-1" />
+                    <div className="h-3 w-28 bg-warm-100 rounded" />
+                  </div>
+                ))}
+              </div>
+            ) : tokenError ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <svg className="h-4 w-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <span className="text-sm text-amber-700">Token 用量数据暂不可用</span>
+                  <button className="ml-auto text-xs text-teal-600 hover:text-teal-700 underline" onClick={() => { void loadTokenUsage(); }}>重试</button>
+                </div>
+              </div>
+            ) : tokenData ? (
+              <div className="grid grid-cols-3 gap-3">
+                <StatCard label="今天" tokens={tokenData.today.tokens} sessions={tokenData.today.sessions} messages={tokenData.today.messages} />
+                <StatCard label="昨天" tokens={tokenData.yesterday.tokens} sessions={tokenData.yesterday.sessions} messages={tokenData.yesterday.messages} />
+                <StatCard label="近 30 天" tokens={tokenData.last30.tokens} sessions={tokenData.last30.sessions} messages={tokenData.last30.messages} />
+              </div>
+            ) : null}
+
+            {/* Compact Heatmap */}
+            <div className="rounded-2xl border border-warm-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <span className="text-sm font-semibold text-warm-800">Token 使用热力图</span>
+                  {tokenData && (
+                    <span className="ml-2 text-xs text-warm-400">
+                      {tokenData.range.start.slice(0, 7).replace('-', '.')} – {tokenData.range.end.slice(0, 7).replace('-', '.')}
+                    </span>
+                  )}
+                </div>
+                {tokenData && (
+                  <button className="text-xs text-teal-500 hover:text-teal-600 transition-colors flex items-center gap-1" onClick={() => { void loadTokenUsage(); }}>
+                    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    刷新
+                  </button>
+                )}
+              </div>
+
+              {tokenLoading ? (
+                <div className="space-y-1">
+                  <div className="flex gap-[3px] overflow-hidden">
+                    {Array(52).fill(null).map((_, i) => (
+                      <div key={i} className="flex flex-col gap-[3px] shrink-0">
+                        {Array(7).fill(null).map((_, j) => (
+                          <div key={j} className="h-2.5 w-2.5 rounded-sm bg-warm-100 animate-pulse" />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : !tokenData || weeks.length === 0 ? (
+                <div className="py-6 text-center">
+                  <p className="text-sm text-warm-400">开始使用 AgentHub 后，这里将显示您的 Token 使用热力图</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <div className="flex">
+                    {/* Weekday labels */}
+                    <div className="mr-2 flex flex-col gap-[3px] shrink-0">
+                      {['一','三','五','日'].map((wd, i) => (
+                        <div key={wd} className={`flex items-center text-[9px] leading-3 text-warm-400 ${i===0?'h-2.5':i===1?'h-2.5 mt-[6px]':i===2?'h-2.5 mt-[6px]':'h-2.5 mt-[6px]'}`}>
+                          {wd}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex gap-[3px]">
+                      {weeks.map((week, wi) => (
+                        <div key={wi} className="flex flex-col gap-[3px]">
+                          {week.map((day, di) => {
+                            if (!day) return <div key={di} className="h-2.5 w-2.5 rounded-sm bg-transparent" />;
+                            const level = getLevel(day.tokens, maxTokens);
+                            return (
+                              <div key={day.date} className={`h-2.5 w-2.5 rounded-sm ${HEAT[level]} cursor-pointer hover:ring-1 hover:ring-warm-300 hover:scale-125 transition-transform`}
+                                title={`${day.date}: ${day.messages} msgs · ${formatTokens(day.tokens)}`} />
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Legend */}
+                  <div className="mt-3 flex items-center justify-end gap-1.5">
+                    <span className="text-[10px] text-warm-400">Less</span>
+                    {HEAT.map((c, i) => <div key={i} className={`h-2 w-2 rounded-sm ${c}`} />)}
+                    <span className="text-[10px] text-warm-400">More</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Quick stats: session & agent summary */}
+            {tokenData && (
+              <div className="grid grid-cols-4 gap-3">
+                <MiniStatBox icon="💬" label="总消息" value={tokenData.last30.messages.toLocaleString()} />
+                <MiniStatBox icon="🧵" label="总会话" value={tokenData.last30.sessions.toLocaleString()} />
+                <MiniStatBox icon="🤖" label="日均消息" value={Math.round(tokenData.last30.messages / 30).toLocaleString()} />
+                <MiniStatBox icon="⚡" label="生成时间" value={tokenData.generatedAt ? new Date(tokenData.generatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '—'} />
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ══════ Divider ══════ */}
+        <div className="flex items-center gap-4">
+          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-warm-200 to-transparent" />
+          <span className="text-xs text-warm-400 font-medium tracking-widest uppercase">系统管理</span>
+          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-warm-200 to-transparent" />
+        </div>
+
+        {/* ══════ Bottom: Original user management content ══════ */}
+        {/* Create new user form (admin only) */}
+        {user?.role === 'admin' && (
+          <div className="rounded-2xl border border-warm-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-warm-900 mb-4">创建新用户</h2>
+            <form onSubmit={(e) => { handleCreateUser(e); }} className="flex flex-wrap gap-3 items-end">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-warm-500">用户名</span>
+                <input
+                  className="input-field w-48"
+                  placeholder="输入用户名..."
+                  value={newUserName}
+                  onChange={(e) => setNewUserName(e.target.value)}
+                  required
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-warm-500">密码</span>
+                <input
+                  type="password"
+                  className="input-field w-48"
+                  placeholder="输入密码..."
+                  value={newUserPassword}
+                  onChange={(e) => setNewUserPassword(e.target.value)}
+                  required
+                  minLength={1}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-warm-500">角色</span>
+                <select
+                  className="input-field w-32"
+                  value={newUserRole}
+                  onChange={(e) => setNewUserRole(e.target.value)}
+                >
+                  <option value="developer">开发者</option>
+                  <option value="viewer">观察者</option>
+                  <option value="admin">管理员</option>
+                </select>
+              </label>
+              <button
+                type="submit"
+                disabled={creatingUser || !newUserName.trim() || !newUserPassword.trim()}
+                className="btn-primary"
+              >
+                {creatingUser ? '创建中...' : '创建用户'}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* User list */}
+        <div className="rounded-2xl border border-warm-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-warm-900">用户列表</h2>
+            <button
+              className="btn-ghost text-sm text-teal-500 hover:text-teal-600 hover:bg-teal-50 transition-colors"
+              onClick={() => loadUsers()}
+              disabled={userListLoading}
+            >
+              {userListLoading ? '刷新中...' : '刷新'}
+            </button>
+          </div>
+
+          {userListError && (
+            <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+              {userListError}
+            </div>
+          )}
+
+          {userListLoading && userList.length === 0 ? (
+            <div className="text-sm text-warm-400 py-6 text-center">加载中...</div>
+          ) : userList.length === 0 ? (
+            <div className="text-sm text-warm-400 py-6 text-center">暂无用户</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-warm-150 text-left text-xs font-semibold text-warm-400 uppercase tracking-wide">
+                    <th className="px-3 py-2">用户名</th>
+                    <th className="px-3 py-2">角色</th>
+                    <th className="px-3 py-2">注册时间</th>
+                    <th className="px-3 py-2 text-right">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {userList.map((u) => (
+                    <tr key={u.id} className="border-b border-warm-50 hover:bg-warm-50 transition-colors">
+                      <td className="px-3 py-2.5 font-medium text-warm-800">
+                        {u.name}
+                        {u.id === user?.id && (
+                          <span className="ml-1.5 text-[10px] text-teal-500 font-normal">(你)</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {user?.role === 'admin' && u.id !== user?.id ? (
+                          <select
+                            value={u.role}
+                            onChange={(e) => handleChangeUserRole(u.id, e.target.value)}
+                            className={`rounded-full px-2.5 py-0.5 text-xs font-medium border-0 outline-none ${ROLE_COLORS[u.role] || 'text-warm-600 bg-warm-50'}`}
+                          >
+                            <option value="admin">管理员</option>
+                            <option value="developer">开发者</option>
+                            <option value="viewer">观察者</option>
+                          </select>
+                        ) : (
+                          <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${ROLE_COLORS[u.role] || 'text-warm-600 bg-warm-50'}`}>
+                            {ROLE_LABELS[u.role] || u.role}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-warm-400">
+                        {u.created_at ? new Date(u.created_at).toLocaleString('zh-CN') : '-'}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {user?.role === 'admin' && u.id !== user?.id && (
+                          <button
+                            className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 rounded px-2 py-1 transition-colors"
+                            onClick={() => handleDeleteUser(u.id, u.name)}
+                          >
+                            删除
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   function renderModuleContent(): JSX.Element {
     if (activeMenu === '服务商') return renderServiceProviderModule();
-    if (activeMenu === 'Agent Flow') return renderAgentFlowModule();
-    if (activeMenu === 'Token 用量') return <TokenUsageHeatmap />;
     if (activeMenu === '记忆') return renderMemoryModule();
     if (activeMenu === '技能') return renderSkillsModule();
     if (activeMenu === '通用') return renderGeneralModule();
     if (activeMenu === '审计日志') return <AuditLogList authHeaders={authHeaders} />;
+    if (activeMenu === '用户管理') return renderUserManagementModule();
 
     return (
       <section className="card p-6">
@@ -2734,6 +3151,35 @@ index a1b2c3d..e4f5g6h 100644
             </div>
           </div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+/* ── Stat card component (used in user management token section) ─── */
+
+function StatCard({ label, tokens, sessions, messages }: { label: string; tokens: number; sessions: number; messages: number }): JSX.Element {
+  function fmt(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(0)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
+    return `${n}`;
+  }
+  return (
+    <div className="flex min-w-0 flex-col justify-center rounded-xl border border-warm-150 bg-white px-4 py-3.5 shadow-sm transition-all hover:shadow-md hover:border-teal-200">
+      <div className="text-xs font-medium text-warm-400">{label}</div>
+      <div className="mt-1 text-lg font-bold text-warm-900">{fmt(tokens)} tokens</div>
+      <div className="mt-0.5 text-[11px] text-warm-400">{messages} 条消息 · {sessions} 个会话</div>
+    </div>
+  );
+}
+
+function MiniStatBox({ icon, label, value }: { icon: string; label: string; value: string }): JSX.Element {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-warm-150 bg-white px-4 py-3 shadow-sm transition-all hover:shadow-md hover:border-teal-200">
+      <span className="text-lg shrink-0">{icon}</span>
+      <div className="min-w-0">
+        <div className="text-[11px] text-warm-400 leading-tight">{label}</div>
+        <div className="text-sm font-semibold text-warm-800 truncate">{value}</div>
       </div>
     </div>
   );

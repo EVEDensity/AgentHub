@@ -399,3 +399,39 @@ body {
   animation: referenceFlash 1.5s ease-out;
   border-radius: 4px;
 }
+
+/* ── Performance: CSS containment for message list items ────────────
+   Each message bubble gets content-visibility: auto so the browser
+   skips rendering off-screen messages entirely. This provides most
+   of the benefit of JS-based virtual scrolling with zero runtime cost.
+   The contain-intrinsic-size hint prevents layout collapse. ─────── */
+
+.chat-message-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
+}
+
+/* Prefer reduced motion when the user's OS config requests it */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Performance: GPU layer for streaming cursor ──────────────────
+   Promotes the animated cursor element to its own compositor layer,
+   avoiding repaints on the entire message bubble during streaming. ─ */
+
+.animate-pulse {
+  will-change: opacity;
+}
+
+/* Prevent layout thrashing during streaming: contain layout changes
+   within each message container so new messages don't trigger
+   full-page re-layout. ─────────────────────────────────────────── */
+
+.chat-scroll-container {
+  contain: layout style;
+}

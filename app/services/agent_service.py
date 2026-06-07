@@ -18,6 +18,97 @@ from app.services.codegen_service import write_generated_files
 from app.services.secret_service import decrypt_secret
 from app.utils.async_file import aexists, aisdir, aread_text, aiterdir, aread_json
 from app.config import REQUEST_TIMEOUT_SECONDS
+
+# ── Default agents seeded for every new user ──────────────────────────
+
+DEFAULT_AGENTS: list[tuple[str, str, str, str, str, list[str]]] = [
+    (
+        "Orchestrator", "orchestrator", "L2",
+        "元调度器：接收用户意图，拆解任务并分派给领域 Agent，汇总结果。"
+        "输入：用户原始需求 | 输出：任务分派方案、Agent 协同调度 | 约束：不替代领域 Agent 产出",
+        "编排调度器",
+        ["任务拆解", "Agent调度", "结果汇总"],
+    ),
+    (
+        "Architect", "architect", "L1",
+        "架构师：分析用户意图与项目结构，输出技术方案与文件影响范围。"
+        "输入：用户意图、项目结构摘要 | 输出：技术方案、文件影响范围 | 约束：不直接写代码",
+        "架构设计师",
+        ["架构设计", "技术选型", "方案输出"],
+    ),
+    (
+        "CodeGen", "codegen", "L2",
+        "代码生成器：根据架构方案和上下文索引生成代码文件与 Diff 草案。"
+        "输入：架构方案、上下文索引 | 输出：代码文件、Diff 草案 | 约束：不直接提交 Git",
+        "代码生成器",
+        ["代码生成", "文件创建", "多语言支持"],
+    ),
+    (
+        "Review", "review", "L1",
+        "代码审查员：审查 Diff 变更，对照规范与风险策略输出审查意见。"
+        "输入：Diff、规范、风险策略 | 输出：审查意见、风险等级 | 约束：不修改部署配置",
+        "代码审查员",
+        ["代码审查", "安全审计", "规范检查"],
+    ),
+    (
+        "Test", "test", "L1",
+        "测试工程师：根据代码变更和测试策略生成测试用例与验证结果。"
+        "输入：代码变更、测试策略 | 输出：测试结果、失败原因 | 约束：不绕过 Review 直接修改代码",
+        "测试工程师",
+        ["测试用例", "验证策略", "边界测试"],
+    ),
+    (
+        "Implement", "implement", "L2",
+        "实施工程师：将 CodeGen 生成的 Diff 落盘到工作区，处理合并冲突并跟踪落盘结果。"
+        "输入：已审查 Diff | 输出：落盘文件清单、冲突报告 | 约束：不修改未审查代码",
+        "实施工程师",
+        ["文件落盘", "冲突解决", "变更跟踪"],
+    ),
+    (
+        "Deploy", "deploy", "L3",
+        "部署工程师：在 Review 通过后执行部署，生成预览 URL 和部署状态报告。"
+        "输入：已确认 Diff、部署目标 | 输出：预览 URL、部署状态 | 约束：不部署未审查代码",
+        "部署工程师",
+        ["部署发布", "环境配置", "上线管理"],
+    ),
+]
+
+
+async def seed_default_agents_for_user(user_id: str) -> None:
+    """Create the 6 foundational agents for a newly registered user.
+
+    Uses ON CONFLICT DO NOTHING so it is safe to call repeatedly — existing
+    agents are never overwritten.  After inserting, copies any avatar data
+    from the system-level agents (``user_id=''``) so new users automatically
+    inherit previously uploaded agent avatars.
+    """
+    for agent_id, domain, risk, duty_note, display_name, capability_tags in DEFAULT_AGENTS:
+        await aexecute(
+            "INSERT INTO agent_registry(agent_id,user_id,domain,status,adapter_type,"
+            "risk_level,duty_note,display_name,capability_tags) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) "
+            "ON CONFLICT(agent_id, user_id) DO NOTHING",
+            agent_id, user_id, domain, "sleeping", "", risk, duty_note,
+            display_name, json.dumps(capability_tags, ensure_ascii=False),
+        )
+
+    # ── Copy avatar data from system agents (user_id='') to this user's agents ──
+    # This ensures avatars uploaded for the shared/system agents are visible to
+    # every user without re-uploading.  Only copies when the target has no avatar.
+    for agent_id, *_ in DEFAULT_AGENTS:
+        await aexecute(
+            "UPDATE agent_registry AS target "
+            "SET avatar_data = source.avatar_data, "
+            "    avatar_mime = source.avatar_mime, "
+            "    avatar_url   = source.avatar_url "
+            "FROM agent_registry AS source "
+            "WHERE target.agent_id = source.agent_id "
+            "  AND target.user_id = $1 "
+            "  AND source.user_id = '' "
+            "  AND source.avatar_data IS NOT NULL "
+            "  AND target.avatar_data IS NULL",
+            user_id,
+        )
 from app.services.symbolic import (
     generate_symbolic_message,
     public_symbolic,
@@ -26,7 +117,7 @@ from app.services.symbolic import (
 logger = logging.getLogger("agenthub.agent_service")
 
 
-AGENTS = {"Orchestrator", "Architect", "CodeGen", "Review", "Test", "Deploy"}
+AGENTS = {"Orchestrator", "Architect", "CodeGen", "Review", "Test", "Deploy", "Implement"}
 _RUNTIME: dict[str, dict] = {}
 
 # ── Memory context cache (avoid scanning 200+ files on every message) ──
@@ -347,6 +438,28 @@ def _build_quote_context(quote_references: list[dict[str, Any]] | None) -> str:
     return "[用户引用的历史消息]\n\n" + "\n\n".join(blocks)
 
 
+async def lookup_agent(
+    agent_id: str,
+    user_id: str,
+    columns: str = "agent_id,domain,status,adapter_type,risk_level",
+) -> dict | None:
+    """Look up an agent, **prioritizing user-owned over system agents**.
+
+    Two users can each have an agent with the same ``agent_id`` (e.g.
+    "Orchestrator").  This helper always returns the row belonging to
+    *user_id* first; only if none exists does it fall back to the
+    system agent (``user_id=''``).
+    """
+    uid = user_id or ""
+    return await afetch_one(
+        f"SELECT {columns} FROM agent_registry "
+        "WHERE agent_id=$1 AND (user_id=$2 OR user_id='') "
+        "ORDER BY CASE WHEN user_id='' THEN 1 ELSE 0 END "
+        "LIMIT 1",
+        agent_id, uid,
+    )
+
+
 def extract_mentions(content: str) -> list[str]:
     return re.findall(r"@(\w+)", content)
 
@@ -441,21 +554,21 @@ def _get_streaming_executor():
         return None
 
 
-async def resolve_all_agents(content: str) -> list[dict]:
+async def resolve_all_agents(content: str, user_id: str | None = None) -> list[dict]:
     """Return ALL valid agents @mentioned in the content.
 
     If no valid mention is found, falls back to the default chat agent.
+    When user_id is provided, only agents belonging to that user are
+    considered (system agents serve as fallback only).
     """
     agents: list[dict] = []
     seen: set[str] = set()
+    uid = user_id or ""
     for name in extract_mentions(content):
         if name in seen:
             continue
         seen.add(name)
-        agent = await afetch_one(
-            "SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1",
-            name,
-        )
+        agent = await lookup_agent(name, uid)
         if agent:
             agents.append(agent)
 
@@ -465,16 +578,64 @@ async def resolve_all_agents(content: str) -> list[dict]:
     # No valid mention — fall back to user-configured default, then Orchestrator
     default_row = await afetch_one("SELECT value FROM system_config WHERE key='default_chat_agent'")
     default_agent_id = default_row["value"] if default_row else "Orchestrator"
-    agent = await afetch_one("SELECT agent_id,domain,status,adapter_type,risk_level FROM agent_registry WHERE agent_id=$1", default_agent_id)
+    agent = await lookup_agent(default_agent_id, uid)
     return [agent] if agent else [{"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}]
 
 
-async def resolve_agent(content: str) -> dict:
+async def resolve_agent(content: str, user_id: str | None = None) -> dict:
     """Resolve a single agent from @mentions (kept for backward compatibility)."""
-    return (await resolve_all_agents(content))[0]
+    return (await resolve_all_agents(content, user_id))[0]
 
 
-async def candidate_models_for_role(role: str) -> list[dict]:
+async def get_direct_chat_agent(user_id: str | None = None) -> dict:
+    """Resolve the agent config for direct/default-model chat mode.
+
+    Resolution order:
+    1. system_config key 'default_chat_agent' → agent_registry lookup
+    2. First active model_config → synthetic agent
+    3. Hard fallback to a minimal Orchestrator-like agent
+
+    When user_id is provided, only agents belonging to that user (or system
+    agents with user_id='') are considered.
+    """
+    uid = user_id or ""
+    columns = "agent_id,domain,status,adapter_type,risk_level,base_model_name,base_url,api_key"
+
+    # 1) User-configured default chat agent
+    default_row = await afetch_one("SELECT value FROM system_config WHERE key='default_chat_agent'")
+    if default_row:
+        agent = await lookup_agent(default_row["value"], uid, columns=columns)
+        if agent and agent.get("adapter_type") and agent.get("adapter_type") != "mock":
+            logger.info("direct_chat_agent: using configured default agent=%s", agent["agent_id"])
+            return agent
+
+    # 2) Fall back to first active model_config as synthetic agent
+    mc = await afetch_one(
+        "SELECT provider,model_name,api_key,base_url FROM model_configs WHERE is_active=1 ORDER BY id ASC LIMIT 1"
+    )
+    if mc:
+        logger.info("direct_chat_agent: using first active model_config provider=%s model=%s",
+                     mc.get("provider"), mc.get("model_name"))
+        return {
+            "agent_id": "__direct__",
+            "domain": "general",
+            "adapter_type": mc["provider"],
+            "risk_level": "L1",
+            "base_model_name": mc.get("model_name") or "",
+            "base_url": mc.get("base_url") or "",
+            "api_key": mc.get("api_key") or "",
+        }
+
+    # 3) Last resort: use Orchestrator
+    agent = await lookup_agent("Orchestrator", uid, columns=columns)
+    if agent:
+        logger.info("direct_chat_agent: falling back to Orchestrator")
+        return agent
+    return {"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}
+
+
+async def candidate_models_for_role(role: str, user_id: str | None = None) -> list[dict]:
+    uid = user_id or ""
     # 1) Explicit role bindings (role_bindings JOIN model_configs)
     rows = await afetch_all(
         "SELECT mc.id,mc.provider,mc.model_name AS model_name,mc.api_key,mc.base_url,rb.prompt FROM role_bindings rb JOIN model_configs mc ON rb.model_config_id=mc.id WHERE rb.role=$1 AND mc.is_active=1 ORDER BY mc.id DESC",
@@ -484,7 +645,7 @@ async def candidate_models_for_role(role: str) -> list[dict]:
         logger.info("model_for agent=%s source=role_binding count=%d", role, len(rows))
         return rows
     # 2) Agent's own config in agent_registry (adapter_type + base_model_name + base_url + api_key)
-    agent_row = await afetch_one("SELECT adapter_type,base_model_name,base_url,api_key FROM agent_registry WHERE agent_id=$1", role)
+    agent_row = await lookup_agent(role, uid, columns="adapter_type,base_model_name,base_url,api_key")
     if agent_row and agent_row.get("adapter_type") and agent_row.get("adapter_type") != "mock":
         result = [{
             "id": 0,
@@ -709,10 +870,11 @@ async def save_message(
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
     total_tokens: int = 0,
+    user_id: str = "",
 ) -> None:
     ts = now()
     await aexecute(
-        "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+        "INSERT INTO messages(id,session_id,sender,content,type,fidelity_score,symbolic_json,prompt_tokens,completion_tokens,total_tokens,created_at,user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
         str(uuid.uuid4()),
         session_id,
         sender,
@@ -724,6 +886,7 @@ async def save_message(
         completion_tokens,
         total_tokens,
         ts,
+        user_id,
     )
     await aexecute("UPDATE sessions SET last_message_at=$1 WHERE id=$2", ts, session_id)
 
@@ -758,7 +921,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         intent_type=_intent_from_domain(domain, content),
         risk_level=agent.get("risk_level", "L1"),
     )
-    models = choose_models(await candidate_models_for_role(agent["agent_id"]))
+    models = choose_models(await candidate_models_for_role(agent["agent_id"], user_id))
     history = await _build_conversation_history(session_id)
     memory_ctx = await _build_memory_context()
 
@@ -834,7 +997,7 @@ async def stream_agent_response(
             attachments=attachments, quote_references=quote_references,
         )
 
-    models = choose_models(await candidate_models_for_role(agent["agent_id"]))
+    models = choose_models(await candidate_models_for_role(agent["agent_id"], user_id))
     if not models:
         return None
 
@@ -938,7 +1101,7 @@ async def stream_agent_response(
                 intent_type=_intent_from_domain(agent["domain"], content),
                 risk_level=agent.get("risk_level", "L1"),
             )
-            await save_message(session_id, agent["agent_id"], content_out, "text", 0.0, public_symbolic(symbolic_out), pt, ct, tt)
+            await save_message(session_id, agent["agent_id"], content_out, "text", 0.0, public_symbolic(symbolic_out), pt, ct, tt, user_id=user_id)
             AuthService.write_audit(
                 user_id,
                 agent["agent_id"],
@@ -1264,6 +1427,67 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
 
+    if agent_id == "Orchestrator":
+        return (
+            f"{memory_context}"
+            f"{shared_context}"
+            f"{date_context}"
+            f"你是 AgentHub 平台中的 Orchestrator（元调度器），负责接收用户意图、拆解任务并分派给领域 Agent。\n\n"
+            f"{actual_model_line}"
+            f"{reply_lang_instr}"
+            f"{reasoning_instr}"
+            f"{thinking_rule}"
+            "# Orchestrator 工作流程\n\n"
+            "## 第一步：理解并优化用户问题\n"
+            "1. 仔细阅读用户的问题，理解其真实意图。\n"
+            "2. 将用户的问题用更清晰、结构化、专业化的语言重述一遍，确保其他 AI Agent 能够准确理解。\n"
+            "3. 如果问题模糊或不完整，先向用户询问澄清，不要擅自猜测。\n\n"
+            "## 第二步：任务拆解与 Agent 分派\n"
+            "4. 将复杂需求拆解为 2-5 个独立的子任务，明确每个子任务的目标和交付物。\n"
+            "5. 为每个子任务指定最合适的 Agent（Architect→架构设计, CodeGen→代码生成, "
+            "Review→代码审查, Test→测试验证, Deploy→部署发布）。\n"
+            "6. 确定子任务之间的依赖关系（哪些可以先做，哪些需要等待前置任务完成）。\n"
+            "7. 用简洁的列表格式输出任务计划，让用户一目了然。\n\n"
+            "## 第三步：等待用户确认\n"
+            "8. 在任务计划输出后，明确提示用户：请确认是否执行此计划。\n"
+            "9. 只有用户明确确认后，才开始调用工具或分派任务给其他 Agent。\n"
+            "10. 如果用户要求修改计划，根据反馈调整后再请求确认。\n\n"
+            "## 重要约束\n"
+            "- 你是调度者，不是执行者 — 优先将具体工作分派给领域 Agent，而不是自己完成。\n"
+            "- 对于简单问候或闲聊，直接简短回复即可（20 字以内），不要拆解任务。\n"
+            "- 只有在用户确认任务计划后才开始实际执行。\n"
+            "- 使用工具前确保所有必填参数齐全，缺失参数时先向用户询问。\n"
+            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + f"{collab_section}"
+            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        )
+
+    if agent_id == "Architect":
+        return (
+            f"{memory_context}"
+            f"{shared_context}"
+            f"{date_context}"
+            f"你是 AgentHub 平台中的 Architect（架构设计师），负责分析用户意图与项目结构，输出技术方案与文件影响范围。\n\n"
+            f"{actual_model_line}"
+            f"{reply_lang_instr}"
+            f"{reasoning_instr}"
+            f"{thinking_rule}"
+            "# Architect 工作原则\n\n"
+            "## 你的职责\n"
+            "1. 分析用户需求，理解技术上下文和项目现状。\n"
+            "2. 输出清晰的技术方案，包括架构设计、技术选型、文件影响范围。\n"
+            "3. 为 CodeGen 等下游 Agent 提供足够详细的规格说明，使其可以直接开始编码。\n\n"
+            "## 约束\n"
+            "- 不直接写代码 — 你的产出是设计文档和规格说明，不是可运行的代码。\n"
+            "- 不确定技术细节时，使用工具查看现有代码和项目结构，而不是猜测。\n"
+            "- 方案中要明确标注风险和边界条件。\n"
+            "- 对于简单问候或闲聊，直接简短回复即可（20 字以内）。\n"
+            "- 使用工具前确保所有必填参数齐全，缺失参数时先向用户询问。\n"
+            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + f"{collab_section}"
+            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        )
+
     # ── General agent prompt ────────────────────────────────────────
     custom_role = role_prompt.strip() if role_prompt else ""
     prompt = (
@@ -1441,6 +1665,17 @@ async def _run_tool_call_loop(
 
     async def _loop_body() -> tuple[str, dict, dict]:
         nonlocal final_text, usage, selected, adapter
+        # ── Circuit-breaker counters (reset when a tool succeeds) ────────
+        # Three-tier detection:
+        #   1. Same-tool-same-error: the deadliest loop — agent calls the same
+        #      tool, gets the same error, retries anyway (max 3 consecutive).
+        #   2. Missing-required-params: agent doesn't understand tool schema
+        #      (max 2 consecutive rounds with missing-param errors).
+        #   3. All-tools-failed: every tool in a round fails (max 3 consecutive).
+        _consecutive_missing_param_rounds = 0
+        _consecutive_all_error_rounds = 0
+        # Per-tool failure tracking: tool_name → {error_key, consecutive_rounds}
+        _tool_failure_history: dict[str, dict] = {}
         for iteration in range(executor.MAX_ITERATIONS):
             # ── Respect cancellation token ────────────────────────────
             if token and token.cancelled:
@@ -1615,6 +1850,115 @@ async def _run_tool_call_loop(
 
                     conversation.append({"role": "assistant", "tool_calls": tool_calls})
                     conversation.append({"role": "tool", "results": tool_results})
+
+                    # ── Circuit breaker: three-tier failure detection ───────
+                    # Prevents infinite tool-call loops (5-round dead loop cap).
+                    #
+                    # Tier 1 (per-tool): Same tool fails with the SAME error key
+                    #   for ≥3 consecutive rounds → dead loop: the agent keeps
+                    #   retrying a tool that can never succeed.  This is the
+                    #   most common infinite-loop pattern.
+                    #
+                    # Tier 2 (round-level): All tools in a round fail with
+                    #   missing-required-params for ≥2 consecutive rounds → the
+                    #   model fundamentally misunderstands the tool schemas.
+                    #
+                    # Tier 3 (round-level): All tools in a round fail for ≥3
+                    #   consecutive rounds → catch-all for systemic failure.
+                    all_failed = all(not r.get("success") for r in tool_results)
+                    missing_param_errors = [
+                        r for r in tool_results
+                        if not r.get("success") and r.get("missing_params")
+                    ]
+
+                    # ── Tier 1: Same-tool-same-error detection ────────────
+                    _tier1_triggered = False
+                    for tr in tool_results:
+                        if tr.get("success"):
+                            # Tool succeeded → reset its failure history
+                            tool_name = tr.get("tool_name", "")
+                            if tool_name in _tool_failure_history:
+                                del _tool_failure_history[tool_name]
+                            continue
+                        tool_name = tr.get("tool_name", "")
+                        if not tool_name:
+                            continue
+                        # Build a stable error key for this failure
+                        error_key = (
+                            tr.get("error", "")
+                            or tr.get("missing_params", "")
+                            or str(tr)
+                        )[:80]  # first 80 chars is enough to fingerprint
+                        prev = _tool_failure_history.get(tool_name)
+                        if prev and prev["error_key"] == error_key:
+                            prev["consecutive_rounds"] += 1
+                        else:
+                            _tool_failure_history[tool_name] = {
+                                "error_key": error_key,
+                                "consecutive_rounds": 1,
+                            }
+                        if _tool_failure_history[tool_name]["consecutive_rounds"] >= 3:
+                            logger.warning(
+                                "tool_loop iter=%d: circuit breaker TIER1 — "
+                                "tool '%s' failed with same error for %d consecutive rounds",
+                                iteration, tool_name,
+                                _tool_failure_history[tool_name]["consecutive_rounds"],
+                            )
+                            _tier1_triggered = True
+                    if _tier1_triggered:
+                        final_text = executor.build_tool_result_context(tool_results)
+                        if on_tool_event:
+                            try:
+                                await on_tool_event("circuit_breaker", tool_calls, [
+                                    {"tier": "tier1", "tool_name": tn, "rounds": _tool_failure_history.get(tn, {}).get("consecutive_rounds", 0)}
+                                    for tn in {tc.get("name", "") for tc in tool_calls} if tn
+                                ])
+                            except Exception:
+                                pass
+                        break
+
+                    # ── Tier 2: Missing-required-params across all tools ──
+                    if missing_param_errors:
+                        _consecutive_missing_param_rounds += 1
+                        logger.warning(
+                            "tool_loop iter=%d: %d/%d tools missing required params "
+                            "(consecutive_missing_rounds=%d)",
+                            iteration, len(missing_param_errors), len(tool_results),
+                            _consecutive_missing_param_rounds,
+                        )
+                        if _consecutive_missing_param_rounds >= 2:
+                            final_text = executor.build_tool_result_context(tool_results)
+                            logger.warning(
+                                "tool_loop: circuit breaker TIER2 after %d "
+                                "consecutive missing-param rounds",
+                                _consecutive_missing_param_rounds,
+                            )
+                            if on_tool_event:
+                                try:
+                                    await on_tool_event("circuit_breaker", tool_calls, [{"tier": "tier2"}])
+                                except Exception:
+                                    pass
+                            break
+                    elif all_failed:
+                        # ── Tier 3: All-tools-failed ──────────────────────
+                        _consecutive_all_error_rounds += 1
+                        if _consecutive_all_error_rounds >= 3:
+                            final_text = executor.build_tool_result_context(tool_results)
+                            logger.warning(
+                                "tool_loop: circuit breaker TIER3 after %d "
+                                "consecutive all-error rounds",
+                                _consecutive_all_error_rounds,
+                            )
+                            if on_tool_event:
+                                try:
+                                    await on_tool_event("circuit_breaker", tool_calls, [{"tier": "tier3"}])
+                                except Exception:
+                                    pass
+                            break
+                    else:
+                        # At least one tool succeeded → reset round-level counters
+                        _consecutive_missing_param_rounds = 0
+                        _consecutive_all_error_rounds = 0
 
                     if iteration >= executor.MAX_ITERATIONS - 1:
                         final_text = executor.build_tool_result_context(tool_results)
@@ -2259,6 +2603,7 @@ async def _stream_cloudcode_response(
                                 )
                             ),
                             pt, ct, pt + ct,
+                            user_id=user_id,
                         )
                     except Exception:
                         logger.debug("save_message failed in cloudcode stream", exc_info=True)

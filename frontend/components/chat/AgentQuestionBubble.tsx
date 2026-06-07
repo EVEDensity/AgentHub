@@ -11,14 +11,18 @@ interface AgentQuestionBubbleProps {
 }
 
 const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreaming, onSendEvent }: AgentQuestionBubbleProps): JSX.Element {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(data.resolvedBy ? (data as Record<string, unknown>).selectedOptionId as string || null : null);
   const [customAnswer, setCustomAnswer] = useState('');
   const [showCustom, setShowCustom] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [submittedLocal, setSubmittedLocal] = useState(false);
+  // Shared state: derived from interaction_already_resolved broadcast or local click
+  const submitted = submittedLocal || !!data.resolvedBy;
+  const resolvedByName = data.resolvedByName || '';
 
   function handleSelectOption(option: AgentQuestionOption) {
     if (submitted) return;
     setSelected(option.id);
+    setSubmittedLocal(true);
     // Auto-submit if there's only one clear action path
     onSendEvent({
       event: 'agent_question_response',
@@ -27,11 +31,11 @@ const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreamin
       questionMessageId: data.messageId,
       selectedOptionId: option.id,
     });
-    setSubmitted(true);
   }
 
   function handleCustomSubmit() {
     if (!customAnswer.trim() || submitted) return;
+    setSubmittedLocal(true);
     onSendEvent({
       event: 'agent_question_response',
       sessionId: data.sessionId,
@@ -39,7 +43,6 @@ const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreamin
       questionMessageId: data.messageId,
       customAnswer: customAnswer.trim(),
     });
-    setSubmitted(true);
   }
 
   return (
@@ -122,11 +125,11 @@ const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreamin
           </div>
         )}
 
-        {/* Submitted confirmation */}
+        {/* Submitted confirmation — shared state across users */}
         {submitted && (
-          <div className="mt-2 text-xs text-indigo-500 flex items-center gap-1">
+          <div className={`mt-2 text-xs flex items-center gap-1 ${resolvedByName ? 'text-amber-600' : 'text-indigo-500'}`}>
             <Check className="h-3 w-3" />
-            已回复
+            {resolvedByName ? `已由 ${resolvedByName} 回复` : '已回复'}
           </div>
         )}
       </div>

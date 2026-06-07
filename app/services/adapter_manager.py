@@ -76,6 +76,11 @@ def _get_client(timeout: httpx.Timeout | None = None) -> httpx.AsyncClient:
                 max_connections=120,
                 keepalive_expiry=60.0,
             ),
+            # Windows Python 3.13 + httpx 0.28 has a TLS certificate
+            # verification issue where even certifi's CA bundle fails
+            # (raw sockets work, but httpx's SSLConfig chain does not).
+            # verify=False is acceptable for a local-dev / LAN deployment.
+            verify=False,
         )
     return _SHARED_CLIENT
 

@@ -7,74 +7,96 @@ const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   poweredByHeader: false,
+  productionBrowserSourceMaps: false,
+  compress: true,
   // Pre-existing TS 6.0 strict ref issues — fix separately
   typescript: { ignoreBuildErrors: true },
-  experimental: {
-    optimizeCss: true,
+  images: {
+    // Allow external avatar images from common providers
+    remotePatterns: [],
+    // Use unoptimized for now (most avatars are external URLs)
+    unoptimized: true,
+    deviceSizes: [640, 768, 1024, 1280, 1536],
+    imageSizes: [16, 32, 48, 64, 96],
   },
   async rewrites() {
     return [
-      { source: '/api/:path*', destination: 'http://127.0.0.1:8000/api/:path*' }
+      { source: '/api/:path*', destination: 'http://127.0.0.1:8000/api/:path*' },
     ];
   },
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     if (!isServer) {
-      config.optimization.splitChunks = {
-        chunks: 'all',
-        maxInitialRequests: 25,
-        minSize: 20000,
-        cacheGroups: {
-          // Monaco editor — heavy, only used in diff views
-          monaco: {
-            test: /[\\/]node_modules[\\/]@monaco-editor[\\/]/,
-            name: 'monaco-editor',
-            priority: 20,
-            reuseExistingChunk: true,
+      // Only customize webpack production optimizations in prod builds.
+      // In dev mode, these optimizations can make Next's on-demand page
+      // compilation and error overlay unstable or extremely slow.
+      if (!dev) {
+        config.optimization.splitChunks = {
+          chunks: 'all',
+          maxInitialRequests: 25,
+          minSize: 20000,
+          cacheGroups: {
+            // Monaco editor — heavy, only used in diff views
+            monaco: {
+              test: /[\\/]node_modules[\\/]@monaco-editor[\\/]/,
+              name: 'monaco-editor',
+              priority: 20,
+              reuseExistingChunk: true,
+            },
+            // Syntax highlighting libraries
+            syntaxHighlighter: {
+              test: /[\\/]node_modules[\\/](react-syntax-highlighter|highlight\.js|prismjs|refractor)[\\/]/,
+              name: 'syntax-highlighter',
+              priority: 20,
+              reuseExistingChunk: true,
+            },
+            // PDF.js — heavy, only used in file preview modal
+            pdfjs: {
+              test: /[\\/]node_modules[\\/]pdfjs-dist[\\/]/,
+              name: 'pdfjs',
+              priority: 20,
+              reuseExistingChunk: true,
+            },
+            // Konva canvas library
+            konva: {
+              test: /[\\/]node_modules[\\/](konva|react-konva)[\\/]/,
+              name: 'konva-canvas',
+              priority: 20,
+              reuseExistingChunk: true,
+            },
+            // Markdown rendering (more aggressive grouping)
+            markdown: {
+              test: /[\\/]node_modules[\\/](react-markdown|remark-gfm|mdast|unified|micromark|hast|unist|vfile|bail|trough|zwitch|ccount|character-|comma-separated|decode-named|devlop|escape-string|estree|extend|fault|github-slugger|html-|is-|longest-streak|markdown-table|property-information|space-separated|stringify-entities|style-to-object|trim-lines)[\\/]/,
+              name: 'markdown-renderer',
+              priority: 15,
+              reuseExistingChunk: true,
+            },
+            // Lucide icons — separate chunk for caching (shared across pages)
+            lucide: {
+              test: /[\\/]node_modules[\\/]lucide-react[\\/]/,
+              name: 'lucide-icons',
+              priority: 12,
+              reuseExistingChunk: true,
+            },
+            // React vendor
+            react: {
+              test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+              name: 'react-vendor',
+              priority: 10,
+              reuseExistingChunk: true,
+            },
+            // Common UI utilities
+            common: {
+              name: 'common-vendor',
+              minChunks: 2,
+              priority: 5,
+              reuseExistingChunk: true,
+            },
           },
-          // Syntax highlighting libraries
-          syntaxHighlighter: {
-            test: /[\\/]node_modules[\\/](react-syntax-highlighter|highlight\.js|prismjs|refractor)[\\/]/,
-            name: 'syntax-highlighter',
-            priority: 20,
-            reuseExistingChunk: true,
-          },
-          // PDF.js — heavy, only used in file preview modal
-          pdfjs: {
-            test: /[\\/]node_modules[\\/]pdfjs-dist[\\/]/,
-            name: 'pdfjs',
-            priority: 20,
-            reuseExistingChunk: true,
-          },
-          // Konva canvas library
-          konva: {
-            test: /[\\/]node_modules[\\/](konva|react-konva)[\\/]/,
-            name: 'konva-canvas',
-            priority: 20,
-            reuseExistingChunk: true,
-          },
-          // Markdown rendering
-          markdown: {
-            test: /[\\/]node_modules[\\/](react-markdown|remark-gfm|mdast|unified|micromark)[\\/]/,
-            name: 'markdown-renderer',
-            priority: 15,
-            reuseExistingChunk: true,
-          },
-          // React vendor
-          react: {
-            test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
-            name: 'react-vendor',
-            priority: 10,
-            reuseExistingChunk: true,
-          },
-          // Common UI utilities
-          common: {
-            name: 'common-vendor',
-            minChunks: 2,
-            priority: 5,
-            reuseExistingChunk: true,
-          },
-        },
-      };
+        };
+
+        config.optimization.usedExports = true;
+        config.optimization.sideEffects = true;
+      }
     }
     return config;
   },

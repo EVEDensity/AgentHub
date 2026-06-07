@@ -54,6 +54,7 @@ export interface Message {
   content: string;
   type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result' | 'agent_question' | 'progress_update' | 'risk_warning' | 'agent_todo' | 'task_preview' | 'terminal';
   timestamp: string;
+  userId?: string;           // JWT-derived user ID (empty for agent messages)
   guardrailResult?: GuardrailResult;
   symbolic?: SymbolicData & {
     generated?: GeneratedData;
@@ -199,8 +200,10 @@ export interface TestState {
 }
 
 export interface User {
+  id?: string;
   name: string;
   role: string;
+  created_at?: string;
 }
 
 export interface AuthFormState {
@@ -226,6 +229,7 @@ export interface PendingMessage {
   attachments?: AttachmentMeta[];
   quoteReferences?: QuoteReference[];
   exec_permission?: number;  // 1=询问 2=跳过 3=计划
+  auto_reply?: boolean;      // 无@Agent时是否自动使用默认Agent回复（默认 true）
 }
 
 export interface GeneratedFileDetail {
@@ -281,6 +285,9 @@ export interface ChatSession {
   createdAt?: string;
   isPinned?: number;
   lastMessageAt?: string;
+  ownerId?: string;
+  visibility?: string;
+  myRole?: string;
 }
 
 export interface DagState {
@@ -680,6 +687,9 @@ export interface AgentQuestionEvent {
   options: AgentQuestionOption[];
   allowCustomAnswer: boolean;
   timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
 }
 
 export interface AgentQuestionOption {
@@ -722,6 +732,9 @@ export interface RiskWarningEvent {
   description: string;
   actions: RiskWarningAction[];
   timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
 }
 
 export interface RiskWarningAction {
@@ -752,6 +765,9 @@ export interface AgentTodoEvent {
   actions: AgentTodoAction[];
   priority: 'low' | 'medium' | 'high';
   timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
 }
 
 export interface AgentTodoAction {
@@ -797,6 +813,9 @@ export interface TaskPreviewEvent {
   tasks: TaskPreviewItem[];
   estimatedTotalSeconds?: number;
   timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
 }
 
 export interface TaskPreviewItem {
@@ -853,4 +872,82 @@ export interface SessionBadge {
   pendingDecisions: number;
   hasRiskWarnings: boolean;
   hasQuestions: boolean;
+}
+
+// ── Multi-User Collaboration Event Types ───────────────────────────────
+
+export interface PresenceUser {
+  userId: string;
+  name: string;
+  role: string;
+  status: 'online' | 'idle' | 'typing' | 'offline';
+}
+
+export interface UserJoinedEvent {
+  event: 'user_joined';
+  sessionId: string;
+  userId: string;
+  userName: string;
+  role: string;
+  timestamp: string;
+}
+
+export interface UserLeftEvent {
+  event: 'user_left';
+  sessionId: string;
+  userId: string;
+  userName: string;
+  timestamp: string;
+}
+
+export interface UserRosterEvent {
+  event: 'user_roster';
+  sessionId: string;
+  users: PresenceUser[];
+}
+
+export interface PresenceUpdateEvent {
+  event: 'presence_update';
+  sessionId: string;
+  users: Array<{ userId: string; status: string }>;
+}
+
+export interface TypingIndicatorEvent {
+  event: 'typing_indicator';
+  sessionId: string;
+  userId: string;
+  userName: string;
+  isTyping: boolean;
+}
+
+export interface SessionMember {
+  userId: string;
+  userName: string;
+  userRole: string;
+  role: string;
+  invitedBy: string;
+  joinedAt: string;
+  onlineStatus?: string;
+}
+
+// ── Multi-User Interaction Sync Events ────────────────────────────────────
+
+/** Broadcast when a PM interaction has been resolved by any user */
+export interface InteractionAlreadyResolvedEvent {
+  event: 'interaction_already_resolved';
+  sessionId: string;
+  messageId: string;
+  resolvedBy: string;
+  userName: string;
+  timestamp: string;
+}
+
+/** Broadcast when the execution permission mode is changed */
+export interface PermissionModeChangedEvent {
+  event: 'permission_mode_changed';
+  sessionId: string;
+  mode: number;
+  changedBy: string;
+  changedByName: string;
+  timestamp: string;
 }

@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import type { ChatSession } from '../../types';
+import MemberList from '../collaboration/MemberList';
 
 interface SessionSidebarProps {
   user: { name: string; role: string } | null;
@@ -25,6 +26,14 @@ interface SessionSidebarProps {
   onEditNameKeyDown: (e: React.KeyboardEvent<HTMLInputElement>, id: string) => void;
   onEditNameBlur: (id: string) => void;
   onLogout: () => void;
+  /** Multi-user: open share dialog */
+  onOpenShare?: () => void;
+  /** Current session's user role */
+  currentRole?: string;
+  /** Multi-user: current session visibility */
+  currentVisibility?: string;
+  /** Multi-user: auth headers for API calls */
+  authHeaders?: Record<string, string>;
 }
 
 const GENERIC_NAME_PATTERNS = ['untitled session', 'new session', '新建会话', '默认会话'];
@@ -41,6 +50,7 @@ const SessionSidebar = memo(function SessionSidebar({
   onRenameSession, onTogglePin, onStartRename, onRegenerateName,
   onSessionQueryChange, onEditNameChange,
   onEditNameKeyDown, onEditNameBlur, onLogout,
+  onOpenShare, currentRole, currentVisibility, authHeaders,
   width,
 }: SessionSidebarProps) {
   return (
@@ -59,6 +69,7 @@ const SessionSidebar = memo(function SessionSidebar({
       {notice && <div className="mt-3 rounded-lg bg-warning-50 p-2 text-xs text-warning-600">{notice}</div>}
       <div className="mb-3 mt-4 flex items-center justify-between border-b border-warm-150 pb-3">
         <button className="btn-ghost flex items-center gap-2" onClick={onCreateSession}><span className="text-lg">+</span><span>New Session</span></button>
+        {/* 分享按钮已移至顶部 Header 区域（与 UserRoster 并列） */}
       </div>
       <div className="mb-3 flex items-center gap-2 rounded-xl border border-warm-150 bg-warm-50 px-3 py-2">
         <span className="text-warm-400">Search</span>
@@ -130,6 +141,16 @@ const SessionSidebar = memo(function SessionSidebar({
         {sessionsLength === 0 && <div className="rounded-lg bg-warm-50 px-3 py-2 text-sm text-warm-500">No sessions, click &quot;New Session&quot;</div>}
         </div>
       </div>
+      {/* Multi-user: member list (only shown when a session is selected) */}
+      {sessionId && authHeaders && (
+        <MemberList
+          sessionId={sessionId}
+          userRole={currentRole}
+          visibility={currentVisibility}
+          authHeaders={authHeaders}
+          onOpenShare={onOpenShare}
+        />
+      )}
     </aside>
   );
 });

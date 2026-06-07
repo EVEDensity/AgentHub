@@ -17,13 +17,16 @@ function formatEta(seconds: number): string {
 }
 
 const TaskPreviewCard = memo(function TaskPreviewCard({ data, isStreaming, onSendEvent }: TaskPreviewCardProps): JSX.Element {
-  const [submitted, setSubmitted] = useState(false);
+  const [submittedLocal, setSubmittedLocal] = useState(false);
   const [modifications, setModifications] = useState('');
   const [showModify, setShowModify] = useState(false);
+  // Shared state: derived from interaction_already_resolved broadcast or local click
+  const submitted = submittedLocal || !!data.resolvedBy;
+  const resolvedByName = data.resolvedByName || '';
 
   function handleConfirm() {
     if (submitted) return;
-    setSubmitted(true);
+    setSubmittedLocal(true);
     onSendEvent({
       event: 'task_preview_response',
       sessionId: data.sessionId,
@@ -39,7 +42,7 @@ const TaskPreviewCard = memo(function TaskPreviewCard({ data, isStreaming, onSen
 
   function handleSubmitModify() {
     if (submitted) return;
-    setSubmitted(true);
+    setSubmittedLocal(true);
     onSendEvent({
       event: 'task_preview_response',
       sessionId: data.sessionId,
@@ -51,7 +54,7 @@ const TaskPreviewCard = memo(function TaskPreviewCard({ data, isStreaming, onSen
 
   function handleCancel() {
     if (submitted) return;
-    setSubmitted(true);
+    setSubmittedLocal(true);
     onSendEvent({
       event: 'task_preview_response',
       sessionId: data.sessionId,
@@ -183,11 +186,11 @@ const TaskPreviewCard = memo(function TaskPreviewCard({ data, isStreaming, onSen
           </div>
         )}
 
-        {/* Submitted state */}
+        {/* Submitted state — shared across users */}
         {submitted && (
-          <div className="mt-2 text-xs text-warm-500 flex items-center gap-1">
+          <div className={`mt-2 text-xs flex items-center gap-1 ${resolvedByName ? 'text-amber-600' : 'text-warm-500'}`}>
             <Check className="h-3 w-3" />
-            已确认
+            {resolvedByName ? `已由 ${resolvedByName} 确认` : '已确认'}
           </div>
         )}
       </div>

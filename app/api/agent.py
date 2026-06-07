@@ -12,6 +12,7 @@ from app.config import DATA_DIR
 from app.db.session import afetch_all, afetch_one, aexecute
 from app.schemas.common import AgentCreateRequest, AgentUpdateRequest
 from app.services.adapter_manager import adapter_manager
+from app.services.agent_service import seed_default_agents_for_user
 from app.services.auth_service import get_current_user, require_admin, write_audit
 from app.services.secret_service import decrypt_secret, encrypt_secret
 from app.utils.async_file import aexists, aread_bytes, awrite_bytes
@@ -35,6 +36,73 @@ _ALLOWED_EXTENSIONS = set(_MIME_BY_EXT.keys())
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════
+
+# ── Deterministic SVG fallback for agents without an uploaded avatar ──
+# When an agent has no avatar_data in DB and no legacy file on disk, we
+# generate a unique, deterministic SVG avatar from its agent_id.  This
+# guarantees that *every* agent (including custom ones the admin creates)
+# always has a unique, visually-distinct avatar — without requiring a
+# manual upload.
+
+# Curated palette: 12 colors with strong contrast against the warm UI.
+# Each agent_id is hashed to a stable (color, second-color) pair, so the
+# same agent_id always renders the same avatar (consistent across users)
+# and different agent_ids render different avatars (uniqueness per agent).
+_AVATAR_PALETTE: list[tuple[str, str]] = [
+    ("#f97316", "#fb923c"),  # orange
+    ("#ec4899", "#f472b6"),  # pink
+    ("#8b5cf6", "#a78bfa"),  # violet
+    ("#3b82f6", "#60a5fa"),  # blue
+    ("#10b981", "#34d399"),  # emerald
+    ("#f59e0b", "#fbbf24"),  # amber
+    ("#06b6d4", "#22d3ee"),  # cyan
+    ("#ef4444", "#f87171"),  # red
+    ("#14b8a6", "#2dd4bf"),  # teal
+    ("#a855f7", "#c084fc"),  # purple
+    ("#84cc16", "#a3e635"),  # lime
+    ("#f43f5e", "#fb7185"),  # rose
+]
+
+
+def _generate_default_avatar_svg(agent_id: str) -> tuple[bytes, str]:
+    """Generate a deterministic, unique SVG avatar for the given agent_id.
+
+    Returns ``(bytes, mime)``.  The avatar is a circular gradient with the
+    first character of the agent_id rendered in white.  The same agent_id
+    always produces the same SVG, but different agent_ids produce visually
+    distinct avatars.
+    """
+    if not agent_id:
+        agent_id = "?"
+
+    # Stable hash → palette index (so the same agent always uses the same color)
+    h = 0
+    for ch in agent_id:
+        h = (h * 131 + ord(ch)) & 0xFFFFFFFF
+    primary, secondary = _AVATAR_PALETTE[h % len(_AVATAR_PALETTE)]
+    # Vary the rotation by another hash mod to make repeated palette slots
+    # still feel distinct.
+    angle = (h >> 8) % 360
+
+    # First character — supports both ASCII and CJK
+    ch = agent_id[0].upper()
+
+    # Build a minimal, dependency-free SVG (90×90 is plenty for a 40×40 chip)
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="90" height="90" viewBox="0 0 90 90">'
+        f'<defs>'
+        f'<linearGradient id="g" gradientTransform="rotate({angle} 0.5 0.5)">'
+        f'<stop offset="0%" stop-color="{primary}"/>'
+        f'<stop offset="100%" stop-color="{secondary}"/>'
+        f'</linearGradient>'
+        f'</defs>'
+        f'<circle cx="45" cy="45" r="45" fill="url(#g)"/>'
+        f'<text x="45" y="45" fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif" '
+        f'font-size="42" font-weight="700" text-anchor="middle" dominant-baseline="central">{ch}</text>'
+        f'</svg>'
+    )
+    return svg.encode("utf-8"), "image/svg+xml"
+
 
 def _avatar_url_for(agent_id: str) -> str:
     """Return the canonical DB-backed avatar URL for an agent."""
@@ -94,18 +162,69 @@ def _validate_image(content: bytes, filename: str) -> None:
 
 
 @router.get("/registry")
-async def registry() -> list[dict]:
-    rows = await afetch_all(
-        "SELECT agent_id AS \"agentId\",domain,status,adapter_type AS \"adapterType\","
-        "base_model_name AS \"baseModelName\",risk_level AS \"rankLevel\","
-        "duty_note AS \"dutyNote\",display_name AS \"displayName\","
-        "CASE WHEN avatar_data IS NOT NULL AND avatar_mime != '' "
-        "  THEN '/api/agent/registry/avatar/' || agent_id "
-        "  ELSE avatar_url "
-        "END AS \"avatarUrl\","
-        "capability_tags AS \"capabilityTags\","
-        "base_url AS \"baseUrl\" FROM agent_registry ORDER BY agent_id"
+async def registry(user: dict = Depends(get_current_user)) -> list[dict]:
+    user_id = user["id"]
+    # Always prefer the canonical agent_id-based URL so the server endpoint
+    # can fall back to the deterministic SVG when no avatar is uploaded.
+    # This avoids broken-image <img> tags when an agent has a stale
+    # avatar_url pointing at a file that no longer exists.
+    _AVATAR_SQL = (
+        "COALESCE("
+        "  CASE WHEN a.avatar_data IS NOT NULL AND a.avatar_mime != '' "
+        "    THEN '/api/agent/registry/avatar/' || a.agent_id "
+        "    WHEN a.avatar_url != '' AND a.avatar_url LIKE '/api/agent/registry/avatar/%' "
+        "      THEN a.avatar_url "
+        "    ELSE '/api/agent/registry/avatar/' || a.agent_id "
+        "  END,"
+        "  '/api/agent/registry/avatar/' || a.agent_id"
+        ") AS \"avatarUrl\""
     )
+    _REGISTRY_COLS = (
+        "a.agent_id AS \"agentId\",a.domain,a.status,"
+        "a.adapter_type AS \"adapterType\","
+        "a.base_model_name AS \"baseModelName\",a.risk_level AS \"rankLevel\","
+        "a.duty_note AS \"dutyNote\",a.display_name AS \"displayName\","
+        + _AVATAR_SQL + ","
+        "a.capability_tags AS \"capabilityTags\","
+        "a.base_url AS \"baseUrl\""
+    )
+    rows = await afetch_all(
+        f"SELECT {_REGISTRY_COLS} FROM agent_registry a "
+        "WHERE a.user_id=$1 ORDER BY a.agent_id",
+        user_id,
+    )
+    # Auto-seed 6 default agents if this user has none yet
+    if not rows:
+        await seed_default_agents_for_user(user_id)
+        rows = await afetch_all(
+            f"SELECT {_REGISTRY_COLS} FROM agent_registry a "
+            "WHERE a.user_id=$1 ORDER BY a.agent_id",
+            user_id,
+        )
+    # ── Lazy avatar migration: copy avatar data from system agents ──
+    # Runs once per user whose agents were seeded before the avatar-copy
+    # logic was added to seed_default_agents_for_user.
+    if any(not row.get("avatarUrl") for row in rows):
+        # Batch-copy all missing avatars in one UPDATE ... FROM
+        await aexecute(
+            "UPDATE agent_registry AS target "
+            "SET avatar_data = source.avatar_data, "
+            "    avatar_mime = source.avatar_mime, "
+            "    avatar_url   = source.avatar_url "
+            "FROM agent_registry AS source "
+            "WHERE target.agent_id = source.agent_id "
+            "  AND target.user_id = $1 "
+            "  AND source.user_id = '' "
+            "  AND source.avatar_data IS NOT NULL "
+            "  AND target.avatar_data IS NULL",
+            user_id,
+        )
+        # Re-read rows so in-memory dicts reflect the copied avatar URLs
+        rows = await afetch_all(
+            f"SELECT {_REGISTRY_COLS} FROM agent_registry a "
+            "WHERE a.user_id=$1 ORDER BY a.agent_id",
+            user_id,
+        )
     for row in rows:
         try:
             row["capabilityTags"] = json.loads(row.get("capabilityTags", "[]") or "[]")
@@ -132,10 +251,11 @@ async def create_agent(data: AgentCreateRequest, user: dict = Depends(get_curren
 
     try:
         await aexecute(
-            "INSERT INTO agent_registry(agent_id,domain,status,adapter_type,base_model_name,"
+            "INSERT INTO agent_registry(agent_id,user_id,domain,status,adapter_type,base_model_name,"
             "risk_level,duty_note,display_name,avatar_url,capability_tags,base_url,api_key) "
-            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
             agent_id,
+            user["id"],
             data.domain.strip(),
             "sleeping",
             data.adapterType,
@@ -158,7 +278,8 @@ async def create_agent(data: AgentCreateRequest, user: dict = Depends(get_curren
 async def delete_agent(agent_id: str, user: dict = Depends(get_current_user)) -> dict:
     require_admin(user)
     deleted = await afetch_one(
-        "DELETE FROM agent_registry WHERE agent_id=$1 RETURNING agent_id", agent_id,
+        "DELETE FROM agent_registry WHERE agent_id=$1 AND user_id=$2 RETURNING agent_id",
+        agent_id, user["id"],
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent 不存在")
@@ -172,7 +293,10 @@ async def update_agent(agent_id: str, data: AgentUpdateRequest, user: dict = Dep
     if agent_id != data.agentId:
         raise HTTPException(status_code=400, detail="路径和请求中的 Agent ID 不一致")
 
-    exists = await afetch_one("SELECT agent_id FROM agent_registry WHERE agent_id=$1", agent_id)
+    exists = await afetch_one(
+        "SELECT agent_id FROM agent_registry WHERE agent_id=$1 AND user_id=$2",
+        agent_id, user["id"],
+    )
     if not exists:
         raise HTTPException(status_code=404, detail="Agent 不存在")
 
@@ -188,20 +312,20 @@ async def update_agent(agent_id: str, data: AgentUpdateRequest, user: dict = Dep
         await aexecute(
             "UPDATE agent_registry SET domain=$1,adapter_type=$2,base_model_name=$3,"
             "risk_level=$4,duty_note=$5,display_name=$6,avatar_url=$7,"
-            "capability_tags=$8,base_url=$9,api_key=$10 WHERE agent_id=$11",
+            "capability_tags=$8,base_url=$9,api_key=$10 WHERE agent_id=$11 AND user_id=$12",
             data.domain.strip(), data.adapterType, data.baseModelName.strip(),
             data.rankLevel, data.dutyNote.strip(), data.displayName.strip(),
             avatar_url, tags_json, data.baseUrl.strip(),
-            encrypt_secret(data.apiKey.strip()), agent_id,
+            encrypt_secret(data.apiKey.strip()), agent_id, user["id"],
         )
     else:
         await aexecute(
             "UPDATE agent_registry SET domain=$1,adapter_type=$2,base_model_name=$3,"
             "risk_level=$4,duty_note=$5,display_name=$6,avatar_url=$7,"
-            "capability_tags=$8,base_url=$9 WHERE agent_id=$10",
+            "capability_tags=$8,base_url=$9 WHERE agent_id=$10 AND user_id=$11",
             data.domain.strip(), data.adapterType, data.baseModelName.strip(),
             data.rankLevel, data.dutyNote.strip(), data.displayName.strip(),
-            avatar_url, tags_json, data.baseUrl.strip(), agent_id,
+            avatar_url, tags_json, data.baseUrl.strip(), agent_id, user["id"],
         )
 
     audit_id = write_audit(user["id"], agent_id, "agent_update", "L2", "approve", {**data.model_dump(), "apiKey": "***" if data.apiKey else ""})
@@ -211,7 +335,12 @@ async def update_agent(agent_id: str, data: AgentUpdateRequest, user: dict = Dep
 @router.post("/registry/{agent_id}/test")
 async def test_agent_model(agent_id: str, user: dict = Depends(get_current_user)) -> dict:
     require_admin(user)
-    row = await afetch_one("SELECT agent_id AS \"agentId\",adapter_type AS \"adapterType\",base_model_name AS \"baseModelName\",base_url AS \"baseUrl\",api_key AS \"apiKey\" FROM agent_registry WHERE agent_id=$1", agent_id)
+    row = await afetch_one(
+        "SELECT agent_id AS \"agentId\",adapter_type AS \"adapterType\",base_model_name AS \"baseModelName\","
+        "base_url AS \"baseUrl\",api_key AS \"apiKey\" FROM agent_registry "
+        "WHERE agent_id=$1 AND user_id=$2",
+        agent_id, user["id"],
+    )
     if not row:
         raise HTTPException(status_code=404, detail="Agent 不存在")
 
@@ -260,11 +389,15 @@ async def upload_avatar(
 
     # ── DB path: store in agent_registry.avatar_data ──────────────
     if agentId.strip():
-        existing = await afetch_one("SELECT agent_id FROM agent_registry WHERE agent_id=$1", agentId.strip())
+        existing = await afetch_one(
+            "SELECT agent_id FROM agent_registry WHERE agent_id=$1 AND user_id=$2",
+            agentId.strip(), user["id"],
+        )
         if existing:
             await aexecute(
-                "UPDATE agent_registry SET avatar_data=$1, avatar_mime=$2, avatar_url=$3 WHERE agent_id=$4",
-                content, mime, _avatar_url_for(agentId.strip()), agentId.strip(),
+                "UPDATE agent_registry SET avatar_data=$1, avatar_mime=$2, avatar_url=$3 "
+                "WHERE agent_id=$4 AND user_id=$5",
+                content, mime, _avatar_url_for(agentId.strip()), agentId.strip(), user["id"],
             )
             # Also save a local copy for backward compat
             try:
@@ -298,6 +431,10 @@ async def get_avatar(ident: str):
     Lookup order:
     1. **agent_id** — check ``agent_registry.avatar_data`` (DB-backed).
     2. **filename** — serve from local disk (legacy fallback).
+    3. **deterministic SVG** — auto-generated from ``ident`` if it is a
+       known agent_id and no uploaded avatar exists.  Guarantees every
+       agent (including the legacy/custom ones the admin creates) renders
+       a unique, stable avatar without requiring a manual upload.
     """
     from fastapi.responses import Response
 
@@ -315,15 +452,21 @@ async def get_avatar(ident: str):
 
     # ── 2. Filesystem fallback (legacy filename-based avatars) ──
     safe_name = Path(ident).name
-    if ".." in safe_name or "/" in safe_name or "\\" in safe_name:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    avatar_path = AVATAR_DIR / safe_name
-    if not await aexists(avatar_path):
-        raise HTTPException(status_code=404, detail="Avatar not found")
+    if ".." not in safe_name and "/" not in safe_name and "\\" not in safe_name:
+        avatar_path = AVATAR_DIR / safe_name
+        if await aexists(avatar_path):
+            content = await aread_bytes(avatar_path)
+            return Response(content=content, media_type=_content_type_for(safe_name))
 
-    content = await aread_bytes(avatar_path)
-    mime = _content_type_for(safe_name)
-    return Response(content=content, media_type=mime)
+    # ── 3. Deterministic SVG fallback (so every agent always has an avatar) ──
+    # Only emit the auto-SVG when the ident looks like an agent_id (no file
+    # extension).  This keeps legacy /registry/avatar/<file>.<ext> URLs
+    # returning a real 404 instead of an SVG masquerading as the file.
+    if "." not in ident and "/" not in ident and "\\" not in ident:
+        svg_bytes, mime = _generate_default_avatar_svg(ident)
+        return Response(content=svg_bytes, media_type=mime)
+
+    raise HTTPException(status_code=404, detail="Avatar not found")
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -57,17 +57,27 @@ class WebSocketManager:
         self._tokens: dict[str, StreamToken] = {}
         # session_id → asyncio.Lock (message processing serialisation)
         self._locks: dict[str, asyncio.Lock] = {}
+        # ── Multi-user presence ────────────────────────────────────────
+        # session_id → {user_id: {"name", "role", "status", "lastSeen"}}
+        self._presence: dict[str, dict[str, dict[str, Any]]] = {}
+        # Per-user-user role mapping (conn_id → role)
+        self._conn_roles: dict[str, str] = {}
 
     # ── Connection lifecycle ─────────────────────────────────────────
 
-    async def connect(self, session_id: str, websocket: WebSocket, user_id: str = "") -> str:
+    async def connect(self, session_id: str, websocket: WebSocket, user_id: str = "", role: str = "viewer", user_name: str = "") -> str:
         """Accept the websocket and register the connection.  Returns a unique connection_id."""
         await websocket.accept()
         conn_id = str(uuid.uuid4())
         now_ts = time.monotonic()
         self._connections.setdefault(session_id, []).append((conn_id, websocket, user_id, now_ts))
         self._heartbeats[(session_id, conn_id)] = now_ts
-        logger.info("ws connect session=%s conn=%s user=%s", session_id, conn_id, user_id)
+        self._conn_roles[conn_id] = role
+        # Initialize presence entry with user name
+        self._presence.setdefault(session_id, {})[user_id] = {
+            "name": user_name, "role": role, "status": "online", "lastSeen": now_ts,
+        }
+        logger.info("ws connect session=%s conn=%s user=%s role=%s", session_id, conn_id, user_id, role)
         return conn_id
 
     def disconnect(self, session_id: str, websocket: WebSocket) -> None:
@@ -86,17 +96,76 @@ class WebSocketManager:
                 break
         if target is None:
             return  # already removed (e.g. by broadcast dead-connection pruning)
+        user_id = target[2]
+        conn_id = target[0]
         try:
             conns.remove(target)
         except ValueError:
             pass  # race with another cleanup path
         self._heartbeats.pop((session_id, target[0]), None)
-        logger.info("ws disconnect session=%s conn=%s", session_id, target[0])
+        self._conn_roles.pop(target[0], None)
+        # Update presence: mark offline if no more connections for this user in this session
+        remaining = [c for c in conns if c[2] == user_id]
+        if not remaining and session_id in self._presence:
+            self._presence[session_id].pop(user_id, None)
+            if not self._presence[session_id]:
+                self._presence.pop(session_id, None)
+        logger.info("ws disconnect session=%s conn=%s user=%s", session_id, conn_id, user_id)
         if not conns and session_id in self._connections:
             self._connections.pop(session_id, None)
 
     def _connection_count(self, session_id: str) -> int:
         return len(self._connections.get(session_id, []))
+
+    # ── Multi-user presence ─────────────────────────────────────────
+
+    def set_user_presence(self, session_id: str, user_id: str, status: str) -> None:
+        """Update a user's online status for the given session."""
+        if session_id not in self._presence:
+            self._presence[session_id] = {}
+        if user_id not in self._presence[session_id]:
+            self._presence[session_id][user_id] = {"name": "", "role": "viewer"}
+        self._presence[session_id][user_id]["status"] = status
+        self._presence[session_id][user_id]["lastSeen"] = time.monotonic()
+
+    def get_online_users(self, session_id: str) -> list[dict[str, Any]]:
+        """Return the current user roster with presence status."""
+        users = self._presence.get(session_id, {})
+        return [
+            {"userId": uid, **{k: v for k, v in info.items() if k != "lastSeen"}}
+            for uid, info in users.items()
+            if info.get("status") != "offline"
+        ]
+
+    async def broadcast_user_event(
+        self, session_id: str, payload: dict[str, Any],
+        exclude_user: str | None = None,
+    ) -> None:
+        """Broadcast to all connections EXCEPT those belonging to *exclude_user*."""
+        conns = self._connections.get(session_id, [])
+        if not conns:
+            return
+
+        async def _send_one(cid: str, ws: WebSocket, uid: str, ts: float) -> tuple[str, bool]:
+            if exclude_user is not None and uid == exclude_user:
+                return (cid, True)  # skip the excluded user silently
+            try:
+                if ws.client_state != WebSocketState.CONNECTED:
+                    return (cid, False)
+                await asyncio.wait_for(ws.send_json(payload), timeout=BROADCAST_SEND_TIMEOUT)
+                return (cid, True)
+            except Exception:
+                return (cid, False)
+
+        results = await asyncio.gather(
+            *[_send_one(cid, ws, uid, ts) for cid, ws, uid, ts in conns],
+            return_exceptions=True,
+        )
+
+        # Prune dead connections
+        dead = {cid for cid, ok in results if isinstance((cid, ok), tuple) and not ok}
+        if dead:
+            conns[:] = [(cid, ws, uid, ts) for cid, ws, uid, ts in conns if cid not in dead]
 
     # ── Safe send — never raises on connection errors ───────────────
 
@@ -416,6 +485,32 @@ class WebSocketManager:
         if eta_seconds is not None:
             payload["estimatedTotalSeconds"] = eta_seconds
         await self.broadcast(session_id, payload)
+
+    async def broadcast_interaction_already_resolved(
+        self, session_id: str, message_id: str, resolver: dict,
+    ) -> None:
+        """Broadcast that a PM interaction has been resolved by a user."""
+        await self.broadcast(session_id, {
+            "event": "interaction_already_resolved",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "resolvedBy": resolver.get("resolvedBy", ""),
+            "userName": resolver.get("userName", ""),
+            "timestamp": resolver.get("timestamp", db_now()),
+        })
+
+    async def broadcast_permission_mode_changed(
+        self, session_id: str, mode: int, changed_by: str, changed_by_name: str,
+    ) -> None:
+        """Broadcast that the execution permission mode has changed."""
+        await self.broadcast(session_id, {
+            "event": "permission_mode_changed",
+            "sessionId": session_id,
+            "mode": mode,
+            "changedBy": changed_by,
+            "changedByName": changed_by_name,
+            "timestamp": db_now(),
+        })
 
     async def broadcast_degradation_change(
         self, session_id: str, active: bool, reason: str,

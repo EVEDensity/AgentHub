@@ -71,7 +71,7 @@ const ChatHeader = memo(function ChatHeader({
   }, [commitRename, sessionName]);
 
   return (
-    <header className="border-b border-warm-150 bg-white">
+    <div>
       {/* Degradation banner */}
       {degradationStatus?.active && (
         <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2 text-sm">
@@ -165,45 +165,74 @@ const ChatHeader = memo(function ChatHeader({
             </div>
           </div>
 
-          <div className="min-w-[420px]">
-            <div className="mb-1.5 flex justify-between text-caption text-warm-500">
-              <div className="flex items-center gap-3">
-                <button onClick={onTaskClick} className="text-primary-500 hover:text-primary-600">DAG Progress / View Tasks</button>
-                {onTogglePreview && (
-                  <button
-                    onClick={onTogglePreview}
-                    className={`text-sm font-medium transition-colors ${
-                      previewOpen
-                        ? 'text-accent-600 hover:text-accent-700'
-                        : 'text-warm-500 hover:text-primary-600'
-                    }`}
-                    title={previewOpen ? '关闭预览面板' : '打开预览面板'}
-                  >
-                    {previewOpen ? '关闭预览' : '文件预览'}
-                  </button>
-                )}
-                {onResetLayout && (
-                  <>
-                    <span className="text-warm-200">|</span>
-                    <button
-                      onClick={onResetLayout}
-                      className="text-sm font-medium text-warm-500 transition-colors hover:text-primary-600"
-                      title="重置侧栏 / 预览面板 / 文件树宽度到默认值"
-                    >
-                      重置布局
-                    </button>
-                  </>
-                )}
+          {/* ── 右侧：任务控制 / 文件预览 / 重置布局 / 进度 ── */}
+          <div className="flex items-center gap-3 shrink-0">
+            {/* 进度条 + 百分比 */}
+            <div className="flex items-center gap-2">
+              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-warm-100">
+                <div
+                  className="h-full bg-primary-500 transition-all duration-300"
+                  style={{ width: `${percent}%` }}
+                />
               </div>
-              <span>{percent}%</span>
+              <span className={`text-xs font-mono font-medium tabular-nums ${isStreaming ? 'text-primary-600' : 'text-warm-500'}`}>
+                {percent}%
+              </span>
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-warm-100">
-              <div className="h-full bg-primary-500 transition-all duration-300" style={{ width: `${percent}%` }} />
-            </div>
+
+            <span className="h-5 w-px bg-warm-150" />
+
+            <button
+              onClick={onTaskClick}
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-warm-500 hover:text-primary-600 hover:bg-warm-50 rounded-md transition-colors"
+              title="查看 DAG 任务进度"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <rect x="14" y="14" width="7" height="7" rx="1" />
+              </svg>
+              <span className="hidden sm:inline">View Tasks</span>
+            </button>
+
+            {onTogglePreview && (
+              <button
+                onClick={onTogglePreview}
+                className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                  previewOpen
+                    ? 'text-accent-600 bg-accent-50 hover:bg-accent-100'
+                    : 'text-warm-500 hover:text-primary-600 hover:bg-warm-50'
+                }`}
+                title={previewOpen ? '关闭预览面板' : '打开文件预览面板'}
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                </svg>
+                <span className="hidden sm:inline">文件预览</span>
+              </button>
+            )}
+
+            {onResetLayout && (
+              <button
+                onClick={onResetLayout}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-warm-500 hover:text-primary-600 hover:bg-warm-50 rounded-md transition-colors"
+                title="重置侧栏 / 预览面板 / 文件树宽度到默认值"
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="1 4 1 10 7 10" />
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                </svg>
+                <span className="hidden sm:inline">重置布局</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
-    </header>
+    </div>
   );
 });
 
