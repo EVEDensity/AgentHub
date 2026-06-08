@@ -24,6 +24,7 @@ import ProgressBubble from './ProgressBubble';
 import RiskAlertBubble from './RiskAlertBubble';
 import AgentTodoBubble from './AgentTodoBubble';
 import TaskPreviewCard from './TaskPreviewCard';
+import DeployCard from './DeployCard';
 import TerminalBubble from './TerminalBubble';
 import { getPresenceStore } from '../../lib/presenceStore';
 
@@ -436,6 +437,16 @@ const MessageRow = memo(function MessageRow({
     );
   }
 
+  // ── Deploy card ─────────────────────────────────────────────────
+  if (msg.type === 'deploy_card' && msg.deployCardData) {
+    return (
+      <DeployCard
+        key={msgKey}
+        data={msg.deployCardData}
+      />
+    );
+  }
+
   // ── Default text bubble ──
   return (
     <div key={msgKey} className={`mb-4 flex ${isUser ? 'justify-end' : 'justify-start'} group relative`}>
@@ -496,14 +507,13 @@ const MessageRow = memo(function MessageRow({
               if (seg.type === 'think') {
                 return <ThinkingPanel key={si} content={seg.content} isStreaming={!!showCursor} isComplete={seg.isComplete} />;
               }
-              const cleanText = seg.content.replace('【正式回复】\n', '');
+              const cleanText = seg.content.replace('【正式回复】\n', '').replace('【正式回复】', '');
               const diffIdx = cleanText.indexOf('diff --git ');
               if (diffIdx >= 0) {
                 const before = cleanText.slice(0, diffIdx).trim();
                 const diffContent = cleanText.slice(diffIdx);
                 return (
                   <div key={si}>
-                    {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
                     {before && <MarkdownRenderer content={before} />}
                     <CodeReviewPanel content={diffContent} />
                   </div>
@@ -512,14 +522,12 @@ const MessageRow = memo(function MessageRow({
               if (isCodeGenOutput(cleanText)) {
                 return (
                   <div key={si}>
-                    {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
                     <CodeGenResultPanel content={cleanText} />
                   </div>
                 );
               }
               return (
                 <div key={si}>
-                  {seg.content.includes('【正式回复】') ? null : <div className="mb-2 text-xs font-semibold text-warm-500">【正式回复】</div>}
                   <MarkdownRenderer content={cleanText} />
                 </div>
               );

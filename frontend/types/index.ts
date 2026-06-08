@@ -52,7 +52,7 @@ export interface Message {
   sessionId: string;
   sender: string;
   content: string;
-  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result' | 'agent_question' | 'progress_update' | 'risk_warning' | 'agent_todo' | 'task_preview' | 'terminal';
+  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result' | 'agent_question' | 'progress_update' | 'risk_warning' | 'agent_todo' | 'task_preview' | 'terminal' | 'deploy_card';
   timestamp: string;
   userId?: string;           // JWT-derived user ID (empty for agent messages)
   guardrailResult?: GuardrailResult;
@@ -70,6 +70,7 @@ export interface Message {
   riskWarningData?: RiskWarningEvent;
   todoData?: AgentTodoEvent;
   taskPreviewData?: TaskPreviewEvent;
+  deployCardData?: DeployCardEvent;
   /** Diff accept/reject */
   diffDecisionState?: 'pending' | 'accepted' | 'rejected';
   diffFilePath?: string;
@@ -650,6 +651,46 @@ export interface WorkspacePreviewTab {
   truncated?: boolean;
 }
 
+// ── Agent 真落盘 — workspace real-time event types ──────────────────────
+
+export interface WorkspaceChangeEvent {
+  event: 'workspace_change';
+  sessionId: string;
+  path: string;
+  operation: 'write' | 'delete' | 'rename';
+  userId: string;
+  agentId?: string;
+  sizeBytes: number;
+  diffPreview?: string;
+  oldPath?: string;
+  timestamp: string;
+}
+
+export interface FileConflictEvent {
+  event: 'file_conflict';
+  sessionId: string;
+  path: string;
+  oursUserId: string;
+  theirsUserId: string;
+  oursPreview?: string;
+  theirsPreview?: string;
+  diff?: string;
+  backupPath?: string;
+  timestamp: string;
+}
+
+export interface FileLockChangeEvent {
+  event: 'file_lock_change';
+  sessionId: string;
+  path: string;
+  userId: string;
+  locked: boolean;
+  holderName?: string;
+  timestamp: string;
+}
+
+export type WorkspaceEvent = WorkspaceChangeEvent | FileConflictEvent | FileLockChangeEvent;
+
 export interface FileReference {
   id: string;
   name: string;
@@ -841,6 +882,50 @@ export interface TaskPreviewResponse {
   previewMessageId: string;
   decision: 'confirm' | 'cancel' | 'modify';
   modifications?: string;
+  timestamp: string;
+}
+
+// ── Deploy Card Event ────────────────────────────────────────────────
+
+/** Deploy agent sends a deployment card when project is completed */
+export interface DeployCardEvent {
+  event: 'deploy_card';
+  sessionId: string;
+  messageId: string;
+  /** Git commit hash (short) */
+  version: string;
+  /** ISO timestamp when the version was created */
+  completedAt: string;
+  /** Project description / feat message */
+  description: string;
+  /** List of affected/changed files */
+  affectedFiles: string[];
+  /** Agent that generated this card */
+  agentId: string;
+  timestamp: string;
+}
+
+/** User requests deployment details */
+export interface DeployRequest {
+  event: 'deploy_request';
+  sessionId: string;
+  messageId: string;
+  version: string;
+  /** Deployment environment */
+  environment: string;
+  /** Deployment notes */
+  notes: string;
+  /** Deploy target (currently frontend only) */
+  targets: string[];
+  timestamp: string;
+}
+
+/** User requests version rollback */
+export interface DeployRollbackRequest {
+  event: 'deploy_rollback';
+  sessionId: string;
+  messageId: string;
+  version: string;
   timestamp: string;
 }
 

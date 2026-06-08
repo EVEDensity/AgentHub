@@ -11,6 +11,7 @@ from app.services.tools.builtin_tools import (
     web_search_handler,
     file_read_handler,
     file_write_handler,
+    file_write_batch_handler,
     code_execute_handler,
     memory_search_handler,
     file_search_handler,
@@ -94,7 +95,7 @@ FILE_READ = ToolDefinition(
         ToolParameter(name="max_lines", type="number", required=False,
                       description="最大读取行数，默认500", default=500),
     ],
-    return_type='"文件内容文本" 或 目录列表，以及 metadata（total_lines, size_bytes 等）',
+    return_type='"文件内容文本" 或 目录列表，以及 metadata（path, total_lines, size_bytes, sha256 等）。sha256 可用于后续 file_write 的冲突检测。',
     examples=[
         ToolExample(
             user_question="帮我读一下 README.md 的内容",
@@ -114,7 +115,7 @@ FILE_READ = ToolDefinition(
 
 FILE_WRITE = ToolDefinition(
     name="file_write",
-    description="将内容写入工作区的文件。可以创建新文件或追加到现有文件。用于保存代码、配置、文档等。",
+    description="将内容写入工作区的文件。可以创建新文件或追加到现有文件。用于保存代码、配置、文档等。所有写入自动纳入 Git 版本控制，多人协作时自动检测文件冲突。",
     category="file",
     parameters=[
         ToolParameter(name="path", type="string", required=True,
@@ -123,8 +124,10 @@ FILE_WRITE = ToolDefinition(
                       description="要写入的完整文本内容"),
         ToolParameter(name="mode", type="string", required=False,
                       description="写入模式: 'overwrite' 覆写(默认) 或 'append' 追加", default="overwrite"),
+        ToolParameter(name="expected_sha256", type="string", required=False,
+                      description="上次 file_read 返回的 sha256 值，用于检测文件是否被其他用户修改过。不提供则跳过冲突检测。"),
     ],
-    return_type='"写入结果描述文本" 及 metadata（path, size_bytes, mode）',
+    return_type='"写入结果描述文本" 及 metadata（path, size_bytes, mode, sha256, conflict 等）',
     examples=[
         ToolExample(
             user_question="帮我在 data 目录下创建一个 config.json 文件，内容是 {...}",
@@ -134,6 +137,43 @@ FILE_WRITE = ToolDefinition(
     risk_level="L2",
     handler=file_write_handler,
     is_concurrency_safe=False,  # Has side effects, needs exclusivity
+)
+
+# ── file_write_batch ──────────────────────────────────────────────────
+
+FILE_WRITE_BATCH = ToolDefinition(
+    name="file_write_batch",
+    description="批量写入多个文件到工作区，自动创建所需的父目录。一次调用可写入多个文件（如整个模块的代码文件），大幅减少 tool_call 次数。适合 CodeGen 输出多文件代码时使用。",
+    category="file",
+    parameters=[
+        ToolParameter(name="paths_contents", type="array", required=True,
+                      description="文件列表。每项为 {\"path\": \"相对路径\", \"content\": \"文件内容\"} 的对象。例如 [{\"path\": \"src/main.py\", \"content\": \"print('hi')\"}, {\"path\": \"src/utils.py\", \"content\": \"def f(): pass\"}]。最多支持 20 个文件。"),
+    ],
+    return_type='批量写入结果摘要及每个文件的写入状态（success/fail + metadata）',
+    examples=[
+        ToolExample(
+            user_question="帮我创建一个博客项目的基础结构，包括前端和后端代码",
+            parameters={
+                "paths_contents": [
+                    {"path": "backend/app.py", "content": "from flask import Flask\napp = Flask(__name__)\n..."},
+                    {"path": "frontend/index.html", "content": "<!DOCTYPE html>\n<html>...</html>"},
+                    {"path": "README.md", "content": "# Blog Project\n..."},
+                ],
+            },
+        ),
+        ToolExample(
+            user_question="创建 src/utils 目录并在其中写入 helpers.py 和 config.py",
+            parameters={
+                "paths_contents": [
+                    {"path": "src/utils/helpers.py", "content": "def add(a, b): return a + b"},
+                    {"path": "src/utils/config.py", "content": "DEBUG = True"},
+                ],
+            },
+        ),
+    ],
+    risk_level="L2",
+    handler=file_write_batch_handler,
+    is_concurrency_safe=False,  # Has side effects
 )
 
 # ── code_execute ──────────────────────────────────────────────────────
@@ -733,6 +773,7 @@ BUILTIN_TOOLS: list[ToolDefinition] = [
     WEB_SEARCH,
     FILE_READ,
     FILE_WRITE,
+    FILE_WRITE_BATCH,
     FILE_SEARCH,
     FILE_PATCH,
     CODE_EXECUTE,

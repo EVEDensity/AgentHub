@@ -679,10 +679,12 @@ function WorkspaceFileTree({
   onOpenFile,
   width,
   sessionId,
+  workspaceVersion = 0,
 }: {
   onOpenFile: (path: string) => void;
   width: number;
   sessionId?: string;
+  workspaceVersion?: number;
 }): JSX.Element {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
@@ -933,12 +935,13 @@ function WorkspaceFileTree({
     ];
   }
 
-  // Load root on mount
+  // Load root on mount, and auto-refresh when workspace changes
   useEffect(() => {
     fetchDir('').then((data) => {
       if (data?.files || data?.dirs) setTree(buildRootNodes(data));
     });
-  }, [fetchDir]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchDir, workspaceVersion]);
 
   const handleToggleDir = useCallback(async (node: FileTreeNode) => {
     if (expandedDirs.has(node.path)) {
@@ -1272,6 +1275,8 @@ interface FilePreviewPanelProps {
   onOpenWorkspaceFile?: (path: string, content: string, language: string, state: string, meta?: Record<string, unknown>) => void;
   /** Current session ID for session-scoped workspace isolation. */
   sessionId?: string;
+  /** Version counter — increments on every workspace file change to trigger auto-refresh. */
+  workspaceVersion?: number;
   /**
    * 当前所有引用（来自 ChatInput 的 fileReferences）。
    * 组件内部会按当前激活 tab 的 path 过滤后传给子预览器。
@@ -1294,6 +1299,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
   sessionId,
   references,
   pendingScrollRef,
+  workspaceVersion,
 }: FilePreviewPanelProps): JSX.Element {
   const contentRef = useRef<HTMLDivElement>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -1471,6 +1477,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
       <WorkspaceFileTree
         width={treeWidthLive ?? treeWidth}
         sessionId={sessionId}
+        workspaceVersion={workspaceVersion}
         onOpenFile={(path) => {
           const token = localStorage.getItem('agenthub_token') || '';
           const readParams = new URLSearchParams({ path });

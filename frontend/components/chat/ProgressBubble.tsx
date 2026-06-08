@@ -17,7 +17,10 @@ function formatEta(seconds: number): string {
 
 const ProgressBubble = memo(function ProgressBubble({ data, isStreaming }: ProgressBubbleProps): JSX.Element {
   const pct = data.totalSteps > 0 ? Math.round((data.completedSteps / data.totalSteps) * 100) : 0;
-  const isDone = data.completedSteps >= data.totalSteps;
+  const countMatch = data.completedSteps === data.totalSteps;
+  // Only show "done" when the stream has actually ended — if the agent is still
+  // streaming (generating text after tool calls), show "working" instead.
+  const isDone = countMatch && !isStreaming;
 
   return (
     <div className="mb-3 flex justify-start">
@@ -29,9 +32,9 @@ const ProgressBubble = memo(function ProgressBubble({ data, isStreaming }: Progr
           <span className={`rounded px-2 py-0.5 text-xs font-medium ${
             isDone ? 'bg-emerald-200 text-emerald-700' : 'bg-emerald-100 text-emerald-600'
           }`}>
-            {isDone ? '已完成' : '进度汇报'}
+            {isDone ? '已完成' : countMatch ? '工具完成，生成文本中' : '进度汇报'}
           </span>
-          {isStreaming && !isDone && (
+          {isStreaming && (
             <span className="inline-block h-3 w-0.5 animate-pulse bg-emerald-500" />
           )}
         </div>
@@ -46,11 +49,13 @@ const ProgressBubble = memo(function ProgressBubble({ data, isStreaming }: Progr
           <div className="flex-1 h-2 rounded-full bg-emerald-100 overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-700 ease-out ${
-                pct >= 100
+                isDone
                   ? 'bg-emerald-500'
-                  : pct > 50
-                    ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
-                    : 'bg-emerald-400'
+                  : countMatch
+                    ? 'bg-gradient-to-r from-emerald-400 to-blue-400 animate-pulse'
+                    : pct > 50
+                      ? 'bg-gradient-to-r from-emerald-400 to-teal-400'
+                      : 'bg-emerald-400'
               }`}
               style={{ width: `${Math.min(pct, 100)}%` }}
             />
@@ -65,6 +70,18 @@ const ProgressBubble = memo(function ProgressBubble({ data, isStreaming }: Progr
           <div className="flex items-center gap-1 text-xs text-warm-500">
             <Clock className="h-3 w-3" />
             <span>预计还需 {formatEta(data.estimatedRemainingSeconds)}</span>
+          </div>
+        )}
+
+        {/* Text generation hint — shown when tools are done but stream continues */}
+        {countMatch && isStreaming && (
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-blue-600 font-medium">
+            <span className="inline-flex gap-0.5">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: '0ms' }} />
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: '200ms' }} />
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" style={{ animationDelay: '400ms' }} />
+            </span>
+            <span>Agent 正在基于工具结果生成文本回复...</span>
           </div>
         )}
 

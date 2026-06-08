@@ -147,6 +147,9 @@ export default function AgentHubIM(): JSX.Element {
   const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
   const [previewTabs, setPreviewTabs] = useState<WorkspacePreviewTab[]>([]);
   const [activePreviewTabId, setActivePreviewTabId] = useState<string | null>(null);
+  // Workspace change counter — incremented on each file write/delete to
+  // trigger auto-refresh in the file tree panel without full page reload.
+  const [workspaceVersion, setWorkspaceVersion] = useState(0);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [previewPanelOpen, setPreviewPanelOpen] = useState<boolean>(false);
   /**
@@ -192,6 +195,9 @@ export default function AgentHubIM(): JSX.Element {
   // ★ streamBufferRef 不再使用——buffer 走 SessionStore。
   // ★ streamFlushRafRef 改为 per-session Map，让每个 session 独立 RAF 调度 flush。
   const streamFlushRafRef = useRef<Map<string, number>>(new Map());
+  // ★ progressiveFlushTimersRef: per-session setTimeout IDs for progressive
+  //    chunk release (one chunk every ~8ms for a natural typing effect).
+  const progressiveFlushTimersRef = useRef<Map<string, number>>(new Map());
   // ★ streamInterruptedAtRef 记录每个 session 上次 stream_interrupted 的时间戳。
   //   用于在 800ms 窗口内阻断迟到的 agent_thinking 事件重新激活流式状态
   //   (避免标题栏"AI streaming..."状态卡死)。
@@ -285,6 +291,8 @@ export default function AgentHubIM(): JSX.Element {
     }
     streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
     streamFlushRafRef.current.clear();
+    progressiveFlushTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+    progressiveFlushTimersRef.current.clear();
     setToken('');
     setUser(null);
     setNotice('登录已过期，请重新登录');
@@ -445,10 +453,19 @@ export default function AgentHubIM(): JSX.Element {
   // ── Streaming ────────────────────────────────────────────
 
   /**
-   * 把指定 session 的 buffer 中的 chunks 应用到对应 session 的 messages。
-   * 每个 session 独立调度：切到别的 session 时旧 session 的 chunks 仍能被正确
-   * 累积到对应 session 的 messages 里，切回来时直接看到完整流式结果。
+   * Progressive chunk release: release ONE chunk at a time, then
+   * schedule the next release via setTimeout.  This ensures text
+   * appears progressively even when chunks arrive faster than the
+   * animation frame rate (e.g., when the LLM adapter returns the
+   * entire response in one big chunk, or when chunks arrive over
+   * a very fast network connection within a single RAF window).
+   *
+   * Each chunk is ~1-5 characters (individual SSE tokens), so
+   * releasing them at ~8ms intervals gives ~125-625 chars/sec —
+   * a natural "streaming typewriter" feel.
    */
+  const PROGRESSIVE_FLUSH_INTERVAL_MS = 8;
+
   function flushStreamBuffer(sessionId: string): void {
     const buf = getSessionBuffer(sessionId);
     if (!buf) return;
@@ -465,14 +482,18 @@ export default function AgentHubIM(): JSX.Element {
       return;
     }
 
-    const contentDelta = buf.chunks.join('');
-    const finalFlag = buf.isFinal;
-    // 重置 buffer 内容（保留 isFinal 以便 isFinal 分支消费）
+    // ── Release only the FIRST chunk per flush ──
+    // Remaining chunks stay in the buffer and will be flushed by
+    // subsequent timer/RAF calls, creating a visible typing effect.
+    const chunk = buf.chunks[0];
+    const remaining = buf.chunks.slice(1);
+    const isLastChunk = remaining.length === 0 && buf.isFinal;
+
     const nextBuf: StreamBuffer = {
       messageId: buf.messageId,
       sessionId: buf.sessionId,
-      chunks: [],
-      isFinal: finalFlag ? false : buf.isFinal,
+      chunks: remaining,
+      isFinal: isLastChunk ? false : buf.isFinal,
     };
     setSessionBuffer(buf.sessionId, nextBuf);
 
@@ -484,8 +505,8 @@ export default function AgentHubIM(): JSX.Element {
         const updated = [...prev];
         updated[idx] = {
           ...updated[idx],
-          content: updated[idx].content + contentDelta,
-          isStreaming: !finalFlag,
+          content: updated[idx].content + chunk,
+          isStreaming: !isLastChunk,
         };
         return updated;
       }
@@ -493,18 +514,30 @@ export default function AgentHubIM(): JSX.Element {
         event: 'message',
         sessionId: buf.sessionId,
         sender: 'agent',
-        content: contentDelta,
+        content: chunk,
         type: 'text',
         timestamp: new Date().toISOString(),
         messageId: bufMessageId,
-        isStreaming: !finalFlag,
+        isStreaming: !isLastChunk,
       };
       return [...prev, newMsg];
     });
 
-    if (finalFlag) {
+    if (isLastChunk) {
       setSessionStreaming(buf.sessionId, false);
       setSessionBuffer(buf.sessionId, null);
+      return;
+    }
+
+    // ── Schedule next chunk release ──
+    // If there are more chunks in the buffer, release the next one
+    // after a short delay to maintain the progressive typing effect.
+    if (remaining.length > 0) {
+      const timerId = window.setTimeout(() => {
+        progressiveFlushTimersRef.current.delete(sessionId);
+        flushStreamBuffer(sessionId);
+      }, PROGRESSIVE_FLUSH_INTERVAL_MS);
+      progressiveFlushTimersRef.current.set(sessionId, timerId);
     }
   }
 
@@ -667,6 +700,36 @@ export default function AgentHubIM(): JSX.Element {
         if (msgId) lastMessageIdRef.current = msgId;
       }
 
+      // ── Workspace file change events ─────────────────────────────
+      if (evt === 'workspace_change') {
+        setWorkspaceVersion(v => v + 1);
+        // Preview tabs: if the changed file is open in a tab, refresh its content
+        const changePath = raw.path as string;
+        if (changePath) {
+          setPreviewTabs(prev =>
+            prev.map(t => (t.path === changePath ? { ...t, _version: (t as any)._version + 1 || 1 } : t))
+          );
+        }
+      }
+
+      if (evt === 'file_conflict') {
+        const conflictPath = raw.path as string;
+        const backupPath = raw.backupPath as string;
+        if (conflictPath) {
+          setNotice(
+            `⚠️ 文件冲突: ${conflictPath} 被其他用户修改过` +
+            (backupPath ? ` (原文件已备份为 ${backupPath})` : '')
+          );
+        }
+        // Still refresh the file tree
+        setWorkspaceVersion(v => v + 1);
+      }
+
+      if (evt === 'file_lock_change') {
+        // Increment version so lock indicators update in the file tree
+        setWorkspaceVersion(v => v + 1);
+      }
+
       if (evt === 'task_update') {
         // Per-node incremental update — merge into existing dag state
         const tu = raw as { nodeId: string; status: string; detail?: { error?: string; retries?: number }; sessionId: string };
@@ -697,11 +760,13 @@ export default function AgentHubIM(): JSX.Element {
 
         const existingBuf = getSessionBuffer(cSessionId);
         if (!existingBuf || existingBuf.messageId !== chunk.messageId) {
-          // First chunk of a new stream — clean up any thinking placeholder
-          // from the agent_thinking event (it has a different messageId)
+          // First chunk of a new stream — clean up ALL thinking placeholders
+          // from agent_thinking events (they have different messageIds).
+          // Previous filter only targeted empty or "正在"-prefixed content,
+          // missing the "synthesizing" phase ("工具执行完成，正在综合...")
           updateSessionMessages(cSessionId, (prev) => {
             const cleaned = prev.filter(
-              (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
+              (m) => !(m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text')
             );
             return cleaned.length !== prev.length ? cleaned : prev;
           });
@@ -728,8 +793,12 @@ export default function AgentHubIM(): JSX.Element {
           });
         }
 
-        // 调度该 session 自己的 RAF flush
-        if (!streamFlushRafRef.current.has(cSessionId)) {
+        // 调度该 session 自己的 RAF flush — only if no progressive
+        // timer is already running (which would release chunks one at a time).
+        if (
+          !streamFlushRafRef.current.has(cSessionId) &&
+          !progressiveFlushTimersRef.current.has(cSessionId)
+        ) {
           const raf = window.requestAnimationFrame(() => {
             streamFlushRafRef.current.delete(cSessionId);
             flushStreamBuffer(cSessionId);
@@ -749,6 +818,12 @@ export default function AgentHubIM(): JSX.Element {
         if (pendingRaf) {
           window.cancelAnimationFrame(pendingRaf);
           streamFlushRafRef.current.delete(iSessionId);
+        }
+        // Clear any pending progressive flush timer
+        const pendingTimer = progressiveFlushTimersRef.current.get(iSessionId);
+        if (pendingTimer) {
+          window.clearTimeout(pendingTimer);
+          progressiveFlushTimersRef.current.delete(iSessionId);
         }
         // 记录打断时刻；800ms 内的 agent_thinking / stream_chunk 会被忽略
         streamInterruptedAtRef.current.set(iSessionId, Date.now());
@@ -1090,6 +1165,24 @@ export default function AgentHubIM(): JSX.Element {
         ]);
       }
 
+      // ── Deploy card event ──────────────────────────────────────────
+      if (evt === 'deploy_card') {
+        const payload = raw as unknown as import('../types').DeployCardEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'Deploy',
+            content: payload.description || '部署完成',
+            type: 'deploy_card' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            deployCardData: payload,
+          },
+        ]);
+      }
+
       // ── CloudCode: terminal output (streaming) ────────────────────
       if (evt === 'terminal_output') {
         const payload = raw as unknown as import('../types').TerminalOutputEvent;
@@ -1181,25 +1274,52 @@ export default function AgentHubIM(): JSX.Element {
         // for the placeholder — the RAF callback may not have fired yet.
         const cSessionId = chunkSessionId;
         const buf = getSessionBuffer(cSessionId);
-        if (buf && streamFlushRafRef.current.has(cSessionId)) {
-          const raf = streamFlushRafRef.current.get(cSessionId);
-          if (raf != null) window.cancelAnimationFrame(raf);
-          streamFlushRafRef.current.delete(cSessionId);
-          flushStreamBuffer(cSessionId);
+        if (buf) {
+          const pendingRaf = streamFlushRafRef.current.get(cSessionId);
+          if (pendingRaf != null) {
+            window.cancelAnimationFrame(pendingRaf);
+            streamFlushRafRef.current.delete(cSessionId);
+          }
+          const pendingTimer = progressiveFlushTimersRef.current.get(cSessionId);
+          if (pendingTimer != null) {
+            window.clearTimeout(pendingTimer);
+            progressiveFlushTimersRef.current.delete(cSessionId);
+          }
+          // Flush ALL remaining chunks at once before the final message
+          if (buf.chunks.length > 0) {
+            const allContent = buf.chunks.join('');
+            const bufMsgId = buf.messageId;
+            updateSessionMessages(cSessionId, (prev) => {
+              const idx = prev.findIndex((m) => m.messageId === bufMsgId);
+              if (idx >= 0) {
+                const updated = [...prev];
+                updated[idx] = {
+                  ...updated[idx],
+                  content: updated[idx].content + allContent,
+                  isStreaming: false,
+                };
+                return updated;
+              }
+              return prev;
+            });
+          }
+          setSessionBuffer(cSessionId, null);
         }
         setSessionStreaming(cSessionId, false);
         const msg = raw as unknown as Message;
         const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
         updateSessionMessages(cSessionId, (prev) => {
-          // Clean up any empty thinking placeholders (from agent_thinking) before
-          // adding/replacing the final message
+          // Clean up ALL streaming thinking placeholders (from agent_thinking)
+          // before adding/replacing the final message.  The prior narrow filter
+          // (empty or "正在"-prefixed) missed the "synthesizing" phase content
+          // like "工具执行完成，正在综合结果生成回复..."
           let cleaned = prev;
-          const hasEmptyThinkers = prev.some(
-            (m) => m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在'))
+          const hasStaleStreamers = prev.some(
+            (m) => m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text'
           );
-          if (hasEmptyThinkers) {
+          if (hasStaleStreamers) {
             cleaned = prev.filter(
-              (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
+              (m) => !(m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text')
             );
           }
 
@@ -1342,6 +1462,8 @@ export default function AgentHubIM(): JSX.Element {
     }
     streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
     streamFlushRafRef.current.clear();
+    progressiveFlushTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+    progressiveFlushTimersRef.current.clear();
     setToken('');
     setUser(null);
   }, []);
@@ -2586,6 +2708,7 @@ export default function AgentHubIM(): JSX.Element {
               sessionId={sessionId}
               references={fileReferences}
               pendingScrollRef={pendingScrollRef}
+              workspaceVersion={workspaceVersion}
             />
           </aside>
         </>

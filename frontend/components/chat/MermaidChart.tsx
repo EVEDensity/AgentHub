@@ -16,6 +16,59 @@ interface MermaidState {
 }
 
 /**
+ * Intercept console.error during Mermaid rendering to suppress the noisy
+ * "Syntax error in text" messages that Mermaid 11.x logs internally on
+ * every failed parse attempt.  Our multi-stage pipeline intentionally
+ * tries multiple render strategies — each failed attempt is expected and
+ * should not pollute the browser console.
+ *
+ * Returns a restore function that reinstates the original console.error.
+ */
+function suppressConsoleErrors(): () => void {
+  const original = console.error;
+  // Match Mermaid's own error patterns — we don't want to suppress
+  // legitimate errors from other libraries or our own code.
+  const MERMAID_ERROR_PATTERNS = [
+    /Syntax error in text/i,
+    /Parse error/i,
+    /Lexical error/i,
+    /mermaid version/i,
+    /Unhandled Rejection/i,
+    /Error: Parse error/i,
+  ];
+
+  console.error = function (...args: any[]) {
+    const msg = args.length > 0 ? String(args[0]) : '';
+    const isMermaidNoise = MERMAID_ERROR_PATTERNS.some((p) => p.test(msg));
+    if (isMermaidNoise) {
+      // Swallow — our error handling below produces user-visible messages
+      return;
+    }
+    original.apply(console, args);
+  } as typeof console.error;
+
+  return () => {
+    console.error = original;
+  };
+}
+
+/**
+ * Check whether the Mermaid library loaded is version 11.x.
+ * Mermaid 11 introduced breaking parser changes and removed
+ * `suppressErrorRendering`.  We adapt initialization and error
+ * handling accordingly.
+ */
+function isMermaidV11(mermaid: any): boolean {
+  try {
+    const ver = mermaid.version || mermaid.mermaidAPI?.getConfig?.()?.version || '';
+    return ver.startsWith('11.');
+  } catch {
+    // If we can't determine the version, assume v11 (stricter handling)
+    return true;
+  }
+}
+
+/**
  * MermaidChart - Mermaid 图表渲染组件
  *
  * 功能：
@@ -24,13 +77,21 @@ interface MermaidState {
  * - 渲染失败自动降级：sanitize → repair → raw → plain-text fallback
  * - 提供复制代码、下载 SVG/PNG 按钮
  * - 错误状态友好提示 + 修复建议
+ * - 渲染过程中抑制 Mermaid 内部的 console.error 噪音
  *
  * Mermaid 版本策略:
  * - 优先加载 Mermaid 11.x（更好的 Unicode 支持 + 错误恢复）
- * - 如果 11.x CDN 不可用，回退到 10.9.x
+ * - 如果 11.x CDN 不可用，回退到 10.9.x（更宽松的解析器）
  */
-const MERMAID_CDN_PRIMARY = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';
-const MERMAID_CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.0/dist/mermaid.min.js';
+// 11.4.1 是 11.x 分支最后一个被广泛验证的稳定版本
+// 11.15.0+ 引入了更严格的解析器（裸引号/未引用 subgraph 名称等），频繁触发 Syntax error in text
+// 10.9.1 是 10.x 的最终稳定版本，作为兜底
+const MERMAID_CDN_PRIMARY = 'https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js';
+const MERMAID_CDN_FALLBACK = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+
+/** Singleton: track whether Mermaid 11.x has accumulated too many failures. */
+let mermaidV11GlobalFailureCount = 0;
+const MERMAID_V11_FAILURE_THRESHOLD = 5;
 
 export default function MermaidChart({
   code,
@@ -43,10 +104,18 @@ export default function MermaidChart({
   const [copySuccess, setCopySuccess] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const uniqueIdRef = useRef(`mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  /** Track per-component render failures to decide on fallback */
+  const failureCountRef = useRef(0);
 
   /** 动态加载 Mermaid 库（支持降级） */
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
+    // Reset global failure count when too high — the user may have
+    // navigated to a new conversation with better Mermaid code.
+    if (mermaidV11GlobalFailureCount >= MERMAID_V11_FAILURE_THRESHOLD) {
+      mermaidV11GlobalFailureCount = 0;
+    }
 
     // 检查是否已加载
     if ((window as any).mermaid) {
@@ -61,18 +130,32 @@ export default function MermaidChart({
     const setupMermaid = () => {
       const mermaid = (window as any).mermaid;
       if (!mermaid) return;
+      const v11 = isMermaidV11(mermaid);
       try {
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: 'default',
-          securityLevel: 'loose',
-          fontFamily: 'inherit',
-          // Mermaid 11.x options — silently ignored by 10.x
-          suppressErrorRendering: true,
-          maxTextSize: 50000,
-        });
+        if (v11) {
+          // Mermaid 11.x: suppressErrorRendering was removed.
+          // Use logLevel: 'fatal' to minimize internal console noise,
+          // and set maxTextSize for large diagrams.
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: 'default',
+            securityLevel: 'loose',
+            fontFamily: 'inherit',
+            logLevel: 'fatal' as any, // 0 = fatal only, minimizes console spam
+            maxTextSize: 90000,
+          });
+        } else {
+          // Mermaid 10.x fallback
+          mermaid.initialize({
+            startOnLoad: false,
+            theme: 'default',
+            securityLevel: 'loose',
+            fontFamily: 'inherit',
+            maxTextSize: 90000,
+          });
+        }
       } catch {
-        // Older versions may not support all options — safe to ignore
+        // Last-resort minimal config
         try {
           mermaid.initialize({
             startOnLoad: false,
@@ -80,7 +163,7 @@ export default function MermaidChart({
             securityLevel: 'loose',
           });
         } catch {
-          // Last resort
+          // Give up — will error later
         }
       }
     };
@@ -131,7 +214,7 @@ export default function MermaidChart({
     };
   }, []);
 
-  /** 渲染 Mermaid 图表（多级修复管道） */
+  /** 渲染 Mermaid 图表（多级修复管道 + 控制台噪声抑制） */
   useEffect(() => {
     if (!mermaidReady || !code.trim()) return;
 
@@ -152,84 +235,119 @@ export default function MermaidChart({
       const id = uniqueIdRef.current;
 
       // ── Multi-stage repair pipeline ────────────────────────────
+      // Each stage attempts a different sanitization strategy.
+      // ALL attempts are wrapped with console.error suppression so
+      // Mermaid 11.x's internal "Syntax error in text" logs don't
+      // pollute the browser console — we surface actionable errors
+      // via the React state, not via raw console noise.
+      //
       // Stage 1: Basic sanitization (invisible chars, deprecated keywords, etc.)
-      // Stage 2: Validate + progressive repair
-      // Stage 3: Force-quote all labels
-      // Stage 4: Last resort — try raw code
-      // Stage 5: Plain-text code block fallback
+      // Stage 2: Progressive repair (force-quote labels, strip non-essentials)
+      // Stage 3: Skip (consolidated — stage1 is already sanitized)
+      // Stage 4: Raw code as last resort
+      // Stage 5: Collect error for display
 
       const stage1 = sanitizeMermaidCode(code);
 
-      // Try Stage 1: sanitized code
-      const preCheck = validateMermaidCode(stage1);
-      if (!preCheck) {
+      // Helper: try rendering a single stage with console noise suppressed
+      const tryRender = async (label: string, mermaidCode: string): Promise<string | null> => {
+        if (cancelled) return null;
+        const restoreConsole = suppressConsoleErrors();
         try {
-          const { svg } = await mermaid.render(`${id}-s1`, stage1);
+          // Pre-validate: use mermaid.parse() (if available) to get a
+          // structured error BEFORE attempting render — parse() is lighter
+          // and gives better error messages in Mermaid 11.x.
+          if (typeof mermaid.parse === 'function') {
+            try {
+              await mermaid.parse(mermaidCode);
+            } catch (parseErr: any) {
+              // parse() confirmed the error — but still try render()
+              // because some parse errors are false positives
+              const parseMsg = parseErr?.message || String(parseErr);
+              if (parseMsg && !/syntax error/i.test(parseMsg)) {
+                // Non-generic error — keep it for diagnostics
+                console.debug(`Mermaid ${label} parse hint:`, parseMsg);
+              }
+            }
+          }
+
+          const { svg } = await mermaid.render(`${id}-${label}`, mermaidCode);
+          // Sanity check: Mermaid 11.x may return an error SVG instead of
+          // throwing — detect and treat as failure.
+          if (svg && svg.includes('error-icon') && svg.includes('Syntax error')) {
+            return null; // treat as render failure
+          }
+          return svg;
+        } catch {
+          return null; // expected — try next stage
+        } finally {
+          restoreConsole();
+        }
+      };
+
+      // Track failures to decide on v11→v10 fallback
+      let lastErrorMsg = '';
+
+      // Stage 1: sanitized code
+      if (!validateMermaidCode(stage1)) {
+        const svg = await tryRender('s1', stage1);
+        if (svg) {
           if (!cancelled) {
             setState({ svg, error: null });
             setLoading(false);
-            return;
           }
-        } catch (err1) {
-          // Stage 1 failed — continue to stage 2
-          console.debug('Mermaid stage1 (sanitized) failed:', (err1 as Error).message);
+          return;
         }
+        failureCountRef.current++;
       }
 
       // Stage 2: Progressive repair
       const { code: repaired, repaired: wasRepaired } = repairMermaidCode(code);
-      if (wasRepaired) {
-        try {
-          const { svg } = await mermaid.render(`${id}-s2`, repaired);
+      if (wasRepaired && repaired !== stage1) {
+        const svg = await tryRender('s2', repaired);
+        if (svg) {
           if (!cancelled) {
             setState({ svg, error: null });
             setLoading(false);
-            return;
           }
-        } catch (err2) {
-          console.debug('Mermaid stage2 (repaired) failed:', (err2 as Error).message);
+          return;
         }
+        failureCountRef.current++;
       }
 
-      // Stage 3: Try the sanitized version if different from repaired
-      if (stage1 !== repaired && stage1 !== code.trim()) {
-        try {
-          const { svg } = await mermaid.render(`${id}-s3`, stage1);
+      // Stage 3: Raw code (only if different from sanitized)
+      if (code !== stage1) {
+        const svg = await tryRender('s3', code);
+        if (svg) {
           if (!cancelled) {
             setState({ svg, error: null });
             setLoading(false);
-            return;
           }
-        } catch (err3) {
-          console.debug('Mermaid stage3 (sanitized retry) failed:', (err3 as Error).message);
+          return;
         }
+        failureCountRef.current++;
       }
 
-      // Stage 4: Last resort — try raw, unmodified code
-      if (stage1 !== code) {
-        try {
-          const { svg: rawSvg } = await mermaid.render(`${id}-s4`, code);
-          if (!cancelled) {
-            setState({ svg: rawSvg, error: null });
-            setLoading(false);
-            return;
-          }
-        } catch (err4) {
-          console.debug('Mermaid stage4 (raw) failed:', (err4 as Error).message);
-        }
-      }
-
-      // Stage 5: All rendering attempts failed
-      // Collect the most informative error
-      let lastError = '';
+      // Stage 4: All attempts failed — collect error message
+      // Try one final render to capture the error text
+      const restoreFinal = suppressConsoleErrors();
       try {
-        await mermaid.render(`${id}-s5`, stage1);
-      } catch (finalErr) {
-        lastError = finalErr instanceof Error ? finalErr.message : '渲染失败';
+        await mermaid.render(`${id}-s4`, stage1);
+      } catch (finalErr: any) {
+        lastErrorMsg = finalErr?.message || String(finalErr);
+      } finally {
+        restoreFinal();
       }
+
+      // Increment global failure counter for v11→v10 fallback decisions
+      mermaidV11GlobalFailureCount += failureCountRef.current;
 
       if (!cancelled) {
-        setState({ svg: '', error: lastError || 'Mermaid 渲染失败，请检查语法' });
+        // Build a more helpful error message
+        const friendlyError = lastErrorMsg
+          ? formatMermaidError(lastErrorMsg, stage1)
+          : 'Mermaid 渲染失败，请检查语法';
+        setState({ svg: '', error: friendlyError });
         setLoading(false);
       }
     };
@@ -323,11 +441,45 @@ export default function MermaidChart({
     window.open(url, '_blank');
   }
 
+  /**
+   * Format raw Mermaid error messages into something human-readable.
+   *
+   * Mermaid 11.x's default error ("Syntax error in text") is unhelpful —
+   * this function extracts line/column info and appends a snippet of the
+   * offending code when possible.
+   */
+  function formatMermaidError(rawError: string, codeSnippet: string): string {
+    // Extract line number from error message
+    const lineMatch = rawError.match(/line\s*(\d+)/i);
+    const colMatch = rawError.match(/(?:column|col)\s*(\d+)/i);
+    const lineNum = lineMatch ? parseInt(lineMatch[1], 10) : null;
+    const colNum = colMatch ? parseInt(colMatch[1], 10) : null;
+
+    let friendly = rawError
+      // Clean up verbose Mermaid internal prefixes
+      .replace(/^Error:\s*/i, '')
+      .replace(/^mermaid\s+version\s+\S+\s*/i, '')
+      .trim();
+
+    // If the error is the generic "Syntax error in text", add context
+    if (/^syntax error in text$/i.test(friendly) && lineNum) {
+      const lines = codeSnippet.split('\n');
+      const offender = lines[lineNum - 1] || (lineNum - 2 >= 0 ? lines[lineNum - 2] : '');
+      if (offender) {
+        friendly = `第 ${lineNum} 行${colNum ? ` 第 ${colNum} 列` : ''}附近语法错误: "${offender.trim().slice(0, 80)}"`;
+      } else {
+        friendly = `第 ${lineNum} 行附近语法错误`;
+      }
+    }
+
+    return friendly;
+  }
+
   /** Map common Mermaid error messages to actionable fix hints (Chinese). */
   function getErrorHint(error: string): string | null {
     const msg = error.toLowerCase();
-    if (msg.includes('syntax error in text') || msg.includes('parse error')) {
-      return '检查节点ID是否包含空格或特殊字符（如中文标点），尝试用引号包裹标签文本';
+    if (msg.includes('syntax error') || msg.includes('parse error') || msg.includes('语法错误')) {
+      return '标签文本含特殊字符（如冒号、括号、引号）时须用双引号包裹。节点ID仅限英文+数字+下划线';
     }
     if (msg.includes('lexical error')) {
       return '图表代码中包含无法识别的字符，检查是否有未转义的特殊符号（如引号、括号）';
@@ -344,6 +496,9 @@ export default function MermaidChart({
     }
     if (msg.includes('invalid')) {
       return '图表类型或语法无效，第一行应为 flowchart/sequenceDiagram/classDiagram 等';
+    }
+    if (msg.includes('ambiguity') || msg.includes('ambiguous')) {
+      return '图表定义存在歧义，尝试为每个节点标签添加双引号包裹';
     }
     return '请检查 Mermaid 语法，确保节点ID无空格、标签用引号包裹、箭头语法正确';
   }
@@ -424,7 +579,7 @@ export default function MermaidChart({
           )}
 
           {!showCodeFallback && (
-            <details className="text-xs">
+            <details className="text-xs" open={true}>
               <summary className="cursor-pointer text-warm-500 hover:text-warm-700">
                 查看图表代码{errorLine ? `（错误在第 ${errorLine} 行附近）` : ''}
               </summary>

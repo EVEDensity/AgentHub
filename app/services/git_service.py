@@ -88,5 +88,47 @@ class GitService:
         self.ensure_repo()
         return {"branch": self.current_branch(), "status": self._run(["status", "--short"])}
 
+    def auto_commit(self, path: str, user_id: str, operation: str) -> dict:
+        """Auto-commit a single file change with metadata for traceability.
+
+        This is called automatically after every ``file_write`` /
+        ``file_patch`` when ``AGENTHUB_FILE_AUTO_GIT`` is enabled.
+
+        Returns:
+            ``{"status": "success"|"skipped"|"error", ...}``
+        """
+        import time as _time
+        self.ensure_repo()
+        self._ensure_identity()
+
+        # Stage only the specified file
+        try:
+            self._run(["add", str(path)])
+        except HTTPException:
+            return {"status": "error", "message": "git add 失败"}
+
+        # Check for actual changes
+        try:
+            diff_out = self._run(["diff", "--cached", "--", str(path)])
+        except HTTPException:
+            diff_out = ""
+        if not diff_out.strip():
+            return {"status": "skipped", "message": "无实际变更"}
+
+        # Build structured commit message
+        ts = _time.strftime("%Y-%m-%d %H:%M:%S")
+        message = (
+            f"{operation}: {path}\n\n"
+            f"User: {user_id}\n"
+            f"Timestamp: {ts}\n"
+            f"Source: AgentHub auto-commit"
+        )
+        try:
+            self._run(["commit", "-m", message])
+            commit_hash = self._run(["rev-parse", "HEAD"])
+            return {"status": "success", "commit_hash": commit_hash, "path": path}
+        except HTTPException as exc:
+            return {"status": "error", "message": str(exc)}
+
 
 git_service = GitService()

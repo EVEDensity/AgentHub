@@ -61,6 +61,84 @@ def post_process_mermaid_blocks(text: str) -> str:
         return text
 
 
+# Patterns that force a label to be double-quoted in Mermaid ≥11.x
+_FORCE_QUOTE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r'[一-鿿㐀-䶿]'), 'CJK'),
+    (re.compile(r'[：；，。！？、【】《》「」『』]'), 'CJK punctuation'),
+    (re.compile(r'[:;]'), 'colon/semicolon'),
+    (re.compile(r'[\(\)]'), 'parentheses'),
+    (re.compile(r'\[[^\]]*\]'), 'nested brackets'),
+    (re.compile(r'\{[^}]*\}'), 'curly braces'),
+    (re.compile(r'\d+\.\s'), 'numbered prefix'),
+    (re.compile(r'[#$%@]'), 'special char'),
+    (re.compile(r'<[a-zA-Z]'), 'HTML-like'),
+    (re.compile(r'&(?!amp;|lt;|gt;|quot;|#39;|#\d+;|#x[\da-fA-F]+;)'), 'bare ampersand'),
+]
+
+
+def _label_needs_quoting(label: str) -> bool:
+    """Return True if *label* should be double-quoted for Mermaid ≥11.x."""
+    trimmed = label.strip()
+    if not trimmed:
+        return False
+    # Already quoted
+    if (trimmed.startswith('"') and trimmed.endswith('"')) or \
+       (trimmed.startswith("'") and trimmed.endswith("'")):
+        return False
+    # Multi-word English
+    if ' ' in trimmed and len(trimmed) > 2:
+        return True
+    # Check force-quote patterns
+    return any(p.search(trimmed) for p, _ in _FORCE_QUOTE_PATTERNS)
+
+
+# Regex to match Mermaid bracket labels: nodeId[...] / nodeId{...} / nodeId(...) / nodeId((...))
+_BRACKET_LABEL_RE = re.compile(
+    r'([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*?\]|\{[^}]*?\}|\(\([^)]*?\)\)|\([^)]*?\))'
+)
+
+
+def _quote_labels_in_line(line: str) -> str:
+    """Quote unquoted bracket labels in *line* when they contain special chars.
+
+    Skips style/classDef/link/click directives and %% comments.
+    """
+
+    stripped = line.strip()
+    if re.match(r'^\s*(style|classDef|class|linkStyle|click)\s', stripped):
+        return line
+    if stripped.startswith('%%'):
+        return line
+
+    def _replacer(m: re.Match[str]) -> str:
+        node_id = m.group(1)
+        bracket_expr = m.group(2)
+
+        # Determine bracket type
+        if bracket_expr.startswith('(('):
+            inner = bracket_expr[2:-2]
+            open_s, close_s = '((', '))'
+        elif bracket_expr.startswith('['):
+            inner = bracket_expr[1:-1]
+            open_s, close_s = '[', ']'
+        elif bracket_expr.startswith('{'):
+            inner = bracket_expr[1:-1]
+            open_s, close_s = '{', '}'
+        elif bracket_expr.startswith('('):
+            inner = bracket_expr[1:-1]
+            open_s, close_s = '(', ')'
+        else:
+            return m.group(0)
+
+        if not _label_needs_quoting(inner):
+            return m.group(0)
+
+        escaped = inner.replace('"', '&quot;')
+        return f'{node_id}{open_s}"{escaped}"{close_s}'
+
+    return _BRACKET_LABEL_RE.sub(_replacer, line)
+
+
 def _repair_single(code: str) -> str:
     """Apply all repair passes to a single Mermaid code block."""
     if not code or not code.strip():
@@ -118,6 +196,9 @@ def _repair_single(code: str) -> str:
 
         # Fix bare & that aren't HTML entities
         line = re.sub(r'&(?!amp;|lt;|gt;|quot;|#39;|#\d+;|#x[0-9a-fA-F]+;)', '&amp;', line)
+
+        # NEW: Quote labels with special characters (colons, parens, brackets, etc.)
+        line = _quote_labels_in_line(line)
 
         fixed.append(line)
 

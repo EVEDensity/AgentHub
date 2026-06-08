@@ -103,6 +103,15 @@ ORCHESTRATOR_PREPROCESS_MIN_LENGTH = int(os.getenv("AGENTHUB_PREPROCESS_MIN_LENG
 OFFICE_PREVIEW_MAX_MB = int(os.getenv("AGENTHUB_OFFICE_PREVIEW_MAX_MB", "20"))
 OFFICE_WORKSPACE_READ_MAX_MB = int(os.getenv("AGENTHUB_OFFICE_WORKSPACE_READ_MAX_MB", "30"))
 
+# ── File operations: real-time sync & versioning ────────────────────────
+# When enabled, every ``file_write`` / ``file_patch`` auto-commits to the
+# per-session git repository so changes are traceable and revertable.
+AGENTHUB_FILE_AUTO_GIT = os.getenv("AGENTHUB_FILE_AUTO_GIT", "true").lower() != "false"
+# When enabled, ``file_write`` / ``file_patch`` broadcasts a
+# ``workspace_change`` WebSocket event to all session members so the
+# frontend file tree updates in real time.
+AGENTHUB_FILE_BROADCAST = os.getenv("AGENTHUB_FILE_BROADCAST", "true").lower() != "false"
+
 # ── Streaming timeouts ──────────────────────────────────────────────
 # Maximum time to wait for the first streaming chunk (token) before
 # considering the model unresponsive and falling back.

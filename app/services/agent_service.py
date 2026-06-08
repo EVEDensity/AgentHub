@@ -1638,6 +1638,46 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
     weekday_str = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][_dt.now().weekday()]
     date_context = f"【当前日期】{today_str} {weekday_str}。涉及\"今天\"、\"最新\"、\"最近\"等内容时，请基于此日期。\n"
 
+    # ── Workspace filesystem context ─────────────────────────────────
+    # Informs the agent that it has a real filesystem to work with.
+    # The workspace is session-scoped and git-versioned — every file
+    # write is automatically committed so the agent should feel
+    # confident persisting code and data.
+    from app.services.workspace_context import get_workspace_root as _ws_root_fn
+    _ws_root = _ws_root_fn()
+    _ws_files_summary = ""
+    try:
+        if _ws_root.exists():
+            _items = sorted(_ws_root.iterdir(), key=lambda p: (p.is_dir(), p.name.lower()))[:30]
+            _lines = [f"工作区路径: {_ws_root}"]
+            for p in _items:
+                _kind = "📁" if p.is_dir() else "📄"
+                _size = ""
+                if p.is_file():
+                    try:
+                        sz = p.stat().st_size
+                        _size = f" ({sz:,} bytes)" if sz < 1024 else f" ({sz/1024:.0f} KB)"
+                    except OSError:
+                        pass
+                _lines.append(f"  {_kind} {p.name}{_size}")
+            if len(_items) >= 30:
+                _lines.append("  ... (已截断，使用 file_read 查看完整目录)")
+            _ws_files_summary = "\n".join(_lines) + "\n"
+    except OSError:
+        pass
+    workspace_context_block = (
+        "【工作区文件系统 — 真实落盘能力】\n"
+        "你拥有真实的工作区文件系统，可以使用以下工具操作文件：\n"
+        "- file_read — 读取文件内容或列出目录\n"
+        "- file_write — 创建/覆写/追加文件到工作区（自动 Git 版本控制）\n"
+        "- file_patch — 增量修改文件（推荐用于大文件的部分修改）\n"
+        "- file_search — 在文件中搜索匹配内容\n"
+        "- code_execute — 在工作区中执行 Python/Bash 代码\n\n"
+        "所有文件操作自动纳入 Git 版本控制，可追溯变更历史。\n"
+        "多人协作时，系统自动检测文件冲突并发出警告。\n"
+        f"{_ws_files_summary}\n"
+    ) if _ws_root.exists() else ""
+
     # ── Load settings for reply language, reasoning, thinking ───────
     settings = await _load_settings()
     reply_lang_instr = _build_reply_lang_instruction(settings)
@@ -1715,6 +1755,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"{memory_context}"
             f"{shared_context}"
             f"{date_context}"
+            f"{workspace_context_block}"
             f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
             f"{actual_model_line}"
             f"{reply_lang_instr}"
@@ -1796,12 +1837,18 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             "你是 AgentHub 调度中心，通过 invoke_agent 工具实际调用 "
             "Architect/CodeGen/Review/Test/Deploy 等专业 Agent 执行任务。\n\n"
             "原则: 简单直接回 | 复杂直接调 Agent(不等确认) | 冲突仲裁 | 失败降级(重试→替代→手建) | 标注来源\n\n"
+            "【批处理写入 — 减少 tool_call 次数】\n"
+            "当 CodeGen/Architect 产出多个文件时（如一个功能包含前端+后端+配置），"
+            "请使用 file_write_batch 一次性写入所有文件，而不是多次调用 file_write。"
+            "这大幅减少工具调用轮次，提升响应速度。\n"
+            "示例: file_write_batch(paths_contents=[{\"path\":\"src/app.py\",\"content\":\"...\"}, {\"path\":\"README.md\",\"content\":\"...\"}])\n\n"
         )
 
         return (
             f"{memory_context}"
             f"{shared_context}"
             f"{date_context}"
+            f"{workspace_context_block}"
             f"{orchestrator_identity}"
             f"{actual_model_line}"
             f"{reply_lang_instr}"
@@ -1824,6 +1871,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"{memory_context}"
             f"{shared_context}"
             f"{date_context}"
+            f"{workspace_context_block}"
             f"你是 AgentHub 平台中的 Architect（架构设计师），负责分析用户意图与项目结构，输出技术方案与文件影响范围。\n\n"
             f"{actual_model_line}"
             f"{reply_lang_instr}"
@@ -1835,6 +1883,22 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             "1. 分析用户需求，理解技术上下文和项目现状。\n"
             "2. 输出清晰的技术方案，包括架构设计、技术选型、文件影响范围。\n"
             "3. 为 CodeGen 等下游 Agent 提供足够详细的规格说明，使其可以直接开始编码。\n\n"
+            "## 汇报机制 — 每完成一项大任务主动 @ 主人\n"
+            "当你完成以下任务之一时，必须在回复开头用 '@主人' 或 '@用户' 主动汇报：\n"
+            "- 完成了一个完整的技术方案或架构设计\n"
+            "- 完成了多个文件的代码生成或修改\n"
+            "- 完成了一轮代码审查\n"
+            "- 完成了测试并给出了报告\n\n"
+            "汇报格式:\n"
+            "  @主人 👋 早上/下午/晚上好！刚刚完成了 [任务名称]。\n"
+            "  📋 **完成内容**: [简要列举关键产出]\n"
+            "  📁 **涉及文件**: [列出修改/创建的文件路径]\n"
+            "  ⚠️ **风险/注意事项**: [如有]\n"
+            "  💡 **下一步建议**: [可选]\n\n"
+            "示例: \"@主人 下午好！Architect 刚刚完成了博客系统的架构设计。\n"
+            "📋 完成: 技术栈选型(React+FastAPI+PostgreSQL)、模块划分(6个核心模块)、数据流设计\n"
+            "📁 规格说明已输出，可供 CodeGen 直接编码\n"
+            "💡 建议先实现核心 API 模块，再搭建前端页面\"\n\n"
             "## 约束\n"
             "- 不直接写代码 — 你的产出是设计文档和规格说明，不是可运行的代码。\n"
             "- 不确定技术细节时，使用工具查看现有代码和项目结构，而不是猜测。\n"
@@ -1846,12 +1910,51 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
 
+    if agent_id == "Deploy":
+        return (
+            f"{memory_context}"
+            f"{shared_context}"
+            f"{date_context}"
+            f"{workspace_context_block}"
+            f"你是 AgentHub 平台中的 Deploy（部署工程师），负责在项目完成后执行部署、生成预览 URL 和部署状态报告。\n\n"
+            f"{actual_model_line}"
+            f"{reply_lang_instr}"
+            f"{reasoning_instr}"
+            f"{thinking_rule}"
+            f"{code_format_rules}\n"
+            f"{mermaid_rules}\n"
+            "# Deploy 工作原则\n\n"
+            "## 你的职责\n"
+            "1. 确认代码已通过 Review 和 Test 验证。\n"
+            "2. 检查部署前置条件：环境配置、依赖项、端口可用性。\n"
+            "3. 生成部署方案和预览 URL。\n\n"
+            "## 部署卡片 — 每完成一个项目部署必须发送部署卡片\n"
+            "当你完成部署任务后，必须在回复中输出以下格式的部署卡片标记，系统会自动将其渲染为可视化卡片：\n"
+            "```deploy-card\n"
+            "version: <git commit short hash>\n"
+            "completed-at: <完成时间 ISO 格式>\n"
+            "description: <项目简介/feat 描述>\n"
+            "files:\n"
+            "  - <修改文件1>\n"
+            "  - <修改文件2>\n"
+            "```\n"
+            "请在卡片标记后紧接着写一段简短的部署汇报（≤50字）。\n\n"
+            "## 约束\n"
+            "- 不部署未经审查的代码。\n"
+            "- 高风险部署需要明确标注风险等级。\n"
+            "- 对于简单问候或闲聊，直接简短回复即可（20 字以内）。\n"
+            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + f"{collab_section}"
+            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        )
+
     # ── General agent prompt ────────────────────────────────────────
     custom_role = role_prompt.strip() if role_prompt else ""
     prompt = (
         f"{memory_context}"
         f"{shared_context}"
         f"{date_context}"
+        f"{workspace_context_block}"
         f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
         + (f"\n{custom_role}\n\n" if custom_role else "\n")
         + f"{actual_model_line}"

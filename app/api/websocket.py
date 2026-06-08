@@ -1821,15 +1821,17 @@ async def _invoke_agent(
             # ── 🟡 Trigger 3: Progress Update ───────────────────────
             # After each tool iteration completes, broadcast progress so
             # the frontend ProgressBubble updates in real time.
-            # Estimate remaining iterations based on results complexity.
-            total_estimate = max(thinking_sent_iterations + 1, thinking_sent_iterations + len(tool_results))
+            # Use the actual iteration count for both completed & total to
+            # avoid showing misleading estimates like "1/2" when the LLM
+            # is about to generate text (not make more tool calls).
+            current_round = thinking_sent_iterations
             await manager.broadcast_progress_update(
                 session_id,
                 str(uuid.uuid4()),
                 agent_id,
-                thinking_sent_iterations,  # completed steps
-                total_estimate,             # estimated total
-                f"第 {thinking_sent_iterations} 轮工具调用完成",
+                current_round,  # completed steps
+                current_round,  # total = completed (don't guess future rounds)
+                f"第 {current_round} 轮工具调用完成",
             )
 
             # ── 🟡 Trigger 2: Agent Question detection ──────────────
@@ -1976,6 +1978,110 @@ async def _invoke_agent(
         return "".join(full_response)
 
 
+async def _maybe_broadcast_deploy_card(
+    session_id: str, message_id: str, content: str, sender: str,
+) -> None:
+    """Broadcast a deploy_card event with real project data from git.
+
+    The primary data source is the ACTUAL git repository — version hash,
+    last commit message, and changed files.  The Deploy agent may optionally
+    supply a `` ```deploy-card `` fenced block to override / supplement the
+    auto-detected fields, but the card always reflects real project state.
+    """
+    import re as _re
+    import time as _time
+
+    # ── 1. Extract optional deploy-card block (agent overrides) ──────────
+    agent_version = ""
+    agent_description = ""
+    agent_files: list[str] = []
+
+    m = _re.search(
+        r'```deploy-card\s*\n(.*?)```',
+        content,
+        _re.DOTALL | _re.IGNORECASE,
+    )
+    if m:
+        block = m.group(1).strip()
+        in_files = False
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("files:"):
+                in_files = True
+                continue
+            if in_files:
+                file_match = _re.match(r'^\s*-\s+(.+)$', line)
+                if file_match:
+                    agent_files.append(file_match.group(1).strip())
+                else:
+                    in_files = False
+            if not in_files:
+                if stripped.startswith("version:"):
+                    agent_version = stripped[len("version:"):].strip()
+                elif stripped.startswith("description:"):
+                    agent_description = stripped[len("description:"):].strip()
+
+    # ── 2. Gather real git data ─────────────────────────────────────────
+    git_version = ""
+    git_description = ""
+    git_files: list[str] = []
+
+    try:
+        from app.services.git_service import git_service
+        git_service.ensure_repo()
+
+        # Version: short commit hash
+        try:
+            raw = git_service._run(["rev-parse", "--short", "HEAD"])
+            git_version = raw.strip()[:8]
+        except Exception:
+            git_version = ""
+
+        # Description: last commit message (first line = subject)
+        try:
+            raw = git_service._run(["log", "-1", "--pretty=%B"])
+            lines = raw.strip().splitlines()
+            git_description = lines[0].strip() if lines else ""
+        except Exception:
+            git_description = ""
+
+        # Files: changed in last commit, or tracked files if no commits yet
+        try:
+            raw = git_service._run(["diff", "--name-only", "HEAD~1"])
+            git_files = [f.strip() for f in raw.splitlines() if f.strip()]
+        except Exception:
+            try:
+                raw = git_service._run(["ls-files", "--others", "--exclude-standard", "--cached"])
+                git_files = [f.strip() for f in raw.splitlines() if f.strip()][:30]
+            except Exception:
+                git_files = []
+    except Exception:
+        logger.debug("deploy_card: unable to query git", exc_info=True)
+
+    # ── 3. Merge: agent overrides > git data > fallback ──────────────────
+    version = agent_version or git_version or "unknown"
+    description = agent_description or git_description or content[:200].strip()
+    files = agent_files if agent_files else git_files
+    completed_at = _time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    logger.info(
+        "deploy_card generated session=%s version=%s files=%d (git_version=%s)",
+        session_id, version, len(files), git_version,
+    )
+
+    await manager.broadcast_deploy_card(
+        session_id=session_id,
+        message_id=message_id,
+        version=version,
+        completed_at=completed_at,
+        description=description,
+        affected_files=files,
+        agent_id=sender,
+    )
+
+
 async def _broadcast_final_message(session_id: str, message_id: str, response: dict) -> None:
     rows = await afetch_all(
         "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -1990,9 +2096,21 @@ async def _broadcast_final_message(session_id: str, message_id: str, response: d
         except (json.JSONDecodeError, TypeError):
             final["symbolic"] = {}
         await manager.broadcast(session_id, final)
+
+        # ── Auto-generate deploy_card when Deploy agent completes ──
+        sender = final.get("sender", "")
+        content = final.get("content", "")
+        if sender == "Deploy" and content:
+            await _maybe_broadcast_deploy_card(session_id, message_id, content, sender)
     else:
         response["messageId"] = message_id
         await manager.broadcast(session_id, response)
+
+        # ── Auto-generate deploy_card for response path too ──
+        sender = response.get("sender", "")
+        content = response.get("content", "")
+        if sender == "Deploy" and content and isinstance(content, str):
+            await _maybe_broadcast_deploy_card(session_id, message_id, content, sender)
 
 
 async def _broadcast_final_db_message(session_id: str, message_id: str) -> None:

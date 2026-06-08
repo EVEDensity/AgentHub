@@ -39,6 +39,91 @@ def _safe_path(file_path: str, base: Path) -> Path | None:
         return None
 
 
+# ── Diff helper (used by file_write / file_patch for broadcast) ────────────
+
+def _compute_unified_diff(old_text: str, new_text: str, path: str = "") -> str:
+    """Compute a unified diff between two text strings.  Returns empty string
+    when the texts are identical or difflib is unavailable."""
+    if old_text == new_text:
+        return ""
+    try:
+        import difflib
+        diff_lines = list(
+            difflib.unified_diff(
+                old_text.splitlines(keepends=True),
+                new_text.splitlines(keepends=True),
+                fromfile=path or "a/file",
+                tofile=path or "b/file",
+                lineterm="",
+            )
+        )
+        return "".join(diff_lines[:100])  # cap at 100 lines for broadcast
+    except Exception:
+        return ""
+
+
+# ── Fire-and-forget helpers (must NEVER block the tool response) ───────────
+
+async def _broadcast_workspace_change(
+    session_id: str, path: str, operation: str, size_bytes: int,
+    diff_preview: str = "", old_path: str = "", user_id: str = "",
+) -> None:
+    """Broadcast a workspace_change event after a successful file op."""
+    try:
+        from app.services.websocket_manager import manager
+        if session_id:
+            await manager.broadcast_workspace_change(
+                session_id=session_id, path=path, operation=operation,
+                user_id=user_id, size_bytes=size_bytes,
+                diff_preview=diff_preview, old_path=old_path,
+            )
+    except Exception:
+        pass  # broadcast failure must never block the tool
+
+
+async def _record_file_version(
+    path: str, content: str, session_id: str = "", user_id: str = "",
+) -> str:
+    """Record a file version and return the SHA-256 hash."""
+    try:
+        from app.services.file_version_tracker import file_version_tracker
+        sid = session_id or _get_sid_fast()
+        uid = user_id or _get_uid_fast()
+        fv = file_version_tracker.record_write(sid, path, content, uid)
+        return fv.sha256
+    except Exception:
+        return ""
+
+
+async def _auto_git_commit(path: str, user_id: str, operation: str) -> None:
+    """Auto-commit to git after a file write (fire-and-forget)."""
+    try:
+        from app.config import AGENTHUB_FILE_AUTO_GIT
+        if not AGENTHUB_FILE_AUTO_GIT:
+            return
+        import asyncio as _asyncio
+        from app.services.git_service import git_service
+        await _asyncio.to_thread(git_service.auto_commit, path, user_id, operation)
+    except Exception:
+        pass
+
+
+def _get_sid_fast() -> str:
+    try:
+        from app.services.workspace_context import get_workspace_session_id
+        return get_workspace_session_id()
+    except Exception:
+        return ""
+
+
+def _get_uid_fast() -> str:
+    try:
+        from app.services.workspace_context import get_workspace_user_id
+        return get_workspace_user_id()
+    except Exception:
+        return ""
+
+
 # ── web_search (multi-provider with mode-based selection) ────────────
 
 # Valid WEB_SEARCH_MODE values (mirrors the TypeScript WebSearchMode)
@@ -705,6 +790,17 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
         if total_lines > max_lines:
             result_text += f"\n\n... [已截断，显示前 {max_lines} 行，共 {total_lines} 行]"
 
+        # ── Record version hash for conflict detection ──────────────────
+        sha256_hash = ""
+        try:
+            from app.services.file_version_tracker import file_version_tracker
+            sid = _get_sid_fast()
+            uid = _get_uid_fast()
+            fv = file_version_tracker.record_read(sid, path, content, uid)
+            sha256_hash = fv.sha256[:12]
+        except Exception:
+            pass
+
         return {
             "success": True,
             "result": result_text,
@@ -714,6 +810,7 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
                 "displayed_lines": len(truncated),
                 "size_bytes": size,
                 "encoding": encoding,
+                "sha256": sha256_hash,
             },
         }
     except UnicodeDecodeError:
@@ -724,13 +821,22 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
 
 # ── file_write ────────────────────────────────────────────────────────
 
-async def file_write_handler(path: str, content: str, mode: str = "overwrite") -> dict[str, Any]:
+async def file_write_handler(
+    path: str,
+    content: str,
+    mode: str = "overwrite",
+    expected_sha256: str = "",
+) -> dict[str, Any]:
     """Write content to a file in the user's per-session workspace.
 
     Args:
         path: Relative path within the session workspace.
         content: The text content to write.
         mode: "overwrite" (default) replaces the file; "append" adds to the end.
+        expected_sha256: Optional hash from a prior ``file_read`` call.
+            When provided, conflict detection compares it against the
+            tracked version and warns if another user modified the file
+            in the meantime.
     """
     from app.services.workspace_context import get_workspace_root, resolve_workspace_path
 
@@ -742,30 +848,273 @@ async def file_write_handler(path: str, content: str, mode: str = "overwrite") -
     if await aexists(safe) and await aisdir(safe):
         return {"success": False, "error": f"'{path}' 是一个目录，无法写入"}
 
+    # ── Context ─────────────────────────────────────────────────────────
+    sid = _get_sid_fast()
+    uid = _get_uid_fast()
+
+    # ── Pre-read original content (for diff + conflict + backup) ────────
+    original_text = ""
+    if mode == "overwrite" and await aexists(safe):
+        try:
+            original_text = await aread_text(safe, encoding="utf-8")
+        except UnicodeDecodeError:
+            original_text = ""
+
+    # ── Conflict detection ──────────────────────────────────────────────
+    conflict_warning = ""
+    if expected_sha256 and original_text:
+        try:
+            from app.services.file_version_tracker import file_version_tracker
+            check = file_version_tracker.check_conflict(sid, path, expected_sha256)
+            if check["conflict"]:
+                cv = check["current_version"]
+                conflict_user = (cv.written_by_user or cv.written_by_agent or "其他用户")
+                conflict_warning = (
+                    f"⚠️ 冲突检测: 文件被 {conflict_user} 修改过。"
+                )
+                # Backup the current version so nothing is lost
+                backup_path = safe.with_suffix(safe.suffix + ".conflict_backup")
+                try:
+                    await awrite_text(backup_path, original_text, encoding="utf-8")
+                    conflict_warning += f" 原文件已备份为 {backup_path.name}。"
+                except OSError:
+                    pass
+                # Broadcast conflict event
+                try:
+                    from app.services.websocket_manager import manager
+                    diff_preview = _compute_unified_diff(original_text, content, path)
+                    await manager.broadcast_file_conflict(
+                        session_id=sid, path=path,
+                        ours_user_id=uid or "",
+                        theirs_user_id=cv.written_by_user,
+                        ours_preview=content[:1000],
+                        theirs_preview=original_text[:1000],
+                        diff=diff_preview,
+                        backup_path=backup_path.name if backup_path.exists() else "",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass  # conflict detection is advisory — never block the write
+
+    # ── Advisory locking ────────────────────────────────────────────────
+    lock_acquired = False
     try:
-        # Ensure parent directory exists
+        from app.services.file_lock import file_lock_manager
+        lock_result = file_lock_manager.acquire(sid, path, uid)
+        lock_acquired = lock_result["ok"]
+        if not lock_result["ok"]:
+            existing_lock = lock_result["lock"]
+            if not conflict_warning:
+                conflict_warning = ""
+            conflict_warning += (
+                f" 🔒 文件被 {existing_lock.holder_name or existing_lock.holder_user_id} 锁定"
+                f"（{existing_lock.remaining_seconds:.0f}秒后过期）。"
+            )
+    except Exception:
+        pass
+
+    # ── Write ───────────────────────────────────────────────────────────
+    try:
         await amkdir(safe.parent)
 
-        if mode == "append" and await aexists(safe):
-            existing = await aread_text(safe, encoding="utf-8")
-            await awrite_text(safe, existing + "\n" + content, encoding="utf-8")
+        if mode == "append" and original_text:
+            new_full = original_text + "\n" + content
+            await awrite_text(safe, new_full, encoding="utf-8")
             action = "追加"
         else:
             await awrite_text(safe, content, encoding="utf-8")
             action = "覆写"
 
         size = await astat_size(safe)
-        return {
-            "success": True,
-            "result": f"文件 '{path}' {action}成功 ({size} 字节)",
-            "metadata": {
-                "path": str(safe.relative_to(ws_root)),
-                "size_bytes": size,
-                "mode": mode,
-            },
+
+        # ── Post-write: track version ───────────────────────────────────
+        sha256_hash = ""
+        try:
+            from app.services.file_version_tracker import file_version_tracker
+            fv = file_version_tracker.record_write(
+                sid, path,
+                content if mode == "overwrite" else (original_text + "\n" + content),
+                uid, "",
+            )
+            sha256_hash = fv.sha256
+        except Exception:
+            pass
+
+        # ── Post-write: broadcast workspace_change ──────────────────────
+        diff_preview = ""
+        if mode == "overwrite" and original_text:
+            diff_preview = _compute_unified_diff(original_text, content, path)
+        # Fire-and-forget — don't await, don't block
+        import asyncio as _asyncio
+        _asyncio.ensure_future(
+            _broadcast_workspace_change(sid, path, "write", size, diff_preview, user_id=uid)
+        )
+
+        # ── Post-write: auto git commit ─────────────────────────────────
+        _asyncio.ensure_future(_auto_git_commit(path, uid, action))
+
+        # ── Build result ────────────────────────────────────────────────
+        result_msg = f"文件 '{path}' {action}成功 ({size} 字节)"
+        if conflict_warning:
+            result_msg = conflict_warning + "\n" + result_msg
+
+        metadata: dict[str, Any] = {
+            "path": str(safe.relative_to(ws_root)),
+            "size_bytes": size,
+            "mode": mode,
+            "sha256": sha256_hash[:12] if sha256_hash else "",
         }
+        if conflict_warning:
+            metadata["conflict"] = True
+        if lock_acquired:
+            metadata["lock_held"] = True
+
+        return {"success": True, "result": result_msg, "metadata": metadata}
     except OSError as exc:
         return {"success": False, "error": f"写入文件失败: {exc}"}
+    finally:
+        # ── Release lock ────────────────────────────────────────────────
+        if lock_acquired:
+            try:
+                from app.services.file_lock import file_lock_manager
+                file_lock_manager.release(sid, path, uid)
+            except Exception:
+                pass
+
+
+# ── file_write_batch ──────────────────────────────────────────────────
+
+async def file_write_batch_handler(
+    paths_contents: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Write multiple files to the workspace in a single call.
+
+    Creates parent directories automatically (acts as mkdir -p for each
+    file's parent path).  Each item in *paths_contents* must have:
+
+        - ``path`` (str, required) — relative path within the workspace
+        - ``content`` (str, required) — text content to write
+
+    Example::
+
+        [
+            {"path": "src/main.py", "content": "print('hello')"},
+            {"path": "src/utils/helpers.py", "content": "def add(a,b): return a+b"},
+        ]
+    """
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    if not isinstance(paths_contents, list) or len(paths_contents) == 0:
+        return {"success": False, "error": "paths_contents 必须是非空数组，每项包含 path 和 content 字段"}
+
+    ws_root = get_workspace_root()
+    sid = _get_sid_fast()
+    uid = _get_uid_fast()
+
+    results: list[dict] = []
+    created_dirs: set[str] = set()
+
+    for i, item in enumerate(paths_contents):
+        if not isinstance(item, dict):
+            results.append({"index": i, "success": False, "error": "数组项必须是对象 {path, content}"})
+            continue
+
+        path = item.get("path", "")
+        content = item.get("content", "")
+        if not path:
+            results.append({"index": i, "success": False, "error": "缺少必填字段 path"})
+            continue
+        if not isinstance(content, str):
+            results.append({"index": i, "success": False, "error": "content 必须是字符串"})
+            continue
+
+        safe = resolve_workspace_path(path)
+        if safe is None:
+            results.append({"index": i, "path": path, "success": False, "error": f"路径 '{path}' 超出工作区允许范围"})
+            continue
+
+        if await aexists(safe) and await aisdir(safe):
+            results.append({"index": i, "path": path, "success": False, "error": f"'{path}' 是一个目录，无法作为文件写入"})
+            continue
+
+        # ── Auto-create parent directories (folder creation) ──────────
+        parent = safe.parent
+        parent_rel = str(parent.relative_to(ws_root))
+        try:
+            if not await aexists(parent):
+                await amkdir(parent)
+                if parent_rel not in created_dirs:
+                    created_dirs.add(parent_rel)
+        except OSError as exc:
+            results.append({"index": i, "path": path, "success": False, "error": f"无法创建目录 '{parent_rel}': {exc}"})
+            continue
+
+        # ── Pre-read original for diff (if overwriting) ───────────────
+        original_text = ""
+        if await aexists(safe):
+            try:
+                original_text = await aread_text(safe, encoding="utf-8")
+            except UnicodeDecodeError:
+                original_text = ""
+
+        # ── Write ─────────────────────────────────────────────────────
+        try:
+            await awrite_text(safe, content, encoding="utf-8")
+            size = await astat_size(safe)
+        except OSError as exc:
+            results.append({"index": i, "path": path, "success": False, "error": f"写入失败: {exc}"})
+            continue
+
+        # ── Post-write: track version ─────────────────────────────────
+        try:
+            from app.services.file_version_tracker import file_version_tracker
+            file_version_tracker.record_write(sid, path, content, uid, "")
+        except Exception:
+            pass
+
+        # ── Post-write: broadcast + git (fire-and-forget) ────────────
+        diff_preview = ""
+        if original_text:
+            diff_preview = _compute_unified_diff(original_text, content, path)
+        import asyncio as _asyncio
+        _asyncio.ensure_future(
+            _broadcast_workspace_change(sid, path, "write", size, diff_preview, user_id=uid)
+        )
+        _asyncio.ensure_future(_auto_git_commit(path, uid, "batch_write"))
+
+        results.append({
+            "index": i,
+            "path": path,
+            "success": True,
+            "result": f"'{path}' 写入成功 ({size} 字节)",
+            "metadata": {"path": path, "size_bytes": size},
+        })
+
+    # ── Summary ───────────────────────────────────────────────────────
+    success_count = sum(1 for r in results if r.get("success"))
+    fail_count = len(results) - success_count
+
+    summary_parts: list[str] = [
+        f"批量写入完成: {success_count}/{len(results)} 成功",
+    ]
+    if fail_count > 0:
+        failed_paths = [r.get("path", f"index {r.get('index')}") for r in results if not r.get("success")]
+        summary_parts.append(f"，{fail_count} 失败: {', '.join(failed_paths[:5])}")
+    if created_dirs:
+        summary_parts.append(f"。自动创建目录: {', '.join(sorted(created_dirs)[:10])}")
+
+    return {
+        "success": fail_count == 0,
+        "result": "".join(summary_parts),
+        "metadata": {
+            "total": len(results),
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "created_dirs": sorted(created_dirs),
+            "files": results,
+        },
+    }
 
 
 # ── code_execute ──────────────────────────────────────────────────────
@@ -1101,11 +1450,32 @@ async def file_patch_handler(
 
     patched = "\n".join(result_lines)
 
-    # Write the patched file
+    # ── Write the patched file ──────────────────────────────────────────
     try:
         await awrite_text(safe, patched, encoding="utf-8")
     except OSError as exc:
         return {"success": False, "error": f"写入补丁文件失败: {exc}"}
+
+    # ── Post-patch: track version, broadcast, git ──────────────────────
+    sid = _get_sid_fast()
+    uid = _get_uid_fast()
+
+    # Record version
+    sha256_hash = ""
+    try:
+        from app.services.file_version_tracker import file_version_tracker
+        fv = file_version_tracker.record_write(sid, path, patched, uid, "")
+        sha256_hash = fv.sha256
+    except Exception:
+        pass
+
+    # Broadcast
+    size = len(patched.encode("utf-8"))
+    import asyncio as _asyncio
+    _asyncio.ensure_future(
+        _broadcast_workspace_change(sid, path, "write", size, diff, user_id=uid)
+    )
+    _asyncio.ensure_future(_auto_git_commit(path, uid, "patch"))
 
     # Preview
     preview = patched[:2000]
@@ -1121,6 +1491,7 @@ async def file_patch_handler(
             "lines_removed": removed,
             "total_lines": len(result_lines),
             "total_chars": len(patched),
+            "sha256": sha256_hash[:12] if sha256_hash else "",
         },
     }
 

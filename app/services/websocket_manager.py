@@ -531,6 +531,101 @@ class WebSocketManager:
             "timestamp": db_now(),
         })
 
+    # ── Deploy card event ──────────────────────────────────────────────
+
+    async def broadcast_deploy_card(
+        self, session_id: str, message_id: str,
+        version: str, completed_at: str, description: str,
+        affected_files: list[str], agent_id: str = "Deploy",
+    ) -> None:
+        """Broadcast a deploy_card event when Deploy agent completes."""
+        await self.broadcast(session_id, {
+            "event": "deploy_card",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "version": version,
+            "completedAt": completed_at,
+            "description": description,
+            "affectedFiles": affected_files,
+            "agentId": agent_id,
+            "timestamp": db_now(),
+        })
+
+    # ── File workspace events ─────────────────────────────────────────
+    # These events enable real-time file tree updates and multi-user
+    # conflict awareness when agents write files to the workspace.
+
+    async def broadcast_workspace_change(
+        self, session_id: str, path: str, operation: str,
+        user_id: str = "", agent_id: str = "",
+        size_bytes: int = 0, diff_preview: str = "",
+        old_path: str = "",
+    ) -> None:
+        """Broadcast a workspace file change to all session members.
+
+        Fired after ``file_write``, ``file_patch``, or file deletion.
+        The frontend uses this to incrementally update the file tree
+        without re-fetching the entire directory listing.
+        """
+        payload: dict = {
+            "event": "workspace_change",
+            "sessionId": session_id,
+            "path": path,
+            "operation": operation,
+            "userId": user_id,
+            "agentId": agent_id,
+            "sizeBytes": size_bytes,
+            "diffPreview": diff_preview[:2000] if diff_preview else "",
+            "oldPath": old_path,
+            "timestamp": db_now(),
+        }
+        await self.broadcast(session_id, payload)
+
+    async def broadcast_file_conflict(
+        self, session_id: str, path: str,
+        ours_user_id: str = "", theirs_user_id: str = "",
+        ours_preview: str = "", theirs_preview: str = "",
+        diff: str = "", backup_path: str = "",
+    ) -> None:
+        """Broadcast a file conflict warning when concurrent edits collide.
+
+        The frontend renders a rich conflict-resolution dialog showing
+        both versions side-by-side with a unified diff.
+        """
+        payload: dict = {
+            "event": "file_conflict",
+            "sessionId": session_id,
+            "path": path,
+            "oursUserId": ours_user_id,
+            "theirsUserId": theirs_user_id,
+            "oursPreview": ours_preview[:1000] if ours_preview else "",
+            "theirsPreview": theirs_preview[:1000] if theirs_preview else "",
+            "diff": diff[:5000] if diff else "",
+            "backupPath": backup_path,
+            "timestamp": db_now(),
+        }
+        await self.broadcast(session_id, payload)
+
+    async def broadcast_file_lock_change(
+        self, session_id: str, path: str,
+        user_id: str = "", locked: bool = True,
+        holder_name: str = "",
+    ) -> None:
+        """Broadcast a file lock acquisition or release.
+
+        The frontend uses this to show/hide the 🔒 indicator on locked files
+        in the workspace tree.
+        """
+        await self.broadcast(session_id, {
+            "event": "file_lock_change",
+            "sessionId": session_id,
+            "path": path,
+            "userId": user_id,
+            "locked": locked,
+            "holderName": holder_name,
+            "timestamp": db_now(),
+        })
+
     # ── Session cleanup ──────────────────────────────────────────────
 
     def teardown_session(self, session_id: str) -> None:

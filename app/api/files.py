@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.config import DATA_DIR, WORKSPACES_DIR, OFFICE_PREVIEW_MAX_MB, OFFICE_WORKSPACE_READ_MAX_MB
@@ -1242,6 +1243,96 @@ def _ext_to_language(ext: str) -> str:
         ".dockerfile": "dockerfile", ".makefile": "makefile",
         ".pptx": "pptx", ".ppt": "ppt", ".docx": "docx",
     }.get(ext, "text")
+
+
+# ── Workspace zip download endpoint ──────────────────────────────────────
+
+@router.get("/workspace/download")
+async def download_workspace_zip(
+    session_id: str = "",
+    user: dict = Depends(get_current_user),
+):
+    """Download the entire workspace as a ZIP archive.
+
+    Recursively zips all files and directories in the user+session workspace.
+    Uses streaming to avoid memory pressure on large workspaces.
+    Hidden files (dotfiles) are excluded except for .env, .gitignore,
+    and .editorconfig.
+    """
+    import zipfile
+    import io
+
+    sid = session_id or "default"
+    ws_root = _get_session_workspace_root(user["id"], sid)
+
+    if not ws_root.exists():
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # Collect file list first (we need the total for Content-Length hint)
+    EXCLUDE_PREFIXES = ('.git/', '__pycache__/', 'node_modules/', '.venv/', 'venv/')
+    INCLUDE_DOTFILES = {'.env', '.gitignore', '.editorconfig', '.gitattributes'}
+
+    file_entries: list[tuple[str, Path]] = []
+    for entry in sorted(ws_root.rglob('*')):
+        if entry.is_dir():
+            continue
+        rel = str(entry.relative_to(ws_root)).replace('\\', '/')
+
+        # Skip hidden files/dirs (except allowlisted)
+        parts = rel.split('/')
+        if any(p.startswith('.') and p not in INCLUDE_DOTFILES for p in parts):
+            continue
+        # Skip common large dirs
+        if any(rel.startswith(prefix.replace('\\', '/')) for prefix in EXCLUDE_PREFIXES):
+            continue
+        # Skip conflict backups
+        if rel.endswith('.conflict_backup'):
+            continue
+
+        file_entries.append((rel, entry))
+
+    if not file_entries:
+        # Empty workspace — return an empty zip
+        empty_zip = io.BytesIO()
+        with zipfile.ZipFile(empty_zip, 'w', zipfile.ZIP_DEFLATED) as _zf:
+            pass
+        empty_zip.seek(0)
+        return StreamingResponse(
+            empty_zip,
+            media_type='application/zip',
+            headers={
+                'Content-Disposition': f'attachment; filename="workspace-{sid[:8]}.zip"',
+                'Content-Length': str(len(empty_zip.getvalue())),
+            },
+        )
+
+    # Build zip in memory, stream to client
+    zip_buffer = io.BytesIO()
+
+    # We use ZipFile with compression for a balance of speed and size
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=3) as zf:
+        for rel_path, abs_path in file_entries:
+            try:
+                zf.write(abs_path, arcname=rel_path)
+            except OSError:
+                # Skip unreadable files
+                pass
+
+    zip_buffer.seek(0)
+    zip_data = zip_buffer.getvalue()
+
+    # Build a human-readable filename
+    safe_sid = sid[:8].replace('/', '-').replace('\\', '-')
+    filename = f'workspace-{safe_sid}.zip'
+
+    return StreamingResponse(
+        io.BytesIO(zip_data),
+        media_type='application/zip',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(len(zip_data)),
+        },
+    )
 
 
 # ── Workspace upload endpoint ──────────────────────────────────────────

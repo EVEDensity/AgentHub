@@ -24,9 +24,16 @@ const SAFE_ID_RE = /^[A-Za-z0-9_]+$/;
  * Invisible / zero-width Unicode characters that LLMs sometimes inject.
  * Covered: U+200B-200F, U+FEFF, U+00A0, U+2060-2064, U+2028-202E, U+180E
  * Uses \\uXXXX escapes — literal invisible chars in source break TypeScript.
+ *
+ * IMPORTANT: JavaScript's \\uXXXX escape is exactly 4 hex digits.  Writing
+ * 5+ digits like \\uE01EF is a SYNTAX BUG: the parser reads \\uE01E (a
+ * single char) and treats the next char `F` as part of the character
+ * class, expanding the range to almost every printable character.  Never
+ * use 5+ hex digits in \\u escapes — use \\u{XXXXX} (with the `u` flag)
+ * or simply drop the range.
  */
 const INVISIBLE_CHARS_RE =
-  /[\u200B\u200C\u200D\u200E\u200F\uFEFF\u00A0\u2060\u2061\u2062\u2063\u2064\u2028\u2029\u202A\u202B\u202C\u202D\u202E\u202F\u180E]/gu;
+  /[\u200B\u200C\u200D\u200E\u200F\uFEFF\u00A0\u2060\u2061\u2062\u2063\u2064\u2028\u2029\u202A\u202B\u202C\u202D\u202E\u202F\u180E\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B\u180C\u180D\uFE00\uFE01\uFE02\uFE03\uFE04\uFE05\uFE06\uFE07\uFE08\uFE09\uFE0A\uFE0B\uFE0C\uFE0D\uFE0E\uFE0F]/gu;
 
 /** Valid Mermaid diagram-type starters (first line first word). */
 const VALID_STARTERS = new Set([
@@ -74,15 +81,32 @@ export function sanitizeMermaidCode(raw: string): string {
   const lines = code.split('\n');
   const fixed: string[] = [];
   let subgraphDepth = 0;
+  // Debug trace buffer
+  const dbg: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
+    const origLine = line;
+    dbg.push(`#${i} IN: ${JSON.stringify(line)}`);
 
     // Skip fully empty lines (Mermaid tolerates these)
     if (!line.trim()) {
+      dbg.push(`#${i} SKIP_EMPTY`);
       fixed.push(line);
       continue;
     }
+
+    // ── 4pre. Detect and rewrite natural-language paragraphs ──────
+    // LLM output sometimes appends explanatory text after the diagram
+    // body — e.g. "数据流 ：\n  页面加载时...".  These lines lack a
+    // `%%` comment prefix and crash Mermaid 11.x.  Detect them and
+    // convert to comments.
+    if (isNaturalLanguageLine(line)) {
+      dbg.push(`#${i} NATLANG`);
+      fixed.push(`%% ${line.trim()}`);
+      continue;
+    }
+    dbg.push(`#${i} after_natural: ${JSON.stringify(line)}`);
 
     // ── 4a. Detect & strip line-number prefixes added by LLMs ───────
     // e.g. "1. A[Start] --> B[End]" → "A[Start] --> B[End]"
@@ -96,13 +120,22 @@ export function sanitizeMermaidCode(raw: string): string {
       subgraphDepth--;
     }
 
-    // ── 4c. Fix subgraph names with spaces / special chars ──────────
+    // ── 4c. Fix subgraph name: subgraph B [Label] is illegal ──────
+    // Must run BEFORE fixSubgraphName which expects the simple `subgraph X` form
+    line = fixSubgraphBracketName(line);
+
+    // ── 4c2. Quote subgraph names with spaces / Chinese / special chars ─
     line = fixSubgraphName(line);
 
     // ── 4d. Fix node IDs: spaces / Chinese in the ID part ──────────
     line = sanitizeNodeId(line);
 
-    // ── 4e. Quote labels containing Chinese / special chars ────────
+    // ── 4e1. Fix arrow labels with embedded double quotes ─────────
+    // `B -- 点击 "新建" --> C`  →  `B -->|点击 "新建"| C`
+    // Mermaid 11.x doesn't tolerate unescaped " inside arrow labels.
+    line = fixArrowLabelWithQuotes(line);
+
+    // ── 4e2. Quote labels containing Chinese / special chars ────────
     line = quoteLabelsWithSpecialChars(line);
 
     // ── 4f. Fix unescaped quotes inside node labels ────────────────
@@ -130,10 +163,67 @@ export function sanitizeMermaidCode(raw: string): string {
   while (fixed.length > 0 && !fixed[0].trim()) fixed.shift();
   while (fixed.length > 0 && !fixed[fixed.length - 1].trim()) fixed.pop();
 
+  // Debug: append trace on the global object so test scripts can read it
+  (globalThis as any).__MERMAID_DEBUG__ = dbg.join('\n');
+
   return fixed.join('\n');
 }
 
 // ── Sanitizer helpers ──────────────────────────────────────────────────
+
+/**
+ * Heuristic: does this line look like a Mermaid syntax line, or is it
+ * free-form natural-language text (which would crash Mermaid 11.x if
+ * left unprefixed)?
+ *
+ * Returns true (= "treat as natural language") when the line:
+ *   - has no Mermaid syntax markers (no arrows, no brackets, no
+ *     subgraph/end/style keywords), AND
+ *   - contains Chinese characters, OR
+ *   - is a long free-form line with multiple spaces and no `[`/`{`/`(`.
+ *
+ * Comment lines (`%%`) and lines starting with Mermaid keywords are
+ * always treated as syntax.
+ */
+function isNaturalLanguageLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('%%')) return false;
+
+  // ── 1. Always-syntax line patterns ─────────────────────────────
+  // If the line has any of these markers, trust that it IS Mermaid syntax.
+  const SYNTAX_MARKERS = [
+    /^\s*(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|gitgraph|mindmap|timeline|sankey|quadrantChart|xychart|requirementDiagram|c4Context|c4Container|c4Component|architecture|kanban|packet|radar|block)\b/i,
+    /^\s*(subgraph|end|style|classDef|class|linkStyle|click)\b/i,
+    /-->|==>|-\.->|-\.\.->|---|--x|==x|->>|--/,
+    /\[[^\]]*\]/,                  // node[label]
+    /\{[^}]*\}/,                   // node{label}
+    /\([^)]*\)/,                   // node(label) or node((label))
+    /^\s*\|/,                       // table row
+    /:::/,                          // class assignment
+    /^\s*%/,                        // directive line
+  ];
+  if (SYNTAX_MARKERS.some((re) => re.test(trimmed))) {
+    return false;
+  }
+
+  // ── 2. Natural-language indicators ─────────────────────────────
+  // Chinese characters present
+  if (/[一-鿿㐀-䶿]/.test(trimmed)) {
+    return true;
+  }
+  // Long line with no syntax markers and no brackets (e.g. "Page loads
+  // with state initialized by GET /api/users...")
+  if (trimmed.length > 60 && !/[\[\{\(]/.test(trimmed)) {
+    return true;
+  }
+  // Multiple spaces + ends with period/comma (natural-language sentence)
+  if (/\s{2,}/.test(trimmed) && /[。.,，;；:：]$/.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Strip leading line numbers that LLMs sometimes prepend.
@@ -155,10 +245,33 @@ function stripLineNumberPrefix(line: string): string {
 }
 
 /**
+ * Fix the illegal `subgraph <id> [label]` syntax.  Mermaid only allows
+ *   - `subgraph <id>`  (id is the displayed name)
+ *   - `subgraph "<label>"`  (quoted label is the displayed name)
+ * LLM-generated code frequently uses `subgraph B [UserManagement Page]`
+ * which combines both forms and crashes Mermaid 11.x.  Convert to
+ *   - `subgraph B["UserManagement Page"]`  (preserves the label visually)
+ */
+function fixSubgraphBracketName(line: string): string {
+  return line.replace(
+    /^(\s*subgraph\s+)([A-Za-z_][A-Za-z0-9_]*)\s+(\[[^\]]*\])\s*$/i,
+    (_m, prefix: string, id: string, bracketExpr: string) => {
+      const label = bracketExpr.slice(1, -1).trim();
+      if (!label) return `${prefix}${id}`;
+      return `${prefix}${id}["${label.replace(/"/g, '&quot;')}"]`;
+    }
+  );
+}
+
+/**
  * Quote subgraph names that contain spaces, Chinese, or special chars.
  *
  *   subgraph 用户登录模块        → subgraph "用户登录模块"
  *   subgraph User Login          → subgraph "User Login"
+ *
+ * NOTE: If `name` already contains a `[…]` (from fixSubgraphBracketName)
+ * or `{…}` (rhombus/hexagon subgraph), the bracketed form is its own
+ * quoted label — don't add another set of quotes.
  */
 function fixSubgraphName(line: string): string {
   return line.replace(
@@ -168,8 +281,10 @@ function fixSubgraphName(line: string): string {
       // Already quoted — leave alone
       if (trimmed.startsWith('"') && trimmed.endsWith('"')) return match;
       if (trimmed.startsWith("'") && trimmed.endsWith("'")) return match;
+      // Already has a bracketed label (e.g. `B["..."]` from fixSubgraphBracketName)
+      if (/^[\w_-]+\s*[\[\{]/.test(trimmed)) return match;
       // Contains spaces, Chinese, or special chars — quote it
-      if (/[\s一-鿿一-鿿]|[^\w-]/.test(trimmed)) {
+      if (/[\s一-鿿]|[^\w-]/.test(trimmed)) {
         return `${prefix}"${trimmed}"`;
       }
       return match;
@@ -210,76 +325,140 @@ function sanitizeNodeId(line: string): string {
 }
 
 /**
- * Wrap labels containing Chinese characters, spaces, or special chars
- * in double quotes — Mermaid 10.x / 11.x handle quoted labels more reliably.
+ * Characters/patterns that force a label to be double-quoted even if
+ * the label otherwise looks "clean".  Mermaid 11.x is strict about
+ * these inside unquoted bracket labels.
+ */
+const FORCE_QUOTE_PATTERNS: Array<{ re: RegExp; desc: string }> = [
+  { re: /[一-鿿㐀-䶿]/, desc: 'CJK' },
+  { re: /[：；，。！？、【】《》「」『』]/, desc: 'CJK punctuation' },
+  { re: /[:;]/, desc: 'colon/semicolon' },           // e.g. "Step 1: Init"
+  { re: /[\(\)]/, desc: 'parentheses' },              // e.g. "Call func()"
+  { re: /^[^"]*\[[^\]]*\]/, desc: 'nested brackets' }, // e.g. "items[0]"
+  { re: /\{[^}]*\}/, desc: 'curly braces' },          // e.g. "{key: val}"
+  { re: /\d+\.\s/, desc: 'numbered prefix' },         // e.g. "1. First step"
+  { re: /[#$%]/, desc: 'special char' },              // e.g. "$100", "#1"
+  { re: /@/, desc: 'at sign' },
+  { re: /<[a-zA-Z]/, desc: 'HTML-like' },            // e.g. "<div>"
+  { re: /&(?!amp;|lt;|gt;|quot;|#39;|#\d+;|#x[\da-fA-F]+;)/, desc: 'bare ampersand' },
+];
+
+/** Returns true when a label SHOULD be double-quoted for Mermaid 11.x. */
+function labelNeedsQuoting(label: string): boolean {
+  const trimmed = label.trim();
+  if (!trimmed) return false;
+  // Already quoted — nothing to do
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return false;
+  }
+  // Multi-word English (space + length > 2 chars)
+  if (trimmed.includes(' ') && trimmed.length > 2) return true;
+  // Check all force-quote patterns
+  return FORCE_QUOTE_PATTERNS.some((p) => p.re.test(trimmed));
+}
+
+/**
+ * Wrap labels containing special characters in double quotes.
  *
- *   A[用户登录]     → A["用户登录"]
- *   B{条件？判断}    → B{"条件？判断"}
- *   C[Step 1: Init] → C["Step 1: Init"]
+ * Mermaid 11.x is substantially stricter than 10.x about unquoted label
+ * content.  This function detects labels that will cause parse failures
+ * and proactively quotes them.
+ *
+ *   A[用户登录]       → A["用户登录"]
+ *   B{条件？判断}      → B{"条件？判断"}
+ *   C[Step 1: Init]   → C["Step 1: Init"]    (colon → quote)
+ *   D[Cost: $100]     → D["Cost: $100"]       ($ → quote)
+ *   E[items[0]]       → E["items[0]"]         (nested brackets → quote)
  */
 function quoteLabelsWithSpecialChars(line: string): string {
   // Don't touch lines that are style/classDef/link directives
   if (/^\s*(style|classDef|class|linkStyle|click)\s/.test(line)) return line;
+  // Don't touch subgraph declarations — `fixSubgraphBracketName` already
+  // produced `subgraph B["..."]`, and re-quoting breaks the syntax.
+  if (/^\s*subgraph\s/.test(line)) return line;
   // Don't touch lines that are just comments
   if (/^\s*%%/.test(line)) return line;
 
-  // Match node definitions with unquoted labels:
-  //   nodeId[LABEL] / nodeId{LABEL} / nodeId(LABEL) / nodeId((LABEL))
-  // Handles single-bracket forms.  We intentionally skip already-quoted labels.
+  // Match Mermaid bracket labels: nodeId[...] or nodeId{...} or nodeId(...) or nodeId((...))
+  // The approach: for each line, locate bracket-like constructs that aren't
+  // arrow syntax or subgraph declarations, and quote the label if needed.
   //
-  // Strategy: find bracket pairs and check if the content needs quoting.
-  return line.replace(
-    /(\[(\/\/|\\\\)?|\{|\(\(?)([^"\]\}\)\n].*?)(\](\/\/|\\\\)?|\}|\)\)?)/g,
-    (fullMatch: string) => {
-      // Extract bracket type and label
-      const m = fullMatch.match(/^([\[\(\{]+)(.*?)([\]\)\}]+)$/);
-      if (!m) return fullMatch;
+  // Simpler, more robust regex than before: matches the node-definition
+  // bracket pairs one at a time.
+  const bracketLabelRe = /([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*?\]|\{[^}]*?\}|\(\([^)]*?\)\)|\([^)]*?\))/g;
 
-      const [, open, label, close] = m;
-      const trimmed = label.trim();
+  return line.replace(bracketLabelRe, (fullMatch: string, nodeId: string, bracketExpr: string) => {
+    // Extract the opening/closing brackets and the label inside
+    const openClose = bracketExpr.charAt(0);
+    let closeStr: string;
+    let inner: string;
 
-      // Already quoted — skip
-      if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-          (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-        return fullMatch;
-      }
-
-      // Check whether this label needs quoting
-      const needsQuoting =
-        /[一-鿿一-鿿㐀-䶿]/.test(trimmed) || // Chinese
-        /[：；，。！？、@#￥%…&*（）【】《》「」『』]/.test(trimmed) || // CJK punctuation
-        (trimmed.includes(' ') && trimmed.length > 2) || // multi-word
-        trimmed.includes('<') || // potential HTML
-        trimmed.includes('"') || // embedded double quotes
-        trimmed.includes("'") || // embedded single quotes
-        /[<>]/.test(trimmed);    // angle brackets
-
-      if (!needsQuoting) return fullMatch;
-
-      // Escape existing quotes
-      const escaped = trimmed.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-      return `${open}"${escaped}"${close}`;
+    if (openClose === '(' && bracketExpr.startsWith('((')) {
+      inner = bracketExpr.slice(2, -2);
+      closeStr = '))';
+    } else if (openClose === '[') {
+      inner = bracketExpr.slice(1, -1);
+      closeStr = ']';
+    } else if (openClose === '{') {
+      inner = bracketExpr.slice(1, -1);
+      closeStr = '}';
+    } else if (openClose === '(') {
+      inner = bracketExpr.slice(1, -1);
+      closeStr = ')';
+    } else {
+      return fullMatch; // unrecognized — leave alone
     }
-  );
+
+    // Check if quoting is needed
+    if (!labelNeedsQuoting(inner)) return fullMatch;
+
+    // Escape any existing double-quotes in the label
+    const escaped = inner.replace(/"/g, '&quot;');
+    return `${nodeId}${openClose === '(' && closeStr === '))' ? '((' : openClose}"${escaped}"${closeStr}`;
+  });
 }
 
 /**
  * Fix unescaped double quotes inside Mermaid node labels.
  *
+ * Mermaid uses " as the label delimiter.  If the label text itself
+ * contains unescaped ", the parser loses track of where the label ends.
+ *
  *   A["他说"你好""]  →  A["他说&quot;你好&quot;"]
+ *
+ * Strategy: find quoted labels (label starts and ends with ") and
+ * escape any " found between the delimiters.
  */
 function fixUnescapedQuotesInLabels(line: string): string {
-  // Find quoted labels and fix nested quotes
+  // 11.15.0 对所有括号形式都强制要求标签内引号转义
+  // 覆盖 [..]、{..}、((..)) 三种形式
   return line.replace(
-    /(\[[^\]]*?"[^\]]*?"[^\]]*\])/g,
-    (match: string) => {
-      return match.replace(
-        /\[(.*)\]/g,
-        (_inner: string, label: string) => {
-          const fixed = label.replace(/"/g, '&quot;');
-          return `[${fixed}]`;
-        }
-      );
+    /(\[[^\]]*?"[^\]]*?"[^\]]*\]|\{[^}]*?"[^}]*?"[^}]*\}|\(\([^)]*?"[^)]*?"[^)]*\)\))/g,
+    (bracketExpr: string) => {
+      let openCh: string;
+      let closeCh: string;
+      if (bracketExpr.startsWith('((')) {
+        // ((..)) 形式：裁掉内层括号
+        const inner = bracketExpr.slice(2, -2);
+        const fixed = inner.replace(/"([^"]*?)"/g, (_q: string, quotedText: string) => {
+          return `"${quotedText.replace(/"/g, '&quot;')}"`;
+        });
+        return `((${fixed}))`;
+      } else if (bracketExpr.startsWith('[')) {
+        openCh = '[';
+        closeCh = ']';
+      } else if (bracketExpr.startsWith('{')) {
+        openCh = '{';
+        closeCh = '}';
+      } else {
+        return bracketExpr;
+      }
+      const inner = bracketExpr.slice(1, -1);
+      const fixed = inner.replace(/"([^"]*?)"/g, (_q: string, quotedText: string) => {
+        return `"${quotedText.replace(/"/g, '&quot;')}"`;
+      });
+      return `${openCh}${fixed}${closeCh}`;
     }
   );
 }
@@ -287,17 +466,118 @@ function fixUnescapedQuotesInLabels(line: string): string {
 /**
  * Replace bare HTML fragments inside Mermaid labels.
  *
- *   A[click <br/> here] → A[click &lt;br/&gt; here]
+ * Mermaid 11.x allows the following HTML tags inside quoted labels:
+ *   - `<br>` / `<br/>` / `<br />`  (line break)
+ *   - `<i>...</i>`  `<b>...</b>`  `<em>...</em>`  `<strong>...</strong>`
+ *   - `<u>...</u>`
+ *   - `<code>...</code>` `<s>...</s>` `<sub>...</sub>` `<sup>...</sup>`
+ *   - `<small>...</small>` `<mark>...</mark>` `<ins>...</ins>` `<del>...</del>`
+ *
+ * Other tags MUST be HTML-encoded to avoid parse failures.
+ *
+ *   A[click <br/> here]              → A["click <br/> here"]
+ *   A[<b>important</b> text]         → A["<b>important</b> text"]
+ *   A[random <div>block</div>]       → A["random &lt;div&gt;block&lt;/div&gt;"]
  */
+const ALLOWED_HTML_TAGS = new Set([
+  'br', 'i', 'b', 'em', 'strong', 'u', 'code', 's', 'sub', 'sup',
+  'small', 'mark', 'ins', 'del', 'span', 'p',
+]);
+
 function fixHtmlInLabels(line: string): string {
-  // Replace obvious HTML tags inside labels
   return line.replace(
-    /<(\/?\w+)[^>]*>/g,
-    (_match: string, tag: string) => {
-      // If it's already escaped, leave alone
-      return `&lt;${tag}&gt;`;
+    /<(\/?)([A-Za-z][A-Za-z0-9]*)([^>]*)>/g,
+    (_match: string, slash: string, tag: string, attrs: string) => {
+      const lowerTag = tag.toLowerCase();
+      if (ALLOWED_HTML_TAGS.has(lowerTag)) {
+        // <br/> must always be self-closed.  Strip any extra slash from
+        // attrs and emit the canonical `<br/>` form.
+        if (lowerTag === 'br' && !slash) {
+          return `<${tag}/>`;
+        }
+        return `<${slash}${tag}${attrs}>`;
+      }
+      // Unknown tag — HTML-encode it
+      return `&lt;${slash}${tag}${attrs}&gt;`;
     }
   );
+}
+
+/**
+ * Fix arrow labels that contain unescaped double quotes.
+ *
+ * Mermaid 11.x crashes on:
+ *   B -- 点击 "新建" --> C
+ *   B -- 点击 "新建" --> C[UserForm Modal]
+ *   B -. 点击 "新建" .-> C{Yes}
+ *
+ * Mermaid 11.x accepts:
+ *   B -->|"点击 &quot;新建&quot;"| C
+ *   B -- "点击 \"新建\"" --> C     (less common, may also fail)
+ *   B --|"点击 \"新建\""|--> C
+ *
+ * Strategy:
+ *   1. Strip a trailing target (id, [label], {label}, (label), ((label))).
+ *   2. If the remaining text contains a "-->" or "-- " arrow with a
+ *      quote-bearing label, rewrite to the `--|"..."|` form.
+ */
+function fixArrowLabelWithQuotes(line: string): string {
+  // Match a trailing target: either a bracketed label
+  //   [..]   {..}   (..)   ((..))
+  // or a bare Mermaid node ID (alphanumeric/underscore).  This second
+  // case is necessary for lines like `A -- "text" --> B`.
+  const targetRe = /^(.*?)\s*(\[[^\]]*\]|\{[^}]*\}|\([^)]*\)|\(\([^)]*\)\)|[A-Za-z_][A-Za-z0-9_]*)\s*$/;
+  const m = line.match(targetRe);
+  if (!m) return line;
+
+  // Make sure the "target" we stripped is actually at the end of the line,
+  // and that there's at least one arrow `--` in the head.  A line like
+  // `B["foo"]` should not be treated as `B + target "foo"`.
+  const [, head, target] = m;
+  if (!/--/.test(head)) return line;
+  // Guard: if head has no arrow, this is a node definition, not an arrow.
+  if (!/(?:--+)|(?:-\.)/.test(head)) return line;
+
+  // ── Pattern A: head ends with `--` (no `>` tail) ────────────
+  // e.g. "B -- 点击 \"新建\" --"
+  let a1 = head.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s+--\s+([\s\S]+?)\s+--$/);
+  if (a1) {
+    const [, ws, srcId, label] = a1;
+    if (label.includes('"')) {
+      const escaped = label.replace(/"/g, '&quot;');
+      return `${ws}${srcId} -->|"${escaped}"| ${target}`;
+    }
+    return line;
+  }
+
+  // ── Pattern B: head ends with `-->` (with optional trailing ID) ──
+  // e.g. "B -- 点击 \"新建\" -->" or "B -- 点击 \"新建\" --> C"
+  // Capture the optional trailing ID as `srcTail` so we can preserve it
+  // in the output (it's NOT the target — that's already stripped).
+  let a2 = head.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s+--\s+([\s\S]+?)\s+-->(?:\s+([A-Za-z_][A-Za-z0-9_]*))?$/);
+  if (a2) {
+    const [, ws, srcId, label, srcTail] = a2;
+    if (label.includes('"')) {
+      const escaped = label.replace(/"/g, '&quot;');
+      const tailStr = srcTail ? ` ${srcTail}` : '';
+      return `${ws}${srcId} -->|"${escaped}"|${tailStr} ${target}`;
+    }
+    return line;
+  }
+
+  // ── Pattern C: dotted arrow `-.`  /  `.->` ──────────────────
+  let a3 = head.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s+-\.\s+([\s\S]+?)\s+\.->(?:\s+([A-Za-z_][A-Za-z0-9_]*))?$/);
+  if (a3) {
+    const [, ws, srcId, label, srcTail] = a3;
+    if (label.includes('"')) {
+      const escaped = label.replace(/"/g, '&quot;');
+      const tailStr = srcTail ? ` ${srcTail}` : '';
+      return `${ws}${srcId} -.->|"${escaped}"|${tailStr} ${target}`;
+    }
+    return line;
+  }
+
+  return line;
 }
 
 /**
@@ -416,48 +696,65 @@ export function repairMermaidCode(raw: string): { code: string; repaired: boolea
 }
 
 /**
- * Level-2 repair: force-quote every node label regardless of content.
- * This solves edge cases where special chars slip through other filters.
+ * Level-2 repair: force-quote every node label that contains anything
+ * beyond simple ASCII alphanumerics.  Uses the same detection logic as
+ * quoteLabelsWithSpecialChars for consistency.
  */
 function forceQuoteAllLabels(code: string): string {
   const lines = code.split('\n');
   const result: string[] = [];
 
   for (const line of lines) {
-    // Skip directives, comments, and subgraph declarations
-    if (/^\s*(style|classDef|class|linkStyle|click|subgraph|end|%%)\s/i.test(line)) {
+    // Skip directives, comments, subgraph declarations, and end
+    if (/^\s*(style|classDef|class|linkStyle|click|subgraph\s|end\b|%%)\s/i.test(line.trim())) {
       result.push(line);
       continue;
     }
 
-    // Force quote all bracket labels
-    const fixed = line.replace(
-      /(\[[^"\]]*?\]|\{[^"}]*?\}|\(\([^")]*?\)\)|\([^")]*?\))/g,
-      (match: string) => {
-        // Extract bracket type and content
-        if (match.startsWith('((')) {
-          const inner = match.slice(2, -2);
-          if (inner.startsWith('"') || !/[一-鿿\s'"<>]/.test(inner)) return match;
-          return `(("${inner.replace(/"/g, '&quot;')}"))`;
-        }
-        if (match.startsWith('[')) {
-          const inner = match.slice(1, -1);
-          if (inner.startsWith('"') || !/[一-鿿\s'"<>]/.test(inner)) return match;
-          return `["${inner.replace(/"/g, '&quot;')}"]`;
-        }
-        if (match.startsWith('{')) {
-          const inner = match.slice(1, -1);
-          if (inner.startsWith('"') || !/[一-鿿\s'"<>]/.test(inner)) return match;
-          return `{"${inner.replace(/"/g, '&quot;')}"}`;
-        }
-        if (match.startsWith('(')) {
-          const inner = match.slice(1, -1);
-          if (inner.startsWith('"') || !/[一-鿿\s'"<>]/.test(inner)) return match;
-          return `("${inner.replace(/"/g, '&quot;')}")`;
-        }
-        return match;
+    // Match nodeId[BracketExpr] patterns
+    const bracketLabelRe = /([A-Za-z_][A-Za-z0-9_]*)\s*(\[[^\]]*?\]|\{[^}]*?\}|\(\([^)]*?\)\)|\([^)]*?\))/g;
+
+    const fixed = line.replace(bracketLabelRe, (_full: string, nodeId: string, bracketExpr: string) => {
+      const openCh = bracketExpr.charAt(0);
+      let inner: string;
+      let openStr: string;
+      let closeStr: string;
+
+      if (openCh === '(' && bracketExpr.startsWith('((')) {
+        inner = bracketExpr.slice(2, -2);
+        openStr = '((';
+        closeStr = '))';
+      } else if (openCh === '[') {
+        inner = bracketExpr.slice(1, -1);
+        openStr = '[';
+        closeStr = ']';
+      } else if (openCh === '{') {
+        inner = bracketExpr.slice(1, -1);
+        openStr = '{';
+        closeStr = '}';
+      } else if (openCh === '(') {
+        inner = bracketExpr.slice(1, -1);
+        openStr = '(';
+        closeStr = ')';
+      } else {
+        return _full;
       }
-    );
+
+      // Already quoted — leave alone
+      const trimmed = inner.trim();
+      if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+          (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+        return _full;
+      }
+
+      // Quote if label has anything beyond simple alphanumerics + basic punctuation
+      if (!labelNeedsQuoting(inner) && /^[A-Za-z0-9_\s.\-+|/\\]+$/.test(inner)) {
+        return _full; // safe ASCII-only label
+      }
+
+      const escaped = trimmed.replace(/"/g, '&quot;');
+      return `${nodeId}${openStr}"${escaped}"${closeStr}`;
+    });
     result.push(fixed);
   }
 
