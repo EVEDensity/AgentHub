@@ -745,7 +745,7 @@ const FilePreviewModal = memo(function FilePreviewModal({
       <BinaryBody
         fileName={file.name}
         size={result.size}
-        hint="文件超过 5 MB，暂不支持在线预览。请下载到本地查看。"
+        hint={`文件过大（${result.size ? (result.size / 1024 / 1024).toFixed(1) + ' MB' : '未知大小'}），暂不支持在线预览。请下载到本地查看。`}
       />
     );
   } else if (result.state === 'binary' || result.kind === 'binary') {

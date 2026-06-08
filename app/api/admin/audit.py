@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.db.session import afetch_all, afetch_one
 from app.schemas.common import AuditConfirmRequest
-from app.services.auth_service import get_current_user, require_admin, write_audit
+from app.services.auth_service import get_current_user, write_audit
 
 router = APIRouter(prefix="/audit", tags=["admin-audit"])
 
@@ -33,28 +33,30 @@ async def list_logs(
     page_size: int = Query(25, ge=5, le=200, alias="pageSize", description="Rows per page"),
     sort_by: str = Query("timestamp", alias="sortBy", description="Column to sort by"),
     sort_order: str = Query("desc", alias="sortOrder", description="asc or desc"),
-    user_id: str = Query("", alias="userId", description="Filter by user ID"),
     agent_id: str = Query("", alias="agentId", description="Filter by agent ID"),
     action: str = Query("", description="Filter by action"),
     risk_level: str = Query("", alias="riskLevel", description="Filter by risk level"),
-    search: str = Query("", description="Free-text search across action, userId, agentId"),
+    search: str = Query("", description="Free-text search across action, agentId"),
 ) -> dict:
-    """Return paginated audit-log entries (admin only)."""
-    require_admin(user)
+    """Return paginated audit-log entries (user-scoped).
+
+    Each registered user can view their own audit log records — user-level
+    data isolation is enforced by always filtering on the current user's ID.
+    """
+    # ── User-level data isolation ──────────────────────────────────────
+    # Always scope results to the current user — users cannot see other
+    # users' audit records.
+    current_uid = user["id"]
 
     # Validate sort column
     sort_col = sort_by if sort_by in SORT_COLUMNS else "timestamp"
     order = "ASC" if sort_order.lower() == "asc" else "DESC"
 
-    # Build WHERE clause
-    conditions: list[str] = []
-    params: list[str] = []
-    param_idx = 0
+    # Build WHERE clause — base condition always filters by current user
+    conditions: list[str] = ["user_id = $1"]
+    params: list[str] = [current_uid]
+    param_idx = 1
 
-    if user_id:
-        param_idx += 1
-        conditions.append(f"user_id LIKE ${param_idx}")
-        params.append(f"%{user_id}%")
     if agent_id:
         param_idx += 1
         conditions.append(f"agent_id LIKE ${param_idx}")
@@ -71,14 +73,12 @@ async def list_logs(
         param_idx += 1
         q_param = f"%{search}%"
         conditions.append(
-            f"(action LIKE ${param_idx} OR user_id LIKE ${param_idx} OR agent_id LIKE ${param_idx} OR payload_json LIKE ${param_idx})"
+            f"(action LIKE ${param_idx} OR agent_id LIKE ${param_idx} OR payload_json LIKE ${param_idx})"
         )
-        params.extend([q_param, q_param, q_param, q_param])
-        param_idx += 3  # already added 4 params
+        params.extend([q_param, q_param, q_param])
+        param_idx += 2  # already added 3 params
 
-    where_clause = ""
-    if conditions:
-        where_clause = "WHERE " + " AND ".join(conditions)
+    where_clause = "WHERE " + " AND ".join(conditions)
 
     # Count total matching rows
     count_sql = f"SELECT COUNT(*) AS cnt FROM audit_log {where_clause}"
@@ -124,15 +124,16 @@ async def get_log_detail(
     log_id: str,
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """Return full detail of a single audit-log entry (admin only)."""
-    require_admin(user)
+    """Return full detail of a single audit-log entry (user-scoped).
 
+    Only the user who owns this audit record (matching user_id) can view it.
+    """
     row = await afetch_one(
         "SELECT id, user_id AS \"userId\", agent_id AS \"agentId\", action, "
         "risk_level AS \"riskLevel\", decision, content_hash AS \"contentHash\", "
         "payload_json AS payload, timestamp "
-        "FROM audit_log WHERE id = $1",
-        log_id,
+        "FROM audit_log WHERE id = $1 AND user_id = $2",
+        log_id, user["id"],
     )
     if not row:
         raise HTTPException(status_code=404, detail="Audit log entry not found")

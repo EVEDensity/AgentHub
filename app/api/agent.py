@@ -104,9 +104,15 @@ def _generate_default_avatar_svg(agent_id: str) -> tuple[bytes, str]:
     return svg.encode("utf-8"), "image/svg+xml"
 
 
-def _avatar_url_for(agent_id: str) -> str:
-    """Return the canonical DB-backed avatar URL for an agent."""
-    return f"/api/agent/registry/avatar/{agent_id}"
+def _avatar_url_for(agent_id: str, user_id: str = "") -> str:
+    """Return the canonical DB-backed avatar URL for an agent.
+
+    Includes ``user_id`` as a query parameter so the serve endpoint can
+    scope the DB lookup to the correct user — this prevents avatar leakage
+    when two users have uploaded different avatars for the same agent_id.
+    """
+    base = f"/api/agent/registry/avatar/{agent_id}"
+    return f"{base}?u={user_id}" if user_id else base
 
 
 def _content_type_for(filename: str) -> str:
@@ -114,7 +120,7 @@ def _content_type_for(filename: str) -> str:
     return _MIME_BY_EXT.get(ext, "image/png")
 
 
-async def _migrate_avatar_to_db(agent_id: str, avatar_url: str) -> bool:
+async def _migrate_avatar_to_db(agent_id: str, avatar_url: str, user_id: str = "") -> bool:
     """Try to read an avatar from filesystem (legacy URL) → store in DB.
 
     Returns True if migration succeeded, False otherwise.
@@ -124,6 +130,9 @@ async def _migrate_avatar_to_db(agent_id: str, avatar_url: str) -> bool:
 
     # Extract filename from legacy URL like /api/agent/registry/avatar/filename.png
     filename = avatar_url.rsplit("/", 1)[-1]
+    # Strip query params if present (e.g., filename.png?u=xxx)
+    if "?" in filename:
+        filename = filename.split("?", 1)[0]
     safe_name = Path(filename).name
     if safe_name != filename or ".." in filename:
         return False
@@ -135,10 +144,16 @@ async def _migrate_avatar_to_db(agent_id: str, avatar_url: str) -> bool:
     try:
         content = await aread_bytes(file_path)
         mime = _content_type_for(safe_name)
-        await aexecute(
-            "UPDATE agent_registry SET avatar_data=$1, avatar_mime=$2 WHERE agent_id=$3",
-            content, mime, agent_id,
-        )
+        if user_id:
+            await aexecute(
+                "UPDATE agent_registry SET avatar_data=$1, avatar_mime=$2 WHERE agent_id=$3 AND user_id=$4",
+                content, mime, agent_id, user_id,
+            )
+        else:
+            await aexecute(
+                "UPDATE agent_registry SET avatar_data=$1, avatar_mime=$2 WHERE agent_id=$3",
+                content, mime, agent_id,
+            )
         return True
     except Exception:
         return False
@@ -169,15 +184,7 @@ async def registry(user: dict = Depends(get_current_user)) -> list[dict]:
     # This avoids broken-image <img> tags when an agent has a stale
     # avatar_url pointing at a file that no longer exists.
     _AVATAR_SQL = (
-        "COALESCE("
-        "  CASE WHEN a.avatar_data IS NOT NULL AND a.avatar_mime != '' "
-        "    THEN '/api/agent/registry/avatar/' || a.agent_id "
-        "    WHEN a.avatar_url != '' AND a.avatar_url LIKE '/api/agent/registry/avatar/%' "
-        "      THEN a.avatar_url "
-        "    ELSE '/api/agent/registry/avatar/' || a.agent_id "
-        "  END,"
-        "  '/api/agent/registry/avatar/' || a.agent_id"
-        ") AS \"avatarUrl\""
+        "('/api/agent/registry/avatar/' || a.agent_id || '?u=' || a.user_id) AS \"avatarUrl\""
     )
     _REGISTRY_COLS = (
         "a.agent_id AS \"agentId\",a.domain,a.status,"
@@ -245,9 +252,9 @@ async def create_agent(data: AgentCreateRequest, user: dict = Depends(get_curren
     avatar_url = data.avatarUrl.strip()
     if avatar_url and "/registry/avatar/" in avatar_url:
         # Try to migrate existing filesystem avatar to DB on create
-        migrated = await _migrate_avatar_to_db(agent_id, avatar_url)
+        migrated = await _migrate_avatar_to_db(agent_id, avatar_url, user["id"])
         if migrated:
-            avatar_url = _avatar_url_for(agent_id)
+            avatar_url = _avatar_url_for(agent_id, user["id"])
 
     try:
         await aexecute(
@@ -303,9 +310,9 @@ async def update_agent(agent_id: str, data: AgentUpdateRequest, user: dict = Dep
     # ── Handle avatar: migrate from filesystem URL → DB storage ─────
     avatar_url = data.avatarUrl.strip()
     if avatar_url and "/registry/avatar/" in avatar_url:
-        migrated = await _migrate_avatar_to_db(agent_id, avatar_url)
+        migrated = await _migrate_avatar_to_db(agent_id, avatar_url, user["id"])
         if migrated:
-            avatar_url = _avatar_url_for(agent_id)
+            avatar_url = _avatar_url_for(agent_id, user["id"])
 
     tags_json = json.dumps(data.capabilityTags or [], ensure_ascii=False)
     if data.apiKey.strip():
@@ -397,7 +404,8 @@ async def upload_avatar(
             await aexecute(
                 "UPDATE agent_registry SET avatar_data=$1, avatar_mime=$2, avatar_url=$3 "
                 "WHERE agent_id=$4 AND user_id=$5",
-                content, mime, _avatar_url_for(agentId.strip()), agentId.strip(), user["id"],
+                content, mime, _avatar_url_for(agentId.strip(), user["id"]),
+                agentId.strip(), user["id"],
             )
             # Also save a local copy for backward compat
             try:
@@ -406,7 +414,7 @@ async def upload_avatar(
             except Exception:
                 pass
             return {
-                "avatarUrl": _avatar_url_for(agentId.strip()),
+                "avatarUrl": _avatar_url_for(agentId.strip(), user["id"]),
                 "filename": f"{agentId.strip()}{ext}",
                 "storedInDb": True,
             }
@@ -425,30 +433,50 @@ async def upload_avatar(
 
 
 @router.get("/registry/avatar/{ident}")
-async def get_avatar(ident: str):
+async def get_avatar(ident: str, u: str = ""):
     """Serve an avatar image.
 
     Lookup order:
-    1. **agent_id** — check ``agent_registry.avatar_data`` (DB-backed).
-    2. **filename** — serve from local disk (legacy fallback).
-    3. **deterministic SVG** — auto-generated from ``ident`` if it is a
+    1. **agent_id + user_id** (``?u=`` query param) — DB-backed, per-user.
+    2. **agent_id** only — DB-backed, first match (legacy fallback).
+    3. **filename** — serve from local disk (legacy fallback).
+    4. **deterministic SVG** — auto-generated from ``ident`` if it is a
        known agent_id and no uploaded avatar exists.  Guarantees every
        agent (including the legacy/custom ones the admin creates) renders
        a unique, stable avatar without requiring a manual upload.
     """
     from fastapi.responses import Response
 
-    # ── 1. Try DB lookup by agent_id ──────────────────────────────
-    row = await afetch_one(
-        "SELECT avatar_data, avatar_mime FROM agent_registry WHERE agent_id=$1",
-        ident,
-    )
-    if row and row.get("avatar_data") is not None:
-        content = row["avatar_data"]
-        mime = row.get("avatar_mime") or "image/png"
-        if isinstance(content, memoryview):
-            content = bytes(content)
-        return Response(content=content, media_type=mime)
+    # ── 1. Try DB lookup by agent_id + user_id (per-user avatar) ──
+    if u:
+        row = await afetch_one(
+            "SELECT avatar_data, avatar_mime FROM agent_registry WHERE agent_id=$1 AND user_id=$2",
+            ident, u,
+        )
+        if row and row.get("avatar_data") is not None:
+            content = row["avatar_data"]
+            mime = row.get("avatar_mime") or "image/png"
+            if isinstance(content, memoryview):
+                content = bytes(content)
+            return Response(content=content, media_type=mime)
+
+        # Per-user lookup failed — skip the agent_id-only DB query to
+        # prevent leaking another user's custom avatar.  Fall through
+        # directly to the filesystem / deterministic-SVG fallbacks.
+
+    else:
+        # ── 1b. DB lookup by agent_id only (legacy, no user scope) ─────
+        # Only reached when no `u` query param is present (old URL format).
+        row = await afetch_one(
+            "SELECT avatar_data, avatar_mime FROM agent_registry WHERE agent_id=$1",
+            ident,
+        )
+        if row and row.get("avatar_data") is not None:
+            content = row["avatar_data"]
+            mime = row.get("avatar_mime") or "image/png"
+            if isinstance(content, memoryview):
+                content = bytes(content)
+            return Response(content=content, media_type=mime)
 
     # ── 2. Filesystem fallback (legacy filename-based avatars) ──
     safe_name = Path(ident).name
@@ -483,9 +511,12 @@ async def migrate_avatars_to_db(user: dict = Depends(get_current_user)) -> dict:
     """
     require_admin(user)
 
+    current_uid = user["id"]
+
     rows = await afetch_all(
         "SELECT agent_id, avatar_url FROM agent_registry "
-        "WHERE avatar_data IS NULL AND avatar_url != ''"
+        "WHERE user_id=$1 AND avatar_data IS NULL AND avatar_url != ''",
+        current_uid,
     )
 
     migrated = 0
@@ -496,12 +527,12 @@ async def migrate_avatars_to_db(user: dict = Depends(get_current_user)) -> dict:
         agent_id = row["agent_id"]
         avatar_url = row["avatar_url"]
         try:
-            ok = await _migrate_avatar_to_db(agent_id, avatar_url)
+            ok = await _migrate_avatar_to_db(agent_id, avatar_url, current_uid)
             if ok:
                 # Also update avatar_url to the canonical DB-backed form
                 await aexecute(
-                    "UPDATE agent_registry SET avatar_url=$1 WHERE agent_id=$2",
-                    _avatar_url_for(agent_id), agent_id,
+                    "UPDATE agent_registry SET avatar_url=$1 WHERE agent_id=$2 AND user_id=$3",
+                    _avatar_url_for(agent_id, current_uid), agent_id, current_uid,
                 )
                 migrated += 1
             else:

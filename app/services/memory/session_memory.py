@@ -68,8 +68,8 @@ class SessionMemoryManager:
         self._state: dict[str, Any] = {"sessions": {}, "global": {}}
         self._state_loaded: bool = False
         # Throttle: min new messages + time cooldown
-        self._min_new_messages = int(os.environ.get("AGENTHUB_MEMORY_MIN_MSG", "4"))
-        self._cooldown_seconds = 300  # 5 minutes between updates per session
+        self._min_new_messages = int(os.environ.get("AGENTHUB_MEMORY_MIN_MSG", "2"))
+        self._cooldown_seconds = 120  # 2 minutes between updates per session
 
     # ── public API ──────────────────────────────────────────────────
 

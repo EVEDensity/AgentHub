@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -14,17 +16,18 @@ from app.services.auth_service import websocket_user
 from app.services.auth.session_guard import check_session_access, SessionRole
 from app.services.message_router import route_message, stream_message
 
+from app.schemas.dag import DAGConfig
 from app.services.guardrails import scan_input as _guardrails_scan
 from app.services.websocket_manager import manager
 
 logger = logging.getLogger("agenthub.websocket")
 
-# ── auto-memory extraction (lazy singletons) ────────────────────────
-_memory_extractor = None  # type: ignore
-_session_mgr_singleton = None  # type: ignore
+# ── auto-memory extraction (lazy per-user singletons) ────────────────
+_memory_extractors: dict[str, object] = {}  # user_id → MemoryExtractor
+_session_mgrs: dict[str, object] = {}       # user_id → SessionMemoryManager
 # Per-session throttle: {session_id: last_run_timestamp}
 _throttle_state: dict[str, float] = {}
-_THROTTLE_SECONDS = 90  # min interval between background memory tasks per session
+_THROTTLE_SECONDS = 30  # min interval between background memory tasks per session
 
 # ── Permission request state (session-scoped async Events) ─────────
 # {session_id: {request_id: {"event": asyncio.Event, "decision": str}}}
@@ -151,9 +154,13 @@ _pending_task_previews: dict[str, dict[str, dict]] = {}
 
 
 async def _wait_for_task_confirmation(
-    session_id: str, preview_msg_id: str, token,
+    session_id: str, preview_msg_id: str, token, user_id: str = "",
 ) -> tuple[str, str]:
     """Wait for the user to confirm/modify/cancel a task preview.
+
+    In multi-user sessions, only the session **owner** has the authority
+    to confirm or cancel the DAG.  Members can vote/comment but their
+    decisions are treated as advisory — they don't block the flow.
 
     Returns ``(decision, modifications)`` where *decision* is one of
     ``"confirm"``, ``"cancel"``, ``"modify"`` or ``"timeout"``.
@@ -163,6 +170,8 @@ async def _wait_for_task_confirmation(
         "event": event,
         "decision": "confirm",
         "modifications": "",
+        "owner_id": user_id,
+        "member_votes": {} if user_id else None,  # user_id → decision
     }
 
     try:
@@ -195,6 +204,109 @@ def _resolve_pending_task_preview(
         entry["event"].set()
         return True
     return False
+
+
+# ── Multi-@mention greeting detection ──────────────────────────────────
+# Patterns used by _is_multi_mention_greeting() to catch messages like
+# "@A @B @C 大家好🤩" that should NOT trigger a multi-agent DAG.
+
+_MULTI_MENTION_GREETING_PATTERNS = [
+    # Multi-person greetings — "大家好", "各位好", "大家早上好" etc.
+    r'^(大家|各位|大伙|朋友们|伙伴们|同学们|大家好|各位好|大家早上好|大家下午好|大家晚上好|大家好呀|大家好啊|大家早|大家晚安|各位早|各位晚安|hi\s*all|hello\s*all|hey\s*all|hello\s*everyone|hi\s*everyone|hey\s*everyone)',
+    # Single-person greetings — "你好", "hi", "hello" etc.
+    r'^(你好|hi|hello|hey|嗨|早上好|下午好|晚上好|晚安|再见|bye|谢谢|thanks?|thank\s*you|3q|ok|好的|嗯|哦|知道了|收到|明白)',
+    # Status/feeling expressions — "今天怎么样", "在吗", "在不在"
+    r'^(今天|最近|最近怎么样|how\s*are\s*you|what\'?s?\s*up|干嘛呢|在吗|在不在|我来了|我回来了|我走了)',
+    # Self-introduction — "你是谁", "介绍一下你自己"
+    r'^(你是谁|你的名字|你能做什么|你会什么|介绍一下你自己)',
+]
+
+# Technical keywords — if any appear in the stripped content, it's a task,
+# not a greeting, regardless of greeting pattern match.
+_MULTI_MENTION_TECH_KEYWORDS = [
+    '开发', '实现', '写', '代码', '生成', '创建', '设计', '架构',
+    '部署', '发布', '上线', '测试', '审查', '修复', 'bug', '错误',
+    '优化', '重构', '配置', '安装', '集成', '迁移', '升级',
+    'api', '接口', '页面', '组件', '模块', '功能', '系统', '数据库',
+    '前端', '后端', '全栈', 'react', 'vue', 'angular', 'node',
+    'python', 'java', 'go', 'rust', 'docker', 'k8s', 'ci/cd',
+    'develop', 'implement', 'create', 'build', 'design', 'deploy',
+    'code', 'function', 'feature', 'component', 'module',
+    'crud', 'rest', 'graphql', 'sql', 'nosql', 'redis',
+    '帮我', '做个', '写个', '搞个', '弄个', '帮我写', '帮我做',
+    '分析', '检查', '审查', '排查', '修复', '重构',
+]
+
+
+async def _get_user_session_role(session_id: str, user_id: str) -> str:
+    """Get the user's role in a session.
+
+    Returns ``"owner"`` if the user is the session owner, ``"member"``
+    otherwise.  Falls back to ``"owner"`` when the session has no
+    explicit owner record (single-user or legacy mode).
+
+    Resolution order:
+      1. ``sessions.owner_id == user_id`` → owner
+      2. ``session_members.role == 'owner'`` → owner
+      3. ``session_members`` record exists → member
+      4. No record found → owner (legacy / single-user)
+    """
+    if not session_id or not user_id:
+        return "owner"  # single-user / legacy — full authority
+    try:
+        from app.db.session import afetch_one
+        row = await afetch_one(
+            "SELECT owner_id FROM sessions WHERE id=$1", session_id,
+        )
+        if row and row.get("owner_id") == user_id:
+            return "owner"
+        # Also check session_members for explicit role
+        member_row = await afetch_one(
+            "SELECT role FROM session_members WHERE session_id=$1 AND user_id=$2",
+            session_id, user_id,
+        )
+        if member_row:
+            return member_row.get("role", "member")
+        # No membership record → treat as owner (legacy single-user mode)
+        return "owner"
+    except Exception:
+        return "owner"  # legacy fallback
+
+
+def _is_multi_mention_greeting(content: str) -> bool:
+    """Check if a message (with @mentions already stripped) is a greeting/chat.
+
+    Returns True if the content looks like a greeting or simple chat that
+    should NOT trigger a multi-agent DAG decomposition.  Returns False if
+    the content contains technical keywords, is long enough to be a real
+    question, or doesn't match any greeting pattern.
+
+    This prevents "@A @B @C 大家好🤩" from showing a "任务计划预览" with
+    3 fake subtasks.
+    """
+    stripped = content.strip()
+
+    # Empty after stripping @mentions → pure greeting, treat as chat
+    if not stripped:
+        return True
+
+    # Contains technical keywords → real task, not a greeting
+    stripped_lower = stripped.lower()
+    for kw in _MULTI_MENTION_TECH_KEYWORDS:
+        if kw in stripped_lower:
+            return False
+
+    # Check against greeting patterns
+    for pattern in _MULTI_MENTION_GREETING_PATTERNS:
+        if re.match(pattern, stripped, re.IGNORECASE):
+            return True
+
+    # Short non-technical message (≤15 chars) → likely just chat
+    if len(stripped) <= 15:
+        return True
+
+    return False
+
 
 # ── Resolved interaction tracking (for first-wins + broadcast to peers) ─
 # {session_id: {message_id: {"resolvedBy": user_id, "userName": str, "timestamp": str}}}
@@ -349,10 +461,19 @@ async def _handle_agent_todo_response(session_id: str, data: dict, user_id: str 
 async def _handle_task_preview_response(
     session_id: str, data: dict, user_id: str, user_name: str,
 ) -> None:
-    """User confirmed or modified a task preview."""
+    """User confirmed or modified a task preview.
+
+    In multi-user sessions, only the session **owner** can confirm or
+    cancel the DAG.  Member decisions are recorded as votes and broadcast
+    to all participants but do NOT alter the execution flow.  The owner
+    still needs to explicitly confirm.
+    """
     decision = data.get("decision", "confirm")
     modifications = data.get("modifications", "")
     preview_msg_id = data.get("previewMessageId", "")
+
+    # ── Determine if user is the session owner ────────────────────────
+    user_role = await _get_user_session_role(session_id, user_id)
 
     # ── First-wins: check if already resolved ────────────────────────
     if not _mark_interaction_resolved(session_id, preview_msg_id, user_id, user_name):
@@ -362,19 +483,44 @@ async def _handle_task_preview_response(
         )
         return
 
+    # ── Non-owner member: record as advisory vote ─────────────────────
+    if user_role != "owner":
+        entry = _pending_task_previews.get(session_id, {}).get(preview_msg_id)
+        if entry and entry.get("member_votes") is not None:
+            entry["member_votes"][user_id] = decision
+        action_label = {"confirm": "赞同执行", "cancel": "建议取消", "modify": "建议修改"}.get(decision, decision)
+        await save_message(
+            session_id, user_name,
+            f"[{action_label}]（成员建议）: {modifications or ''}",
+            "text", user_id=user_id,
+        )
+        # Broadcast member vote to all participants
+        await manager.broadcast(session_id, {
+            "event": "task_vote",
+            "sessionId": session_id,
+            "previewMessageId": preview_msg_id,
+            "userId": user_id,
+            "userName": user_name,
+            "role": user_role,
+            "decision": decision,
+            "timestamp": now(),
+        })
+        logger.info(
+            "task_preview member vote session=%s user=%s role=%s decision=%s",
+            session_id, user_id, user_role, decision,
+        )
+        return
+
+    # ── Owner path: full authority to confirm/cancel/modify ──────────
     # Broadcast to peers
     await manager.broadcast_interaction_already_resolved(
         session_id, preview_msg_id,
-        {"resolvedBy": user_id, "userName": user_name, "timestamp": now()},
+        {"resolvedBy": user_id, "userName": user_name, "role": "owner", "timestamp": now()},
     )
-
-    from app.db.init_db import now as _now
 
     # ── If a _process_and_stream call is waiting on this preview,
     #     signal it so it can proceed / cancel / modify in-line ──────
     if _resolve_pending_task_preview(session_id, preview_msg_id, decision, modifications):
-        # The waiting flow will handle broadcasting the status message.
-        # Still save the user action for the transcript.
         action_label = {"confirm": "确认执行", "cancel": "取消了任务执行", "modify": "修改计划"}.get(decision, decision)
         await save_message(session_id, user_name, f"[{action_label}]: {modifications or ''}", "text", user_id=user_id)
         return
@@ -383,20 +529,18 @@ async def _handle_task_preview_response(
         await save_message(session_id, user_name, "[取消了任务执行]", "text", user_id=user_id)
         await manager.broadcast(session_id, {
             "event": "message", "sessionId": session_id,
-            "content": "❌ 任务已取消",
-            "sender": "system", "timestamp": _now(), "type": "system",
+            "content": "❌ 任务已由会话 Owner 取消",
+            "sender": "system", "timestamp": now(), "type": "system",
         })
     elif decision == "modify":
-        # Re-process with user modifications
         modified_content = f"[用户修改了任务计划]\n{modifications}"
         await _process_and_stream(session_id, modified_content, user_name, user_id)
     else:
-        # Confirm — the task execution continues in the current flow
         await save_message(session_id, user_name, "[确认执行任务计划]", "text", user_id=user_id)
         await manager.broadcast(session_id, {
             "event": "message", "sessionId": session_id,
-            "content": "✅ 任务计划已确认，开始执行...",
-            "sender": "system", "timestamp": _now(), "type": "system",
+            "content": "✅ 任务计划已由 Owner 确认，开始执行...",
+            "sender": "system", "timestamp": now(), "type": "system",
         })
 
 
@@ -413,10 +557,11 @@ async def _handle_diff_decision(session_id: str, data: dict) -> None:
             from app.db.session import aexecute
             from pathlib import Path
 
-            from app.config import PROJECT_ROOT
+            from app.services.workspace_context import get_workspace_root
 
+            ws_root = get_workspace_root()
             full_path = (
-                Path(PROJECT_ROOT) / file_path
+                ws_root / file_path
                 if not Path(file_path).is_absolute()
                 else Path(file_path)
             )
@@ -472,20 +617,30 @@ async def _auto_name_and_broadcast(session_id: str) -> None:
         logger.debug("auto-name background task failed for %s", session_id, exc_info=True)
 
 
-def _get_memory_extractor():
-    global _memory_extractor
-    if _memory_extractor is None:
+def _get_memory_extractor(user_id: str = ""):
+    """Return a per-user MemoryExtractor backed by the user's memory directory."""
+    global _memory_extractors
+    uid = user_id or "local-admin"
+    if uid not in _memory_extractors:
+        from app.config import MEMORY_DIR
         from app.services.memory import MemoryExtractor
-        _memory_extractor = MemoryExtractor()
-    return _memory_extractor
+        from app.services.memory.storage import MemoryStorage
+        user_dir = MEMORY_DIR / "users" / uid
+        _memory_extractors[uid] = MemoryExtractor(MemoryStorage(user_dir))
+    return _memory_extractors[uid]
 
 
-def _get_session_mgr():
-    global _session_mgr_singleton
-    if _session_mgr_singleton is None:
+def _get_session_mgr(user_id: str = ""):
+    """Return a per-user SessionMemoryManager backed by the user's memory directory."""
+    global _session_mgrs
+    uid = user_id or "local-admin"
+    if uid not in _session_mgrs:
+        from app.config import MEMORY_DIR
         from app.services.memory.session_memory import SessionMemoryManager
-        _session_mgr_singleton = SessionMemoryManager()
-    return _session_mgr_singleton
+        from app.services.memory.storage import MemoryStorage
+        user_dir = MEMORY_DIR / "users" / uid
+        _session_mgrs[uid] = SessionMemoryManager(MemoryStorage(user_dir))
+    return _session_mgrs[uid]
 
 
 def _should_run_memory_tasks(session_id: str) -> bool:
@@ -501,8 +656,13 @@ def _should_run_memory_tasks(session_id: str) -> bool:
 router = APIRouter(tags=["websocket"])
 
 
-def _chunk_text_for_streaming(text: str, chunk_size: int = 120) -> list[str]:
-    """Split text for pseudo-stream fallback only."""
+def _chunk_text_for_streaming(text: str, chunk_size: int = 60) -> list[str]:
+    """Split text for pseudo-stream fallback only.
+
+    Uses a small default chunk size (60 chars) so the frontend sees
+    progressive text even when real SSE streaming is unavailable.
+    Sentence-aware splitting ensures chunks end at natural boundaries.
+    """
     if not text:
         return []
     chunks: list[str] = []
@@ -757,12 +917,29 @@ async def _process_and_stream(
       - *auto_reply=True*   → the default chat agent responds automatically
       - *auto_reply=False*  → no agent is invoked (message is saved only)
     """
+    # ── Activate per-user per-session workspace ──────────────────────────
+    from app.services.workspace_context import set_workspace_context
+    set_workspace_context(user_id=user_id, session_id=session_id)
+
     lock = manager.get_session_lock(session_id)
     async with lock:
         token = manager.create_token(session_id)
 
         try:
             await save_message(session_id, sender, content, "text", user_id=user_id)
+
+            # ── Immediate ack: confirm message receipt to ALL clients ──
+            # This lets other connected users see the message in real-time
+            # without a page reload.  The sender's frontend already has the
+            # message via handleSend() and will dedup by DB id.
+            await manager.broadcast(
+                session_id,
+                {
+                    "event": "message_ack",
+                    "sessionId": session_id,
+                    "timestamp": now(),
+                },
+            )
 
             # ── Safety guardrail scan (Tier 1: auto-block) ──────────
             guard_result = _guardrails_scan(content)
@@ -820,17 +997,97 @@ async def _process_and_stream(
                     # Prepend skill context to the user content
                     content = skill_context + content
 
-            # ── Extract @mentions — they always take priority ────────
-            mentioned = extract_mentions(content)
-            target_agents: list[dict] = []
-            seen: set[str] = set()
-            for name in mentioned:
-                if name in seen:
-                    continue
-                seen.add(name)
-                row = await lookup_agent(name, user_id)
-                if row:
-                    target_agents.append(row)
+            # ── #route: workflow detection ─────────────────────────
+            # Detect explicit workflow route selection via #route:name
+            # or #路线:name.  When a user selects a route, its
+            # predefined agent nodes are used directly — no LLM-driven
+            # task decomposition needed.
+            route_dag: DAGConfig | None = None  # type: ignore[name-defined]
+            from app.services.agent_route_service import agent_route_service
+
+            matched_route, content = await agent_route_service.extract_route_ref(content)
+            if matched_route and matched_route.get("nodes"):
+                logger.info(
+                    "ws #route matched session=%s route=%s nodes=%d",
+                    session_id, matched_route["name"], len(matched_route["nodes"]),
+                )
+                # Build DAGConfig from the route's predefined nodes.
+                route_dag = DAGConfig(
+                    total=len(matched_route["nodes"]),
+                    completed=0,
+                    nodes=copy.deepcopy(matched_route["nodes"]),
+                    execution_strategy="sequential",
+                    analysis=f"Route: {matched_route['name']} — {matched_route.get('description', '')}",
+                )
+
+            # ── Extract @mentions — only if no route was selected ──
+            # When a #route is explicitly chosen, the route's agent
+            # nodes define the workflow.  @mentions in the same message
+            # are treated as conversational references, not routing
+            # directives.
+            if route_dag is not None:
+                # Build target_agents from route nodes
+                target_agents: list[dict] = []
+                route_seen: set[str] = set()
+                for node in route_dag.nodes:
+                    agent_name = node.agent if hasattr(node, 'agent') else node.get("agent", "")
+                    if not agent_name or agent_name in route_seen:
+                        continue
+                    route_seen.add(agent_name)
+                    row = await lookup_agent(agent_name, user_id)
+                    if row:
+                        target_agents.append(row)
+                    else:
+                        logger.warning(
+                            "ws #route agent not found session=%s agent=%s",
+                            session_id, agent_name,
+                        )
+                if len(target_agents) < 2:
+                    # Route has only 1 valid agent — fall through to
+                    # single-agent path (no DAG preview needed).
+                    route_dag = None
+            else:
+                mentioned = extract_mentions(content)
+                target_agents: list[dict] = []
+                seen: set[str] = set()
+                for name in mentioned:
+                    if name in seen:
+                        continue
+                    seen.add(name)
+                    row = await lookup_agent(name, user_id)
+                    if row:
+                        target_agents.append(row)
+
+            # ── Guard: don't trigger DAG for multi-@mention greetings ──
+            # When a user @mentions multiple agents but the actual message
+            # is just a greeting (e.g. "@A @B 大家好🤩"), route it as a
+            # normal chat message instead of spawning a full task plan.
+            # This prevents the jarring UX of seeing a "任务计划预览" for
+            # "你好" or "大家好".
+            # NOTE: This guard only applies to @mention-triggered DAGs.
+            # When the user explicitly selects a route via #route:name,
+            # the greeting guard is skipped — they clearly intended the
+            # workflow to run.
+            if route_dag is None and len(target_agents) >= 2:
+                # Strip @mentions to inspect the real message content
+                msg_without_mentions = content
+                for name in mentioned:
+                    msg_without_mentions = re.sub(
+                        rf'@{re.escape(name)}', '', msg_without_mentions
+                    )
+                msg_without_mentions = msg_without_mentions.strip()
+
+                # Check if the remaining text is a greeting / non-task message
+                if _is_multi_mention_greeting(msg_without_mentions):
+                    logger.info(
+                        "ws multi-@mention greeting detected, routing to "
+                        "default chat instead of DAG. mentioned=%s stripped=%r",
+                        mentioned, msg_without_mentions,
+                    )
+                    target_agents = []  # fall through to default path
+                    # Also remove @mentions from content so the agent doesn't
+                    # receive a string of bare @names as a "task"
+                    content = msg_without_mentions if msg_without_mentions else content
 
             # ── Multi-agent path (Architect-driven DAG execution) ──────
             if len(target_agents) >= 2:
@@ -843,30 +1100,37 @@ async def _process_and_stream(
                 for a in target_agents:
                     collab.register(a)
 
-                # ── Step 1: Architect-driven task decomposition ─────────
-                # Use the Architect LLM to decompose the user request into
-                # a structured DAG, falling back to keyword templates.
-                try:
-                    dag_config = await task_decomposer.decompose(
-                        content=content,
-                        session_id=session_id,
-                        agents=target_agents,
+                # ── Step 1: Build DAG ────────────────────────────────────
+                # When a #route explicitly selects a workflow, use its
+                # predefined nodes directly — no LLM decomposition.
+                # Otherwise, use the Architect LLM to decompose.
+                if route_dag is not None:
+                    dag_config = route_dag
+                    logger.info(
+                        "ws using predefined route DAG session=%s nodes=%d",
+                        session_id, len(dag_config.nodes),
                     )
-                except Exception:
-                    # Last-resort fallback
-                    from app.schemas.dag import DAGConfig
-                    dag_config = DAGConfig(
-                        total=len(target_agents),
-                        completed=0,
-                        nodes=[{
-                            "id": f"n{i}", "domain": a.get("domain", "general"),
-                            "agent": a["agent_id"],
-                            "description": f"执行 {a['agent_id']} 的任务",
-                            "dependencies": [f"n{j}" for j in range(i)] if i > 0 else [],
-                        } for i, a in enumerate(target_agents)],
-                        execution_strategy="sequential",
-                        analysis=f"自动分解为 {len(target_agents)} 个节点",
-                    )
+                else:
+                    try:
+                        dag_config = await task_decomposer.decompose(
+                            content=content,
+                            session_id=session_id,
+                            agents=target_agents,
+                        )
+                    except Exception:
+                        # Last-resort fallback
+                        dag_config = DAGConfig(
+                            total=len(target_agents),
+                            completed=0,
+                            nodes=[{
+                                "id": f"n{i}", "domain": a.get("domain", "general"),
+                                "agent": a["agent_id"],
+                                "description": f"执行 {a['agent_id']} 的任务",
+                                "dependencies": [f"n{j}" for j in range(i)] if i > 0 else [],
+                            } for i, a in enumerate(target_agents)],
+                            execution_strategy="sequential",
+                            analysis=f"自动分解为 {len(target_agents)} 个节点",
+                        )
 
                 # ── 🟡 Trigger 1: Task Preview with real DAG ────────
                 task_preview_msg_id = str(uuid.uuid4())
@@ -1035,21 +1299,21 @@ async def _process_and_stream(
                 return
 
             # ── Resolve target agent ──────────────────────────────────
-            # Behavior matrix (is_direct_mention flag):
+            # Behavior matrix:
             #   ┌──────────────────────────┬──────────────────────────────────┐
             #   │ Scenario                 │ Behavior                         │
+            #   ├──────────────────────────┼──────────────────────────────────┤
+            #   │ @A @B @C do X            │ DAG task preview → wait for      │
+            #   │ (multi-agent, handled    │ confirm → execute (user sees     │
+            #   │  earlier at line ~836)   │ plan and approves it)            │
             #   ├──────────────────────────┼──────────────────────────────────┤
             #   │ @Agent do X              │ Direct execution, no preview,    │
             #   │                          │ no wait (user chose the agent)   │
             #   ├──────────────────────────┼──────────────────────────────────┤
-            #   │ do X + autoReply ON      │ Task preview → wait for confirm  │
-            #   │                          │ → execute (Orchestrator plans)   │
+            #   │ do X + autoReply ON      │ Direct execution, no preview,    │
+            #   │ (default chat)           │ no wait — immediate streaming    │
             #   ├──────────────────────────┼──────────────────────────────────┤
             #   │ do X + autoReply OFF     │ Save message only, no agent call │
-            #   ├──────────────────────────┼──────────────────────────────────┤
-            #   │ @A @B @C do X            │ DAG task preview → wait for      │
-            #   │ (multi-agent, handled    │ confirm → execute (handled in    │
-            #   │  earlier at line ~836)   │ multi-agent path above)          │
             #   └──────────────────────────┴──────────────────────────────────┘
             is_direct_mention = bool(target_agents)  # user explicitly @mentioned an agent
             if target_agents:
@@ -1070,55 +1334,12 @@ async def _process_and_stream(
                 )
                 return
 
-            # ── 🟡 Trigger 1 (single): Task Preview ───────────────────
-            # Only show + wait when the *default agent* (Orchestrator) handles
-            # an un-directed message — the user needs to review the plan before
-            # the Orchestrator dispatches to other agents.
-            # Direct @mentions skip this: the user already chose their agent.
-            preview_msg_id: str = ""
-            if agent and not token.cancelled and not is_direct_mention:
-                agent_domain_label = {
-                    "orchestrator": "协调调度", "architect": "架构设计",
-                    "codegen": "代码生成", "review": "代码审查",
-                    "test": "测试验证", "deploy": "部署发布",
-                }.get(agent.get("domain", ""), agent.get("domain", "general"))
-                preview_msg_id = str(uuid.uuid4())
-                await manager.broadcast_task_preview(
-                    session_id,
-                    preview_msg_id,
-                    [{
-                        "id": "task_0",
-                        "description": f"{agent['agent_id']} ({agent_domain_label}): 处理您的请求",
-                        "agent": agent["agent_id"],
-                        "dependencies": [],
-                        "estimatedSeconds": 30,
-                    }],
-                    eta_seconds=30,
-                )
-
-            # ── Wait for user confirmation before executing ──────────
-            if preview_msg_id and not token.cancelled:
-                decision, modifications = await _wait_for_task_confirmation(
-                    session_id, preview_msg_id, token,
-                )
-                if token.cancelled:
-                    return
-                if decision == "cancel":
-                    await manager.broadcast(session_id, {
-                        "event": "message", "sessionId": session_id,
-                        "content": "❌ 任务已取消",
-                        "sender": "system", "timestamp": now(), "type": "system",
-                    })
-                    return
-                if decision == "modify":
-                    # Re-process with user modifications
-                    modified_content = f"[用户修改了任务计划]\n{modifications}"
-                    await _process_and_stream(
-                        session_id, modified_content, sender, user_id,
-                        attachments, quote_references, auto_reply,
-                    )
-                    return
-                # decision == "confirm" or "timeout" → proceed
+            # ── Default chat path: invoke agent directly ──────────────────
+            # No task preview, no confirmation wait — the user expects
+            # an immediate response, not a multi-step approval workflow.
+            # Task previews are reserved exclusively for multi-agent
+            # (@A @B) DAG workflows where the user needs to review a
+            # complex plan before execution.
 
             await _invoke_agent(
                 session_id, content, agent, user_id, token, attachments or [],
@@ -1126,39 +1347,11 @@ async def _process_and_stream(
                 quote_references=quote_references,
             )
 
-            # ── 🟡 Trigger 5 (single): Agent Todo ──────────────────────
-            # After single agent completes, suggest logical next steps.
-            if agent and not token.cancelled:
-                single_todo_items = [{
-                    "id": "todo_feedback",
-                    "label": "检查结果并提供反馈",
-                    "intent": "approve",
-                    "description": f"{agent['agent_id']} 已完成处理，请检查结果是否符合预期",
-                }]
-                agent_domain = agent.get("domain", "")
-                if agent_domain == "codegen" or agent["agent_id"] == "CodeGen":
-                    single_todo_items.insert(0, {
-                        "id": "todo_review",
-                        "label": "发送代码审查",
-                        "intent": "approve",
-                        "description": "建议 @Review 审查生成的代码质量和安全性",
-                    })
-                elif agent_domain == "review" or agent["agent_id"] == "Review":
-                    single_todo_items.insert(0, {
-                        "id": "todo_apply_fixes",
-                        "label": "应用审查建议",
-                        "intent": "approve",
-                        "description": "根据 Review 的意见修改代码，然后 @CodeGen 重新生成",
-                    })
-                await manager.broadcast_agent_todo(
-                    session_id,
-                    str(uuid.uuid4()),
-                    agent["agent_id"],
-                    f"{agent['agent_id']} 任务完成",
-                    f"Agent 已完成本轮处理。建议下一步：",
-                    single_todo_items,
-                    priority="low",
-                )
+            # ── Agent Todo: only for multi-agent workflows ────────────
+            # Single-agent responses don't need a follow-up todo list;
+            # the user can naturally continue the conversation.  The
+            # multi-agent DAG path (above) still broadcasts task todos
+            # where they add real value.
 
         except Exception:
             logger.exception("ws _process_and_stream failed session=%s", session_id)
@@ -1192,13 +1385,13 @@ async def _process_and_stream(
         try:
             from app.config import AUTO_MEMORY_ENABLED
             if AUTO_MEMORY_ENABLED:
-                extractor = _get_memory_extractor()
+                extractor = _get_memory_extractor(user_id)
                 asyncio.create_task(extractor.extract_from_session(session_id))
         except Exception:
             logger.debug("auto-memory extraction init failed", exc_info=True)
 
         try:
-            session_mgr = _get_session_mgr()
+            session_mgr = _get_session_mgr(user_id)
             asyncio.create_task(session_mgr.update_session_summary(session_id))
         except Exception:
             logger.debug("session-memory update init failed", exc_info=True)
@@ -1226,6 +1419,202 @@ async def _invoke_agent(
     Returns the agent's full response text (for collaboration context recording).
     """
     agent_id = agent["agent_id"] if agent else (sender_override or "Orchestrator")
+
+    # ── Orchestrator pre-processing: analyze and restructure the user's
+    #     question before it reaches the main LLM.  Uses a lightweight LLM
+    #     call to produce intent analysis, sub-task decomposition, and a
+    #     clarified question — the main LLM receives a well-structured
+    #     prompt instead of raw user input.
+    #
+    #     For simple greetings / short non-technical messages, the preprocessor
+    #     returns a synthetic "simple" result (no LLM call).  We thread
+    #     ``simple_mode=True`` through the pipeline so ``build_prompt()`` can
+    #     emit a minimal prompt — no tools, no workflow, no decomposition.
+    #     This prevents the LLM from calling web_search / skill_list / etc.
+    #     chaotically for trivial messages like "你好".
+    preprocess_context = ""
+    simple_mode = False
+    if agent_id == "Orchestrator":
+        try:
+            from app.services.orchestrator_preprocessor import orchestrator_preprocessor
+            preprocess_result = await orchestrator_preprocessor.process(
+                content=content,
+                agent=agent,
+                user_id=user_id,
+            )
+            if preprocess_result:
+                if preprocess_result.get("is_simple"):
+                    # Signal to build_prompt: use minimal prompt, no tools
+                    if preprocess_result.get("_no_tools"):
+                        simple_mode = True
+                        logger.info(
+                            "ws orchestrator preprocessor: simple_mode enabled intent=%s session=%s",
+                            preprocess_result.get("intent_type", "?"),
+                            session_id,
+                        )
+                else:
+                    preprocess_context = orchestrator_preprocessor.format_for_prompt(
+                        preprocess_result
+                    )
+                    if preprocess_context:
+                        logger.info(
+                            "ws orchestrator preprocessor: intent=%s sub_tasks=%d session=%s",
+                            preprocess_result.get("intent_type", "?"),
+                            len(preprocess_result.get("sub_tasks", [])),
+                            session_id,
+                        )
+        except Exception:
+            logger.debug("ws orchestrator preprocessor failed", exc_info=True)
+
+    # ── DAG-based execution path ──────────────────────────────────────
+    # When the Orchestrator preprocessor produces a sub-task decomposition
+    # with routing, execute the tasks directly via DAGExecutor instead of
+    # relying on the LLM to serialize invoke_agent calls through the
+    # tool-call loop.  This gives us:
+    #   • True parallelism for independent nodes
+    #   • Real-time node status broadcasts to the frontend
+    #   • Dependency-aware execution order
+    #   • Built-in retry and fallback chains
+    #
+    # Falls through to the standard prompt-based path when:
+    #   - preprocess_result has no sub_tasks (simple/greeting message)
+    #   - DAG construction fails (only 1 node, etc.)
+    #   - Any node lookup fails (agent not found)
+    if agent_id == "Orchestrator" and preprocess_result and not preprocess_result.get("is_simple"):
+        try:
+            dag_config = orchestrator_preprocessor.build_dag_from_preprocess(
+                preprocess_result, content
+            )
+            if dag_config is not None and len(dag_config.nodes) >= 2:
+                # Look up all agents referenced in the DAG
+                dag_agents: dict[str, dict] = {}
+                dag_agent_missing = False
+                for node in dag_config.nodes:
+                    if node.agent not in dag_agents:
+                        row = await lookup_agent(node.agent, user_id)
+                        if row:
+                            dag_agents[node.agent] = row
+                        else:
+                            logger.warning(
+                                "ws orchestrator DAG: agent not found agent=%s — "
+                                "falling through to prompt-based path", node.agent,
+                            )
+                            dag_agent_missing = True
+                            break
+
+                if not dag_agent_missing:
+                    logger.info(
+                        "ws orchestrator DAG: executing %d nodes strategy=%s session=%s",
+                        len(dag_config.nodes), dag_config.execution_strategy, session_id,
+                    )
+
+                    # ── Broadcast task preview ──────────────────────────
+                    _dag_preview_id = str(uuid.uuid4())
+                    _dag_task_items = []
+                    for node in dag_config.nodes:
+                        domain_label = {
+                            "orchestrator": "协调调度", "architect": "架构设计",
+                            "codegen": "代码生成", "review": "代码审查",
+                            "test": "测试验证", "deploy": "部署发布",
+                        }.get(node.domain, node.domain)
+                        _dag_task_items.append({
+                            "id": node.id,
+                            "description": f"{node.agent} ({domain_label}): {node.description}",
+                            "agent": node.agent,
+                            "dependencies": node.dependencies,
+                            "estimatedSeconds": {"low": 20, "medium": 45, "high": 90}.get(
+                                node.estimated_effort, 45
+                            ),
+                        })
+                    await manager.broadcast_task_preview(
+                        session_id, _dag_preview_id, _dag_task_items,
+                        eta_seconds=sum(t.get("estimatedSeconds", 45) for t in _dag_task_items),
+                    )
+
+                    # ── Execute DAG ─────────────────────────────────────
+                    from app.services.dag_executor import DAGExecutor
+
+                    async def _dag_invoke(sid, agent_name, task_content, extra_context=""):
+                        agent_row = dag_agents.get(agent_name)
+                        if not agent_row:
+                            return f"[错误] Agent '{agent_name}' 未在注册表中找到"
+                        full = task_content
+                        if extra_context:
+                            full = f"{extra_context}\n\n{full}"
+                        result = await _invoke_agent(
+                            sid, full, agent_row, user_id, token,
+                            attachments or [],
+                            collab_ctx="",
+                            quote_references=quote_references,
+                        )
+                        return result or ""
+
+                    dag_exec = DAGExecutor(
+                        session_id=session_id,
+                        manager=manager,
+                        invoke_fn=_dag_invoke,
+                        on_node_update=None,
+                    )
+
+                    try:
+                        node_results = await dag_exec.execute(dag_config)
+                    except Exception as dag_exc:
+                        logger.warning("ws orchestrator DAG execution failed: %s", dag_exc)
+
+                    # ── Synthesize results ──────────────────────────────
+                    if not token.cancelled:
+                        synthesis_prompt = (
+                            f"你收到了以下子任务执行结果的汇总。请综合各 Agent 的输出，"
+                            f"生成一个连贯的最终回复给用户。\n\n"
+                            f"## 用户原始问题\n{content}\n\n"
+                            f"## 预处理分析\n{preprocess_context}\n\n"
+                            f"## 子任务执行结果\n\n"
+                        )
+                        for node_id, node_result in node_results.items():
+                            node = next((n for n in dag_config.nodes if n.id == node_id), None)
+                            agent_label = node.agent if node else node_id
+                            synthesis_prompt += (
+                                f"### {agent_label} ({node_id})\n{node_result[:3000]}\n\n"
+                            )
+                        synthesis_prompt += (
+                            "\n请综合以上结果，给出完整、连贯的最终回复。"
+                            "标注每个关键结论的来源 Agent。"
+                        )
+
+                        # Use a lightweight agent for synthesis — the
+                        # Orchestrator itself (without tools) is perfect
+                        synth_agent = agent if agent else await lookup_agent("Orchestrator", user_id)
+                        if synth_agent:
+                            synth_result = await _invoke_agent(
+                                session_id, synthesis_prompt, synth_agent, user_id,
+                                token, attachments or [],
+                                collab_ctx="",
+                                quote_references=quote_references,
+                            )
+                            if synth_result:
+                                return synth_result
+
+                    # If synthesis failed, return a raw summary
+                    raw_summary_parts = ["## 📋 任务执行结果\n"]
+                    for node_id, node_result in node_results.items():
+                        node = next((n for n in dag_config.nodes if n.id == node_id), None)
+                        agent_label = node.agent if node else node_id
+                        raw_summary_parts.append(
+                            f"### {agent_label}\n{node_result[:2000]}\n"
+                        )
+                    summary_text = "\n".join(raw_summary_parts)
+                    # Broadcast as a message
+                    summary_msg_id = str(uuid.uuid4())
+                    await manager.stream_broadcast(
+                        session_id, summary_msg_id, summary_text, is_final=True,
+                        sender=agent_id,
+                    )
+                    return summary_text
+
+        except Exception as dag_setup_exc:
+            logger.warning(
+                "ws orchestrator DAG setup failed — falling through: %s", dag_setup_exc,
+            )
 
     # ── Broadcast "agent_thinking" so the frontend shows a streaming
     #     indicator immediately, even during the tool-call loop phase
@@ -1267,6 +1656,13 @@ async def _invoke_agent(
                     ],
                     "timestamp": now(),
                 },
+            )
+            # ── Stream progress text so the user sees tool activity in the chat ──
+            tool_list = '、'.join(tool_names)
+            await manager.stream_broadcast(
+                session_id, msg_id_for_tools,
+                f"\n\n🔧 正在调用工具：{tool_list} ...\n",
+                is_final=False, sender=agent_id,
             )
             # Also update the thinking indicator to show tool execution phase
             thinking_sent_iterations += 1
@@ -1393,6 +1789,21 @@ async def _invoke_agent(
                     "timestamp": now(),
                 },
             )
+            # ── Stream completion text for tool results ────────────
+            ok_count = sum(1 for tr in tool_results if tr.get("success"))
+            total = len(tool_results)
+            if total > 0:
+                status_text = f"\n✅ 工具执行完成（{ok_count}/{total} 成功）\n"
+                if ok_count < total:
+                    failed_names = [
+                        tr.get("tool_name", "?") for tr in tool_results
+                        if not tr.get("success")
+                    ]
+                    status_text = f"\n⚠️ 工具执行完成（{ok_count}/{total} 成功，失败: {'、'.join(failed_names)}）\n"
+                await manager.stream_broadcast(
+                    session_id, msg_id_for_tools,
+                    status_text, is_final=False, sender=agent_id,
+                )
             # Update thinking: now synthesizing results
             await manager.broadcast(
                 session_id,
@@ -1461,6 +1872,8 @@ async def _invoke_agent(
         attachments, agent=agent, collab_ctx=collab_ctx,
         on_tool_event=_on_tool_event,
         quote_references=quote_references,
+        preprocess_context=preprocess_context,
+        simple_mode=simple_mode,
     )
 
     # Non-streaming fallback
@@ -1471,9 +1884,17 @@ async def _invoke_agent(
             f"<thinking>正在分析中...</thinking>\n\n",
             is_final=False,
         )
+        # For the non-streaming path, prepend preprocess_context to the
+        # content so the LLM still receives the pre-analysis.
+        fallback_content = content
+        if preprocess_context:
+            fallback_content = (
+                f"[系统预处理分析]\n{preprocess_context}\n\n---\n\n"
+                f"[用户原始问题]\n{content}"
+            )
         if agent:
             from app.services.agent_service import call_agent as _call
-            response = await _call(session_id, content, user_id, attachments, agent=agent, collab_ctx=collab_ctx, token=token, on_tool_event=_on_tool_event, quote_references=quote_references)
+            response = await _call(session_id, fallback_content, user_id, attachments, agent=agent, collab_ctx=collab_ctx, token=token, on_tool_event=_on_tool_event, quote_references=quote_references, simple_mode=simple_mode)
         else:
             response = await route_message(session_id, content, sender_override or "user", user_id, attachments, on_tool_event=_on_tool_event)
 
@@ -1491,6 +1912,11 @@ async def _invoke_agent(
         return text
 
     # Streaming path — real SSE chunks from the adapter
+    # ── Close any tool-progress streaming message before starting the
+    #     real response stream (uses a different messageId).
+    await manager.stream_broadcast(
+        session_id, msg_id_for_tools, "", is_final=True, sender=agent_id,
+    )
     message_id = str(uuid.uuid4())
     full_response: list[str] = []
     batch: list[str] = []

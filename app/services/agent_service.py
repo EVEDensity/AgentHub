@@ -15,6 +15,7 @@ from app.db.session import afetch_all, afetch_one, aexecute
 from app.services.adapter_manager import adapter_manager
 from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
+from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
 from app.utils.async_file import aexists, aisdir, aread_text, aiterdir, aread_json
 from app.config import REQUEST_TIMEOUT_SECONDS
@@ -125,17 +126,21 @@ _RUNTIME: dict[str, dict] = {}
 # window, reducing disk I/O while staying fresh enough for cross-session
 # memory.  Invalidation is explicit via _invalidate_memory_cache() when
 # new memories are written (extraction, /memory commands).
-_MEMORY_CACHE: dict[str, Any] = {"context": "", "ts": 0.0, "ttl": 300.0}
-_SESSION_MGR_SINGLETON: Any = None
+_MEMORY_CACHE: dict[str, Any] = {"context": "", "ts": 0.0, "ttl": 300.0, "key": ""}
+_SESSION_MGRS: dict[str, Any] = {}
 
 
-def _get_session_mgr_singleton():
-    """Return a cached SessionMemoryManager — avoids recreating on every message."""
-    global _SESSION_MGR_SINGLETON
-    if _SESSION_MGR_SINGLETON is None:
+def _get_session_mgr_singleton(user_id: str = ""):
+    """Return a cached per-user SessionMemoryManager."""
+    global _SESSION_MGRS
+    uid = user_id or "local-admin"
+    if uid not in _SESSION_MGRS:
+        from app.config import MEMORY_DIR
         from app.services.memory.session_memory import SessionMemoryManager
-        _SESSION_MGR_SINGLETON = SessionMemoryManager()
-    return _SESSION_MGR_SINGLETON
+        from app.services.memory.storage import MemoryStorage
+        user_dir = MEMORY_DIR / "users" / uid
+        _SESSION_MGRS[uid] = SessionMemoryManager(MemoryStorage(user_dir))
+    return _SESSION_MGRS[uid]
 
 # ── Collaboration context for multi-agent communication ──────────────
 # Models how real employees communicate: shared project context,
@@ -609,7 +614,16 @@ async def get_direct_chat_agent(user_id: str | None = None) -> dict:
             logger.info("direct_chat_agent: using configured default agent=%s", agent["agent_id"])
             return agent
 
-    # 2) Fall back to first active model_config as synthetic agent
+    # 2) Prefer Orchestrator — it can intelligently route to CodeGen when needed.
+    #    Using CodeGen directly as the default agent means even non-code tasks
+    #    (greetings, factual queries, architecture discussions) get a code-gen
+    #    response, which confuses users.
+    agent = await lookup_agent("Orchestrator", uid, columns=columns)
+    if agent and agent.get("adapter_type") and agent.get("adapter_type") != "mock":
+        logger.info("direct_chat_agent: using Orchestrator as default")
+        return agent
+
+    # 3) Fall back to first active model_config as synthetic agent
     mc = await afetch_one(
         "SELECT provider,model_name,api_key,base_url FROM model_configs WHERE is_active=1 ORDER BY id ASC LIMIT 1"
     )
@@ -626,10 +640,10 @@ async def get_direct_chat_agent(user_id: str | None = None) -> dict:
             "api_key": mc.get("api_key") or "",
         }
 
-    # 3) Last resort: use Orchestrator
+    # 4) Hard fallback to minimal Orchestrator
     agent = await lookup_agent("Orchestrator", uid, columns=columns)
     if agent:
-        logger.info("direct_chat_agent: falling back to Orchestrator")
+        logger.info("direct_chat_agent: falling back to Orchestrator (mock)")
         return agent
     return {"agent_id": "Orchestrator", "domain": "orchestrator", "adapter_type": "mock", "risk_level": "L2"}
 
@@ -860,6 +874,177 @@ async def _race_models(
     return ("", models[0] if models else {}, None, errors)
 
 
+async def _race_models_streaming(
+    prompt: str,
+    models: list[dict],
+    token: Any,
+    stream_callback,
+    native_tools: list[dict] | None = None,
+) -> tuple[str, dict, Any, list[str]]:
+    """Race models concurrently using real streaming — first byte wins.
+
+    Unlike ``_race_models`` which waits for the FULL response from each
+    model before returning, this function starts ``stream_prompt()`` for
+    each candidate in parallel.  The first model that produces a real
+    text token wins; its entire stream is then fed through
+    *stream_callback* token-by-token so the user sees text immediately.
+
+    Tool-call detection is still performed on the accumulated full text
+    after the stream completes (returned as *result* to the caller).
+
+    Returns ``(full_text, winning_model, adapter, errors)``.
+    """
+    import asyncio as _asyncio
+
+    from app.services.adapter_manager import adapter_manager as _am
+
+    BATCH = 2  # race 2 models at a time
+    errors: list[str] = []
+
+    for batch_start in range(0, len(models), BATCH):
+        batch = models[batch_start:batch_start + BATCH]
+
+        if len(batch) == 1:
+            # Single model — no racing needed, just stream it
+            model = batch[0]
+            if token and token.cancelled:
+                return ("", model, None, errors)
+            adapter = _am.get_adapter(model.get("provider", "mock"))
+            started = time.perf_counter()
+            gathered: list[str] = []
+            try:
+                async for chunk in adapter.stream_prompt(
+                    prompt,
+                    model.get("model_name", "mock"),
+                    decrypt_secret(model.get("api_key", "")),
+                    model.get("base_url", ""),
+                ):
+                    if chunk:
+                        gathered.append(chunk)
+                        await stream_callback(chunk)
+                elapsed = (time.perf_counter() - started) * 1000
+                _update_runtime(model, True, elapsed)
+                logger.info(
+                    "race_stream batch=%d solo: provider=%s model=%s elapsed=%.0fms",
+                    batch_start, model.get("provider"), model.get("model_name"), elapsed,
+                )
+                return ("".join(gathered), model, adapter, errors)
+            except Exception as exc:
+                elapsed = (time.perf_counter() - started) * 1000
+                _update_runtime(model, False, elapsed)
+                errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
+                continue
+
+        # ── Race 2 models concurrently via streaming ──────────────
+        winner_model: dict | None = None
+        winner_adapter: Any | None = None
+        winner_chunks: list[str] = []
+        first_chunk_queue: _asyncio.Queue = _asyncio.Queue()
+        winner_set = False
+
+        async def _stream_one(model: dict):
+            nonlocal winner_set
+            if token and token.cancelled:
+                return
+            adapter = _am.get_adapter(model.get("provider", "mock"))
+            local_chunks: list[str] = []
+            try:
+                async for chunk in adapter.stream_prompt(
+                    prompt,
+                    model.get("model_name", "mock"),
+                    decrypt_secret(model.get("api_key", "")),
+                    model.get("base_url", ""),
+                ):
+                    if token and token.cancelled:
+                        return
+                    if not chunk:
+                        continue
+                    local_chunks.append(chunk)
+                    if not winner_set:
+                        # Signal first-chunk to the racer logic
+                        await first_chunk_queue.put((model, adapter, chunk))
+                        winner_set = True
+                    # After winner is chosen, only the winner keeps streaming
+                    if winner_model is model:
+                        await stream_callback(chunk)
+                # Done streaming — signal completion
+                if winner_model is model:
+                    await first_chunk_queue.put(("_done_", "".join(local_chunks)))
+            except Exception as exc:
+                if not winner_set:
+                    await first_chunk_queue.put(("_error_", model, exc))
+
+        # Map task → model so we can cancel only losers
+        task_model_map: dict[_asyncio.Task, dict] = {}
+        tasks: list[_asyncio.Task] = []
+        for m in batch:
+            t = _asyncio.create_task(_stream_one(m))
+            tasks.append(t)
+            task_model_map[t] = m
+
+        # Wait for the first model to produce a chunk
+        try:
+            msg = await _asyncio.wait_for(first_chunk_queue.get(), timeout=REQUEST_TIMEOUT_SECONDS)
+        except _asyncio.TimeoutError:
+            errors.append("race_stream batch %d timeout" % batch_start)
+            for t in tasks:
+                t.cancel()
+            continue
+
+        if isinstance(msg, tuple) and len(msg) == 3:
+            kind = msg[0]
+            if kind == "_error_":
+                _, err_model, exc = msg
+                errors.append(
+                    f"{err_model.get('provider')}/{err_model.get('model_name')}: {exc}"
+                )
+                logger.warning(
+                    "race_stream batch=%d first-model-error: provider=%s model=%s error=%s",
+                    batch_start, err_model.get("provider"), err_model.get("model_name"), exc,
+                )
+                for t in tasks:
+                    t.cancel()
+                continue  # try next batch
+
+            # First chunk from a model — this is our winner
+            winner_model, winner_adapter, first_chunk = msg
+            # Push the first chunk through the callback
+            await stream_callback(first_chunk)
+            winner_chunks.append(first_chunk)
+            logger.info(
+                "race_stream batch=%d winner: provider=%s model=%s",
+                batch_start, winner_model.get("provider"), winner_model.get("model_name"),
+            )
+
+            # Cancel only the LOSER tasks — the winner keeps streaming
+            for t in tasks:
+                if not t.done() and task_model_map[t] is not winner_model:
+                    t.cancel()
+
+            # Drain the winner's remaining chunks and done signal
+            try:
+                while True:
+                    finish_msg = await _asyncio.wait_for(
+                        first_chunk_queue.get(), timeout=REQUEST_TIMEOUT_SECONDS,
+                    )
+                    if isinstance(finish_msg, tuple) and finish_msg[0] == "_done_":
+                        full_text = finish_msg[1]
+                        elapsed = (time.perf_counter() - time.perf_counter()) * 1000  # approx
+                        return (full_text, winner_model, winner_adapter, errors)
+            except _asyncio.TimeoutError:
+                pass
+
+            # If we got here, done signal didn't arrive — use what we have
+            full_text = "".join(winner_chunks)
+            return (full_text, winner_model, winner_adapter, errors)
+
+        # Shouldn't get here — try next batch
+        for t in tasks:
+            t.cancel()
+
+    return ("", models[0] if models else {}, None, errors)
+
+
 async def save_message(
     session_id: str,
     sender: str,
@@ -890,6 +1075,10 @@ async def save_message(
     )
     await aexecute("UPDATE sessions SET last_message_at=$1 WHERE id=$2", ts, session_id)
 
+    # Invalidate the conversation history cache so the next prompt build
+    # picks up the newly saved message.
+    prompt_cache.invalidate_history(session_id)
+
 
 async def list_messages(session_id: str) -> list[dict]:
     items = await afetch_all(
@@ -901,7 +1090,7 @@ async def list_messages(session_id: str) -> list[dict]:
     return items
 
 
-async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "", token: Any = None, on_tool_event: Any = None, quote_references: list[dict[str, Any]] | None = None) -> dict:
+async def call_agent(session_id: str, content: str, user_id: str, attachments: list[dict[str, Any]] | None = None, agent: dict | None = None, collab_ctx: str = "", token: Any = None, on_tool_event: Any = None, quote_references: list[dict[str, Any]] | None = None, simple_mode: bool = False) -> dict:
     if agent is None:
         agent = await resolve_agent(content)
     domain = agent["domain"]
@@ -923,7 +1112,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     )
     models = choose_models(await candidate_models_for_role(agent["agent_id"], user_id))
     history = await _build_conversation_history(session_id)
-    memory_ctx = await _build_memory_context()
+    memory_ctx = await _build_memory_context(user_id=user_id, session_id=session_id)
 
     # Use tool-enabled call loop (handles tool detection, execution, synthesis)
     result, usage, selected = await _run_tool_call_loop(
@@ -931,6 +1120,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         models, history, memory_ctx, collab_ctx, token=token,
         streaming_executor=_get_streaming_executor(),
         on_tool_event=on_tool_event,
+        simple_mode=simple_mode,
     )
 
     content_out = normalize_agent_output(agent["agent_id"], result, content)
@@ -981,6 +1171,8 @@ async def stream_agent_response(
     collab_ctx: str = "",
     on_tool_event: Any = None,
     quote_references: list[dict[str, Any]] | None = None,
+    preprocess_context: str = "",
+    simple_mode: bool = False,
 ) -> AsyncGenerator[str, None] | None:
     """Stream an agent response with full tool-calling support.
 
@@ -1017,6 +1209,11 @@ async def stream_agent_response(
         # WebSocket layer immediately — true token-by-token streaming.
         import asyncio as _asyncio
 
+        t_start = time.perf_counter()
+        first_chunk_sent = False
+        ttfc_ms = 0.0
+        chunk_count = 0
+
         chunk_queue: _asyncio.Queue = _asyncio.Queue()
         _SENTINEL = object()
 
@@ -1037,6 +1234,8 @@ async def stream_agent_response(
                     collab_ctx, token=token, on_tool_event=on_tool_event,
                     streaming_executor=_get_streaming_executor(),
                     stream_callback=on_chunk,
+                    preprocess_context=preprocess_context,
+                    simple_mode=simple_mode,
                 )
                 return ("ok", r, u, s)
             except Exception as _loop_exc:
@@ -1062,7 +1261,11 @@ async def stream_agent_response(
                     loop_task.cancel()
                     return
                 if chunk:
+                    if not first_chunk_sent:
+                        ttfc_ms = (time.perf_counter() - t_start) * 1000
+                        first_chunk_sent = True
                     full_text.append(chunk)
+                    chunk_count += 1
                     yield chunk
         finally:
             # Always release per-session filter state so a later
@@ -1088,6 +1291,27 @@ async def stream_agent_response(
         else:
             _, result, usage, selected = loop_result
             content_out = normalize_agent_output(agent["agent_id"], result, content)
+
+        # ── Stream performance metrics ────────────────────────────
+        t_end = time.perf_counter()
+        total_ms = (t_end - t_start) * 1000
+        logger.info(
+            "stream_metrics session=%s agent=%s provider=%s model=%s "
+            "ttfc=%.0fms total=%.0fms chunks=%d len=%d",
+            session_id, agent["agent_id"],
+            selected.get("provider", "?"), selected.get("model_name", "?"),
+            ttfc_ms, total_ms, chunk_count, len(content_out),
+        )
+        try:
+            from app.services.performance_monitor import monitor
+            monitor.record_stream_start()
+            if ttfc_ms > 0:
+                monitor.record_ttft(ttfc_ms)
+            # Record chunk throughput
+            if chunk_count > 0 and total_ms > 0:
+                monitor.record_chunk(len(content_out), total_ms / max(1, chunk_count))
+        except Exception:
+            pass
 
         # ── Persist message & audit (best-effort, non-fatal) ────────
         try:
@@ -1120,7 +1344,7 @@ async def stream_agent_response(
     return stream()
 
 
-async def _build_conversation_history(session_id: str, max_chars: int = 4000) -> str:
+async def _build_conversation_history(session_id: str, max_chars: int = 8000) -> str:
     """Fetch recent messages from this session and format as a transcript.
 
     Gives every agent called in the session full awareness of what was
@@ -1128,17 +1352,25 @@ async def _build_conversation_history(session_id: str, max_chars: int = 4000) ->
 
     Messages are processed newest-first so that the most recent (and most
     relevant) context is always included when the char limit is hit.
-    LIMIT 15 avoids fetching data that will be truncated anyway.
+    LIMIT 25 balances context depth with prompt size.
+
+    Results are cached for 5s per session to avoid redundant DB queries
+    during rapid-fire messages or tool-call loop iterations.
     """
+    cached = prompt_cache.get_history(session_id)
+    if cached is not None:
+        return cached
+
     try:
         rows = await afetch_all(
-            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 15",
+            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 25",
             session_id,
         )
     except Exception:
         return ""
 
     if not rows:
+        prompt_cache.set_history(session_id, "")
         return ""
 
     # Keep DESC order (newest first), build lines until we hit max_chars,
@@ -1147,33 +1379,63 @@ async def _build_conversation_history(session_id: str, max_chars: int = 4000) ->
     total = 0
     for r in rows:
         content = _strip_think_tags(r["content"])
-        # Truncate individual messages to avoid one giant message consuming the budget
-        line = f"{r['sender']}：{content[:800]}"
+        # Truncate individual messages — larger cap to preserve more meaning
+        line = f"{r['sender']}：{content[:1200]}"
         total += len(line)
         lines.append(line)
         if total > max_chars:
             break
 
     lines.reverse()  # chronological order for readability
-    return "【会话历史记录 — 以下是本会话中之前的对话内容，请基于此上下文理解用户的后续问题】\n" + "\n".join(lines)
+    result = "【会话历史记录 — 以下是本会话中之前的对话内容，请基于此上下文理解用户的后续问题】\n" + "\n".join(lines)
+    prompt_cache.set_history(session_id, result)
+    return result
 
 
-async def _build_memory_context(max_chars: int = 3000, force: bool = False) -> str:
+async def _build_memory_context(user_id: str = "", session_id: str = "", max_chars: int = 3000, force: bool = False) -> str:
     """Load persistent memories and global summary and format as a prompt block.
 
     Cached with a TTL to avoid scanning 200+ files from disk on every
     single chat message. Call with force=True to bypass the cache (e.g. after
     memory extraction completes).
+
+    When *user_id* is provided, memories are loaded from the user's private
+    directory (``MEMORY_DIR/users/{user_id}/``).  When *session_id* is also
+    provided, the current session's summary is included.
     """
+    uid = user_id or "local-admin"
+    cache_key = f"{uid}:{session_id}" if session_id else uid
     now_ts = time.monotonic()
-    if not force and _MEMORY_CACHE["context"] and (now_ts - _MEMORY_CACHE["ts"]) < _MEMORY_CACHE["ttl"]:
+    if not force and _MEMORY_CACHE.get("key") == cache_key and _MEMORY_CACHE["context"] and (now_ts - _MEMORY_CACHE["ts"]) < _MEMORY_CACHE["ttl"]:
         return _MEMORY_CACHE["context"]
+
+    from app.config import MEMORY_DIR
+    from app.services.memory.storage import MemoryStorage
+    from app.services.memory.scanner import MemoryScanner
+    from app.services.memory.session_memory import SessionMemoryManager
+
+    user_memory_dir = MEMORY_DIR / "users" / uid
+    storage = MemoryStorage(user_memory_dir)
+    scanner = MemoryScanner(storage)
+    session_mgr = SessionMemoryManager(storage)
 
     sections: list[str] = []
 
+    # ── Current session summary ────────────────────────────────────
+    if session_id:
+        try:
+            sess_summary = await session_mgr.get_session_summary(session_id)
+            if sess_summary:
+                sections.append(
+                    "【当前会话摘要】\n"
+                    "以下是对本会话之前对话内容的总结：\n\n"
+                    f"{sess_summary}"
+                )
+        except Exception:
+            pass
+
     # ── Global summary (cross-session aggregated) ─────────────────
     try:
-        session_mgr = _get_session_mgr_singleton()
         global_summary = await session_mgr.get_global_summary()
         if global_summary:
             sections.append(
@@ -1186,12 +1448,6 @@ async def _build_memory_context(max_chars: int = 3000, force: bool = False) -> s
 
     # ── File-backed memories ──────────────────────────────────────
     try:
-        from app.config import MEMORY_DIR
-        from app.services.memory.storage import MemoryStorage
-        from app.services.memory.scanner import MemoryScanner
-
-        storage = MemoryStorage(MEMORY_DIR)
-        scanner = MemoryScanner(storage)
         headers = await scanner.scan(max_files=200)
         if headers:
             lines: list[str] = []
@@ -1219,11 +1475,13 @@ async def _build_memory_context(max_chars: int = 3000, force: bool = False) -> s
     if not sections:
         _MEMORY_CACHE["context"] = ""
         _MEMORY_CACHE["ts"] = now_ts
+        _MEMORY_CACHE["key"] = cache_key
         return ""
 
     result = "\n\n".join(sections) + "\n─── 以上为持久化记忆，以下是会话上下文 ───\n"
     _MEMORY_CACHE["context"] = result
     _MEMORY_CACHE["ts"] = now_ts
+    _MEMORY_CACHE["key"] = cache_key
     return result
 
 
@@ -1236,9 +1494,13 @@ def _invalidate_memory_cache() -> None:
 async def _load_settings() -> dict[str, Any]:
     """Load general settings from the shared settings.json file.
 
-    Returns a dict with defaults for all known keys.  This is a lightweight
-    read-every-call so settings changes take effect without restart.
+    Returns a dict with defaults for all known keys.  Results are cached
+    for 30s to avoid reading the file from disk on every prompt build.
     """
+    cached = prompt_cache.get_settings()
+    if cached is not None:
+        return cached
+
     defaults: dict[str, Any] = {
         "theme": "warm",
         "lang": "zh",
@@ -1261,6 +1523,8 @@ async def _load_settings() -> dict[str, Any]:
                         defaults[k] = val
     except Exception:
         pass
+
+    prompt_cache.set_settings(defaults)
     return defaults
 
 
@@ -1323,20 +1587,31 @@ def _build_tool_section(agent_id: str = "", available_tools: list[str] | None = 
     """Build the tool-calling prompt section for injection into the agent prompt.
 
     Returns empty string if no tools are registered or tools are disabled.
+
+    Results are cached for the process lifetime — tool definitions only
+    change when the server restarts (which clears the in-process cache).
     """
+    tools_key = tuple(sorted(available_tools)) if available_tools else None
+    cached = prompt_cache.get_tool_section(agent_id, tools_key)
+    if cached is not None:
+        return cached
+
     from app.services.tool_registry import tool_registry
 
     tool_defs = tool_registry.build_prompt_section(available_tools)
     if not tool_defs:
+        prompt_cache.set_tool_section(agent_id, tools_key, "")
         return ""
 
     instructions = tool_registry.build_calling_instructions()
-    return "\n\n" + tool_defs + "\n\n" + instructions
+    result = "\n\n" + tool_defs + "\n\n" + instructions
+    prompt_cache.set_tool_section(agent_id, tools_key, result)
+    return result
 
 
 
 
-async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None, model_provider: str = "", model_name: str = "") -> str:
+async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None, model_provider: str = "", model_name: str = "", preprocess_context: str = "") -> str:
     # ── Shared session context (ALL agents see this FIRST) ──────────
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
@@ -1396,6 +1671,37 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         "4. 仅使用原生 Markdown，不插入 HTML、自定义标签\n"
     ) if not role_prompt else ""
 
+    # Mermaid diagram syntax rules — LLMs frequently generate subtly broken
+    # Mermaid that causes "Syntax error in text" at render time.  These rules
+    # encode the most common failure patterns observed in production.
+    mermaid_rules = (
+        "【Mermaid 图表语法规范 — 必须严格遵守】当输出 flowchart/sequenceDiagram/classDiagram 等 Mermaid 图表时：\n"
+        "1. 图表类型：第一行必须为 flowchart TD/LR（不用已弃用的 graph）\n"
+        "2. 节点ID（关键！）：只能使用英文字母+数字+下划线，绝对禁止中文、空格、连字符、点号\n"
+        "   正确: A[用户登录页面] 或 start[开始]\n"
+        "   错误: 用户登录[用户登录] / user-login[登录] / 1.start[开始]\n"
+        "3. 标签引号：含中文、空格、标点的标签必须用双引号包裹\n"
+        "   正确: A[\"用户登录 — 步骤1\"]\n"
+        "   错误: A[用户登录 — 步骤1]\n"
+        "4. 箭头：每条连接单独一行，箭头两侧各留一个空格\n"
+        "   正确: A --> B / C -->|\"标签\"| D\n"
+        "   错误: A-->B-->C（链式）\n"
+        "5. subgraph 名称含中文或空格须加引号：subgraph \"用户模块\" ... end\n"
+        "6. 禁止在标签中使用裸 HTML 标签、裸 & 符号（用 &amp; 替代）\n"
+        "7. 代码块内不要出现 ``` 标记（会破坏 Markdown 解析）\n"
+        "8. 节点标签内如有双引号，转义为 &quot;\n"
+        "9. 完整示例（复制此模板修改）：\n"
+        "```mermaid\n"
+        "flowchart TD\n"
+        "    A[\"开始\"] --> B[\"处理数据\"]\n"
+        "    B --> C{\"条件成立？\"}\n"
+        "    C -->|\"是\"| D[\"执行操作A\"]\n"
+        "    C -->|\"否\"| E[\"执行操作B\"]\n"
+        "    D --> F[\"结束\"]\n"
+        "    E --> F\n"
+        "```\n"
+    )
+
     thinking_rule = ""
     if not settings.get("thinking", True):
         thinking_rule = "【思考模式已关闭】直接给出最终答案，不要进行任何思考、推理或分析。\n"
@@ -1415,6 +1721,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"{reasoning_instr}"
             f"{thinking_rule}"
             f"{code_format_rules}\n"
+            f"{mermaid_rules}\n"
             f"{output_rules}\n"
             "# 代码生成规则\n"
             "当且仅当用户明确请求生成代码、创建文件、修改代码、实现具体功能时，回复使用 JSON 格式：\n"
@@ -1428,35 +1735,85 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         )
 
     if agent_id == "Orchestrator":
+        # ── Simple mode: tools disabled by preprocessor ────────────────
+        # When the preprocessor determines the message is a simple greeting
+        # or short non-technical message, use a minimal prompt — no tools,
+        # no workflow, no task decomposition.  This prevents the LLM from
+        # getting confused by aggressive tool-calling instructions and making
+        # chaotic tool calls for trivial messages like "你好".
+        if not tools_enabled:
+            return (
+                f"{date_context}"
+                f"你是 AgentHub 平台中的 AI 助手。\n\n"
+                f"{actual_model_line}"
+                f"{reply_lang_instr}"
+                f"【输出规则】请直接友好回复用户。如果是简单问候或闲聊，回复简洁明了（20字以内）。"
+                f"不要调用任何工具，不要拆解任务，不要输出任何任务计划。\n\n"
+                f"{shared_context}"
+                f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+            )
+
+        # ── Preprocess block: system already analyzed the question ──
+        preprocess_block = ""
+        workflow_section = ""
+        if preprocess_context:
+            preprocess_block = (
+                "# 系统预处理分析\n\n"
+                "以下是对用户问题的预处理分析，由系统的需求分析模块生成。"
+                "请基于此分析**直接执行任务**，无需重复拆解，无需等待用户确认：\n\n"
+                f"{preprocess_context}\n\n"
+                "---\n\n"
+            )
+            workflow_section = (
+                "# 工作流程（基于预处理分析 — 直接执行，无需确认）\n\n"
+                "## 第一步：直接委派执行\n"
+                "1. 根据预处理分析中的子任务拆解和 Agent 调用顺序，**立即使用 invoke_agent 工具**调用专业 Agent。\n"
+                "2. 不要先输出计划再等确认——直接调用工具开始执行。\n"
+                "3. 有依赖关系的 Agent 串行调用；无依赖的用 invoke_agents_parallel 并行调用。\n\n"
+                "## 第二步：汇总与仲裁\n"
+                "4. 收集所有 Agent 的输出，检查是否存在冲突或矛盾。\n"
+                "5. 如果 Review 提出了修改建议而 CodeGen 未处理 → 重新调用 CodeGen 修复。\n"
+                "6. 如果 Test 发现了 Bug → 将测试结果反馈给 CodeGen 修复。\n"
+                "7. 综合所有 Agent 的输出，生成最终的用户回复。\n"
+                "8. 标注每个结论来自哪个 Agent。\n\n"
+            )
+        else:
+            # ── No preprocess: concise 3-step workflow ────────────────
+            # The LLM needs to judge complexity itself, so we give it a
+            # compact decision tree rather than verbose step-by-step.
+            workflow_section = (
+                "# 工作流程\n"
+                "1. **判断**: 简单问题(问候/闲聊/知识问答)直接回复，不调工具。\n"
+                "2. **委派**: 复杂任务**立即**调用 invoke_agent 委派给专业 Agent：\n"
+                "   Architect(架构) | CodeGen(代码) | Review(审查) | Test(测试) | Deploy(部署)\n"
+                "   无依赖→invoke_agents_parallel 并行；有依赖→串行。\n"
+                "3. **汇总**: 收集结果综合回复，冲突时仲裁，失败时重试→替代Agent→手动建议。\n"
+                "   标注结论来源（如\"根据 Architect 分析...\"）。\n\n"
+            )
+
+        # ── Slim identity + principles (merged from two sections) ─────
+        orchestrator_identity = (
+            "你是 AgentHub 调度中心，通过 invoke_agent 工具实际调用 "
+            "Architect/CodeGen/Review/Test/Deploy 等专业 Agent 执行任务。\n\n"
+            "原则: 简单直接回 | 复杂直接调 Agent(不等确认) | 冲突仲裁 | 失败降级(重试→替代→手建) | 标注来源\n\n"
+        )
+
         return (
             f"{memory_context}"
             f"{shared_context}"
             f"{date_context}"
-            f"你是 AgentHub 平台中的 Orchestrator（元调度器），负责接收用户意图、拆解任务并分派给领域 Agent。\n\n"
+            f"{orchestrator_identity}"
             f"{actual_model_line}"
             f"{reply_lang_instr}"
             f"{reasoning_instr}"
             f"{thinking_rule}"
-            "# Orchestrator 工作流程\n\n"
-            "## 第一步：理解并优化用户问题\n"
-            "1. 仔细阅读用户的问题，理解其真实意图。\n"
-            "2. 将用户的问题用更清晰、结构化、专业化的语言重述一遍，确保其他 AI Agent 能够准确理解。\n"
-            "3. 如果问题模糊或不完整，先向用户询问澄清，不要擅自猜测。\n\n"
-            "## 第二步：任务拆解与 Agent 分派\n"
-            "4. 将复杂需求拆解为 2-5 个独立的子任务，明确每个子任务的目标和交付物。\n"
-            "5. 为每个子任务指定最合适的 Agent（Architect→架构设计, CodeGen→代码生成, "
-            "Review→代码审查, Test→测试验证, Deploy→部署发布）。\n"
-            "6. 确定子任务之间的依赖关系（哪些可以先做，哪些需要等待前置任务完成）。\n"
-            "7. 用简洁的列表格式输出任务计划，让用户一目了然。\n\n"
-            "## 第三步：等待用户确认\n"
-            "8. 在任务计划输出后，明确提示用户：请确认是否执行此计划。\n"
-            "9. 只有用户明确确认后，才开始调用工具或分派任务给其他 Agent。\n"
-            "10. 如果用户要求修改计划，根据反馈调整后再请求确认。\n\n"
-            "## 重要约束\n"
-            "- 你是调度者，不是执行者 — 优先将具体工作分派给领域 Agent，而不是自己完成。\n"
-            "- 对于简单问候或闲聊，直接简短回复即可（20 字以内），不要拆解任务。\n"
-            "- 只有在用户确认任务计划后才开始实际执行。\n"
-            "- 使用工具前确保所有必填参数齐全，缺失参数时先向用户询问。\n"
+            f"{preprocess_block}"
+            f"{workflow_section}"
+            f"{mermaid_rules}\n"
+            "# 约束\n"
+            "- 简单问候/闲聊直接回复（≤20字），**严禁调工具**。\n"
+            "- 不先展示计划等确认，直接行动。\n"
+            "- 每轮最多 3 个工具调用，超过 3 轮必须给出最终回复。\n"
             + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
             + f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
@@ -1472,6 +1829,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"{reply_lang_instr}"
             f"{reasoning_instr}"
             f"{thinking_rule}"
+            f"{mermaid_rules}\n"
             "# Architect 工作原则\n\n"
             "## 你的职责\n"
             "1. 分析用户需求，理解技术上下文和项目现状。\n"
@@ -1501,6 +1859,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         f"{reasoning_instr}"
         f"{thinking_rule}"
         f"{code_format_rules}\n"
+        f"{mermaid_rules}\n"
         f"{output_rules}\n"
         + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
         + f"{collab_section}"
@@ -1628,6 +1987,8 @@ async def _run_tool_call_loop(
     on_tool_event: Any = None,
     streaming_executor: Any = None,
     stream_callback: Any = None,
+    preprocess_context: str = "",
+    simple_mode: bool = False,
 ) -> tuple[str, dict, dict]:
     """Execute the tool-calling loop for a single user message.
 
@@ -1649,6 +2010,23 @@ async def _run_tool_call_loop(
     conversation: list[dict] = [{"role": "user", "content": llm_input}]
     available_tools = await _get_agent_tools(agent["agent_id"])
 
+    # ── Set tool execution context for agent-invocation tools ─────────
+    # invoke_agent / invoke_agents_parallel need session context to look
+    # up agents and save messages.  We set contextvars before the loop
+    # so every tool handler can access the current session params.
+    from app.services.tools.agent_tools import set_tool_context
+
+    set_tool_context(
+        session_id=session_id,
+        user_id=user_id,
+        token=token,
+        on_tool_event=on_tool_event,
+    )
+
+    # Also set session context for session-scoped tools (artifact, conversation)
+    from app.services.tools.session_tools import set_session_tool_context as _set_sess_ctx
+    _set_sess_ctx(session_id)
+
     LOOP_TIMEOUT = 1800  # 30-minute overall safety cap (was 180s — too short for complex generation)
 
     all_tool_names = tool_registry.list_names()
@@ -1663,8 +2041,23 @@ async def _run_tool_call_loop(
     selected = models[0] if models else {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
     adapter = None
 
+    # ── System prefix cache key for this tool-call loop ────────────
+    # The system prefix (everything before "符号消息:") is identical
+    # across all iterations.  We build it once on iteration 0 and
+    # reuse on iterations 1-4, appending only the dynamic conversation
+    # content.  This saves ~3-6KB of repeated string construction per
+    # iteration.
+    _loop_prefix_key = prompt_cache.make_prefix_key(
+        agent["agent_id"], domain, not simple_mode,
+        tuple(sorted(available_tools)) if available_tools else None,
+        session_id, preprocess_context,
+        models[0].get("provider", "") if models else "",
+        models[0].get("model_name", "") if models else "",
+    )
+    _loop_prefix_cached: str | None = None  # populated on iteration 0
+
     async def _loop_body() -> tuple[str, dict, dict]:
-        nonlocal final_text, usage, selected, adapter
+        nonlocal final_text, usage, selected, adapter, _loop_prefix_cached
         # ── Circuit-breaker counters (reset when a tool succeeds) ────────
         # Three-tier detection:
         #   1. Same-tool-same-error: the deadliest loop — agent calls the same
@@ -1689,14 +2082,39 @@ async def _run_tool_call_loop(
                 intent_type=_intent_from_domain(domain, conv_text),
                 risk_level=agent.get("risk_level", "L1"),
             )
-            prompt = await build_prompt(
-                agent["agent_id"], domain, conv_text, symbolic,
-                models[0].get("prompt", "") if models else "",
-                collab_ctx, history, memory_ctx,
-                tools_enabled=True, available_tools=available_tools,
-                model_provider=(models[0].get("provider", "") if models else ""),
-                model_name=(models[0].get("model_name", "") if models else ""),
-            )
+
+            # ── Build prompt with system prefix caching ──────────────
+            # The system prefix (role instructions, tool definitions,
+            # memory context, etc.) is typically 3-6KB and identical
+            # across all iterations of the tool-call loop.  We build it
+            # once on iteration 0, cache it, and reuse on iterations
+            # 1-4 — appending only the dynamic conversation content.
+            if _loop_prefix_cached is not None:
+                # Reuse cached system prefix; only rebuild the user suffix
+                collab_suffix = f"\n\n{collab_ctx}" if collab_ctx else ""
+                user_suffix = (
+                    f"{collab_suffix}"
+                    f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n"
+                    f"用户需求: {conv_text}"
+                )
+                prompt = _loop_prefix_cached + user_suffix
+            else:
+                prompt = await build_prompt(
+                    agent["agent_id"], domain, conv_text, symbolic,
+                    models[0].get("prompt", "") if models else "",
+                    collab_ctx, history, memory_ctx,
+                    tools_enabled=not simple_mode, available_tools=available_tools,
+                    model_provider=(models[0].get("provider", "") if models else ""),
+                    model_name=(models[0].get("model_name", "") if models else ""),
+                    preprocess_context=preprocess_context,
+                )
+                # Split and cache the system prefix for subsequent iterations.
+                # The anchor "符号消息:" is present in every build_prompt()
+                # return path (CodeGen, Orchestrator, Architect, General).
+                anchor = "符号消息:"
+                split_idx = prompt.rfind(anchor)
+                if split_idx > 0:
+                    _loop_prefix_cached = prompt[:split_idx]
 
             logger.info(
                 "tool_loop iter=%d: prompt_len=%d has_tool_section=%s",
@@ -1720,7 +2138,58 @@ async def _run_tool_call_loop(
                         len(native_tools),
                     )
 
-            if iteration == 0 and len(models) >= 2:
+            if iteration == 0 and stream_callback and not native_tools:
+                # ── Direct streaming (no tools → stream from best model) ──
+                # When no native function-calling tools are configured,
+                # stream the response directly from the top-ranked model.
+                # We no longer race models for text-only chat because the
+                # latency benefit (~200-500ms) doesn't justify wasting 50%
+                # of API credits on a cancelled concurrent call.
+                model = models[0] if models else {"provider": "mock", "model_name": "mock"}
+                selected = model
+                adapter = adapter_manager.get_adapter(model.get("provider", "mock"))
+                started = time.perf_counter()
+                gathered: list[str] = []
+                try:
+                    async for chunk in adapter.stream_prompt(
+                        prompt,
+                        model.get("model_name", "mock"),
+                        decrypt_secret(model.get("api_key", "")),
+                        model.get("base_url", ""),
+                    ):
+                        if chunk:
+                            gathered.append(chunk)
+                            await stream_callback(chunk)
+                    elapsed = (time.perf_counter() - started) * 1000
+                    _update_runtime(model, True, elapsed)
+                    final_text = "".join(gathered)
+                    logger.info(
+                        "tool_loop iter=%d direct_stream: provider=%s model=%s elapsed=%.0fms len=%d",
+                        iteration, model.get("provider"), model.get("model_name"),
+                        elapsed, len(final_text),
+                    )
+                    break
+                except Exception as exc:
+                    elapsed = (time.perf_counter() - started) * 1000
+                    _update_runtime(model, False, elapsed)
+                    errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
+                    logger.warning(
+                        "tool_loop iter=%d direct_stream_fail: provider=%s model=%s error=%s",
+                        iteration, model.get("provider"), model.get("model_name"), exc,
+                    )
+                    if len(models) > 1:
+                        # Fall through to serial fallback with remaining models
+                        result = ""
+                    else:
+                        final_text = "模型调用失败，已降级为本地响应：" + " | ".join(errors[:2])
+                        failed_model_ids = [f"{m.get('provider')}/{m.get('model_name')}" for m in models[:3]]
+                        await _enter_degradation(
+                            session_id, " | ".join(errors[:2]), failed_model_ids,
+                        )
+                        asyncio.create_task(_schedule_recovery_check(session_id))
+                        break
+
+            elif iteration == 0 and len(models) >= 2:
                 # ── Race top models concurrently (first success wins) ──
                 result, selected, adapter, errors = await _race_models(
                     prompt, models, iteration, native_tools, token,
@@ -1796,6 +2265,21 @@ async def _run_tool_call_loop(
                 if tool_calls:
                     if token and token.cancelled:
                         return "流式响应已被中断。", usage, selected
+
+                    # ── Soft cap: at iteration 5, strongly nudge the LLM ──
+                    #     to synthesize instead of calling more tools.
+                    #     This prevents the "analysis paralysis" pattern where
+                    #     the Orchestrator keeps searching/planning without
+                    #     ever producing a final answer.
+                    if iteration == 5:
+                        conversation.append({
+                            "role": "user",
+                            "content": (
+                                "【系统提示】你已经进行了多轮工具调用。"
+                                "请基于已有结果生成最终回复，不要再调用新工具。"
+                                "如果信息不足，请诚实告知用户当前进展和缺失的部分。"
+                            ),
+                        })
 
                     # Notify frontend
                     if on_tool_event:
@@ -2664,11 +3148,12 @@ def _parse_changed_files_from_diff(diff_text: str) -> list[str]:
 
 
 def _read_file_content(file_path: str) -> str | None:
-    """Read a file's content from the workspace."""
+    """Read a file's content from the user's per-session workspace."""
     from pathlib import Path
-    from app.config import PROJECT_ROOT
+    from app.services.workspace_context import get_workspace_root
     try:
-        full = Path(PROJECT_ROOT) / file_path if not Path(file_path).is_absolute() else Path(file_path)
+        ws_root = get_workspace_root()
+        full = ws_root / file_path if not Path(file_path).is_absolute() else Path(file_path)
         if full.exists() and full.is_file():
             return full.read_text(encoding="utf-8", errors="replace")
     except Exception:

@@ -104,4 +104,41 @@ class AgentRouteService:
         return next((route for route in routes if route.get("isDefault")), None)
 
 
+    async def extract_route_ref(self, content: str) -> tuple[dict[str, Any] | None, str]:
+        """Extract ``#route:name`` / ``#路线:name`` from content and match against routes.
+
+        Returns ``(matched_route, stripped_content)`` where ``matched_route`` is
+        the route dict if a match was found and ``stripped_content`` has the
+        route token removed.  Returns ``(None, content)`` if no match.
+        """
+        import re
+
+        # Match patterns like: #route:标准研发闭环  or  #路线:快速代码生成
+        # Also handles leading/trailing whitespace and full-width chars in names
+        pattern = r'(?:^|\s)(?:#route:|#路线:|@路线:)\s*([^\s]+)'
+        match = re.search(pattern, content)
+        if not match:
+            return None, content
+
+        route_name = match.group(1).strip()
+        routes = await self.list_routes(active_only=True)
+
+        # Exact match first, then case-insensitive
+        matched = None
+        route_name_lower = route_name.lower()
+        for route in routes:
+            if route["name"] == route_name or route["name"].lower() == route_name_lower:
+                matched = route
+                break
+
+        if not matched:
+            return None, content
+
+        # Strip the matched token from content
+        stripped = content[:match.start()] + content[match.end():]
+        stripped = stripped.strip()
+
+        return matched, stripped
+
+
 agent_route_service = AgentRouteService()

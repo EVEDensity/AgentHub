@@ -119,6 +119,9 @@ interface ChatInputProps {
   // ── 自动回复：无@Agent 时是否用默认Agent回复 ──
   autoReply: boolean;
   onAutoReplyChange: (mode: boolean) => void;
+  // ── 观察者模式 ──
+  userRole?: string;
+  memberCount?: number;
 }
 
 const ChatInput = memo(function ChatInput({
@@ -133,7 +136,13 @@ const ChatInput = memo(function ChatInput({
   quoteReferences, onRemoveQuoteReference, onClearAllQuoteReferences,
   execPermission, onExecPermissionChange,
   autoReply, onAutoReplyChange,
+  userRole, memberCount,
 }: ChatInputProps) {
+  // ── Observer mode detection ──────────────────────────────────────
+  // Observers in multi-user sessions (≥2 members) have restricted input:
+  // plain text only — no @mentions, #workflows, or /skills.
+  const isObserverInMultiUser = userRole === 'viewer' && (memberCount ?? 0) > 1;
+
   // Emoji popover state. The panel is positioned via fixed offsets so
   // it always lands above the toolbar, regardless of scroll position.
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -227,6 +236,19 @@ const ChatInput = memo(function ChatInput({
 
   return (
     <footer className="shrink-0 relative border-t border-warm-150 bg-white px-6 py-4">
+      {/* ── Observer-mode indicator ─────────────────────────────── */}
+      {isObserverInMultiUser && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+          <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+            <line x1="1" y1="12" x2="23" y2="12"/>
+          </svg>
+          <span className="font-medium">观察者模式</span>
+          <span className="text-amber-600">— 多人对话中仅允许发送纯文本消息</span>
+        </div>
+      )}
+
       {mentionOpen && mentionTrigger === '@' && (
         <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
           <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
@@ -820,9 +842,16 @@ const ChatInput = memo(function ChatInput({
 
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-warm-500 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600"
-              title="Insert skill / tool"
-              onClick={() => onInsertSkill && filteredSkills[0] && onInsertSkill(filteredSkills[0])}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent transition-colors ${
+                isObserverInMultiUser
+                  ? 'text-warm-300 cursor-not-allowed'
+                  : 'text-warm-500 hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600'
+              }`}
+              title={isObserverInMultiUser ? '观察者模式下不可使用技能' : 'Insert skill / tool'}
+              onClick={() => {
+                if (isObserverInMultiUser) return;
+                onInsertSkill && filteredSkills[0] && onInsertSkill(filteredSkills[0]);
+              }}
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
@@ -864,7 +893,11 @@ const ChatInput = memo(function ChatInput({
             onPaste={handlePaste}
             rows={3}
             className="input-field w-full resize-none"
-            placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : '输入消息，支持@Agent唤起智能体指令'}
+            placeholder={
+              isStreaming ? 'AI is streaming, new message will interrupt current output...'
+                : isObserverInMultiUser ? '观察者模式 — 仅可发送纯文本消息'
+                : '输入消息，支持@Agent唤起智能体指令'
+            }
           />
         </div>
 

@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from app.config import MEMORY_DIR, PROJECT_ROOT
+from app.config import MEMORY_DIR
 from app.utils.async_file import (
     aexists,
     aisfile,
@@ -652,29 +652,31 @@ def normalize_hit(title: Any, url: Any) -> tuple[str, str] | None:
 # ── file_read ─────────────────────────────────────────────────────────
 
 async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int = 500) -> dict[str, Any]:
-    """Read a file from the workspace, returning its content with line numbers."""
-    safe = _safe_path(path, PROJECT_ROOT)
+    """Read a file from the user's per-session workspace."""
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    ws_root = get_workspace_root()
+    safe = resolve_workspace_path(path)
     if safe is None:
-        return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围。工作区: {PROJECT_ROOT}"}
+        return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
 
     if not await aexists(safe):
-        # Try listing similar files as a helpful hint
         parent = safe.parent
         similar: list[str] = []
         try:
             name_lower = safe.name.lower()
             for child in (await aiterdir(parent))[:20]:
                 if await aisfile(child) and name_lower[:4] in child.name.lower():
-                    similar.append(str(child.relative_to(PROJECT_ROOT)))
+                    similar.append(str(child.relative_to(ws_root)))
         except OSError:
             pass
-        hint = f"\n目录 '{parent.relative_to(PROJECT_ROOT)}' 中相似文件: {similar}" if similar else ""
+        hint = f"\n目录 '{parent.relative_to(ws_root)}' 中相似文件: {similar}" if similar else ""
         return {"success": False, "error": f"文件不存在: {path}{hint}"}
 
     if await aisdir(safe):
         try:
             listing = (await aiterdir(safe))[:50]
-            names = [str(p.relative_to(PROJECT_ROOT)) + ("/" if await aisdir(p) else "") for p in listing]
+            names = [str(p.relative_to(ws_root)) + ("/" if await aisdir(p) else "") for p in listing]
             return {
                 "success": True,
                 "result": f"目录 '{path}' 内容 ({len(names)} 项):\n" + "\n".join(names),
@@ -707,7 +709,7 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
             "success": True,
             "result": result_text,
             "metadata": {
-                "path": str(safe.relative_to(PROJECT_ROOT)),
+                "path": str(safe.relative_to(ws_root)),
                 "total_lines": total_lines,
                 "displayed_lines": len(truncated),
                 "size_bytes": size,
@@ -723,14 +725,17 @@ async def file_read_handler(path: str, encoding: str = "utf-8", max_lines: int =
 # ── file_write ────────────────────────────────────────────────────────
 
 async def file_write_handler(path: str, content: str, mode: str = "overwrite") -> dict[str, Any]:
-    """Write content to a file in the workspace.
+    """Write content to a file in the user's per-session workspace.
 
     Args:
-        path: Relative path within PROJECT_ROOT.
+        path: Relative path within the session workspace.
         content: The text content to write.
         mode: "overwrite" (default) replaces the file; "append" adds to the end.
     """
-    safe = _safe_path(path, PROJECT_ROOT)
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    ws_root = get_workspace_root()
+    safe = resolve_workspace_path(path)
     if safe is None:
         return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
 
@@ -754,7 +759,7 @@ async def file_write_handler(path: str, content: str, mode: str = "overwrite") -
             "success": True,
             "result": f"文件 '{path}' {action}成功 ({size} 字节)",
             "metadata": {
-                "path": str(safe.relative_to(PROJECT_ROOT)),
+                "path": str(safe.relative_to(ws_root)),
                 "size_bytes": size,
                 "mode": mode,
             },
@@ -851,6 +856,330 @@ async def _run_subprocess(cmd: list[str], timeout: int, cwd: str) -> dict[str, A
             proc.kill()
             await proc.wait()
         raise subprocess.TimeoutExpired(cmd, timeout)
+
+
+# ── file_search ────────────────────────────────────────────────────────
+
+async def file_search_handler(
+    pattern: str,
+    path: str = ".",
+    glob: str = "*",
+    max_results: int = 30,
+    context_lines: int = 2,
+    ignore_case: bool = True,
+) -> dict[str, Any]:
+    """Search file contents using regex pattern (grep-like).
+
+    Walks the workspace directory tree, filters files by glob pattern,
+    and searches each file's content for matches.  Returns matching lines
+    with file path, line number, and surrounding context.
+
+    Args:
+        pattern: Regex pattern to search for.
+        path: Relative directory path to search (default: workspace root).
+        glob: File glob filter (e.g. ``*.py``, ``*.{ts,tsx}``).
+        max_results: Maximum number of matches to return.
+        context_lines: Lines of context before/after each match.
+        ignore_case: Case-insensitive matching (default True).
+    """
+    import re as _re
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    if not pattern or not pattern.strip():
+        return {"success": False, "error": "搜索模式不能为空"}
+
+    pattern = pattern.strip()
+    ws_root = get_workspace_root()
+    search_path = resolve_workspace_path(path)
+    if search_path is None:
+        return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
+
+    if not await aisdir(search_path):
+        return {"success": False, "error": f"目录不存在: {path}"}
+
+    # Build glob pattern
+    import fnmatch as _fnmatch
+    glob_parts = [g.strip() for g in glob.split(",") if g.strip()]
+
+    # Compile regex
+    try:
+        flags = _re.IGNORECASE if ignore_case else 0
+        regex = _re.compile(pattern, flags)
+    except _re.error as exc:
+        return {"success": False, "error": f"正则表达式无效: {exc}"}
+
+    matches: list[dict[str, Any]] = []
+    scanned_files = 0
+    max_files = 200  # safety limit
+
+    try:
+        for root_dir, dirs, files in _walk_sync(search_path):
+            # Skip hidden dirs
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+
+            for fname in files:
+                if fname.startswith("."):
+                    continue
+                if max_files <= 0:
+                    break
+                max_files -= 1
+
+                # Glob filter
+                if glob_parts and not any(_fnmatch.fnmatch(fname, gp) for gp in glob_parts):
+                    continue
+
+                file_path = Path(root_dir) / fname
+                # Skip binary/large files
+                try:
+                    size = file_path.stat().st_size
+                    if size > 500_000:  # 500KB limit
+                        continue
+                except OSError:
+                    continue
+
+                scanned_files += 1
+                try:
+                    content = file_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+
+                lines = content.split("\n")
+                for i, line in enumerate(lines):
+                    if regex.search(line):
+                        ctx_start = max(0, i - context_lines)
+                        ctx_end = min(len(lines), i + context_lines + 1)
+                        context_block = "\n".join(
+                            f"{j+1}: {lines[j]}" for j in range(ctx_start, ctx_end)
+                        )
+                        matches.append({
+                            "file": str(file_path.relative_to(ws_root)),
+                            "line": i + 1,
+                            "match": line.strip()[:200],
+                            "context": context_block[:800],
+                        })
+                        if len(matches) >= max_results:
+                            break
+                if len(matches) >= max_results:
+                    break
+            if max_files <= 0 or len(matches) >= max_results:
+                break
+    except Exception as exc:
+        logger.exception("file_search walk failed")
+        return {"success": False, "error": f"搜索文件失败: {exc}"}
+
+    return {
+        "success": True,
+        "result": {
+            "pattern": pattern,
+            "path": str(search_path.relative_to(ws_root)),
+            "matches": matches,
+            "total_matches": len(matches),
+            "scanned_files": scanned_files,
+        },
+    }
+
+
+def _walk_sync(root: Path) -> Any:
+    """Synchronous walk wrapper — simple implementation."""
+    import os as _os
+    for dirpath_str, dirnames, filenames in _os.walk(str(root)):
+        dirpath = Path(dirpath_str)
+        yield dirpath, dirnames, filenames
+
+
+# ── file_patch ──────────────────────────────────────────────────────────
+
+async def file_patch_handler(
+    path: str,
+    diff: str,
+) -> dict[str, Any]:
+    """Apply a unified diff patch to a file.
+
+    Supports the standard unified diff format (output from ``diff -u``,
+    ``git diff``, etc.).  Each hunk header ``@@ -a,n +b,m @@`` is parsed
+    and applied to the target file.
+
+    Args:
+        path: Relative path to the file to patch (within workspace).
+        diff: Unified diff text (one or more hunks).
+
+    Returns:
+        Result with patched content preview and change summary.
+    """
+    import re as _re
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    if not path or not path.strip():
+        return {"success": False, "error": "文件路径不能为空"}
+    if not diff or not diff.strip():
+        return {"success": False, "error": "diff 内容不能为空"}
+
+    ws_root = get_workspace_root()
+    safe = resolve_workspace_path(path)
+    if safe is None:
+        return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
+
+    # Read original file
+    if not await aexists(safe):
+        return {"success": False, "error": f"文件不存在: {path}"}
+
+    try:
+        original = await aread_text(safe, encoding="utf-8")
+    except UnicodeDecodeError:
+        return {"success": False, "error": f"文件不是有效的 UTF-8 文本文件"}
+
+    original_lines = original.split("\n")
+
+    # Parse diff hunks
+    hunk_pattern = _re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
+    hunks: list[dict] = []
+    current_hunk = None
+    lines_consumed = 0
+
+    for line in diff.split("\n"):
+        m = hunk_pattern.match(line)
+        if m:
+            if current_hunk:
+                hunks.append(current_hunk)
+            old_start = int(m.group(1))
+            old_count = int(m.group(2)) if m.group(2) else 1
+            new_start = int(m.group(3))
+            new_count = int(m.group(4)) if m.group(4) else 1
+            current_hunk = {
+                "old_start": old_start,
+                "old_count": old_count,
+                "new_start": new_start,
+                "new_count": new_count,
+                "context": m.group(5).strip(),
+                "edits": [],
+            }
+            lines_consumed = 0
+        elif current_hunk is not None:
+            if line.startswith(" ") or line == "" or (not line.startswith(("+", "-"))):
+                # Context line
+                current_hunk["edits"].append(("context", line[1:] if line.startswith(" ") else line))
+                lines_consumed += 1
+            elif line.startswith("-"):
+                current_hunk["edits"].append(("remove", line[1:]))
+            elif line.startswith("+"):
+                current_hunk["edits"].append(("add", line[1:]))
+            # Skip other lines (e.g. "\ No newline at end of file")
+
+    if current_hunk:
+        hunks.append(current_hunk)
+
+    if not hunks:
+        return {"success": False, "error": "无法解析 diff，未找到有效的 hunk 头（@@ 行）"}
+
+    # Apply hunks (in reverse order to preserve line numbers)
+    result_lines = list(original_lines)
+    added = 0
+    removed = 0
+
+    for hunk in reversed(hunks):
+        old_start = hunk["old_start"] - 1  # 0-indexed
+
+        # Calculate how many old lines this hunk covers
+        old_line_count = sum(1 for e in hunk["edits"] if e[0] in ("context", "remove"))
+
+        if old_start > len(result_lines):
+            continue
+
+        # Build replacement lines
+        replacement: list[str] = []
+        for action, text in hunk["edits"]:
+            if action in ("context", "add"):
+                replacement.append(text)
+                if action == "add":
+                    added += 1
+            # "remove" lines are skipped
+            if action == "remove":
+                removed += 1
+
+        # Replace the hunk segment
+        result_lines[old_start:old_start + old_line_count] = replacement
+
+    patched = "\n".join(result_lines)
+
+    # Write the patched file
+    try:
+        await awrite_text(safe, patched, encoding="utf-8")
+    except OSError as exc:
+        return {"success": False, "error": f"写入补丁文件失败: {exc}"}
+
+    # Preview
+    preview = patched[:2000]
+    if len(patched) > 2000:
+        preview += "\n\n... [已截断]"
+
+    return {
+        "success": True,
+        "result": f"补丁应用成功。{added} 行新增，{removed} 行删除。\n\n[文件预览]\n{preview}",
+        "metadata": {
+            "path": str(safe.relative_to(ws_root)),
+            "lines_added": added,
+            "lines_removed": removed,
+            "total_lines": len(result_lines),
+            "total_chars": len(patched),
+        },
+    }
+
+
+# ── memory_save ─────────────────────────────────────────────────────────
+
+async def memory_save_handler(
+    name: str,
+    content: str,
+    type: str = "reference",
+    description: str = "",
+) -> dict[str, Any]:
+    """Save a persistent memory entry for the current user.
+
+    Memories persist across sessions and are searchable via ``memory_search``.
+    Uses the file-based memory storage system (MEMORY.md index + .md files).
+
+    Args:
+        name: Short kebab-case slug for the memory (e.g. ``user-preferences``).
+        content: The memory content (markdown body).
+        type: Memory type — ``user`` | ``feedback`` | ``project`` | ``reference``.
+        description: One-line summary for the MEMORY.md index.
+    """
+    from app.config import MEMORY_DIR
+    from app.services.memory.storage import MemoryStorage
+    from app.services.memory.models import MemoryType
+
+    if not name or not name.strip():
+        return {"success": False, "error": "记忆名称不能为空"}
+    if not content or not content.strip():
+        return {"success": False, "error": "记忆内容不能为空"}
+
+    name = name.strip()
+    valid_types = {"user": MemoryType.USER, "feedback": MemoryType.FEEDBACK,
+                   "project": MemoryType.PROJECT, "reference": MemoryType.REFERENCE}
+    mem_type = valid_types.get(type.strip().lower() if type else "reference", MemoryType.REFERENCE)
+
+    try:
+        storage = MemoryStorage(MEMORY_DIR)
+        doc = await storage.save(
+            name=name,
+            description=description.strip() if description else name,
+            type_=mem_type,
+            body=content.strip(),
+        )
+        return {
+            "success": True,
+            "result": {
+                "name": doc.meta.name,
+                "filename": Path(doc.file_path).name,
+                "type": doc.meta.type.value,
+                "description": doc.meta.description,
+                "updated_at": doc.meta.updated_at,
+                "body_preview": content.strip()[:300],
+            },
+        }
+    except Exception as exc:
+        logger.exception("memory_save failed")
+        return {"success": False, "error": f"保存记忆失败: {exc}"}
 
 
 # ── memory_search ─────────────────────────────────────────────────────

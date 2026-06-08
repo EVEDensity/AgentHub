@@ -74,6 +74,7 @@ class DAGExecutor:
             "dag_executor: starting execution of %d nodes (strategy=%s)",
             dag.total, dag.execution_strategy,
         )
+        self._dag_nodes = dag.nodes  # for progress computation in broadcasts
 
         while not dag.is_complete():
             if self._cancelled:
@@ -257,7 +258,15 @@ class DAGExecutor:
         status: str,
         detail: dict[str, Any] | None = None,
     ) -> None:
-        """Broadcast node status change via WebSocket."""
+        """Broadcast node status change via WebSocket and callback.
+
+        Sends a rich ``task_update`` event to the frontend so the
+        ProgressBubble / DAG visualisation can show real-time status
+        for each node: PENDING → RUNNING → SUCCESS/FAILED.
+
+        Also fires the optional ``on_node_update`` callback for
+        server-side observers (e.g. logging, metrics, DAG re-planning).
+        """
         if self.on_node_update:
             try:
                 await self.on_node_update(node_id, status, detail)
@@ -266,17 +275,50 @@ class DAGExecutor:
 
         if self.manager:
             try:
+                # ── Compute aggregate progress ─────────────────────
+                total = len(self.node_results) + sum(
+                    1 for n in self._dag_nodes if n.status == "PENDING"
+                ) if hasattr(self, '_dag_nodes') else 0
+                completed = sum(
+                    1 for n in self._dag_nodes if n.status == "SUCCESS"
+                ) if hasattr(self, '_dag_nodes') else len(self.node_results)
+                failed = sum(
+                    1 for n in self._dag_nodes if n.status == "FAILED"
+                ) if hasattr(self, '_dag_nodes') else 0
+                running = sum(
+                    1 for n in self._dag_nodes if n.status == "RUNNING"
+                ) if hasattr(self, '_dag_nodes') else 0
+                if total == 0:
+                    total = max(1, completed + failed + running)
+
                 payload: dict[str, Any] = {
                     "event": "task_update",
                     "nodeId": node_id,
                     "status": status,
                     "sessionId": self.session_id,
+                    "progress": {
+                        "completed": completed,
+                        "failed": failed,
+                        "running": running,
+                        "total": total,
+                        "percent": round((completed + failed) / total * 100),
+                    },
                 }
                 if detail:
                     payload["detail"] = detail
+                if node_id in self.node_durations:
+                    payload["durationMs"] = self.node_durations[node_id]
+                if node_id in self.node_retries:
+                    payload["retries"] = self.node_retries[node_id]
                 await self.manager.broadcast(self.session_id, payload)
             except Exception:
                 pass
+
+    # ── Internal: store DAG node list for progress computation ──────
+
+    def _set_dag_nodes(self, nodes: list[Any]) -> None:
+        """Called by execute() to store node references for progress."""
+        self._dag_nodes = nodes
 
 
 class DAGExecutionError(Exception):

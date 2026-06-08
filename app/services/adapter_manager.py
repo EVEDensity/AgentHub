@@ -216,11 +216,19 @@ class BaseAdapter:
         raise NotImplementedError
 
     async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+        """Streaming fallback: chunks the full response for pseudo-streaming.
+
+        Subclasses SHOULD override this with real SSE/NDJSON streaming.
+        This base implementation waits for the full response then yields
+        small chunks so the frontend still sees progressive text.
+        """
         result = await self.execute_prompt(prompt, model, api_key, base_url)
-        chunk_size = max(1, len(result) // 20)
+        # Smaller chunks for faster perceived streaming (was len//20)
+        chunk_size = max(1, min(40, len(result) // 50)) if len(result) > 200 else max(1, len(result) // 20)
         for i in range(0, len(result), chunk_size):
             yield result[i:i + chunk_size]
-            await asyncio.sleep(0)
+            # Pure yield — no asyncio.sleep(0) needed; the caller's
+            # event-loop yield in the stream loop handles fairness.
         yield ""
 
     async def ping(self, model: str = "", api_key: str = "", base_url: str = "") -> str:
@@ -754,12 +762,15 @@ class KimiAdapter(OpenAICompatibleAdapter):
 
 
 class AnthropicAdapter(BaseAdapter):
+    default_model = "claude-sonnet-4-6"
+
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", **kwargs: Any) -> str:
         key = api_key or ANTHROPIC_API_KEY
         if not ENABLE_REAL_LLM or not key:
             return await MockAdapter().execute_prompt(prompt, model)
+        actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com") + "/v1/messages"
-        payload = {"model": model, "max_tokens": 2048, "messages": [{"role": "user", "content": prompt}]}
+        payload = {"model": actual_model, "max_tokens": 32768, "messages": [{"role": "user", "content": prompt}]}
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         response = await _retry_request(
             "POST", url,
@@ -779,6 +790,86 @@ class AnthropicAdapter(BaseAdapter):
             "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or max(1, len(prompt) // 4) + max(1, len(first_block.get("text", "")) // 4),
         }
         return "\n".join(block.get("text", "") for block in content_blocks if isinstance(block, dict) and block.get("type") == "text")
+
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+        """Real SSE streaming via Anthropic Messages Streaming API.
+
+        Uses ``stream: True`` and parses Server-Sent Events (SSE):
+        ``content_block_delta`` → text delta, ``message_delta`` → usage,
+        ``message_stop`` → end of stream.
+        """
+        key = api_key or ANTHROPIC_API_KEY
+        if not ENABLE_REAL_LLM or not key:
+            async for chunk in MockAdapter().stream_prompt(prompt, model):
+                yield chunk
+            return
+
+        actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
+        url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com") + "/v1/messages"
+        payload = {
+            "model": actual_model,
+            "max_tokens": 32768,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+        }
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+        self.last_usage = {}
+        full_text = ""
+
+        client = _get_client()
+        async with client.stream("POST", url, headers=headers, json=payload) as response:
+            if response.status_code >= 400:
+                body = await response.aread()
+                raise LLMAdapterError(body.decode(errors="replace"))
+
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                try:
+                    obj = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = obj.get("type", "")
+
+                if event_type == "content_block_delta":
+                    delta = obj.get("delta", {})
+                    if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            full_text += text
+                            yield text
+
+                elif event_type == "message_delta":
+                    usage = obj.get("usage", {})
+                    if isinstance(usage, dict):
+                        self.last_usage = {
+                            "prompt_tokens": usage.get("input_tokens", 0),
+                            "completion_tokens": usage.get("output_tokens", 0),
+                            "total_tokens": (
+                                usage.get("input_tokens", 0)
+                                + usage.get("output_tokens", 0)
+                            ),
+                        }
+
+                elif event_type == "message_stop":
+                    break
+
+        yield ""  # end-of-stream sentinel
+
+        # Fallback token estimation if no usage was captured
+        if not self.last_usage.get("total_tokens"):
+            self.last_usage = {
+                "prompt_tokens": max(1, len(prompt) // 4),
+                "completion_tokens": max(1, len(full_text) // 4),
+                "total_tokens": max(1, len(prompt) // 4) + max(1, len(full_text) // 4),
+            }
 
     async def ping(self, model: str = "", api_key: str = "", base_url: str = "") -> str:
         """Real connectivity probe — lightweight GET /v1/models, NO mock fallback."""

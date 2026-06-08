@@ -5,12 +5,31 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.config import WORKSPACE_REPO_PATH
+
+def _get_workspace_repo_path() -> Path:
+    """Return the current user+session workspace root for git operations."""
+    from app.services.workspace_context import get_workspace_root
+    return get_workspace_root()
 
 
 class GitService:
-    def __init__(self, repo_path: Path = WORKSPACE_REPO_PATH) -> None:
-        self.repo_path = repo_path
+    """Per-user per-session git operations inside the workspace.
+
+    The repo path is resolved dynamically from the workspace context so
+    each user+session gets an independent git repository.
+    """
+
+    def __init__(self, repo_path: Path | None = None) -> None:
+        self._explicit_path = repo_path
+
+    @property
+    def repo_path(self) -> Path:
+        if self._explicit_path is not None:
+            return self._explicit_path
+        return _get_workspace_repo_path()
+
+    def set_repo_path(self, path: Path) -> None:
+        self._explicit_path = path
 
     def _run(self, args: list[str]) -> str:
         try:

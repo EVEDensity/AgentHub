@@ -40,7 +40,14 @@ const FilePreviewModal = dynamic(() => import('../components/chat/FilePreviewMod
 });
 const FilePreviewPanel = dynamic(() => import('../components/chat/FilePreviewPanel'), {
   ssr: false,
-  loading: () => null,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-white">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+        <span className="text-sm text-warm-400">加载预览面板...</span>
+      </div>
+    </div>
+  ),
 });
 const DagModal = dynamic(() => import('../components/chat/DagModal'), {
   ssr: false,
@@ -197,6 +204,7 @@ export default function AgentHubIM(): JSX.Element {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
+  const tokenRef = useRef<string>(token);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const mentionStartRef = useRef<number>(-1);
   const mentionPanelRef = useRef<HTMLDivElement | null>(null);
@@ -214,13 +222,16 @@ export default function AgentHubIM(): JSX.Element {
   // 也能拿到“此时此刻”真实的 sessionId，而不是上一次渲染的快照。
   const activeSessionIdRef = useRef<string>(sessionId);
   activeSessionIdRef.current = sessionId;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Effects ──────────────────────────────────────────────
 
   useEffect(() => {
     currentSessionRef.current = sessionId;
-  }, [sessionId]);
+    tokenRef.current = token;
+  }, [sessionId, token]);
 
   useEffect(() => {
     const saved = localStorage.getItem('agenthub_token');
@@ -256,36 +267,80 @@ export default function AgentHubIM(): JSX.Element {
       .catch(() => { /* backend off — use localStorage defaults */ });
   }, [token]);
 
+  /** Centralised handler for expired / invalid auth tokens.
+   *  Clears stored credentials, tears down all active connections,
+   *  and returns the UI to the login screen with an explanatory notice. */
+  function handleTokenExpired(): void {
+    // Prevent duplicate logout cascades
+    if (!localStorage.getItem('agenthub_token')) return;
+
+    localStorage.removeItem('agenthub_token');
+    localStorage.removeItem('agenthub_user');
+    // Close every open WebSocket — the token is dead
+    Array.from(wsRef.current.keys()).forEach((sid) => closeWs(sid));
+    Array.from(wsRef.current.keys()).forEach((sid) => clearSession(sid));
+    if (reconnectRef.current) {
+      clearTimeout(reconnectRef.current);
+      reconnectRef.current = null;
+    }
+    streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
+    streamFlushRafRef.current.clear();
+    setToken('');
+    setUser(null);
+    setNotice('登录已过期，请重新登录');
+  }
+
   useEffect(() => {
     if (!token) return;
+    // ── Fetch sessions ──────────────────────────────────────────────
     fetch('/api/chat/sessions', { headers: authHeaders() })
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) {
+          if (r.status === 401) throw new Error('TOKEN_EXPIRED');
+          throw new Error(`HTTP ${r.status}`);
+        }
+        return r.json();
+      })
       .then((data: ChatSession[]) => {
+        if (!Array.isArray(data)) return; // defensive: 401 返回的不是数组
         setSessions(sortSessions(data));
         if (!data.find((s) => s.id === sessionId) && data.length) {
           setSessionId(data[0].id);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if ((err as Error).message === 'TOKEN_EXPIRED') {
+          handleTokenExpired();
+        }
+      });
+    // ── Fetch agents ───────────────────────────────────────────────
     fetch('/api/agent/registry', { headers: authHeaders() })
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: Agent[]) => setAgents(data.length ? data : FALLBACK_AGENTS))
       .catch(() => setAgents(FALLBACK_AGENTS));
+    // ── Fetch workflows ─────────────────────────────────────────────
     fetch('/api/chat/workflows', { headers: authHeaders() })
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: WorkflowSummary[]) => setWorkflows(data))
       .catch(() => {});
+    // ── Fetch skills ────────────────────────────────────────────────
     fetch('/api/skills')
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: { skills: SkillMeta[] }) => setSkills(data.skills || []))
       .catch(() => {});
   }, [token]);
 
   async function reloadMessages(merge = false): Promise<void> {
     const sid = currentSessionRef.current;
+    // Guard: never issue requests with an empty session id — the
+    // resulting double-slash URL (…/sessions//messages) would 404.
+    if (!sid) return;
     try {
-      const res = await fetch(`/api/chat/sessions/${sid}/messages`, { headers: authHeaders() });
-      if (!res.ok) return;
+      const res = await fetch(`/api/chat/sessions/${encodeURIComponent(sid)}/messages`, { headers: authHeaders() });
+      if (!res.ok) {
+        if (res.status === 401) handleTokenExpired();
+        return;
+      }
       const data: Message[] = (await res.json()) as Message[];
       if (merge) {
         updateSessionMessages(sid, (prev) => {
@@ -311,6 +366,21 @@ export default function AgentHubIM(): JSX.Element {
   function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const localToken = typeof window !== 'undefined' ? localStorage.getItem('agenthub_token') : '';
     return localToken ? { ...extra, Authorization: `Bearer ${localToken}` } : extra;
+  }
+
+  /** Fetch wrapper that attaches auth headers and auto-logouts on 401.
+   *  Any component-level API call SHOULD use this instead of raw fetch
+   *  so stale/expired tokens are caught uniformly. */
+  async function fetchAuth(url: string, init: RequestInit = {}): Promise<Response> {
+    const res = await fetch(url, {
+      ...init,
+      headers: { ...authHeaders(), ...(init.headers as Record<string, string> || {}) },
+    });
+    if (res.status === 401) {
+      handleTokenExpired();
+      throw new Error('TOKEN_EXPIRED');
+    }
+    return res;
   }
 
   useEffect(() => {
@@ -464,6 +534,14 @@ export default function AgentHubIM(): JSX.Element {
     // 导致新建/切换会话时连到了旧 sid —— 表现就是 "只能发到固定会话"。
     const sid = targetSid || currentSessionRef.current;
     currentSessionRef.current = sid;
+
+    // Guard: empty session id produces malformed ws://…/ws/ URLs that 404.
+    // Also refuse to connect when the stored token is missing (already
+    // logged out) — this prevents spurious reconnection attempts after
+    // handleTokenExpired() fires.  Use tokenRef to avoid stale-closure
+    // issues when connectWs is called from setTimeout.
+    if (!sid || !tokenRef.current) return;
+
     // eslint-disable-next-line no-console
     if (process.env.NODE_ENV === "development") { console.log("[agenthub] connectWs", { targetSid, finalSid: sid, hasSocket: wsRef.current.has(sid) }); }
     // ★ 关键修复：如果该 session 已有 ws 但已 CLOSED/CLOSING，删掉重建。
@@ -531,8 +609,15 @@ export default function AgentHubIM(): JSX.Element {
       setSessionStreaming(sid, false);
       // 清理该 session 的中断标记
       streamInterruptedAtRef.current.delete(sid);
-      // 仅当用户当前还在这个 session 才重连
-      if (currentSessionRef.current === sid) {
+      // 仅当用户当前还在这个 session 且 token 仍有效才重连
+      // tokenRef 检查防止已过期登出后仍继续无效重连
+      if (currentSessionRef.current === sid && tokenRef.current) {
+        // Cap reconnection attempts to avoid infinite loops on
+        // permanent failures (e.g. expired token, deleted session).
+        if (reconnectAttemptsRef.current >= 10) {
+          setNotice('连接已断开，请刷新页面或重新登录');
+          return;
+        }
         reconnectAttemptsRef.current += 1;
         if (reconnectRef.current) clearTimeout(reconnectRef.current);
         reconnectRef.current = setTimeout(connectWs, _reconnectDelay());
@@ -1163,6 +1248,22 @@ export default function AgentHubIM(): JSX.Element {
   // ── Mention detection ────────────────────────────────────
 
   function detectMention(value: string, cursor: number): void {
+    // ── Observer restriction in multi-user sessions ──────────────────
+    // Only allow plain text — block @mentions, #workflows, /skills
+    // Use refs to avoid stale-closure issues (this function is not a
+    // useCallback, but consistent with the handler guards below).
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    const myRole = currentSession?.myRole || 'viewer';
+    const memberCount = currentSession?.memberCount ?? 0;
+    const isObserverInMultiUser = myRole === 'viewer' && memberCount > 1;
+    if (isObserverInMultiUser) {
+      setMentionOpen(false);
+      setMentionActiveIndex(0);
+      mentionStartRef.current = -1;
+      return;
+    }
+
     const textBefore = value.slice(0, cursor);
     const lastAt = textBefore.lastIndexOf('@');
     const lastHash = textBefore.lastIndexOf('#');
@@ -1247,11 +1348,16 @@ export default function AgentHubIM(): JSX.Element {
 
   const handleCreateSession = useCallback(async () => {
     const name = `Untitled Session ${sessions.length + 1}`;
-    const res = await fetch('/api/chat/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ name }),
-    });
+    let res: Response;
+    try {
+      res = await fetchAuth('/api/chat/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+    } catch {
+      return; // fetchAuth already called handleTokenExpired on 401
+    }
     const data = await res.json();
     if (!res.ok) {
       setNotice(data.detail || 'Create session failed');
@@ -1285,10 +1391,17 @@ export default function AgentHubIM(): JSX.Element {
     const { id } = confirmDelete;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE', headers: authHeaders() });
+      let res: Response;
+      try {
+        res = await fetchAuth(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch {
+        setDeleting(false);
+        return; // fetchAuth already called handleTokenExpired on 401
+      }
       const data = await res.json();
       if (!res.ok) {
         setNotice(data.detail || 'Delete failed');
+        setDeleting(false);
         return;
       }
       // 关闭这个 session 的 WebSocket、清理 Store、清理重连定时器
@@ -1527,6 +1640,11 @@ export default function AgentHubIM(): JSX.Element {
   }, [mentionOpen, mentionTrigger, mentionActiveIndex, filteredAgents, filteredWorkflows, filteredSkills]);
 
   const handleInsertMention = useCallback((agentId: string) => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const mention = `@${agentId} `;
@@ -1554,6 +1672,11 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   const handleInsertAllMentions = useCallback(() => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const mentions = agents.map((a) => `@${a.agentId} `).join('');
@@ -1581,6 +1704,11 @@ export default function AgentHubIM(): JSX.Element {
   }, [agents]);
 
   const handleInsertWorkflow = useCallback((wf: WorkflowSummary) => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const name = `#route:${wf.name}`;
@@ -1608,6 +1736,11 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   const handleInsertSkill = useCallback((skill: SkillMeta) => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const trigger = `/${skill.name} `;
@@ -1882,13 +2015,21 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   // Open workspace file in preview panel (fetched by FilePreviewPanel)
-  const handleOpenWorkspaceFile = useCallback((path: string, content: string, language: string, state: string) => {
+  const handleOpenWorkspaceFile = useCallback((path: string, content: string, language: string, state: string, meta?: Record<string, unknown>) => {
     setPreviewPanelOpen(true);
     setPreviewTabs((prev) => {
       const existing = prev.find((t) => t.path === path && t.kind === 'file');
       if (existing) {
         setActivePreviewTabId(existing.id);
-        return prev.map((t) => (t.id === existing.id ? { ...t, content, language, state: state as WorkspacePreviewTab['state'] } : t));
+        return prev.map((t) => (t.id === existing.id ? {
+          ...t, content, language, state: state as WorkspacePreviewTab['state'],
+          contentType: (meta?.contentType as string) || t.contentType,
+          slideCount: (meta?.slideCount as number) ?? t.slideCount,
+          imageCount: (meta?.imageCount as number) ?? t.imageCount,
+          textLength: (meta?.textLength as number) ?? t.textLength,
+          totalChars: (meta?.totalChars as number) ?? t.totalChars,
+          truncated: (meta?.truncated as boolean) ?? t.truncated,
+        } : t));
       }
       const newTab: WorkspacePreviewTab = {
         id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1897,6 +2038,12 @@ export default function AgentHubIM(): JSX.Element {
         content,
         language,
         state: state as WorkspacePreviewTab['state'],
+        contentType: meta?.contentType as string | undefined,
+        slideCount: meta?.slideCount as number | undefined,
+        imageCount: meta?.imageCount as number | undefined,
+        textLength: meta?.textLength as number | undefined,
+        totalChars: meta?.totalChars as number | undefined,
+        truncated: meta?.truncated as boolean | undefined,
       };
       setActivePreviewTabId(newTab.id);
       return [...prev, newTab];
@@ -1924,8 +2071,10 @@ export default function AgentHubIM(): JSX.Element {
       // 没找到 tab，尝试从工作区 API 拉取
       try {
         const token = localStorage.getItem('agenthub_token') || '';
+        const readParams = new URLSearchParams({ path: ref.path });
+        if (sessionId) readParams.set('session_id', sessionId);
         const resp = await fetch(
-          `/api/files/workspace/read?path=${encodeURIComponent(ref.path)}`,
+          `/api/files/workspace/read?${readParams.toString()}`,
           { headers: token ? { Authorization: `Bearer ${token}` } : {} },
         );
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1933,7 +2082,14 @@ export default function AgentHubIM(): JSX.Element {
         const content = data?.content ?? '';
         const language = data?.language ?? '';
         const state = data?.state ?? 'ok';
-        handleOpenWorkspaceFile(ref.path, content, language, state);
+        handleOpenWorkspaceFile(ref.path, content, language, state, {
+          contentType: data?.contentType,
+          slideCount: data?.slideCount,
+          imageCount: data?.imageCount,
+          textLength: data?.textLength,
+          totalChars: data?.totalChars,
+          truncated: data?.truncated,
+        });
         setPendingScrollRef({ id: ref.id, nonce: Date.now() });
       } catch (err) {
         // 拿不到内容也至少提示一下；不让 console 全是红
@@ -1941,7 +2097,7 @@ export default function AgentHubIM(): JSX.Element {
         setNotice(`无法打开文件: ${ref.path}`);
       }
     },
-    [handleOpenWorkspaceFile, setNotice],
+    [handleOpenWorkspaceFile, setNotice, sessionId],
   );
 
   // ── File upload ──────────────────────────────────────────
@@ -2267,7 +2423,7 @@ export default function AgentHubIM(): JSX.Element {
         bubbleSide="left"
       />
 
-      <main className="flex flex-1 flex-col min-h-0">
+      <main className="flex flex-1 flex-col min-h-0 min-w-0">
         {/* ── Unified Top Bar: Title + Task Controls + UserRoster + Share ── */}
         <header className="border-b border-warm-150 bg-white shrink-0">
           <div className="flex items-stretch">
@@ -2388,6 +2544,8 @@ export default function AgentHubIM(): JSX.Element {
           quoteReferences={quoteReferences}
           onRemoveQuoteReference={handleRemoveQuoteReference}
           onClearAllQuoteReferences={handleClearAllQuoteReferences}
+          userRole={sessions.find((s) => s.id === sessionId)?.myRole}
+          memberCount={sessions.find((s) => s.id === sessionId)?.memberCount}
         />
         <TypingIndicator sessionId={sessionId} />
       </main>
@@ -2425,6 +2583,7 @@ export default function AgentHubIM(): JSX.Element {
               onCloseTab={handleClosePreviewTab}
               onAddReference={handleAddReference}
               onOpenWorkspaceFile={handleOpenWorkspaceFile}
+              sessionId={sessionId}
               references={fileReferences}
               pendingScrollRef={pendingScrollRef}
             />

@@ -288,6 +288,7 @@ export interface ChatSession {
   ownerId?: string;
   visibility?: string;
   myRole?: string;
+  memberCount?: number;
 }
 
 export interface DagState {
@@ -637,9 +638,16 @@ export interface WorkspacePreviewTab {
   language?: string;
   state?: 'loading' | 'ok' | 'binary' | 'too_large' | 'missing' | 'error';
   content?: string;
+  contentType?: string;        // "text" | "html" — for rich document previews
   diffOld?: string;
   diffNew?: string;
   status?: WorkspaceFileStatus;
+  /** PPTX-specific metadata */
+  slideCount?: number;
+  imageCount?: number;
+  textLength?: number;
+  totalChars?: number;
+  truncated?: boolean;
 }
 
 export interface FileReference {

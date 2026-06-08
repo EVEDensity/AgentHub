@@ -244,10 +244,13 @@ const MessageRow = memo(function MessageRow({
   const userId = user?.id || '';
   const userName = (user?.name || '').trim();
   const sender = (msg.sender || '').trim();
-  const isUser = (userId !== '' && msg.userId === userId)
+  const isAi = isAiSender(sender);
+  const isUser = !isAi && (
+    (userId !== '' && msg.userId === userId)
     || sender === 'user'
     || (userName !== '' && sender === userName)
-    || (userName !== '' && sender.toLowerCase() === userName.toLowerCase());
+    || (userName !== '' && sender.toLowerCase() === userName.toLowerCase())
+  );
   const isToolCall = msg.type === 'tool_call' || msg.type === 'tool_result';
   const isCode = msg.type === 'code' || msg.type === 'diff';
   const badge = msg.type || 'text';

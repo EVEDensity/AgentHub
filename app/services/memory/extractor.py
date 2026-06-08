@@ -72,7 +72,7 @@ class MemoryExtractor:
         self._state_path = self._storage.base / ".extraction_state.json"
         self._state: dict[str, Any] = self._load_state()
         # Throttle: min new messages since last extraction
-        self._min_new_messages = int(os.environ.get("AGENTHUB_MEMORY_MIN_MSG", "4"))
+        self._min_new_messages = int(os.environ.get("AGENTHUB_MEMORY_MIN_MSG", "2"))
 
     # ── public API ──────────────────────────────────────────────────
 
@@ -110,25 +110,56 @@ class MemoryExtractor:
             logger.warning("extraction parse failed for session=%s", session_id)
             return 0
 
+        memories = parsed.get("memories", [])
         summary = parsed.get("compressed_summary", "")
+        session_name = await self._get_session_name(session_id)
 
-        # 6. Save ONE session summary file per session, named after the session
+        saved = 0
+
+        # 6. Save individual extracted memories (the core output of extraction)
+        for mem in memories:
+            mem_name = mem.get("name", "").strip()
+            if not mem_name:
+                continue
+            try:
+                mem_type_raw = mem.get("type", "reference")
+                try:
+                    mem_type = MemoryType(mem_type_raw)
+                except ValueError:
+                    mem_type = MemoryType.REFERENCE
+
+                # Check for duplicate by name before saving
+                existing_path = await self._find_by_name(mem_name)
+                if existing_path:
+                    logger.debug("skipping duplicate memory '%s' (already exists)", mem_name)
+                    continue
+
+                await self._storage.save(
+                    name=mem_name,
+                    description=mem.get("description", ""),
+                    type_=mem_type,
+                    body=mem.get("body", ""),
+                )
+                saved += 1
+                logger.info("saved memory '%s' type=%s from session=%s", mem_name, mem_type.value, session_id)
+            except Exception as exc:
+                logger.error("failed to save memory '%s': %s", mem_name, exc)
+
+        # 7. Save session summary as a separate file (prefixed to avoid collision)
         if summary:
-            session_name = await self._get_session_name(session_id)
-            session_filename = sanitize_filename(session_name) if session_name else sanitize_filename(session_id)
+            session_slug = sanitize_filename(session_id)
+            summary_filename = f"_session_{session_slug}"
             try:
                 await self._storage.save(
-                    name=session_name or session_id,
-                    description=f"会话对话总结",
+                    name=f"会话摘要: {session_name or session_id}",
+                    description=f"会话 {session_id} 的对话总结",
                     type_=MemoryType.PROJECT,
                     body=summary,
-                    filename=session_filename,
+                    filename=summary_filename,
                 )
-                saved = 1
+                saved += 1
             except Exception as exc:
                 logger.error("failed to save session summary: %s", exc)
-        else:
-            saved = 0
 
         # 8. Update cursor
         if messages:

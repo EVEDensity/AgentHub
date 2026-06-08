@@ -131,7 +131,6 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // ── Filter state ───────────────────────────────────────────────────
-  const [filterUserId, setFilterUserId] = useState('');
   const [filterAgentId, setFilterAgentId] = useState('');
   const [filterAction, setFilterAction] = useState('');
   const [filterRiskLevel, setFilterRiskLevel] = useState('');
@@ -154,7 +153,6 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
       params.set('pageSize', String(pageSize));
       params.set('sortBy', sortBy);
       params.set('sortOrder', sortOrder);
-      if (filterUserId) params.set('userId', filterUserId);
       if (filterAgentId) params.set('agentId', filterAgentId);
       if (filterAction) params.set('action', filterAction);
       if (filterRiskLevel) params.set('riskLevel', filterRiskLevel);
@@ -174,7 +172,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, sortBy, sortOrder, filterUserId, filterAgentId, filterAction, filterRiskLevel, filterSearch]);
+  }, [page, pageSize, sortBy, sortOrder, filterAgentId, filterAction, filterRiskLevel, filterSearch]);
 
   useEffect(() => {
     void fetchLogs();
@@ -198,7 +196,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
   // Apply immediate filters (dropdowns/selects)
   useEffect(() => {
     setPage(1);
-  }, [filterUserId, filterAgentId, filterAction, filterRiskLevel]);
+  }, [filterAgentId, filterAction, filterRiskLevel]);
 
   // ── Open detail ────────────────────────────────────────────────────
   async function openDetail(log: AuditLog): Promise<void> {
@@ -252,11 +250,10 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
 
   // ── Active filter count ────────────────────────────────────────────
   const activeFilterCount = useMemo(() => {
-    return [filterUserId, filterAgentId, filterAction, filterRiskLevel, filterSearch].filter(Boolean).length;
-  }, [filterUserId, filterAgentId, filterAction, filterRiskLevel, filterSearch]);
+    return [filterAgentId, filterAction, filterRiskLevel, filterSearch].filter(Boolean).length;
+  }, [filterAgentId, filterAction, filterRiskLevel, filterSearch]);
 
   function clearFilters(): void {
-    setFilterUserId('');
     setFilterAgentId('');
     setFilterAction('');
     setFilterRiskLevel('');
@@ -273,7 +270,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
         <div>
           <h2 className="text-[34px] font-semibold leading-tight text-warm-900">审计日志</h2>
           <p className="mt-1 text-sm text-warm-500">
-            记录所有管理操作和敏感事件，支持追溯与审查。
+            仅显示您账号的操作记录。记录所有管理操作和敏感事件，支持追溯与审查。
           </p>
         </div>
         <button className="btn-secondary" onClick={() => fetchLogs()} disabled={loading}>
@@ -341,14 +338,6 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
             </button>
           )}
         </div>
-
-        {/* User ID filter */}
-        <input
-          className="rounded-lg border border-warm-200 bg-warm-50 px-3 py-2 text-sm text-warm-700 outline-none placeholder:text-warm-400 w-[130px] transition-colors focus:border-primary-300 focus:bg-white"
-          placeholder="用户 ID"
-          value={filterUserId}
-          onChange={(e) => setFilterUserId(e.target.value)}
-        />
 
         {/* Agent ID filter */}
         <input

@@ -54,7 +54,8 @@ async def sessions(user: dict = Depends(get_current_user)) -> list[dict]:
                   s.last_message_at AS "lastMessageAt",
                   s.owner_id AS "ownerId",
                   s.visibility,
-                  COALESCE(sm.role, 'viewer') AS "myRole"
+                  COALESCE(sm.role, 'viewer') AS "myRole",
+                  (SELECT COUNT(*) FROM session_members WHERE session_id = s.id)::int AS "memberCount"
            FROM sessions s
            LEFT JOIN session_members sm ON s.id = sm.session_id AND sm.user_id = $1
            WHERE s.visibility = 'public'
