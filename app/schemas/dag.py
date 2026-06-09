@@ -5,9 +5,9 @@ from pydantic import BaseModel, Field
 
 class DAGNode(BaseModel):
     id: str
-    domain: str
-    agent: str
-    description: str
+    domain: str = ""                  # canvas flow nodes may not have this
+    agent: str = ""                   # canvas flow nodes may not have this
+    description: str = ""             # canvas flow nodes may not have this
     dependencies: list[str] = Field(default_factory=list)
     status: str = "PENDING"
     priority: int = 1                # 1=highest, 3=lowest

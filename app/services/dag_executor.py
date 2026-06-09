@@ -193,11 +193,16 @@ class DAGExecutor:
         """Execute a single DAG node by calling the assigned agent.
 
         Handles timeout via asyncio.wait_for.
+
+        This method now builds a rich **DAG progress context** that tells
+        each sub-agent exactly where it sits in the pipeline, what has
+        already been done, and what is expected of it — so agents don't
+        work blindly or repeat work that upstream nodes already completed.
         """
         if self.invoke_fn is None:
             raise DAGExecutionError("No invoke_fn configured for DAGExecutor")
 
-        # Build context from dependency results
+        # ── 1. Build dependency output context ────────────────────────
         dep_context = ""
         if node.dependencies and self.node_results:
             dep_parts = []
@@ -209,7 +214,57 @@ class DAGExecutor:
             if dep_parts:
                 dep_context = "\n\n".join(dep_parts)
 
-        # Get collaboration context if available
+        # ── 2. Build DAG progress awareness context ───────────────────
+        # This is the key improvement: sub-agents now know their role in
+        # the larger pipeline — they see completed work, pending work,
+        # and understand that they're one piece of a multi-agent plan.
+        dag_total = len(self._dag_nodes) if hasattr(self, '_dag_nodes') else 0
+        dag_completed = sum(
+            1 for n in self._dag_nodes
+            if n.status == "SUCCESS"
+        ) if hasattr(self, '_dag_nodes') else 0
+
+        # Completed nodes (excluding current)
+        completed_nodes: list[str] = []
+        pending_nodes: list[str] = []
+        failed_nodes: list[str] = []
+        if hasattr(self, '_dag_nodes'):
+            for n in self._dag_nodes:
+                if n.id == node.id:
+                    continue
+                label = f"{n.id} ({n.agent})"
+                if n.status == "SUCCESS":
+                    completed_nodes.append(label)
+                elif n.status == "FAILED":
+                    failed_nodes.append(label)
+                elif n.status == "PENDING":
+                    pending_nodes.append(label)
+
+        dag_position_block = (
+            f"【DAG 流水线进度 — 你的位置】\n"
+            f"你正在执行多 Agent 协同流水线中的一个子任务。以下是当前进度：\n"
+        )
+        dag_position_block += f"- 流水线节点总数: {dag_total}\n"
+        dag_position_block += f"- 已完成: {dag_completed} 个\n"
+        dag_position_block += f"- 你的节点: {node.id}（{node.agent}）\n"
+        if completed_nodes:
+            dag_position_block += f"- 已完成的节点: {', '.join(completed_nodes)}\n"
+        if pending_nodes:
+            dag_position_block += f"- 等待执行的节点（在你完成后启动）: {', '.join(pending_nodes)}\n"
+        if failed_nodes:
+            dag_position_block += f"- ⚠️ 失败的节点: {', '.join(failed_nodes)}\n"
+        if node.dependencies:
+            dep_labels = []
+            for did in node.dependencies:
+                dep_node = next((n for n in self._dag_nodes if n.id == did), None) if hasattr(self, '_dag_nodes') else None
+                dep_labels.append(f"{did}" + (f" ({dep_node.agent})" if dep_node else ""))
+            dag_position_block += f"- 你的上游依赖: {', '.join(dep_labels)}（它们的输出已在下方提供）\n"
+        dag_position_block += (
+            "\n请基于上游节点的输出直接产出你的成果，不要再做上游已做过的工作。"
+            "你的输出将成为下游节点的输入，请确保结构清晰、内容完整。\n"
+        )
+
+        # ── 3. Get collaboration context if available ─────────────────
         collab_context = ""
         if collaboration_ctx:
             try:
@@ -217,14 +272,16 @@ class DAGExecutor:
             except Exception:
                 pass
 
-        # Build the full prompt
-        full_content = node.description
+        # ── 4. Build the full content block ───────────────────────────
+        # Order: DAG position → dependency outputs (if any) → task description
+        full_content = dag_position_block
         if dep_context:
-            full_content = f"{full_content}\n\n## 依赖节点输出\n{dep_context}"
+            full_content += f"\n## 上游依赖节点的输出\n{dep_context}\n"
         if collab_context:
             full_content = f"{collab_context}\n\n{full_content}"
+        full_content += f"\n## 你的任务\n{node.description}"
 
-        # Execute with timeout
+        # ── 5. Execute with timeout ───────────────────────────────────
         start = time.time()
         try:
             result = await asyncio.wait_for(

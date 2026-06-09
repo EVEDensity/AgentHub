@@ -780,6 +780,7 @@ async def _race_models(
     iteration: int,
     native_tools: list[dict] | None,
     token: Any,
+    system_prompt: str = "",
 ) -> tuple[str, dict, Any, list[str]]:
     """Race the top N models concurrently — first successful response wins.
 
@@ -816,6 +817,7 @@ async def _race_models(
                     decrypt_secret(model.get("api_key", "")),
                     model.get("base_url", ""),
                     tools=native_tools if native_tools else None,
+                    system_prompt=system_prompt,
                 )
                 elapsed = (time.perf_counter() - started) * 1000
                 _update_runtime(model, True, elapsed)
@@ -843,6 +845,7 @@ async def _race_models(
                     decrypt_secret(model.get("api_key", "")),
                     model.get("base_url", ""),
                     tools=native_tools if native_tools else None,
+                    system_prompt=system_prompt,
                 )
                 elapsed = (time.perf_counter() - started) * 1000
                 _update_runtime(model, True, elapsed)
@@ -903,6 +906,7 @@ async def _race_models_streaming(
     token: Any,
     stream_callback,
     native_tools: list[dict] | None = None,
+    system_prompt: str = "",
 ) -> tuple[str, dict, Any, list[str]]:
     """Race models concurrently using real streaming — first byte wins.
 
@@ -941,6 +945,7 @@ async def _race_models_streaming(
                     model.get("model_name", "mock"),
                     decrypt_secret(model.get("api_key", "")),
                     model.get("base_url", ""),
+                    system_prompt=system_prompt,
                 ):
                     if chunk:
                         gathered.append(chunk)
@@ -980,6 +985,7 @@ async def _race_models_streaming(
                     model.get("model_name", "mock"),
                     decrypt_secret(model.get("api_key", "")),
                     model.get("base_url", ""),
+                    system_prompt=system_prompt,
                 ):
                     if token and token.cancelled:
                         return
@@ -1449,15 +1455,18 @@ async def _build_conversation_history(session_id: str, max_chars: int = 8000) ->
 
 
 async def _build_memory_context(user_id: str = "", session_id: str = "", max_chars: int = 3000, force: bool = False) -> str:
-    """Load persistent memories and global summary and format as a prompt block.
+    """Load current-session conversation memory and global summary.
 
-    Cached with a TTL to avoid scanning 200+ files from disk on every
-    single chat message. Call with force=True to bypass the cache (e.g. after
-    memory extraction completes).
+    Only loads what is strictly needed for conversational continuity:
+    1. Current session's raw conversation memory (from session_store)
+    2. Current session's LLM-generated summary
+    3. Global cross-session summary
 
-    When *user_id* is provided, memories are loaded from the user's private
-    directory (``MEMORY_DIR/users/{user_id}/``).  When *session_id* is also
-    provided, the current session's summary is included.
+    File-backed memories (MEMORY.md etc.) are deliberately NOT loaded here —
+    they were adding 200+ file I/O operations per message for marginal value.
+    Agents access them on-demand via the ``memory_search`` tool instead.
+
+    Cached with a 60 s TTL.  Call with force=True to bypass the cache.
     """
     uid = user_id or "local-admin"
     cache_key = f"{uid}:{session_id}" if session_id else uid
@@ -1467,24 +1476,38 @@ async def _build_memory_context(user_id: str = "", session_id: str = "", max_cha
 
     from app.config import MEMORY_DIR
     from app.services.memory.storage import MemoryStorage
-    from app.services.memory.scanner import MemoryScanner
     from app.services.memory.session_memory import SessionMemoryManager
+    from app.services.memory.session_store import SessionMemoryStore
 
     user_memory_dir = MEMORY_DIR / "users" / uid
     storage = MemoryStorage(user_memory_dir)
-    scanner = MemoryScanner(storage)
     session_mgr = SessionMemoryManager(storage)
+    session_store = SessionMemoryStore(user_memory_dir)
 
     sections: list[str] = []
 
-    # ── Current session summary ────────────────────────────────────
+    # ── Current session conversation memory (highest priority) ─────
+    if session_id:
+        try:
+            conv = await session_store.get_conversation(
+                session_id, max_chars=max_chars,
+            )
+            if conv and len(conv) > 100:
+                sections.append(
+                    "【当前会话对话记忆】\n"
+                    "以下是你与用户在本会话中的对话记录：\n\n"
+                    f"{conv}"
+                )
+        except Exception:
+            pass
+
+    # ── Current session summary (LLM-generated) ────────────────────
     if session_id:
         try:
             sess_summary = await session_mgr.get_session_summary(session_id)
             if sess_summary:
                 sections.append(
                     "【当前会话摘要】\n"
-                    "以下是对本会话之前对话内容的总结：\n\n"
                     f"{sess_summary}"
                 )
         except Exception:
@@ -1496,34 +1519,7 @@ async def _build_memory_context(user_id: str = "", session_id: str = "", max_cha
         if global_summary:
             sections.append(
                 "【全局记忆 — 跨会话聚合摘要】\n"
-                "以下是对所有会话内容的综合摘要，代表项目的长期积累知识：\n\n"
                 f"{global_summary}"
-            )
-    except Exception:
-        pass
-
-    # ── File-backed memories ──────────────────────────────────────
-    try:
-        headers = await scanner.scan(max_files=200)
-        if headers:
-            lines: list[str] = []
-            total = 0
-            for h in headers:
-                entry = f"- [{h.type.value}] {h.name}: {h.description}"
-                freshness = scanner.freshness_text(h.mtime)
-                if freshness:
-                    entry += f" ({freshness})"
-                total += len(entry)
-                if total > max_chars:
-                    lines.append("- ... [更多记忆已截断]")
-                    break
-                lines.append(entry)
-            sections.append(
-                "【持久化记忆上下文 — 跨会话存储的关键信息】\n"
-                "以下是从项目记忆库中加载的已知信息。请优先参考这些内容，"
-                "避免重复询问用户已经明确过的偏好或背景。\n"
-                "如果记忆标注了\"较旧\"，请结合上下文判断其是否仍然有效。\n\n"
-                + "\n".join(lines)
             )
     except Exception:
         pass
@@ -1534,7 +1530,7 @@ async def _build_memory_context(user_id: str = "", session_id: str = "", max_cha
         _MEMORY_CACHE["key"] = cache_key
         return ""
 
-    result = "\n\n".join(sections) + "\n─── 以上为持久化记忆，以下是会话上下文 ───\n"
+    result = "\n\n".join(sections) + "\n─── 以上为记忆上下文，以下是当前对话 ───\n"
     _MEMORY_CACHE["context"] = result
     _MEMORY_CACHE["ts"] = now_ts
     _MEMORY_CACHE["key"] = cache_key
@@ -1761,9 +1757,13 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         "【工作区文件系统 — 真实落盘能力】\n"
         "你拥有真实的工作区文件系统，可以使用以下工具操作文件：\n"
         "- file_read — 读取文件内容或列出目录\n"
-        "- file_write — 创建/覆写/追加文件到工作区（自动 Git 版本控制）\n"
-        "- file_patch — 增量修改文件（推荐用于大文件的部分修改）\n"
-        "- file_search — 在文件中搜索匹配内容\n"
+        "- file_write — 创建/覆写/追加文件到工作区（自动创建父目录）\n"
+        "- file_write_batch — 批量写入多个文件（推荐用于一次生成多文件代码）\n"
+        "- file_edit — 精确字符串替换编辑文件（新文件自动创建，无需先用 file_write）\n"
+        "- file_patch — 应用 unified diff 补丁（适合增量修改）\n"
+        "- file_search — 在文件中搜索匹配内容（支持正则）\n"
+        "- file_glob — 按通配符模式查找文件（如 **/*.py）\n"
+        "- mkdir — 创建目录（类似 mkdir -p，用于搭建项目结构）\n"
         "- code_execute — 在工作区中执行 Python/Bash 代码\n\n"
         "所有文件操作自动纳入 Git 版本控制，可追溯变更历史。\n"
         "多人协作时，系统自动检测文件冲突并发出警告。\n"
@@ -2008,33 +2008,35 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             f"{shared_context}"
             f"{date_context}"
             f"{workspace_context_block}"
-            f"你是 AgentHub 平台中的 Deploy（部署工程师），负责在项目完成后执行部署、生成预览 URL 和部署状态报告。\n\n"
+            f"你是 AgentHub 平台中的 Deploy（部署工程师），负责执行文件部署、Git 版本记录和生成部署状态报告。\n\n"
             f"{actual_model_line}"
             f"{reply_lang_instr}"
             f"{reasoning_instr}"
             f"{thinking_rule}"
             f"{code_format_rules}\n"
             f"{mermaid_rules}\n"
+            f"{output_rules}\n"
             "# Deploy 工作原则\n\n"
-            "## 你的职责\n"
-            "1. 确认代码已通过 Review 和 Test 验证。\n"
-            "2. 检查部署前置条件：环境配置、依赖项、端口可用性。\n"
-            "3. 生成部署方案和预览 URL。\n\n"
-            "## 部署卡片 — 每完成一个项目部署必须发送部署卡片\n"
+            "## 你的职责（聚焦版）\n"
+            "1. 根据用户需求，直接使用工具完成文件操作（创建/修改/删除）。\n"
+            "2. 完成后用 file_glob 确认目标文件存在，然后输出部署卡片。\n"
+            "3. 不需要检查 Review/Test 状态——用户直接 @Deploy 即表示授权你执行部署。\n\n"
+            "## 部署卡片 — 每完成文件操作必须发送部署卡片\n"
             "当你完成部署任务后，必须在回复中输出以下格式的部署卡片标记，系统会自动将其渲染为可视化卡片：\n"
             "```deploy-card\n"
-            "version: <git commit short hash>\n"
-            "completed-at: <完成时间 ISO 格式>\n"
-            "description: <项目简介/feat 描述>\n"
+            "version: <git commit short hash 或 \"local\">\n"
+            "completed-at: <当前时间>\n"
+            "description: <简短描述本次部署内容>\n"
             "files:\n"
-            "  - <修改文件1>\n"
-            "  - <修改文件2>\n"
+            "  - <涉及的文件路径>\n"
             "```\n"
             "请在卡片标记后紧接着写一段简短的部署汇报（≤50字）。\n\n"
-            "## 约束\n"
-            "- 不部署未经审查的代码。\n"
-            "- 高风险部署需要明确标注风险等级。\n"
-            "- 对于简单问候或闲聊，直接简短回复即可（20 字以内）。\n"
+            "## 严格约束\n"
+            "- **工具调用上限**: 每轮最多 3 个工具调用，最多 3 轮，第 3 轮必须产出最终回复（含部署卡片）。\n"
+            "- **禁止无关探索**: 不要搜索记忆、不要查博客/项目背景、不要跑 code_execute。你的任务就是文件操作+部署卡片。\n"
+            "- **简单场景直接执行**: 用户指定了具体文件名时，直接创建/确认文件，输出部署卡片即可，不需要检查环境、端口、依赖。\n"
+            "- 简单问候或闲聊直接简短回复（≤20字），**严禁调用任何工具**。\n"
+            "- 不确定文件内容时向用户确认，不要自己编造内容。\n"
             + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
             + f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
@@ -2368,6 +2370,7 @@ async def _run_tool_call_loop(
                         model.get("model_name", "mock"),
                         decrypt_secret(model.get("api_key", "")),
                         model.get("base_url", ""),
+                        system_prompt=_loop_prefix_cached or "",
                     ):
                         if chunk:
                             gathered.append(chunk)
@@ -2405,6 +2408,7 @@ async def _run_tool_call_loop(
                 # ── Race top models concurrently (first success wins) ──
                 result, selected, adapter, errors = await _race_models(
                     prompt, models, iteration, native_tools, token,
+                    system_prompt=_loop_prefix_cached or "",
                 )
                 if result:
                     logger.info(
@@ -2427,6 +2431,7 @@ async def _run_tool_call_loop(
                             decrypt_secret(model.get("api_key", "")),
                             model.get("base_url", ""),
                             tools=native_tools if native_tools else None,
+                            system_prompt=_loop_prefix_cached or "",
                         )
                         elapsed = (time.perf_counter() - started) * 1000
                         _update_runtime(model, True, elapsed)
@@ -2478,12 +2483,12 @@ async def _run_tool_call_loop(
                     if token and token.cancelled:
                         return "流式响应已被中断。", usage, selected
 
-                    # ── Soft cap: at iteration 5, strongly nudge the LLM ──
+                    # ── Soft cap: at iteration 12, strongly nudge the LLM ──
                     #     to synthesize instead of calling more tools.
                     #     This prevents the "analysis paralysis" pattern where
                     #     the Orchestrator keeps searching/planning without
                     #     ever producing a final answer.
-                    if iteration == 5:
+                    if iteration == 12:
                         conversation.append({
                             "role": "user",
                             "content": (
@@ -2711,6 +2716,7 @@ async def _run_tool_call_loop(
                     model.get("model_name", "mock"),
                     decrypt_secret(model.get("api_key", "")),
                     model.get("base_url", ""),
+                    system_prompt=_loop_prefix_cached or "",
                 ):
                     if chunk:
                         gathered.append(chunk)

@@ -913,3 +913,179 @@ async def transfer_session_memory(req: SessionTransferRequest, user: dict = Depe
         "source_session_id": req.source_session_id,
         "target_session_id": req.target_session_id,
     }
+
+
+# -- Session Memory Store Endpoints (per-session append-only memory) -----
+
+_session_stores: dict[str, object] = {}  # user_id → SessionMemoryStore
+
+
+def _get_session_store_api(user_id: str = ""):
+    """Return a per-user SessionMemoryStore for API endpoints."""
+    global _session_stores
+    uid = user_id or "local-admin"
+    if uid not in _session_stores:
+        from app.services.memory.session_store import SessionMemoryStore
+        user_dir = MEMORY_DIR / "users" / uid
+        _session_stores[uid] = SessionMemoryStore(user_dir)
+    return _session_stores[uid]
+
+
+class SessionTopicRequest(BaseModel):
+    topic: str = Field("", max_length=256, description="新话题标签")
+
+
+class CreateMemorySessionRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=128, description="会话 ID")
+    session_name: str = Field("", max_length=256, description="会话名称")
+    topic: str = Field("", max_length=256, description="话题标签")
+
+
+@router.get("/session-store")
+async def list_memory_sessions(user: dict = Depends(get_current_user)):
+    """List all memory sessions (from the append-only per-session store)."""
+    uid = user["id"]
+    store = _get_session_store_api(uid)
+    sessions = await store.list_sessions()
+    return {
+        "sessions": [
+            {
+                "session_id": s.session_id,
+                "session_name": s.session_name,
+                "topic": s.topic,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "conversation_size_chars": s.conversation_size_chars,
+                "turn_count": s.turn_count,
+                "is_active": s.is_active,
+            }
+            for s in sessions
+        ],
+        "count": len(sessions),
+    }
+
+
+@router.get("/session-store/{session_id}")
+async def get_memory_session_info(session_id: str, user: dict = Depends(get_current_user)):
+    """Get metadata for a specific memory session."""
+    uid = user["id"]
+    store = _get_session_store_api(uid)
+    info = await store.get_session_info(session_id)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"会话 '{session_id}' 的记忆不存在")
+    return {
+        "session_id": info.session_id,
+        "session_name": info.session_name,
+        "topic": info.topic,
+        "created_at": info.created_at,
+        "updated_at": info.updated_at,
+        "conversation_size_chars": info.conversation_size_chars,
+        "turn_count": info.turn_count,
+        "is_active": info.is_active,
+    }
+
+
+@router.get("/session-store/{session_id}/conversation")
+async def get_memory_session_conversation(
+    session_id: str,
+    max_chars: int = Query(0, description="最大返回字符数（0=全部）"),
+    recent_turns: int = Query(0, description="仅返回最近 N 轮（0=全部）"),
+    user: dict = Depends(get_current_user),
+):
+    """Get the raw conversation memory for a session (append-only store)."""
+    uid = user["id"]
+    store = _get_session_store_api(uid)
+    content = await store.get_conversation(
+        session_id, max_chars=max_chars, recent_turns=recent_turns,
+    )
+    if not content:
+        raise HTTPException(status_code=404, detail=f"会话 '{session_id}' 的对话记忆不存在或为空")
+    info = await store.get_session_info(session_id)
+    return {
+        "session_id": session_id,
+        "content": content,
+        "turn_count": info.turn_count if info else 0,
+        "size_chars": len(content),
+    }
+
+
+@router.post("/session-store/{session_id}/consolidate")
+async def consolidate_memory_session(session_id: str, user: dict = Depends(get_current_user)):
+    """Trigger LLM-based consolidation for a session's conversation memory."""
+    uid = user["id"]
+    store = _get_session_store_api(uid)
+    result = await store.trigger_llm_consolidation(session_id)
+    if result is None:
+        return {"status": "skipped", "message": "会话记忆不足无需整合，或 LLM 不可用"}
+    return {"status": "ok", "session_id": session_id, "size_chars": len(result)}
+
+
+@router.put("/session-store/{session_id}/topic")
+async def update_memory_session_topic(
+    session_id: str, req: SessionTopicRequest, user: dict = Depends(get_current_user),
+):
+    """Update the topic label for a memory session."""
+    uid = user["id"]
+    store = _get_session_store_api(uid)
+    await store.update_topic(session_id, req.topic)
+    return {"status": "ok", "session_id": session_id, "topic": req.topic}
+
+
+@router.post("/session-store")
+async def create_memory_session(
+    req: CreateMemorySessionRequest, user: dict = Depends(get_current_user),
+):
+    """Manually create a new memory session."""
+    uid = user["id"]
+    store = _get_session_store_api(uid)
+    info = await store.create_new_session(
+        req.session_id, req.session_name, req.topic,
+    )
+    return {
+        "status": "ok",
+        "session_id": info.session_id,
+        "session_name": info.session_name,
+        "topic": info.topic,
+        "created_at": info.created_at,
+    }
+
+
+@router.get("/session-store/{session_id}/search")
+async def search_memory_session(
+    session_id: str,
+    q: str = Query(..., min_length=1, description="搜索关键词"),
+    user: dict = Depends(get_current_user),
+):
+    """Search within a specific session's conversation memory."""
+    uid = user["id"]
+    store = _get_session_store_api(uid)
+    content = await store.get_conversation(session_id)
+    if not content:
+        return {"session_id": session_id, "query": q, "matches": [], "count": 0}
+
+    keyword = q.lower()
+    lines = content.split("\n")
+    matches: list[dict] = []
+    for i, line in enumerate(lines):
+        if keyword in line.lower():
+            start = max(0, i - 1)
+            end = min(len(lines), i + 3)
+            snippet = "\n".join(lines[start:end])
+            matches.append({
+                "line_number": i + 1,
+                "snippet": snippet[:300],
+                "turn_match": _extract_turn_from_line(lines, i),
+            })
+
+    matches = matches[:20]
+    return {"session_id": session_id, "query": q, "matches": matches, "count": len(matches)}
+
+
+def _extract_turn_from_line(lines: list[str], line_idx: int) -> str:
+    """Look backward from line_idx to find the turn header."""
+    import re
+    for i in range(line_idx, max(0, line_idx - 50), -1):
+        m = re.match(r"## Turn (\d+) — (.+)", lines[i])
+        if m:
+            return f"Turn {m.group(1)} ({m.group(2)})"
+    return "未知轮次"

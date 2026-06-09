@@ -127,7 +127,8 @@ _PG_DDL = [
     )""",
     """CREATE TABLE IF NOT EXISTS agent_routes (
         id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        user_id TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '',
         trigger_keywords TEXT NOT NULL DEFAULT '[]',
         nodes_json TEXT NOT NULL,
@@ -136,6 +137,7 @@ _PG_DDL = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_routes_name_user ON agent_routes(name, user_id)""",
     """CREATE TABLE IF NOT EXISTS audit_log (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -331,6 +333,7 @@ async def _ainit_postgresql() -> None:
         # ── Step 3: Runtime migrations for existing databases ───────
         await _migrate_agent_registry_pg(conn)
         await _migrate_multi_user_pg(conn)
+        await _migrate_agent_routes_pg(conn)
 
         # ── Step 4: Seed default data ───────────────────────────────
         await _seed_users_pg(conn)
@@ -539,6 +542,40 @@ async def _migrate_multi_user_pg(conn) -> None:
     )
 
 
+async def _migrate_agent_routes_pg(conn) -> None:
+    """Add user_id column to agent_routes for per-user workflow isolation (idempotent)."""
+    # 1. Add user_id column if not exists
+    try:
+        await conn.execute(
+            "ALTER TABLE agent_routes ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT ''"
+        )
+    except Exception as exc:
+        logger.warning("agent_routes user_id migration skipped: %s", exc)
+
+    # 2. Drop old unique constraint on name (single-column)
+    try:
+        await conn.execute("ALTER TABLE agent_routes DROP CONSTRAINT IF EXISTS agent_routes_name_key")
+    except Exception as exc:
+        logger.warning("agent_routes drop name_key skipped: %s", exc)
+
+    # 3. Create composite unique index (name, user_id) if not exists
+    try:
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_routes_name_user ON agent_routes(name, user_id)"
+        )
+    except Exception as exc:
+        logger.warning("agent_routes composite unique index skipped: %s", exc)
+
+    # 4. Backfill existing routes without user_id with the default admin user
+    try:
+        await conn.execute(
+            "UPDATE agent_routes SET user_id=$1 WHERE user_id='' OR user_id IS NULL",
+            DEFAULT_USER_ID,
+        )
+    except Exception as exc:
+        logger.warning("agent_routes backfill user_id skipped: %s", exc)
+
+
 async def _seed_users_pg(conn) -> None:
     await conn.execute(
         "INSERT INTO users(id,name,role,password_hash,created_at) "
@@ -699,13 +736,13 @@ async def _seed_agent_routes_pg(conn) -> None:
     ]
     for name, description, keywords, is_default, nodes in routes:
         existing = await conn.fetchval(
-            "SELECT id FROM agent_routes WHERE name=$1", name,
+            "SELECT id FROM agent_routes WHERE name=$1 AND user_id=$2", name, DEFAULT_USER_ID,
         )
         if existing:
             continue
         await conn.execute(
-            "INSERT INTO agent_routes(name,description,trigger_keywords,nodes_json,"
-            "is_default,active,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-            name, description, json.dumps(keywords, ensure_ascii=False),
+            "INSERT INTO agent_routes(name,user_id,description,trigger_keywords,nodes_json,"
+            "is_default,active,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+            name, DEFAULT_USER_ID, description, json.dumps(keywords, ensure_ascii=False),
             json.dumps(nodes, ensure_ascii=False), is_default, 1, now(), now(),
         )

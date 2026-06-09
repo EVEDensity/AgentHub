@@ -37,7 +37,7 @@ class ToolExecutor:
       - ResultStorage: content budget and truncation
     """
 
-    MAX_ITERATIONS = 10  # safety limit for the tool-call loop (was 5 — too tight for complex multi-step tasks)
+    MAX_ITERATIONS = 20  # safety limit for the tool-call loop (raised from 10 — complex multi-file projects need more write→execute→fix cycles)
 
     def __init__(self) -> None:
         self.permission_manager = None

@@ -19,6 +19,7 @@ from app.services.tools.builtin_tools import (
     memory_save_handler,
     file_edit_handler,
     file_glob_handler,
+    mkdir_handler,
 )
 from app.services.tools.browser_tools import (
     browser_navigate_handler,
@@ -183,17 +184,19 @@ FILE_WRITE_BATCH = ToolDefinition(
 
 CODE_EXECUTE = ToolDefinition(
     name="code_execute",
-    description="在沙箱环境中执行 Python 或 Bash 代码。用于运行计算、数据处理、脚本测试等。有30秒超时限制。",
+    description="在用户工作区中执行 Python 或 Bash 代码/命令。工作目录为工作区根目录（或指定的子目录），脚本可以访问、导入、测试 Agent 已写入的文件。支持 pip install、npm install 等依赖安装命令（自动延长超时到120秒）。",
     category="code",
     parameters=[
         ToolParameter(name="code", type="string", required=True,
-                      description="要执行的完整代码（Python 或 Bash 脚本）"),
+                      description="要执行的代码。Python 脚本或 Bash 命令/脚本。单行 Bash 命令（如 pip install flask）会直接在 shell 中执行。"),
         ToolParameter(name="language", type="string", required=False,
                       description="编程语言: 'python'(默认) 或 'bash'", default="python"),
         ToolParameter(name="timeout", type="number", required=False,
-                      description="超时秒数，最大30秒", default=30),
+                      description="超时秒数。普通脚本最大30秒，安装命令最大120秒。", default=30),
+        ToolParameter(name="cwd", type="string", required=False,
+                      description="工作区内的相对工作目录。默认为 '.'（工作区根目录）。例如 'src'、'backend'。该目录下的文件可直接引用。", default="."),
     ],
-    return_type='"标准输出和标准错误文本" 及 metadata（language, exit_code, timeout_seconds）',
+    return_type='"标准输出和标准错误文本" 及 metadata（language, exit_code, timeout_seconds, cwd, is_install）',
     examples=[
         ToolExample(
             user_question="帮我计算 1 到 100 的和",
@@ -202,6 +205,14 @@ CODE_EXECUTE = ToolDefinition(
         ToolExample(
             user_question="列出当前目录的文件",
             parameters={"code": "ls -la", "language": "bash"},
+        ),
+        ToolExample(
+            user_question="安装 Flask 依赖",
+            parameters={"code": "pip install flask", "language": "bash"},
+        ),
+        ToolExample(
+            user_question="运行刚写的 app.py",
+            parameters={"code": "import app; app.main()", "language": "python", "cwd": "."},
         ),
     ],
     risk_level="L3",
@@ -842,6 +853,38 @@ FILE_GLOB = ToolDefinition(
     is_concurrency_safe=True,  # Read-only
 )
 
+# ── mkdir ────────────────────────────────────────────────────────────────
+
+MKDIR = ToolDefinition(
+    name="mkdir",
+    description="在用户的工作区中创建目录（类似 mkdir -p）。可以创建单个目录或嵌套的目录树。用于搭建项目代码的目录结构——例如创建 src/components/、app/api/、frontend/pages/ 等。成功创建后自动纳入 Git 版本控制。",
+    category="file",
+    parameters=[
+        ToolParameter(name="path", type="string", required=True,
+                      description="工作区内要创建的目录的相对路径。例如 'src/components'、'app/api/routes'。支持嵌套路径，父目录默认会自动创建。"),
+        ToolParameter(name="parents", type="boolean", required=False,
+                      description="是否自动创建缺失的父目录（类似 mkdir -p）。默认为 true。当设为 false 时，如果父目录不存在则报错。", default=True),
+    ],
+    return_type="成功时返回创建确认和路径信息。目录已存在时也返回成功（幂等操作）。失败时返回错误原因。",
+    examples=[
+        ToolExample(
+            user_question="帮我搭建一个 Flask 项目的目录结构",
+            parameters={"path": "src/routes", "parents": True},
+        ),
+        ToolExample(
+            user_question="创建 components 目录",
+            parameters={"path": "frontend/components", "parents": True},
+        ),
+        ToolExample(
+            user_question="初始化项目，创建 app/api 和 app/models 目录",
+            parameters={"path": "app/api", "parents": True},
+        ),
+    ],
+    risk_level="L1",
+    handler=mkdir_handler,
+    is_concurrency_safe=False,  # Has side effects
+)
+
 # ── task ──────────────────────────────────────────────────────────────────
 
 TASK = ToolDefinition(
@@ -918,5 +961,6 @@ BUILTIN_TOOLS: list[ToolDefinition] = [
     CONVERSATION_SEARCH,
     FILE_EDIT,
     FILE_GLOB,
+    MKDIR,
     TASK,
 ]

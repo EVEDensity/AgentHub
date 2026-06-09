@@ -1,13 +1,24 @@
 'use client';
 
-import { memo, useState, type JSX } from 'react';
+import { memo, useState, useEffect, type JSX } from 'react';
 import { Rocket, RotateCcw, History, GitBranch, Clock, FileText, ChevronRight } from 'lucide-react';
-import type { DeployCardEvent } from '../../types';
+import type { DeployCardEvent, DeployRequest } from '../../types';
 import DeployModal from './DeployModal';
+
+// ── Constants ─────────────────────────────────────────────────────────────
+
+const MOCK_PROJECTS = [
+  { id: 'proj-1', name: 'agenthub-frontend', defaultBranch: 'main', defaultDomain: 'agenthub' },
+  { id: 'proj-2', name: 'agenthub-blog', defaultBranch: 'main', defaultDomain: 'blog' },
+] as const;
+
+// ── Props ─────────────────────────────────────────────────────────────────
 
 interface DeployCardProps {
   data: DeployCardEvent;
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────
 
 /** Format an ISO timestamp into a relative time string (Chinese). */
 function formatRelativeTime(isoString: string): string {
@@ -44,21 +55,55 @@ function formatDateTime(isoString: string): string {
   }
 }
 
+// ── Component ─────────────────────────────────────────────────────────────
+
 const DeployCard = memo(function DeployCard({ data }: DeployCardProps): JSX.Element {
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [rollbackConfirm, setRollbackConfirm] = useState(false);
   const [deployed, setDeployed] = useState(false);
   const [rolledBack, setRolledBack] = useState(false);
 
+  // ── Debug event listener ────────────────────────────────────────────
+
+  useEffect(() => {
+    function onDeployReq(e: Event) {
+      const ce = e as CustomEvent<DeployRequest>;
+      console.info('[DeployCard] deploy_request dispatched:', ce.detail);
+    }
+    window.addEventListener('agenthub:deploy:request', onDeployReq);
+    return () => window.removeEventListener('agenthub:deploy:request', onDeployReq);
+  }, []);
+
+  // ── Handlers ────────────────────────────────────────────────────────
+
   function handleDeploy() {
     setDeployModalOpen(true);
   }
 
-  function handleDeployConfirm(_details: {
+  function handleDeployConfirm(details: {
+    projectId: string;
+    branch: string;
+    domain: string;
+    deployType: 'preview' | 'production' | 'custom';
     environment: string;
     notes: string;
     targets: string[];
   }) {
+    const payload: DeployRequest = {
+      event: 'deploy_request',
+      sessionId: data.sessionId,
+      messageId: data.messageId,
+      version: data.version,
+      projectId: details.projectId,
+      branch: details.branch,
+      domain: details.domain,
+      deployType: details.deployType,
+      environment: details.environment,
+      notes: details.notes,
+      targets: details.targets,
+      timestamp: new Date().toISOString(),
+    };
+    window.dispatchEvent(new CustomEvent('agenthub:deploy:request', { detail: payload }));
     setDeployModalOpen(false);
     setDeployed(true);
   }
@@ -220,6 +265,10 @@ const DeployCard = memo(function DeployCard({ data }: DeployCardProps): JSX.Elem
         open={deployModalOpen}
         version={data.version}
         description={data.description}
+        projects={[...MOCK_PROJECTS]}
+        defaultProjectId={data.projectId || 'proj-1'}
+        defaultBranch={data.defaultBranch || 'main'}
+        defaultDomain={data.defaultDomain || 'preview'}
         onConfirm={handleDeployConfirm}
         onCancel={handleDeployCancel}
       />

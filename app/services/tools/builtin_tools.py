@@ -24,7 +24,8 @@ logger = logging.getLogger("agenthub.tools.builtin")
 # ── Security constraints ──────────────────────────────────────────────
 MAX_FILE_READ_BYTES = 1_000_000  # 1 MB
 MAX_FILE_LINES = 2000
-CODE_EXECUTE_TIMEOUT = 30  # seconds
+CODE_EXECUTE_TIMEOUT = 30  # seconds (script execution)
+CODE_EXECUTE_INSTALL_TIMEOUT = 120  # seconds (pip/npm install)
 MAX_CODE_OUTPUT_CHARS = 10_000
 
 
@@ -1119,72 +1120,185 @@ async def file_write_batch_handler(
 
 # ── code_execute ──────────────────────────────────────────────────────
 
-async def code_execute_handler(code: str, language: str = "python", timeout: int = 30) -> dict[str, Any]:
-    """Execute code in a sandboxed subprocess.
+async def code_execute_handler(
+    code: str,
+    language: str = "python",
+    timeout: int = 30,
+    cwd: str = ".",
+) -> dict[str, Any]:
+    """Execute code in a sandboxed subprocess within the workspace.
 
-    Currently supports: python, bash
-    Security: runs in a temp directory with limited permissions.
+    The working directory is the user's per-session workspace (or a
+    subdirectory within it), so scripts can access, import, and test
+    files the agent has written.  Unlike the old implementation that
+    ran in a throw-away temp directory, this gives the agent a genuine
+    write→execute→debug loop.
+
+    Supports: python, bash
     """
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
     if not code or not code.strip():
         return {"success": False, "error": "代码内容不能为空"}
 
-    if language not in ("python", "bash", "sh"):
+    lang = language.lower()
+    if lang in ("sh", "shell"):
+        lang = "bash"
+    if lang not in ("python", "bash"):
         return {"success": False, "error": f"不支持的语言: {language}。支持: python, bash"}
 
-    # Apply timeout cap
-    effective_timeout = min(timeout, CODE_EXECUTE_TIMEOUT)
+    # ── Resolve working directory ─────────────────────────────────────
+    ws_root = get_workspace_root()
+    if cwd and cwd.strip() and cwd.strip() != ".":
+        safe_cwd = resolve_workspace_path(cwd.strip())
+        if safe_cwd is None:
+            return {"success": False, "error": f"工作目录 '{cwd}' 超出工作区允许范围"}
+        if not safe_cwd.exists():
+            safe_cwd.mkdir(parents=True, exist_ok=True)
+        work_dir = str(safe_cwd)
+        work_dir_rel = str(safe_cwd.relative_to(ws_root))
+    else:
+        work_dir = str(ws_root)
+        work_dir_rel = "."
+
+    # ── Detect install commands → use longer timeout ─────────────────
+    code_stripped = code.strip()
+    is_install_cmd = _is_install_command(code_stripped, lang)
+    effective_timeout = min(
+        timeout,
+        CODE_EXECUTE_INSTALL_TIMEOUT if is_install_cmd else CODE_EXECUTE_TIMEOUT,
+    )
+
+    # ── Create .agenthub_exec/ scratch dir inside workspace ───────────
+    # Scripts are written here (not system /tmp) so they sit alongside
+    # workspace files and can import sibling modules naturally.
+    exec_dir = ws_root / ".agenthub_exec"
+    try:
+        exec_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        exec_dir = Path(tempfile.mkdtemp(prefix="agenthub_exec_"))
 
     try:
-        with tempfile.TemporaryDirectory(prefix="agenthub_exec_") as tmpdir:
-            if language == "python":
-                script_path = Path(tmpdir) / "script.py"
-                await awrite_text(script_path, code, encoding="utf-8")
-                cmd = ["python", str(script_path)]
+        if lang == "python":
+            # ── Python execution ────────────────────────────────────
+            script_path = exec_dir / "script.py"
+            await awrite_text(script_path, code, encoding="utf-8")
+            cmd = _build_python_cmd(ws_root, script_path)
+        else:
+            # ── Bash execution ──────────────────────────────────────
+            if _is_one_liner(code_stripped):
+                # Single command (e.g. "pip install flask", "npm install"):
+                # run directly via bash -c in the workspace.
+                script_path = None
+                cmd = ["bash", "-lc", code_stripped]
             else:
-                script_path = Path(tmpdir) / "script.sh"
+                script_path = exec_dir / "script.sh"
                 await awrite_text(script_path, code, encoding="utf-8")
                 cmd = ["bash", str(script_path)]
 
-            proc = await _run_subprocess(cmd, effective_timeout, cwd=tmpdir)
+        proc = await _run_subprocess(cmd, effective_timeout, cwd=work_dir)
 
-            stdout = proc.get("stdout", "")[:MAX_CODE_OUTPUT_CHARS]
-            stderr = proc.get("stderr", "")[:MAX_CODE_OUTPUT_CHARS]
-            exit_code = proc.get("exit_code", -1)
+        stdout = proc.get("stdout", "")[:MAX_CODE_OUTPUT_CHARS]
+        stderr = proc.get("stderr", "")[:MAX_CODE_OUTPUT_CHARS]
+        exit_code = proc.get("exit_code", -1)
 
-            result_parts: list[str] = []
-            if stdout:
-                result_parts.append(f"[标准输出]\n{stdout}")
-            if stderr:
-                result_parts.append(f"[标准错误]\n{stderr}")
-            if exit_code != 0:
-                result_parts.append(f"[退出码: {exit_code}]")
-            if not result_parts:
-                result_parts.append("[无输出]")
+        result_parts: list[str] = []
+        if stdout:
+            result_parts.append(f"[标准输出]\n{stdout}")
+        if stderr:
+            result_parts.append(f"[标准错误]\n{stderr}")
+        if exit_code != 0:
+            result_parts.append(f"[退出码: {exit_code}]")
+        if not result_parts:
+            result_parts.append("[无输出]")
 
-            return {
-                "success": exit_code == 0,
-                "result": "\n\n".join(result_parts),
-                "metadata": {
-                    "language": language,
-                    "exit_code": exit_code,
-                    "stdout_length": len(stdout),
-                    "stderr_length": len(stderr),
-                    "timeout_seconds": effective_timeout,
-                },
-            }
+        metadata: dict[str, Any] = {
+            "language": lang,
+            "exit_code": exit_code,
+            "stdout_length": len(stdout),
+            "stderr_length": len(stderr),
+            "timeout_seconds": effective_timeout,
+            "cwd": work_dir_rel,
+            "is_install": is_install_cmd,
+        }
+
+        return {
+            "success": exit_code == 0,
+            "result": "\n\n".join(result_parts),
+            "metadata": metadata,
+        }
+
     except subprocess.TimeoutExpired:
         return {
             "success": False,
-            "error": f"代码执行超时 ({effective_timeout}秒)",
-            "metadata": {"language": language, "timeout_seconds": effective_timeout},
+            "error": f"代码执行超时 ({effective_timeout}秒){' (安装命令)' if is_install_cmd else ''}",
+            "metadata": {
+                "language": lang,
+                "timeout_seconds": effective_timeout,
+                "cwd": work_dir_rel,
+                "is_install": is_install_cmd,
+            },
         }
     except Exception as exc:
         logger.exception("code_execute failed")
         return {"success": False, "error": f"代码执行异常: {exc}"}
+    finally:
+        # Clean up the script file (leave exec_dir for future runs)
+        if lang == "python" and script_path:
+            try:
+                script_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        elif lang == "bash" and script_path:
+            try:
+                script_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _is_install_command(code: str, lang: str) -> bool:
+    """Detect whether *code* is a dependency installation command."""
+    first_line = code.split("\n")[0].strip().lower()
+    install_prefixes = (
+        "pip install", "pip3 install", "python -m pip install",
+        "npm install", "npm i ", "npm ci",
+        "yarn add", "yarn install",
+        "pnpm install", "pnpm add",
+        "poetry install", "poetry add",
+        "conda install",
+        "gem install",
+        "cargo install", "cargo add",
+        "go get", "go install",
+    )
+    return any(first_line.startswith(p) for p in install_prefixes)
+
+
+def _is_one_liner(code: str) -> bool:
+    """Heuristic: is *code* a single shell command (not a multi-line script)?"""
+    lines = [l for l in code.split("\n") if l.strip() and not l.strip().startswith("#")]
+    if len(lines) > 1:
+        return False
+    # If there are no common script markers (shebang, function, if/while/for),
+    # treat it as a single command.
+    script_keywords = ("#!/", "function ", "if ", "while ", "for ", "case ", "do ", "then ")
+    combined = "\n".join(lines)
+    return not any(combined.strip().startswith(kw) for kw in script_keywords)
+
+
+def _build_python_cmd(ws_root: Path, script_path: Path) -> list[str]:
+    """Build the python command, auto-activating workspace venv if present."""
+    # Check for workspace .venv
+    venv_python = ws_root / ".venv" / "Scripts" / "python.exe"  # Windows
+    if not venv_python.exists():
+        venv_python = ws_root / ".venv" / "bin" / "python"       # Unix
+    if venv_python.exists():
+        return [str(venv_python), str(script_path)]
+    return ["python", str(script_path)]
 
 
 async def _run_subprocess(cmd: list[str], timeout: int, cwd: str) -> dict[str, Any]:
     """Run a subprocess with timeout and return stdout/stderr/exit_code."""
+    proc = None
     try:
         proc = await __import__("asyncio").create_subprocess_exec(
             *cmd,
@@ -1202,8 +1316,11 @@ async def _run_subprocess(cmd: list[str], timeout: int, cwd: str) -> dict[str, A
         }
     except __import__("asyncio").TimeoutError:
         if proc:
-            proc.kill()
-            await proc.wait()
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
         raise subprocess.TimeoutExpired(cmd, timeout)
 
 
@@ -1661,9 +1778,6 @@ async def file_edit_handler(
     if safe is None:
         return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
 
-    if not await aexists(safe):
-        return {"success": False, "error": f"文件不存在: {path}"}
-
     if await aisdir(safe):
         return {"success": False, "error": f"'{path}' 是一个目录，无法编辑"}
 
@@ -1673,6 +1787,44 @@ async def file_edit_handler(
     # ── Context ────────────────────────────────────────────────────────
     sid = _get_sid_fast()
     uid = _get_uid_fast()
+
+    # ── Handle new file creation ─────────────────────────────────────
+    # When the file doesn't exist yet, auto-create it with new_string as
+    # the full content.  This makes file_edit a universal "write-or-edit"
+    # tool — agents no longer need to remember to switch to file_write
+    # for new files.  Matches the behaviour of the native Claude Edit tool.
+    if not await aexists(safe):
+        try:
+            await amkdir(safe.parent)
+            await awrite_text(safe, new_string, encoding="utf-8")
+            size = await astat_size(safe)
+        except OSError as exc:
+            return {"success": False, "error": f"创建文件失败: {exc}"}
+
+        # Track version + broadcast (fire-and-forget)
+        sha256_hash = ""
+        try:
+            from app.services.file_version_tracker import file_version_tracker
+            fv = file_version_tracker.record_write(sid, path, new_string, uid, "")
+            sha256_hash = fv.sha256
+        except Exception:
+            pass
+        import asyncio as _asyncio
+        _asyncio.ensure_future(
+            _broadcast_workspace_change(sid, path, "write", size, "", user_id=uid)
+        )
+        _asyncio.ensure_future(_auto_git_commit(path, uid, "创建（通过 file_edit）"))
+
+        return {
+            "success": True,
+            "result": f"文件 '{path}' 创建成功（{size} 字节）。old_string 忽略——文件之前不存在。",
+            "metadata": {
+                "path": path,
+                "size_bytes": size,
+                "created": True,
+                "sha256": sha256_hash[:12] if sha256_hash else "",
+            },
+        }
 
     # ── Read original content ─────────────────────────────────────────
     try:
@@ -1841,3 +1993,78 @@ async def file_glob_handler(
         }
     except Exception as exc:
         return {"success": False, "error": f"Glob 匹配失败: {exc}"}
+
+
+# ── mkdir ─────────────────────────────────────────────────────────────
+
+async def mkdir_handler(
+    path: str,
+    parents: bool = True,
+) -> dict[str, Any]:
+    """Create a directory in the user's per-session workspace.
+
+    Creates the specified directory (and any missing parent directories
+    when *parents* is True — the default).  This is the canonical way to
+    scaffold a project directory tree without writing placeholder files.
+
+    Args:
+        path: Relative directory path within the session workspace
+              (e.g. ``src/components/`` or ``src/utils``).
+        parents: If True (default), create intermediate directories
+                 like ``mkdir -p``.  If False, fail when the parent
+                 does not exist.
+    """
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    if not path or not path.strip():
+        return {"success": False, "error": "目录路径不能为空"}
+
+    path = path.strip()
+    ws_root = get_workspace_root()
+    safe = resolve_workspace_path(path)
+    if safe is None:
+        return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
+
+    # ── Already exists ──────────────────────────────────────────────
+    if await aexists(safe):
+        if await aisdir(safe):
+            try:
+                listing = (await aiterdir(safe))[:20]
+                names = [str(p.relative_to(ws_root)) + ("/" if await aisdir(p) else "") for p in listing]
+            except OSError:
+                names = []
+            return {
+                "success": True,
+                "result": f"目录 '{path}' 已存在（{len(names)} 项）",
+                "metadata": {"path": str(safe.relative_to(ws_root)), "existed": True, "items": names},
+            }
+        else:
+            return {"success": False, "error": f"'{path}' 已存在但是一个文件，无法创建同名目录"}
+
+    # ── Create ──────────────────────────────────────────────────────
+    try:
+        await amkdir(safe, parents=parents, exist_ok=False)
+    except FileNotFoundError:
+        return {
+            "success": False,
+            "error": f"无法创建目录 '{path}'：父目录不存在（设置 parents=True 可自动创建父目录）",
+        }
+    except FileExistsError:
+        return {"success": True, "result": f"目录 '{path}' 已存在", "metadata": {"path": str(safe.relative_to(ws_root)), "existed": True}}
+    except OSError as exc:
+        return {"success": False, "error": f"创建目录失败: {exc}"}
+
+    # ── Broadcast + git ─────────────────────────────────────────────
+    sid = _get_sid_fast()
+    uid = _get_uid_fast()
+    import asyncio as _asyncio
+    _asyncio.ensure_future(
+        _broadcast_workspace_change(sid, path, "mkdir", 0, "", user_id=uid)
+    )
+    _asyncio.ensure_future(_auto_git_commit(path, uid, "创建目录"))
+
+    return {
+        "success": True,
+        "result": f"目录 '{path}' 创建成功",
+        "metadata": {"path": str(safe.relative_to(ws_root)), "existed": False, "parents_created": parents},
+    }

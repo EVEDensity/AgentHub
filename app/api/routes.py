@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import agent, artifacts, auth, canvas, chat, files, git, im, memory, settings, skills, system, tasks, user, websocket
+from app.api import agent, artifacts, auth, canvas, chat, files, git, im, memory, settings, skills, system, tasks, user, websocket, workspace
 from app.api.admin import router as admin_router
 
 api_router = APIRouter()
@@ -17,6 +17,7 @@ api_router.include_router(admin_router)
 api_router.include_router(agent.router)
 api_router.include_router(files.router)
 api_router.include_router(git.router)
+api_router.include_router(workspace.router)
 api_router.include_router(tasks.router)
 api_router.include_router(websocket.router)
 api_router.include_router(skills.router)

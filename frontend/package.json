@@ -15,12 +15,15 @@
     "lucide-react": "^1.16.0",
     "next": "^13.5.7",
     "pdfjs-dist": "^4.0.379",
+    "prism-react-renderer": "^2.4.1",
     "react": "^18.2.0",
+    "react-diff-viewer-continued": "^4.2.2",
     "react-dom": "^18.2.0",
     "react-konva": "^18.2.10",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@next/bundle-analyzer": "^13.5.7",

@@ -55,6 +55,43 @@
   --scrollbar-thumb-hover: 173 171 163;
 }
 
+/* ── Diff view colors ──────────────────────────────────────────────────
+   Used by DiffViewer (react-diff-viewer-continued) and WorkspaceDiffSurface
+   components.  Color values are direct hex (not RGB channels) because the
+   diff viewer library and inline highlighters expect raw colors. ─────── */
+
+:root,
+[data-theme="warm"] {
+  /* Diff backgrounds */
+  --color-diff-bg: #1E1E1E;
+  --color-diff-added-bg: rgba(16, 185, 129, 0.15);
+  --color-diff-removed-bg: rgba(239, 68, 68, 0.15);
+  --color-diff-highlight-bg: rgba(245, 158, 11, 0.12);
+  --color-diff-gutter-bg: #161616;
+  /* Diff text */
+  --color-diff-added-text: #10B981;
+  --color-diff-removed-text: #EF4444;
+  /* Word-level diff highlights */
+  --color-diff-added-word: rgba(16, 185, 129, 0.35);
+  --color-diff-removed-word: rgba(239, 68, 68, 0.35);
+  /* Gutter (line number column) */
+  --color-diff-added-gutter: rgba(16, 185, 129, 0.20);
+  --color-diff-removed-gutter: rgba(239, 68, 68, 0.20);
+  /* Code syntax colors */
+  --color-code-fg: #D4D4D4;
+  --color-code-comment: #6A9955;
+  --color-code-string: #98C379;
+  --color-code-keyword: #569CD6;
+  --color-code-function: #DCDCAA;
+  --color-code-number: #D19A66;
+  --color-code-property: #9CDCFE;
+  --color-code-operator: #D4D4D4;
+  --color-code-punctuation: #808080;
+  --color-code-variable: #9CDCFE;
+  --color-code-class: #4EC9B0;
+  --color-code-builtin: #C586C0;
+}
+
 /* ── Light theme (pure white) ────────────────────────────────────── */
 
 [data-theme="light"] {

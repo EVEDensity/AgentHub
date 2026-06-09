@@ -971,6 +971,14 @@ export interface DeployCardEvent {
   /** Agent that generated this card */
   agentId: string;
   timestamp: string;
+  /** 项目 ID */
+  projectId?: string;
+  /** 默认分支 */
+  defaultBranch?: string;
+  /** 默认域名 */
+  defaultDomain?: string;
+  /** 部署类型候选 */
+  deployTypeOptions?: ('preview' | 'production' | 'custom')[];
 }
 
 /** User requests deployment details */
@@ -979,6 +987,14 @@ export interface DeployRequest {
   sessionId: string;
   messageId: string;
   version: string;
+  /** 目标项目 ID */
+  projectId: string;
+  /** Git 分支 */
+  branch: string;
+  /** 自定义域名 */
+  domain: string;
+  /** 部署类型 */
+  deployType: 'preview' | 'production' | 'custom';
   /** Deployment environment */
   environment: string;
   /** Deployment notes */

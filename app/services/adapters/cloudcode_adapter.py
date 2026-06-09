@@ -358,6 +358,7 @@ class CloudCodeAdapter(BaseAdapter):
         model: str,
         api_key: str = "",
         base_url: str = "",
+        **kwargs: object,
     ) -> AsyncGenerator[str, None]:
         """Streaming execution: launch subprocess, yield JSON Lines as they arrive.
 

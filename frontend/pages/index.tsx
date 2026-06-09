@@ -9,6 +9,7 @@ import TypingIndicator from '../components/collaboration/TypingIndicator';
 import { getPresenceStore } from '../lib/presenceStore';
 import { getCollaborationStore } from '../lib/collaborationStore';
 import ShareDialog from '../components/collaboration/ShareDialog';
+import OneClickDeployModal from '../components/chat/OneClickDeployModal';
 import MessageList from '../components/chat/MessageList';
 import { type ExecPermission } from '../components/chat/PermissionModePopover';
 import SessionSidebar from '../components/chat/SessionSidebar';
@@ -16,6 +17,7 @@ import PreviewSidebar from '../components/shared/PreviewSidebar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
+import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeReferences } from '../lib/references';
 import {
   useSessionMessages,
@@ -74,34 +76,6 @@ function sortSessions(items: ChatSession[]): ChatSession[] {
   });
 }
 
-function detectFileCategory(name: string, _mimeType: string): string {
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  const configs: Record<string, { extensions: string[] }> = {
-    code: { extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'] },
-    document: { extensions: ['txt','md','pdf','docx','rtf','tex','rst','org','log'] },
-    image: { extensions: ['png','jpg','jpeg','gif','svg','webp','bmp','ico'] },
-    archive: { extensions: ['zip','rar','7z','tar','gz','bz2','xz'] },
-    spreadsheet: { extensions: ['xlsx','xls','csv','tsv'] },
-    presentation: { extensions: ['pptx','ppt'] },
-    config: { extensions: ['json','yaml','yml','xml','toml','ini','cfg','env','conf','cnf','editorconfig','gitignore','dockerfile','makefile','prisma','graphql','proto'] },
-  };
-  for (const [cat, cfg] of Object.entries(configs)) {
-    if (cfg.extensions.includes(ext)) return cat;
-  }
-  return 'unknown';
-}
-
-function extractApiError(err: unknown): string {
-  if (err && typeof err === 'object' && 'detail' in err) {
-    const detail = (err as Record<string, unknown>).detail;
-    if (typeof detail === 'string') return detail;
-    if (Array.isArray(detail)) {
-      return (detail as Array<{ msg?: string }>).map((d) => d.msg || '').filter(Boolean).join('; ') || 'Validation error';
-    }
-  }
-  return 'Upload failed';
-}
-
 export default function AgentHubIM(): JSX.Element {
   const [token, setToken] = useState<string>('');
   const [user, setUser] = useState<User | null>(null);
@@ -153,6 +127,8 @@ export default function AgentHubIM(): JSX.Element {
   // ── Share dialog state ─────────────────────────────────────────
   const [shareOpen, setShareOpen] = useState(false);
   const [sessionVisibility, setSessionVisibility] = useState<string>('');
+  // ── One-click deploy dialog state ───────────────────────────────
+  const [deployOpen, setDeployOpen] = useState(false);
   // 附件卡片的全屏预览弹窗 (点击眼睛按钮触发)
   const [previewFile, setPreviewFile] = useState<FilePreviewTarget | null>(null);
   const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
@@ -2396,146 +2372,10 @@ export default function AgentHubIM(): JSX.Element {
     [handleOpenWorkspaceFile, setNotice, sessionId],
   );
 
-  // ── File upload ──────────────────────────────────────────
-
-  async function uploadFileChunked(file: File): Promise<string> {
-    const CHUNK_SIZE = 512 * 1024;
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-    const initRes = await fetch('/api/files/upload/init', { method: 'POST', headers: authHeaders() });
-    const { uploadId } = (await initRes.json()) as { uploadId: string; chunkSizeHint: number };
-
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-
-      const formData = new FormData();
-      formData.append('file', chunk, `${file.name}.chunk${i}`);
-      formData.append('upload_id', uploadId);
-      formData.append('chunk_index', String(i));
-      formData.append('total_chunks', String(totalChunks));
-      formData.append('file_name', file.name);
-
-      const res = await fetch('/api/files/upload/chunk', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(extractApiError(err) || `Chunk ${i} failed`);
-      }
-
-      setAttachedFiles((prev) => prev.map((f) =>
-        f.name === file.name
-          ? { ...f, uploadProgress: Math.round(((i + 1) / totalChunks) * 100), uploadStatus: 'uploading' as const }
-          : f,
-      ));
-    }
-
-    const completeRes = await fetch('/api/files/upload/complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ upload_id: uploadId, file_name: file.name, total_chunks: totalChunks }),
-    });
-
-    if (!completeRes.ok) {
-      throw new Error('Upload completion failed');
-    }
-
-    return uploadId;
-  }
-
-  // Shared file-processing helper — used by both file input and clipboard paste
-  function processFiles(files: File[]): void {
-    const MAX_INLINE = 2 * 1024 * 1024;
-    const MAX_TOTAL = 50 * 1024 * 1024;
-
-    files.forEach(async (file) => {
-      const ext = (file.name.split('.').pop() || '').toLowerCase();
-      const category = detectFileCategory(file.name, file.type);
-
-      if (category === 'unknown') {
-        setNotice(`不支持的文件类型: ${file.name}`);
-        return;
-      }
-
-      if (file.size > MAX_TOTAL) {
-        setNotice(`文件 ${file.name} 超过 50MB 限制`);
-        return;
-      }
-
-      const base: AttachedFile = {
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        category: category as AttachedFile['category'],
-        uploadStatus: 'pending',
-      };
-
-      const isInlineText = (category === 'code' || category === 'config' || (category === 'document' && ext !== 'pdf' && ext !== 'docx' && ext !== 'rtf'));
-      const isInlineImage = category === 'image' && file.size <= MAX_INLINE;
-      const canInline = (isInlineText && file.size <= MAX_INLINE) || isInlineImage;
-
-      if (canInline) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          setAttachedFiles((prev) => [...prev, {
-            ...base,
-            content: reader.result as string,
-            uploadStatus: 'done' as const,
-            uploadProgress: 100,
-          }]);
-        };
-        reader.onerror = () => {
-          setNotice(`读取文件失败: ${file.name}`);
-        };
-        if (isInlineImage) {
-          reader.readAsDataURL(file);
-        } else {
-          reader.readAsText(file);
-        }
-      } else {
-        setAttachedFiles((prev) => [...prev, { ...base, uploadProgress: 0 }]);
-
-        try {
-          const fileId = await uploadFileChunked(file);
-          setAttachedFiles((prev) => prev.map((f) =>
-            f.name === file.name
-              ? { ...f, fileId, uploadStatus: 'done' as const, uploadProgress: 100 }
-              : f,
-          ));
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : 'Upload failed';
-          setAttachedFiles((prev) => prev.map((f) =>
-            f.name === file.name
-              ? { ...f, uploadStatus: 'error' as const, uploadError: msg }
-              : f,
-          ));
-          setNotice(`上传失败: ${file.name} - ${msg}`);
-        }
-      }
-    });
-  }
-
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const fs = e.target.files;
-    if (!fs || fs.length === 0) return;
-    processFiles(Array.from(fs));
-    e.target.value = '';
-  }, []);
-
-  const handlePasteFiles = useCallback((files: File[]) => {
-    if (files.length === 0) return;
-    processFiles(files);
-    setNotice(`已从剪贴板添加 ${files.length} 张图片`);
-  }, []);
-
-  const handleRemoveFile = useCallback((index: number) => {
-    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  // ── File upload (extracted to hook) ──────────────────────
+  const { handleFileChange, handlePasteFiles, handleRemoveFile } = useFileUpload({
+    authHeaders, setAttachedFiles, setNotice,
+  });
 
   // 点击附件卡片上的预览按钮: 弹出全屏预览模态
   // ── PM/PMO 事件发送 ────────────────────────────────────────────────
@@ -2589,6 +2429,10 @@ export default function AgentHubIM(): JSX.Element {
     setSessionVisibility(vis);
     setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, visibility: vis } : s)));
   }, [sessionId]);
+
+  // ── One-click deploy dialog ─────────────────────────────────────
+  const handleOpenDeploy = useCallback(() => setDeployOpen(true), []);
+  const handleCloseDeploy = useCallback(() => setDeployOpen(false), []);
 
   // 支持两种路径：
   //   1. 内联文件（小文件 <2MB）— 内容已在 file.content 中，走 FilePreviewModal 的 inlineContent 快速路径
@@ -2762,7 +2606,7 @@ export default function AgentHubIM(): JSX.Element {
                 }}
               />
             </div>
-            {/* Right accessory strip: UserRoster + Share */}
+            {/* Right accessory strip: UserRoster + Share + Deploy */}
             {sessionId && (
               <div className="flex items-center gap-1 shrink-0 self-center pr-4 pl-2 border-l border-warm-100">
                 <UserRoster sessionId={sessionId} />
@@ -2781,6 +2625,21 @@ export default function AgentHubIM(): JSX.Element {
                     <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
                   </svg>
                   <span className="text-xs font-medium">分享</span>
+                </button>
+                <span className="h-5 w-px bg-warm-150" />
+                <button
+                  onClick={handleOpenDeploy}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-warm-500 hover:text-primary-600 hover:bg-warm-100 active:scale-95 transition-all"
+                  title="一键部署当前会话"
+                  aria-label="一键部署"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+                    <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                    <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
+                    <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+                  </svg>
+                  <span className="text-xs font-medium">一键部署</span>
                 </button>
               </div>
             )}
@@ -2947,6 +2806,14 @@ export default function AgentHubIM(): JSX.Element {
         authHeaders={authHeaders()}
         onClose={handleCloseShare}
         onVisibilityChange={handleVisibilityChange}
+      />
+
+      {/* ── One-click deploy modal ──────────────────────────────── */}
+      <OneClickDeployModal
+        open={deployOpen}
+        sessionId={sessionId}
+        sessionName={sessionName}
+        onClose={handleCloseDeploy}
       />
 
       {/* 附件文件全屏预览弹窗 - 点击附件卡片上的眼睛按钮触发 */}

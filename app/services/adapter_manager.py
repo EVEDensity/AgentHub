@@ -240,17 +240,17 @@ class BaseAdapter:
     def _get_default_model(self) -> str:
         return getattr(self, "_default_model", "")
 
-    async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", **kwargs: Any) -> str:
+    async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "", **kwargs: Any) -> str:
         raise NotImplementedError
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         """Streaming fallback: chunks the full response for pseudo-streaming.
 
         Subclasses SHOULD override this with real SSE/NDJSON streaming.
         This base implementation waits for the full response then yields
         small chunks so the frontend still sees progressive text.
         """
-        result = await self.execute_prompt(prompt, model, api_key, base_url)
+        result = await self.execute_prompt(prompt, model, api_key, base_url, system_prompt=system_prompt)
         # Smaller chunks for faster perceived streaming (was len//20)
         chunk_size = max(1, min(40, len(result) // 50)) if len(result) > 200 else max(1, len(result) // 20)
         for i in range(0, len(result), chunk_size):
@@ -301,9 +301,9 @@ class MockAdapter(BaseAdapter):
         self.last_usage = {"prompt_tokens": max(1, len(prompt) // 4), "completion_tokens": max(1, len(result) // 4), "total_tokens": max(1, len(prompt) // 4) + max(1, len(result) // 4)}
         return result
 
-    async def stream_prompt(self, prompt: str, model: str = "mock", api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str, model: str = "mock", api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         """Mock streaming: delegate to execute_prompt and yield the full result."""
-        result = await self.execute_prompt(prompt, model, api_key, base_url)
+        result = await self.execute_prompt(prompt, model, api_key, base_url, system_prompt=system_prompt)
         # Yield the full result as one chunk so tool-call JSON is complete
         yield result
         yield ""  # end-of-stream marker
@@ -629,10 +629,10 @@ class OpenAICompatibleAdapter(BaseAdapter):
             )
         return content
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
-            async for chunk in MockAdapter().stream_prompt(prompt, model):
+            async for chunk in MockAdapter().stream_prompt(prompt, model, system_prompt=system_prompt):
                 yield chunk
             return
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
@@ -795,13 +795,30 @@ class KimiAdapter(OpenAICompatibleAdapter):
 class AnthropicAdapter(BaseAdapter):
     default_model = "claude-sonnet-4-6"
 
-    async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", **kwargs: Any) -> str:
+    async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "", **kwargs: Any) -> str:
         key = api_key or ANTHROPIC_API_KEY
         if not ENABLE_REAL_LLM or not key:
             return await MockAdapter().execute_prompt(prompt, model)
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com") + "/v1/messages"
-        payload = {"model": actual_model, "max_tokens": 32768, "messages": [{"role": "user", "content": prompt}]}
+
+        # ── Build messages payload ────────────────────────────────────
+        if system_prompt:
+            payload: dict[str, Any] = {
+                "model": actual_model,
+                "max_tokens": 32768,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+                "messages": [{"role": "user", "content": prompt}],
+            }
+        else:
+            payload = {"model": actual_model, "max_tokens": 32768, "messages": [{"role": "user", "content": prompt}]}
+
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         response = await _retry_request(
             "POST", url,
@@ -822,12 +839,17 @@ class AnthropicAdapter(BaseAdapter):
         }
         return "\n".join(block.get("text", "") for block in content_blocks if isinstance(block, dict) and block.get("type") == "text")
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         """Real SSE streaming via Anthropic Messages Streaming API.
 
         Uses ``stream: True`` and parses Server-Sent Events (SSE):
         ``content_block_delta`` → text delta, ``message_delta`` → usage,
         ``message_stop`` → end of stream.
+
+        When *system_prompt* is provided it is sent as the ``system``
+        parameter with ``cache_control: ephemeral`` — this caches the
+        large static prefix (role instructions, tool definitions, rules)
+        server-side and cuts TTFT by 50-70 % on subsequent requests.
         """
         key = api_key or ANTHROPIC_API_KEY
         if not ENABLE_REAL_LLM or not key:
@@ -837,12 +859,32 @@ class AnthropicAdapter(BaseAdapter):
 
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com") + "/v1/messages"
-        payload = {
-            "model": actual_model,
-            "max_tokens": 32768,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": True,
-        }
+
+        # ── Build messages payload ────────────────────────────────────
+        if system_prompt:
+            # Split: system (cached) + user (dynamic)
+            payload: dict[str, Any] = {
+                "model": actual_model,
+                "max_tokens": 32768,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+            }
+        else:
+            # Fallback: monolithic prompt as single user message
+            payload = {
+                "model": actual_model,
+                "max_tokens": 32768,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+            }
+
         headers = {
             "x-api-key": key,
             "anthropic-version": "2023-06-01",
@@ -937,7 +979,7 @@ class OllamaAdapter(BaseAdapter):
         except httpx.HTTPError:
             return await MockAdapter().execute_prompt(prompt, model)
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         url = (base_url.rstrip("/") if base_url else OLLAMA_BASE_URL) + "/api/generate"
         payload = {"model": model or "llama3", "prompt": prompt, "stream": True}
         self.last_usage = {}
@@ -967,7 +1009,7 @@ class OllamaAdapter(BaseAdapter):
                     except json.JSONDecodeError:
                         continue
         except httpx.HTTPError:
-            async for chunk in MockAdapter().stream_prompt(prompt, model):
+            async for chunk in MockAdapter().stream_prompt(prompt, model, system_prompt=system_prompt):
                 yield chunk
             return
         yield ""

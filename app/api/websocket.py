@@ -25,6 +25,7 @@ logger = logging.getLogger("agenthub.websocket")
 # ── auto-memory extraction (lazy per-user singletons) ────────────────
 _memory_extractors: dict[str, object] = {}  # user_id → MemoryExtractor
 _session_mgrs: dict[str, object] = {}       # user_id → SessionMemoryManager
+_session_stores: dict[str, object] = {}     # user_id → SessionMemoryStore
 # Per-session throttle: {session_id: last_run_timestamp}
 _throttle_state: dict[str, float] = {}
 _THROTTLE_SECONDS = 30  # min interval between background memory tasks per session
@@ -674,6 +675,53 @@ def _get_session_mgr(user_id: str = ""):
     return _session_mgrs[uid]
 
 
+def _get_session_store(user_id: str = ""):
+    """Return a per-user SessionMemoryStore backed by the user's memory directory."""
+    global _session_stores
+    uid = user_id or "local-admin"
+    if uid not in _session_stores:
+        from app.config import MEMORY_DIR
+        from app.services.memory.session_store import SessionMemoryStore
+        user_dir = MEMORY_DIR / "users" / uid
+        _session_stores[uid] = SessionMemoryStore(user_dir)
+    return _session_stores[uid]
+
+
+async def _append_turn_to_session_memory(
+    session_id: str,
+    user_message: str,
+    agent_response: str,
+    user_id: str = "",
+    sender: str = "",
+    agent_name: str = "",
+) -> None:
+    """Append a conversation turn (user message + agent response) to the
+    per-session memory file.  Fire-and-forget — errors are logged but never
+    propagated, so memory persistence failures never block chat responses.
+    """
+    try:
+        store = _get_session_store(user_id)
+        await store.append_turn(
+            session_id=session_id,
+            user_message=user_message,
+            agent_response=agent_response,
+            sender=sender or "user",
+            agent_name=agent_name or "assistant",
+        )
+        # Invalidate the memory context cache so the next agent call
+        # picks up the updated session memory.
+        try:
+            from app.services.agent_service import _invalidate_memory_cache
+            _invalidate_memory_cache()
+        except Exception:
+            pass
+    except Exception:
+        logger.debug(
+            "append_turn_to_session_memory failed session=%s", session_id,
+            exc_info=True,
+        )
+
+
 def _should_run_memory_tasks(session_id: str) -> bool:
     """Return True if enough time has passed since last memory task run."""
     import time
@@ -1040,7 +1088,7 @@ async def _process_and_stream(
             route_dag: DAGConfig | None = None  # type: ignore[name-defined]
             from app.services.agent_route_service import agent_route_service
 
-            matched_route, content = await agent_route_service.extract_route_ref(content)
+            matched_route, content = await agent_route_service.extract_route_ref(content, user_id)
             if matched_route and matched_route.get("nodes"):
                 logger.info(
                     "ws #route matched session=%s route=%s nodes=%d",
@@ -1093,16 +1141,19 @@ async def _process_and_stream(
                     if row:
                         target_agents.append(row)
 
-            # ── Guard: don't trigger DAG for multi-@mention greetings ──
+            # ── Guard: parallel broadcast for multi-@mention greetings ──
             # When a user @mentions multiple agents but the actual message
-            # is just a greeting (e.g. "@A @B 大家好🤩"), route it as a
-            # normal chat message instead of spawning a full task plan.
-            # This prevents the jarring UX of seeing a "任务计划预览" for
-            # "你好" or "大家好".
+            # is just a greeting (e.g. "@A @B 大家好🤩" or
+            # "@A @B 介绍一下自己"), skip the full DAG task-plan preview
+            # (which would be jarring UX for a simple greeting) BUT still
+            # fan out to every mentioned agent in parallel so each one can
+            # respond independently.  No task preview, no confirmation
+            # wait, no result synthesis — each agent replies on its own.
             # NOTE: This guard only applies to @mention-triggered DAGs.
             # When the user explicitly selects a route via #route:name,
             # the greeting guard is skipped — they clearly intended the
             # workflow to run.
+            is_greeting_broadcast = False
             if route_dag is None and len(target_agents) >= 2:
                 # Strip @mentions to inspect the real message content
                 msg_without_mentions = content
@@ -1115,14 +1166,46 @@ async def _process_and_stream(
                 # Check if the remaining text is a greeting / non-task message
                 if _is_multi_mention_greeting(msg_without_mentions):
                     logger.info(
-                        "ws multi-@mention greeting detected, routing to "
-                        "default chat instead of DAG. mentioned=%s stripped=%r",
+                        "ws multi-@mention greeting detected, broadcasting to "
+                        "all mentioned agents in parallel. mentioned=%s stripped=%r",
                         mentioned, msg_without_mentions,
                     )
-                    target_agents = []  # fall through to default path
-                    # Also remove @mentions from content so the agent doesn't
-                    # receive a string of bare @names as a "task"
+                    is_greeting_broadcast = True
+                    # Remove @mentions from content so each agent sees a clean
+                    # message (e.g. "大家好，介绍一下自己") instead of a string
+                    # of bare @names.
                     content = msg_without_mentions if msg_without_mentions else content
+
+            # ── Parallel broadcast for multi-@mention greetings ──────────
+            # When the user @mentions multiple agents with a greeting-level
+            # message (e.g. "大家好，介绍一下自己"), fan the same message
+            # out to ALL mentioned agents concurrently.  Each agent replies
+            # independently — no DAG, no task preview, no confirmation
+            # wait, no result synthesis.  The user sees every agent's
+            # self-introduction as a separate message.
+            if is_greeting_broadcast and len(target_agents) >= 2:
+
+                async def _broadcast_to_agent(agent_row: dict):
+                    try:
+                        await _invoke_agent(
+                            session_id, content, agent_row, user_id, token,
+                            attachments or [],
+                            sender_override=sender,
+                            quote_references=quote_references,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "ws greeting broadcast agent failed session=%s agent=%s",
+                            session_id, agent_row.get("agent_id", "?"),
+                        )
+
+                # Fire all agents concurrently — each one saves and
+                # broadcasts its own response independently.
+                await asyncio.gather(
+                    *(_broadcast_to_agent(a) for a in target_agents),
+                    return_exceptions=True,
+                )
+                return  # done — don't fall through to single-agent path
 
             # ── Multi-agent path (Architect-driven DAG execution) ──────
             if len(target_agents) >= 2:
@@ -2047,6 +2130,18 @@ async def _invoke_agent(
         if not token.cancelled:
             await manager.stream_broadcast(session_id, message_id, "", is_final=True)
             await _broadcast_final_message(session_id, message_id, response)
+        # ── Append turn to session memory ─────────────────────────
+        try:
+            await _append_turn_to_session_memory(
+                session_id=session_id,
+                user_message=content,
+                agent_response=text,
+                user_id=user_id,
+                sender=sender_override or "",
+                agent_name=agent_id,
+            )
+        except Exception:
+            logger.debug("append turn failed (non-streaming)", exc_info=True)
         return text
 
     # Streaming path — real SSE chunks from the adapter
@@ -2093,7 +2188,25 @@ async def _invoke_agent(
             await manager.stream_broadcast(session_id, message_id, "", is_final=True, sender=agent_id)
             await _broadcast_final_db_message(session_id, message_id)
 
-        return "".join(full_response)
+        response_text = "".join(full_response)
+
+        # ── Auto-generate deploy_card when Deploy agent completes ──
+        # Uses in-memory full_response so it works regardless of DB sync timing.
+        if agent_id == "Deploy" and response_text:
+            await _maybe_broadcast_deploy_card(session_id, message_id, response_text, agent_id)
+        # ── Append turn to session memory ─────────────────────────
+        try:
+            await _append_turn_to_session_memory(
+                session_id=session_id,
+                user_message=content,
+                agent_response=response_text,
+                user_id=user_id,
+                sender=sender_override or "",
+                agent_name=agent_id,
+            )
+        except Exception:
+            logger.debug("append turn failed (streaming)", exc_info=True)
+        return response_text
 
     except Exception as _stream_exc:
         logger.exception("ws _invoke_agent stream failed session=%s agent=%s", session_id, agent_id)
@@ -2263,3 +2376,9 @@ async def _broadcast_final_db_message(session_id: str, message_id: str) -> None:
         except (json.JSONDecodeError, TypeError):
             final["symbolic"] = {}
         await manager.broadcast(session_id, final)
+
+        # ── Auto-generate deploy_card when Deploy agent completes (streaming path) ──
+        sender = final.get("sender", "")
+        content = final.get("content", "")
+        if sender == "Deploy" and content:
+            await _maybe_broadcast_deploy_card(session_id, message_id, content, sender)

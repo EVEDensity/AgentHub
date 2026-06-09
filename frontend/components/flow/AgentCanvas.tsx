@@ -77,6 +77,7 @@ function normalize(d:D|null|undefined):D{if(!d?.nodes?.length)return init;return
 
 export default function AgentCanvas(props?:{
   embedded?:boolean;initialData?:EmbedData;
+  workflowId?:number;
   agents?:{agentId:string;domain:string}[];
   onSave?:(d:any)=>void;onDelete?:()=>void;
 }):JSX.Element{
@@ -116,8 +117,23 @@ export default function AgentCanvas(props?:{
    setMsg('工作流已保存');
    return;
   }
-  const ok=await fetch('/api/canvas/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:CID,name:'Agent Workflow Canvas',data:doc})}).then(()=>true).catch(()=>false);
-  setMsg(ok?'画布已保存':'保存失败')
+  // Standalone mode — save through workflow API
+  const d=docToEmbed(doc,props?.workflowId,wfName,wfDesc,wfKeys,false,true);
+  // Strip fields not expected by AgentRouteRequest schema
+  const payload={name:d.name,description:d.description,triggerKeywords:d.triggerKeywords,nodes:d.nodes,isDefault:d.isDefault};
+  const token=typeof window!=='undefined'?localStorage.getItem('agenthub_token')||'':'';
+  const headers:Record<string,string>={'Content-Type':'application/json'};
+  if(token)headers.Authorization='Bearer '+token;
+  const method=props?.workflowId?'PUT':'POST';
+  const url=props?.workflowId?'/api/admin/workflows/'+props.workflowId:'/api/admin/workflows';
+  const res=await fetch(url,{method,headers,body:JSON.stringify(payload)});
+  if(!res.ok){const err=await res.json().catch(()=>({}));setMsg((err as any).detail||'保存失败');return}
+  const result=await res.json();
+  if(!props?.workflowId&&(result as any)?.route?.id){
+   const newId=(result as any).route.id;
+   if(typeof window!=='undefined')window.history.replaceState(null,'','/canvas?id='+newId);
+   setMsg('工作流已创建 · ID: '+newId);
+  }else{setMsg('工作流已保存')}
  }
  async function exp(){const r=await fetch('/api/canvas/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:CID,image:stage.current?.toDataURL({pixelRatio:2}),data:doc})}).then(r=>r.ok?r.json():null).catch(()=>null);if(r?.url)window.open(r.url,'_blank');setMsg(r?'已导出 PNG':'导出失败')}
 
@@ -125,6 +141,28 @@ export default function AgentCanvas(props?:{
 
  useEffect(()=>{
   if(embedded)return;
+  const token=typeof window!=='undefined'?localStorage.getItem('agenthub_token')||'':'';
+  const headers:Record<string,string>={};
+  if(token)headers.Authorization=`Bearer ${token}`;
+
+  // If a workflowId is provided, load from workflow API
+  if(props?.workflowId){
+   fetch('/api/admin/workflows',{headers}).then(r=>r.json()).then((list:any[])=>{
+    const found=list.find((w:any)=>w.id===props.workflowId);
+    if(found){
+     const ed:EmbedData={
+      id:found.id,name:found.name,description:found.description,triggerKeywords:found.triggerKeywords||[],
+      // Reconstruct edges from node dependencies (backend stores deps, not edges)
+      nodes:found.nodes||[],edges:(()=>{const ee:{from:string;to:string;label?:string}[]=[];(found.nodes||[]).forEach((n:any)=>{(n.dependencies||[]).forEach((dep:string)=>{ee.push({from:dep,to:n.id,label:''})})});return ee.length?ee:(found.edges||[])})()||[],
+      isDefault:found.isDefault,active:found.active
+     };
+     const d=embedToDoc(ed);setDoc(d);setHist([cp(d)]);hiRef.current=0;setHi(0);
+     setWfName(ed.name);setWfDesc(ed.description);setWfKeys(ed.triggerKeywords.join(','));
+    }else{setMsg('工作流未找到，已使用默认模板')}
+   }).catch(()=>setMsg('加载失败，已使用默认模板'));
+   return;
+  }
+  // Legacy: load from canvas API
   fetch(`/api/canvas/${CID}`).then(r=>r.json()).then(r=>{const d=normalize(r.data||init);setDoc(d);setHist([cp(d)]);hiRef.current=0;setHi(0)}).catch(()=>setMsg('加载失败，已使用默认模板'))
  },[]);
 
@@ -142,7 +180,10 @@ export default function AgentCanvas(props?:{
    <div className="border-b border-warm-150 px-6 py-6">
     <div className="text-lg font-semibold tracking-tight text-warm-800">Agent Flow</div>
     <p className="mt-1 text-xs text-warm-400">低代码 Agent 连接画布</p>
-    {!embedded&&<a className="btn-ghost mt-4 inline-flex px-0 text-xs text-primary-500" href="/">← 返回会话</a>}
+    {!embedded&&<>
+     <a className="btn-ghost mt-4 inline-flex px-0 text-xs text-primary-500" href="/admin?menu=工作流">← 返回工作流管理</a>
+     <a className="btn-ghost mt-1 inline-flex px-0 text-xs text-warm-400" href="/">→ 返回会话</a>
+    </>}
     {embedded&&<a className="btn-ghost mt-4 inline-flex px-0 text-xs text-primary-500" href="/canvas" target="_blank">全屏画布 →</a>}
    </div>
    <div className="flex-1 overflow-y-auto px-4 py-5">
@@ -174,7 +215,12 @@ export default function AgentCanvas(props?:{
       <input className="input-field w-36 text-sm" placeholder="工作流名称" value={wfName} onChange={e=>setWfName(e.target.value)}/>
       <input className="input-field w-44 text-sm" placeholder="描述" value={wfDesc} onChange={e=>setWfDesc(e.target.value)}/>
       <input className="input-field w-40 text-sm" placeholder="触发关键词（逗号分隔）" value={wfKeys} onChange={e=>setWfKeys(e.target.value)}/>
-     </div>:<><div className="text-sm font-semibold text-warm-800">Workflow Canvas</div><div className="text-[11px] text-warm-400">缩放 {Math.round(doc.viewport.scale*100)}% · 节点 {doc.nodes.length} · 连线 {doc.edges.length}</div></>}
+     </div>:<div className="flex items-center gap-3">
+      <input className="input-field w-36 text-sm" placeholder="工作流名称" value={wfName} onChange={e=>setWfName(e.target.value)}/>
+      <input className="input-field w-44 text-sm" placeholder="描述" value={wfDesc} onChange={e=>setWfDesc(e.target.value)}/>
+      <input className="input-field w-40 text-sm" placeholder="触发关键词（逗号分隔）" value={wfKeys} onChange={e=>setWfKeys(e.target.value)}/>
+      <span className="text-[11px] text-warm-400 ml-2 shrink-0">缩放 {Math.round(doc.viewport.scale*100)}% · 节点 {doc.nodes.length} · 连线 {doc.edges.length}</span>
+     </div>}
     </div>
     <div className="flex items-center gap-1.5">
      {msg&&<span className="mr-2 rounded-lg bg-primary-50 px-3 py-1.5 text-[11px] text-primary-600">{msg}</span>}
@@ -183,6 +229,7 @@ export default function AgentCanvas(props?:{
      <Btn onClick={()=>{const ns=lim(doc.viewport.scale+.1),cx=sz.width/2,cy=sz.height/2,wx=(cx-doc.viewport.x)/doc.viewport.scale,wy=(cy-doc.viewport.y)/doc.viewport.scale;commit({...doc,viewport:{x:cx-wx*ns,y:cy-wy*ns,scale:ns}},true)}}>放大</Btn>
      <Btn onClick={()=>{commit({...doc,viewport:{x:0,y:0,scale:1}},true);setMsg('视角已重置')}}>重置视角</Btn>
      {!embedded&&<Btn onClick={exp}>导出 PNG</Btn>}
+     {!embedded&&props?.workflowId&&<button className="btn-ghost text-sm text-red-500" onClick={async()=>{if(!window.confirm(`确认删除工作流 "${wfName}"？此操作不可撤销。`))return;const token=typeof window!=='undefined'?localStorage.getItem('agenthub_token')||'':'';const h:Record<string,string>={'Content-Type':'application/json'};if(token)h.Authorization='Bearer '+token;const ok=await fetch('/api/admin/workflows/'+props.workflowId,{method:'DELETE',headers:h}).then(r=>r.ok).catch(()=>false);setMsg(ok?'工作流已删除':'删除失败');if(ok&&typeof window!=='undefined'){window.location.href='/admin?menu=工作流'}}}>删除工作流</button>}
      {embedded&&props?.initialData?.id&&<button className="btn-ghost text-sm text-red-500" onClick={()=>{if(window.confirm(`确认删除工作流 "${wfName}"？`))props?.onDelete?.()}}>删除工作流</button>}
      <button className="btn-primary" onClick={save}>保存</button>
     </div>

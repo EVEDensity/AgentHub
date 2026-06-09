@@ -19,8 +19,8 @@ class TaskStateMachine:
         "FAILED": {"RUNNING"},
     }
 
-    async def create_task(self, session_id: str, message: str) -> dict:
-        dag, template_id, route = await agent_route_service.resolve_dag(message)
+    async def create_task(self, session_id: str, message: str, user_id: str = "") -> dict:
+        dag, template_id, route = await agent_route_service.resolve_dag(message, user_id)
         template_engine.validate(dag)
         task_id = str(uuid.uuid4())
         route_id = route["id"] if route else None

@@ -25,6 +25,11 @@ const nextConfig = {
     ];
   },
   webpack: (config, { isServer, dev }) => {
+    // Konva tries to require('canvas') for server-side rendering — we only
+    // use react-konva client-side (ssr:false), so exclude it from server bundles.
+    if (isServer) {
+      config.externals = [...(config.externals || []), 'canvas'];
+    }
     if (!isServer) {
       // Only customize webpack production optimizations in prod builds.
       // In dev mode, these optimizations can make Next's on-demand page
