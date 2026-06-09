@@ -18,30 +18,54 @@ logger = logging.getLogger("agenthub.orchestrator_preprocessor")
 
 # ── Prompt for lightweight question pre-processing ───────────────────
 
-PREPROCESS_SYSTEM = """你是一个技术需求分析助手。你的任务是将用户的原始问题转化为更清晰、结构化、适合AI执行的专业描述。
+PREPROCESS_SYSTEM = """你是一个资深技术架构师兼PM。你的任务是将用户的原始问题转化为结构化、可执行的专业方案。
 
 ## 你的任务
-1. **意图分类**: 判断用户问题的类型
-   - greeting: 简单问候/闲聊（你好、谢谢、再见、今天怎么样）
-   - factual: 事实查询/知识问答（什么是XXX、如何XXX、解释XXX）
-   - technical_development: 技术开发（包含前后端/全栈/功能实现/CRUD等）
-   - code_generation: 纯代码生成（写一个函数/脚本/组件）
-   - architecture: 架构设计/技术方案（系统设计、技术选型）
-   - deployment: 部署运维（发布、上线、CI/CD、容器化）
-   - debugging: 调试修复（修bug、排查问题、错误分析）
 
-2. **问题重述**: 将用户的问题用更清晰、结构化、专业化的语言重述一遍，补全隐含的技术上下文。
+### 1. 意图分类
+判断用户问题的类型：
+- greeting: 简单问候/闲聊（你好、谢谢、再见、今天怎么样）
+- factual: 事实查询/知识问答（什么是XXX、如何XXX、解释XXX）
+- technical_development: 技术开发（前后端/全栈/功能实现/CRUD等）
+- code_generation: 纯代码生成（写一个函数/脚本/组件）
+- architecture: 架构设计/技术方案（系统设计、技术选型）
+- deployment: 部署运维（发布、上线、CI/CD、容器化）
+- debugging: 调试修复（修bug、排查问题、错误分析）
 
-3. **子任务拆解**: 如果问题涉及多步骤（2-5步），将其拆解为独立的子任务，每个子任务明确：
-   - id: 序号
-   - title: 子任务简短标题
-   - description: 具体要做什么（详细，让下游Agent能直接执行）
-   - domain: 适合的Agent角色（architect/codegen/review/test/deploy/general）
-   - depends_on: 依赖的前置子任务id列表（如 [1] 表示依赖任务1完成）
+### 2. 需求提取（仅复杂任务）
+从用户问题中提取：
+- requirements: 功能需求列表（用户到底要什么功能？）
+- non_functional_requirements: 非功能性需求（性能、安全、可扩展性、响应式等）
 
-4. **约束提取**: 提取用户显式或隐式提到的技术约束（语言、框架、平台、性能、安全等）
+### 3. 方案探索与对比（仅复杂任务 — 核心能力）
+基于需求，提出 2-3 个明显不同的技术方案。每个方案包含：
+- id: "方案A" / "方案B" / "方案C"
+- name: 方案简短名称（如 "React + FastAPI + PostgreSQL"）
+- tech_stack: 技术栈列表
+- architecture: 架构简述（1-2句话）
+- pros: 优点列表（3-5个）
+- cons: 缺点列表（3-5个）
+- estimated_effort: 预估工作量（如 "2-3天"）
+- risk_level: low / medium / high
+- score: 综合评分（0-100，基于开发效率、性能、可维护性、学习成本等维度）
 
-5. **Agent 路由建议**: 为复杂任务提供推荐的 Agent 调用顺序和潜在的冲突点/失败点
+方案必须有实质差异（如不同的前端框架、不同的后端语言、不同的数据库策略），不能只是同一方案的微调。
+
+### 4. 方案推荐
+- recommended_solution_id: 推荐哪个方案（填方案id如"方案A"）
+- recommendation_reason: 推荐理由（2-3句话，说明为什么这个方案最适合当前需求）
+
+### 5. 子任务拆解
+将推荐方案拆解为2-5个子任务：
+- id: 序号
+- title: 子任务简短标题
+- description: 具体做什么（详细，包含技术栈信息，让下游Agent能直接执行）
+- domain: 适合的Agent角色（architect/codegen/review/test/deploy/general）
+- depends_on: 依赖的前置子任务id列表
+
+### 6. 约束提取 & Agent路由
+- constraints: 技术约束列表
+- routing: 执行顺序、并行机会、潜在冲突、失败降级方案
 
 ## 输出格式
 严格的JSON对象（不要markdown代码块，不要输出任何解释文字）：
@@ -50,23 +74,39 @@ PREPROCESS_SYSTEM = """你是一个技术需求分析助手。你的任务是将
   "intent_type": "technical_development",
   "is_simple": false,
   "clarified_question": "重述后的清晰问题（1-3句话）",
-  "sub_tasks": [
+  "requirements": ["用户注册/登录", "权限管理(RBAC)", "用户列表CRUD", "用户资料编辑"],
+  "non_functional_requirements": ["响应式设计", "JWT认证", "密码bcrypt加密", "API限流"],
+  "solutions": [
     {
-      "id": 1,
-      "title": "需求分析与架构设计",
-      "description": "分析博客网站需求，设计技术架构方案...",
-      "domain": "architect",
-      "depends_on": []
+      "id": "方案A",
+      "name": "React + FastAPI + PostgreSQL",
+      "tech_stack": ["React 18", "FastAPI", "PostgreSQL", "Ant Design", "SQLAlchemy"],
+      "architecture": "前后端分离架构，React SPA通过RESTful API与FastAPI通信，PostgreSQL存储用户数据",
+      "pros": ["开发效率高，Python全栈统一", "FastAPI自动生成API文档", "Ant Design组件丰富，UI开发快", "PostgreSQL成熟稳定"],
+      "cons": ["需要单独部署数据库", "React状态管理需额外配置", "SEO不友好（SPA通病）"],
+      "estimated_effort": "2-3天",
+      "risk_level": "low",
+      "score": 92
     },
     {
-      "id": 2,
-      "title": "代码实现",
-      "description": "基于架构方案生成前后端代码...",
-      "domain": "codegen",
-      "depends_on": [1]
+      "id": "方案B",
+      "name": "Next.js + Prisma + SQLite",
+      "tech_stack": ["Next.js 14", "Prisma ORM", "SQLite", "Tailwind CSS", "NextAuth.js"],
+      "architecture": "Next.js全栈应用，API Routes处理后端逻辑，Prisma管理数据库，单体部署",
+      "pros": ["单一项目结构，部署简单", "TypeScript全栈类型安全", "Tailwind CSS快速样式", "文件数据库零配置"],
+      "cons": ["SQLite不适合高并发", "Prisma学习曲线陡峭", "Next.js服务端渲染增加复杂度"],
+      "estimated_effort": "2-3天",
+      "risk_level": "medium",
+      "score": 78
     }
   ],
-  "constraints": ["使用React", "需要响应式设计"],
+  "recommended_solution_id": "方案A",
+  "recommendation_reason": "方案A使用成熟的Python+PostgreSQL技术栈，长期可维护性好，与当前AgentHub平台的Python生态一致，便于集成和扩展。方案B虽然部署简单但SQLite不适合生产环境。",
+  "sub_tasks": [
+    {"id": 1, "title": "数据库模型设计", "description": "使用SQLAlchemy设计User/Role/Permission模型...", "domain": "architect", "depends_on": []},
+    {"id": 2, "title": "后端API实现", "description": "使用FastAPI实现用户CRUD API...", "domain": "codegen", "depends_on": [1]}
+  ],
+  "constraints": ["使用React", "需要响应式设计", "JWT认证"],
   "suggested_approach": "Architect→CodeGen→Review→Test 的顺序执行",
   "routing": {
     "execution_order": ["Architect", "CodeGen", "Review", "Test"],
@@ -77,12 +117,12 @@ PREPROCESS_SYSTEM = """你是一个技术需求分析助手。你的任务是将
 }
 
 ## 规则
-- 问候/闲聊/感谢 → is_simple=true, clarified_question="", sub_tasks=[], routing=null, suggested_approach="直接友好回复"
-- 简单事实查询（≤1句话能回答） → is_simple=true, clarified_question=重述的问题, sub_tasks=[]
-- 技术开发/代码生成/架构设计 → is_simple=false, 必须拆解sub_tasks（2-5个），必须提供routing
+- 问候/闲聊/感谢 → is_simple=true, clarified_question="", solutions=[], sub_tasks=[], routing=null
+- 简单事实查询 → is_simple=true, clarified_question=重述的问题, solutions=[], sub_tasks=[]
+- 技术开发/代码生成/架构设计 → is_simple=false, 必须提供 requirements+solutions（2-3个）+sub_tasks（2-5个）+routing
+- solutions 数组必须有 2-3 个方案，方案间必须有实质差异
+- recommended_solution_id 必须对应 solutions 中某个方案的 id
 - depends_on 列表填前置任务的 id 数字
-- routing.potential_conflicts 预判哪些Agent输出可能冲突（如Review可能否定CodeGen的方案）
-- routing.fallback_agents 为每个关键Agent指定失败时的替代方案
 - 只输出JSON，不要任何额外文字"""
 
 # ── Simple question detection ─────────────────────────────────────────
@@ -116,6 +156,55 @@ _TECH_KEYWORDS = [
 ]
 
 
+# ── Compound-task heuristic keywords ───────────────────────────────────
+# When a user message (even without @Orchestrator) matches these patterns,
+# the system may auto-decompose it into DAG sub-tasks to avoid timeouts
+# on overly ambitious single-shot LLM calls.
+
+_COMPOUND_KEYWORDS = [
+    "完整", "整个", "全部", "所有", "整套",
+    "前后端", "全栈", "前端和后端", "后端和前端",
+    "多个文件", "多文件", "批量", "一起",
+    "同时生成", "同时创建", "一整套",
+]
+
+
+def should_decompose(content: str) -> bool:
+    """Determine whether a user message should be auto-decomposed into DAG sub-tasks.
+
+    Returns True when the message is long enough AND contains compound-task
+    indicators, suggesting it's too large for a single LLM call to handle
+    within the per-request timeout.
+
+    Only used when the user does NOT explicitly invoke @Orchestrator.
+    """
+    from app.config import AGENTHUB_AUTO_DECOMPOSE, AGENTHUB_AUTO_DECOMPOSE_MIN_LENGTH
+
+    if not AGENTHUB_AUTO_DECOMPOSE:
+        return False
+
+    text = (content or "").strip()
+    if len(text) < AGENTHUB_AUTO_DECOMPOSE_MIN_LENGTH:
+        return False
+
+    # Check for compound-task keywords
+    text_lower = text.lower()
+    for kw in _COMPOUND_KEYWORDS:
+        if kw in text_lower:
+            return True
+
+    # Heuristic: very long messages (>1500 chars) are likely compound
+    if len(text) > 1500:
+        return True
+
+    # Check for multiple file-creation patterns
+    file_patterns = re.findall(r"(?:创建|生成|写入|新建|写|编写)\S*(?:文件|代码|页面|组件|模块)", text)
+    if len(file_patterns) >= 2:
+        return True
+
+    return False
+
+
 class OrchestratorPreprocessor:
     """Lightweight pre-processor that analyzes and restructures user questions.
 
@@ -129,8 +218,8 @@ class OrchestratorPreprocessor:
     Simple questions (greetings, short queries) skip pre-processing.
     """
 
-    MAX_PREPROCESS_TOKENS = 600
-    PREPROCESS_TIMEOUT = 20.0  # seconds — keep it fast
+    MAX_PREPROCESS_TOKENS = 1200
+    PREPROCESS_TIMEOUT = 25.0  # seconds — slightly longer for solution exploration
 
     def __init__(self) -> None:
         pass
@@ -365,6 +454,11 @@ class OrchestratorPreprocessor:
             "intent_type": data.get("intent_type", "technical_development"),
             "is_simple": False,
             "clarified_question": data.get("clarified_question", ""),
+            "requirements": data.get("requirements", []),
+            "non_functional_requirements": data.get("non_functional_requirements", []),
+            "solutions": data.get("solutions", []),
+            "recommended_solution_id": data.get("recommended_solution_id", ""),
+            "recommendation_reason": data.get("recommendation_reason", ""),
             "sub_tasks": data.get("sub_tasks", []),
             "constraints": data.get("constraints", []),
             "suggested_approach": data.get("suggested_approach", ""),
@@ -377,8 +471,8 @@ class OrchestratorPreprocessor:
         """Format a pre-processing result as a Markdown block for the main prompt.
 
         This is injected before the user's original question in build_prompt().
-        Includes agent routing suggestions, potential conflicts, and fallback
-        strategies to guide the Orchestrator's dispatch decisions.
+        Includes requirements, selected solution, agent routing suggestions,
+        potential conflicts, and fallback strategies.
         """
         if not preprocessed or preprocessed.get("is_simple"):
             return ""
@@ -389,6 +483,32 @@ class OrchestratorPreprocessor:
         clarified = preprocessed.get("clarified_question", "").strip()
         if clarified:
             lines.append(f"**问题重述**: {clarified}")
+
+        # ── Requirements ──────────────────────────────────────────────
+        requirements = preprocessed.get("requirements", [])
+        if requirements:
+            lines.append("\n**功能需求**:")
+            for req in requirements:
+                lines.append(f"  - {req}")
+
+        nf_reqs = preprocessed.get("non_functional_requirements", [])
+        if nf_reqs:
+            lines.append("\n**非功能需求**:")
+            for nf in nf_reqs:
+                lines.append(f"  - {nf}")
+
+        # ── Selected solution context ──────────────────────────────────
+        selected_solution = preprocessed.get("_selected_solution")
+        if selected_solution and isinstance(selected_solution, dict):
+            sol_name = selected_solution.get("name", "")
+            sol_stack = selected_solution.get("tech_stack", [])
+            sol_arch = selected_solution.get("architecture", "")
+            if sol_name:
+                lines.append(f"\n**选定技术方案**: {sol_name}")
+            if sol_stack:
+                lines.append(f"**技术栈**: {', '.join(sol_stack)}")
+            if sol_arch:
+                lines.append(f"**架构**: {sol_arch}")
 
         # Sub-tasks with dependency info
         sub_tasks = preprocessed.get("sub_tasks", [])
@@ -467,6 +587,7 @@ class OrchestratorPreprocessor:
         self,
         preprocess_result: dict[str, Any],
         content: str = "",
+        solution_context: dict[str, Any] | None = None,
     ) -> Any | None:
         """Build a DAGConfig from the preprocessor's sub-task decomposition.
 
@@ -479,6 +600,13 @@ class OrchestratorPreprocessor:
         - Dependencies are enforced (a node waits for its ``depends_on``).
         - Node status is broadcast to the frontend in real time.
         - Failures trigger retries and fallback chains.
+
+        Args:
+            preprocess_result: Parsed pre-processing result dict.
+            content: Original user message (fallback for analysis field).
+            solution_context: Optional dict with the user-selected solution
+                (id, name, tech_stack, architecture).  Injected into node
+                descriptions so downstream agents know the tech stack.
 
         Returns a ``DAGConfig`` or ``None`` if the result isn't suitable
         for DAG construction (e.g. is_simple=True or no sub_tasks).
@@ -493,6 +621,19 @@ class OrchestratorPreprocessor:
         routing = preprocess_result.get("routing") or {}
         execution_order = routing.get("execution_order", [])
         parallel_hints = routing.get("parallel_opportunities", [])
+
+        # ── Build solution context prefix for node descriptions ──────
+        sol_prefix = ""
+        if solution_context and isinstance(solution_context, dict):
+            sol_name = solution_context.get("name", "")
+            sol_stack = solution_context.get("tech_stack", [])
+            if sol_name or sol_stack:
+                parts = []
+                if sol_name:
+                    parts.append(f"技术方案: {sol_name}")
+                if sol_stack:
+                    parts.append(f"技术栈: {', '.join(sol_stack)}")
+                sol_prefix = "；".join(parts) + "。\n"
 
         # ── Map domain → agent_id ────────────────────────────────────
         DOMAIN_TO_AGENT: dict[str, str] = {
@@ -514,6 +655,9 @@ class OrchestratorPreprocessor:
             title = st.get("title", "")
             desc = st.get("description", "")
 
+            # Prepend solution context to node description
+            full_desc = sol_prefix + (f"{title}: {desc}" if title else desc)
+
             # Normalize depends_on to string IDs ("1" → "n1")
             deps_raw = st.get("depends_on", [])
             dep_ids: list[str] = []
@@ -524,7 +668,7 @@ class OrchestratorPreprocessor:
                 id=f"n{sid}",
                 domain=domain,
                 agent=agent_id,
-                description=f"{title}: {desc}" if title else desc,
+                description=full_desc,
                 dependencies=dep_ids,
                 status="PENDING",
                 priority=1,
@@ -555,6 +699,7 @@ class OrchestratorPreprocessor:
             nodes=nodes,
             execution_strategy=strategy,
             analysis=analysis,
+            solution_context=solution_context,
         )
 
 

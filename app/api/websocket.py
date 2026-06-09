@@ -37,6 +37,14 @@ _permission_state: dict[str, dict[str, dict]] = {}
 # 1 = 询问 (ask), 2 = 跳过 (bypass), 3 = 计划 (plan/read-only)
 _session_exec_permission: dict[str, int] = {}
 
+# ── Solution selection state (session-scoped async Events) ──────────
+# When the Orchestrator proposes solutions, it sets an Event here and
+# waits.  The frontend sends "solution_selection" to resolve it.
+# {session_id: asyncio.Event}
+_solution_selection_events: dict[str, asyncio.Event] = {}
+# {session_id: {"solutionId": "...", "autoSelected": bool}}
+_solution_selection_results: dict[str, dict] = {}
+
 
 def get_session_exec_permission(session_id: str) -> int:
     """Return the exec_permission for a session (default 1 = ask)."""
@@ -544,6 +552,29 @@ async def _handle_task_preview_response(
         })
 
 
+async def _handle_solution_selection(
+    session_id: str, data: dict, user_id: str = "", user_name: str = "",
+) -> None:
+    """User selected a solution from the solution_proposal bubble.
+
+    Signals the waiting Orchestrator task to proceed with the chosen
+    solution (or the recommended one if auto-confirmed).
+    """
+    solution_id = data.get("solutionId", "")
+    auto_selected = data.get("autoSelected", False)
+
+    if session_id in _solution_selection_events:
+        _solution_selection_results[session_id] = {
+            "solutionId": solution_id,
+            "autoSelected": auto_selected,
+        }
+        _solution_selection_events[session_id].set()
+        logger.info(
+            "solution_selection: session=%s solution=%s auto=%s user=%s",
+            session_id, solution_id, auto_selected, user_id,
+        )
+
+
 async def _handle_diff_decision(session_id: str, data: dict) -> None:
     """User clicked Accept or Reject on a diff bubble from CloudCode."""
     decision = data.get("decision", "reject")
@@ -780,6 +811,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
 
             if data.get("event") == "task_preview_response":
                 await _handle_task_preview_response(session_id, data, user_id, user["name"])
+                continue
+
+            if data.get("event") == "solution_selection":
+                await _handle_solution_selection(session_id, data, user_id, user["name"])
                 continue
 
             if data.get("event") == "diff_decision":
@@ -1466,6 +1501,97 @@ async def _invoke_agent(
         except Exception:
             logger.debug("ws orchestrator preprocessor failed", exc_info=True)
 
+    # ── Solution proposal handling ─────────────────────────────────────
+    # When the preprocessor identifies multiple solution approaches, we
+    # broadcast them to the frontend and let the user choose (or auto-
+    # confirm after a timeout).  The selected solution's tech stack is
+    # then injected into the DAG nodes so downstream agents know exactly
+    # what to use.
+    solution_context: dict[str, Any] | None = None
+    if agent_id == "Orchestrator" and preprocess_result and not preprocess_result.get("is_simple"):
+        solutions = preprocess_result.get("solutions", [])
+        if solutions and len(solutions) >= 2:
+            _solution_msg_id = str(uuid.uuid4())
+            _auto_confirm_sec = 15
+
+            # Normalize solution dicts for the frontend
+            _frontend_solutions = []
+            for s in solutions:
+                _frontend_solutions.append({
+                    "id": s.get("id", ""),
+                    "name": s.get("name", ""),
+                    "techStack": s.get("tech_stack", []),
+                    "architecture": s.get("architecture", ""),
+                    "pros": s.get("pros", []),
+                    "cons": s.get("cons", []),
+                    "estimatedEffort": s.get("estimated_effort", ""),
+                    "riskLevel": s.get("risk_level", "medium"),
+                    "score": s.get("score", 80),
+                })
+
+            recommended_id = preprocess_result.get("recommended_solution_id", "")
+            recommendation_reason = preprocess_result.get("recommendation_reason", "")
+
+            logger.info(
+                "ws orchestrator: broadcasting solution_proposal session=%s solutions=%d recommended=%s",
+                session_id, len(_frontend_solutions), recommended_id,
+            )
+
+            # ── Set up async wait for user selection ──────────────────
+            _sel_event = asyncio.Event()
+            _solution_selection_events[session_id] = _sel_event
+            _solution_selection_results.pop(session_id, None)
+
+            await manager.broadcast_solution_proposal(
+                session_id=session_id,
+                message_id=_solution_msg_id,
+                intent_type=preprocess_result.get("intent_type", "technical_development"),
+                requirements=preprocess_result.get("requirements", []),
+                non_functional_requirements=preprocess_result.get("non_functional_requirements", []),
+                constraints=preprocess_result.get("constraints", []),
+                solutions=_frontend_solutions,
+                recommended_solution_id=recommended_id,
+                recommendation_reason=recommendation_reason,
+                auto_confirm_seconds=_auto_confirm_sec,
+            )
+
+            # Wait for user selection or auto-confirm timeout
+            try:
+                await asyncio.wait_for(_sel_event.wait(), timeout=_auto_confirm_sec)
+                _selection = _solution_selection_results.get(session_id, {})
+                logger.info(
+                    "ws orchestrator: solution selected session=%s solution=%s",
+                    session_id, _selection.get("solutionId", "?"),
+                )
+            except asyncio.TimeoutError:
+                # Auto-confirm the recommended solution
+                _selection = {"solutionId": recommended_id, "autoSelected": True}
+                logger.info(
+                    "ws orchestrator: solution auto-confirmed session=%s solution=%s",
+                    session_id, recommended_id,
+                )
+            finally:
+                _solution_selection_events.pop(session_id, None)
+                _solution_selection_results.pop(session_id, None)
+
+            # Resolve the selected solution to its full context
+            selected_id = _selection.get("solutionId", recommended_id)
+            for s in solutions:
+                if s.get("id") == selected_id:
+                    solution_context = s
+                    break
+            if not solution_context and solutions:
+                # Fallback to recommended if selection not found
+                for s in solutions:
+                    if s.get("id") == recommended_id:
+                        solution_context = s
+                        break
+                if not solution_context:
+                    solution_context = solutions[0]
+
+            # Store selection in preprocess_result for format_for_prompt
+            preprocess_result["_selected_solution"] = solution_context
+
     # ── DAG-based execution path ──────────────────────────────────────
     # When the Orchestrator preprocessor produces a sub-task decomposition
     # with routing, execute the tasks directly via DAGExecutor instead of
@@ -1483,7 +1609,7 @@ async def _invoke_agent(
     if agent_id == "Orchestrator" and preprocess_result and not preprocess_result.get("is_simple"):
         try:
             dag_config = orchestrator_preprocessor.build_dag_from_preprocess(
-                preprocess_result, content
+                preprocess_result, content, solution_context=solution_context,
             )
             if dag_config is not None and len(dag_config.nodes) >= 2:
                 # Look up all agents referenced in the DAG
@@ -1641,6 +1767,16 @@ async def _invoke_agent(
     async def _on_tool_event(status: str, tool_calls: list[dict], tool_results: list[dict] | None) -> None:
         """Broadcast tool call/result events and progress updates to the frontend."""
         nonlocal thinking_sent_iterations
+        # ★ 改进3: "agent_thinking" status — 工具循环进度事件
+        # When status is "agent_thinking", tool_calls is actually a dict payload
+        # with messageId, agentId, phase, details fields.
+        if status == "agent_thinking" and isinstance(tool_calls, dict):
+            await manager.broadcast(session_id, {
+                "event": "agent_thinking",
+                "sessionId": session_id,
+                **tool_calls,
+            })
+            return
         if status == "calling":
             # Send tool_call event so the frontend can render tool-call bubbles
             tool_names = [tc.get("name", "unknown") for tc in tool_calls]

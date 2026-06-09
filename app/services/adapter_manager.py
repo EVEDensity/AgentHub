@@ -209,8 +209,36 @@ class BaseAdapter:
 
     @property
     def default_model(self) -> str:
-        """Default model name — overridden by subclasses."""
-        return ""
+        """Default model name — overridden by subclasses.
+
+        Subclasses may declare ``default_model`` as a class attribute
+        (preferred) or assign it in ``__init__`` (supported via the
+        setter below).  The getter resolves the value with the
+        following precedence:
+
+        1. Instance attribute ``_default_model`` (set via constructor)
+        2. Class attribute ``default_model`` (declared on subclass)
+        3. Empty string (base default)
+        """
+        # Instance attribute set via the constructor takes precedence
+        instance_val = self.__dict__.get("_default_model")
+        if instance_val is not None:
+            return instance_val
+        # Fall back to class attribute (most subclasses use this form)
+        return getattr(type(self), "default_model", "")
+
+    @default_model.setter
+    def default_model(self, value: str) -> None:
+        """Allow ``self.default_model = ...`` in ``__init__`` of adapters
+        that take a ``default_model`` constructor argument (e.g. the
+        subprocess-based :class:`CloudCodeAdapter`).  Subclasses that
+        declare ``default_model`` as a class attribute continue to work
+        unchanged because the class attribute is returned by the getter
+        until the first instance assignment shadows it."""
+        self._default_model = value
+
+    def _get_default_model(self) -> str:
+        return getattr(self, "_default_model", "")
 
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", **kwargs: Any) -> str:
         raise NotImplementedError
@@ -524,7 +552,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
             json_body=payload,
         )
         if response.status_code >= 400:
-            raise LLMAdapterError(response.text)
+            raise LLMAdapterError(f"HTTP {response.status_code}: {str(response.text)[:500]}")
         data = response.json()
         usage = data.get("usage", {})
         self.last_usage = {
@@ -627,7 +655,10 @@ class OpenAICompatibleAdapter(BaseAdapter):
         async with client.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=payload) as response:
                 if response.status_code >= 400:
                     body = await response.aread()
-                    raise LLMAdapterError(body.decode(errors="replace"))
+                    body_text = body.decode(errors="replace")
+                    raise LLMAdapterError(
+                        f"HTTP {response.status_code}: {body_text[:500]}"
+                    )
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data: "):
                         continue
@@ -778,7 +809,7 @@ class AnthropicAdapter(BaseAdapter):
             json_body=payload,
         )
         if response.status_code >= 400:
-            raise LLMAdapterError(response.text)
+            raise LLMAdapterError(f"HTTP {response.status_code}: {str(response.text)[:500]}")
         data = response.json()
         usage = data.get("usage", {})
         # Guard: Anthropic may return null entries in content array
@@ -825,7 +856,7 @@ class AnthropicAdapter(BaseAdapter):
         async with client.stream("POST", url, headers=headers, json=payload) as response:
             if response.status_code >= 400:
                 body = await response.aread()
-                raise LLMAdapterError(body.decode(errors="replace"))
+                raise LLMAdapterError(f"HTTP {response.status_code}: {body.decode(errors='replace')[:500]}")
 
             async for line in response.aiter_lines():
                 if not line or not line.startswith("data: "):
@@ -894,7 +925,7 @@ class OllamaAdapter(BaseAdapter):
         try:
             response = await _retry_request("POST", url, json_body=payload)
             if response.status_code >= 400:
-                raise LLMAdapterError(response.text)
+                raise LLMAdapterError(f"HTTP {response.status_code}: {str(response.text)[:500]}")
             data = response.json()
             result = data.get("response", "")
             self.last_usage = {
@@ -916,7 +947,7 @@ class OllamaAdapter(BaseAdapter):
             async with client.stream("POST", url, json=payload) as response:
                 if response.status_code >= 400:
                     body = await response.aread()
-                    raise LLMAdapterError(body.decode(errors="replace"))
+                    raise LLMAdapterError(f"HTTP {response.status_code}: {body.decode(errors='replace')[:500]}")
                 async for line in response.aiter_lines():
                     if not line:
                         continue
@@ -982,6 +1013,27 @@ class AdapterManager:
                 from app.services.adapters.cloudcode_adapter import CloudCodeAdapter
                 self.adapters["cloud_code"] = CloudCodeAdapter()
             return self.adapters["cloud_code"]
+
+        # Local agent adapters — lazy-loaded to avoid circular imports
+        # and to skip importing when the CLI tools are not installed.
+        if key == "local_claude":
+            if "local_claude" not in self.adapters:
+                from app.services.adapters.local_claude_adapter import ClaudeCodeAdapter
+                self.adapters["local_claude"] = ClaudeCodeAdapter()
+            return self.adapters["local_claude"]
+
+        if key == "local_codex":
+            if "local_codex" not in self.adapters:
+                from app.services.adapters.local_codex_adapter import CodexCLIAdapter
+                self.adapters["local_codex"] = CodexCLIAdapter()
+            return self.adapters["local_codex"]
+
+        if key == "local_openclaw":
+            if "local_openclaw" not in self.adapters:
+                from app.services.adapters.local_openclaw_adapter import OpenClawAdapter
+                self.adapters["local_openclaw"] = OpenClawAdapter()
+            return self.adapters["local_openclaw"]
+
         return self.adapters.get(key, self.adapters["mock"])
 
 

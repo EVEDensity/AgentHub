@@ -5,6 +5,7 @@ import type { Agent, ConsolidationResult, MemoryDetail, MemoryFileInfo, MemorySe
 import { PLATFORM_LABELS, PLATFORM_COLORS } from '../types';
 import MarkdownRenderer from '../components/chat/MarkdownRenderer';
 import TagInput from '../components/admin/TagInput';
+import LocalAgentModal from '../components/admin/LocalAgentModal';
 
 // ── Dynamic imports for heavy / conditionally-rendered sections ──
 const CodeReviewPanel = dynamic(() => import('../components/chat/CodeReviewPanel'), {
@@ -12,6 +13,10 @@ const CodeReviewPanel = dynamic(() => import('../components/chat/CodeReviewPanel
   loading: () => null,
 });
 const AuditLogList = dynamic(() => import('../components/admin/AuditLogList'), {
+  ssr: false,
+  loading: () => null,
+});
+const MCPLayout = dynamic(() => import('../components/admin/MCPDashboard/MCPLayout'), {
   ssr: false,
   loading: () => null,
 });
@@ -62,6 +67,7 @@ export default function AdminPage(): JSX.Element {
   const [selectedAdapterInfo, setSelectedAdapterInfo] = useState<{ id: string; name: string; description: string; default_model: string; default_base_url: string; requires_api_key: boolean; category: string } | null>(null);
   const [editSelectedAdapterInfo, setEditSelectedAdapterInfo] = useState<{ id: string; name: string; description: string; default_model: string; default_base_url: string; requires_api_key: boolean; category: string } | null>(null);
   const [isCreatingAgent, setIsCreatingAgent] = useState(false);
+  const [showLocalAgentModal, setShowLocalAgentModal] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [editAgent, setEditAgent] = useState({
     agentId: '',
@@ -1088,9 +1094,14 @@ export default function AdminPage(): JSX.Element {
             <h2 className="text-[34px] font-semibold leading-tight text-warm-900">服务商</h2>
             <p className="mt-1 text-sm text-warm-500">管理 API 服务商以访问模型。</p>
           </div>
-          <button className="btn-primary" onClick={() => setIsCreatingAgent(true)}>
-            + 添加服务商
-          </button>
+          <div className="flex items-center gap-2">
+            <button className="btn-secondary" onClick={() => setShowLocalAgentModal(true)}>
+              💻 接入本地 Agent
+            </button>
+            <button className="btn-primary" onClick={() => setIsCreatingAgent(true)}>
+              + 添加服务商
+            </button>
+          </div>
         </div>
 
         {/* Default model explanation banner */}
@@ -1156,6 +1167,11 @@ export default function AdminPage(): JSX.Element {
                         >
                           {PLATFORM_LABELS[a.adapterType] || a.adapterType}
                         </span>
+                        {a.adapterType?.startsWith('local_') && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                            💻 本地
+                          </span>
+                        )}
                         {isDefaultAgent ? <span className="rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700">默认对话模型</span> : null}
                       </div>
                       <div className="mt-1 truncate text-sm text-warm-500">
@@ -2941,6 +2957,7 @@ index a1b2c3d..e4f5g6h 100644
     if (activeMenu === '通用') return renderGeneralModule();
     if (activeMenu === '审计日志') return <AuditLogList authHeaders={authHeaders} />;
     if (activeMenu === '用户管理') return renderUserManagementModule();
+    if (activeMenu === 'MCP') return <MCPLayout />;
 
     return (
       <section className="card p-6">
@@ -3152,6 +3169,14 @@ index a1b2c3d..e4f5g6h 100644
           </div>
         ) : null}
       </div>
+
+      {/* Local Agent Modal */}
+      <LocalAgentModal
+        visible={showLocalAgentModal}
+        onClose={() => setShowLocalAgentModal(false)}
+        onRegistered={() => refresh()}
+        authHeaders={authHeaders}
+      />
     </div>
   );
 }

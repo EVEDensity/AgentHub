@@ -17,7 +17,30 @@ from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
+from app.services.text_processing import (
+    filter_streaming_chunk,
+    is_code_request,
+    is_codegen_json_response,
+    latex_to_unicode,
+    normalize_agent_output,
+    remove_repeated_text,
+    reset_stream_filter,
+    strip_codegen_prefix,
+    strip_kimi_thinking,
+    strip_think_tags,
+)
 from app.utils.async_file import aexists, aisdir, aread_text, aiterdir, aread_json
+
+# Backward-compatible aliases for internal use
+_filter_streaming_chunk = filter_streaming_chunk
+_is_code_request = is_code_request
+_is_codegen_json_response = is_codegen_json_response
+_latex_to_unicode = latex_to_unicode
+_remove_repeated_text = remove_repeated_text
+_reset_stream_filter = reset_stream_filter
+_strip_codegen_prefix = strip_codegen_prefix
+_strip_kimi_thinking = strip_kimi_thinking
+_strip_think_tags = strip_think_tags
 from app.config import REQUEST_TIMEOUT_SECONDS
 
 # ── Default agents seeded for every new user ──────────────────────────
@@ -466,7 +489,7 @@ async def lookup_agent(
 
 
 def extract_mentions(content: str) -> list[str]:
-    return re.findall(r"@(\w+)", content)
+    return re.findall(r"@([\w-]+)", content)
 
 
 def extract_skill_calls(content: str) -> list[str]:
@@ -932,7 +955,10 @@ async def _race_models_streaming(
             except Exception as exc:
                 elapsed = (time.perf_counter() - started) * 1000
                 _update_runtime(model, False, elapsed)
-                errors.append(f"{model.get('provider')}/{model.get('model_name')}: {exc}")
+                err_msg = f"{model.get('provider')}/{model.get('model_name')}: {type(exc).__name__}"
+                if str(exc):
+                    err_msg += f": {exc}"
+                errors.append(err_msg)
                 continue
 
         # ── Race 2 models concurrently via streaming ──────────────
@@ -995,9 +1021,10 @@ async def _race_models_streaming(
             kind = msg[0]
             if kind == "_error_":
                 _, err_model, exc = msg
-                errors.append(
-                    f"{err_model.get('provider')}/{err_model.get('model_name')}: {exc}"
-                )
+                err_detail = f"{err_model.get('provider')}/{err_model.get('model_name')}: {type(exc).__name__}"
+                if str(exc):
+                    err_detail += f": {exc}"
+                errors.append(err_detail)
                 logger.warning(
                     "race_stream batch=%d first-model-error: provider=%s model=%s error=%s",
                     batch_start, err_model.get("provider"), err_model.get("model_name"), exc,
@@ -1104,6 +1131,32 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     if attachment_context:
         llm_input = f"{llm_input}\n\n[用户上传附件上下文]\n{attachment_context}"
 
+    # ── Auto-decomposition for compound tasks ──────────────────────────
+    # When the user's request is large and compound (e.g. "write the entire
+    # user management system front+backend"), inject a decomposition prefix
+    # so the agent breaks the work into smaller sub-steps within its tool-
+    # call loop.  Each sub-step gets its own LLM call → no single call
+    # exceeds the per-request timeout.
+    decomposition_prefix = ""
+    if agent["agent_id"] != "Orchestrator":
+        from app.services.orchestrator_preprocessor import should_decompose
+        if should_decompose(content):
+            decomposition_prefix = (
+                "[系统指令 — 任务自动分解]\n"
+                "用户请求内容较多且涉及多个文件/模块，请按以下策略分步执行：\n"
+                "1. 首先用一句话总结你对任务的理解\n"
+                "2. 将任务拆分为 3-5 个独立的子步骤（每个子步骤聚焦单个文件或模块）\n"
+                "3. 按顺序执行每个子步骤：先完成 → 再下一个（避免一次生成过多代码导致超时）\n"
+                "4. 每个子步骤完成后简要告知用户进度\n"
+                "5. 如果某个子步骤遇到错误，尝试修复后再继续下一个\n\n"
+                "⚠️ 重要：请不要尝试在一次回复中完成所有工作。分步执行，每步只写一个文件。\n\n"
+            )
+            llm_input = decomposition_prefix + llm_input
+            logger.info(
+                "call_agent: auto-decompose injected for agent=%s content_len=%d",
+                agent["agent_id"], len(content),
+            )
+
     symbolic = generate_symbolic_message(
         llm_input, msg_type, session_id,
         sender_role=agent["agent_id"],
@@ -1182,8 +1235,11 @@ async def stream_agent_response(
     if agent is None:
         agent = await resolve_agent(content)
 
-    # ── CloudCode adapter: subprocess-based, no model resolution needed ──
-    if agent.get("adapter_type") == "cloud_code":
+    # ── CloudCode / Local subprocess adapters ──
+    _SUB_PROCESS_ADAPTERS = frozenset({
+        "cloud_code", "local_claude", "local_codex", "local_openclaw",
+    })
+    if agent.get("adapter_type") in _SUB_PROCESS_ADAPTERS:
         return await _stream_cloudcode_response(
             session_id, content, user_id, agent, token=token,
             attachments=attachments, quote_references=quote_references,
@@ -1583,7 +1639,11 @@ async def _get_agent_tools(agent_id: str) -> list[str] | None:
     return None  # None = all tools available
 
 
-def _build_tool_section(agent_id: str = "", available_tools: list[str] | None = None) -> str:
+def _build_tool_section(
+    agent_id: str = "",
+    available_tools: list[str] | None = None,
+    permission_mode: str | None = None,
+) -> str:
     """Build the tool-calling prompt section for injection into the agent prompt.
 
     Returns empty string if no tools are registered or tools are disabled.
@@ -1591,27 +1651,59 @@ def _build_tool_section(agent_id: str = "", available_tools: list[str] | None = 
     Results are cached for the process lifetime — tool definitions only
     change when the server restarts (which clears the in-process cache).
     """
-    tools_key = tuple(sorted(available_tools)) if available_tools else None
-    cached = prompt_cache.get_tool_section(agent_id, tools_key)
-    if cached is not None:
-        return cached
+    # 模式感知的独立缓存：避免 (a) 命中无 mode 提示的陈旧缓存
+    #                       (b) 多次调用重复拼装 notice
+    base_tools_key = tuple(sorted(available_tools)) if available_tools else None
+    _mode_key = (agent_id, base_tools_key, permission_mode or "")
+    _mode_cache: dict = getattr(_build_tool_section, "_cache", {})
+    if _mode_key in _mode_cache:
+        return _mode_cache[_mode_key]
 
     from app.services.tool_registry import tool_registry
 
     tool_defs = tool_registry.build_prompt_section(available_tools)
     if not tool_defs:
-        prompt_cache.set_tool_section(agent_id, tools_key, "")
+        _mode_cache[_mode_key] = ""
+        _build_tool_section._cache = _mode_cache
         return ""
 
     instructions = tool_registry.build_calling_instructions()
-    result = "\n\n" + tool_defs + "\n\n" + instructions
-    prompt_cache.set_tool_section(agent_id, tools_key, result)
+
+    # 模式感知：在 tool 段开头注入当前会话的权限模式，避免 LLM 在 PLAN 模式下
+    # 盲目尝试调用 file_write/code_execute 等高危工具。
+    mode_notice = ""
+    if permission_mode == "plan":
+        mode_notice = (
+            "\n\n【当前权限模式：计划模式（PLAN / read-only）】\n"
+            "用户已开启计划模式：以下写/执行类工具调用将被系统直接拒绝（Deny），"
+            "且不会弹窗确认。请不要调用：file_write / file_write_batch / file_edit / "
+            "file_patch / code_execute / command_execute（写操作或 shell）。"
+            "你可以使用 file_read / file_search / file_glob / web_search / memory_search 等只读工具来调研，"
+            "并向用户输出一个「实施计划」——用文字描述需要改哪些文件、改成什么样，"
+            "等用户切回默认或 Bypass 模式后再实际落盘。\n"
+        )
+    elif permission_mode == "bypass":
+        mode_notice = (
+            "\n\n【当前权限模式：跳过权限（BYPASS / auto-allow）】\n"
+            "用户已开启跳过权限：所有工具调用会直接放行，不会弹窗确认。"
+            "请直接动手执行用户的请求，不需要中途打断。\n"
+        )
+    elif permission_mode == "default":
+        mode_notice = (
+            "\n\n【当前权限模式：询问权限（DEFAULT / ask-on-risky）】\n"
+            "高风险工具（写文件、执行代码、运行 Shell 等）在调用时可能会触发用户确认弹窗。"
+            "请正常调用工具，但准备好在用户拒绝时调整方案。\n"
+        )
+
+    result = "\n\n" + mode_notice + tool_defs + "\n\n" + instructions
+    _mode_cache[_mode_key] = result
+    _build_tool_section._cache = _mode_cache
     return result
 
 
 
 
-async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None, model_provider: str = "", model_name: str = "", preprocess_context: str = "") -> str:
+async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict, role_prompt: str, collab_ctx: str = "", history: str = "", memory_context: str = "", tools_enabled: bool = True, available_tools: list[str] | None = None, model_provider: str = "", model_name: str = "", preprocess_context: str = "", permission_mode: str | None = None) -> str:
     # ── Shared session context (ALL agents see this FIRST) ──────────
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
@@ -1770,7 +1862,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             "- 路径只能是相对路径，代码必须完整可运行\n"
             "- JSON 不要包裹在 Markdown 代码块中\n\n"
             "# 非代码请求：直接以纯文本回复，严禁输出 JSON 格式。\n"
-            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
             + f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
@@ -1861,7 +1953,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             "- 简单问候/闲聊直接回复（≤20字），**严禁调工具**。\n"
             "- 不先展示计划等确认，直接行动。\n"
             "- 每轮最多 3 个工具调用，超过 3 轮必须给出最终回复。\n"
-            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
             + f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
@@ -1905,7 +1997,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             "- 方案中要明确标注风险和边界条件。\n"
             "- 对于简单问候或闲聊，直接简短回复即可（20 字以内）。\n"
             "- 使用工具前确保所有必填参数齐全，缺失参数时先向用户询问。\n"
-            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
             + f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
@@ -1943,7 +2035,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
             "- 不部署未经审查的代码。\n"
             "- 高风险部署需要明确标注风险等级。\n"
             "- 对于简单问候或闲聊，直接简短回复即可（20 字以内）。\n"
-            + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
             + f"{collab_section}"
             f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
         )
@@ -1964,7 +2056,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         f"{code_format_rules}\n"
         f"{mermaid_rules}\n"
         f"{output_rules}\n"
-        + (_build_tool_section(agent_id, available_tools) if tools_enabled else "")
+        + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
         + f"{collab_section}"
         f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
     )
@@ -2158,9 +2250,10 @@ async def _run_tool_call_loop(
         models[0].get("model_name", "") if models else "",
     )
     _loop_prefix_cached: str | None = None  # populated on iteration 0
+    _loop_prefix_cached_mode: str | None = None  # 记录缓存时使用的 mode，mode 切换时失效
 
     async def _loop_body() -> tuple[str, dict, dict]:
-        nonlocal final_text, usage, selected, adapter, _loop_prefix_cached
+        nonlocal final_text, usage, selected, adapter, _loop_prefix_cached, _loop_prefix_cached_mode
         # ── Circuit-breaker counters (reset when a tool succeeds) ────────
         # Three-tier detection:
         #   1. Same-tool-same-error: the deadliest loop — agent calls the same
@@ -2177,6 +2270,18 @@ async def _run_tool_call_loop(
             if token and token.cancelled:
                 logger.info("tool_loop cancelled at iteration %d", iteration)
                 return "流式响应已被中断。", usage, selected
+
+            # ★ 改进3: 发送迭代进度事件 — 让前端知道工具循环正在进行
+            if iteration > 0 and on_tool_event:
+                try:
+                    await on_tool_event("agent_thinking", {
+                        "messageId": f"tool-loop-iter-{iteration}",
+                        "agentId": agent["agent_id"],
+                        "phase": "executing",
+                        "details": f"正在执行第 {iteration + 1}/{executor.MAX_ITERATIONS} 轮工具调用...",
+                    })
+                except Exception:
+                    pass  # 进度事件失败不影响工具执行
 
             conv_text = _format_conversation(conversation)
             symbolic = generate_symbolic_message(
@@ -2202,6 +2307,8 @@ async def _run_tool_call_loop(
                 )
                 prompt = _loop_prefix_cached + user_suffix
             else:
+                from app.services.tools.permission import get_permission_mode_for_session
+
                 prompt = await build_prompt(
                     agent["agent_id"], domain, conv_text, symbolic,
                     models[0].get("prompt", "") if models else "",
@@ -2210,6 +2317,7 @@ async def _run_tool_call_loop(
                     model_provider=(models[0].get("provider", "") if models else ""),
                     model_name=(models[0].get("model_name", "") if models else ""),
                     preprocess_context=preprocess_context,
+                    permission_mode=get_permission_mode_for_session(session_id).value,
                 )
                 # Split and cache the system prefix for subsequent iterations.
                 # The anchor "符号消息:" is present in every build_prompt()
@@ -2218,6 +2326,7 @@ async def _run_tool_call_loop(
                 split_idx = prompt.rfind(anchor)
                 if split_idx > 0:
                     _loop_prefix_cached = prompt[:split_idx]
+                    _loop_prefix_cached_mode = get_permission_mode_for_session(session_id).value
 
             logger.info(
                 "tool_loop iter=%d: prompt_len=%d has_tool_section=%s",
@@ -2394,6 +2503,10 @@ async def _run_tool_call_loop(
                     # Execute tools
                     # ── Guardrail: classify each tool's risk before execution ──
                     from app.services.guardrails import classify_tool_risk as _ctr
+                    from app.services.tools.permission import (
+                        get_permission_mode_for_session,
+                        PermissionMode,
+                    )
                     high_risk_tools: list[dict] = []
                     for tc in tool_calls:
                         risk = _ctr(tc.get("name", ""), tc.get("arguments", {}))
@@ -2403,11 +2516,20 @@ async def _run_tool_call_loop(
                                 "arguments": tc.get("arguments", {}),
                                 "risk": risk.to_dict(),
                             })
-                    if high_risk_tools and on_tool_event:
+                    # BYPASS（跳过权限）模式下不重复弹风险警告：
+                    # 用户已明确表示"自动放行一切"，PermissionManager 也会返回 ALLOW，
+                    # 此时再发 risk_warning 反而会让用户觉得"切了跟没切一样"。
+                    current_mode = get_permission_mode_for_session(session_id)
+                    if high_risk_tools and on_tool_event and current_mode != PermissionMode.BYPASS:
                         try:
                             await on_tool_event("risk_warning", high_risk_tools, None)
                         except Exception:
                             pass
+                    elif high_risk_tools and current_mode == PermissionMode.BYPASS:
+                        logger.info(
+                            "tool_loop risk_warning 跳过: session=%s mode=bypass 涉及工具=%s",
+                            session_id, [t["name"] for t in high_risk_tools],
+                        )
 
                     if streaming_executor is not None:
                         streaming_executor.set_context(session_id=session_id, agent_id=agent["agent_id"], user_id=user_id)
@@ -2551,6 +2673,18 @@ async def _run_tool_call_loop(
                         final_text = executor.build_tool_result_context(tool_results)
                         break
 
+                    # ★ 改进3: 工具执行完成后发送 "synthesizing" 阶段事件
+                    if on_tool_event:
+                        try:
+                            await on_tool_event("agent_thinking", {
+                                "messageId": f"tool-loop-synth-{iteration}",
+                                "agentId": agent["agent_id"],
+                                "phase": "synthesizing",
+                                "details": "工具执行完成，正在综合结果生成回复...",
+                            })
+                        except Exception:
+                            pass
+
                     continue  # loop back for synthesis
 
             # No tool calls found — this is the synthesis iteration.
@@ -2620,410 +2754,6 @@ async def _run_tool_call_loop(
 
     return final_text, usage_dict, selected
 
-
-def _remove_repeated_text(text: str) -> str:
-    if not text:
-        return text
-
-    # 0. Detect full-text duplication: model sometimes echoes the entire
-    #    response twice back-to-back.  We scan a sliding midpoint ±20 %
-    #    to handle header prefixes like 【正式回复】 that offset alignment.
-    n = len(text)
-    if n >= 60:
-        best_ratio = 0.0
-        best_left = text
-        # Sample every 4th position; full scan is unnecessary for this heuristic
-        start = max(n // 3, 30)
-        end = min(n * 2 // 3, n - 30)
-        for mid in range(start, end, 4):
-            left = text[:mid].strip()
-            right = text[mid:].strip()
-            if not left or not right:
-                continue
-            # Fast path: exact match
-            if left == right:
-                return left
-            # Containment: the shorter half is substantially inside the longer
-            # one (≥80 % length ratio prevents matching on shared-phrase overlap).
-            if len(left) < len(right) and len(left) >= len(right) * 0.8 and left in right:
-                return right
-            if len(right) < len(left) and len(right) >= len(left) * 0.8 and right in left:
-                return left
-            # Fuzzy: longest common prefix ratio
-            min_len = min(len(left), len(right))
-            match_len = 0
-            for j in range(min_len):
-                if left[j] == right[j]:
-                    match_len += 1
-                else:
-                    break
-            ratio = match_len / max(len(left), len(right))
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_left = left
-        if best_ratio > 0.95:
-            text = best_left
-
-    # 1. Remove consecutive duplicate lines
-    lines = text.split('\n')
-    unique_lines = []
-    prev_line = ""
-    for line in lines:
-        stripped = line.strip()
-        if stripped and stripped != prev_line:
-            unique_lines.append(line)
-            prev_line = stripped
-        elif not stripped:
-            unique_lines.append(line)
-    text = '\n'.join(unique_lines)
-
-    # 2. Remove adjacent repeated phrases (12-80 char windows)
-    text = _remove_repeated_phrases(text)
-
-    # 3. Remove non-adjacent repeated paragraphs (30+ chars, same content
-    #    appearing again later in the output regardless of intervening text)
-    paragraphs = re.split(r'\n\n+', text)
-    seen: set[str] = set()
-    unique_paras: list[str] = []
-    for p in paragraphs:
-        stripped = p.strip()
-        if len(stripped) >= 30:
-            if stripped in seen:
-                continue  # duplicate paragraph — drop it
-            seen.add(stripped)
-        unique_paras.append(p)
-    text = '\n\n'.join(unique_paras)
-
-    return text
-
-
-def _remove_repeated_phrases(text: str) -> str:
-    """Detect and remove consecutively repeated phrases (12+ chars) within text."""
-    n = len(text)
-    if n < 24:
-        return text
-    # Scan with decreasing window sizes to catch both long and short repetitions
-    for window in range(min(n // 2, 80), 11, -1):
-        i = 0
-        while i + window * 2 <= n:
-            phrase = text[i:i + window]
-            # Check if this phrase immediately repeats
-            if text[i + window:i + window * 2] == phrase:
-                # Remove the duplicate and restart scan from this position
-                text = text[:i + window] + text[i + window * 2:]
-                n = len(text)
-                continue
-            i += 1
-    return text
-
-
-def _strip_kimi_thinking(text: str) -> str:
-    """Clean up Kimi native thinking markers that leak into the reply.
-
-    Kimi K2.6 may output multiple 💭 + 【思考分析】 thinking blocks followed by
-    a final 【正式回复】 marker.  When the final marker is present, everything
-    before it is discarded; otherwise we strip the thinking markers inline.
-    """
-    # Strategy 1: locate the last 【正式回复】 and keep only what follows it
-    parts = re.split(r"【正式回复】\s*", text)
-    if len(parts) > 1 and parts[-1].strip():
-        return parts[-1].strip()
-    # Strategy 2: no final marker — strip thinking patterns inline
-    text = re.sub(r"💭\s*", "", text)
-    text = re.sub(r"【思考分析】已完成\s*\(\d+字\)", "", text)
-    text = re.sub(r"^(回复策略：.*|思考内容：.*|注意：用户消息.*|核心需求是.*)\n?", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def _strip_think_tags(text: str) -> str:
-    """Remove <think>...</think> tags injected by the adapter for reasoning_content.
-
-    These tags drive the frontend ThinkingPanel but pollute saved messages and
-    conversation history — strip them before persistence.
-    """
-    return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
-
-
-# ── Streaming filter state (per-session) ────────────────────────────
-# Track cross-chunk state so the filter can correctly handle <think> tags
-# that split across token boundaries. Keyed by session_id.
-_STREAM_FILTER_STATE: dict[str, dict] = {}
-
-
-def _reset_stream_filter(session_id: str) -> None:
-    """Clear per-session streaming filter state (call on stream end / interrupt)."""
-    _STREAM_FILTER_STATE.pop(session_id, None)
-
-
-def _filter_streaming_chunk(session_id: str, chunk: str) -> str:
-    """Apply SAFE incremental filters to a streaming chunk.
-
-    Critical: this MUST be idempotent and MUST NOT destroy <think>...</think>
-    blocks — the frontend ThinkingPanel relies on them being intact in the
-    rendered message so users can expand/collapse the reasoning trace.
-
-    Filters applied (in order):
-    1. Unescape common literal escape sequences (``\\n``, ``\\t``, ``\\xml``)
-       that some models emit as raw text — the model was confused and printed
-       the escape sequence as a literal; turn it back into a real char.
-    2. LaTeX-to-Unicode (\\div, \\times, etc.) — same as final-pass.
-    3. Strip Kimi ``【正式回复】`` marker — it leaks into the visible message
-       and renders as inline code instead of a section divider.
-    4. Strip leftover ``【思考分析】`` markers that the model may have
-       emitted outside a <think> block.
-
-    NOTE: We deliberately do NOT call _strip_think_tags() here — that would
-    delete the <think> block the ThinkingPanel needs. The frontend's
-    ``parseThinkSegments`` correctly extracts the think block on render.
-    """
-    if not chunk:
-        return chunk
-
-    # 1) Unescape literal backslash sequences the model emitted as text.
-    #    Conservative: only unescape sequences that have no business being
-    #    literal in a chat reply.  We don't touch ``\\n`` in code blocks
-    #    because by the time we see a chunk, we don't know if the rest of
-    #    the code block has already arrived or is in the next chunk.  The
-    #    case we care about is when the model prints ``\xml`` (with the
-    #    leading backslash literally) as part of leaked thinking.
-    chunk = chunk.replace("\\`", "`").replace('\\"', '"').replace("\\'", "'")
-
-    # 2) LaTeX-to-Unicode (safe, idempotent, doesn't touch <think> content
-    #    because the LaTeX commands are mathematical and wouldn't appear in
-    #    a model's reasoning).
-    chunk = _latex_to_unicode(chunk)
-
-    # 3) Strip Kimi 正式回复 marker — this is meant to be a section
-    #    divider, but the frontend renders it as inline code, polluting
-    #    the visible message.  We strip it because the model has already
-    #    crossed the boundary by the time the marker appears.
-    chunk = chunk.replace("【正式回复】\n", "").replace("【正式回复】", "")
-
-    # 4) Strip leftover 【思考分析】 markers that the model may have
-    #    emitted outside a <think> block (e.g. after a tool call).
-    chunk = re.sub(r"【思考分析】已完成\s*\(\d+字\)", "", chunk)
-    chunk = re.sub(r"【思考分析】", "", chunk)
-
-    return chunk
-
-
-def _strip_codegen_prefix(text: str) -> str:
-    """Remove decorative prefixes models sometimes add before JSON."""
-    return re.sub(r"^(【[^】]*】\s*)+", "", text.strip())
-
-
-def _is_codegen_json_response(text: str) -> bool:
-    """Check if text is a CodeGen-style JSON file manifest."""
-    try:
-        data = json.loads(text)
-        return isinstance(data, dict) and isinstance(data.get("files"), list)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        return False
-
-
-def _is_code_request(text: str) -> bool:
-    """Check whether the user is asking for code generation."""
-    keywords = [
-        "生成", "创建", "实现", "写", "编写", "修改", "添加", "改", "开发",
-        "code", "fastapi", "react", "api", "页面", "组件", "路由", "接口",
-        "帮我做", "帮我写", "做一个", "写一个", "改一下", "加一个",
-    ]
-    return any(w in text.lower() for w in keywords)
-
-
-def _latex_to_unicode(text: str) -> str:
-    """Convert common LaTeX math commands to Unicode symbols.
-
-    Models (especially Kimi K2.6) often output LaTeX like \\div, \\times
-    which the frontend cannot render.  Map them to proper Unicode glyphs.
-    Longer patterns are replaced first so that e.g. \\rightarrow is handled
-    before the shorter \\to contained within it.
-    """
-    replacements = [
-        ("\\textdegree", "°"),
-        ("\\Leftrightarrow", "⇔"),
-        ("\\rightarrow", "→"),
-        ("\\leftarrow", "←"),
-        ("\\Rightarrow", "⇒"),
-        ("\\subseteq", "⊆"),
-        ("\\notin", "∉"),
-        ("\\subset", "⊂"),
-        ("\\approx", "≈"),
-        ("\\equiv", "≡"),
-        ("\\propto", "∝"),
-        ("\\infty", "∞"),
-        ("\\ldots", "…"),
-        ("\\cdots", "⋯"),
-        ("\\degree", "°"),
-        ("\\angle", "∠"),
-        ("\\triangle", "△"),
-        ("\\forall", "∀"),
-        ("\\exists", "∃"),
-        ("\\emptyset", "∅"),
-        ("\\times", "×"),
-        ("\\cdot", "·"),
-        ("\\leq", "≤"),
-        ("\\geq", "≥"),
-        ("\\neq", "≠"),
-        ("\\sim", "∼"),
-        ("\\sum", "∑"),
-        ("\\prod", "∏"),
-        ("\\int", "∫"),
-        ("\\div", "÷"),
-        ("\\pm", "±"),
-        ("\\mp", "∓"),
-        ("\\sqrt", "√"),
-        ("\\alpha", "α"),
-        ("\\beta", "β"),
-        ("\\gamma", "γ"),
-        ("\\delta", "δ"),
-        ("\\epsilon", "ε"),
-        ("\\theta", "θ"),
-        ("\\lambda", "λ"),
-        ("\\mu", "μ"),
-        ("\\pi", "π"),
-        ("\\sigma", "σ"),
-        ("\\omega", "ω"),
-        ("\\land", "∧"),
-        ("\\lor", "∨"),
-        ("\\neg", "¬"),
-        ("\\cup", "∪"),
-        ("\\cap", "∩"),
-        ("\\to", "→"),
-        ("\\in", "∈"),
-        ("\\%", "%"),
-        ("\\_", "_"),
-        ("\\&", "&"),
-        ("\\#", "#"),
-    ]
-    for latex, uni in replacements:
-        text = text.replace(latex, uni)
-    return text
-
-
-def normalize_agent_output(agent_id: str, model_output: str, original: str) -> str:
-    if agent_id == "CodeGen":
-        # Case A: Real model response (not mock, not failure)
-        is_codegen_mock = (
-            not model_output
-            or model_output.startswith("本地 Mock 模型响应")
-        )
-        is_codegen_failure = model_output.startswith("模型调用失败")
-
-        if not is_codegen_mock and not is_codegen_failure:
-            stripped = _latex_to_unicode(_strip_think_tags(_strip_kimi_thinking(_strip_codegen_prefix(model_output))))
-            # Safety net: model may ignore prompt and still output JSON for a
-            # conversational question. If so, replace with a text reply.
-            if _is_codegen_json_response(stripped) and not _is_code_request(original):
-                return "我是 AgentHub 平台的代码生成专家，基于大规模语言模型构建。对于编程任务，我可以生成完整的可执行代码；如果你有代码相关的具体需求，请直接告诉我！"
-            return stripped
-
-        # Case B: Model was called but ALL failed → show actual error
-        if is_codegen_failure:
-            error_detail = model_output.replace("模型调用失败，已降级为本地响应：", "").strip()
-            return (
-                f"⚠️ 模型调用失败\n\n"
-                f"错误详情：{error_detail}\n\n"
-                f"可能原因：\n"
-                f"1. 请求超时（当前超时：{REQUEST_TIMEOUT_SECONDS:.0f} 秒）— 复杂代码生成时间较长\n"
-                f"2. Prompt 超出模型上下文窗口限制\n"
-                f"3. 模型 API 返回错误（key 无效、限流、余额不足等）\n\n"
-                f"建议：重试、简化需求、或检查管理后台的模型配置。"
-                f"查看服务端日志获取完整错误堆栈（grep 'llm_fail' 或 'tool_loop'）。"
-            )
-
-        # Case C: Mock / no-model — fallback JSON or text
-        if _is_code_request(original):
-            return json.dumps(
-                {
-                    "files": [
-                        {
-                            "path": "backend/health_router.py" if "fastapi" in original.lower() or "路由" in original else "frontend/GeneratedPanel.jsx",
-                            "content": "from fastapi import APIRouter\n\nrouter = APIRouter(prefix=\"/generated\", tags=[\"generated\"])\n\n\n@router.get(\"/health\")\nasync def generated_health() -> dict[str, str]:\n    return {\"status\": \"ok\", \"module\": \"agenthub-generated\"}\n",
-                        }
-                    ]
-                },
-                ensure_ascii=False,
-            )
-        return "Mock 运行模式下 CodeGen 不可用，请前往管理后台为 CodeGen Agent 配置真实的大模型 API Key。配置后，我可以根据你的需求生成完整的可执行代码。"
-    # ── Model failure fallback ──────────────────────────────────────
-    # Two distinct error cases, handled very differently:
-    #
-    # Case A: "模型调用失败" — the model WAS called but ALL candidates
-    #   threw exceptions (timeout, context overflow, API error, etc.).
-    #   The error text includes the real exception — SHOW IT so the
-    #   developer can diagnose the root cause.  Hiding it behind a
-    #   generic "API unreachable" message is misleading and wastes time.
-    #
-    # Case B: "本地 Mock 模型响应" / empty — MockAdapter was used,
-    #   meaning the model was NEVER called (no API key, ENABLE_REAL_LLM
-    #   is false, or the provider is literally "mock").  Use domain-
-    #   specific fallbacks or a graceful degradation message.
-    #
-    is_mock = (
-        not model_output
-        or model_output.startswith("本地 Mock 模型响应")
-    )
-    is_model_failure = model_output.startswith("模型调用失败")
-
-    if not is_mock and not is_model_failure:
-        return _remove_repeated_text(_latex_to_unicode(_strip_think_tags(_strip_kimi_thinking(model_output))))
-
-    # ── Case A: Real model error — surface the actual failure reason ──
-    if is_model_failure:
-        error_detail = model_output.replace("模型调用失败，已降级为本地响应：", "").strip()
-        return (
-            f"⚠️ 模型调用失败\n\n"
-            f"错误详情：{error_detail}\n\n"
-            f"可能原因：\n"
-            f"1. 请求超时（当前超时：{REQUEST_TIMEOUT_SECONDS:.0f} 秒）— 复杂任务生成时间较长，可尝试简化需求\n"
-            f"2. Prompt 超出模型上下文窗口限制（skill 上下文 + 系统提示词 + 历史消息）\n"
-            f"3. 模型 API 返回错误（key 无效、限流、余额不足等）\n"
-            f"4. max_tokens 不足导致输出被截断\n\n"
-            f"建议：\n"
-            f"- 重试当前请求（可能是临时网络波动）\n"
-            f"- 简化输入或拆分任务（如分步生成页面结构、样式、脚本）\n"
-            f"- 在管理后台检查模型配置（API Key / Base URL / max_tokens）\n"
-            f"- 查看服务端日志获取完整错误堆栈（grep 'llm_fail' 或 'tool_loop'）"
-        )
-
-    # ── Case B: Mock / no-model — graceful degradation ─────────────
-    if agent_id == "CodeGen":
-        if _is_code_request(original):
-            return json.dumps(
-                {
-                    "files": [
-                        {
-                            "path": "backend/health_router.py" if "fastapi" in original.lower() or "路由" in original else "frontend/GeneratedPanel.jsx",
-                            "content": "from fastapi import APIRouter\n\nrouter = APIRouter(prefix=\"/generated\", tags=[\"generated\"])\n\n\n@router.get(\"/health\")\nasync def generated_health() -> dict[str, str]:\n    return {\"status\": \"ok\", \"module\": \"agenthub-generated\"}\n",
-                        }
-                    ]
-                },
-                ensure_ascii=False,
-            )
-        return "Mock 运行模式下 CodeGen 不可用，请前往管理后台为 CodeGen Agent 配置真实的大模型 API Key。配置后，我可以根据你的需求生成完整的可执行代码。"
-
-    if agent_id == "Review":
-        return "Review 完成：结构符合 FastAPI + Next.js 分层方案，建议生产环境收紧 CORS、加入鉴权、限流和审计。"
-    if agent_id == "Test":
-        return "Test 完成：请验证 /api/health、/api/admin/model-config、/ws/session-1、DAG 状态机和 Git 接口。"
-    if agent_id == "Deploy":
-        return "Deploy 准备完成：前端 http://localhost:3000，后端 http://localhost:8000。高风险发布需管理员确认。"
-
-    # Default fallback — a useful response acknowledging the degradation
-    return (
-        "⚠️ 当前模型 API 暂时不可达，系统已降级为本地响应模式。\n\n"
-        "你的需求已记录，以下是基于本地规则的建议：\n\n"
-        "1. 请检查管理后台的模型配置是否正确（API Key / Base URL / 端点可达性）\n"
-        "2. 如果是代码相关需求，CodeGen Agent 配置真实模型后可自动生成代码\n"
-        "3. 当前会话的消息已保存，模型恢复后可继续处理\n\n"
-        "如有紧急需求，请通过管理后台切换至可用模型或联系系统管理员。"
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# CloudCode subprocess-based streaming
 # ═══════════════════════════════════════════════════════════════════════
 
 async def _stream_cloudcode_response(
@@ -3042,6 +2772,19 @@ async def _stream_cloudcode_response(
     Line is parsed, dispatched as a WebSocket event to the frontend, and
     text chunks are yielded for the SSE stream.
 
+    Two execution modes based on the adapter's :class:`SubprocessProtocol`:
+
+    **Interactive mode** (Claude Code — ``supports_interactive() == True``)
+        stdin stays open.  When the CLI produces a ``tool_use`` event,
+        AgentHub executes the tool and feeds the result back via
+        ``adapter.send_input()``.  The CLI continues processing and
+        produces its final ``end`` event only when done.
+
+    **One-shot mode** (Codex CLI, OpenClaw — ``supports_interactive() == False``)
+        stdin is closed after the initial prompt.  Tool calls are
+        broadcast to the frontend for display only (no feedback loop).
+        This is the same behaviour as the pre-protocol implementation.
+
     Parameters
     ----------
     session_id : str
@@ -3056,11 +2799,22 @@ async def _stream_cloudcode_response(
     import asyncio as _asyncio
 
     from app.services.adapter_manager import adapter_manager
-    from app.services.event_mapper import is_diff_event, is_terminal_event
+    from app.services.event_mapper import map_event, is_diff_event, is_terminal_event
     from app.services.websocket_manager import manager as ws_manager
 
-    adapter = adapter_manager.get_adapter("cloud_code")
+    adapter_type = agent.get("adapter_type", "cloud_code")
+    adapter = adapter_manager.get_adapter(adapter_type)
     message_id = str(uuid.uuid4())
+    turn_id = str(uuid.uuid4())
+
+    # ── Resolve protocol (may be None for generic cloud_code) ────────
+    protocol = getattr(adapter, "protocol", None)
+    use_interactive = protocol is not None and protocol.supports_interactive()
+
+    # ── Thread / CLI session continuity ─────────────────────────────
+    # When the CLI supports --resume, carry the cached session ID forward
+    # so the subprocess can pick up where the last turn left off.
+    thread_id = getattr(adapter, "_cli_session_id", None) or ""
 
     # Build attachment / quote context (same as normal stream path)
     attachment_context, _ = _build_attachment_context(attachments)
@@ -3072,12 +2826,22 @@ async def _stream_cloudcode_response(
         llm_input = f"{llm_input}\n\n[用户上传附件上下文]\n{attachment_context}"
 
     full_text: list[str] = []
+    tool_call_count = 0
+    MAX_TOOL_ROUNDS = 10  # safety limit for interactive tool feedback loop
 
     async def stream():
-        nonlocal full_text
+        nonlocal full_text, tool_call_count, thread_id
 
         try:
-            async for json_line in adapter.stream_prompt(llm_input, "cloud-code"):
+            # ── Choose streaming strategy ──────────────────────────
+            if use_interactive:
+                line_iter = adapter.stream_prompt_interactive(
+                    llm_input, adapter_type, turn_id=turn_id,
+                )
+            else:
+                line_iter = adapter.stream_prompt(llm_input, adapter_type)
+
+            async for json_line in line_iter:
                 # Check cancellation
                 if token and token.cancelled:
                     adapter.cancel()
@@ -3096,38 +2860,99 @@ async def _stream_cloudcode_response(
                     yield json_line
                     continue
 
-                evt_type = obj.get("type", "")
+                # ── Try to extract CLI session ID for --resume ──────
+                if use_interactive and not thread_id and protocol is not None:
+                    extracted = protocol.extract_session_id(obj)
+                    if extracted:
+                        thread_id = extracted
+                        adapter._cli_session_id = extracted
 
-                # ── Text event → yield for SSE + collect ──────────
-                if evt_type == "text":
-                    chunk = obj.get("content", "")
+                # ── Unified event mapping ───────────────────────────
+                mapped = map_event(
+                    obj, session_id, message_id, agent["agent_id"],
+                    turn_id=turn_id, thread_id=thread_id,
+                )
+
+                if mapped is None:
+                    # end / result / system events — handled below
+                    evt_type = obj.get("type", "")
+                    if evt_type in ("end", "result"):
+                        # ── Finalise ────────────────────────────────
+                        # Claude Code uses "result" (interactive) or "end" (one-shot)
+                        final_text = (
+                            obj.get("result", "")
+                            or obj.get("content", "")
+                            or "\n".join(full_text)
+                        )
+                        # Broadcast the final message to the frontend
+                        if final_text or full_text:
+                            display_text = final_text or "\n".join(full_text)
+                            await ws_manager.broadcast(
+                                session_id,
+                                {
+                                    "event": "message",
+                                    "sessionId": session_id,
+                                    "messageId": message_id,
+                                    "turnId": turn_id,
+                                    "threadId": thread_id,
+                                    "content": display_text,
+                                    "sender": agent["agent_id"],
+                                    "timestamp": now(),
+                                    "type": "text",
+                                },
+                            )
+
+                        # Persist the message
+                        try:
+                            persist_text = final_text or "\n".join(full_text)
+                            pt = max(1, len(llm_input) // 4)
+                            ct = max(1, len(persist_text) // 4)
+                            await save_message(
+                                session_id, agent["agent_id"], persist_text, "text", 0.0,
+                                public_symbolic(
+                                    generate_symbolic_message(
+                                        llm_input, "text", session_id,
+                                        sender_role=agent["agent_id"],
+                                        intent_type=_intent_from_domain(agent.get("domain", ""), content),
+                                        risk_level=agent.get("risk_level", "L1"),
+                                    )
+                                ),
+                                pt, ct, pt + ct,
+                                user_id=user_id,
+                            )
+                        except Exception:
+                            logger.debug("save_message failed in cloudcode stream", exc_info=True)
+
+                        # Trigger post-agent pipeline (background)
+                        _asyncio.create_task(
+                            _run_cloudcode_post_hooks(session_id, agent["agent_id"])
+                        )
+                        return
+                    # system events → skip silently
+                    continue
+
+                # ── Dispatch by mapped event type ───────────────────
+                event_type = mapped.get("event", "")
+
+                if event_type == "message_chunk":
+                    chunk = mapped.get("content", "")
                     if chunk:
                         full_text.append(chunk)
                         yield chunk
 
-                # ── Tool use → broadcast to frontend ──────────────
-                elif evt_type == "tool_use":
-                    tool_name = obj.get("name", "unknown")
-                    tool_args = obj.get("args", obj.get("arguments", {}))
+                elif event_type == "tool_call":
+                    tool_call_count += 1
+                    tool_calls_list = mapped.get("toolCalls", [])
+                    tool_use_id = ""
+                    tool_name = "unknown"
+                    if tool_calls_list:
+                        tool_use_id = tool_calls_list[0].get("toolUseId", "")
+                        tool_name = tool_calls_list[0].get("name", "unknown")
 
-                    # Broadcast tool_call event
-                    await ws_manager.broadcast(
-                        session_id,
-                        {
-                            "event": "tool_call",
-                            "sessionId": session_id,
-                            "messageId": message_id,
-                            "toolCalls": [
-                                {
-                                    "name": tool_name,
-                                    "arguments": tool_args,
-                                    "status": "calling",
-                                }
-                            ],
-                        },
-                    )
+                    # Broadcast to frontend
+                    await ws_manager.broadcast(session_id, mapped)
 
-                    # Diff events → also broadcast as diff_update
+                    # ── Extra: diff_update for edit_file ────────────
                     if is_diff_event(obj):
                         await ws_manager.broadcast(
                             session_id,
@@ -3135,13 +2960,14 @@ async def _stream_cloudcode_response(
                                 "event": "diff_update",
                                 "sessionId": session_id,
                                 "messageId": message_id,
+                                "turnId": turn_id,
                                 "path": obj.get("path", ""),
                                 "diff": obj.get("diff", ""),
                                 "timestamp": now(),
                             },
                         )
 
-                    # Terminal events → broadcast terminal_output
+                    # ── Extra: terminal_output for run_command ──────
                     if is_terminal_event(obj):
                         cmd_output = obj.get("output", obj.get("stdout", ""))
                         if cmd_output:
@@ -3151,61 +2977,98 @@ async def _stream_cloudcode_response(
                                     "event": "terminal_output",
                                     "sessionId": session_id,
                                     "messageId": message_id,
+                                    "turnId": turn_id,
                                     "content": cmd_output,
                                     "sender": agent["agent_id"],
                                     "timestamp": now(),
                                 },
                             )
 
-                # ── End event → finalise ──────────────────────────
-                elif evt_type == "end":
-                    final_text = obj.get("content", "") or "\n".join(full_text)
-                    if final_text:
-                        # Broadcast final message
+                    # ── Tool feedback loop (interactive mode only) ──
+                    if use_interactive and protocol is not None and tool_call_count <= MAX_TOOL_ROUNDS:
+                        # Execute the tool via AgentHub's tool executor
+                        tool_args = tool_calls_list[0].get("arguments", {}) if tool_calls_list else {}
+                        tool_result = await _execute_cli_tool(
+                            tool_name, tool_args, session_id,
+                        )
+                        success = tool_result.get("success", False)
+
+                        # Broadcast tool result to frontend
                         await ws_manager.broadcast(
                             session_id,
                             {
-                                "event": "message",
+                                "event": "tool_result",
                                 "sessionId": session_id,
                                 "messageId": message_id,
-                                "content": final_text,
-                                "sender": agent["agent_id"],
-                                "timestamp": now(),
-                                "type": "text",
+                                "turnId": turn_id,
+                                "threadId": thread_id,
+                                "results": [
+                                    {
+                                        "tool_name": tool_name,
+                                        "success": success,
+                                        "result": tool_result.get("result", tool_result.get("error", "")),
+                                    }
+                                ],
                             },
                         )
 
-                    # Persist the message
-                    try:
-                        pt = max(1, len(llm_input) // 4)
-                        ct = max(1, len(final_text) // 4)
-                        await save_message(
-                            session_id, agent["agent_id"], final_text, "text", 0.0,
-                            public_symbolic(
-                                generate_symbolic_message(
-                                    llm_input, "text", session_id,
-                                    sender_role=agent["agent_id"],
-                                    intent_type=_intent_from_domain(agent.get("domain", ""), content),
-                                    risk_level=agent.get("risk_level", "L1"),
-                                )
-                            ),
-                            pt, ct, pt + ct,
-                            user_id=user_id,
+                        # Feed result back to CLI (keeps generating)
+                        encoded = protocol.encode_tool_result(
+                            tool_use_id, tool_name, tool_result,
+                            is_error=not success,
                         )
-                    except Exception:
-                        logger.debug("save_message failed in cloudcode stream", exc_info=True)
+                        adapter.send_input(encoded)
+                        # Continue the stream loop — CLI will produce more output
 
-                    # Trigger post-agent pipeline (background)
-                    _asyncio.create_task(
-                        _run_cloudcode_post_hooks(session_id, agent["agent_id"])
-                    )
-                    return
+                    elif not use_interactive:
+                        # One-shot mode: tool calls are broadcast for
+                        # display only — the CLI process doesn't expect
+                        # feedback and will exit on its own.
+                        logger.info(
+                            "cloudcode one-shot tool_call: %s (no feedback loop)",
+                            tool_name,
+                        )
+
+                elif event_type == "tool_result":
+                    # CLI-side tool_result (informational, not from our
+                    # own executor) — broadcast to frontend
+                    await ws_manager.broadcast(session_id, mapped)
 
         except Exception as exc:
             logger.exception("CloudCode stream crashed session=%s agent=%s", session_id, agent["agent_id"])
             yield f"\n[CloudCode 执行异常：{exc}]"
 
     return stream()
+
+
+async def _execute_cli_tool(
+    tool_name: str,
+    arguments: dict[str, Any],
+    session_id: str,
+) -> dict[str, Any]:
+    """Execute a tool on behalf of a CLI subprocess agent.
+
+    Reuses the same :class:`ToolExecutor` that the standard tool-call
+    loop uses, so CLI agents get identical tool behaviour to HTTP-based
+    agents.
+
+    Returns a dict with ``{"success": bool, "result": Any, "error": str|null,
+    "tool_name": str}``.
+    """
+    try:
+        from app.services.tool_executor import tool_executor
+        result = await tool_executor.execute(tool_name, arguments)
+        return result
+    except Exception as exc:
+        logger.warning(
+            "cli_tool_exec failed: tool=%s session=%s error=%s",
+            tool_name, session_id, exc,
+        )
+        return {
+            "success": False,
+            "error": f"工具执行异常: {exc}",
+            "tool_name": tool_name,
+        }
 
 
 async def _run_cloudcode_post_hooks(session_id: str, agent_id: str) -> None:

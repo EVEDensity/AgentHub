@@ -17,6 +17,8 @@ from app.services.tools.builtin_tools import (
     file_search_handler,
     file_patch_handler,
     memory_save_handler,
+    file_edit_handler,
+    file_glob_handler,
 )
 from app.services.tools.browser_tools import (
     browser_navigate_handler,
@@ -33,6 +35,7 @@ from app.services.tools.skill_tools import (
 from app.services.tools.agent_tools import (
     invoke_agent_handler,
     invoke_agents_parallel_handler,
+    task_handler,
 )
 from app.services.tools.network_tools import (
     http_request_handler,
@@ -767,6 +770,126 @@ INVOKE_AGENTS_PARALLEL = ToolDefinition(
     is_concurrency_safe=False,
 )
 
+# ── file_edit ────────────────────────────────────────────────────────────
+
+FILE_EDIT = ToolDefinition(
+    name="file_edit",
+    description="执行精确字符串替换（类似 sed）。读取文件，查找完全匹配的 old_string，替换为 new_string。这是对文件进行定点修改的首选方式——比 file_patch（unified diff）更简单可靠，LLM 不容易出错。适合修改函数名、修改变量值、插入代码片段等场景。",
+    category="file",
+    parameters=[
+        ToolParameter(name="path", type="string", required=True,
+                      description="要编辑的文件路径（相对于工作区），例如 'app/main.py'"),
+        ToolParameter(name="old_string", type="string", required=True,
+                      description="要查找并替换的原始文本。必须与文件内容完全一致（包括空格、缩进、换行）。"),
+        ToolParameter(name="new_string", type="string", required=True,
+                      description="替换后的新文本。如果不想做任何修改，设置与 old_string 相同。"),
+        ToolParameter(name="replace_all", type="boolean", required=False,
+                      description="是否替换所有匹配项。默认 false（只替换第一处）。当 old_string 在文件中出现多次且 replace_all=false 时，工具会拒绝执行并返回所有匹配位置。", default=False),
+    ],
+    return_type='"替换结果描述文本" 及 metadata（path, occurrences, replaced, size_bytes, sha256 等）',
+    examples=[
+        ToolExample(
+            user_question="把 app/main.py 中所有的 'user_name' 改成 'username'",
+            parameters={"path": "app/main.py", "old_string": "user_name", "new_string": "username", "replace_all": True},
+        ),
+        ToolExample(
+            user_question="在 config.py 的 DEBUG = False 改为 DEBUG = True",
+            parameters={"path": "config.py", "old_string": "DEBUG = False", "new_string": "DEBUG = True"},
+        ),
+        ToolExample(
+            user_question="在 README.md 开头插入一行项目描述",
+            parameters={"path": "README.md", "old_string": "# My Project", "new_string": "# My Project\n\n> A modern web application built with React and FastAPI."},
+        ),
+    ],
+    risk_level="L2",
+    handler=file_edit_handler,
+    is_concurrency_safe=False,  # Has side effects
+)
+
+# ── file_glob ────────────────────────────────────────────────────────────
+
+FILE_GLOB = ToolDefinition(
+    name="file_glob",
+    description="使用 glob 模式匹配文件路径。支持通配符 *（匹配任意字符）、**（递归匹配目录）、?（匹配单个字符）、[abc]（字符组）。用于快速查找项目中的文件，了解项目结构。注意：此工具只返回文件名，不返回文件内容。要读取文件内容请使用 file_read。",
+    category="file",
+    parameters=[
+        ToolParameter(name="pattern", type="string", required=True,
+                      description="Glob 匹配模式，例如 '**/*.py'（所有 Python 文件）、'src/**/*.tsx'（src 下所有 TSX）、'*.md'（根目录 Markdown 文件）、'app/services/**/*.py'（services 目录下所有 Python）"),
+        ToolParameter(name="path", type="string", required=False,
+                      description="搜索起始目录（相对于工作区）。默认为 '.'（工作区根目录）", default="."),
+    ],
+    return_type='{"pattern": "str", "search_path": "str", "matches": [{"path": "str", "size_bytes": "int", "size_display": "str"}], "total_matches": "int", "truncated": "bool"}',
+    examples=[
+        ToolExample(
+            user_question="列出项目中所有的 Python 文件",
+            parameters={"pattern": "**/*.py", "path": "."},
+        ),
+        ToolExample(
+            user_question="列出 app/services 目录下的所有 TypeScript 文件",
+            parameters={"pattern": "**/*.ts", "path": "app/services"},
+        ),
+        ToolExample(
+            user_question="查看前端组件目录结构",
+            parameters={"pattern": "frontend/components/**/*.tsx", "path": "."},
+        ),
+        ToolExample(
+            user_question="查找所有配置文件",
+            parameters={"pattern": "**/*.{json,yaml,yml,toml,cfg,ini}", "path": "."},
+        ),
+    ],
+    risk_level="L1",
+    handler=file_glob_handler,
+    is_concurrency_safe=True,  # Read-only
+)
+
+# ── task ──────────────────────────────────────────────────────────────────
+
+TASK = ToolDefinition(
+    name="task",
+    description="启动一个临时的、独立的 Agent 来处理复杂子任务。与 invoke_agent（只能调用预定义的 7 个 Agent）不同，task 会动态创建一个全新的 Agent 实例，拥有完整的工具访问权限（文件操作、搜索、代码执行等），专门完成你指定的任务。每个 task 调用都是独立的，不共享上下文。适用于：需要全新视角的分析任务、不适合现有 Agent 角色的特殊任务、并行分解大型任务的子问题。",
+    category="system",
+    parameters=[
+        ToolParameter(name="description", type="string", required=True,
+                      description="任务的简短描述（3-5个词），用作标识标签。例如 '查找认证漏洞'、'重构数据库层'"),
+        ToolParameter(name="prompt", type="string", required=True,
+                      description="完整的任务描述。越具体越好——包含期望输出、约束条件、相关上下文。Agent 将此作为其唯一的用户消息，并获得全部工具的访问权。"),
+        ToolParameter(name="subagent_type", type="string", required=False,
+                      description="Agent 行为模式提示: 'general-purpose'(默认,全部工具), 'Explore'(只读搜索), 'Plan'(架构思考,无文件写入)", default="general-purpose"),
+        ToolParameter(name="model", type="string", required=False,
+                      description="可选的模型覆盖。留空则继承会话默认模型。"),
+    ],
+    return_type='{"success": bool, "result": "Agent 的最终文本输出", "description": "str", "duration_ms": "float", "result_length": "int", "subagent_type": "str"}',
+    examples=[
+        ToolExample(
+            user_question="帮我全面审查这个项目的安全性，找出所有潜在漏洞",
+            parameters={
+                "description": "安全审查",
+                "prompt": "请全面审查当前项目的安全性。检查：1) SQL 注入风险 2) XSS 漏洞 3) 认证/授权缺陷 4) 敏感信息泄露 5) 不安全的依赖。对每个发现的问题给出风险等级和修复建议。使用 file_search 和 file_read 工具查看代码。",
+                "subagent_type": "Explore",
+            },
+        ),
+        ToolExample(
+            user_question="重构数据库访问层，从原始 SQL 迁移到 ORM",
+            parameters={
+                "description": "重构数据库层",
+                "prompt": "分析当前项目中的数据库访问模式（使用 file_search 查找原始 SQL 查询），输出一份详细的重构方案，包括：1) 当前使用原始 SQL 的文件清单 2) 推荐的 ORM 方案 3) 迁移步骤 4) 风险评估。不要编写代码，只输出方案。",
+                "subagent_type": "Plan",
+            },
+        ),
+        ToolExample(
+            user_question="并行分析前端和后端的性能瓶颈",
+            parameters={
+                "description": "性能分析",
+                "prompt": "分析项目中可能导致性能问题的代码模式。搜索：1) N+1 查询 2) 未优化的循环 3) 大文件未分页读取 4) 阻塞操作。使用 file_search 和 file_read 查看相关代码，给出具体文件和行号。",
+                "subagent_type": "general-purpose",
+            },
+        ),
+    ],
+    risk_level="L2",
+    handler=task_handler,
+    is_concurrency_safe=False,  # Agent calls have side effects
+)
+
 # ── All built-in tools list ───────────────────────────────────────────
 
 BUILTIN_TOOLS: list[ToolDefinition] = [
@@ -793,4 +916,7 @@ BUILTIN_TOOLS: list[ToolDefinition] = [
     ARTIFACT_LIST,
     ARTIFACT_READ,
     CONVERSATION_SEARCH,
+    FILE_EDIT,
+    FILE_GLOB,
+    TASK,
 ]

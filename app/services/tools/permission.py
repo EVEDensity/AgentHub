@@ -221,32 +221,43 @@ class PermissionManager:
                 source="mode:bypass",
             )
 
-        # ── Plan mode: read-only — deny all write/delete/shell ops ──
+        # ── Plan mode: read-only — deny all write/delete/shell/code ops ──
         if context.mode == PermissionMode.PLAN:
-            # Tools that modify the filesystem or execute code
+            # 真实内置工具的写/执行类白名单（与 definitions.py 对齐）
             _WRITE_TOOLS = {
-                "file_write", "file_delete", "file_move", "file_copy",
-                "bash", "bash_parallel", "code_exec", "shell_exec",
-                "git_commit", "git_push", "git_tag",
-                "db_execute", "db_migrate",
-                "pip_install", "npm_install",
+                # 文件写入
+                "file_write", "file_write_batch", "file_edit", "file_patch",
+                # 代码 / Shell 执行
+                "code_execute", "command_execute",
             }
             if tool_name in _WRITE_TOOLS:
                 return PermissionResult(
                     behavior=PermissionBehavior.DENY,
-                    reason=f"计划模式：禁止执行 '{tool_name}'（只读模式，不允许写/删/执行操作）",
+                    reason=f"计划模式：禁止执行 '{tool_name}'（只读模式，不允许写文件/执行代码/执行 Shell）",
                     source="mode:plan",
                 )
-            # For path-based write tools, check the operation type in arguments
+            # 文件写入工具的参数 schema 不带 operation 字段——以"是否携带 content/contents/paths_contents 字段"作为写意图信号
             if tool_name.startswith("file_"):
-                operation = arguments.get("operation", arguments.get("action", ""))
-                if operation in ("write", "delete", "move", "copy", "create", "mkdir"):
+                has_write_intent = any(
+                    arguments.get(field) is not None
+                    for field in ("content", "contents", "paths_contents", "new_content")
+                )
+                if has_write_intent:
                     return PermissionResult(
                         behavior=PermissionBehavior.DENY,
-                        reason=f"计划模式：禁止文件 '{operation}' 操作",
+                        reason="计划模式：检测到文件写入意图（content/contents/paths_contents 参数），已拒绝",
                         source="mode:plan",
                     )
-            # All other tools (read/search/list) are allowed in plan mode
+            # http_request 若指向非 GET 也算写操作（POST/PUT/DELETE/PATCH）
+            if tool_name == "http_request":
+                method = (arguments.get("method") or "GET").upper()
+                if method in {"POST", "PUT", "DELETE", "PATCH"}:
+                    return PermissionResult(
+                        behavior=PermissionBehavior.DENY,
+                        reason=f"计划模式：禁止 HTTP {method}（只读模式）",
+                        source="mode:plan",
+                    )
+            # 其他工具（read/search/list/navigate/screenshot/extract 等）放行
             return PermissionResult(
                 behavior=PermissionBehavior.ALLOW,
                 reason="Plan mode — read-only operations allowed",

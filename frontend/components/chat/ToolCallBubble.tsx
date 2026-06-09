@@ -5,6 +5,8 @@ interface ToolCallBubbleProps {
   calls?: ToolCallItem[];
   results?: ToolResultItem[];
   isStreaming?: boolean;
+  /** 重试失败的工具调用（携带工具名和参数） */
+  onRetryTool?: (toolName: string, args: Record<string, unknown>) => void;
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -29,6 +31,7 @@ const ToolCallBubble = memo(function ToolCallBubble({
   calls,
   results,
   isStreaming,
+  onRetryTool,
 }: ToolCallBubbleProps) {
   const [expandedArg, setExpandedArg] = useState<string | null>(null);
   const [expandedResult, setExpandedResult] = useState<string | null>(null);
@@ -118,8 +121,24 @@ const ToolCallBubble = memo(function ToolCallBubble({
                   调用中...
                 </span>
               ) : item.status === 'error' ? (
-                <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700">
-                  失败
+                <span className="flex items-center gap-1.5">
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700">
+                    失败
+                  </span>
+                  {/* ★ 方案4: 重试按钮 */}
+                  {onRetryTool && item.arguments && (
+                    <button
+                      className="inline-flex items-center gap-0.5 rounded-full bg-red-50 border border-red-200 px-1.5 py-0.5 text-[10px] text-red-600 hover:bg-red-100 transition-colors"
+                      onClick={() => onRetryTool(item.name, item.arguments!)}
+                      title={`重试 ${item.name}`}
+                    >
+                      <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="1 4 1 10 7 10" />
+                        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                      </svg>
+                      重试
+                    </button>
+                  )}
                 </span>
               ) : (
                 <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">

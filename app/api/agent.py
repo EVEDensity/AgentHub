@@ -372,6 +372,180 @@ async def test_agent_model(agent_id: str, user: dict = Depends(get_current_user)
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Local Agent Discovery & Registration
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@router.get("/local/discover")
+async def discover_local_agents(user: dict = Depends(get_current_user)) -> dict:
+    """Scan the server's PATH for installed local AI CLI tools.
+
+    Returns a list of :class:`LocalAgentCandidate` objects, each
+    indicating whether the tool was found and is healthy.
+    """
+    require_admin(user)
+    from app.services.local_agent_discovery import discover_local_agents as _discover
+
+    candidates = await _discover()
+    # Also mark which ones are already registered for this user
+    registered = await afetch_all(
+        "SELECT agent_id, adapter_type, status FROM agent_registry "
+        "WHERE user_id=$1 AND adapter_type IN ($2,$3,$4)",
+        user["id"], "local_claude", "local_codex", "local_openclaw",
+    )
+    registered_map: dict[str, dict] = {}
+    for row in registered:
+        registered_map[row["adapter_type"]] = {
+            "agentId": row["agent_id"],
+            "status": row["status"],
+        }
+
+    result: list[dict] = []
+    for c in candidates:
+        entry = {
+            "adapterType": c.adapter_type,
+            "displayName": c.display_name,
+            "binary": c.binary,
+            "installPath": c.install_path,
+            "version": c.version,
+            "installed": c.installed,
+            "healthy": c.healthy,
+            "errorMessage": c.error_message,
+            "capabilities": c.capabilities,
+            "headlessCommand": c.headless_command,
+        }
+        reg = registered_map.get(c.adapter_type)
+        if reg:
+            entry["registered"] = True
+            entry["registeredAgentId"] = reg["agentId"]
+            entry["registeredStatus"] = reg["status"]
+        else:
+            entry["registered"] = False
+        result.append(entry)
+
+    return {"candidates": result, "total": len(result)}
+
+
+@router.post("/local/register")
+async def register_local_agent(data: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Register a discovered local agent into the agent_registry.
+
+    Expected JSON body::
+
+        {
+            "adapterType": "local_claude",
+            "agentId": "my-claude",       // optional, auto-derived if empty
+            "domain": "codegen",          // optional
+            "displayName": "My Claude",   // optional
+            "riskLevel": "L1",            // optional
+            "capabilityTags": ["code"],   // optional
+        }
+    """
+    require_admin(user)
+
+    from app.services.local_agent_discovery import (
+        DISCOVERY_MAP,
+        discover_local_agents,
+        register_local_agent,
+    )
+
+    adapter_type = (data.get("adapterType") or "").strip()
+    if adapter_type not in DISCOVERY_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown local adapter type: {adapter_type}. "
+                   f"Supported: {', '.join(DISCOVERY_MAP.keys())}",
+        )
+
+    # Verify the tool is installed before registering
+    candidates = await discover_local_agents()
+    candidate = next((c for c in candidates if c.adapter_type == adapter_type), None)
+    if not candidate or not candidate.installed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未检测到已安装的 {DISCOVERY_MAP[adapter_type]['display_name']}。"
+                   f"请先安装对应的 CLI 工具。",
+        )
+
+    result = await register_local_agent(
+        candidate,
+        user_id=user["id"],
+        domain=data.get("domain", ""),
+        agent_id=data.get("agentId", ""),
+        risk_level=data.get("riskLevel", "L1"),
+        duty_note=data.get("displayName", ""),
+        base_model_name=data.get("baseModelName", candidate.display_name),
+    )
+
+    if result["status"] == "error":
+        raise HTTPException(status_code=500, detail=result.get("error", "注册失败"))
+
+    audit_id = write_audit(
+        user["id"], result["agentId"], "local_agent_register", "L1", "approve",
+        {"adapterType": adapter_type, "binary": candidate.binary, "version": candidate.version},
+    )
+    result["auditId"] = audit_id
+    return result
+
+
+@router.get("/local/status")
+async def get_local_agent_status(user: dict = Depends(get_current_user)) -> dict:
+    """Health-check all registered local agents for the current user.
+
+    Re-runs ``<binary> --version`` for each registered local agent
+    and updates the ``status`` column accordingly.
+    """
+    require_admin(user)
+
+    from app.services.local_agent_discovery import check_agent_health, DISCOVERY_MAP
+
+    rows = await afetch_all(
+        "SELECT agent_id, adapter_type FROM agent_registry "
+        "WHERE user_id=$1 AND adapter_type IN ($2,$3,$4)",
+        user["id"], "local_claude", "local_codex", "local_openclaw",
+    )
+
+    results: list[dict] = []
+    for row in rows:
+        adapter_type = row["adapter_type"]
+        agent_id = row["agent_id"]
+        cfg = DISCOVERY_MAP.get(adapter_type, {})
+        binary = cfg.get("binary", "")
+
+        if not binary:
+            results.append({
+                "agentId": agent_id,
+                "adapterType": adapter_type,
+                "online": False,
+                "message": "未找到二进制配置",
+            })
+            continue
+
+        import shutil
+        install_path = shutil.which(binary) or binary
+        version, healthy, error = await check_agent_health(
+            install_path, adapter_type,
+        )
+
+        new_status = "online" if healthy else "offline"
+        await aexecute(
+            "UPDATE agent_registry SET status=$1 WHERE agent_id=$2 AND user_id=$3",
+            new_status, agent_id, user["id"],
+        )
+
+        results.append({
+            "agentId": agent_id,
+            "adapterType": adapter_type,
+            "online": healthy,
+            "version": version,
+            "installPath": install_path,
+            "message": "" if healthy else error,
+        })
+
+    return {"agents": results, "total": len(results)}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Avatar Upload / Serve (DB-backed with filesystem fallback)
 # ═══════════════════════════════════════════════════════════════════════
 

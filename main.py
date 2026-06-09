@@ -2,18 +2,54 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.routes import api_router
-from app.config import APP_NAME, APP_VERSION
+from app.core.config import get_settings
 from app.db.init_db import ainit_db
+
+# Single import at module level — lazy-init, validated once.
+_cfg = get_settings()
+
+
+class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject requests whose Content-Length exceeds *max_bytes* *before*
+    reading the body, preventing memory-exhaustion attacks."""
+
+    async def dispatch(self, request: Request, call_next):
+        cl = request.headers.get("content-length")
+        if cl is not None:
+            try:
+                if int(cl) > _cfg.max_body_mb * 1024 * 1024:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "detail": (
+                                f"Request body too large. "
+                                f"Max {_cfg.max_body_mb} MB allowed."
+                            )
+                        },
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import logging
     _log = logging.getLogger("agenthub.startup")
+
+    _log.info(
+        "startup: env=%s cors_origins=%s body_limit_mb=%d orchestrator=%s",
+        _cfg.env,
+        _cfg.cors_origins,
+        _cfg.max_body_mb,
+        "enabled" if _cfg.orchestrator.preprocess_enabled else "disabled",
+    )
 
     # ── Database init ────────────────────────────────────────────────
     _log.info("startup: initializing PostgreSQL...")
@@ -63,10 +99,13 @@ async def lifespan(app: FastAPI):
         _log.warning("shutdown: failed to close HTTP client", exc_info=True)
 
 
-app = FastAPI(title=APP_NAME, version=APP_VERSION, lifespan=lifespan)
+app = FastAPI(title=_cfg.app_name, version=_cfg.app_version, lifespan=lifespan)
+
+# ── Middleware (last added wraps outermost) ──────────────────────────
+app.add_middleware(_BodySizeLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cfg.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -76,4 +115,4 @@ app.include_router(api_router)
 
 @app.get("/")
 async def root() -> dict[str, str]:
-    return {"message": "AgentHub backend is running", "docs": "/docs", "version": APP_VERSION}
+    return {"message": "AgentHub backend is running", "docs": "/docs", "version": _cfg.app_version}

@@ -24,6 +24,7 @@ import ProgressBubble from './ProgressBubble';
 import RiskAlertBubble from './RiskAlertBubble';
 import AgentTodoBubble from './AgentTodoBubble';
 import TaskPreviewCard from './TaskPreviewCard';
+import SolutionBubble from './SolutionBubble';
 import DeployCard from './DeployCard';
 import TerminalBubble from './TerminalBubble';
 import { getPresenceStore } from '../../lib/presenceStore';
@@ -437,6 +438,28 @@ const MessageRow = memo(function MessageRow({
     );
   }
 
+  // ── Solution proposal bubble ─────────────────────────────────────
+  if (msg.type === 'solution_proposal' && msg.solutionProposalData && onSendPMEvent) {
+    return (
+      <SolutionBubble
+        key={msgKey}
+        data={msg.solutionProposalData}
+        resolvedBy={msg.solutionProposalData.resolvedBy}
+        resolvedByName={msg.solutionProposalData.resolvedByName}
+        onSelectSolution={(solutionId, autoSelected) => {
+          onSendPMEvent({
+            event: 'solution_selection',
+            sessionId: msg.sessionId,
+            messageId: msg.messageId || '',
+            solutionId,
+            autoSelected,
+            timestamp: new Date().toISOString(),
+          });
+        }}
+      />
+    );
+  }
+
   // ── Deploy card ─────────────────────────────────────────────────
   if (msg.type === 'deploy_card' && msg.deployCardData) {
     return (
@@ -554,13 +577,39 @@ interface MessageListProps {
   onSendPMEvent?: (event: Record<string, unknown>) => void;
   agents?: Agent[];
   sessionId?: string;
+  /** Whether the session is currently streaming (for skeleton screen) */
+  isStreaming?: boolean;
 }
 
 const EMPTY_USER_MAP = new Map<string, string>();
 
+// ── Skeleton Bubble (用于骨架屏加载态) ───────────────────────────────
+
+function SkeletonBubble({ align, width, delay }: { align: 'left' | 'right'; width: string; delay: string }) {
+  return (
+    <div className={`mb-4 flex ${align === 'right' ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className="rounded-2xl px-4 py-3 bg-white border border-warm-150 shadow-sm animate-pulse"
+        style={{ width, animationDelay: delay }}
+      >
+        <div className="flex items-center gap-2 mb-2">
+          <div className="h-6 w-6 rounded-full bg-warm-200" />
+          <div className="h-3 w-16 rounded bg-warm-200" />
+          <div className="h-3 w-8 rounded bg-warm-200 ml-auto" />
+        </div>
+        <div className="space-y-2">
+          <div className="h-3 rounded bg-warm-100" style={{ width: '90%' }} />
+          <div className="h-3 rounded bg-warm-100" style={{ width: '75%' }} />
+          <div className="h-3 rounded bg-warm-100" style={{ width: '60%' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const MessageList = memo(function MessageList({
   messages, user, generated, onCommit, messagesContainerRef, bottomRef,
-  onQuoteMessage, onSendPMEvent, agents, sessionId,
+  onQuoteMessage, onSendPMEvent, agents, sessionId, isStreaming = false,
 }: MessageListProps) {
   const presenceUsers = useMemo(() => {
     if (!sessionId) return EMPTY_USER_MAP;
@@ -604,6 +653,14 @@ const MessageList = memo(function MessageList({
 
   return (
     <section ref={messagesContainerRef as React.LegacyRef<HTMLElement>} className="flex-1 overflow-auto p-6 chat-scroll-container">
+      {/* ★ 方案5: 骨架屏 — 等待AI响应时显示，消除空白闪烁 */}
+      {messages.length === 0 && isStreaming && (
+        <div className="space-y-6 py-4">
+          <SkeletonBubble align="left" width="70%" delay="0ms" />
+          <SkeletonBubble align="left" width="85%" delay="300ms" />
+          <SkeletonBubble align="left" width="55%" delay="600ms" />
+        </div>
+      )}
       {messages.map((msg, index) => (
         <div className="chat-message-row" key={getMsgKey(msg, index)}>
           <MessageRow

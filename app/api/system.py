@@ -97,6 +97,30 @@ ADAPTER_METADATA = {
         "requires_api_key": True,
         "category": "custom",
     },
+    "local_claude": {
+        "name": "Claude Code (本地)",
+        "description": "Anthropic 官方 CLI Agent，通过 subprocess 无头模式调用本地 claude 命令",
+        "default_model": "claude",
+        "default_base_url": "",
+        "requires_api_key": False,
+        "category": "local",
+    },
+    "local_codex": {
+        "name": "Codex CLI (本地)",
+        "description": "OpenAI Codex CLI，通过 codex exec --json 执行本地编码任务",
+        "default_model": "codex",
+        "default_base_url": "",
+        "requires_api_key": False,
+        "category": "local",
+    },
+    "local_openclaw": {
+        "name": "OpenClaw (本地)",
+        "description": "开源 TypeScript CLI Agent，支持 MCP 和多后端切换",
+        "default_model": "openclaw-cli",
+        "default_base_url": "",
+        "requires_api_key": False,
+        "category": "local",
+    },
 }
 
 

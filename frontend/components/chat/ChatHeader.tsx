@@ -17,6 +17,14 @@ interface ChatHeaderProps {
   onResetLayout?: () => void;
   pmState?: PMState;
   degradationStatus?: DegradationStatus | null;
+  /** Phase-based progress: thinking | executing | generating | done | idle */
+  streamPhase?: 'idle' | 'thinking' | 'executing' | 'generating' | 'done';
+  /** Currently executing tool names */
+  activeTools?: string[];
+  /** Current agent name */
+  currentAgentName?: string;
+  /** Interrupt the current streaming session */
+  onInterruptStream?: () => void;
 }
 
 const PM_STATE_COLORS: Record<PMState, string> = {
@@ -42,6 +50,8 @@ const ChatHeader = memo(function ChatHeader({
   percent, onTaskClick, onRenameSession, onRegenerateName,
   onTogglePreview, previewOpen, onResetLayout,
   pmState = 'IDLE', degradationStatus,
+  streamPhase = 'idle', activeTools = [], currentAgentName = '',
+  onInterruptStream,
 }: ChatHeaderProps) {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(sessionName);
@@ -157,27 +167,54 @@ const ChatHeader = memo(function ChatHeader({
             </div>
 
             {/* WS status + PM state detail */}
-            <div className="text-caption text-warm-500 mt-0.5 flex items-center gap-2">
-              <span>WebSocket: {connected ? (isStreaming ? 'AI streaming...' : 'Connected') : 'Reconnecting'}</span>
+            <div className="text-caption text-warm-500 mt-0.5 flex items-center gap-2 flex-wrap">
+              <span>WebSocket: {connected ? (
+                streamPhase === 'thinking' ? '🧠 AI 思考中...'
+                : streamPhase === 'executing' ? (activeTools.length > 0 ? `🔧 执行: ${activeTools.join(', ')}` : '🔧 工具执行中...')
+                : streamPhase === 'generating' ? '✍️ 生成回复中...'
+                : isStreaming ? 'AI streaming...'
+                : 'Connected'
+              ) : 'Reconnecting'}</span>
               {pmState === 'WAITING_USER' && (
                 <span className="text-amber-600 font-medium">· 等待你的决策</span>
+              )}
+              {currentAgentName && streamPhase !== 'idle' && streamPhase !== 'done' && (
+                <span className="text-primary-500">· {currentAgentName}</span>
               )}
             </div>
           </div>
 
           {/* ── 右侧：任务控制 / 文件预览 / 重置布局 / 进度 ── */}
           <div className="flex items-center gap-3 shrink-0">
-            {/* 进度条 + 百分比 */}
+            {/* ★ 方案2: 进度条 — DAG优先，否则用阶段式进度 */}
             <div className="flex items-center gap-2">
-              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-warm-100">
-                <div
-                  className="h-full bg-primary-500 transition-all duration-300"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-              <span className={`text-xs font-mono font-medium tabular-nums ${isStreaming ? 'text-primary-600' : 'text-warm-500'}`}>
-                {percent}%
-              </span>
+              {(() => {
+                const phasePercent = streamPhase === 'thinking' ? 25
+                  : streamPhase === 'executing' ? 50
+                  : streamPhase === 'generating' ? 75
+                  : streamPhase === 'done' ? 100
+                  : 0;
+                const displayPercent = percent > 0 ? percent : phasePercent;
+                const barColor = streamPhase === 'thinking' ? 'bg-purple-500'
+                  : streamPhase === 'executing' ? 'bg-blue-500 animate-pulse'
+                  : streamPhase === 'generating' ? 'bg-primary-500'
+                  : streamPhase === 'done' ? 'bg-emerald-500'
+                  : percent > 0 ? 'bg-primary-500'
+                  : 'bg-warm-200';
+                return (
+                  <>
+                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-warm-100">
+                      <div
+                        className={`h-full transition-all duration-500 ${barColor}`}
+                        style={{ width: `${displayPercent}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs font-mono font-medium tabular-nums ${isStreaming || streamPhase !== 'idle' ? 'text-primary-600' : 'text-warm-500'}`}>
+                      {displayPercent}%
+                    </span>
+                  </>
+                );
+              })()}
             </div>
 
             <span className="h-5 w-px bg-warm-150" />
@@ -227,6 +264,20 @@ const ChatHeader = memo(function ChatHeader({
                   <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
                 </svg>
                 <span className="hidden sm:inline">重置布局</span>
+              </button>
+            )}
+
+            {/* ★ 方案5: 中断按钮 — 流式/AI处理中显示 */}
+            {onInterruptStream && isStreaming && (
+              <button
+                onClick={onInterruptStream}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
+                title="中断当前 AI 处理"
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <rect x="4" y="4" width="16" height="16" rx="2" />
+                </svg>
+                <span className="hidden sm:inline">中断</span>
               </button>
             )}
           </div>

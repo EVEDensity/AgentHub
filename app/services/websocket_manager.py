@@ -378,6 +378,28 @@ class WebSocketManager:
         token = self._tokens.get(session_id)
         return token is not None and not token.cancelled
 
+    # ── MCP management helpers ──────────────────────────────────────
+
+    def active_connection_count(self) -> int:
+        """Return total active WebSocket connections across all sessions."""
+        total = 0
+        for conns in self._connections.values():
+            total += len(conns)
+        return total
+
+    def get_connections_for_session(self, session_id: str) -> list[dict]:
+        """Return connection info for a session (for MCP session detail)."""
+        conns = self._connections.get(session_id, [])
+        return [
+            {"connectionId": cid, "userId": uid, "connectedAt": ts}
+            for cid, ws, uid, ts in conns
+        ]
+
+    def get_tokens_for_session(self, session_id: str) -> list[StreamToken]:
+        """Return the StreamToken for a session, if any."""
+        token = self._tokens.get(session_id)
+        return [token] if token and not token.cancelled else []
+
     # ── Session cleanup ──────────────────────────────────────────────
 
     # ── PM/PMO event broadcasting ─────────────────────────────────────
@@ -485,6 +507,38 @@ class WebSocketManager:
         if eta_seconds is not None:
             payload["estimatedTotalSeconds"] = eta_seconds
         await self.broadcast(session_id, payload)
+
+    async def broadcast_solution_proposal(
+        self, session_id: str, message_id: str,
+        intent_type: str,
+        requirements: list[str],
+        non_functional_requirements: list[str],
+        constraints: list[str],
+        solutions: list[dict],
+        recommended_solution_id: str,
+        recommendation_reason: str,
+        auto_confirm_seconds: int = 30,
+    ) -> None:
+        """Broadcast a solution_proposal event for user to review and select.
+
+        The frontend renders a SolutionBubble with side-by-side comparison
+        cards.  The user can click to select a solution, or it auto-confirms
+        after ``auto_confirm_seconds``.
+        """
+        await self.broadcast(session_id, {
+            "event": "solution_proposal",
+            "sessionId": session_id,
+            "messageId": message_id,
+            "intentType": intent_type,
+            "requirements": requirements,
+            "nonFunctionalRequirements": non_functional_requirements,
+            "constraints": constraints,
+            "solutions": solutions,
+            "recommendedSolutionId": recommended_solution_id,
+            "recommendationReason": recommendation_reason,
+            "autoConfirmSeconds": auto_confirm_seconds,
+            "timestamp": db_now(),
+        })
 
     async def broadcast_interaction_already_resolved(
         self, session_id: str, message_id: str, resolver: dict,

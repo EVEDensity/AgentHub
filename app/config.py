@@ -1,121 +1,79 @@
+"""Backward-compatible config bridge.
+
+All settings are now managed by :mod:`app.core.config`.  This module re-exports
+every attribute that existing callers import so the migration to Pydantic
+Settings is transparent.
+
+New code should import ``settings`` from ``app.core.config`` directly::
+
+    from app.core.config import settings
+"""
+
 from __future__ import annotations
 
-import os
-from pathlib import Path
+# Force re-export of every attribute the old config.py exposed.
+# This is intentionally verbose so that ``from app.config import X``
+# continues to work for all 19 existing callers.
+from app.core.config import settings as _cfg
 
-# ── Load .env file (if python-dotenv is available) ─────────────────
-try:
-    from dotenv import load_dotenv
-    _env_file = Path(__file__).resolve().parent.parent / ".env"
-    if _env_file.exists():
-        load_dotenv(_env_file)
-except ImportError:
-    pass  # dotenv not installed — env vars must be set externally
+# ── Paths ─────────────────────────────────────────────────────────────
+BASE_DIR = _cfg.base_dir
+PROJECT_ROOT = _cfg.project_root
+DATA_DIR = _cfg.data_dir
+WORKSPACES_DIR = _cfg.workspaces_dir
+MEMORY_DIR = _cfg.memory_dir
+SKILLS_DIR_USER = _cfg.skills_dir_user
+SKILLS_DIR_PROJECT = _cfg.skills_dir_project
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-PROJECT_ROOT = BASE_DIR.parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# ── Database ──────────────────────────────────────────────────────────
+DATABASE_URL = _cfg.DATABASE_URL
 
-# ── Per-user per-session isolated workspace directories ─────────────────
-# Each user+session gets an independent subdirectory:
-#   DATA_DIR/workspaces/{user_id}/{session_id}/
-# Agent tools (file_read, file_write, code_execute, git, etc.) resolve
-# their working directory dynamically from the workspace context, never
-# from PROJECT_ROOT.
-WORKSPACES_DIR = DATA_DIR / "workspaces"
+# ── Application ───────────────────────────────────────────────────────
+APP_NAME = _cfg.app_name
+APP_VERSION = _cfg.app_version
+DEFAULT_SESSION_ID = _cfg.default_session_id
+DEFAULT_USER_ID = _cfg.default_user_id
 
-# ── Database ───────────────────────────────────────────────────────
-# PostgreSQL connection URL (required — e.g. Neon serverless).
-# Set via .env file or environment variable.
-DATABASE_URL = os.getenv("DATABASE_URL", "")
+# ── LLM ───────────────────────────────────────────────────────────────
+OPENAI_API_KEY = _cfg.llm.openai_api_key
+ANTHROPIC_API_KEY = _cfg.llm.anthropic_api_key
+OLLAMA_BASE_URL = _cfg.llm.ollama_base_url
 
-APP_NAME = "AgentHub 多智能体协作平台"
-APP_VERSION = "3.0-modular"
+# ── Search ────────────────────────────────────────────────────────────
+WEB_SEARCH_MODE = _cfg.search.web_search_mode
+BING_API_KEY = _cfg.search.bing_api_key
+SERPAPI_API_KEY = _cfg.search.serpapi_api_key
+GOOGLE_API_KEY = _cfg.search.google_api_key
+GOOGLE_CSE_ID = _cfg.search.google_cse_id
+TAVILY_API_KEY = _cfg.search.tavily_api_key
+BRAVE_API_KEY = _cfg.search.brave_api_key
 
-DEFAULT_SESSION_ID = "session-1"
-DEFAULT_USER_ID = "local-admin"
+# ── Orchestrator ──────────────────────────────────────────────────────
+ORCHESTRATOR_PREPROCESS_ENABLED = _cfg.orchestrator.preprocess_enabled
+ORCHESTRATOR_PREPROCESS_MIN_LENGTH = _cfg.orchestrator.preprocess_min_length
+AGENTHUB_AUTO_DECOMPOSE = _cfg.orchestrator.auto_decompose
+AGENTHUB_AUTO_DECOMPOSE_MIN_LENGTH = _cfg.orchestrator.auto_decompose_min_length
 
-# Memory system: project-local .claude/memory/ directory
-MEMORY_DIR = PROJECT_ROOT / ".claude" / "memory"
+# ── File operations ───────────────────────────────────────────────────
+AGENTHUB_FILE_AUTO_GIT = _cfg.files.auto_git
+AGENTHUB_FILE_BROADCAST = _cfg.files.broadcast
 
-# Auto memory extraction settings
-AUTO_MEMORY_ENABLED = os.getenv("AGENTHUB_AUTO_MEMORY", "true").lower() != "false"
-AUTO_MEMORY_MIN_MSG = int(os.getenv("AGENTHUB_MEMORY_MIN_MSG", "2"))
+# ── Office preview ────────────────────────────────────────────────────
+OFFICE_PREVIEW_MAX_MB = _cfg.office.preview_max_mb
+OFFICE_WORKSPACE_READ_MAX_MB = _cfg.office.workspace_read_max_mb
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+# ── Memory ────────────────────────────────────────────────────────────
+AUTO_MEMORY_ENABLED = _cfg.memory.auto_memory_enabled
+AUTO_MEMORY_MIN_MSG = _cfg.memory.memory_min_msg
 
-# ── Search provider API keys ──────────────────────────────────────────
-# Set at least one to enable real web search.  If none are set the
-# DuckDuckGo free API is used as a best-effort fallback.
-#
-# WEB_SEARCH_MODE controls provider priority:
-#   auto      → smart fallback chain (default)
-#   bing      → Bing Web Search API v7 only (explicit)
-#   serpapi   → SerpAPI / Google via SerpAPI only
-#   google    → Google Custom Search API only
-#   tavily    → Tavily Search API only
-#   brave     → Brave Search API only
-#   duckduckgo→ DuckDuckGo Instant Answer (free, no key)
-#   disabled  → no web search (returns unavailable message)
-WEB_SEARCH_MODE = os.getenv("WEB_SEARCH_MODE", "auto")
-BING_API_KEY = os.getenv("BING_API_KEY", "")
-SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY", "")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID", "")
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
-BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+# ── Command execution ─────────────────────────────────────────────────
+COMMAND_EXECUTE_TIMEOUT = _cfg.command.execute_timeout
+COMMAND_EXECUTE_MAX_OUTPUT = _cfg.command.max_output
 
-# ── Skill system directories ────────────────────────────────────────
-# Skills are loaded from two locations (project-level takes precedence):
-#   1. ~/.claude/skills/   — user-level, available across all projects
-#   2. .claude/skills/     — project-level (under PROJECT_ROOT)
-SKILLS_DIR_USER = Path.home() / ".claude" / "skills"
-SKILLS_DIR_PROJECT = PROJECT_ROOT / ".claude" / "skills"
+# ── Streaming ─────────────────────────────────────────────────────────
+STREAM_FIRST_BYTE_TIMEOUT = _cfg.streaming.first_byte_timeout
+STREAM_IDLE_TIMEOUT = _cfg.streaming.idle_timeout
 
-# ── Command execution limits ─────────────────────────────────────────
-COMMAND_EXECUTE_TIMEOUT = int(os.getenv("AGENTHUB_COMMAND_TIMEOUT", "120"))
-COMMAND_EXECUTE_MAX_OUTPUT = int(os.getenv("AGENTHUB_COMMAND_MAX_OUTPUT", "100000"))
-
-# Default 600 s (10 min) — complex tasks (full blog HTML, multi-file codegen,
-# long chains of tool calls) can take several minutes.  The old 45 s default
-# was too aggressive and silently killed legitimate long-running requests.
-# Operators can still override via AGENTHUB_REQUEST_TIMEOUT if needed.
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("AGENTHUB_REQUEST_TIMEOUT", "600"))
-ENABLE_REAL_LLM = os.getenv("AGENTHUB_ENABLE_REAL_LLM", "true").lower() != "false"
-
-# ── Orchestrator pre-processing ──────────────────────────────────────
-# When enabled, the Orchestrator pre-processes complex user questions
-# before sending them to the main LLM — performing intent analysis,
-# question clarification, sub-task decomposition, and constraint extraction.
-ORCHESTRATOR_PREPROCESS_ENABLED = os.getenv("AGENTHUB_ORCHESTRATOR_PREPROCESS", "true").lower() != "false"
-# Minimum character length for a question to trigger pre-processing.
-# Simple greetings and very short questions (< this length) skip
-# pre-processing to avoid unnecessary LLM calls.
-ORCHESTRATOR_PREPROCESS_MIN_LENGTH = int(os.getenv("AGENTHUB_PREPROCESS_MIN_LENGTH", "30"))
-
-# ── Office document preview limits ───────────────────────────────────
-# PPTX/DOCX files often embed large images; these limits are more
-# permissive than the general 5 MB cap.  Image optimisation (Pillow)
-# further reduces the output HTML size inside the browser.
-OFFICE_PREVIEW_MAX_MB = int(os.getenv("AGENTHUB_OFFICE_PREVIEW_MAX_MB", "20"))
-OFFICE_WORKSPACE_READ_MAX_MB = int(os.getenv("AGENTHUB_OFFICE_WORKSPACE_READ_MAX_MB", "30"))
-
-# ── File operations: real-time sync & versioning ────────────────────────
-# When enabled, every ``file_write`` / ``file_patch`` auto-commits to the
-# per-session git repository so changes are traceable and revertable.
-AGENTHUB_FILE_AUTO_GIT = os.getenv("AGENTHUB_FILE_AUTO_GIT", "true").lower() != "false"
-# When enabled, ``file_write`` / ``file_patch`` broadcasts a
-# ``workspace_change`` WebSocket event to all session members so the
-# frontend file tree updates in real time.
-AGENTHUB_FILE_BROADCAST = os.getenv("AGENTHUB_FILE_BROADCAST", "true").lower() != "false"
-
-# ── Streaming timeouts ──────────────────────────────────────────────
-# Maximum time to wait for the first streaming chunk (token) before
-# considering the model unresponsive and falling back.
-STREAM_FIRST_BYTE_TIMEOUT = int(os.getenv("AGENTHUB_STREAM_FIRST_BYTE_TIMEOUT", "30"))
-# Maximum idle time between streaming chunks before the connection is
-# considered stale and the stream is interrupted.
-STREAM_IDLE_TIMEOUT = int(os.getenv("AGENTHUB_STREAM_IDLE_TIMEOUT", "120"))
+# ── Request ───────────────────────────────────────────────────────────
+REQUEST_TIMEOUT_SECONDS = _cfg.request_timeout_seconds
+ENABLE_REAL_LLM = _cfg.enable_real_llm

@@ -23,6 +23,7 @@ class DAGConfig(BaseModel):
     similarity: float | None = None
     execution_strategy: str = "sequential"  # sequential|parallel|mixed
     analysis: str = ""                       # Architect's reasoning
+    solution_context: dict | None = None     # Selected solution (id, name, tech_stack, architecture)
 
     def get_ready_nodes(self) -> list[DAGNode]:
         """Return nodes whose dependencies are all satisfied."""

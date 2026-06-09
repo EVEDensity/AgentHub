@@ -52,9 +52,12 @@ export interface Message {
   sessionId: string;
   sender: string;
   content: string;
-  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result' | 'agent_question' | 'progress_update' | 'risk_warning' | 'agent_todo' | 'task_preview' | 'terminal' | 'deploy_card';
+  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result' | 'agent_question' | 'progress_update' | 'risk_warning' | 'agent_todo' | 'task_preview' | 'solution_proposal' | 'terminal' | 'deploy_card';
   timestamp: string;
   userId?: string;           // JWT-derived user ID (empty for agent messages)
+  /** Multi-turn request tracking */
+  turnId?: string;
+  threadId?: string;
   guardrailResult?: GuardrailResult;
   symbolic?: SymbolicData & {
     generated?: GeneratedData;
@@ -70,10 +73,13 @@ export interface Message {
   riskWarningData?: RiskWarningEvent;
   todoData?: AgentTodoEvent;
   taskPreviewData?: TaskPreviewEvent;
+  solutionProposalData?: SolutionProposalEvent;
   deployCardData?: DeployCardEvent;
   /** Diff accept/reject */
   diffDecisionState?: 'pending' | 'accepted' | 'rejected';
   diffFilePath?: string;
+  /** Optimistic thinking placeholder (replaced by real agent_thinking event) */
+  _optimistic?: boolean;
 }
 
 export interface StreamChunk {
@@ -82,6 +88,8 @@ export interface StreamChunk {
   sessionId: string;
   content: string;
   isFinal: boolean;
+  turnId?: string;
+  threadId?: string;
 }
 
 export interface StreamInterrupted {
@@ -125,6 +133,11 @@ export interface Agent {
   avatarUrl?: string;
   capabilityTags?: string[];
   baseUrl?: string;
+  /** Local agent fields */
+  isLocal?: boolean;
+  localStatus?: 'online' | 'offline' | 'unknown';
+  installPath?: string;
+  version?: string;
 }
 
 // ── Platform labels & colors for agent adapter types ──────────────
@@ -141,6 +154,9 @@ export const PLATFORM_LABELS: Record<string, string> = {
   kimi: 'Kimi',
   custom_openai: '自定义',
   cloud_code: 'CloudCode',
+  local_claude: 'Claude Code',
+  local_codex: 'Codex CLI',
+  local_openclaw: 'OpenClaw',
   mock: 'Mock',
 };
 
@@ -156,6 +172,9 @@ export const PLATFORM_COLORS: Record<string, string> = {
   kimi: '#f59e0b',
   custom_openai: '#0ea5e9',
   cloud_code: '#8b5cf6',
+  local_claude: '#d97706',
+  local_codex: '#10a37f',
+  local_openclaw: '#6366f1',
   mock: '#6b7280',
 };
 
@@ -518,6 +537,7 @@ export interface ToolCallItem {
   arguments: Record<string, unknown>;
   status: 'queued' | 'executing' | 'calling' | 'success' | 'error';
   progress?: ToolProgressEvent;
+  toolUseId?: string;
 }
 
 export interface ToolCallData {
@@ -539,6 +559,8 @@ export interface ToolCallEvent {
   event: 'tool_call';
   sessionId: string;
   messageId: string;
+  turnId?: string;
+  threadId?: string;
   toolCalls: ToolCallItem[];
   timestamp: string;
 }
@@ -547,6 +569,8 @@ export interface ToolResultEvent {
   event: 'tool_result';
   sessionId: string;
   messageId: string;
+  turnId?: string;
+  threadId?: string;
   results: ToolResultItem[];
   timestamp: string;
 }
@@ -885,6 +909,50 @@ export interface TaskPreviewResponse {
   timestamp: string;
 }
 
+// ── Solution Proposal Event ───────────────────────────────────────────
+
+/** A single solution option within a solution proposal */
+export interface SolutionOption {
+  id: string;
+  name: string;
+  techStack: string[];
+  architecture: string;
+  pros: string[];
+  cons: string[];
+  estimatedEffort: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  score: number;
+}
+
+/** Orchestrator sends solution proposal for user to review and select */
+export interface SolutionProposalEvent {
+  event: 'solution_proposal';
+  sessionId: string;
+  messageId: string;
+  intentType: string;
+  requirements: string[];
+  nonFunctionalRequirements: string[];
+  constraints: string[];
+  solutions: SolutionOption[];
+  recommendedSolutionId: string;
+  recommendationReason: string;
+  autoConfirmSeconds: number;
+  timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
+}
+
+/** User selects a solution (or frontend auto-selects on timeout) */
+export interface SolutionSelectionEvent {
+  event: 'solution_selection';
+  sessionId: string;
+  messageId: string;
+  solutionId: string;
+  autoSelected: boolean;
+  timestamp: string;
+}
+
 // ── Deploy Card Event ────────────────────────────────────────────────
 
 /** Deploy agent sends a deployment card when project is completed */
@@ -936,6 +1004,7 @@ export interface DiffUpdateEvent {
   event: 'diff_update';
   sessionId: string;
   messageId: string;
+  turnId?: string;
   path: string;
   diff: string;
   timestamp: string;
@@ -955,6 +1024,7 @@ export interface TerminalOutputEvent {
   event: 'terminal_output';
   sessionId: string;
   messageId: string;
+  turnId?: string;
   content: string;
   sender: string;
   timestamp: string;
@@ -1043,4 +1113,116 @@ export interface PermissionModeChangedEvent {
   changedBy: string;
   changedByName: string;
   timestamp: string;
+}
+
+// ── Local Agent Discovery Types ──────────────────────────────────────
+
+/** A single discovered local AI CLI tool candidate */
+export interface LocalAgentCandidate {
+  adapterType: string;
+  displayName: string;
+  binary: string;
+  installPath: string;
+  version: string;
+  installed: boolean;
+  healthy: boolean;
+  errorMessage: string;
+  capabilities: string[];
+  headlessCommand: string;
+  registered?: boolean;
+  registeredAgentId?: string;
+  registeredStatus?: string;
+}
+
+/** Response from GET /api/agent/local/discover */
+export interface LocalAgentDiscoverResponse {
+  candidates: LocalAgentCandidate[];
+  total: number;
+}
+
+/** Request body for POST /api/agent/local/register */
+export interface LocalAgentRegisterRequest {
+  adapterType: string;
+  agentId?: string;
+  domain?: string;
+  displayName?: string;
+  riskLevel?: string;
+  baseModelName?: string;
+  capabilityTags?: string[];
+}
+
+/** A single local agent status entry from GET /api/agent/local/status */
+export interface LocalAgentStatus {
+  agentId: string;
+  adapterType: string;
+  online: boolean;
+  version: string;
+  installPath: string;
+  message: string;
+}
+
+/** Response from GET /api/agent/local/status */
+export interface LocalAgentStatusResponse {
+  agents: LocalAgentStatus[];
+  total: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MCP Dashboard Types
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Response from GET /api/admin/mcp/dashboard */
+export interface MCPDashboardData {
+  timestamp: string;
+  health: {
+    status: 'healthy' | 'degraded';
+    issues: string[];
+  };
+  agents: {
+    total: number;
+    byStatus: Record<string, {
+      count: number;
+      adapters: Record<string, number>;
+    }>;
+  };
+  sessions: {
+    activeWebSocket: number;
+    today: number;
+  };
+  messages: {
+    today: number;
+    thisWeek: number;
+  };
+  tokens: {
+    today: number;
+    thisWeek: number;
+    perModel: Array<{ model: string; messages: number; tokens: number }>;
+  };
+  tools: {
+    todayCalls: number;
+    todaySuccess: number;
+    topTools: Array<{ name: string; count: number; successCount: number }>;
+  };
+  performance: Record<string, unknown>;
+  system: {
+    cpuPercent: number;
+    memoryPercent: number;
+    memoryUsedGB: number;
+    memoryTotalGB: number;
+    pythonPid: number;
+    note?: string;
+  };
+  database: {
+    connected: boolean;
+    poolSize: number;
+    poolFree: number;
+  };
+  recentEvents: Array<{
+    id?: string;
+    agentId?: string;
+    action?: string;
+    riskLevel?: string;
+    decision?: string;
+    timestamp?: string;
+  }>;
 }

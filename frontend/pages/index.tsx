@@ -32,6 +32,7 @@ import {
 } from '../lib/sessionStore';
 import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
+import { ToastProvider, useAddToast } from '../components/ui/Toast';
 
 // ── Dynamic imports for heavy / conditionally-rendered components ──
 const FilePreviewModal = dynamic(() => import('../components/chat/FilePreviewModal'), {
@@ -113,6 +114,7 @@ export default function AgentHubIM(): JSX.Element {
   const [sessionId, setSessionId] = useState<string>('');
   const messages = useSessionMessages(sessionId);
   const isStreaming = useSessionStreaming(sessionId);
+  const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
@@ -139,6 +141,15 @@ export default function AgentHubIM(): JSX.Element {
   const [quoteReferences, setQuoteReferences] = useState<QuoteReference[]>([]);
   const [pmState, setPmState] = useState<import('../types').PMState>('IDLE');
   const [degradationStatus, setDegradationStatus] = useState<import('../types').DegradationStatus | null>(null);
+  // ── Streaming UX state ────────────────────────────────────────
+  // Phase-based progress: tracks the current stage of the agent pipeline
+  const [streamPhase, setStreamPhase] = useState<'idle' | 'thinking' | 'executing' | 'generating' | 'done'>('idle');
+  // Currently executing tool names (shown in ChatHeader)
+  const [activeTools, setActiveTools] = useState<string[]>([]);
+  // WebSocket send state: idle → sending → sent
+  const [sendState, setSendState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  // Current agent name extracted from the message content
+  const [currentAgentName, setCurrentAgentName] = useState<string>('');
   // ── Share dialog state ─────────────────────────────────────────
   const [shareOpen, setShareOpen] = useState(false);
   const [sessionVisibility, setSessionVisibility] = useState<string>('');
@@ -642,6 +653,13 @@ export default function AgentHubIM(): JSX.Element {
       setSessionStreaming(sid, false);
       // 清理该 session 的中断标记
       streamInterruptedAtRef.current.delete(sid);
+      // ★ 方案4: 重连通知
+      const attempt = reconnectAttemptsRef.current;
+      if (currentSessionRef.current === sid && attempt === 0) {
+        addToast({ type: 'warning', title: 'WebSocket 连接断开', message: '正在尝试重新连接...', duration: 5000 });
+      } else if (currentSessionRef.current === sid && attempt >= 3) {
+        addToast({ type: 'error', title: '连接不稳定', message: `已尝试重连 ${attempt + 1} 次，请检查网络`, duration: 0 });
+      }
       // 仅当用户当前还在这个 session 且 token 仍有效才重连
       // tokenRef 检查防止已过期登出后仍继续无效重连
       if (currentSessionRef.current === sid && tokenRef.current) {
@@ -649,6 +667,7 @@ export default function AgentHubIM(): JSX.Element {
         // permanent failures (e.g. expired token, deleted session).
         if (reconnectAttemptsRef.current >= 10) {
           setNotice('连接已断开，请刷新页面或重新登录');
+          addToast({ type: 'error', title: '连接彻底断开', message: '请刷新页面或重新登录', duration: 0 });
           return;
         }
         reconnectAttemptsRef.current += 1;
@@ -757,14 +776,40 @@ export default function AgentHubIM(): JSX.Element {
           return;
         }
         setSessionStreaming(cSessionId, !chunk.isFinal);
+        // ★ 方案2: 第一个文本chunk到达 → 进入"生成回复"阶段
+        setStreamPhase('generating');
 
         const existingBuf = getSessionBuffer(cSessionId);
         if (!existingBuf || existingBuf.messageId !== chunk.messageId) {
-          // First chunk of a new stream — clean up ALL thinking placeholders
-          // from agent_thinking events (they have different messageIds).
-          // Previous filter only targeted empty or "正在"-prefixed content,
-          // missing the "synthesizing" phase ("工具执行完成，正在综合...")
+          // ★ 方案3: 保留最后一个 thinking 占位，更新为 "工具完成，生成回复中"
+          // 而非全部删除。这样用户始终看到阶段上下文。
           updateSessionMessages(cSessionId, (prev) => {
+            const lastThinkingIdx = (() => {
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].isStreaming && prev[i].sender !== 'user' && !prev[i].diffFilePath && prev[i].type === 'text') {
+                  return i;
+                }
+              }
+              return -1;
+            })();
+            if (lastThinkingIdx >= 0) {
+              const updated = [...prev];
+              if (!updated[lastThinkingIdx].content || updated[lastThinkingIdx].content.startsWith('🔧')) {
+                updated[lastThinkingIdx] = {
+                  ...updated[lastThinkingIdx],
+                  content: '工具执行完成，正在综合结果生成回复...',
+                };
+              }
+              // Delete OLDER thinking placeholders but keep the latest one
+              return updated.filter((m, i) => {
+                if (i === lastThinkingIdx) return true;
+                if (m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text') {
+                  return false;
+                }
+                return true;
+              });
+            }
+            // Fallback: clean up all (no thinking buffer found)
             const cleaned = prev.filter(
               (m) => !(m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text')
             );
@@ -809,6 +854,10 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'stream_interrupted') {
         const iSessionId = chunkSessionId;
+        // ★ 方案2+3: 重置 UX 状态
+        setStreamPhase('idle');
+        setActiveTools([]);
+        setCurrentAgentName('');
         // ★ 强制定位：清除该 session 的所有 streaming 状态、buffer、待调度 RAF
         //   以及流式 filter 状态。即便后续 stream_chunk 因为竞态到达，buffer
         //   已经被清空，flush 时不会把老内容写入新消息。
@@ -869,13 +918,40 @@ export default function AgentHubIM(): JSX.Element {
           streamInterruptedAtRef.current.delete(chunkSessionId);
         }
         setSessionStreaming(chunkSessionId, true);
+        // ★ 方案2: 更新阶段进度
+        const phase = payload.phase || '';
+        if (phase === 'analyzing' || phase === 'planning') {
+          setStreamPhase('thinking');
+        } else if (phase === 'executing') {
+          setStreamPhase('executing');
+        } else if (phase === 'synthesizing') {
+          setStreamPhase('generating');
+        }
+        if (payload.agentId) setCurrentAgentName(payload.agentId);
+
         // Insert or update the thinking placeholder with phase details.
         // Subsequent agent_thinking events (e.g. "executing", "synthesizing")
         // update the same placeholder in-place so the user sees live progress.
         updateSessionMessages(chunkSessionId, (prev) => {
+          // ★ 方案1: 如果有乐观占位，替换它而非新增
+          const optimisticIdx = prev.findIndex(
+            (m) => (m as any)._optimistic && m.isStreaming
+          );
           const existingIdx = prev.findIndex(
             (m) => m.messageId === payload.messageId && m.isStreaming
           );
+          if (optimisticIdx >= 0) {
+            // Replace optimistic placeholder with real agent_thinking
+            const updated = [...prev];
+            updated[optimisticIdx] = {
+              ...updated[optimisticIdx],
+              messageId: payload.messageId,
+              sender: payload.agentId || updated[optimisticIdx].sender,
+              content: payload.details || '模型正在思考中...',
+              _optimistic: undefined,
+            };
+            return updated;
+          }
           if (existingIdx >= 0) {
             // Update existing placeholder with new phase info
             const updated = [...prev];
@@ -904,11 +980,34 @@ export default function AgentHubIM(): JSX.Element {
       // ── Tool call events ──────────────────────────────────────────
       if (evt === 'tool_call') {
         const payload = raw as unknown as ToolCallEvent;
+        // ★ 方案2+3: 更新阶段和活跃工具列表
+        setStreamPhase('executing');
+        if (payload.toolCalls && payload.toolCalls.length > 0) {
+          setActiveTools(payload.toolCalls.map((c: any) => c.name || ''));
+        }
         updateSessionMessages(chunkSessionId, (prev) => {
-          // Remove empty thinking placeholders — tool execution has started
-          const cleaned = prev.filter(
-            (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
-          );
+          // ★ 方案3: 保留最后一个 thinking 占位，更新为 "工具执行中"
+          // 而不是全部删除。这样用户始终看到最近的上下文。
+          const lastThinkingIdx = (() => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].isStreaming && prev[i].sender !== 'user' && !prev[i].diffFilePath && prev[i].type === 'text') {
+                return i;
+              }
+            }
+            return -1;
+          })();
+          let cleaned = prev;
+          if (lastThinkingIdx >= 0) {
+            cleaned = prev.map((m, i) => {
+              if (i === lastThinkingIdx) {
+                return { ...m, content: '🔧 正在执行工具...' };
+              }
+              if (m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text') {
+                return null; // Remove older thinking placeholders
+              }
+              return m;
+            }).filter(Boolean) as Message[];
+          }
           return [
             ...cleaned,
             {
@@ -927,6 +1026,23 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'tool_result') {
         const payload = raw as unknown as ToolResultEvent;
+        // ★ 方案3: 从活跃工具列表中移除完成的工具
+        if (payload.results) {
+          setActiveTools(prev => prev.filter(
+            name => !payload.results.some((r: any) => r.tool_name === name)
+          ));
+          // ★ 方案4: 工具失败时弹出 toast 通知
+          for (const result of payload.results) {
+            if (!result.success) {
+              addToast({
+                type: 'error',
+                title: `工具执行失败: ${result.tool_name}`,
+                message: result.error || '未知错误',
+                duration: 8000,
+              });
+            }
+          }
+        }
         updateSessionMessages(chunkSessionId, (prev) => {
           // Find the matching tool_call message and update it
           const updated = [...prev];
@@ -1165,6 +1281,24 @@ export default function AgentHubIM(): JSX.Element {
         ]);
       }
 
+      // ── Solution proposal event ──────────────────────────────────────
+      if (evt === 'solution_proposal') {
+        const payload = raw as unknown as import('../types').SolutionProposalEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: 'Orchestrator',
+            content: `方案分析 — ${payload.solutions.length} 个方案`,
+            type: 'solution_proposal' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            solutionProposalData: payload,
+          },
+        ]);
+      }
+
       // ── Deploy card event ──────────────────────────────────────────
       if (evt === 'deploy_card') {
         const payload = raw as unknown as import('../types').DeployCardEvent;
@@ -1270,6 +1404,10 @@ export default function AgentHubIM(): JSX.Element {
       }
 
       if (evt === 'message') {
+        // ★ 方案2: 消息完成，标记阶段为 done，2秒后恢复 idle
+        setStreamPhase('done');
+        setActiveTools([]);
+        setTimeout(() => setStreamPhase('idle'), 2000);
         // Flush any pending stream buffer for THIS session before searching
         // for the placeholder — the RAF callback may not have fired yet.
         const cSessionId = chunkSessionId;
@@ -1994,17 +2132,53 @@ export default function AgentHubIM(): JSX.Element {
     if (isStreaming) {
       setSessionStreaming(activeSessionId, false);
     }
+    // ── Reset streaming UX state for new message ──
+    setStreamPhase('idle');
+    setActiveTools([]);
+    setSendState('sending');
+
     updateSessionMessages(activeSessionId, (prev) => [...prev, localMsg]);
+
+    // ★ 方案1: 乐观 Thinking 占位 — 发送后立即显示 "AI思考中" 消除黑洞期
+    const optimisticMsgId = `optimistic-${Date.now()}`;
+    // Detect which agent is being mentioned
+    let detectedAgentName = 'AI';
+    const mentionMatch = text.match(/@(\w+)/);
+    if (mentionMatch) {
+      const agent = agents.find(a => a.agentId === mentionMatch[1]);
+      if (agent) {
+        detectedAgentName = agent.displayName || agent.agentId;
+        setCurrentAgentName(detectedAgentName);
+      }
+    }
+    updateSessionMessages(activeSessionId, (prev) => [
+      ...prev,
+      {
+        event: 'message',
+        sessionId: activeSessionId,
+        sender: detectedAgentName,
+        content: '正在理解你的需求...',
+        type: 'text' as const,
+        timestamp: new Date().toISOString(),
+        messageId: optimisticMsgId,
+        isStreaming: true,
+        _optimistic: true as any,
+      },
+    ]);
+
     setSessions((prev) => sortSessions(prev.map((s) => (s.id === activeSessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
     const targetWs = wsRef.current.get(activeSessionId);
     if (targetWs && targetWs.readyState === WebSocket.OPEN) {
       targetWs.send(JSON.stringify(wsMsg));
+      setSendState('sent');
     } else {
       // ws 还没连上：保险起见触发一次连接（如果本来就在连，就是 no-op）。
       connectWs(activeSessionId);
       retryRef.current.push(wsMsg);
       setPending((prev) => [...prev, wsMsg]);
       setNotice('Message queued for retry');
+      addToast({ type: 'warning', title: '消息已排队', message: 'WebSocket 未连接，正在尝试重连后发送...', duration: 5000 });
+      setSendState('error');
     }
     setInput('');
     setAttachedFiles([]);
@@ -2496,7 +2670,9 @@ export default function AgentHubIM(): JSX.Element {
     );
   }
 
+  // ★ Wrap with ToastProvider so toast notifications render on top
   return (
+    <ToastProvider>
     <div className="flex h-screen bg-warm-50 text-warm-800 overflow-hidden">
       <SessionSidebar
         user={user}
@@ -2574,6 +2750,16 @@ export default function AgentHubIM(): JSX.Element {
                 }}
                 pmState={pmState}
                 degradationStatus={degradationStatus}
+                streamPhase={streamPhase}
+                activeTools={activeTools}
+                currentAgentName={currentAgentName}
+                onInterruptStream={() => {
+                  const ws = wsRef.current.get(activeSessionIdRef.current);
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ event: 'interrupt_stream' }));
+                    addToast({ type: 'info', title: '已发送中断请求', duration: 3000 });
+                  }
+                }}
               />
             </div>
             {/* Right accessory strip: UserRoster + Share */}
@@ -2614,6 +2800,7 @@ export default function AgentHubIM(): JSX.Element {
           onSendPMEvent={handleSendPMEvent}
           agents={agents}
           sessionId={sessionId}
+          isStreaming={isStreaming}
         />
 
         {/* ── Permission Mode Toggle 已被挪入 ChatInput 工具栏（next to 工具） ── */}
@@ -2769,5 +2956,6 @@ export default function AgentHubIM(): JSX.Element {
         authToken={token}
       />
     </div>
+    </ToastProvider>
   );
 }

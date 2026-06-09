@@ -1628,3 +1628,216 @@ async def memory_search_handler(query: str, max_results: int = 5) -> dict[str, A
     except Exception as exc:
         logger.exception("memory_search failed")
         return {"success": False, "error": f"记忆搜索失败: {exc}"}
+
+
+# ── file_edit ─────────────────────────────────────────────────────────
+
+async def file_edit_handler(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> dict[str, Any]:
+    """Perform exact string replacement in a file.
+
+    Reads the file, finds *old_string*, replaces it with *new_string*,
+    and writes the file back.  This is the preferred way to make surgical
+    edits — safer and more reliable than ``file_patch`` (unified diff)
+    for most single-change scenarios.
+
+    Args:
+        path: Relative path within the session workspace.
+        old_string: The exact text to find and replace. Must match
+            exactly, including whitespace and indentation.
+        new_string: The text to replace *old_string* with.
+        replace_all: If True, replace every occurrence.  If False
+            (default) and *old_string* appears more than once, the
+            edit is refused and the user is asked to be more specific.
+    """
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    ws_root = get_workspace_root()
+    safe = resolve_workspace_path(path)
+    if safe is None:
+        return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
+
+    if not await aexists(safe):
+        return {"success": False, "error": f"文件不存在: {path}"}
+
+    if await aisdir(safe):
+        return {"success": False, "error": f"'{path}' 是一个目录，无法编辑"}
+
+    if not old_string:
+        return {"success": False, "error": "old_string 不能为空"}
+
+    # ── Context ────────────────────────────────────────────────────────
+    sid = _get_sid_fast()
+    uid = _get_uid_fast()
+
+    # ── Read original content ─────────────────────────────────────────
+    try:
+        original_text = await aread_text(safe, encoding="utf-8")
+    except UnicodeDecodeError:
+        return {"success": False, "error": f"文件不是有效的 UTF-8 文本文件，可能是二进制文件"}
+    except OSError as exc:
+        return {"success": False, "error": f"读取文件失败: {exc}"}
+
+    # ── Find matches ──────────────────────────────────────────────────
+    occurrences = original_text.count(old_string)
+    if occurrences == 0:
+        # Provide helpful diagnostic: show the file snippet around where
+        # the user might be looking, so they can spot formatting issues.
+        snippet_lines = original_text.split("\n")[:20]
+        snippet = "\n".join(snippet_lines)
+        hint = ""
+        # Check if old_string with different line endings would match
+        if "\r\n" in original_text and "\n" in old_string:
+            hint = " (提示: 文件使用 CRLF 换行符，old_string 是否使用了 LF？)"
+        return {
+            "success": False,
+            "error": (
+                f"在文件 '{path}' 中未找到指定的文本。"
+                f"请确认 old_string 与文件内容完全一致（包括空格和缩进）。"
+                f"文件开头预览:\n{snippet[:500]}"
+                f"{hint}"
+            ),
+            "metadata": {"path": path, "occurrences": 0},
+        }
+
+    if not replace_all and occurrences > 1:
+        # Show context around each match to help the user disambiguate
+        match_contexts: list[str] = []
+        lines = original_text.split("\n")
+        for idx, line in enumerate(lines):
+            if old_string in line:
+                ctx = f"  行 {idx + 1}: {line.strip()[:120]}"
+                match_contexts.append(ctx)
+        return {
+            "success": False,
+            "error": (
+                f"在文件 '{path}' 中找到了 {occurrences} 处匹配的文本，"
+                f"但 replace_all 为 false。请提供更具体的 old_string "
+                f"（包含更多上下文行）以唯一定位要修改的位置。\n"
+                f"匹配位置:\n" + "\n".join(match_contexts[:10])
+            ),
+            "metadata": {"path": path, "occurrences": occurrences},
+        }
+
+    # ── Perform replacement ───────────────────────────────────────────
+    new_text = original_text.replace(old_string, new_string) if replace_all else original_text.replace(old_string, new_string, 1)
+
+    if new_text == original_text:
+        return {"success": True, "result": f"文件 '{path}' 未发生变化（old_string 与 new_string 相同）", "metadata": {"path": path, "occurrences": occurrences, "changed": False}}
+
+    # ── Write ──────────────────────────────────────────────────────────
+    try:
+        await awrite_text(safe, new_text, encoding="utf-8")
+        size = await astat_size(safe)
+
+        # ── Track version ─────────────────────────────────────────────
+        sha256_hash = ""
+        try:
+            from app.services.file_version_tracker import file_version_tracker
+            fv = file_version_tracker.record_write(sid, path, new_text, uid, "")
+            sha256_hash = fv.sha256
+        except Exception:
+            pass
+
+        # ── Broadcast workspace change ────────────────────────────────
+        diff_preview = _compute_unified_diff(original_text, new_text, path)
+        import asyncio as _asyncio
+        _asyncio.ensure_future(
+            _broadcast_workspace_change(sid, path, "write", size, diff_preview, user_id=uid)
+        )
+
+        # ── Auto git commit ───────────────────────────────────────────
+        _asyncio.ensure_future(_auto_git_commit(path, uid, "编辑"))
+
+        replaced_count = occurrences if replace_all else 1
+        return {
+            "success": True,
+            "result": (
+                f"文件 '{path}' 编辑成功。替换了 {replaced_count} 处匹配。"
+            ),
+            "metadata": {
+                "path": path,
+                "size_bytes": size,
+                "occurrences": occurrences,
+                "replaced": replaced_count,
+                "sha256": sha256_hash[:12] if sha256_hash else "",
+            },
+        }
+    except OSError as exc:
+        return {"success": False, "error": f"写入文件失败: {exc}"}
+
+
+# ── file_glob ─────────────────────────────────────────────────────────
+
+async def file_glob_handler(
+    pattern: str,
+    path: str = ".",
+) -> dict[str, Any]:
+    """Find files matching a glob pattern.
+
+    Uses standard shell-style wildcards:
+      - ``*`` matches any number of characters (except path separator)
+      - ``**`` matches any number of characters across directories
+      - ``?`` matches a single character
+      - ``[abc]`` matches one character in the brackets
+
+    Args:
+        pattern: Glob pattern, e.g. ``**/*.py``, ``src/**/*.tsx``,
+            ``*.md``, ``app/services/*.py``.
+        path: Directory to search within (relative to workspace root).
+            Defaults to ``"."`` (workspace root).
+    """
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
+
+    ws_root = get_workspace_root()
+    search_root = resolve_workspace_path(path)
+    if search_root is None:
+        return {"success": False, "error": f"路径 '{path}' 超出工作区允许范围"}
+
+    if not await aexists(search_root):
+        return {"success": False, "error": f"目录不存在: {path}"}
+
+    if not await aisdir(search_root):
+        return {"success": False, "error": f"'{path}' 不是目录"}
+
+    try:
+        # Use pathlib's glob — recursive if pattern contains **
+        matches = list(search_root.glob(pattern))
+        # Filter to files only (skip directories)
+        file_matches = [m for m in matches if m.is_file()]
+        # Sort for deterministic output
+        file_matches.sort(key=lambda p: (str(p.parent), p.name.lower()))
+
+        result_files: list[dict[str, Any]] = []
+        for f in file_matches[:200]:  # cap at 200 results
+            try:
+                sz = f.stat().st_size
+            except OSError:
+                sz = 0
+            rel = str(f.relative_to(ws_root)).replace("\\", "/")
+            result_files.append({
+                "path": rel,
+                "size_bytes": sz,
+                "size_display": f"{sz:,} B" if sz < 1024 else f"{sz / 1024:.1f} KB",
+            })
+
+        total = len(file_matches)
+        truncated = total > 200
+        display = result_files[:200]
+
+        return {
+            "success": True,
+            "result": {
+                "pattern": pattern,
+                "search_path": str(search_root.relative_to(ws_root)).replace("\\", "/") or ".",
+                "matches": display,
+                "total_matches": total,
+                "truncated": truncated,
+            },
+        }
+    except Exception as exc:
+        return {"success": False, "error": f"Glob 匹配失败: {exc}"}

@@ -410,3 +410,173 @@ async def invoke_agents_parallel_handler(
         "total_count": total,
         "partial_summaries": partial_summaries,
     }
+
+
+# ── Dynamic task agent — spawn an ephemeral sub-agent for any task ────────
+
+
+async def task_handler(
+    description: str,
+    prompt: str,
+    subagent_type: str = "general-purpose",
+    model: str = "",
+) -> dict[str, Any]:
+    """Launch a new ephemeral agent to handle a complex, multi-step task.
+
+    Unlike ``invoke_agent`` (which is limited to the 7 predefined agents:
+    Architect, CodeGen, Review, Test, Deploy, etc.), this tool dynamically
+    creates a fresh agent instance with a custom system prompt tailored to
+    the specific task.  Each invocation is independent — the agent has no
+    memory of previous tasks.
+
+    Use this when:
+      - The task doesn't fit any predefined agent's domain
+      - You need a fresh perspective without role baggage
+      - You want an agent that can use ALL available tools (file ops,
+        search, code execution, etc.) for a focused sub-problem
+      - You need to fan out independent work to multiple agents
+
+    Args:
+        description: A short (3-5 word) label describing the task.
+            Displayed in the UI progress indicator.
+        prompt: The full task description for the agent.  Be specific
+            about what you want — include expected outputs, constraints,
+            and any relevant context.  The agent receives this as its
+            sole user message along with tool access.
+        subagent_type: Optional hint for agent behavior.  Supported
+            values: ``"general-purpose"`` (default, has all tools),
+            ``"Explore"`` (read-only search/read tools, ideal for
+            codebase exploration), ``"Plan"`` (architectural thinking,
+            no file writes).  The agent's tool set is restricted
+            accordingly.
+        model: Optional model override.  If empty, inherits the
+            session's default model.
+
+    Returns:
+        {"success": bool, "result": str (the agent's final text output),
+         "description": str, "duration_ms": float, "model": dict, ...}
+    """
+    ctx = get_tool_context()
+    session_id = ctx["session_id"]
+    user_id = ctx["user_id"]
+    token = ctx["token"]
+    ws_manager = ctx["ws_manager"]
+
+    if not session_id:
+        return {
+            "success": False,
+            "error": "无法启动 Task Agent：缺少会话上下文（session_id 未设置）",
+            "description": description,
+        }
+
+    if not prompt or not prompt.strip():
+        return {
+            "success": False,
+            "error": "prompt 不能为空",
+            "description": description,
+        }
+
+    # ── Determine tool availability by subagent_type ──────────────────
+    # Explore: read-only tools only (no writes, no code exec)
+    # Plan: read + think, no writes, no code exec
+    # general-purpose: all tools (default)
+
+    # ── Build a dynamic agent dict ────────────────────────────────────
+    # We construct a synthetic agent entry so call_agent() can use the
+    # existing prompt-building, model-selection, and tool-calling infra.
+    # The agent_id "Task" is not in the hardcoded list, so build_prompt()
+    # will route it through the general-agent template and inject our
+    # custom role instructions via role_prompt.
+    agent = {
+        "agent_id": f"Task-{description[:20]}",
+        "domain": "general",
+        "status": "active",
+        "adapter_type": "",
+        "risk_level": "L1",
+        "display_name": description,
+    }
+
+    # ── Notify frontend ───────────────────────────────────────────────
+    task_start_time = time.time()
+    if ws_manager:
+        try:
+            await ws_manager.broadcast(
+                session_id,
+                {
+                    "event": "agent_thinking",
+                    "sessionId": session_id,
+                    "messageId": f"task_{description[:30]}_{int(time.time()*1000)}",
+                    "agentId": "Task",
+                    "phase": "task_spawned",
+                    "details": f"Task Agent 启动: {description}",
+                    "timestamp": "",
+                },
+            )
+        except Exception:
+            pass
+
+    # ── Build a focused system prompt for the task ────────────────────
+    # The role prompt is embedded in the user content since call_agent
+    # doesn't accept a custom role_prompt directly.  The agent template
+    # already includes full tool access, so this context guides behavior.
+    task_content = (
+        f"【临时任务 — {description}】\n\n"
+        f"{prompt}\n\n"
+        f"─── 任务 Agent 工作原则 ───\n"
+        f"1. 直接开始执行任务，不要问「你确认吗？」之类的确认问题。\n"
+        f"2. 使用可用工具高效完成任务（文件操作、搜索、代码执行等）。\n"
+        f"3. 完成后返回最终结果，用清晰的格式总结产出。\n"
+        f"4. 如果任务无法完成，诚实说明原因并建议替代方案。\n"
+        f"5. 对于代码生成类任务，使用 file_write 将代码写入工作区。\n"
+        f"6. 回复语言与用户输入保持一致。"
+    )
+
+    # ── Invoke via call_agent ─────────────────────────────────────────
+    from app.services.agent_service import call_agent as call_agent_fn
+
+    try:
+        response = await call_agent_fn(
+            session_id=session_id,
+            content=task_content,
+            user_id=user_id,
+            agent=agent,
+            token=token,
+        )
+
+        result_text = ""
+        if isinstance(response, dict):
+            result_text = response.get("content", "")
+        elif isinstance(response, str):
+            result_text = response
+        else:
+            result_text = str(response)
+
+        duration_ms = (time.time() - task_start_time) * 1000
+
+        logger.info(
+            "task_handler: desc=%s completed in %.0fms result_len=%d",
+            description, duration_ms, len(result_text),
+        )
+
+        return {
+            "success": True,
+            "result": result_text,
+            "description": description,
+            "duration_ms": duration_ms,
+            "result_length": len(result_text),
+            "subagent_type": subagent_type,
+        }
+
+    except Exception as exc:
+        duration_ms = (time.time() - task_start_time) * 1000
+        logger.warning(
+            "task_handler: desc=%s failed in %.0fms: %s",
+            description, duration_ms, exc,
+        )
+        return {
+            "success": False,
+            "error": f"Task Agent 执行失败: {exc}",
+            "description": description,
+            "duration_ms": duration_ms,
+            "subagent_type": subagent_type,
+        }

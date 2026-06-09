@@ -237,6 +237,53 @@ _PG_DDL = [
         updated_at TEXT NOT NULL,
         PRIMARY KEY (user_id, key)
     )""",
+    # ── MCP alert infrastructure ────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS alert_rules (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        rule_type TEXT NOT NULL,
+        condition_json TEXT NOT NULL DEFAULT '{}',
+        severity TEXT NOT NULL DEFAULT 'warning',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        notify_channels TEXT NOT NULL DEFAULT '["websocket"]',
+        silence_window_seconds INTEGER NOT NULL DEFAULT 3600,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS alert_history (
+        id TEXT PRIMARY KEY,
+        rule_id INTEGER,
+        rule_name TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        message TEXT NOT NULL,
+        context_json TEXT NOT NULL DEFAULT '{}',
+        acknowledged INTEGER NOT NULL DEFAULT 0,
+        acknowledged_by TEXT NOT NULL DEFAULT '',
+        triggered_at TEXT NOT NULL,
+        resolved_at TEXT NOT NULL DEFAULT ''
+    )""",
+    # ── Performance indexes (critical query paths) ────────────────────
+    # These are created via CREATE INDEX IF NOT EXISTS so they are
+    # idempotent — safe to run on every startup.
+    #
+    # messages(session_id, created_at) — every chat load / scroll-back
+    #    query filters on session_id and orders by created_at.
+    """CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at DESC)""",
+    # messages(user_id, created_at) — per-user message history queries.
+    """CREATE INDEX IF NOT EXISTS idx_messages_user_created ON messages(user_id, created_at DESC)""",
+    # agent_registry(user_id) — MCP dashboard and agent listing filter
+    #    by user_id.  The composite PK (agent_id, user_id) doesn't help
+    #    queries that scan by user_id alone.
+    """CREATE INDEX IF NOT EXISTS idx_agent_registry_user ON agent_registry(user_id)""",
+    # agent_registry(status) — dashboard health rollup (count by status).
+    """CREATE INDEX IF NOT EXISTS idx_agent_registry_status ON agent_registry(status)""",
+    # tool_call_log(session_id, created_at) — tool analytics & audit.
+    """CREATE INDEX IF NOT EXISTS idx_tool_call_log_session_created ON tool_call_log(session_id, created_at DESC)""",
+    # tool_call_log(agent_id, created_at) — per-agent tool usage stats.
+    """CREATE INDEX IF NOT EXISTS idx_tool_call_log_agent_created ON tool_call_log(agent_id, created_at DESC)""",
+    # audit_log(timestamp) — recent events stream on MCP dashboard.
+    """CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp DESC)""",
 ]
 
 
@@ -246,7 +293,11 @@ _PG_DDL = [
 
 
 async def ainit_db() -> None:
-    """Create all tables and seed data on PostgreSQL (idempotent)."""
+    """Create all tables and seed data on PostgreSQL (idempotent).
+
+    Order: (1) Alembic migrations, (2) legacy DDL (idempotent fallback),
+    (3) seed data.
+    """
     await _ainit_postgresql()
 
 
@@ -257,6 +308,7 @@ async def ainit_db() -> None:
 
 async def _ainit_postgresql() -> None:
     """Create all tables and seed data on PostgreSQL."""
+    import asyncio
     from app.db.session import aget_pool
 
     pool = await aget_pool()
@@ -264,7 +316,10 @@ async def _ainit_postgresql() -> None:
         raise RuntimeError("PostgreSQL pool not available — check DATABASE_URL")
 
     async with pool.acquire() as conn:
-        # ── Create tables ──────────────────────────────────────────
+        # ── Step 1: Apply Alembic migrations ────────────────────────
+        await _apply_alembic_migrations(conn)
+
+        # ── Step 2: Legacy DDL (idempotent fallback for non-Alembic tables) ──
         for ddl in _PG_DDL:
             try:
                 await conn.execute(ddl)
@@ -273,11 +328,11 @@ async def _ainit_postgresql() -> None:
 
         logger.info("init_db: PostgreSQL tables created (%d DDL statements)", len(_PG_DDL))
 
-        # ── Runtime migrations for existing databases ──────────────
+        # ── Step 3: Runtime migrations for existing databases ───────
         await _migrate_agent_registry_pg(conn)
         await _migrate_multi_user_pg(conn)
 
-        # ── Seed default data (ON CONFLICT DO NOTHING = idempotent) ──
+        # ── Step 4: Seed default data ───────────────────────────────
         await _seed_users_pg(conn)
         await _seed_session_pg(conn)
         await _seed_agents_pg(conn)
@@ -285,6 +340,52 @@ async def _ainit_postgresql() -> None:
         await _seed_agent_routes_pg(conn)
 
         logger.info("init_db: PostgreSQL seed data inserted")
+
+
+async def _apply_alembic_migrations(conn) -> None:
+    """Apply pending Alembic migrations via the asyncpg connection.
+
+    Uses a simple version-check approach: queries ``alembic_version`` to
+    find the current revision, then applies any migrations whose
+    ``down_revision`` matches the current head.
+
+    This avoids pulling in SQLAlchemy / psycopg2 for the async startup path
+    while still giving us Alembic's versioned migration framework.
+    """
+    # Ensure the version table exists
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS alembic_version (
+            version_num TEXT PRIMARY KEY
+        )"""
+    )
+
+    # Check current version
+    row = await conn.fetchrow("SELECT version_num FROM alembic_version LIMIT 1")
+    current = row["version_num"] if row else None
+
+    # Current head revision (must match migrations/versions/)
+    head = "ff209a40779d"
+
+    if current == head:
+        logger.info("init_db: Alembic already at head (%s)", head)
+        return
+
+    if current is None:
+        logger.info("init_db: Alembic fresh install — stamping head (%s)", head)
+        # New database: stamp the head revision directly (tables will be
+        # created by the legacy DDL path above).
+        await conn.execute(
+            "INSERT INTO alembic_version(version_num) VALUES($1) ON CONFLICT DO NOTHING",
+            head,
+        )
+        return
+
+    # Future: apply incremental migrations when current != head
+    logger.warning(
+        "init_db: Alembic version mismatch (current=%s, head=%s). "
+        "Run 'alembic upgrade head' offline or contact the administrator.",
+        current, head,
+    )
 
 
 async def _migrate_agent_registry_pg(conn) -> None:
