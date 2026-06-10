@@ -2,13 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Default theme: warm (RGB channel values) ──────────────────────
-   These CSS variables feed into Tailwind's color system — every
-   bg-warm-* / text-warm-* / border-warm-* class reads from them.
-   When [data-theme] changes on <html>, all colors update globally. ── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   AgentHub Design System v2 — "Warm Studio"
+   温润工坊 · 日本民艺美学 × 开发者工具精准性
+
+   Theme layers: warm (default) / light / dark
+   Each theme defines RGB channel values consumed by Tailwind's color system.
+   Switching [data-theme] on <html> updates all colors globally.
+
+   New in v2:
+     • Accent color scale (warm amber-gold for highlights & decoration)
+     • Glass-morphism surface tokens
+     • Animation keyframe library
+     • Enhanced shadow system with colored ambient shadows
+     • Noise texture & grid pattern utilities
+     • Skeleton loading primitives
+     • Status indicator system
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Default theme: warm (RGB channel values) ────────────────────── */
 
 :root,
 [data-theme="warm"] {
+  /* Warm gray scale — refined clay/stone progression */
   --warm-50:  250 249 247;
   --warm-100: 245 244 240;
   --warm-150: 238 237 232;
@@ -21,15 +37,27 @@
   --warm-800: 50 49 46;
   --warm-900: 28 27 25;
 
-  --primary-50:  240 243 255;
-  --primary-100: 224 231 255;
-  --primary-200: 199 215 254;
-  --primary-300: 164 184 253;
-  --primary-400: 128 153 251;
-  --primary-500: 79 108 247;
-  --primary-600: 67 97 226;
-  --primary-700: 54 81 204;
+  /* Primary — indigo-blue, inspired by Japanese ai-iro (藍色) */
+  --primary-50:  239 243 255;
+  --primary-100: 222 231 254;
+  --primary-200: 195 215 254;
+  --primary-300: 159 189 253;
+  --primary-400: 123 158 251;
+  --primary-500: 76 106 245;
+  --primary-600: 64 92 223;
+  --primary-700: 50 75 196;
 
+  /* Accent — warm amber/gold for highlights & decorative elements */
+  --accent-50:  253 248 238;
+  --accent-100: 250 240 217;
+  --accent-200: 245 227 180;
+  --accent-300: 238 206 120;
+  --accent-400: 224 184 64;
+  --accent-500: 196 158 44;
+  --accent-600: 168 132 32;
+  --accent-700: 138 106 22;
+
+  /* Success — muted sage green */
   --success-50:  242 248 242;
   --success-100: 224 240 224;
   --success-200: 194 224 194;
@@ -37,6 +65,7 @@
   --success-600: 77 122 76;
   --success-700: 63 104 64;
 
+  /* Warning — warm ochre */
   --warning-50:  251 247 238;
   --warning-100: 245 237 214;
   --warning-200: 237 224 184;
@@ -44,6 +73,7 @@
   --warning-600: 176 146 72;
   --warning-700: 156 129 56;
 
+  /* Danger — muted terracotta red */
   --danger-50:  251 240 238;
   --danger-100: 245 221 216;
   --danger-200: 237 196 188;
@@ -51,33 +81,35 @@
   --danger-600: 176 85 72;
   --danger-700: 156 69 56;
 
+  /* Surface tokens — for glass morphism & elevated layers */
+  --surface-glass: 255 255 255;
+  --surface-elevated: 252 251 249;
+  --surface-overlay: 28 27 25;
+
+  /* Scrollbar */
   --scrollbar-thumb: 205 203 196;
   --scrollbar-thumb-hover: 173 171 163;
+
+  /* Shadow colors — tinted ambient shadows instead of pure black */
+  --shadow-color: 28 27 25;
+  --shadow-strength: 0.04;
 }
 
-/* ── Diff view colors ──────────────────────────────────────────────────
-   Used by DiffViewer (react-diff-viewer-continued) and WorkspaceDiffSurface
-   components.  Color values are direct hex (not RGB channels) because the
-   diff viewer library and inline highlighters expect raw colors. ─────── */
+/* ── Diff view colors ────────────────────────────────────────────────── */
 
 :root,
 [data-theme="warm"] {
-  /* Diff backgrounds */
   --color-diff-bg: #1E1E1E;
   --color-diff-added-bg: rgba(16, 185, 129, 0.15);
   --color-diff-removed-bg: rgba(239, 68, 68, 0.15);
   --color-diff-highlight-bg: rgba(245, 158, 11, 0.12);
   --color-diff-gutter-bg: #161616;
-  /* Diff text */
   --color-diff-added-text: #10B981;
   --color-diff-removed-text: #EF4444;
-  /* Word-level diff highlights */
   --color-diff-added-word: rgba(16, 185, 129, 0.35);
   --color-diff-removed-word: rgba(239, 68, 68, 0.35);
-  /* Gutter (line number column) */
   --color-diff-added-gutter: rgba(16, 185, 129, 0.20);
   --color-diff-removed-gutter: rgba(239, 68, 68, 0.20);
-  /* Code syntax colors */
   --color-code-fg: #D4D4D4;
   --color-code-comment: #6A9955;
   --color-code-string: #98C379;
@@ -107,14 +139,23 @@
   --warm-800: 26 26 26;
   --warm-900: 10 10 10;
 
-  --primary-50:  240 243 255;
-  --primary-100: 224 231 255;
-  --primary-200: 199 215 254;
-  --primary-300: 164 184 253;
-  --primary-400: 128 153 251;
-  --primary-500: 79 108 247;
-  --primary-600: 67 97 226;
-  --primary-700: 54 81 204;
+  --primary-50:  239 243 255;
+  --primary-100: 222 231 254;
+  --primary-200: 195 215 254;
+  --primary-300: 159 189 253;
+  --primary-400: 123 158 251;
+  --primary-500: 76 106 245;
+  --primary-600: 64 92 223;
+  --primary-700: 50 75 196;
+
+  --accent-50:  253 248 238;
+  --accent-100: 250 240 217;
+  --accent-200: 245 227 180;
+  --accent-300: 238 206 120;
+  --accent-400: 224 184 64;
+  --accent-500: 196 158 44;
+  --accent-600: 168 132 32;
+  --accent-700: 138 106 22;
 
   --success-50:  242 248 242;
   --success-100: 224 240 224;
@@ -137,6 +178,12 @@
   --danger-600: 176 85 72;
   --danger-700: 156 69 56;
 
+  --surface-glass: 255 255 255;
+  --surface-elevated: 250 250 250;
+  --surface-overlay: 10 10 10;
+  --shadow-color: 10 10 10;
+  --shadow-strength: 0.06;
+
   --scrollbar-thumb: 200 200 200;
   --scrollbar-thumb-hover: 160 160 160;
 }
@@ -156,14 +203,23 @@
   --warm-800: 232 232 232;
   --warm-900: 245 245 245;
 
-  --primary-50:  42 48 80;
-  --primary-100: 51 61 102;
-  --primary-200: 61 74 128;
-  --primary-300: 91 107 184;
-  --primary-400: 123 147 247;
-  --primary-500: 155 176 250;
-  --primary-600: 176 192 251;
-  --primary-700: 199 215 254;
+  --primary-50:  36 43 72;
+  --primary-100: 45 55 92;
+  --primary-200: 55 69 115;
+  --primary-300: 80 100 168;
+  --primary-400: 110 138 235;
+  --primary-500: 140 165 250;
+  --primary-600: 170 188 252;
+  --primary-700: 195 215 254;
+
+  --accent-50:  50 45 20;
+  --accent-100: 65 55 30;
+  --accent-200: 85 70 35;
+  --accent-300: 130 110 50;
+  --accent-400: 180 150 70;
+  --accent-500: 230 190 110;
+  --accent-600: 240 210 130;
+  --accent-700: 250 230 150;
 
   --success-50:  30 50 30;
   --success-100: 40 70 40;
@@ -186,6 +242,12 @@
   --danger-600: 240 140 130;
   --danger-700: 250 160 150;
 
+  --surface-glass: 30 30 30;
+  --surface-elevated: 38 38 38;
+  --surface-overlay: 245 245 245;
+  --shadow-color: 0 0 0;
+  --shadow-strength: 0.25;
+
   --scrollbar-thumb: 85 85 85;
   --scrollbar-thumb-hover: 119 119 119;
 }
@@ -202,67 +264,187 @@ body,
 body {
   background: #FAF9F7;
   color: #32312E;
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss03", "ss05";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Subtle paper texture via repeating SVG noise pattern (GPU-friendly) */
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  background-attachment: fixed;
 }
 
-/* Dark theme overrides for body (hardcoded since Tailwind can't style body) */
+/* Dark theme body */
 [data-theme="light"] body {
   background: #FFFFFF;
   color: #1A1A1A;
+  background-image: none;
 }
 
 [data-theme="dark"] body {
   background: #1E1E1E;
   color: #E8E8E8;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+  background-attachment: fixed;
 }
 
+/* ── Selection ─────────────────────────────────────────────────── */
+
 ::selection {
-  background: #E0E7FF;
-  color: #3651CC;
+  background: rgba(76, 106, 245, 0.15);
+  color: rgb(var(--warm-900));
 }
 
 [data-theme="dark"] ::selection {
-  background: #4F6CF7;
+  background: rgba(140, 165, 250, 0.3);
   color: #FFFFFF;
 }
+
+/* ── Focus ring system ──────────────────────────────────────────── */
+
+:focus-visible {
+  outline: 2px solid rgb(var(--primary-500));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
 
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
   background: rgb(var(--scrollbar-thumb));
   border-radius: 3px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
   background: rgb(var(--scrollbar-thumb-hover));
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Animation Keyframe Library
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulseRing {
+  0% { box-shadow: 0 0 0 0 rgba(76, 106, 245, 0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(76, 106, 245, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(76, 106, 245, 0); }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes drawLine {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Component Library — @layer components
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 @layer components {
+  /* ── Card ──────────────────────────────────────────────────────── */
+
   .card {
     background: rgb(var(--warm-50));
     border: 1px solid rgb(var(--warm-150));
     border-radius: 12px;
-    box-shadow: 0 1px 2px rgba(30, 30, 29, 0.04), 0 1px 3px rgba(30, 30, 29, 0.03);
-    transition: all 0.2s ease;
+    box-shadow:
+      0 1px 2px rgba(var(--shadow-color), calc(var(--shadow-strength) * 1)),
+      0 1px 3px rgba(var(--shadow-color), calc(var(--shadow-strength) * 0.75));
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   [data-theme="dark"] .card {
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.15);
+    box-shadow:
+      0 1px 2px rgba(0,0,0, 0.2),
+      0 1px 3px rgba(0,0,0, 0.15);
   }
 
   .card:hover {
     border-color: rgb(var(--warm-200));
-    box-shadow: 0 2px 4px rgba(30, 30, 29, 0.04), 0 4px 8px rgba(30, 30, 29, 0.03);
+    box-shadow:
+      0 2px 4px rgba(var(--shadow-color), calc(var(--shadow-strength) * 1.5)),
+      0 4px 8px rgba(var(--shadow-color), calc(var(--shadow-strength) * 1));
+    transform: translateY(-1px);
   }
+
+  /* Card variants */
+  .card-elevated {
+    background: rgb(var(--surface-elevated));
+    border: 1px solid rgb(var(--warm-150));
+    border-radius: 14px;
+    box-shadow:
+      0 4px 8px rgba(var(--shadow-color), calc(var(--shadow-strength) * 1.5)),
+      0 8px 16px rgba(var(--shadow-color), calc(var(--shadow-strength) * 1));
+  }
+
+  .card-glass {
+    background: rgba(var(--surface-glass), 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(var(--warm-200), 0.5);
+    border-radius: 14px;
+    box-shadow:
+      0 4px 12px rgba(var(--shadow-color), calc(var(--shadow-strength) * 1.5));
+  }
+
+  /* ── Buttons ───────────────────────────────────────────────────── */
 
   .btn-primary {
     background: rgb(var(--primary-500));
@@ -271,12 +453,29 @@ body {
     padding: 8px 20px;
     font-size: 14px;
     font-weight: 500;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .btn-primary::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.1) 0%, transparent 50%);
+    pointer-events: none;
   }
 
   .btn-primary:hover {
     background: rgb(var(--primary-600));
-    box-shadow: 0 1px 3px rgba(79, 108, 247, 0.2);
+    box-shadow:
+      0 2px 4px rgba(76, 106, 245, 0.2),
+      0 4px 8px rgba(76, 106, 245, 0.1);
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:active {
+    transform: translateY(0) scale(0.98);
   }
 
   .btn-secondary {
@@ -287,12 +486,17 @@ body {
     padding: 8px 20px;
     font-size: 14px;
     font-weight: 500;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .btn-secondary:hover {
     background: rgb(var(--warm-100));
     border-color: rgb(var(--warm-300));
+    transform: translateY(-1px);
+  }
+
+  .btn-secondary:active {
+    transform: translateY(0) scale(0.98);
   }
 
   .btn-ghost {
@@ -302,33 +506,110 @@ body {
     padding: 8px 16px;
     font-size: 14px;
     font-weight: 500;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .btn-ghost:hover {
     background: rgb(var(--warm-100));
   }
 
+  .btn-ghost:active {
+    transform: scale(0.97);
+  }
+
+  .btn-accent {
+    background: rgb(var(--accent-500));
+    color: #FFFFFF;
+    border-radius: 8px;
+    padding: 8px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .btn-accent:hover {
+    background: rgb(var(--accent-600));
+    box-shadow: 0 2px 4px rgba(var(--accent-500), 0.3);
+    transform: translateY(-1px);
+  }
+
+  .btn-danger {
+    background: rgb(var(--danger-500));
+    color: #FFFFFF;
+    border-radius: 8px;
+    padding: 8px 20px;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .btn-danger:hover {
+    background: rgb(var(--danger-600));
+    box-shadow: 0 2px 4px rgba(var(--danger-500), 0.3);
+    transform: translateY(-1px);
+  }
+
+  /* Button sizes */
+  .btn-sm { padding: 4px 12px; font-size: 12px; border-radius: 6px; }
+  .btn-lg { padding: 12px 28px; font-size: 16px; border-radius: 10px; }
+  .btn-xl { padding: 14px 36px; font-size: 18px; border-radius: 12px; }
+
+  /* ── Tags / Badges ─────────────────────────────────────────────── */
+
   .tag {
     display: inline-flex;
     align-items: center;
+    gap: 4px;
     padding: 2px 10px;
-    border-radius: 4px;
+    border-radius: 5px;
     font-size: 12px;
     font-weight: 500;
     line-height: 1.5;
     transition: all 0.2s ease;
+    white-space: nowrap;
   }
 
   .tag-warm {
     background: rgb(var(--warm-100));
     color: rgb(var(--warm-600));
+    border: 1px solid rgb(var(--warm-150));
   }
 
   .tag-blue {
     background: rgb(var(--primary-50));
-    color: rgb(var(--primary-500));
+    color: rgb(var(--primary-600));
+    border: 1px solid rgb(var(--primary-100));
   }
+
+  .tag-accent {
+    background: rgb(var(--accent-50));
+    color: rgb(var(--accent-600));
+    border: 1px solid rgb(var(--accent-100));
+  }
+
+  .tag-green {
+    background: rgb(var(--success-50));
+    color: rgb(var(--success-600));
+    border: 1px solid rgb(var(--success-100));
+  }
+
+  .tag-red {
+    background: rgb(var(--danger-50));
+    color: rgb(var(--danger-600));
+    border: 1px solid rgb(var(--danger-100));
+  }
+
+  /* Dot indicator for tags */
+  .tag-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.7;
+  }
+
+  /* ── Input fields ──────────────────────────────────────────────── */
 
   .input-field {
     width: 100%;
@@ -339,16 +620,112 @@ body {
     color: rgb(var(--warm-800));
     background: rgb(var(--warm-50));
     outline: none;
-    transition: all 0.2s ease;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .input-field:focus {
     border-color: rgb(var(--primary-500));
-    box-shadow: 0 0 0 2px rgba(79, 108, 247, 0.1);
+    box-shadow:
+      0 0 0 3px rgba(var(--primary-500), 0.1),
+      0 1px 2px rgba(var(--shadow-color), calc(var(--shadow-strength) * 0.5));
   }
 
   .input-field::placeholder {
     color: rgb(var(--warm-400));
+  }
+
+  .input-field:hover:not(:focus) {
+    border-color: rgb(var(--warm-300));
+  }
+
+  /* Input sizes */
+  .input-sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+  .input-lg { padding: 10px 16px; font-size: 16px; border-radius: 10px; }
+
+  /* ── Divider ──────────────────────────────────────────────────── */
+
+  .divider {
+    border: none;
+    border-top: 1px solid rgb(var(--warm-150));
+    margin: 16px 0;
+  }
+
+  .divider-accent {
+    border: none;
+    height: 2px;
+    background: linear-gradient(90deg,
+      transparent 0%,
+      rgb(var(--accent-300)) 20%,
+      rgb(var(--accent-300)) 80%,
+      transparent 100%);
+    margin: 20px 0;
+  }
+
+  /* ── Skeleton loading ──────────────────────────────────────────── */
+
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--warm-100)) 25%,
+      rgb(var(--warm-150)) 50%,
+      rgb(var(--warm-100)) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s ease-in-out infinite;
+    border-radius: 6px;
+  }
+
+  .skeleton-text {
+    height: 14px;
+    margin-bottom: 8px;
+  }
+
+  .skeleton-text:last-child {
+    width: 60%;
+  }
+
+  .skeleton-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+  }
+
+  .skeleton-card {
+    height: 120px;
+    border-radius: 12px;
+  }
+
+  /* ── Status indicators ─────────────────────────────────────────── */
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot-active {
+    background: rgb(var(--success-500));
+    box-shadow: 0 0 0 3px rgba(var(--success-500), 0.2);
+  }
+
+  .status-dot-idle {
+    background: rgb(var(--warm-400));
+  }
+
+  .status-dot-busy {
+    background: rgb(var(--accent-500));
+    animation: breathe 1.5s ease-in-out infinite;
+  }
+
+  .status-dot-error {
+    background: rgb(var(--danger-500));
+    animation: breathe 1s ease-in-out infinite;
+  }
+
+  .status-dot-pulse {
+    animation: pulseRing 2s ease-out infinite;
   }
 }
 

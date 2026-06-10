@@ -28,12 +28,12 @@ interface ChatHeaderProps {
 }
 
 const PM_STATE_COLORS: Record<PMState, string> = {
-  IDLE: 'bg-warm-100 text-warm-500',
-  DECOMPOSING: 'bg-purple-100 text-purple-600',
-  DISPATCHING: 'bg-blue-100 text-blue-600',
-  WAITING_USER: 'bg-amber-100 text-amber-700',
-  EXECUTING: 'bg-emerald-100 text-emerald-600',
-  SUMMARIZING: 'bg-indigo-100 text-indigo-600',
+  IDLE: 'bg-warm-100 text-warm-500 border border-warm-150',
+  DECOMPOSING: 'bg-purple-50 text-purple-600 border border-purple-100',
+  DISPATCHING: 'bg-primary-50 text-primary-600 border border-primary-100',
+  WAITING_USER: 'bg-accent-50 text-accent-600 border border-accent-100',
+  EXECUTING: 'bg-emerald-50 text-emerald-600 border border-emerald-100',
+  SUMMARIZING: 'bg-indigo-50 text-indigo-600 border border-indigo-100',
 };
 
 const PM_STATE_DOTS: Record<PMState, string> = {
@@ -203,9 +203,9 @@ const ChatHeader = memo(function ChatHeader({
                   : 'bg-warm-200';
                 return (
                   <>
-                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-warm-100">
+                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-warm-100 shadow-inner">
                       <div
-                        className={`h-full transition-all duration-500 ${barColor}`}
+                        className={`h-full rounded-full transition-all duration-500 ${barColor}`}
                         style={{ width: `${displayPercent}%` }}
                       />
                     </div>
@@ -221,7 +221,7 @@ const ChatHeader = memo(function ChatHeader({
 
             <button
               onClick={onTaskClick}
-              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-warm-500 hover:text-primary-600 hover:bg-warm-50 rounded-md transition-colors"
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-warm-500 hover:text-primary-600 hover:bg-warm-50 rounded-md transition-all active:scale-95"
               title="查看 DAG 任务进度"
             >
               <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -271,7 +271,7 @@ const ChatHeader = memo(function ChatHeader({
             {onInterruptStream && isStreaming && (
               <button
                 onClick={onInterruptStream}
-                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-500 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-danger-500 hover:text-danger-700 hover:bg-danger-50 rounded-md transition-all active:scale-95"
                 title="中断当前 AI 处理"
               >
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="none">

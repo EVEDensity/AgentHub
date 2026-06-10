@@ -58,14 +58,19 @@ const SessionSidebar = memo(function SessionSidebar({
       className="border-r border-warm-150 bg-white p-4 flex h-screen flex-col shrink-0"
       style={width ? { width: `${width}px` } : undefined}
     >
-      <div className="mb-4">
-        <div className="text-h2 text-warm-800">AgentHub</div>
-        <div className="mt-1 text-caption text-warm-500">{user?.name} / {user?.role}</div>
+      <div className="mb-5">
+        <div className="text-h2 text-warm-900 tracking-tight">Agent<span className="text-primary-500">Hub</span></div>
+        <div className="mt-1 text-caption text-warm-500 flex items-center gap-2">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-success-500 shadow-[0_0_0_2px_rgba(91,140,90,0.2)]" />
+          {user?.name} · {user?.role}
+        </div>
       </div>
-      <a className="btn-secondary block w-full text-center" href="/admin">管理面板</a>
-      <a className="btn-secondary mt-2 block w-full text-center" href="/canvas">智能体画布</a>
-      <a className="btn-secondary mt-2 block w-full text-center" href="/admin?menu=%E8%AE%B0%E5%BF%86">记忆管理</a>
-      <button className="btn-ghost mt-2 w-full" onClick={onLogout}>退出登录</button>
+      <div className="flex flex-col gap-1.5">
+        <a className="btn-secondary block w-full text-center transition-all active:scale-[0.98]" href="/admin">⚙️ 管理面板</a>
+        <a className="btn-secondary block w-full text-center transition-all active:scale-[0.98]" href="/canvas">🎨 智能体画布</a>
+        <a className="btn-secondary block w-full text-center transition-all active:scale-[0.98]" href="/admin?menu=%E8%AE%B0%E5%BF%86">🧠 记忆管理</a>
+        <button className="btn-ghost w-full text-warm-500 hover:text-danger-600 transition-all active:scale-[0.98]" onClick={onLogout}>退出登录</button>
+      </div>
       {notice && <div className="mt-3 rounded-lg bg-warning-50 p-2 text-xs text-warning-600">{notice}</div>}
       <div className="mb-3 mt-4 flex items-center justify-between border-b border-warm-150 pb-3">
         <button className="btn-ghost flex items-center gap-2" onClick={onCreateSession}><span className="text-lg">+</span><span>New Session</span></button>
@@ -79,7 +84,7 @@ const SessionSidebar = memo(function SessionSidebar({
       <div className="flex-1 overflow-hidden">
         <div className="h-full space-y-1 overflow-auto pr-1">
         {filteredSessions.map((s) => (
-          <div key={s.id} className={`group flex items-center gap-1 rounded-lg px-2 py-1 ${s.id === sessionId ? 'bg-warm-100' : 'hover:bg-warm-50'}`}>
+          <div key={s.id} className={`group flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${s.id === sessionId ? 'bg-primary-50 border border-primary-100 shadow-sm' : 'hover:bg-warm-50 border border-transparent'}`}>
             {editingId === s.id ? (
               <input
                 className="flex-1 rounded border border-primary-300 px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-primary-500"

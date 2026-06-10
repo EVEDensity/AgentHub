@@ -18,23 +18,24 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
 
   return (
     <div className="flex h-screen overflow-hidden bg-warm-50 text-warm-800">
-      {/* ── Sidebar ─────────────────────────────────────────────── */}
-      <aside className="h-screen w-[254px] flex-none overflow-y-auto border-r border-warm-150 bg-[#F3F2F0]">
-        <div className="sticky top-0 z-10 h-20 border-b border-warm-150 bg-[#ECEBE8] px-5 flex items-center text-xl font-semibold text-warm-800">
-          设置
+      {/* ── Sidebar — dark themed for visual separation ────────── */}
+      <aside className="h-screen w-[240px] flex-none overflow-y-auto bg-warm-900 border-r border-warm-800">
+        <div className="sticky top-0 z-10 h-[72px] border-b border-warm-800/60 bg-warm-900/95 backdrop-blur-sm px-5 flex items-center gap-2">
+          <span className="text-lg">⚡</span>
+          <span className="text-lg font-bold text-white tracking-tight">Agent<span className="text-primary-400">Hub</span></span>
         </div>
-        <nav className="py-3">
+        <nav className="py-4 px-3 space-y-0.5">
           {SETTINGS_MENU.map((item) => (
             <button
               key={item}
-              className={`block w-full px-5 py-3 text-left text-[34px] leading-none ${
+              className={`block w-full px-4 py-2.5 text-left text-sm rounded-lg transition-all ${
                 activeMenu === item
-                  ? 'bg-[#ECEBE8] text-warm-900 font-medium'
-                  : 'text-warm-700 hover:bg-[#ECEBE8]'
+                  ? 'bg-primary-500/15 text-primary-300 font-medium shadow-sm'
+                  : 'text-warm-400 hover:bg-white/5 hover:text-warm-200'
               }`}
               onClick={() => handleMenuClick(item)}
             >
-              <span className="text-[32px] align-middle">{item}</span>
+              {item}
             </button>
           ))}
         </nav>
@@ -42,15 +43,15 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
 
       {/* ── Right area ───────────────────────────────────────────── */}
       <div className="min-w-0 flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <header className="border-b border-warm-150 bg-white px-8 py-4 shrink-0">
+        {/* Header — glass morphism */}
+        <header className="border-b border-warm-150 bg-white/80 backdrop-blur-sm px-8 py-4 shrink-0">
           <div className="mx-auto flex max-w-7xl items-center justify-between">
             <div className="flex items-center gap-3">
-              <h1 className="text-h2">管理控制台</h1>
-              <span className="tag tag-warm">{user?.name}/{user?.role}</span>
-              <span className="tag tag-blue">当前模块：{activeMenu}</span>
+              <h1 className="text-h2 text-warm-900">管理控制台</h1>
+              <span className="tag tag-warm">{user?.name} · {user?.role}</span>
+              <span className="tag tag-blue">{activeMenu}</span>
             </div>
-            <a className="btn-secondary" href="/">返回 IM</a>
+            <a className="btn-secondary transition-all active:scale-[0.98]" href="/">← 返回 IM</a>
           </div>
         </header>
 

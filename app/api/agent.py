@@ -193,7 +193,8 @@ async def registry(user: dict = Depends(get_current_user)) -> list[dict]:
         "a.duty_note AS \"dutyNote\",a.display_name AS \"displayName\","
         + _AVATAR_SQL + ","
         "a.capability_tags AS \"capabilityTags\","
-        "a.base_url AS \"baseUrl\""
+        "a.base_url AS \"baseUrl\","
+        "(a.avatar_data IS NULL) AS \"avatarMissing\""
     )
     rows = await afetch_all(
         f"SELECT {_REGISTRY_COLS} FROM agent_registry a "
@@ -211,8 +212,8 @@ async def registry(user: dict = Depends(get_current_user)) -> list[dict]:
     # ── Lazy avatar migration: copy avatar data from system agents ──
     # Runs once per user whose agents were seeded before the avatar-copy
     # logic was added to seed_default_agents_for_user.
-    if any(not row.get("avatarUrl") for row in rows):
-        # Batch-copy all missing avatars in one UPDATE ... FROM
+    if any(row.get("avatarMissing") for row in rows):
+        # Step 1: Batch-copy avatars from system agents (user_id='')
         await aexecute(
             "UPDATE agent_registry AS target "
             "SET avatar_data = source.avatar_data, "
@@ -226,7 +227,22 @@ async def registry(user: dict = Depends(get_current_user)) -> list[dict]:
             "  AND target.avatar_data IS NULL",
             user_id,
         )
-        # Re-read rows so in-memory dicts reflect the copied avatar URLs
+        # Step 2: For agents that still have no avatar (system agent also
+        # had no bytes), generate a deterministic SVG and store it.
+        still_missing = await afetch_all(
+            "SELECT agent_id FROM agent_registry "
+            "WHERE user_id=$1 AND avatar_data IS NULL",
+            user_id,
+        )
+        for sm in still_missing:
+            agent_id = sm["agent_id"]
+            svg_bytes, mime = _generate_default_avatar_svg(agent_id)
+            await aexecute(
+                "UPDATE agent_registry SET avatar_data=$1, avatar_mime=$2 "
+                "WHERE agent_id=$3 AND user_id=$4",
+                svg_bytes, mime, agent_id, user_id,
+            )
+        # Re-read so in-memory dicts reflect the new avatar state
         rows = await afetch_all(
             f"SELECT {_REGISTRY_COLS} FROM agent_registry a "
             "WHERE a.user_id=$1 ORDER BY a.agent_id",

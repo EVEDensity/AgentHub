@@ -22,35 +22,35 @@ const GeneralSettingsModule = dynamic(() => import('../../components/admin/Gener
 const SkillsModule = dynamic(() => import('../../components/admin/SkillsModule'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
-      <div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" />
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
     </div>
   ),
 });
 const MemoryModule = dynamic(() => import('../../components/admin/MemoryModule'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
-      <div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" />
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
     </div>
   ),
 });
 const UserManagementModule = dynamic(() => import('../../components/admin/UserManagementModule'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
-      <div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" />
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
     </div>
   ),
 });
 const ServiceProviderModule = dynamic(() => import('../../components/admin/ServiceProviderModule'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
-      <div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" />
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
     </div>
   ),
 });
 const WorkflowModule = dynamic(() => import('../../components/admin/WorkflowModule'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
-      <div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" />
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
     </div>
   ),
 });

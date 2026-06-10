@@ -83,7 +83,7 @@ async def list_logs(
     # Count total matching rows
     count_sql = f"SELECT COUNT(*) AS cnt FROM audit_log {where_clause}"
     total_row = await afetch_one(count_sql, *params)
-    total = total_row["cnt"] if total_row else 0
+    total = int(total_row["cnt"]) if total_row else 0
 
     # Map sort column to DB column name
     column_map = {

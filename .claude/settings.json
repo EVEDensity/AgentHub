@@ -23,7 +23,19 @@
       "Bash(.venv/Scripts/pip.exe install *)",
       "Bash(\"d:/Users/xyn/Desktop/agenthub/AgenthubV1.2/.venv/Scripts/pip.exe\" install *)",
       "Bash(\"d:/Users/xyn/Desktop/agenthub/AgenthubV1.2/.venv/Scripts/python.exe\" -m pip install pydantic-settings==2.7.0 -q)",
-      "Bash(\"d:/Users/xyn/Desktop/agenthub/AgenthubV1.2/.venv/Scripts/python.exe\" -m pip install alembic -q)"
+      "Bash(\"d:/Users/xyn/Desktop/agenthub/AgenthubV1.2/.venv/Scripts/python.exe\" -m pip install alembic -q)",
+      "Bash(tail -30 /tmp/backend.log 2>&1)",
+      "Read(//tmp/**)",
+      "Bash(echo \"\")",
+      "Bash(curl -s -w '\\\\nHTTP: %{http_code}\\\\n' 'http://localhost:8000/api/admin/audit/logs?page=1&pageSize=5' -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(netstat -ano)",
+      "Bash(curl -s -o /dev/null -w \"HTTP: %{http_code}\\\\n\" \"http://localhost:8000/\")",
+      "Bash(powershell -Command '$pid = \\(Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue\\).OwningProcess; if \\($pid\\) { Stop-Process -Id $pid -Force; Write-Host \"Killed PID $pid\" } else { Write-Host '\\\\''No process found on port 8000'\\\\'' }')",
+      "Bash(powershell -Command '$p = \\(Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -First 1\\).OwningProcess; if \\($p\\) { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue; Write-Host \"Killed $p\" } else { Write-Host '\\\\''No process'\\\\'' }')",
+      "Bash(python -m uvicorn main:app --host 0.0.0.0 --port 8000)",
+      "Bash(echo \"New PID: $!\")",
+      "Bash(curl -s -w \"\\\\nHTTP: %{http_code}\\\\n\" \"http://localhost:8000/\")",
+      "Bash(curl -s -o /dev/null -w 'HTTP: %{http_code}, Size: %{size_download}\\\\n' 'http://localhost:8000/api/admin/audit/logs?page=1&pageSize=5' -H 'Authorization: Bearer __TRACKED_VAR__')"
     ]
   }
 }
