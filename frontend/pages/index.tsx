@@ -409,6 +409,10 @@ export default function AgentHubIM(): JSX.Element {
     };
   }, [token, sessionId]);
 
+  // ── Scroll-to-bottom helper refs ──────────────────────────
+  const scrollRafRef = useRef<number>(0);
+  const lastScrollTimeRef = useRef<number>(0);
+
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -419,18 +423,34 @@ export default function AgentHubIM(): JSX.Element {
     prevMessageCountRef.current = currentCount;
     prevSessionRef.current = sessionId;
 
+    // Session switch: immediate scroll to bottom
     if (isSessionSwitch) {
-      requestAnimationFrame(() => {
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = requestAnimationFrame(() => {
         container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
       });
       return;
     }
 
+    // New message during streaming: throttle to ~30fps to avoid scroll jank
+    // The progressive flush releases chunks at ~8ms intervals (125Hz) —
+    // scrolling on every chunk causes layout thrashing.
     if (isNewMessage) {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      const now = performance.now();
+      // Throttle: max one scroll per ~32ms (~30fps)
+      if (now - lastScrollTimeRef.current < 32) return;
+      lastScrollTimeRef.current = now;
+
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = requestAnimationFrame(() => {
+        // Use auto (not smooth) during streaming — smooth animation
+        // competes with DOM updates from progressive chunk release
+        container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
+      });
       return;
     }
 
+    // User is near the bottom: keep them anchored
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     if (distanceToBottom < 120) {
       container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
@@ -2489,6 +2509,11 @@ export default function AgentHubIM(): JSX.Element {
     return sessions.find((s) => s.id === sessionId)?.name || 'New Session';
   }, [sessions, sessionId]);
 
+  // Memoize current session to avoid repeated .find() in render
+  const currentSession = useMemo(() => {
+    return sessions.find((s) => s.id === sessionId);
+  }, [sessions, sessionId]);
+
   const percent = useMemo(() => {
     return dag.total ? Math.round((dag.completed / dag.total) * 100) : 0;
   }, [dag.total, dag.completed]);
@@ -2541,8 +2566,8 @@ export default function AgentHubIM(): JSX.Element {
         onEditNameBlur={handleEditNameBlur}
         onLogout={handleLogout}
         onOpenShare={handleOpenShare}
-        currentRole={sessions.find((s) => s.id === sessionId)?.myRole}
-        currentVisibility={sessions.find((s) => s.id === sessionId)?.visibility || sessionVisibility}
+        currentRole={currentSession?.myRole}
+        currentVisibility={currentSession?.visibility || sessionVisibility}
         authHeaders={authHeaders()}
         width={sidebarWidthLive ?? sidebarWidth}
       />
@@ -2712,8 +2737,8 @@ export default function AgentHubIM(): JSX.Element {
           quoteReferences={quoteReferences}
           onRemoveQuoteReference={handleRemoveQuoteReference}
           onClearAllQuoteReferences={handleClearAllQuoteReferences}
-          userRole={sessions.find((s) => s.id === sessionId)?.myRole}
-          memberCount={sessions.find((s) => s.id === sessionId)?.memberCount}
+          userRole={currentSession?.myRole}
+          memberCount={currentSession?.memberCount}
         />
         <TypingIndicator sessionId={sessionId} />
       </main>
@@ -2801,8 +2826,8 @@ export default function AgentHubIM(): JSX.Element {
         open={shareOpen}
         sessionId={sessionId}
         sessionName={sessionName}
-        userRole={sessions.find((s) => s.id === sessionId)?.myRole || 'viewer'}
-        visibility={sessions.find((s) => s.id === sessionId)?.visibility || sessionVisibility}
+        userRole={currentSession?.myRole || 'viewer'}
+        visibility={currentSession?.visibility || sessionVisibility}
         authHeaders={authHeaders()}
         onClose={handleCloseShare}
         onVisibilityChange={handleVisibilityChange}

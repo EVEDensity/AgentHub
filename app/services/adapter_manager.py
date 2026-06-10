@@ -517,6 +517,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
     async def execute_prompt(
         self, prompt: str, model: str, api_key: str = "", base_url: str = "",
         tools: list[dict[str, Any]] | None = None,
+        system_prompt: str = "",
     ) -> str:
         """Execute a prompt, optionally with native function-calling tools.
 
@@ -527,15 +528,21 @@ class OpenAICompatibleAdapter(BaseAdapter):
         Native ``tool_calls`` in the response are transparently converted to
         our internal ``{"tool_calls": [...]}`` JSON string so the existing
         parsing pipeline handles them without modification.
+
+        When *system_prompt* is non-empty, it is prepended as a system message.
         """
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
             return await MockAdapter().execute_prompt(prompt, model)
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "/chat/completions"
+        messages: list[dict[str, Any]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
         payload: dict[str, Any] = {
             "model": actual_model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": self.temperature,
             "frequency_penalty": self.frequency_penalty,
             "presence_penalty": self.presence_penalty,
@@ -638,7 +645,11 @@ class OpenAICompatibleAdapter(BaseAdapter):
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "//chat/completions"
         url = url.replace("//chat", "/chat")  # normalize double slash
-        payload: dict[str, Any] = {"model": actual_model, "messages": [{"role": "user", "content": prompt}], "temperature": self.temperature, "stream": True, "frequency_penalty": self.frequency_penalty, "presence_penalty": self.presence_penalty, "max_tokens": getattr(self, "max_tokens", 16384)}
+        stream_messages: list[dict[str, Any]] = []
+        if system_prompt:
+            stream_messages.append({"role": "system", "content": system_prompt})
+        stream_messages.append({"role": "user", "content": prompt})
+        payload: dict[str, Any] = {"model": actual_model, "messages": stream_messages, "temperature": self.temperature, "stream": True, "frequency_penalty": self.frequency_penalty, "presence_penalty": self.presence_penalty, "max_tokens": getattr(self, "max_tokens", 16384)}
         if self.supports_stream_usage:
             payload["stream_options"] = {"include_usage": True}
         self.last_usage = {}  # reset per call so stale data never leaks

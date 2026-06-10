@@ -1,6 +1,11 @@
 import { useState, type JSX } from 'react';
+import dynamic from 'next/dynamic';
 import type { MemoryFileInfo, MemoryDetail, MemorySearchResult, ConsolidationResult } from '../../types';
-import MarkdownRenderer from '../chat/MarkdownRenderer';
+
+const MarkdownRenderer = dynamic(() => import('../chat/MarkdownRenderer'), {
+  ssr: false,
+  loading: () => <div className="skeleton skeleton-text !h-4 w-3/4" />,
+});
 
 type MemorySubTab = 'files' | 'sessions' | 'conversation' | 'consolidation';
 type SessionMemoryItem = {
