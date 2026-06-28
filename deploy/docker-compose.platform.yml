@@ -1,0 +1,109 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:7.2
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+
+  nats:
+    image: nats:2.10
+    command: ["-js"]
+    ports: ["4222:4222", "8222:8222"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agenthub
+      POSTGRES_PASSWORD: agenthub
+      POSTGRES_DB: agenthub
+    ports: ["5432:5432"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports: ["9000:9000", "9001:9001"]
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports: ["6333:6333"]
+
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports: ["9200:9200"]
+
+  gateway-service:
+    build:
+      context: ..
+      dockerfile: services/go/gateway-service/Dockerfile
+    environment:
+      GATEWAY_ADDR: ":8081"
+      NATS_URL: "nats://nats:4222"
+    depends_on:
+      - nats
+    ports: ["8081:8081"]
+
+  realtime-orchestrator:
+    build:
+      context: ..
+      dockerfile: services/go/realtime-orchestrator/Dockerfile
+    environment:
+      ORCHESTRATOR_ADDR: ":8082"
+      NATS_URL: "nats://nats:4222"
+    depends_on:
+      - nats
+    ports: ["8082:8082"]
+
+  stream-delivery-service:
+    build:
+      context: ..
+      dockerfile: services/go/stream-delivery-service/Dockerfile
+    environment:
+      DELIVERY_ADDR: ":8086"
+      NATS_URL: "nats://nats:4222"
+    depends_on:
+      - nats
+    ports: ["8086:8086"]
+
+  session-service:
+    build:
+      context: ..
+      dockerfile: services/go/session-service/Dockerfile
+    environment:
+      SESSION_ADDR: ":8083"
+      REDIS_ADDR: "redis:6379"
+      STREAM_DELIVERY_URL: "http://stream-delivery-service:8086"
+    depends_on:
+      - redis
+      - stream-delivery-service
+    ports: ["8083:8083"]
+
+  tool-permission-service:
+    build:
+      context: ..
+      dockerfile: services/go/tool-permission-service/Dockerfile
+    environment:
+      PERMISSION_ADDR: ":8084"
+      REDIS_ADDR: "redis:6379"
+      NATS_URL: "nats://nats:4222"
+    depends_on:
+      - redis
+      - nats
+    ports: ["8084:8084"]
+
+  audit-log-service:
+    build:
+      context: ..
+      dockerfile: services/go/audit-log-service/Dockerfile
+    environment:
+      AUDIT_ADDR: ":8087"
+      NATS_URL: "nats://nats:4222"
+    depends_on:
+      - nats
+    ports: ["8087:8087"]

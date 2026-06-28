@@ -1,0 +1,118 @@
+{
+  "streaming": {
+    "chunk_event": {
+      "event_type": "session.stream.chunk",
+      "payload": {
+        "stream_id": "uuid",
+        "sequence": 12,
+        "content": "partial token output",
+        "content_type": "text/plain",
+        "agent_id": "executor-agent",
+        "is_thinking": false,
+        "token_usage": {
+          "prompt_tokens": 1240,
+          "completion_tokens": 22
+        },
+        "latency_ms": 640
+      }
+    },
+    "flush_event": {
+      "event_type": "session.stream.flush",
+      "payload": {
+        "stream_id": "uuid",
+        "flush_reason": "buffer_window",
+        "aggregated_sequences": [10, 11, 12],
+        "delivery_mode": "websocket"
+      }
+    }
+  },
+  "agent_actions": {
+    "transition_event": {
+      "event_type": "agent.react.transition",
+      "payload": {
+        "request_id": "uuid",
+        "agent_id": "planner-agent",
+        "from_state": "retrieve",
+        "to_state": "plan",
+        "decision": "sufficient evidence collected",
+        "budget": {
+          "max_steps": 12,
+          "remaining_steps": 8,
+          "time_budget_ms": 9000
+        }
+      }
+    },
+    "dispatch_event": {
+      "event_type": "agent.runtime.dispatch",
+      "payload": {
+        "request_id": "uuid",
+        "agent_id": "executor-agent",
+        "runtime_kind": "tool_call",
+        "target_worker_pool": "tool-high",
+        "input_ref": "s3://agenthub/jobs/req.json"
+      }
+    }
+  },
+  "permissions": {
+    "request_event": {
+      "event_type": "tool.permission.requested",
+      "payload": {
+        "request_id": "uuid",
+        "tool_name": "shell.exec",
+        "risk_level": "high",
+        "reason": "writes to repository",
+        "timeout_seconds": 30,
+        "arguments": {
+          "command": "git push origin main"
+        }
+      }
+    },
+    "resolved_event": {
+      "event_type": "tool.permission.resolved",
+      "payload": {
+        "request_id": "uuid",
+        "decision": "allow",
+        "decided_by": "user-123",
+        "decided_at": "2025-01-01T00:00:00Z"
+      }
+    }
+  },
+  "retrieval": {
+    "requested_event": {
+      "event_type": "retrieval.query.requested",
+      "payload": {
+        "request_id": "uuid",
+        "query": "设计多人协作网关架构",
+        "mode": "deepsearch",
+        "steps": ["rewrite", "decompose", "hybrid_retrieve", "rerank", "ground"],
+        "filters": {
+          "tenant_id": "tenant-a",
+          "knowledge_scope": ["docs", "code", "memory"]
+        }
+      }
+    },
+    "completed_event": {
+      "event_type": "retrieval.query.completed",
+      "payload": {
+        "request_id": "uuid",
+        "candidate_count": 48,
+        "qdrant_hits": 20,
+        "opensearch_hits": 28,
+        "elapsed_ms": 183,
+        "result_ref": "s3://agenthub/retrieval/uuid.json"
+      }
+    },
+    "fusion_event": {
+      "event_type": "retrieval.fusion.completed",
+      "payload": {
+        "request_id": "uuid",
+        "strategy": "bm25_dense_rerank_freshness",
+        "top_k": 8,
+        "citations": [
+          { "source_id": "doc-1", "score": 0.93 },
+          { "source_id": "code-7", "score": 0.88 }
+        ]
+      }
+    }
+  }
+}

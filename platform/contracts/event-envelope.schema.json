@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenthub.local/contracts/event-envelope.schema.json",
+  "title": "AgentHub Event Envelope",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "event_version",
+    "occurred_at",
+    "trace_id",
+    "tenant_id",
+    "session_id",
+    "producer",
+    "payload"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "minLength": 8 },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "session.message.received",
+        "session.message.persisted",
+        "session.stream.chunk",
+        "session.stream.flush",
+        "session.stream.complete",
+        "agent.react.transition",
+        "agent.runtime.dispatch",
+        "agent.runtime.result",
+        "tool.permission.requested",
+        "tool.permission.resolved",
+        "retrieval.query.requested",
+        "retrieval.query.completed",
+        "retrieval.fusion.completed",
+        "audit.security.event"
+      ]
+    },
+    "event_version": { "type": "integer", "minimum": 1 },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "trace_id": { "type": "string" },
+    "tenant_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "message_id": { "type": ["string", "null"] },
+    "actor_id": { "type": ["string", "null"] },
+    "producer": {
+      "type": "object",
+      "required": ["service", "instance"],
+      "properties": {
+        "service": { "type": "string" },
+        "instance": { "type": "string" },
+        "region": { "type": ["string", "null"] }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "properties": {
+        "channel": { "type": "string" },
+        "partition_key": { "type": "string" },
+        "priority": { "type": "string", "enum": ["low", "normal", "high", "critical"] }
+      }
+    },
+    "payload": { "type": "object" }
+  }
+}

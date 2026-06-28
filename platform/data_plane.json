@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "redis": {
+    "role": [
+      "presence state",
+      "session route table",
+      "reconnect cursor",
+      "permission pending state",
+      "distributed rate limit",
+      "short-lived hot cache"
+    ],
+    "topology": "redis-cluster",
+    "keys": [
+      "presence:{tenant}:{session}",
+      "route:{tenant}:{session}",
+      "cursor:{tenant}:{session}:{connection}",
+      "perm:{tenant}:{request_id}",
+      "rl:{tenant}:{principal}:{bucket}"
+    ]
+  },
+  "nats_jetstream": {
+    "role": [
+      "event bus",
+      "stream chunk transport",
+      "agent dispatch queue",
+      "retrieval request queue",
+      "audit event fanout"
+    ],
+    "streams": [
+      "session-events",
+      "agent-runtime",
+      "retrieval-jobs",
+      "tool-permissions",
+      "audit-events"
+    ]
+  },
+  "postgresql": {
+    "role": [
+      "source of truth for users",
+      "sessions",
+      "messages",
+      "audit trail",
+      "quotas",
+      "billing",
+      "agent configs"
+    ],
+    "partitioning": {
+      "messages": "partition by month and tenant",
+      "audit_events": "partition by week"
+    }
+  },
+  "qdrant": {
+    "role": [
+      "dense vector retrieval",
+      "metadata filterable collections",
+      "knowledge shards by tenant"
+    ],
+    "collections": ["docs", "code", "memory", "artifacts"]
+  },
+  "opensearch": {
+    "role": [
+      "bm25 retrieval",
+      "keyword and metadata search",
+      "operational log analytics"
+    ],
+    "indexes": ["knowledge-docs", "knowledge-code", "knowledge-memory", "ops-logs"]
+  },
+  "object_storage": {
+    "provider": "minio",
+    "role": [
+      "document originals",
+      "preview artifacts",
+      "retrieval snapshots",
+      "stream replay bundles",
+      "evaluation outputs"
+    ],
+    "buckets": ["uploads", "previews", "retrieval", "replays", "evals"]
+  }
+}

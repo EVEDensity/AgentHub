@@ -1,5 +1,7 @@
 # AgentHub 本地可运行版本
 
+> 📘 配套文档：[AgentHub AI 辅助开发协作总结](file:///d:/Users/xyn/Desktop/agenthub/AgenthubV1.2/AgentHub%20AI%20%E8%BE%85%E5%8A%A9%E5%BC%80%E5%8F%91%E5%8D%8F%E4%BD%9C%E6%80%BB%E7%BB%93.md) — 详细描述本项目如何落地 AI 协作范式、Spec 文档、Skills 体系、Rules 防护与可观测审计。
+
 ## 启动
 
 ### 方式一：Windows 一键启动
