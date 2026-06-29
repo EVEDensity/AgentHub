@@ -1,5 +1,19 @@
-version: "3.9"
+# ─────────────────────────────────────────────────────────────────────
+# AgentHub Platform — full stack (infra + Go online tier + Python offline
+# tier + Rust cores + observability). Bring up with:
+#   docker compose -f deploy/docker-compose.platform.yml up --build
+# ─────────────────────────────────────────────────────────────────────
+
+x-go-env: &go-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4318"
+  NATS_URL: "nats://nats:4222"
+  REDIS_ADDR: "redis:6379"
+  DATABASE_DSN: "postgres://agenthub:agenthub@postgres:5432/agenthub?sslmode=disable"
+
 services:
+  # ═══════════════════════════════════════════════════════════════════
+  #  INFRASTRUCTURE
+  # ═══════════════════════════════════════════════════════════════════
   redis:
     image: redis:7.2
     command: ["redis-server", "--appendonly", "yes"]
@@ -38,15 +52,47 @@ services:
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
     ports: ["9200:9200"]
 
+  # ═══════════════════════════════════════════════════════════════════
+  #  OBSERVABILITY
+  # ═══════════════════════════════════════════════════════════════════
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+    ports: ["9090:9090"]
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yml:/etc/tempo.yaml:ro
+    ports: ["3200:3200", "4318:4318"]   # 4318 = OTLP/HTTP
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus, tempo]
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  GO ONLINE TIER
+  # ═══════════════════════════════════════════════════════════════════
   gateway-service:
     build:
       context: ..
       dockerfile: services/go/gateway-service/Dockerfile
     environment:
+      <<: *go-env
       GATEWAY_ADDR: ":8081"
-      NATS_URL: "nats://nats:4222"
-    depends_on:
-      - nats
+      JWT_SECRET: "${JWT_SECRET:-}"
+    depends_on: [nats, tempo]
     ports: ["8081:8081"]
 
   realtime-orchestrator:
@@ -54,34 +100,20 @@ services:
       context: ..
       dockerfile: services/go/realtime-orchestrator/Dockerfile
     environment:
+      <<: *go-env
       ORCHESTRATOR_ADDR: ":8082"
-      NATS_URL: "nats://nats:4222"
-    depends_on:
-      - nats
+    depends_on: [nats, redis, tempo]
     ports: ["8082:8082"]
-
-  stream-delivery-service:
-    build:
-      context: ..
-      dockerfile: services/go/stream-delivery-service/Dockerfile
-    environment:
-      DELIVERY_ADDR: ":8086"
-      NATS_URL: "nats://nats:4222"
-    depends_on:
-      - nats
-    ports: ["8086:8086"]
 
   session-service:
     build:
       context: ..
       dockerfile: services/go/session-service/Dockerfile
     environment:
+      <<: *go-env
       SESSION_ADDR: ":8083"
-      REDIS_ADDR: "redis:6379"
       STREAM_DELIVERY_URL: "http://stream-delivery-service:8086"
-    depends_on:
-      - redis
-      - stream-delivery-service
+    depends_on: [redis, postgres, stream-delivery-service, tempo]
     ports: ["8083:8083"]
 
   tool-permission-service:
@@ -89,21 +121,159 @@ services:
       context: ..
       dockerfile: services/go/tool-permission-service/Dockerfile
     environment:
+      <<: *go-env
       PERMISSION_ADDR: ":8084"
-      REDIS_ADDR: "redis:6379"
-      NATS_URL: "nats://nats:4222"
-    depends_on:
-      - redis
-      - nats
+    depends_on: [redis, postgres, nats, tempo]
     ports: ["8084:8084"]
+
+  agent-runtime-control-plane:
+    build:
+      context: ..
+      dockerfile: services/go/agent-runtime-control-plane/Dockerfile
+    environment:
+      <<: *go-env
+      RUNTIME_ADDR: ":8085"
+      MODEL_ADAPTER_URL: "http://model-adapter-service:8091"
+    depends_on: [nats, tempo, model-adapter-service]
+    ports: ["8085:8085"]
+
+  stream-delivery-service:
+    build:
+      context: ..
+      dockerfile: services/go/stream-delivery-service/Dockerfile
+    environment:
+      <<: *go-env
+      DELIVERY_ADDR: ":8086"
+    depends_on: [nats, redis, tempo]
+    ports: ["8086:8086"]
 
   audit-log-service:
     build:
       context: ..
       dockerfile: services/go/audit-log-service/Dockerfile
     environment:
+      <<: *go-env
       AUDIT_ADDR: ":8087"
-      NATS_URL: "nats://nats:4222"
-    depends_on:
-      - nats
+    depends_on: [nats, postgres, tempo]
     ports: ["8087:8087"]
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  PYTHON OFFLINE TIER
+  # ═══════════════════════════════════════════════════════════════════
+  offline-knowledge-service:
+    build:
+      context: ..
+      dockerfile: services/python/offline_knowledge_service/Dockerfile
+    environment:
+      # 下游存储
+      QDRANT_URL: "http://qdrant:6333"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      MINIO_ENDPOINT: "minio:9000"
+      # 事件总线
+      NATS_URL: "nats://nats:4222"
+      # embedding 模型（通过 model-adapter /v1/embeddings 调用）
+      MODEL_ADAPTER_URL: "http://model-adapter-service:8091"
+      EMBEDDING_MODEL: "bge-large-zh-v1.5"
+      # 分块参数
+      CHUNK_SIZE: "512"
+      CHUNK_OVERLAP: "64"
+      EMBEDDING_BATCH_SIZE: "32"
+      MAX_CHUNKS_PER_INGEST: "2048"
+    depends_on: [qdrant, opensearch, minio, nats, model-adapter-service]
+    ports: ["8092:8092"]
+
+  model-adapter-service:
+    build:
+      context: ..
+      dockerfile: services/python/model_adapter_service/Dockerfile
+    ports: ["8091:8091"]
+
+  summarization-service:
+    build:
+      context: ..
+      dockerfile: services/python/summarization_service/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+    depends_on: [nats]
+    ports: ["8093:8093"]
+
+  evaluation-batch-service:
+    build:
+      context: ..
+      dockerfile: services/python/evaluation_batch_service/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+    depends_on: [nats]
+    ports: ["8094:8094"]
+
+  document-pipeline-service:
+    build:
+      context: ..
+      dockerfile: services/python/document_pipeline_service/Dockerfile
+    environment:
+      # 事件总线
+      NATS_URL: "nats://nats:4222"
+      # MinIO 对象存储
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "minio"
+      MINIO_SECRET_KEY: "minio123"
+      MINIO_BUCKET: "agenthub"
+      MINIO_SECURE: "false"
+      # 抽取限制
+      MAX_EXTRACT_CHARS: "500000"
+    depends_on: [nats, minio]
+    ports: ["8095:8095"]
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  RUST HIGH-PERFORMANCE CORES
+  # ═══════════════════════════════════════════════════════════════════
+  stream-core:
+    build:
+      context: ..
+      dockerfile: services/rust/crates/stream-core/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+      STREAM_CORE_ADDR: "0.0.0.0:8101"
+      RUST_LOG: "info,stream_core=info"
+      # chunk 合并策略：12 个 chunk / 120ms / 8KB 触发 flush
+      SC_FLUSH_MAX_CHUNKS: "12"
+      SC_FLUSH_MAX_INTERVAL_MS: "120"
+      SC_FLUSH_MAX_BYTES: "8192"
+      # 背压窗口：1024 容量，满时丢弃最旧
+      SC_BP_CAPACITY: "1024"
+      SC_BP_POLICY: "drop_oldest"
+      # 慢消费者降级：64 容量，lag>16 触发，丢弃最旧，90s 无 drain 回收
+      SC_CONSUMER_CAPACITY: "64"
+      SC_CONSUMER_LAG_THRESHOLD: "16"
+      SC_CONSUMER_POLICY: "drop_oldest"
+      SC_CONSUMER_IDLE_TIMEOUT_SECS: "90"
+    depends_on: [nats, tempo]
+    ports: ["8101:8101"]
+
+  retrieval-core:
+    build:
+      context: ..
+      dockerfile: services/rust/crates/retrieval-core/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+      RETRIEVAL_CORE_ADDR: "0.0.0.0:8102"
+      RUST_LOG: "info,retrieval_core=info"
+      # 下游依赖
+      QDRANT_URL: "http://qdrant:6333"
+      OPENSEARCH_URL: "http://opensearch:9200"
+      MODEL_ADAPTER_URL: "http://model-adapter-service:8091"
+      EMBEDDING_MODEL: "bge-large-zh-v1.5"
+      # 超时（单源 500ms / embedding 300ms / rerank 400ms）
+      RC_SOURCE_TIMEOUT_MS: "500"
+      RC_EMBEDDING_TIMEOUT_MS: "300"
+      RC_RERANK_TIMEOUT_MS: "400"
+      RC_HTTP_TIMEOUT_MS: "2000"
+      # rerank：取 top-20 候选送精排，默认开启（model-adapter 未实现时自动降级）
+      RC_RERANK_ENABLED: "true"
+      RC_RERANK_TOP_N: "20"
+      # 融合：RRF k=60，freshness 半衰期 30 天，每源拉 50 条
+      RC_FUSION_RRF_K: "60"
+      RC_FUSION_FRESHNESS_HALF_LIFE_DAYS: "30"
+      RC_FUSION_PER_SOURCE_LIMIT: "50"
+    depends_on: [nats, qdrant, opensearch, model-adapter-service, tempo]
+    ports: ["8102:8102"]

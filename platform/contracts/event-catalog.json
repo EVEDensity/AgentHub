@@ -114,5 +114,71 @@
         ]
       }
     }
+  },
+  "knowledge": {
+    "ingest_requested_event": {
+      "event_type": "knowledge.ingest.requested",
+      "payload": {
+        "request_id": "uuid",
+        "tenant_id": "tenant-a",
+        "source_id": "doc-xyz-001",
+        "collection": "docs",
+        "content_type": "text/markdown",
+        "content": "文档全文或片段……",
+        "metadata": {
+          "title": "架构设计文档",
+          "author": "user-123",
+          "url": "s3://agenthub/docs/arch.md"
+        },
+        "chunking": {
+          "strategy": "recursive",
+          "chunk_size": 512,
+          "overlap": 64
+        }
+      }
+    },
+    "ingest_completed_event": {
+      "event_type": "knowledge.ingest.completed",
+      "payload": {
+        "request_id": "uuid",
+        "tenant_id": "tenant-a",
+        "source_id": "doc-xyz-001",
+        "collection": "docs",
+        "chunks_created": 12,
+        "points_upserted": 12,
+        "embedding_dim": 384,
+        "elapsed_ms": 842,
+        "degraded": false,
+        "degradation_reason": null
+      }
+    },
+    "document_requested_event": {
+      "event_type": "knowledge.document.requested",
+      "payload": {
+        "request_id": "uuid",
+        "tenant_id": "tenant-a",
+        "source_id": "doc-xyz-001",
+        "file_ref": "minio://agenthub/docs/doc-xyz-001.pdf",
+        "file_type": "pdf",
+        "collection": "docs",
+        "metadata": {
+          "title": "架构设计文档",
+          "author": "user-123"
+        }
+      }
+    },
+    "document_completed_event": {
+      "event_type": "knowledge.document.completed",
+      "payload": {
+        "request_id": "uuid",
+        "tenant_id": "tenant-a",
+        "source_id": "doc-xyz-001",
+        "file_type": "pdf",
+        "extracted_chars": 15234,
+        "ingest_published": true,
+        "degraded": false,
+        "degradation_reason": null
+      }
+    }
   }
 }

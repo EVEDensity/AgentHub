@@ -8,4 +8,9 @@ use (
 	./agent-runtime-control-plane
 	./stream-delivery-service
 	./audit-log-service
+	./shared/obs
+	./shared/state
+	./shared/eventbus
+	./shared/events
+	./shared/db
 )

@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/agenthub/platform/shared/eventbus"
 	"github.com/agenthub/platform/shared/events"
+	"github.com/agenthub/platform/shared/obs"
 )
 
 type ServiceProfile struct {
@@ -58,6 +60,30 @@ func main() {
 	}
 	defer bus.Close()
 
+	shutdown, err := obs.InitTracer(context.Background(), getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "gateway-service")
+	if err != nil {
+		log.Fatalf("init tracer: %v", err)
+	}
+	defer shutdown(context.Background())
+
+	// WebSocket hub: per-instance connection registry. The broadcast consumer
+	// fans stream events out to connected clients by session_id.
+	hub := NewHub()
+	jwtSecret := []byte(getenv("JWT_SECRET", ""))
+	instance := getenv("HOSTNAME", "local")
+	if _, err := bus.Subscribe("gateway-stream-"+instance, eventbus.StreamEventsSubject, func(env events.Envelope) {
+		obs.IncEventReceived("gateway-service", string(env.EventType))
+		dispatchStreamEvent(context.Background(), hub, env)
+	}); err != nil {
+		log.Fatalf("subscribe stream events for ws fanout: %v", err)
+	}
+	if _, err := bus.Subscribe("gateway-runtime-"+instance, eventbus.AgentRuntimeResultsSubject, func(env events.Envelope) {
+		obs.IncEventReceived("gateway-service", string(env.EventType))
+		dispatchStreamEvent(context.Background(), hub, env)
+	}); err != nil {
+		log.Fatalf("subscribe runtime results for ws fanout: %v", err)
+	}
+
 	profile := ServiceProfile{
 		Service: "gateway-service",
 		Layer:   "go-ingress",
@@ -83,6 +109,15 @@ func main() {
 	}
 	profile.SampleEvent.EventID = "evt-demo-0001"
 
+	// Four-layer rate limiting: user, tenant, agent, tool. Each layer has
+	// independent capacity and rate. Set any rate to 0 to disable that layer.
+	rl := NewMultiLayerRateLimiter(map[LimitLayer]LayerConfig{
+		LayerUser:   {Capacity: getenvFloat("RATE_LIMIT_USER_CAPACITY", 50), Rate: getenvFloat("RATE_LIMIT_USER_RATE", 10)},
+		LayerTenant: {Capacity: getenvFloat("RATE_LIMIT_TENANT_CAPACITY", 200), Rate: getenvFloat("RATE_LIMIT_TENANT_RATE", 100)},
+		LayerAgent:  {Capacity: getenvFloat("RATE_LIMIT_AGENT_CAPACITY", 50), Rate: getenvFloat("RATE_LIMIT_AGENT_RATE", 20)},
+		LayerTool:   {Capacity: getenvFloat("RATE_LIMIT_TOOL_CAPACITY", 20), Rate: getenvFloat("RATE_LIMIT_TOOL_RATE", 5)},
+	})
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -92,6 +127,18 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(profile)
 	})
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		serveWS(hub, jwtSecret, w, r)
+	})
+	mux.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"sessions":          hub.sessionCount(),
+				"connections":       hub.clientCount(),
+				"jwt_enforced":      len(jwtSecret) > 0,
+				"rate_limit_buckets": rl.ActiveBuckets(),
+			})
+		})
 	mux.HandleFunc("/publish", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -133,6 +180,7 @@ func main() {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		obs.IncEventPublished("gateway-service", string(event.EventType))
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(PublishResult{Published: true, Subject: eventbus.SessionEventsSubject, Event: event})
@@ -182,19 +230,39 @@ func main() {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		obs.IncEventPublished("gateway-service", string(event.EventType))
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(PublishResult{Published: true, Subject: eventbus.ToolPermissionRequestsSubject, Event: event})
 	})
 
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		obs.MetricsHandler().ServeHTTP(w, r)
+	})
+
 	addr := getenv("GATEWAY_ADDR", ":8081")
-	log.Printf("gateway-service listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Printf("gateway-service listening on %s (rate limit: user=%.0f/%.0f tenant=%.0f/%.0f agent=%.0f/%.0f tool=%.0f/%.0f)",
+		addr,
+		getenvFloat("RATE_LIMIT_USER_CAPACITY", 50), getenvFloat("RATE_LIMIT_USER_RATE", 10),
+		getenvFloat("RATE_LIMIT_TENANT_CAPACITY", 200), getenvFloat("RATE_LIMIT_TENANT_RATE", 100),
+		getenvFloat("RATE_LIMIT_AGENT_CAPACITY", 50), getenvFloat("RATE_LIMIT_AGENT_RATE", 20),
+		getenvFloat("RATE_LIMIT_TOOL_CAPACITY", 20), getenvFloat("RATE_LIMIT_TOOL_RATE", 5))
+	handler := obs.Middleware("gateway-service", rateLimitMiddleware(rl, mux))
+	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getenvFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
 	}
 	return fallback
 }

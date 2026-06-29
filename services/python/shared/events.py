@@ -27,6 +27,10 @@ class EventType(str, Enum):
     RETRIEVAL_QUERY_REQUESTED = "retrieval.query.requested"
     RETRIEVAL_QUERY_COMPLETED = "retrieval.query.completed"
     RETRIEVAL_FUSION_COMPLETED = "retrieval.fusion.completed"
+    KNOWLEDGE_INGEST_REQUESTED = "knowledge.ingest.requested"
+    KNOWLEDGE_INGEST_COMPLETED = "knowledge.ingest.completed"
+    KNOWLEDGE_DOCUMENT_REQUESTED = "knowledge.document.requested"
+    KNOWLEDGE_DOCUMENT_COMPLETED = "knowledge.document.completed"
     AUDIT_SECURITY_EVENT = "audit.security.event"
 
 

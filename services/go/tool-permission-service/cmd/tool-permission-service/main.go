@@ -8,8 +8,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/agenthub/platform/shared/db"
 	"github.com/agenthub/platform/shared/eventbus"
 	"github.com/agenthub/platform/shared/events"
+	"github.com/agenthub/platform/shared/obs"
 	"github.com/agenthub/platform/shared/state"
 )
 
@@ -67,7 +69,25 @@ func main() {
 	}
 	defer bus.Close()
 
-	if _, err := bus.Subscribe(eventbus.ToolPermissionRequestsSubject, func(env events.Envelope) {
+	shutdown, err := obs.InitTracer(context.Background(), getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "tool-permission-service")
+	if err != nil {
+		log.Fatalf("init tracer: %v", err)
+	}
+	defer shutdown(context.Background())
+
+	dsn := getenv("DATABASE_DSN", "postgres://agenthub:agenthub@localhost:5432/agenthub?sslmode=disable")
+	pool, err := db.Connect(context.Background(), dsn)
+	if err != nil {
+		log.Fatalf("connect db: %v", err)
+	}
+	defer pool.Close()
+	if err := pool.Migrate(context.Background()); err != nil {
+		log.Fatalf("run db migrations: %v", err)
+	}
+	log.Printf("tool-permission-service db migrated")
+
+	if _, err := bus.QueueSubscribe("tool-permission-service", "tool-permission-service", eventbus.ToolPermissionRequestsSubject, func(env events.Envelope) {
+		obs.IncEventReceived("tool-permission-service", string(env.EventType))
 		if env.EventType != events.EventToolPermissionRequested {
 			return
 		}
@@ -94,6 +114,7 @@ func main() {
 			return
 		}
 		_ = store.Expire(ctx, key, time.Duration(ttlSecs)*time.Second)
+		persistPermissionRequest(ctx, pool, env, requestID, toolName, riskLevel, reason, arguments, ttlSecs)
 		log.Printf("persisted permission request request_id=%s tool=%s", requestID, toolName)
 	}); err != nil {
 		log.Fatalf("subscribe permission requests: %v", err)
@@ -189,11 +210,14 @@ func main() {
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		obs.IncEventPublished("tool-permission-service", string(resolvedEvent.EventType))
 		if err := bus.PublishEnvelope(ctx, eventbus.AuditSecurityEventsSubject, auditEvent); err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
+		obs.IncEventPublished("tool-permission-service", string(auditEvent.EventType))
+		updatePermissionDecision(ctx, pool, req.RequestID, req.Decision, req.DecidedBy)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ok":             true,
 			"key":            key,
@@ -225,7 +249,11 @@ func main() {
 
 	addr := getenv("PERMISSION_ADDR", ":8084")
 	log.Printf("tool-permission-service listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		obs.MetricsHandler().ServeHTTP(w, r)
+	})
+	handler := obs.Middleware("tool-permission-service", mux)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
 func buildDecisionEvents(req PermissionDecision, data map[string]string) (events.Envelope, events.Envelope) {
@@ -312,6 +340,38 @@ func jsonStringValue(value any) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// persistPermissionRequest upserts a permission request into PG for the audit
+// trail. Redis stays the hot store for TTL-based expiry; PG is the source of
+// truth that survives Redis eviction.
+func persistPermissionRequest(ctx context.Context, pool *db.Pool, env events.Envelope, requestID, toolName, riskLevel, reason, arguments string, ttlSecs int) {
+	if pool == nil {
+		return
+	}
+	_, err := pool.Exec(ctx, `
+		INSERT INTO platform_permission_requests
+			(id, tenant_id, session_id, trace_id, actor_id, tool_name, risk_level, reason, arguments_json, decision, timeout_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10)
+		ON CONFLICT (id) DO NOTHING`,
+		requestID, env.TenantID, env.SessionID, env.TraceID, env.ActorID, toolName, riskLevel, reason, arguments, ttlSecs)
+	if err != nil {
+		log.Printf("persist permission request to db failed id=%s: %v", requestID, err)
+	}
+}
+
+// updatePermissionDecision records the final decision on a permission request.
+func updatePermissionDecision(ctx context.Context, pool *db.Pool, requestID, decision, decidedBy string) {
+	if pool == nil {
+		return
+	}
+	_, err := pool.Exec(ctx, `
+		UPDATE platform_permission_requests
+		SET decision=$1, decided_by=$2, decided_at=now()
+		WHERE id=$3`, decision, decidedBy, requestID)
+	if err != nil {
+		log.Printf("update permission decision in db failed id=%s: %v", requestID, err)
+	}
 }
 
 func getenv(key, fallback string) string {

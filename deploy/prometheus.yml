@@ -1,0 +1,47 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # ── Go online tier ──────────────────────────────────────────────
+  - job_name: "go-services"
+    static_configs:
+      - targets:
+          - "gateway-service:8081"
+          - "realtime-orchestrator:8082"
+          - "session-service:8083"
+          - "tool-permission-service:8084"
+          - "agent-runtime-control-plane:8085"
+          - "stream-delivery-service:8086"
+          - "audit-log-service:8087"
+        labels:
+          tier: "online"
+
+  # ── Python offline tier ─────────────────────────────────────────
+  - job_name: "python-services"
+    static_configs:
+      - targets:
+          - "model-adapter-service:8091"
+          - "offline-knowledge-service:8092"
+          - "summarization-service:8093"
+          - "evaluation-batch-service:8094"
+          - "document-pipeline-service:8095"
+        labels:
+          tier: "offline"
+
+  # ── Rust high-performance cores ─────────────────────────────────
+  - job_name: "rust-cores"
+    static_configs:
+      - targets:
+          - "stream-core:8101"
+          - "retrieval-core:8102"
+        labels:
+          tier: "core"
+
+  # ── Infrastructure ──────────────────────────────────────────────
+  - job_name: "infrastructure"
+    static_configs:
+      - targets:
+          - "nats:8222"
+        labels:
+          tier: "infra"

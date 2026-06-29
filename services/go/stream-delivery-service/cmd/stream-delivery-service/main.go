@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/agenthub/platform/shared/eventbus"
 	"github.com/agenthub/platform/shared/events"
+	"github.com/agenthub/platform/shared/obs"
+	"github.com/agenthub/platform/shared/state"
 )
 
 type DeliveryModes struct{ Modes []string `json:"modes"` }
@@ -27,9 +30,7 @@ func (s *SessionEventIndex) Add(e events.Envelope) { s.mu.Lock(); defer s.mu.Unl
 func (s *SessionEventIndex) Replay(sessionID, afterCursor, eventType, status string, limit int) []events.Envelope {
 	s.mu.RLock(); defer s.mu.RUnlock(); list := s.items[sessionID]; if len(list) == 0 { return []events.Envelope{} }
 	start := 0
-	if afterCursor != "" {
-		for i, item := range list { if item.EventID == afterCursor || stringValue(item.Payload["stream_id"]) == afterCursor { start = i + 1; break } }
-	}
+	if afterCursor != "" { for i, item := range list { if item.EventID == afterCursor || stringValue(item.Payload["stream_id"]) == afterCursor { start = i + 1; break } } }
 	filtered := make([]events.Envelope, 0, len(list))
 	for _, item := range list[start:] {
 		if eventType != "" && string(item.EventType) != eventType { continue }
@@ -42,28 +43,60 @@ func (s *SessionEventIndex) Replay(sessionID, afterCursor, eventType, status str
 
 func main() {
 	modes := DeliveryModes{Modes: []string{"websocket", "sse", "summary_fallback"}}
-	buffer, index := NewEventBuffer(200), NewSessionEventIndex(400)
+	streamBuf, runtimeBuf := NewEventBuffer(200), NewEventBuffer(100)
+	instance := getenv("HOSTNAME", "local")
+	store := state.Connect(getenv("REDIS_ADDR", "127.0.0.1:6379"))
+	defer func() { _ = store.Close() }()
 	bus, err := eventbus.Connect(getenv("NATS_URL", "nats://127.0.0.1:4222")); if err != nil { log.Fatalf("connect event bus: %v", err) }; defer bus.Close()
-	if _, err := bus.Subscribe(eventbus.StreamEventsSubject, func(env events.Envelope) { buffer.Add(env); index.Add(env); log.Printf("received stream event type=%s session=%s message=%s", env.EventType, env.SessionID, env.MessageID) }); err != nil { log.Fatalf("subscribe stream events: %v", err) }
+	shutdown, errTr := obs.InitTracer(context.Background(), getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "stream-delivery-service"); if errTr != nil { log.Fatalf("init tracer: %v", errTr) }; defer shutdown(context.Background())
+	if _, err := bus.Subscribe("stream-delivery-"+instance, eventbus.StreamEventsSubject, func(env events.Envelope) {
+		obs.IncEventReceived("stream-delivery-service", string(env.EventType)); streamBuf.Add(env)
+		if _, e := store.StreamAdd(context.Background(), env.TenantID, env.SessionID, env); e != nil { log.Printf("streamadd failed session=%s: %v", env.SessionID, e) }
+		log.Printf("received stream event type=%s session=%s message=%s", env.EventType, env.SessionID, env.MessageID)
+	}); err != nil { log.Fatalf("subscribe stream events: %v", err) }
+	if _, err := bus.Subscribe("stream-delivery-runtime-"+instance, eventbus.AgentRuntimeResultsSubject, func(env events.Envelope) {
+		obs.IncEventReceived("stream-delivery-service", string(env.EventType)); runtimeBuf.Add(env)
+		if _, e := store.StreamAdd(context.Background(), env.TenantID, env.SessionID, env); e != nil { log.Printf("streamadd failed session=%s: %v", env.SessionID, e) }
+		log.Printf("received runtime result type=%s session=%s message=%s", env.EventType, env.SessionID, env.MessageID)
+	}); err != nil { log.Fatalf("subscribe runtime results: %v", err) }
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK); _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("/delivery/modes", func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("Content-Type", "application/json"); _ = json.NewEncoder(w).Encode(modes) })
-	mux.HandleFunc("/streams/recent", func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("Content-Type", "application/json"); _ = json.NewEncoder(w).Encode(map[string]any{"subject": eventbus.StreamEventsSubject, "count": buffer.Len(), "events": buffer.Snapshot()}) })
+	mux.HandleFunc("/streams/recent", func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("Content-Type", "application/json"); _ = json.NewEncoder(w).Encode(map[string]any{"subject": eventbus.StreamEventsSubject, "count": streamBuf.Len(), "events": streamBuf.Snapshot()}) })
+	mux.HandleFunc("/runtime/results", func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("Content-Type", "application/json"); _ = json.NewEncoder(w).Encode(map[string]any{"subject": eventbus.AgentRuntimeResultsSubject, "count": runtimeBuf.Len(), "events": runtimeBuf.Snapshot()}) })
 	mux.HandleFunc("/streams/replay", func(w http.ResponseWriter, r *http.Request) {
-		sessionID := r.URL.Query().Get("session_id"); if sessionID == "" { w.WriteHeader(http.StatusBadRequest); _ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"}); return }
+		tenantID := r.URL.Query().Get("tenant_id"); sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" { w.WriteHeader(http.StatusBadRequest); _ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"}); return }
 		afterCursor, eventType, status, limit := r.URL.Query().Get("after_cursor"), r.URL.Query().Get("event_type"), r.URL.Query().Get("status"), parseLimit(r.URL.Query().Get("limit"), 50)
-		events := index.Replay(sessionID, afterCursor, eventType, status, limit)
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second); defer cancel()
+		entries, err := store.StreamRange(ctx, tenantID, sessionID, afterCursor, int64(limit))
+		if err != nil { w.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
+		out := make([]events.Envelope, 0, len(entries))
+		for _, e := range entries {
+			var env events.Envelope
+			if err := json.Unmarshal(e.Data, &env); err != nil { continue }
+			if eventType != "" && string(env.EventType) != eventType { continue }
+			if status != "" && stringValue(env.Payload["status"]) != status { continue }
+			out = append(out, env)
+		}
+		var nextCursor string; if len(entries) > 0 { nextCursor = entries[len(entries)-1].ID }
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"session_id": sessionID, "after_cursor": afterCursor, "event_type": eventType, "status": status, "count": len(events), "events": events})
+		_ = json.NewEncoder(w).Encode(map[string]any{"session_id": sessionID, "after_cursor": afterCursor, "next_cursor": nextCursor, "event_type": eventType, "status": status, "count": len(out), "events": out})
 	})
 	mux.HandleFunc("/streams/timeline", func(w http.ResponseWriter, r *http.Request) {
-		sessionID := r.URL.Query().Get("session_id"); if sessionID == "" { w.WriteHeader(http.StatusBadRequest); _ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"}); return }
-		events := index.Replay(sessionID, "", "", "", 200)
+		tenantID := r.URL.Query().Get("tenant_id"); sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" { w.WriteHeader(http.StatusBadRequest); _ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"}); return }
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second); defer cancel()
+		entries, err := store.StreamRange(ctx, tenantID, sessionID, "", 300)
+		if err != nil { w.WriteHeader(http.StatusBadGateway); _ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()}); return }
+		out := make([]events.Envelope, 0, len(entries))
+		for _, e := range entries { var env events.Envelope; if json.Unmarshal(e.Data, &env) == nil { out = append(out, env) } }
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"session_id": sessionID, "count": len(events), "events": events})
+		_ = json.NewEncoder(w).Encode(map[string]any{"session_id": sessionID, "count": len(out), "events": out})
 	})
 	mux.HandleFunc("/streams/sse", func(w http.ResponseWriter, r *http.Request) {
-		sessionID := r.URL.Query().Get("session_id"); if sessionID == "" { w.WriteHeader(http.StatusBadRequest); _ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"}); return }
+		tenantID := r.URL.Query().Get("tenant_id"); sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" { w.WriteHeader(http.StatusBadRequest); _ = json.NewEncoder(w).Encode(map[string]string{"error": "session_id is required"}); return }
 		flusher, ok := w.(http.Flusher); if !ok { http.Error(w, "streaming unsupported", http.StatusInternalServerError); return }
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -71,17 +104,22 @@ func main() {
 		ctx := r.Context(); cursor := r.URL.Query().Get("after_cursor")
 		ticker := time.NewTicker(700 * time.Millisecond); defer ticker.Stop()
 		for {
-			batch := index.Replay(sessionID, cursor, "", "", 20)
-			for _, env := range batch {
-				payload, _ := json.Marshal(env)
-				_, _ = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", env.EventID, env.EventType, payload)
-				cursor = env.EventID
+			rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			entries, err := store.StreamRange(rctx, tenantID, sessionID, cursor, 20); cancel()
+			if err == nil {
+				for _, e := range entries {
+					var env events.Envelope
+					if json.Unmarshal(e.Data, &env) != nil { continue }
+					_, _ = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", env.EventID, env.EventType, e.Data)
+					cursor = e.ID
+				}
 			}
 			flusher.Flush()
 			select { case <-ctx.Done(): return; case <-ticker.C: }
 		}
 	})
-	addr := getenv("DELIVERY_ADDR", ":8086"); log.Printf("stream-delivery-service listening on %s", addr); log.Fatal(http.ListenAndServe(addr, mux))
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) { obs.MetricsHandler().ServeHTTP(w, r) })
+	addr := getenv("DELIVERY_ADDR", ":8086"); log.Printf("stream-delivery-service listening on %s", addr); handler := obs.Middleware("stream-delivery-service", mux); log.Fatal(http.ListenAndServe(addr, handler))
 }
 
 func parseLimit(raw string, fallback int) int { if raw == "" { return fallback }; var parsed int; if _, err := fmt.Sscanf(raw, "%d", &parsed); err == nil && parsed > 0 { return parsed }; return fallback }

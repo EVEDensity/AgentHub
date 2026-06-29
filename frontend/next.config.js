@@ -3,6 +3,18 @@ const withBundleAnalyzer = process.env.ANALYZE === 'true'
   ? require('@next/bundle-analyzer')({ enabled: true })
   : (config) => config;
 
+// Dual-track migration: the frontend can route API traffic to either the legacy
+// Python monolith (port 8000) or the new Go gateway (port 8081).
+//   API_BACKEND=legacy  (default) → http://127.0.0.1:8000/api/*
+//   API_BACKEND=go                  → http://127.0.0.1:8081/api/*
+//   API_BACKEND_URL=http://host:port → custom URL (overrides the above)
+// The /platform/* path always routes to the Go gateway regardless of API_BACKEND,
+// so new platform features can coexist with legacy APIs during migration.
+const apiBackend = process.env.API_BACKEND || 'legacy';
+const legacyUrl = process.env.API_BACKEND_URL || 'http://127.0.0.1:8000';
+const goGatewayUrl = process.env.GO_GATEWAY_URL || 'http://127.0.0.1:8081';
+const apiDestination = apiBackend === 'go' ? goGatewayUrl : legacyUrl;
+
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
@@ -21,7 +33,10 @@ const nextConfig = {
   },
   async rewrites() {
     return [
-      { source: '/api/:path*', destination: 'http://127.0.0.1:8000/api/:path*' },
+      // /api/* routes to either legacy or Go based on API_BACKEND env.
+      { source: '/api/:path*', destination: `${apiDestination}/api/:path*` },
+      // /platform/* always routes to the Go gateway (new platform APIs).
+      { source: '/platform/:path*', destination: `${goGatewayUrl}/:path*` },
     ];
   },
   webpack: (config, { isServer, dev }) => {

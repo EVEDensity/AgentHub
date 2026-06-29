@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/agenthub/platform/shared/db"
+	"github.com/agenthub/platform/shared/obs"
 	"github.com/agenthub/platform/shared/state"
 )
 
@@ -49,6 +51,24 @@ func main() {
 			log.Printf("close redis: %v", err)
 		}
 	}()
+
+	shutdown, err := obs.InitTracer(context.Background(), getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "session-service")
+	if err != nil {
+		log.Fatalf("init tracer: %v", err)
+	}
+	defer shutdown(context.Background())
+
+	dsn := getenv("DATABASE_DSN", "postgres://agenthub:agenthub@localhost:5432/agenthub?sslmode=disable")
+	pool, err := db.Connect(context.Background(), dsn)
+	if err != nil {
+		log.Fatalf("connect db: %v", err)
+	}
+	defer pool.Close()
+	if err := pool.Migrate(context.Background()); err != nil {
+		log.Fatalf("run db migrations: %v", err)
+	}
+	log.Printf("session-service db migrated")
+
 	streamDeliveryBase := getenv("STREAM_DELIVERY_URL", "http://127.0.0.1:8086")
 	httpClient := &http.Client{Timeout: 3 * time.Second}
 
@@ -90,6 +110,7 @@ func main() {
 			return
 		}
 		_ = store.Expire(ctx, key, 24*time.Hour)
+		upsertSessionPresence(ctx, pool, req.TenantID, req.SessionID, req.UserID, req.Role)
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "key": key, "status": status})
 	})
 	mux.HandleFunc("/cursor", func(w http.ResponseWriter, r *http.Request) {
@@ -172,10 +193,79 @@ func main() {
 			"replay":        replay,
 		})
 	})
+	mux.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
+		tenantID := r.URL.Query().Get("tenant_id")
+		if tenantID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id is required"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		defer cancel()
+		rows, err := pool.Query(ctx, `
+			SELECT id, tenant_id, name, owner_id, type, visibility, status, created_at, updated_at
+			FROM platform_sessions
+			WHERE tenant_id=$1
+			ORDER BY created_at DESC
+			LIMIT 100`, tenantID)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+		type sess struct {
+			ID         string `json:"id"`
+			TenantID   string `json:"tenant_id"`
+			Name       string `json:"name"`
+			OwnerID    string `json:"owner_id"`
+			Type       string `json:"type"`
+			Visibility string `json:"visibility"`
+			Status     string `json:"status"`
+			CreatedAt  string `json:"created_at"`
+			UpdatedAt  string `json:"updated_at"`
+		}
+		out := make([]sess, 0, 50)
+		for rows.Next() {
+			var s sess
+			if err := rows.Scan(&s.ID, &s.TenantID, &s.Name, &s.OwnerID, &s.Type, &s.Visibility, &s.Status, &s.CreatedAt, &s.UpdatedAt); err == nil {
+				out = append(out, s)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"tenant_id": tenantID, "count": len(out), "sessions": out})
+	})
 
 	addr := getenv("SESSION_ADDR", ":8083")
 	log.Printf("session-service listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		obs.MetricsHandler().ServeHTTP(w, r)
+	})
+	handler := obs.Middleware("session-service", mux)
+	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+// upsertSessionPresence records the session row and the member row in PG so the
+// presence is durable across Redis evictions. Redis remains the hot read path.
+func upsertSessionPresence(ctx context.Context, pool *db.Pool, tenantID, sessionID, userID, role string) {
+	if pool == nil {
+		return
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO platform_sessions (id, tenant_id, owner_id)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET updated_at=now()`, sessionID, tenantID, userID); err != nil {
+		log.Printf("upsert session in db failed id=%s: %v", sessionID, err)
+	}
+	if role == "" {
+		role = "member"
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO platform_session_members (session_id, tenant_id, user_id, role)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (session_id, user_id) DO NOTHING`, sessionID, tenantID, userID, role); err != nil {
+		log.Printf("upsert session member in db failed session=%s user=%s: %v", sessionID, userID, err)
+	}
 }
 
 func getenv(key, fallback string) string {
