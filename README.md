@@ -219,7 +219,7 @@ AgentHub stands on the shoulders of giants:
 ---
 
 <p align="center">
-  <sub>Built with ❤️ by <a href="https://github.com/Density">Density</a> and the AgentHub community</sub>
+  <sub>Built with ❤️ by <a href="https://github.com/EVEDensity">Density</a> and the AgentHub community</sub>
 </p>
 
 ## 🌟 Contributors
