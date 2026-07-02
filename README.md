@@ -219,7 +219,7 @@ AgentHub stands on the shoulders of giants:
 ---
 
 <p align="center">
-  <sub>Built with ❤️ by <a href="https://github.com/Density">Density</a> and the AgentHub community</sub>
+  <sub>Built with ❤️ by <a href="https://github.com/EVEDensity">Density</a> and the AgentHub community</sub>
 </p>
 
 ## 🌟 Contributors
@@ -243,3 +243,4 @@ If you find AgentHub useful, **please give it a star** — it really helps other
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
  </picture>
 </a>
+
