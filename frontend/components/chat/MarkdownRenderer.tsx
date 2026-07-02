@@ -1,4 +1,4 @@
-import { useState, type JSX, type ReactNode } from 'react';
+import { memo, useMemo, useState, type JSX, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import InteractiveCodeBlock from './InteractiveCodeBlock';
@@ -96,7 +96,7 @@ interface TableContext {
  * - 表格：DataTable（识别 Markdown 表格并提供复制/下载/新窗口打开）
  * - 标题/段落/列表/引用/链接/代码高亮等
  */
-export default function MarkdownRenderer({
+const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   onRunCode,
   runningCodeKey,
@@ -137,11 +137,10 @@ export default function MarkdownRenderer({
     };
   };
 
-  return (
-    <div className={`markdown-renderer ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
+  // Memoize the components object to prevent ReactMarkdown from reconciling
+  // on every parent re-render — the components only depend on references,
+  // onRunCode, and runningCodeKey.
+  const memoizedComponents = useMemo(() => ({
           /**
            * 代码节点
            */
@@ -327,10 +326,20 @@ export default function MarkdownRenderer({
           strong({ children }: any) {
             return <strong className="font-semibold text-warm-900">{children}</strong>;
           },
-        }}
+        }),
+    [references, onRunCode, runningCodeKey],
+  );
+
+  return (
+    <div className={`markdown-renderer ${className}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={memoizedComponents}
       >
         {content}
       </ReactMarkdown>
     </div>
   );
-}
+});
+
+export default MarkdownRenderer;

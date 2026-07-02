@@ -1,5 +1,8 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import type { Agent, AttachedFile, FileReference, SkillMeta, WorkflowSummary } from '../../types';
+import { MessageSquareQuote } from 'lucide-react';
+import type { Agent, AttachedFile, FileReference, QuoteReference, SkillMeta, WorkflowSummary } from '../../types';
+import { PLATFORM_LABELS, PLATFORM_COLORS } from '../../types';
+import PermissionModePopover, { type ExecPermission } from './PermissionModePopover';
 
 const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]; mimePattern: RegExp }> = {
   code: { label: 'Code', extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'], mimePattern: /^(text\/|\b(?:javascript|typescript|json)\b)/ },
@@ -7,6 +10,7 @@ const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]
   image: { label: 'Image', extensions: ['png','jpg','jpeg','gif','svg','webp','bmp','ico'], mimePattern: /^image\// },
   archive: { label: 'Archive', extensions: ['zip','rar','7z','tar','gz','bz2','xz'], mimePattern: /^(application\/zip|application\/x-rar|application\/x-7z|application\/gzip|application\/x-tar)/ },
   spreadsheet: { label: 'Sheet', extensions: ['xlsx','xls','csv','tsv'], mimePattern: /^(application\/vnd\.(ms-excel|openxmlformats-officedocument\.spreadsheetml)|text\/csv)/ },
+  presentation: { label: 'Slide', extensions: ['pptx','ppt'], mimePattern: /^application\/vnd\.(ms-powerpoint|openxmlformats-officedocument\.presentationml)/ },
   config: { label: 'Config', extensions: ['json','yaml','yml','xml','toml','ini','cfg','env','conf','cnf','editorconfig','gitignore','dockerfile','makefile','prisma','graphql','proto'], mimePattern: /^(application\/json|application\/xml|text\/(xml|yaml|toml))/ },
   unknown: { label: 'File', extensions: [], mimePattern: /^$/ },
 };
@@ -54,6 +58,8 @@ function FileIcon({ category, size }: { category: string; size: number }) {
       return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>;
     case 'spreadsheet':
       return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>;
+    case 'presentation':
+      return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>;
     case 'config':
       return <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>;
     default:
@@ -97,6 +103,9 @@ interface ChatInputProps {
    * 不传则芯片仅展示用，不可点击。
    */
   onJumpToReference?: (ref: FileReference) => void;
+  quoteReferences?: QuoteReference[];
+  onRemoveQuoteReference?: (index: number) => void;
+  onClearAllQuoteReferences?: () => void;
   onInsertMention: (agentId: string) => void;
   onInsertAllMentions: () => void;
   onInsertWorkflow: (wf: WorkflowSummary) => void;
@@ -104,6 +113,15 @@ interface ChatInputProps {
   onMentionSearchChange: (q: string) => void;
   onMentionActiveIndexChange: (idx: number) => void;
   onRiskLevelChange: (level: string) => void;
+  // ── 执行权限 ──
+  execPermission: ExecPermission;
+  onExecPermissionChange: (mode: ExecPermission) => void;
+  // ── 自动回复：无@Agent 时是否用默认Agent回复 ──
+  autoReply: boolean;
+  onAutoReplyChange: (mode: boolean) => void;
+  // ── 观察者模式 ──
+  userRole?: string;
+  memberCount?: number;
 }
 
 const ChatInput = memo(function ChatInput({
@@ -115,7 +133,16 @@ const ChatInput = memo(function ChatInput({
   onInsertMention, onInsertAllMentions, onInsertWorkflow, onInsertSkill,
   onMentionSearchChange, onMentionActiveIndexChange, onRiskLevelChange,
   fileReferences, onRemoveReference, onClearAllReferences, onJumpToReference,
+  quoteReferences, onRemoveQuoteReference, onClearAllQuoteReferences,
+  execPermission, onExecPermissionChange,
+  autoReply, onAutoReplyChange,
+  userRole, memberCount,
 }: ChatInputProps) {
+  // ── Observer mode detection ──────────────────────────────────────
+  // Observers in multi-user sessions (≥2 members) have restricted input:
+  // plain text only — no @mentions, #workflows, or /skills.
+  const isObserverInMultiUser = userRole === 'viewer' && (memberCount ?? 0) > 1;
+
   // Emoji popover state. The panel is positioned via fixed offsets so
   // it always lands above the toolbar, regardless of scroll position.
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -141,6 +168,17 @@ const ChatInput = memo(function ChatInput({
       document.removeEventListener('keydown', onEsc);
     };
   }, [emojiOpen]);
+
+  // Auto-scroll to keep the active mention item visible during keyboard navigation
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const container = mentionPanelRef.current;
+    if (!container) return;
+    const el = container.querySelector(`[data-mention-index="${mentionActiveIndex}"]`);
+    if (el) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [mentionActiveIndex, mentionOpen]);
 
   function handleEmojiSelect(emoji: string) {
     const ta = textareaRef.current;
@@ -194,10 +232,23 @@ const ChatInput = memo(function ChatInput({
     }
   }
 
-  const canSend = input.trim().length > 0 || attachedFiles.length > 0 || (fileReferences && fileReferences.length > 0);
+  const canSend = input.trim().length > 0 || attachedFiles.length > 0 || (fileReferences && fileReferences.length > 0) || (quoteReferences && quoteReferences.length > 0);
 
   return (
     <footer className="shrink-0 relative border-t border-warm-150 bg-white px-6 py-4">
+      {/* ── Observer-mode indicator ─────────────────────────────── */}
+      {isObserverInMultiUser && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+          <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+            <line x1="1" y1="12" x2="23" y2="12"/>
+          </svg>
+          <span className="font-medium">观察者模式</span>
+          <span className="text-amber-600">— 多人对话中仅允许发送纯文本消息</span>
+        </div>
+      )}
+
       {mentionOpen && mentionTrigger === '@' && (
         <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
           <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
@@ -210,6 +261,7 @@ const ChatInput = memo(function ChatInput({
               placeholder="搜索agent..."
               value={mentionSearch}
               onChange={(e) => { onMentionSearchChange(e.target.value); onMentionActiveIndexChange(0); }}
+              onKeyDown={onKeyDown as any}
               className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
@@ -236,6 +288,7 @@ const ChatInput = memo(function ChatInput({
                 filteredAgents.map((agent, idx) => (
                   <button
                     key={agent.agentId}
+                    data-mention-index={idx}
                     className={`rounded-lg px-3 py-2 text-left border ${
                       idx === mentionActiveIndex
                         ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
@@ -244,8 +297,59 @@ const ChatInput = memo(function ChatInput({
                     onClick={() => onInsertMention(agent.agentId)}
                     onMouseEnter={() => onMentionActiveIndexChange(idx)}
                   >
-                    <div className="font-medium text-warm-700">@{agent.agentId}</div>
-                    <div className="text-caption text-warm-500">{agent.domain} / {agent.rankLevel || 'L1'}</div>
+                    <div className="flex items-center gap-2">
+                      {/* Avatar or fallback initial */}
+                      {agent.avatarUrl ? (
+                        <img src={agent.avatarUrl} className="h-7 w-7 rounded-full object-cover shrink-0" alt={agent.displayName || agent.agentId} loading="lazy" decoding="async" />
+                      ) : (
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-warm-200 text-warm-600 text-xs font-bold">
+                          {(agent.displayName || agent.agentId)[0]}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium text-warm-700 text-sm">@{agent.agentId}</span>
+                          {agent.displayName && (
+                            <span className="text-xs text-warm-500">{agent.displayName}</span>
+                          )}
+                          {agent.agentId === 'Architect' && (
+                            <span
+                              className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm"
+                              title="主 Agent（PM / PMO）：负责任务拆解、调度、降级、仲裁与人工交接"
+                            >
+                              <svg
+                                className="h-2.5 w-2.5"
+                                viewBox="0 0 24 24"
+                                fill="currentColor"
+                                aria-hidden="true"
+                              >
+                                <path d="M5 16h14l1.5-9-4.5 3-4-6-4 6L3.5 7 5 16Zm0 2v2h14v-2H5Z" />
+                              </svg>
+                              主 Agent
+                            </span>
+                          )}
+                          <span
+                            className="rounded px-1.5 py-0.5 text-[9px] font-medium"
+                            style={{
+                              backgroundColor: (PLATFORM_COLORS[agent.adapterType] || '#6b7280') + '18',
+                              color: PLATFORM_COLORS[agent.adapterType] || '#6b7280',
+                            }}
+                          >
+                            {PLATFORM_LABELS[agent.adapterType] || agent.adapterType}
+                          </span>
+                        </div>
+                        {agent.capabilityTags && agent.capabilityTags.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {agent.capabilityTags.slice(0, 3).map((tag) => (
+                              <span key={tag} className="rounded bg-warm-100 px-1.5 py-0.5 text-[10px] text-warm-500">{tag}</span>
+                            ))}
+                            {agent.capabilityTags.length > 3 && (
+                              <span className="text-[10px] text-warm-400">+{agent.capabilityTags.length - 3}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </button>
                 ))
               )}
@@ -266,6 +370,7 @@ const ChatInput = memo(function ChatInput({
               placeholder="搜索工作流..."
               value={mentionSearch}
               onChange={(e) => { onMentionSearchChange(e.target.value); onMentionActiveIndexChange(0); }}
+              onKeyDown={onKeyDown as any}
               className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
@@ -277,6 +382,7 @@ const ChatInput = memo(function ChatInput({
                 filteredWorkflows.map((wf, idx) => (
                   <button
                     key={wf.routeId}
+                    data-mention-index={idx}
                     className={`w-full rounded-lg px-3 py-2 text-left border ${
                       idx === mentionActiveIndex
                         ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
@@ -316,6 +422,7 @@ const ChatInput = memo(function ChatInput({
               placeholder="搜索技能..."
               value={mentionSearch}
               onChange={(e) => { onMentionSearchChange(e.target.value); onMentionActiveIndexChange(0); }}
+              onKeyDown={onKeyDown as any}
               className="w-full rounded-lg border border-warm-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
@@ -336,6 +443,7 @@ const ChatInput = memo(function ChatInput({
                 filteredSkills.map((skill, idx) => (
                   <button
                     key={skill.name}
+                    data-mention-index={idx}
                     className={`w-full rounded-lg px-3 py-2 text-left border ${
                       idx === mentionActiveIndex
                         ? 'bg-primary-50 border-primary-300 ring-1 ring-primary-300'
@@ -407,7 +515,7 @@ const ChatInput = memo(function ChatInput({
           2) 工具栏层    – emoji / paperclip / skill icons on the left, Send on the right
           3) 输入框层    – multi-line textarea
       */}
-      <div className="grid gap-3 items-end overflow-hidden" style={{ gridTemplateColumns: '1fr auto' }}>
+      <div className="grid gap-3 items-end overflow-visible" style={{ gridTemplateColumns: '1fr auto' }}>
         <div className="flex flex-col gap-2 min-w-0">
           {/* ── Layer 1: attachment chips ─────────────────────── */}
           {attachedFiles.length > 0 && (
@@ -433,7 +541,7 @@ const ChatInput = memo(function ChatInput({
                         className={`group relative inline-flex items-center gap-1.5 rounded-lg pl-2 pr-1 py-1 text-xs border shrink-0 transition-colors ${chipClass}`}
                       >
                         {isImage ? (
-                          <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" />
+                          <img src={f.content} alt={f.name} className="h-7 w-7 rounded object-cover shrink-0" loading="lazy" decoding="async" />
                         ) : (
                           <span
                             className={`shrink-0 flex items-center justify-center h-5 w-5 rounded ${isUploading || isErrored ? 'bg-white/40' : 'bg-primary-500/20'}`}
@@ -533,6 +641,58 @@ const ChatInput = memo(function ChatInput({
                 </svg>
                 清空
               </button>
+            </div>
+          )}
+
+          {/* ── Layer 1.2: quote reference chips (quoted chat messages) ── */}
+          {quoteReferences && quoteReferences.length > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin max-w-full" style={{ scrollbarWidth: 'thin', scrollbarColor: '#93c5fd transparent' }}>
+                {quoteReferences.map((qr, i) => (
+                  <span
+                    key={qr.id}
+                    className="group shrink-0 inline-flex items-center gap-1 rounded-full pl-2 pr-1 py-1 text-[11px] font-medium bg-blue-50 border border-blue-200 text-blue-700 shadow-sm transition hover:border-blue-300"
+                    title={`引用自: ${qr.originalSender}\n${qr.originalTimestamp}\n\n${qr.quotedText}`}
+                  >
+                    <MessageSquareQuote className="h-3 w-3 shrink-0 text-blue-500" />
+                    <span className="max-w-[100px] truncate">{qr.originalSender}</span>
+                    <span className="max-w-[160px] truncate text-blue-400">
+                      {qr.quotedText.length > 30 ? `${qr.quotedText.slice(0, 30)}…` : qr.quotedText}
+                    </span>
+                    {qr.isFullMessage && (
+                      <span className="rounded bg-blue-100 px-1 text-[9px] text-blue-500 shrink-0">全文</span>
+                    )}
+                    {onRemoveQuoteReference && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onRemoveQuoteReference(i); }}
+                        className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-blue-400 hover:bg-blue-200 hover:text-blue-700 transition-colors"
+                        title="移除此引用"
+                        aria-label="移除此引用"
+                      >
+                        <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                        </svg>
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+              {onClearAllQuoteReferences && (
+                <button
+                  type="button"
+                  onClick={onClearAllQuoteReferences}
+                  className="shrink-0 inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-600 transition-colors hover:border-blue-300 hover:bg-blue-100"
+                  title="清空全部引用"
+                >
+                  <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6M14 11v6"/>
+                  </svg>
+                  清空引用
+                </button>
+              )}
             </div>
           )}
 
@@ -682,13 +842,44 @@ const ChatInput = memo(function ChatInput({
 
             <button
               type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-warm-500 transition-colors hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600"
-              title="Insert skill / tool"
-              onClick={() => onInsertSkill && filteredSkills[0] && onInsertSkill(filteredSkills[0])}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border border-transparent transition-colors ${
+                isObserverInMultiUser
+                  ? 'text-warm-300 cursor-not-allowed'
+                  : 'text-warm-500 hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600'
+              }`}
+              title={isObserverInMultiUser ? '观察者模式下不可使用技能' : 'Insert skill / tool'}
+              onClick={() => {
+                if (isObserverInMultiUser) return;
+                onInsertSkill && filteredSkills[0] && onInsertSkill(filteredSkills[0]);
+              }}
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
               </svg>
+            </button>
+
+            {/* 视觉分隔 — 在工具按钮组和权限模式之间留 1px breathing room */}
+            <span className="mx-0.5 h-5 w-px bg-warm-150" aria-hidden />
+
+            {/* 权限模式 popover（替代原独立 PermissionToggle 行） */}
+            <PermissionModePopover
+              value={execPermission}
+              onChange={onExecPermissionChange}
+            />
+
+            {/* 自动回复 toggle — 无@Agent时是否自动用默认Agent回复 */}
+            <button
+              type="button"
+              onClick={() => onAutoReplyChange(!autoReply)}
+              className={`relative inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border transition-all duration-150 ease-out ${
+                autoReply
+                  ? 'bg-teal-500 text-white border-teal-500 shadow-sm'
+                  : 'border-warm-200 text-warm-400 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-600'
+              }`}
+              title={autoReply ? '自动回复已启用：无@Agent时默认Agent回复' : '仅发送模式：无@Agent时只发送消息不回复。@Agent始终有效'}
+            >
+              <span className="text-sm leading-none">{autoReply ? '🤖' : '💬'}</span>
+              <span>{autoReply ? '自动' : '仅发送'}</span>
             </button>
           </div>
 
@@ -702,7 +893,11 @@ const ChatInput = memo(function ChatInput({
             onPaste={handlePaste}
             rows={3}
             className="input-field w-full resize-none"
-            placeholder={isStreaming ? 'AI is streaming, new message will interrupt current output...' : '输入消息，支持@Agent唤起智能体指令'}
+            placeholder={
+              isStreaming ? 'AI is streaming, new message will interrupt current output...'
+                : isObserverInMultiUser ? '观察者模式 — 仅可发送纯文本消息'
+                : '输入消息，支持@Agent唤起智能体指令'
+            }
           />
         </div>
 

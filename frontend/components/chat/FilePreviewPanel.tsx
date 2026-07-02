@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import type { FileReference, WorkspacePreviewTab } from '../../types';
 import MarkdownRenderer from './MarkdownRenderer';
 import ResizableDivider from '../common/ResizableDivider';
@@ -21,6 +21,7 @@ const EXT_LANG: Record<string, string> = {
   html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
   json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml', ini: 'ini',
   md: 'markdown', mdx: 'mdx', txt: 'text', cfg: 'ini', conf: 'ini',
+  pptx: 'pptx', ppt: 'ppt', docx: 'docx', doc: 'docx',
   dockerfile: 'dockerfile', env: 'bash', lock: 'text',
   vue: 'vue', svelte: 'svelte', astro: 'astro',
   tf: 'hcl', tfvars: 'hcl', proto: 'protobuf',
@@ -53,6 +54,20 @@ function isMarkdownFile(path: string): boolean {
 function isImageFile(path: string): boolean {
   const ext = path.split('.').pop()?.toLowerCase() || '';
   return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext);
+}
+
+function isPptxFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() || '';
+  return ['pptx', 'ppt'].includes(ext);
+}
+
+function isDocxFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() || '';
+  return ext === 'docx';
+}
+
+function isHtmlContent(tab: WorkspacePreviewTab): boolean {
+  return tab.contentType === 'html' || isPptxFile(tab.path) || isDocxFile(tab.path);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -327,6 +342,116 @@ function DiffPreview({ diffText, language, references }: {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// HTML / Rich Document Preview (PPTX, DOCX)
+// ══════════════════════════════════════════════════════════════════════════════
+
+function HtmlPreview({ htmlContent, slideCount, imageCount, textLength, totalChars, truncated }: {
+  htmlContent: string;
+  slideCount?: number;
+  imageCount?: number;
+  textLength?: number;
+  totalChars?: number;
+  truncated?: boolean;
+}): JSX.Element {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [iframeHeight, setIframeHeight] = useState(600);
+
+  // Generate a unique srcdoc that auto-sizes the iframe
+  const srcdoc = useMemo(() => {
+    // Inject a height-reporter script into the HTML
+    const reporter = `
+<script>
+(function(){
+  function reportHeight() {
+    var h = Math.max(
+      document.body.scrollHeight,
+      document.documentElement.scrollHeight,
+      document.body.offsetHeight,
+      document.documentElement.offsetHeight
+    );
+    window.parent.postMessage({type:'pptx-resize', height: h + 40}, '*');
+  }
+  window.addEventListener('load', reportHeight);
+  // Also report after images load
+  var imgs = document.querySelectorAll('img');
+  imgs.forEach(function(img) { img.addEventListener('load', reportHeight); });
+  // Fallback: report after a short delay
+  setTimeout(reportHeight, 500);
+  setTimeout(reportHeight, 1500);
+})();
+</script>`;
+    // Insert reporter before </body> or at the end
+    if (htmlContent.includes('</body>')) {
+      return htmlContent.replace('</body>', reporter + '</body>');
+    }
+    return htmlContent + reporter;
+  }, [htmlContent]);
+
+  // Listen for resize messages from the iframe
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'pptx-resize' && typeof e.data.height === 'number') {
+        setIframeHeight(Math.max(400, e.data.height));
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  // Reset height when content changes
+  useEffect(() => {
+    setIframeHeight(600);
+  }, [htmlContent]);
+
+  return (
+    <div className="flex flex-col h-full bg-[#f0f2f5]">
+      {/* Metadata bar */}
+      <div className="flex items-center gap-4 px-4 py-2 bg-white border-b border-warm-150 text-xs text-warm-500 shrink-0">
+        {slideCount != null && slideCount > 0 && (
+          <span className="flex items-center gap-1">
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <rect x="3" y="3" width="18" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+            <span>{slideCount} 张幻灯片</span>
+          </span>
+        )}
+        {imageCount != null && imageCount > 0 && (
+          <span className="flex items-center gap-1">
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" />
+            </svg>
+            <span>{imageCount} 张图片</span>
+          </span>
+        )}
+        {textLength != null && (
+          <span className="flex items-center gap-1">
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <polyline points="4 7 4 4 20 4 20 7" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" />
+            </svg>
+            <span>{textLength.toLocaleString()} 字符</span>
+          </span>
+        )}
+        {truncated && (
+          <span className="text-amber-500 font-medium">内容已截断（{(totalChars || 0).toLocaleString()} 字符）</span>
+        )}
+      </div>
+
+      {/* Sandboxed iframe */}
+      <div className="flex-1 overflow-auto">
+        <iframe
+          ref={iframeRef}
+          srcDoc={srcdoc}
+          sandbox="allow-scripts"
+          className="w-full border-0"
+          style={{ height: `${iframeHeight}px` }}
+          title="文档预览"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Selection Popover — floating "Add to chat" button
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -429,6 +554,14 @@ function FileTypeIcon({ language }: { language: string }): JSX.Element {
   if (language === 'markdown') {
     return <span className="text-[11px] font-bold text-warm-500 w-4 text-center">MD</span>;
   }
+  if (language === 'pptx' || language === 'ppt') {
+    return (
+      <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="#D24726" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="14" rx="2" />
+        <line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+      </svg>
+    );
+  }
   if (language === 'json') {
     return <span className="text-[10px] font-bold text-warm-500 w-4 text-center">{'{ }'}</span>;
   }
@@ -460,29 +593,136 @@ interface FileTreeNode {
   loaded?: boolean;
 }
 
+interface DndFileEntry {
+  file: File;
+  /** Relative path within the dropped folder, e.g. "src/utils/helper.py" */
+  relativePath: string;
+}
+
+// ── Drag-and-drop helpers ──────────────────────────────────────────────
+
+/** Recursively traverse a DataTransferItemList, resolving files and folders. */
+async function traverseDataTransferItems(
+  items: DataTransferItemList,
+): Promise<DndFileEntry[]> {
+  const entries: DndFileEntry[] = [];
+
+  async function walk(entry: FileSystemEntry, parentPath: string): Promise<void> {
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) => {
+        (entry as FileSystemFileEntry).file(resolve, reject);
+      });
+      const relPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+      entries.push({ file, relativePath: relPath });
+    } else if (entry.isDirectory) {
+      const dirEntry = entry as FileSystemDirectoryEntry;
+      const reader = dirEntry.createReader();
+      // readEntries may batch — loop until done
+      const children: FileSystemEntry[] = [];
+      let batch: FileSystemEntry[];
+      do {
+        batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
+          reader.readEntries(resolve, reject);
+        });
+        children.push(...batch);
+      } while (batch.length > 0);
+
+      const subPath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+      for (const child of children) {
+        await walk(child, subPath);
+      }
+    }
+  }
+
+  const itemList: DataTransferItem[] = [];
+  for (let i = 0; i < items.length; i++) itemList.push(items[i]);
+
+  for (const item of itemList) {
+    const entry = (item as any).webkitGetAsEntry?.() as FileSystemEntry | null;
+    if (entry) {
+      await walk(entry, '');
+    } else if (item.kind === 'file') {
+      // Fallback: plain file without directory info
+      const file = item.getAsFile();
+      if (file) entries.push({ file, relativePath: file.name });
+    }
+  }
+
+  return entries;
+}
+
+/** Extract DndFileEntry list from a folder <input>'s selected files. */
+function entriesFromFolderInput(files: FileList): DndFileEntry[] {
+  const entries: DndFileEntry[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    entries.push({
+      file: f,
+      relativePath: (f as any).webkitRelativePath || f.name,
+    });
+  }
+  return entries;
+}
+
+/** Extract DndFileEntry list from a files <input>'s selected files. */
+function entriesFromFileInput(files: FileList): DndFileEntry[] {
+  const entries: DndFileEntry[] = [];
+  for (let i = 0; i < files.length; i++) {
+    entries.push({ file: files[i], relativePath: files[i].name });
+  }
+  return entries;
+}
+
+// ── Component ──────────────────────────────────────────────────────────
+
 function WorkspaceFileTree({
   onOpenFile,
   width,
+  sessionId,
+  workspaceVersion = 0,
 }: {
   onOpenFile: (path: string) => void;
   width: number;
+  sessionId?: string;
+  workspaceVersion?: number;
 }): JSX.Element {
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Upload state
   const [uploading, setUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState<{ ok: number; fail: number; msg?: string } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{
+    total: number;
+    done: number;
+    ok: number;
+    fail: number;
+    currentFile?: string;
+  } | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<{
+    ok: number;
+    fail: number;
+    msg?: string;
+  } | null>(null);
+
+  // Drag-over state
+  const [isDragOver, setIsDragOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchDir = useCallback(async (subdir: string) => {
     setLoading(true);
     setError(null);
     try {
       const token = localStorage.getItem('agenthub_token') || '';
-      const url = subdir
-        ? `/api/files/workspace/list?subdir=${encodeURIComponent(subdir)}`
-        : '/api/files/workspace/list';
+      const params = new URLSearchParams();
+      if (subdir) params.set('subdir', subdir);
+      if (sessionId) params.set('session_id', sessionId);
+      const qs = params.toString();
+      const url = qs ? `/api/files/workspace/list?${qs}` : '/api/files/workspace/list';
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -498,111 +738,210 @@ function WorkspaceFileTree({
     } finally {
       setLoading(false);
     }
+  }, [sessionId]);
+
+  // Upload a single file — returns true on success
+  const uploadOne = useCallback(async (
+    file: File,
+    subdir: string,
+    token: string,
+  ): Promise<boolean> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const params = new URLSearchParams();
+      if (subdir) params.set('subdir', subdir);
+      if (sessionId) params.set('session_id', sessionId);
+      const qs = params.toString();
+      const url = qs ? `/api/files/workspace/upload?${qs}` : '/api/files/workspace/upload';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      if (!res.ok) {
+        let detail = '';
+        try { const errData = await res.json(); detail = errData.detail || ''; } catch { /* */ }
+        console.error('[WorkspaceUpload]', `${file.name}: ${res.status} ${detail || res.statusText}`);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[WorkspaceUpload]', `${file.name}: ${String(err)}`);
+      return false;
+    }
   }, []);
 
-  // Upload file to workspace
-  const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  // Batch upload with concurrency control
+  const uploadBatch = useCallback(async (
+    entries: DndFileEntry[],
+    token: string,
+  ) => {
+    if (entries.length === 0) return;
 
     setUploading(true);
-    setUploadStatus(null);
-    const token = localStorage.getItem('agenthub_token') || '';
-    let successCount = 0;
-    let failCount = 0;
+    setUploadProgress({ total: entries.length, done: 0, ok: 0, fail: 0 });
+
+    let ok = 0;
+    let fail = 0;
     const errors: string[] = [];
+    const CONCURRENCY = 3;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      try {
-        const formData = new FormData();
-        formData.append('file', file);
+    // Process in concurrent batches
+    for (let i = 0; i < entries.length; i += CONCURRENCY) {
+      const batch = entries.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (entry) => {
+          // Derive subdir from relativePath (strip filename)
+          const parts = entry.relativePath.split('/');
+          const fileName = parts.pop() || entry.file.name;
+          const subdir = parts.join('/');
 
-        const res = await fetch('/api/files/workspace/upload', {
-          method: 'POST',
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          body: formData,
-        });
+          // Create a File with the correct name if they differ
+          const uploadFile =
+            fileName !== entry.file.name
+              ? new File([entry.file], fileName, { type: entry.file.type })
+              : entry.file;
 
-        if (res.ok) {
-          successCount++;
-        } else {
-          failCount++;
-          let detail = '';
-          try {
-            const errData = await res.json();
-            detail = errData.detail || '';
-          } catch { /* ignore parse errors */ }
-          const msg = `${file.name}: ${res.status} ${detail || res.statusText}`;
-          errors.push(msg);
-          console.error('[WorkspaceUpload]', msg);
-        }
-      } catch (err) {
-        failCount++;
-        const msg = `${file.name}: ${String(err)}`;
-        errors.push(msg);
-        console.error('[WorkspaceUpload]', msg);
+          const success = await uploadOne(uploadFile, subdir, token);
+          return { success, name: entry.relativePath };
+        }),
+      );
+
+      for (const r of results) {
+        if (r.success) ok++;
+        else { fail++; errors.push(r.name); }
       }
+
+      setUploadProgress({
+        total: entries.length,
+        done: Math.min(i + CONCURRENCY, entries.length),
+        ok,
+        fail,
+        currentFile: batch[batch.length - 1]?.relativePath,
+      });
     }
 
     setUploading(false);
+    setUploadProgress(null);
     setUploadStatus({
-      ok: successCount,
-      fail: failCount,
+      ok,
+      fail,
       msg: errors.length > 0 ? errors.slice(0, 3).join('; ') : undefined,
     });
 
-    // Auto-clear status after 6s
-    if (failCount === 0) {
+    // Auto-clear success status after 6s; keep errors visible
+    if (fail === 0) {
       setTimeout(() => setUploadStatus(null), 6000);
     }
 
-    // Reset file input so the same file can be re-uploaded
-    if (fileInputRef.current) fileInputRef.current.value = '';
-
-    if (successCount > 0) {
-      // Refresh the tree
+    // Refresh tree if anything was uploaded successfully
+    if (ok > 0) {
       setTree([]);
       setExpandedDirs(new Set());
       const data = await fetchDir('');
       if (data?.files || data?.dirs) {
-        const nodes: FileTreeNode[] = [
-          ...(data.dirs || []).map((d: Record<string, unknown>) => ({
-            name: d.name as string, path: d.path as string, isDirectory: true, children: [], loaded: false,
-          })),
-          ...(data.files || []).map((f: Record<string, unknown>) => ({
-            name: f.name as string, path: f.path as string, isDirectory: false, size: f.size as number, language: f.language as string,
-          })),
-        ];
-        setTree(nodes);
+        setTree(buildRootNodes(data));
       }
     }
-  }, [fetchDir]);
+  }, [uploadOne, fetchDir]);
 
-  // Load root on mount
+  // ── Event handlers ──────────────────────────────────────────────────
+
+  /** File input (single/multiple files — no folder structure). */
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const token = localStorage.getItem('agenthub_token') || '';
+    const entries = entriesFromFileInput(files);
+    await uploadBatch(entries, token);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [uploadBatch]);
+
+  /** Folder input (webkitdirectory — preserves folder structure). */
+  const handleFolderUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const token = localStorage.getItem('agenthub_token') || '';
+    const entries = entriesFromFolderInput(files);
+    await uploadBatch(entries, token);
+    if (folderInputRef.current) folderInputRef.current.value = '';
+  }, [uploadBatch]);
+
+  // Drag-and-drop handlers
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer.types && e.dataTransfer.types.length > 0) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.dropEffect) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    dragCounterRef.current = 0;
+
+    if (uploading) return;
+
+    const items = e.dataTransfer.items;
+    if (!items || items.length === 0) return;
+
+    const token = localStorage.getItem('agenthub_token') || '';
+    const entries = await traverseDataTransferItems(items);
+    if (entries.length === 0) return;
+
+    await uploadBatch(entries, token);
+  }, [uploading, uploadBatch]);
+
+  // ── Tree helpers ────────────────────────────────────────────────────
+
+  function buildRootNodes(data: any): FileTreeNode[] {
+    return [
+      ...(data.dirs || []).map((d: Record<string, unknown>) => ({
+        name: d.name as string,
+        path: d.path as string,
+        isDirectory: true,
+        children: [],
+        loaded: false,
+      })),
+      ...(data.files || []).map((f: Record<string, unknown>) => ({
+        name: f.name as string,
+        path: f.path as string,
+        isDirectory: false,
+        size: f.size as number,
+        language: f.language as string,
+      })),
+    ];
+  }
+
+  // Load root on mount, and auto-refresh when workspace changes
   useEffect(() => {
     fetchDir('').then((data) => {
-      if (data?.files || data?.dirs) {
-        const nodes: FileTreeNode[] = [
-          ...(data.dirs || []).map((d: Record<string, unknown>) => ({
-            name: d.name as string,
-            path: d.path as string,
-            isDirectory: true,
-            children: [],
-            loaded: false,
-          })),
-          ...(data.files || []).map((f: Record<string, unknown>) => ({
-            name: f.name as string,
-            path: f.path as string,
-            isDirectory: false,
-            size: f.size as number,
-            language: f.language as string,
-          })),
-        ];
-        setTree(nodes);
-      }
+      if (data?.files || data?.dirs) setTree(buildRootNodes(data));
     });
-  }, [fetchDir]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchDir, workspaceVersion]);
 
   const handleToggleDir = useCallback(async (node: FileTreeNode) => {
     if (expandedDirs.has(node.path)) {
@@ -616,18 +955,10 @@ function WorkspaceFileTree({
       if (data) {
         const children: FileTreeNode[] = [
           ...(data.dirs || []).map((d: Record<string, unknown>) => ({
-            name: d.name as string,
-            path: d.path as string,
-            isDirectory: true,
-            children: [],
-            loaded: false,
+            name: d.name as string, path: d.path as string, isDirectory: true, children: [], loaded: false,
           })),
           ...(data.files || []).map((f: Record<string, unknown>) => ({
-            name: f.name as string,
-            path: f.path as string,
-            isDirectory: false,
-            size: f.size as number,
-            language: f.language as string,
+            name: f.name as string, path: f.path as string, isDirectory: false, size: f.size as number, language: f.language as string,
           })),
         ];
         setTree((prev) => {
@@ -643,24 +974,46 @@ function WorkspaceFileTree({
     onOpenFile(node.path);
   }, [onOpenFile]);
 
-  // Refresh
   const handleRefresh = useCallback(() => {
     setTree([]);
     setExpandedDirs(new Set());
     fetchDir('').then((data) => {
-      if (data?.files || data?.dirs) {
-        const nodes: FileTreeNode[] = [
-          ...(data.dirs || []).map((d: Record<string, unknown>) => ({
-            name: d.name as string, path: d.path as string, isDirectory: true, children: [], loaded: false,
-          })),
-          ...(data.files || []).map((f: Record<string, unknown>) => ({
-            name: f.name as string, path: f.path as string, isDirectory: false, size: f.size as number, language: f.language as string,
-          })),
-        ];
-        setTree(nodes);
-      }
+      if (data?.files || data?.dirs) setTree(buildRootNodes(data));
     });
   }, [fetchDir]);
+
+  // Delete a file or directory from the workspace
+  const handleDeleteItem = useCallback(async (nodePath: string, isDir: boolean) => {
+    const label = isDir ? `目录 "${nodePath}"` : `文件 "${nodePath}"`;
+    if (!window.confirm(`确定要删除 ${label} 吗？${isDir ? '目录内所有文件将被递归删除。' : '此操作不可撤销。'}`)) {
+      return;
+    }
+    try {
+      const token = localStorage.getItem('agenthub_token') || '';
+      const body: Record<string, string> = { path: nodePath };
+      if (sessionId) body.session_id = sessionId;
+      const res = await fetch('/api/files/workspace/item', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        alert(err.detail || 'Delete failed');
+        return;
+      }
+      // Refresh tree after delete
+      setTree([]);
+      setExpandedDirs(new Set());
+      const data = await fetchDir('');
+      if (data?.files || data?.dirs) setTree(buildRootNodes(data));
+    } catch (e) {
+      alert(String(e));
+    }
+  }, [fetchDir, sessionId]);
 
   function renderNode(node: FileTreeNode, depth: number): JSX.Element {
     const isExpanded = expandedDirs.has(node.path);
@@ -669,23 +1022,36 @@ function WorkspaceFileTree({
     if (node.isDirectory) {
       return (
         <div key={node.path}>
-          <button
-            className="flex w-full items-center gap-1 px-2 py-1 text-left text-sm hover:bg-warm-100 transition-colors"
-            style={{ paddingLeft: padLeft }}
-            onClick={() => handleToggleDir(node)}
-          >
-            <svg
-              className={`h-3.5 w-3.5 shrink-0 text-warm-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+          <div className="flex w-full items-center gap-1 px-2 py-1 text-left text-sm hover:bg-warm-100 transition-colors group"
+            style={{ paddingLeft: padLeft }}>
+            <button
+              className="flex flex-1 items-center gap-1 min-w-0"
+              onClick={() => handleToggleDir(node)}
+              title={node.path}
             >
-              <path d="M9 18l6-6-6-6" />
-            </svg>
-            <svg className="h-4 w-4 shrink-0 text-amber-400" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-              <path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2V6z" />
-              <path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z" fill="currentColor" opacity="0.4" />
-            </svg>
-            <span className="truncate text-warm-700 text-xs">{node.name}</span>
-          </button>
+              <svg
+                className={`h-3.5 w-3.5 shrink-0 text-warm-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+              >
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+              <svg className="h-4 w-4 shrink-0 text-amber-400" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <path d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v1H2V6z" />
+                <path d="M2 9h20v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9z" fill="currentColor" opacity="0.4" />
+              </svg>
+              <span className="truncate text-warm-700 text-xs">{node.name}</span>
+            </button>
+            <button
+              className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 text-warm-400 hover:text-red-500 transition-all rounded"
+              onClick={(e) => { e.stopPropagation(); handleDeleteItem(node.path, true); }}
+              title={`删除目录: ${node.name}`}
+            >
+              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+              </svg>
+            </button>
+          </div>
           {isExpanded && node.children && node.children.length > 0 && (
             <div>{node.children.map((child) => renderNode(child, depth + 1))}</div>
           )}
@@ -697,36 +1063,72 @@ function WorkspaceFileTree({
     }
 
     return (
-      <button
+      <div
         key={node.path}
         className="flex w-full items-center gap-1 px-2 py-1 text-left text-sm hover:bg-warm-100 transition-colors group"
         style={{ paddingLeft: padLeft }}
-        onClick={() => handleClickFile(node)}
-        title={node.path}
       >
-        <span className="w-3.5 shrink-0" />
-        <FileTypeIcon language={node.language || getLanguageFromPath(node.path)} />
-        <span className="truncate text-warm-600 text-xs group-hover:text-primary-600">{node.name}</span>
-      </button>
+        <button
+          className="flex flex-1 items-center gap-1 min-w-0"
+          onClick={() => handleClickFile(node)}
+          title={node.path}
+        >
+          <span className="w-3.5 shrink-0" />
+          <FileTypeIcon language={node.language || getLanguageFromPath(node.path)} />
+          <span className="truncate text-warm-600 text-xs group-hover:text-primary-600">{node.name}</span>
+        </button>
+        <button
+          className="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 text-warm-400 hover:text-red-500 transition-all rounded"
+          onClick={(e) => { e.stopPropagation(); handleDeleteItem(node.path, false); }}
+          title={`删除文件: ${node.name}`}
+        >
+          <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
+      </div>
     );
   }
 
   return (
     <div
-      className="flex flex-col h-full border-r border-warm-150 bg-warm-50/50 shrink-0 min-h-0"
+      className={`flex flex-col h-full border-r border-warm-150 bg-warm-50/50 shrink-0 min-h-0 relative transition-colors ${
+        isDragOver ? 'bg-primary-50/70 ring-2 ring-inset ring-primary-400' : ''
+      }`}
       style={{ width: `${width}px` }}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
+      {/* ── Drag-overlay ─────────────────────────────────────────── */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-primary-50/60 pointer-events-none">
+          <div className="flex flex-col items-center gap-2 text-primary-600">
+            <svg className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="14 5 9 0 4 5" />
+              <line x1="9" y1="0" x2="9" y2="11" />
+            </svg>
+            <span className="text-sm font-semibold">释放以将文件/文件夹上传到工作区</span>
+            <span className="text-xs text-primary-400">支持拖拽整个文件夹</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Header ───────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-warm-150">
         <span className="text-xs font-semibold text-warm-500">工作区文件</span>
         <div className="flex items-center gap-0.5">
-          {/* Upload button */}
+          {/* Upload files button */}
           <label
             className={`p-0.5 rounded cursor-pointer transition-colors ${
               uploading
                 ? 'text-primary-500 animate-pulse'
                 : 'text-warm-400 hover:text-primary-500 hover:bg-warm-100'
             }`}
-            title="上传文件到工作区"
+            title="上传文件"
           >
             {uploading ? (
               <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -744,10 +1146,38 @@ function WorkspaceFileTree({
               type="file"
               multiple
               className="sr-only"
-              onChange={handleUpload}
+              onChange={handleFileUpload}
               disabled={uploading}
             />
           </label>
+
+          {/* Upload folder button */}
+          <label
+            className={`p-0.5 rounded cursor-pointer transition-colors ${
+              uploading
+                ? 'text-warm-300 pointer-events-none'
+                : 'text-warm-400 hover:text-primary-500 hover:bg-warm-100'
+            }`}
+            title="上传文件夹"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              <line x1="12" y1="11" x2="12" y2="17" />
+              <line x1="9" y1="14" x2="15" y2="14" />
+            </svg>
+            <input
+              ref={folderInputRef}
+              type="file"
+              /* @ts-expect-error webkitdirectory is widely supported */
+              webkitdirectory=""
+              directory=""
+              multiple
+              className="sr-only"
+              onChange={handleFolderUpload}
+              disabled={uploading}
+            />
+          </label>
+
           {/* Refresh button */}
           <button
             onClick={handleRefresh}
@@ -762,8 +1192,36 @@ function WorkspaceFileTree({
           </button>
         </div>
       </div>
-      {/* Upload status feedback */}
-      {uploadStatus && (
+
+      {/* ── Upload progress bar ──────────────────────────────────── */}
+      {uploadProgress && (
+        <div className="px-3 py-2 border-b border-warm-150 bg-primary-50/50">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-primary-700 font-medium">
+              {uploadProgress.done < uploadProgress.total
+                ? `上传中 ${uploadProgress.done}/${uploadProgress.total}`
+                : `处理完成 ${uploadProgress.total} 个文件`}
+            </span>
+            <span className="text-xs text-primary-500">
+              ✓{uploadProgress.ok}{uploadProgress.fail > 0 ? ` ✗${uploadProgress.fail}` : ''}
+            </span>
+          </div>
+          <div className="h-1.5 bg-primary-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary-500 rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${Math.round((uploadProgress.done / uploadProgress.total) * 100)}%` }}
+            />
+          </div>
+          {uploadProgress.currentFile && (
+            <div className="mt-1 text-xs text-warm-400 truncate" title={uploadProgress.currentFile}>
+              {uploadProgress.currentFile}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Upload status feedback ────────────────────────────────── */}
+      {uploadStatus && !uploadProgress && (
         <div className={`px-3 py-1.5 text-xs border-b border-warm-150 ${
           uploadStatus.fail > 0 ? 'bg-danger-50 text-danger-600' : 'bg-success-50 text-success-600'
         }`}>
@@ -772,6 +1230,8 @@ function WorkspaceFileTree({
             : `已上传 ${uploadStatus.ok} 个文件`}
         </div>
       )}
+
+      {/* ── File tree ─────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto py-1" style={{ scrollbarWidth: 'thin' }}>
         {loading && tree.length === 0 && (
           <div className="flex items-center justify-center py-8">
@@ -782,7 +1242,17 @@ function WorkspaceFileTree({
           <div className="px-3 py-4 text-xs text-danger-500 text-center">{error}</div>
         )}
         {!loading && !error && tree.length === 0 && (
-          <div className="px-3 py-4 text-xs text-warm-400 text-center">暂无文件</div>
+          <div className="px-3 py-6 text-xs text-warm-400 text-center">
+            <div className="mb-2 text-warm-300">
+              <svg className="h-8 w-8 mx-auto mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+            <p className="mb-1">暂无文件</p>
+            <p className="text-warm-300">上传或拖拽文件/文件夹到此处</p>
+          </div>
         )}
         {tree.map((node) => renderNode(node, 0))}
       </div>
@@ -802,7 +1272,11 @@ interface FilePreviewPanelProps {
   onAddReference: (ref: FileReference) => void;
   onOpenFile?: (path: string) => void;
   onOpenDiff?: (path: string, oldStr: string, newStr: string) => void;
-  onOpenWorkspaceFile?: (path: string, content: string, language: string, state: string) => void;
+  onOpenWorkspaceFile?: (path: string, content: string, language: string, state: string, meta?: Record<string, unknown>) => void;
+  /** Current session ID for session-scoped workspace isolation. */
+  sessionId?: string;
+  /** Version counter — increments on every workspace file change to trigger auto-refresh. */
+  workspaceVersion?: number;
   /**
    * 当前所有引用（来自 ChatInput 的 fileReferences）。
    * 组件内部会按当前激活 tab 的 path 过滤后传给子预览器。
@@ -815,15 +1289,17 @@ interface FilePreviewPanelProps {
   pendingScrollRef?: { id: string; nonce: number } | null;
 }
 
-export default function FilePreviewPanel({
+const FilePreviewPanel = memo(function FilePreviewPanel({
   tabs,
   activeTabId,
   onSelectTab,
   onCloseTab,
   onAddReference,
   onOpenWorkspaceFile,
+  sessionId,
   references,
   pendingScrollRef,
+  workspaceVersion,
 }: FilePreviewPanelProps): JSX.Element {
   const contentRef = useRef<HTMLDivElement>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -1000,18 +1476,39 @@ export default function FilePreviewPanel({
       {/* ── Workspace File Tree (left sidebar) ────────────────────── */}
       <WorkspaceFileTree
         width={treeWidthLive ?? treeWidth}
+        sessionId={sessionId}
+        workspaceVersion={workspaceVersion}
         onOpenFile={(path) => {
           const token = localStorage.getItem('agenthub_token') || '';
-          fetch(`/api/files/workspace/read?path=${encodeURIComponent(path)}`, {
+          const readParams = new URLSearchParams({ path });
+          if (sessionId) readParams.set('session_id', sessionId);
+          fetch(`/api/files/workspace/read?${readParams.toString()}`, {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
           })
-            .then((r) => r.json())
+            .then((r) => {
+              if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+              return r.json();
+            })
             .then((data) => {
-              if (onOpenWorkspaceFile && data.content) {
-                onOpenWorkspaceFile(path, data.content, data.language || '', data.state || 'ok');
+              if (onOpenWorkspaceFile) {
+                if (data.content || data.contentType === 'html') {
+                  onOpenWorkspaceFile(path, data.content || '', data.language || '', data.state || 'ok', {
+                    contentType: data.contentType,
+                    slideCount: data.slideCount,
+                    imageCount: data.imageCount,
+                    textLength: data.textLength,
+                    totalChars: data.totalChars,
+                    truncated: data.truncated,
+                  });
+                } else if (data.state === 'binary' || data.state === 'too_large') {
+                  // Open with empty content — the panel will show the appropriate state
+                  onOpenWorkspaceFile(path, '', data.language || '', data.state);
+                }
               }
             })
-            .catch(() => {});
+            .catch((err) => {
+              console.error('[FilePreview] Failed to load workspace file:', path, err);
+            });
         }}
       />
       {/* ── 可调整分隔条：文件树 / 内容 ─────────────────────── */}
@@ -1090,7 +1587,7 @@ export default function FilePreviewPanel({
                 <line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" />
               </svg>
               <p className="text-sm">选择左侧文件树中的文件即可预览</p>
-              <p className="text-xs mt-1 text-warm-300">支持代码 / Markdown / Diff / 图片预览</p>
+              <p className="text-xs mt-1 text-warm-300">支持代码 / Markdown / Diff / 图片 / PPT / Word 预览</p>
             </div>
           </div>
         )}
@@ -1119,7 +1616,7 @@ export default function FilePreviewPanel({
         {activeTab && activeTab.state !== 'loading' && activeTab.state !== 'error' && (
           <>
             {/* Code file preview */}
-            {activeTab.kind === 'file' && !isMarkdownFile(activeTab.path) && !isImageFile(activeTab.path) && (
+            {activeTab.kind === 'file' && !isMarkdownFile(activeTab.path) && !isImageFile(activeTab.path) && !isHtmlContent(activeTab) && (
               <CodePreview
                 content={activeTab.content || ''}
                 language={activeTab.language || getLanguageFromPath(activeTab.path)}
@@ -1153,6 +1650,29 @@ export default function FilePreviewPanel({
                   </div>
                 )}
               </div>
+            )}
+
+            {/* PPTX / DOCX / HTML rich preview */}
+            {activeTab.kind === 'file' && isHtmlContent(activeTab) && (
+              activeTab.content ? (
+                <HtmlPreview
+                  htmlContent={activeTab.content}
+                  slideCount={activeTab.slideCount}
+                  imageCount={activeTab.imageCount}
+                  textLength={activeTab.textLength}
+                  totalChars={activeTab.totalChars}
+                  truncated={activeTab.truncated}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center bg-white">
+                  <div className="text-center text-warm-400">
+                    <svg className="mx-auto mb-3 h-12 w-12 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <rect x="3" y="3" width="18" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+                    </svg>
+                    <p className="text-sm">文档内容为空</p>
+                  </div>
+                </div>
+              )
             )}
 
             {/* Diff preview */}
@@ -1219,6 +1739,8 @@ export default function FilePreviewPanel({
 
     </div>
   );
-}
+});
+
+export default FilePreviewPanel;
 
 export { getLanguageFromPath, isMarkdownFile, isImageFile };

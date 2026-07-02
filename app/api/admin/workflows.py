@@ -1,7 +1,10 @@
 """Workflow / agent-route management — full CRUD for DAG execution paths.
 
+All operations are scoped to the authenticated user so every user sees
+only their own workflows.
+
 Endpoints:
-  GET    /workflows              List all workflows
+  GET    /workflows              List all workflows for current user
   POST   /workflows              Create a new workflow
   PUT    /workflows/{id}         Update an existing workflow
   DELETE /workflows/{id}         Delete a workflow
@@ -26,14 +29,19 @@ from app.services.template_engine import template_engine
 router = APIRouter(prefix="/workflows", tags=["admin-workflows"])
 
 
+def _uid(user: dict) -> str:
+    """Extract the user ID used for per-user scoping."""
+    return str(user.get("id", ""))
+
+
 # ── LIST ──────────────────────────────────────────────────────────────────
 
 
 @router.get("")
 async def list_workflows(user: dict = Depends(get_current_user)) -> list[dict]:
-    """Return all registered agent workflows / routes."""
+    """Return all workflows belonging to the current user."""
     require_admin(user)
-    return await agent_route_service.list_routes()
+    return await agent_route_service.list_routes(_uid(user))
 
 
 # ── CREATE ────────────────────────────────────────────────────────────────
@@ -43,9 +51,10 @@ async def list_workflows(user: dict = Depends(get_current_user)) -> list[dict]:
 async def create_workflow(data: AgentRouteRequest, user: dict = Depends(get_current_user)) -> dict:
     """Register a new workflow (agent route) with DAG validation."""
     require_admin(user)
+    uid = _uid(user)
     try:
         route = await agent_route_service.create_route(
-            data.name, data.description, data.triggerKeywords, data.nodes, data.isDefault,
+            uid, data.name, data.description, data.triggerKeywords, data.nodes, data.isDefault,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -62,10 +71,11 @@ async def create_workflow(data: AgentRouteRequest, user: dict = Depends(get_curr
 
 @router.put("/{route_id}")
 async def update_workflow(route_id: int, data: AgentRouteRequest, user: dict = Depends(get_current_user)) -> dict:
-    """Replace an existing workflow's definition."""
+    """Replace an existing workflow's definition (user-scoped)."""
     require_admin(user)
+    uid = _uid(user)
 
-    existing = await agent_route_service.get_route(route_id)
+    existing = await agent_route_service.get_route(route_id, uid)
     if not existing:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
@@ -73,10 +83,10 @@ async def update_workflow(route_id: int, data: AgentRouteRequest, user: dict = D
     template_engine.validate(dag)
 
     if data.isDefault:
-        await aexecute("UPDATE agent_routes SET is_default = 0")
+        await aexecute("UPDATE agent_routes SET is_default = 0 WHERE user_id = $1", uid)
     await aexecute(
         "UPDATE agent_routes SET name = $1, description = $2, trigger_keywords = $3, "
-        "nodes_json = $4, is_default = $5, updated_at = $6 WHERE id = $7",
+        "nodes_json = $4, is_default = $5, updated_at = $6 WHERE id = $7 AND user_id = $8",
         data.name,
         data.description,
         json.dumps(data.triggerKeywords, ensure_ascii=False),
@@ -84,9 +94,10 @@ async def update_workflow(route_id: int, data: AgentRouteRequest, user: dict = D
         1 if data.isDefault else 0,
         now(),
         route_id,
+        uid,
     )
 
-    route = await agent_route_service.get_route(route_id)
+    route = await agent_route_service.get_route(route_id, uid)
     audit_id = write_audit(
         user["id"], "admin", "workflow_update", "L2", "approve",
         {"routeId": route_id, "name": data.name},
@@ -99,14 +110,15 @@ async def update_workflow(route_id: int, data: AgentRouteRequest, user: dict = D
 
 @router.delete("/{route_id}")
 async def delete_workflow(route_id: int, user: dict = Depends(get_current_user)) -> dict:
-    """Remove a workflow and its associated routes."""
+    """Remove a workflow (user-scoped)."""
     require_admin(user)
+    uid = _uid(user)
 
-    existing = await agent_route_service.get_route(route_id)
+    existing = await agent_route_service.get_route(route_id, uid)
     if not existing:
         raise HTTPException(status_code=404, detail="Workflow not found")
 
-    await aexecute("DELETE FROM agent_routes WHERE id = $1", route_id)
+    await aexecute("DELETE FROM agent_routes WHERE id = $1 AND user_id = $2", route_id, uid)
 
     audit_id = write_audit(
         user["id"], "admin", "workflow_delete", "L2", "approve",
@@ -120,10 +132,10 @@ async def delete_workflow(route_id: int, user: dict = Depends(get_current_user))
 
 @router.post("/{route_id}/default")
 async def set_default_workflow(route_id: int, user: dict = Depends(get_current_user)) -> dict:
-    """Mark a workflow as the system default route."""
+    """Mark a workflow as the user's default route."""
     require_admin(user)
     try:
-        route = await agent_route_service.set_default(route_id)
+        route = await agent_route_service.set_default(route_id, _uid(user))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -141,10 +153,10 @@ async def set_default_workflow(route_id: int, user: dict = Depends(get_current_u
 async def toggle_workflow_active(
     route_id: int, data: AgentRouteActiveRequest, user: dict = Depends(get_current_user),
 ) -> dict:
-    """Enable or disable a workflow."""
+    """Enable or disable a workflow (user-scoped)."""
     require_admin(user)
     try:
-        route = await agent_route_service.set_active(route_id, data.active)
+        route = await agent_route_service.set_active(route_id, _uid(user), data.active)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

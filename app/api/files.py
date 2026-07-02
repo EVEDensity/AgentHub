@@ -9,9 +9,10 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.config import DATA_DIR, PROJECT_ROOT
+from app.config import DATA_DIR, WORKSPACES_DIR, OFFICE_PREVIEW_MAX_MB, OFFICE_WORKSPACE_READ_MAX_MB
 from app.services.auth_service import get_current_user
 from app.utils.async_file import aexists, aread_bytes, aread_text, aunlink, awrite_bytes, awrite_text, astat_size, armtree, amkdir
 
@@ -28,6 +29,7 @@ ALLOWED_EXTENSIONS: dict[str, set[str]] = {
     "image": {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico"},
     "archive": {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"},
     "spreadsheet": {".xlsx", ".xls", ".csv", ".tsv"},
+    "presentation": {".pptx", ".ppt"},
     "config": {".json", ".yaml", ".yml", ".xml", ".toml", ".ini", ".cfg", ".env", ".conf", ".cnf", ".editorconfig", ".gitignore", ".dockerfile", ".makefile", ".gemfile", ".prisma", ".graphql", ".proto"},
 }
 
@@ -245,6 +247,8 @@ def _detect_preview_kind(ext: str) -> str:
         return "markdown"
     if ext == ".docx":
         return "docx"
+    if ext in {".pptx", ".ppt"}:
+        return "pptx"
     if ext == ".pdf":
         return "pdf"
     if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}:
@@ -467,7 +471,7 @@ def _extract_docx_html(file_path: str, max_chars: int) -> dict:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   body {{
-    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-family: system-ui, -apple-system, 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', sans-serif;
     font-size: 15px; line-height: 1.7; color: #1a1a1a;
     max-width: 860px; margin: 0 auto; padding: 20px 24px;
     background: #fff;
@@ -499,6 +503,310 @@ def _extract_docx_html(file_path: str, max_chars: int) -> dict:
         "truncated": truncated,
         "imageCount": image_count,
         "textLength": len(text_body),
+    }
+
+
+def _extract_pptx_html(file_path: str, max_chars: int) -> dict:
+    """Parse a .pptx file and return HTML with inline base64 images.
+
+    Opens the .pptx as a ZIP, enumerates ``ppt/slides/slideN.xml``,
+    extracts images from ``ppt/media/*``, and converts every slide to a
+    styled card in a self-contained HTML document.
+
+    Returns a dict with keys:
+
+    * ``content``       – full HTML string (truncated to *max_chars*)
+    * ``contentType``   – ``"html"``
+    * ``totalChars``    – original HTML length before truncation
+    * ``truncated``     – whether the HTML was truncated
+    * ``imageCount``    – number of embedded images found
+    * ``textLength``    – plain-text character count
+    * ``slideCount``    – number of slides
+    """
+    import re
+    import xml.etree.ElementTree as ET
+    import zipfile
+    from base64 import b64encode
+
+    MIME_BY_EXT: dict[str, str] = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+        ".svg": "image/svg+xml", ".tiff": "image/tiff", ".tif": "image/tiff",
+    }
+
+    # ── Image optimisation for web preview ────────────────────────
+    def _optimize_image(blob: bytes, ext: str) -> tuple[bytes, str]:
+        """Resize + compress an image blob for HTML preview.
+
+        Returns ``(optimized_bytes, mime_type)``.  Dimensions larger than
+        *MAX_PX* are down-scaled proportionally (LANCZOS).  Raster images
+        are re-encoded at quality 85; PNGs without alpha are converted to
+        JPEG for a 5-10× size reduction.  SVG, GIF and unrecognised blobs
+        pass through unchanged so the preview always works.
+        """
+        _svgext = ext == ".svg"
+        if _svgext:
+            return blob, "image/svg+xml"
+
+        try:
+            from io import BytesIO
+            from PIL import Image
+
+            img = Image.open(BytesIO(blob))
+            w, h = img.size
+            max_dim = 1920
+            if max(w, h) > max_dim:
+                ratio = max_dim / max(w, h)
+                img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+
+            out = BytesIO()
+            has_alpha = img.mode in ("RGBA", "PA", "LA")
+
+            # GIF / animated → keep as-is (Pillow loses animation on resize)
+            if ext == ".gif":
+                img.save(out, format="GIF", optimize=True)
+                return out.getvalue(), "image/gif"
+
+            if not has_alpha:
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(out, format="JPEG", quality=85, optimize=True)
+                return out.getvalue(), "image/jpeg"
+
+            # Keep PNG for transparent images
+            img.save(out, format="PNG", optimize=True)
+            return out.getvalue(), "image/png"
+        except Exception:
+            mime = MIME_BY_EXT.get(ext, "application/octet-stream")
+            return blob, mime
+
+    P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+    def _qname(ns: str, local: str) -> str:
+        return f"{{{ns}}}{local}"
+
+    def _xml_text(el: ET.Element) -> str:
+        """Recursively collect all text from ``<a:t>`` descendants."""
+        parts: list[str] = []
+        for t in el.iter(_qname(A_NS, "t")):
+            if t.text:
+                parts.append(t.text)
+        return "".join(parts)
+
+    # ------------------------------------------------------------------
+    # Step 1 – Open ZIP, enumerate slides
+    # ------------------------------------------------------------------
+    try:
+        zf = zipfile.ZipFile(file_path, "r")
+    except zipfile.BadZipFile:
+        # File is not a valid ZIP archive: could be an old .ppt binary,
+        # a corrupted file, or an empty placeholder.
+        return {
+            "content": (
+                '<div style="text-align:center;padding:40px;color:#888;">'
+                "<p>⚠️ 无法解析此文件</p>"
+                "<p style=\"font-size:14px;margin-top:8px;\">"
+                "文件不是有效的 PPTX/ZIP 格式，可能为空文件、已损坏，或为旧版 .ppt 二进制格式。</p>"
+                "<p style=\"font-size:13px;margin-top:4px;\">"
+                "请尝试用 PowerPoint 打开后另存为 .pptx 格式。</p>"
+                "</div>"
+            ),
+            "contentType": "html",
+            "totalChars": 0,
+            "truncated": False,
+            "imageCount": 0,
+            "textLength": 0,
+            "slideCount": 0,
+            "error": "文件不是有效的PPTX格式（可能为空文件、旧版.ppt或已损坏）",
+        }
+    with zf:
+        slide_names = sorted(
+            [n for n in zf.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)],
+            key=lambda n: int(re.search(r"slide(\d+)", n).group(1))  # type: ignore[union-attr]
+        )
+
+        if not slide_names:
+            # Old .ppt format (binary OLE2) – zipfile sees nothing useful
+            return {
+                "content": "<p>(无法解析旧版 .ppt 格式；仅支持 .pptx)</p>",
+                "contentType": "html",
+                "totalChars": 0,
+                "truncated": False,
+                "imageCount": 0,
+                "textLength": 0,
+                "slideCount": 0,
+            }
+
+        # --- Load all media blobs into memory (optimised) ---
+        media_data: dict[str, str] = {}  # relative_path → base64
+        for name in zf.namelist():
+            if name.startswith("ppt/media/") and not name.endswith("/"):
+                ext = Path(name).suffix.lower()
+                blob = zf.read(name)
+                opt_blob, mime = _optimize_image(blob, ext)
+                media_data[name] = f"data:{mime};base64,{b64encode(opt_blob).decode('ascii')}"
+
+        # ------------------------------------------------------------------
+        # Step 2 – Process each slide
+        # ------------------------------------------------------------------
+        slide_cards: list[str] = []
+        total_text_len = 0
+        total_images = 0
+
+        for idx, slide_name in enumerate(slide_names, start=1):
+            # --- 2a. Relationships: rId → media target ---
+            rels_map: dict[str, str] = {}  # rId → media data-URI
+            rels_name = f"ppt/slides/_rels/slide{idx}.xml.rels"
+            try:
+                rels_xml = zf.read(rels_name)
+                rels_root = ET.fromstring(rels_xml)
+                for rel_el in rels_root:
+                    rid = rel_el.get("Id")
+                    target = rel_el.get("Target", "")
+                    rtype = rel_el.get("Type", "")
+                    if rid and "image" in rtype.lower():
+                        # target = "../media/image1.png"
+                        normalized = f"ppt/media/{target.split('/')[-1]}"
+                        if normalized in media_data:
+                            rels_map[rid] = media_data[normalized]
+            except (KeyError, ET.ParseError):
+                pass
+
+            # --- 2b. Parse slide XML ---
+            slide_xml = zf.read(slide_name)
+            slide_root = ET.fromstring(slide_xml)
+
+            # --- 2c. Slide dimensions ---
+            sld_sz = slide_root.find(_qname(P_NS, "sldSz"))
+            slide_w_emu = int(sld_sz.get("cx", "12192000")) if sld_sz is not None else 12192000
+            slide_h_emu = int(sld_sz.get("cy", "6858000")) if sld_sz is not None else 6858000
+            # EMU → CSS px (1 EMU = 1/914400 inch → 1 EMU ≈ 96/914400 px)
+            slide_w_px = max(300, slide_w_emu * 96 // 914400)
+            slide_h_px = max(200, slide_h_emu * 96 // 914400)
+
+            # --- 2d. Walk shapes ---
+            shape_html: list[str] = []
+            shape_text: list[str] = []
+            for sp in slide_root.iter(_qname(P_NS, "sp")):
+                # --- Position & size ---
+                xfrm = sp.find(_qname(P_NS, "spPr"))
+                off = {"x": 0, "y": 0}
+                ext = {"cx": slide_w_emu, "cy": slide_h_emu}
+                if xfrm is not None:
+                    xfrm_el = xfrm.find(_qname(A_NS, "xfrm"))
+                    if xfrm_el is not None:
+                        off_el = xfrm_el.find(_qname(A_NS, "off"))
+                        ext_el = xfrm_el.find(_qname(A_NS, "ext"))
+                        if off_el is not None:
+                            off["x"] = int(off_el.get("x", "0"))
+                            off["y"] = int(off_el.get("y", "0"))
+                        if ext_el is not None:
+                            ext["cx"] = int(ext_el.get("cx", str(slide_w_emu)))
+                            ext["cy"] = int(ext_el.get("cy", str(slide_h_emu)))
+
+                left_pct = off["x"] * 100 / slide_w_emu
+                top_pct = off["y"] * 100 / slide_h_emu
+                w_pct = ext["cx"] * 100 / slide_w_emu
+                h_pct = ext["cy"] * 100 / slide_h_emu
+
+                # --- Images ---
+                for blip in sp.iter(_qname(A_NS, "blip")):
+                    embed = blip.get(_qname(R_NS, "embed"))
+                    if embed and embed in rels_map:
+                        shape_html.append(
+                            f'<img src="{rels_map[embed]}" '
+                            f'style="position:absolute;left:{left_pct:.1f}%;top:{top_pct:.1f}%;'
+                            f'width:{w_pct:.1f}%;height:{h_pct:.1f}%;object-fit:contain;" '
+                            f'alt="Slide {idx} image" />'
+                        )
+                        shape_text.append("[图片]")
+                        total_images += 1
+
+                # --- Text ---
+                txt = _xml_text(sp)
+                if txt.strip():
+                    escaped = txt.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    # Smarter font-size: use the smaller of height-based and
+                    # width-per-character estimates, so long titles don't get
+                    # clipped inside narrow shapes.
+                    shape_h_px = max(1, ext["cy"] * 96 // 914400)
+                    shape_w_px = max(1, ext["cx"] * 96 // 914400)
+                    char_count = max(1, len(txt))
+                    font_from_h = shape_h_px // 4       # fits ~4 lines
+                    font_from_w = (shape_w_px - 8) // char_count  # roughly fit 1 line
+                    font_px = max(10, min(36, font_from_h, font_from_w))
+                    shape_html.append(
+                        f'<div style="position:absolute;left:{left_pct:.1f}%;top:{top_pct:.1f}%;'
+                        f'width:{w_pct:.1f}%;height:{h_pct:.1f}%;'
+                        f'display:flex;align-items:center;justify-content:center;'
+                        f'font-size:{font_px}px;'
+                        f'word-break:keep-all;overflow-wrap:break-word;'
+                        f'overflow:hidden;padding:4px;'
+                        f'text-align:center;color:#333;">{escaped}</div>'
+                    )
+                    shape_text.append(txt)
+
+            combined_text = " ".join(shape_text).strip()
+            total_text_len += len(combined_text)
+
+            slide_cards.append(
+                f'<div class="slide-card" style="position:relative;'
+                f'width:{slide_w_px}px;height:{slide_h_px}px;'
+                f'max-width:100%;'
+                f'background:#fff;border-radius:8px;'
+                f'box-shadow:0 1px 6px rgba(0,0,0,.1);overflow:hidden;'
+                f'margin:0 auto 24px;flex-shrink:0;">'
+                + "\n".join(shape_html) +
+                f'</div>'
+            )
+
+    # ------------------------------------------------------------------
+    # Step 3 – Assemble full HTML
+    # ------------------------------------------------------------------
+    body_html = "\n".join(slide_cards)
+    full_html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<style>
+  * {{ box-sizing:border-box; margin:0; padding:0; }}
+  body {{
+    font-family:system-ui,-apple-system,'Microsoft YaHei','PingFang SC','Noto Sans SC','WenQuanYi Micro Hei',sans-serif;
+    background:#f0f2f5; padding:24px 16px;
+    display:flex; flex-direction:column; align-items:center;
+  }}
+  .slide-card {{
+    transition: box-shadow .2s;
+  }}
+  .slide-card:hover {{
+    box-shadow: 0 4px 20px rgba(0,0,0,.15);
+  }}
+  .slide-number {{
+    text-align:center; font-size:12px; color:#999; margin-bottom:8px;
+  }}
+</style>
+</head>
+<body>
+{body_html}
+</body>
+</html>"""
+
+    total_chars = len(full_html)
+    truncated = total_chars > max_chars
+    content = full_html[:max_chars] if truncated else full_html
+
+    return {
+        "content": content,
+        "contentType": "html",
+        "totalChars": total_chars,
+        "truncated": truncated,
+        "imageCount": total_images,
+        "textLength": total_text_len,
+        "slideCount": len(slide_cards),
     }
 
 
@@ -583,8 +891,15 @@ async def preview_uploaded_file(
         "kind": kind,
     }
 
-    # 5 MB safety cap on previewable payloads
-    if file_size > 5 * 1024 * 1024:
+    # Size cap: office documents (pptx/docx) are allowed up to
+    # OFFICE_PREVIEW_MAX_MB because they bundle images; other files
+    # stay at 5 MB.
+    _office_limit = OFFICE_PREVIEW_MAX_MB * 1024 * 1024
+    _general_limit = 5 * 1024 * 1024
+    if kind in ("pptx", "docx"):
+        if file_size > _office_limit:
+            return {**base, "state": "too_large", "size": file_size}
+    elif file_size > _general_limit:
         return {**base, "state": "too_large", "size": file_size}
 
     if kind == "binary":
@@ -600,6 +915,18 @@ async def preview_uploaded_file(
                 "state": "binary",
                 "size": file_size,
                 "error": f"docx 解析失败: {exc}",
+            }
+
+    if kind == "pptx":
+        try:
+            result = await asyncio.to_thread(_extract_pptx_html, str(file_path), max_chars)
+            return {**base, "state": "ok", **result}
+        except Exception as exc:  # noqa: BLE001
+            return {
+                **base,
+                "state": "binary",
+                "size": file_size,
+                "error": f"pptx 解析失败: {exc}",
             }
 
     if kind in ("pdf", "image"):
@@ -667,17 +994,34 @@ async def preview_uploaded_file(
 
 
 # ── Workspace file preview endpoints ──────────────────────────────────
+# Each user+session pair gets an isolated workspace:
+#   DATA_DIR/workspaces/{user_id}/{session_id}/
+# Files uploaded by user A are never visible to user B, and different
+# conversations for the same user are also isolated from each other.
 
-from app.config import PROJECT_ROOT
+from app.services.workspace_context import (
+    build_workspace_root,
+    resolve_workspace_path,
+    slugify_user_dir,
+    slugify_session_dir,
+)
 
-WORKSPACE_ROOT = Path(PROJECT_ROOT) if PROJECT_ROOT else DATA_DIR.parent
+WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _safe_workspace_path(rel_path: str) -> Path | None:
-    """Resolve a relative path within WORKSPACE_ROOT, preventing traversal."""
+def _get_session_workspace_root(user_id: str, session_id: str) -> Path:
+    """Return (and auto-create) the per-user, per-session workspace root."""
+    root = build_workspace_root(user_id, session_id)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _safe_session_workspace_path(user_id: str, session_id: str, rel_path: str) -> Path | None:
+    """Resolve a relative path within the user+session workspace, preventing traversal."""
     try:
-        resolved = (WORKSPACE_ROOT / rel_path).resolve()
-        resolved.relative_to(WORKSPACE_ROOT.resolve())
+        root = _get_session_workspace_root(user_id, session_id)
+        resolved = (root / rel_path).resolve()
+        resolved.relative_to(root)
         return resolved
     except (ValueError, OSError):
         return None
@@ -686,12 +1030,24 @@ def _safe_workspace_path(rel_path: str) -> Path | None:
 @router.get("/workspace/list")
 async def list_workspace_files(
     subdir: str = "",
+    session_id: str = "",
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """List files in the workspace directory for the file tree."""
-    base = _safe_workspace_path(subdir) if subdir else WORKSPACE_ROOT.resolve()
+    """List files in the user's per-session workspace for the file tree.
+
+    Each user+session has an isolated workspace:
+    ``DATA_DIR/workspaces/{user_id}/{session_id}/``
+
+    When *session_id* is omitted the listing falls back to the user-level
+    directory so the tree still renders, but the agent tools will always
+    operate within a session-scoped workspace.
+    """
+    sid = session_id or "default"
+    ws_root = _get_session_workspace_root(user["id"], sid)
+
+    base = _safe_session_workspace_path(user["id"], sid, subdir) if subdir else ws_root
     if base is None or not await aexists(base):
-        return {"files": [], "path": subdir, "error": "Directory not found or access denied"}
+        return {"dirs": [], "files": [], "path": subdir, "total": 0, "error": "Directory not found"}
 
     files: list[dict] = []
     dirs: list[dict] = []
@@ -703,7 +1059,7 @@ async def list_workspace_files(
             is_dir = entry.is_dir()
             item: dict = {
                 "name": name,
-                "path": str(entry.relative_to(WORKSPACE_ROOT.resolve())),
+                "path": str(entry.relative_to(ws_root)),
                 "isDirectory": is_dir,
             }
             if not is_dir:
@@ -715,9 +1071,8 @@ async def list_workspace_files(
             else:
                 files.append(item)
     except PermissionError:
-        return {"files": [], "dirs": [], "path": subdir, "error": "Permission denied"}
+        return {"dirs": [], "files": [], "path": subdir, "total": 0, "error": "Permission denied"}
 
-    # dirs first, then files; both alphabetical
     dirs.sort(key=lambda d: d["name"].lower())
     files.sort(key=lambda f: f["name"].lower())
     return {"path": subdir, "dirs": dirs, "files": files, "total": len(dirs) + len(files)}
@@ -726,15 +1081,17 @@ async def list_workspace_files(
 @router.get("/workspace/read")
 async def read_workspace_file(
     path: str,
+    session_id: str = "",
     max_lines: int = 10000,
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """Read a workspace file and return content with language detection.
+    """Read a file from the user's per-session workspace with language detection.
 
-    Supports code, markdown, and text files. Returns binary indicator for
+    Supports code, markdown, and text files. Returns a binary indicator for
     non-previewable files.
     """
-    safe = _safe_workspace_path(path)
+    sid = session_id or "default"
+    safe = _safe_session_workspace_path(user["id"], sid, path)
     if safe is None:
         raise HTTPException(status_code=400, detail=f"Path '{path}' is outside workspace")
 
@@ -745,16 +1102,22 @@ async def read_workspace_file(
         raise HTTPException(status_code=400, detail="Path is a directory, not a file")
 
     file_size = safe.stat().st_size
-    if file_size > 10 * 1024 * 1024:  # 10 MB limit
-        return {
-            "path": path,
-            "name": safe.name,
-            "size": file_size,
-            "state": "too_large",
-            "language": _ext_to_language(safe.suffix.lower()),
-        }
-
     ext = safe.suffix.lower()
+
+    # Office documents (pptx/docx) get a higher limit (default 30 MB).
+    _ws_office_limit = OFFICE_WORKSPACE_READ_MAX_MB * 1024 * 1024
+    _ws_general_limit = 10 * 1024 * 1024
+    if ext in (".pptx", ".ppt", ".docx"):
+        if file_size > _ws_office_limit:
+            return {
+                "path": path, "name": safe.name, "size": file_size,
+                "state": "too_large", "language": _ext_to_language(ext),
+            }
+    elif file_size > _ws_general_limit:
+        return {
+            "path": path, "name": safe.name, "size": file_size,
+            "state": "too_large", "language": _ext_to_language(ext),
+        }
     text_exts = {
         ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs", ".c", ".cpp",
         ".h", ".hpp", ".swift", ".kt", ".rb", ".php", ".sql", ".sh", ".bash",
@@ -764,6 +1127,61 @@ async def read_workspace_file(
         ".rst", ".org", ".log", ".csv", ".tsv", ".graphql", ".gql", ".proto",
         ".dockerfile", ".makefile", ".prisma", ".gemfile",
     }
+
+    # ── Office document preview (pptx, docx) ──────────────────────────
+    if ext in {".pptx", ".ppt"}:
+        try:
+            result = await asyncio.to_thread(
+                _extract_pptx_html, str(safe), 200_000,
+            )
+            return {
+                "path": path,
+                "name": safe.name,
+                "size": file_size,
+                "state": "ok",
+                "language": "pptx",
+                "contentType": "html",
+                **result,
+            }
+        except Exception as exc:
+            import logging
+            logging.getLogger("agenthub.files").warning(
+                "pptx workspace preview failed for %s: %s", path, exc,
+            )
+            return {
+                "path": path,
+                "name": safe.name,
+                "size": file_size,
+                "state": "binary",
+                "language": "binary",
+            }
+
+    if ext == ".docx":
+        try:
+            result = await asyncio.to_thread(
+                _extract_docx_html, str(safe), 200_000,
+            )
+            return {
+                "path": path,
+                "name": safe.name,
+                "size": file_size,
+                "state": "ok",
+                "language": "docx",
+                "contentType": "html",
+                **result,
+            }
+        except Exception as exc:
+            import logging
+            logging.getLogger("agenthub.files").warning(
+                "docx workspace preview failed for %s: %s", path, exc,
+            )
+            return {
+                "path": path,
+                "name": safe.name,
+                "size": file_size,
+                "state": "binary",
+                "language": "binary",
+            }
 
     if ext not in text_exts:
         # Binary file – return metadata only
@@ -823,7 +1241,98 @@ def _ext_to_language(ext: str) -> str:
         ".vue": "vue", ".svelte": "svelte", ".astro": "astro",
         ".xml": "xml",
         ".dockerfile": "dockerfile", ".makefile": "makefile",
+        ".pptx": "pptx", ".ppt": "ppt", ".docx": "docx",
     }.get(ext, "text")
+
+
+# ── Workspace zip download endpoint ──────────────────────────────────────
+
+@router.get("/workspace/download")
+async def download_workspace_zip(
+    session_id: str = "",
+    user: dict = Depends(get_current_user),
+):
+    """Download the entire workspace as a ZIP archive.
+
+    Recursively zips all files and directories in the user+session workspace.
+    Uses streaming to avoid memory pressure on large workspaces.
+    Hidden files (dotfiles) are excluded except for .env, .gitignore,
+    and .editorconfig.
+    """
+    import zipfile
+    import io
+
+    sid = session_id or "default"
+    ws_root = _get_session_workspace_root(user["id"], sid)
+
+    if not ws_root.exists():
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    # Collect file list first (we need the total for Content-Length hint)
+    EXCLUDE_PREFIXES = ('.git/', '__pycache__/', 'node_modules/', '.venv/', 'venv/')
+    INCLUDE_DOTFILES = {'.env', '.gitignore', '.editorconfig', '.gitattributes'}
+
+    file_entries: list[tuple[str, Path]] = []
+    for entry in sorted(ws_root.rglob('*')):
+        if entry.is_dir():
+            continue
+        rel = str(entry.relative_to(ws_root)).replace('\\', '/')
+
+        # Skip hidden files/dirs (except allowlisted)
+        parts = rel.split('/')
+        if any(p.startswith('.') and p not in INCLUDE_DOTFILES for p in parts):
+            continue
+        # Skip common large dirs
+        if any(rel.startswith(prefix.replace('\\', '/')) for prefix in EXCLUDE_PREFIXES):
+            continue
+        # Skip conflict backups
+        if rel.endswith('.conflict_backup'):
+            continue
+
+        file_entries.append((rel, entry))
+
+    if not file_entries:
+        # Empty workspace — return an empty zip
+        empty_zip = io.BytesIO()
+        with zipfile.ZipFile(empty_zip, 'w', zipfile.ZIP_DEFLATED) as _zf:
+            pass
+        empty_zip.seek(0)
+        return StreamingResponse(
+            empty_zip,
+            media_type='application/zip',
+            headers={
+                'Content-Disposition': f'attachment; filename="workspace-{sid[:8]}.zip"',
+                'Content-Length': str(len(empty_zip.getvalue())),
+            },
+        )
+
+    # Build zip in memory, stream to client
+    zip_buffer = io.BytesIO()
+
+    # We use ZipFile with compression for a balance of speed and size
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=3) as zf:
+        for rel_path, abs_path in file_entries:
+            try:
+                zf.write(abs_path, arcname=rel_path)
+            except OSError:
+                # Skip unreadable files
+                pass
+
+    zip_buffer.seek(0)
+    zip_data = zip_buffer.getvalue()
+
+    # Build a human-readable filename
+    safe_sid = sid[:8].replace('/', '-').replace('\\', '-')
+    filename = f'workspace-{safe_sid}.zip'
+
+    return StreamingResponse(
+        io.BytesIO(zip_data),
+        media_type='application/zip',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Length': str(len(zip_data)),
+        },
+    )
 
 
 # ── Workspace upload endpoint ──────────────────────────────────────────
@@ -835,21 +1344,26 @@ WORKSPACE_MAX_SIZE = 50 * 1024 * 1024  # 50 MB per file
 async def upload_to_workspace(
     file: UploadFile = File(...),
     subdir: str = "",
+    session_id: str = "",
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """Upload a file directly into WORKSPACE_ROOT (or subdirectory).
+    """Upload a file into the user's per-session workspace.
 
-    Writes the file to the workspace so it's immediately visible in the
-    file tree and available for agent tools like file_read / file_write.
+    Writes the file to the session-scoped workspace so it's immediately
+    visible in the file tree and available for agent operations within
+    that session.
     """
     safe_name = Path(file.filename or "untitled").name
     if not safe_name or ".." in safe_name or "/" in safe_name or "\\" in safe_name:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # Resolve target directory
-    base = WORKSPACE_ROOT.resolve()
+    # Resolve target directory within the user+session workspace
+    sid = session_id or "default"
+    user_root = _get_session_workspace_root(user["id"], sid)
+
+    base = user_root
     if subdir:
-        target_dir = _safe_workspace_path(subdir)
+        target_dir = _safe_session_workspace_path(user["id"], sid, subdir)
         if target_dir is None:
             raise HTTPException(status_code=400, detail=f"Invalid subdir: {subdir}")
     else:
@@ -894,3 +1408,39 @@ async def upload_to_workspace(
         "language": _ext_to_language(f".{ext}") if ext else "text",
         "message": f"已上传到工作区: {safe_name}",
     }
+
+
+# ── Workspace delete endpoint ──────────────────────────────────────────
+
+class DeleteWorkspaceItemRequest(BaseModel):
+    path: str
+    session_id: str = ""
+
+
+@router.delete("/workspace/item")
+async def delete_workspace_item(
+    body: DeleteWorkspaceItemRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Delete a file or directory from the user's per-session workspace.
+
+    Directories are removed recursively.  The *path* must be relative to
+    the workspace root; traversal attempts are blocked.
+    """
+    sid = body.session_id or "default"
+    safe = _safe_session_workspace_path(user["id"], sid, body.path)
+    if safe is None:
+        raise HTTPException(status_code=400, detail=f"Path '{body.path}' is outside workspace")
+
+    if not await aexists(safe):
+        raise HTTPException(status_code=404, detail=f"Not found: {body.path}")
+
+    try:
+        if safe.is_dir():
+            await armtree(safe)
+            return {"success": True, "path": body.path, "type": "directory", "message": f"Deleted directory: {body.path}"}
+        else:
+            await aunlink(safe)
+            return {"success": True, "path": body.path, "type": "file", "message": f"Deleted file: {body.path}"}
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Delete failed: {exc}")

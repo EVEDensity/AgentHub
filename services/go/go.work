@@ -1,0 +1,19 @@
+go 1.22.0
+
+use (
+	./gateway-service
+	./realtime-orchestrator
+	./session-service
+	./tool-permission-service
+	./agent-runtime-control-plane
+	./stream-delivery-service
+	./audit-log-service
+	./iam-service
+	./shared/obs
+	./shared/state
+	./shared/eventbus
+	./shared/events
+	./shared/db
+	./shared/iam
+	./shared/crypto
+)

@@ -70,24 +70,23 @@ async def file_write_safety_hook(
     arguments: dict[str, Any],
     context: dict[str, Any],
 ) -> "PreToolUseResult":
-    """Validate file_write calls: ensure path is within workspace.
+    """Validate file_write calls: ensure path is within the user's session workspace.
 
     This is a per-tool pre hook for ``file_write``.
-    Blocks writes to paths outside the project root.
+    Blocks writes to paths outside the per-user per-session workspace.
     """
     from app.services.tools.hooks import PreToolUseResult
 
-    from app.config import PROJECT_ROOT
+    from app.services.workspace_context import get_workspace_root, resolve_workspace_path
 
     path = arguments.get("path", "")
     if not path:
         return PreToolUseResult()  # let the validator catch missing path
 
     try:
-        from pathlib import Path
-
-        full_path = (PROJECT_ROOT / path).resolve()
-        if not str(full_path).startswith(str(PROJECT_ROOT.resolve())):
+        safe = resolve_workspace_path(path)
+        if safe is None:
+            ws_root = get_workspace_root()
             return PreToolUseResult(
                 blocked=True,
                 reason=f"路径 '{path}' 超出工作区允许范围，写入被阻止",

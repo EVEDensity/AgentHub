@@ -16,6 +16,33 @@ class PermissionMode(str, Enum):
     DEFAULT = "default"   # User confirmation required for L2+ tools
     BYPASS = "bypass"     # Auto-allow all operations
     AUTO = "auto"         # Rule-based auto-decision
+    PLAN = "plan"         # Read-only: deny all write/delete/shell ops
+
+
+# ── Session exec_permission store ──────────────────────────────────
+# 1 = 询问 (ask), 2 = 跳过 (bypass), 3 = 计划 (plan/read-only)
+_session_exec_perm: dict[str, int] = {}
+
+
+def set_exec_permission(session_id: str, mode: int) -> None:
+    """Store the exec_permission mode for a session."""
+    if mode in (1, 2, 3):
+        _session_exec_perm[session_id] = mode
+
+
+def get_exec_permission(session_id: str) -> int:
+    """Get the exec_permission mode for a session (default 1 = ask)."""
+    return _session_exec_perm.get(session_id, 1)
+
+
+def get_permission_mode_for_session(session_id: str) -> PermissionMode:
+    """Map session exec_permission to PermissionMode."""
+    mode = get_exec_permission(session_id)
+    if mode == 2:
+        return PermissionMode.BYPASS
+    elif mode == 3:
+        return PermissionMode.PLAN
+    return PermissionMode.DEFAULT
 
 
 class PermissionBehavior(str, Enum):
@@ -192,6 +219,49 @@ class PermissionManager:
                 behavior=PermissionBehavior.ALLOW,
                 reason="Bypass mode active",
                 source="mode:bypass",
+            )
+
+        # ── Plan mode: read-only — deny all write/delete/shell/code ops ──
+        if context.mode == PermissionMode.PLAN:
+            # 真实内置工具的写/执行类白名单（与 definitions.py 对齐）
+            _WRITE_TOOLS = {
+                # 文件写入
+                "file_write", "file_write_batch", "file_edit", "file_patch",
+                # 代码 / Shell 执行
+                "code_execute", "command_execute",
+            }
+            if tool_name in _WRITE_TOOLS:
+                return PermissionResult(
+                    behavior=PermissionBehavior.DENY,
+                    reason=f"计划模式：禁止执行 '{tool_name}'（只读模式，不允许写文件/执行代码/执行 Shell）",
+                    source="mode:plan",
+                )
+            # 文件写入工具的参数 schema 不带 operation 字段——以"是否携带 content/contents/paths_contents 字段"作为写意图信号
+            if tool_name.startswith("file_"):
+                has_write_intent = any(
+                    arguments.get(field) is not None
+                    for field in ("content", "contents", "paths_contents", "new_content")
+                )
+                if has_write_intent:
+                    return PermissionResult(
+                        behavior=PermissionBehavior.DENY,
+                        reason="计划模式：检测到文件写入意图（content/contents/paths_contents 参数），已拒绝",
+                        source="mode:plan",
+                    )
+            # http_request 若指向非 GET 也算写操作（POST/PUT/DELETE/PATCH）
+            if tool_name == "http_request":
+                method = (arguments.get("method") or "GET").upper()
+                if method in {"POST", "PUT", "DELETE", "PATCH"}:
+                    return PermissionResult(
+                        behavior=PermissionBehavior.DENY,
+                        reason=f"计划模式：禁止 HTTP {method}（只读模式）",
+                        source="mode:plan",
+                    )
+            # 其他工具（read/search/list/navigate/screenshot/extract 等）放行
+            return PermissionResult(
+                behavior=PermissionBehavior.ALLOW,
+                reason="Plan mode — read-only operations allowed",
+                source="mode:plan",
             )
 
         if context.auth_role == "admin" and context.mode == PermissionMode.AUTO:

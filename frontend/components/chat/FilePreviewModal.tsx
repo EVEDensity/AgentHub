@@ -1,23 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertCircle, ChevronUp, Download, Eye, FileText, Loader2, X } from 'lucide-react';
 
-// pdfjs-dist 在 Next.js SSR 下需要动态加载 (使用 window) - 通过 useEffect 引入
-type PdfJsModule = typeof import('pdfjs-dist');
+// pdfjs-dist 在 Next.js SSR 下不能直接走包入口，否则 Next 会在构建时
+// 解析 pdf.mjs 里的 dynamic import(workerSrc) 并报错。这里改为：
+// 1. postinstall 把 pdf.min.mjs / pdf.worker.min.mjs 复制到 /public
+// 2. 浏览器端直接 import 静态 public 资源，彻底绕开 webpack 对 pdfjs-dist 的分析
+interface PdfJsModule {
+  getDocument: (src: { data: Uint8Array }) => { promise: Promise<any> };
+  GlobalWorkerOptions: { workerSrc: string };
+}
 
 // Worker 通过 npm postinstall 复制到 /public/pdf.worker.min.mjs,
 // 这里直接引用静态资源, 避免 webpack 解析 .mjs worker 时报错
+const PDF_RUNTIME_URL = '/pdf.min.mjs';
 const PDF_WORKER_URL = '/pdf.worker.min.mjs';
 
 async function loadPdfJs(): Promise<PdfJsModule> {
-  const mod = await import('pdfjs-dist');
-  if (typeof window !== 'undefined') {
-    mod.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+  if (typeof window === 'undefined') {
+    throw new Error('PDF runtime 仅可在浏览器端加载');
   }
-  return mod;
+
+  try {
+    const mod = (await import(/* webpackIgnore: true */ PDF_RUNTIME_URL)) as PdfJsModule;
+    mod.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+    return mod;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      'PDF 预览运行时加载失败。请在 frontend 目录执行 `npm run postinstall`，确认 `public/pdf.min.mjs` 与 `public/pdf.worker.min.mjs` 已生成后再重试。'
+      + (detail ? `\n\n底层错误: ${detail}` : '')
+    );
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -43,7 +60,7 @@ interface PreviewResponse {
   ext: string;
   size: number;
   category: string;
-  kind: 'text' | 'markdown' | 'docx' | 'pdf' | 'image' | 'binary';
+  kind: 'text' | 'markdown' | 'docx' | 'pptx' | 'pdf' | 'image' | 'binary';
   state: 'ok' | 'too_large' | 'binary' | 'missing';
   content?: string;
   contentType?: 'text' | 'html';
@@ -51,6 +68,7 @@ interface PreviewResponse {
   totalChars?: number;
   textLength?: number;
   imageCount?: number;
+  slideCount?: number;
   error?: string;
   mimeType?: string;
   pageCount?: number;
@@ -408,6 +426,81 @@ function DocxHtmlBody({ content, fileName }: {
   );
 }
 
+function PptBody({ content, fileName, slideCount }: {
+  content: string;
+  fileName: string;
+  slideCount?: number;
+}): JSX.Element {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [iframeH, setIframeH] = useState(600);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Auto-height the iframe after load
+  const measure = useCallback(() => {
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (doc) {
+        const h = Math.max(
+          doc.documentElement.scrollHeight,
+          doc.body.scrollHeight,
+          doc.documentElement.offsetHeight,
+          doc.body.offsetHeight
+        );
+        if (h > 100) setIframeH(h + 16);
+      }
+    } catch { /* cross-origin */ }
+  }, []);
+
+  // Track deferred measure timers so they can be cleaned up on unmount / reload
+  const measureTimersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      measureTimersRef.current.forEach((t) => clearTimeout(t));
+      measureTimersRef.current = [];
+    };
+  }, [content]);
+
+  const handleLoad = useCallback(() => {
+    measure();
+    measureTimersRef.current.forEach((t) => clearTimeout(t));
+    measureTimersRef.current = [];
+    [300, 1000, 2500].forEach((t) => {
+      measureTimersRef.current.push(window.setTimeout(measure, t));
+    });
+  }, [measure, content]);
+
+  return (
+    <div className="bg-[#f0f2f5]" style={{ minHeight: '300px' }}>
+      {/* Toolbar */}
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-4 py-2 bg-white/95 border-b border-warm-200 backdrop-blur-sm">
+        <div className="text-[11px] text-warm-500 truncate">
+          {fileName}{slideCount ? ` · ${slideCount} 页` : ''}
+        </div>
+      </div>
+
+      {/* Scrollable iframe wrapper */}
+      <div
+        ref={bodyRef}
+        className="overflow-auto"
+        style={{ maxHeight: '75vh' }}
+        onScroll={(e) => setShowScrollTop(e.currentTarget.scrollTop > 200)}
+      >
+        <iframe
+          ref={iframeRef}
+          srcDoc={content}
+          title={`PPT 预览: ${fileName}`}
+          sandbox="allow-scripts allow-same-origin"
+          className="w-full border-0 block"
+          style={{ height: iframeH, minHeight: 400 }}
+          onLoad={handleLoad}
+        />
+      </div>
+    </div>
+  );
+}
+
 function BinaryBody({ fileName, size, hint }: {
   fileName: string;
   size?: number;
@@ -469,7 +562,7 @@ function LoadingBody({ fileName }: { fileName: string }): JSX.Element {
 // Main modal
 // ══════════════════════════════════════════════════════════════════════════════
 
-export default function FilePreviewModal({
+const FilePreviewModal = memo(function FilePreviewModal({
   file,
   onClose,
   authToken,
@@ -652,7 +745,7 @@ export default function FilePreviewModal({
       <BinaryBody
         fileName={file.name}
         size={result.size}
-        hint="文件超过 5 MB，暂不支持在线预览。请下载到本地查看。"
+        hint={`文件过大（${result.size ? (result.size / 1024 / 1024).toFixed(1) + ' MB' : '未知大小'}），暂不支持在线预览。请下载到本地查看。`}
       />
     );
   } else if (result.state === 'binary' || result.kind === 'binary') {
@@ -676,6 +769,8 @@ export default function FilePreviewModal({
     body = (result.contentType === 'html')
       ? <DocxHtmlBody content={result.content} fileName={file.name} />
       : <PlainTextBody content={result.content} fileName={file.name} />;
+  } else if (result.kind === 'pptx' && result.content !== undefined) {
+    body = <PptBody content={result.content} fileName={file.name} slideCount={result.slideCount} />;
   } else if (result.kind === 'pdf' && result.content !== undefined) {
     body = <PdfBody content={result.content} pageCount={result.pageCount} fileName={file.name} />;
   } else if (result.kind === 'image' && result.content !== undefined) {
@@ -731,6 +826,7 @@ export default function FilePreviewModal({
             <div className="text-[11px] text-warm-500 truncate">
               {fileSize ? `${formatSize(fileSize)} · ` : ''}{ext ? ext.toUpperCase().replace('.', '') || '文件' : '文件'}
               {result?.kind ? ` · ${result.kind}` : ''}
+              {result?.slideCount ? ` · ${result.slideCount} 页` : ''}
               {result?.imageCount ? ` · ${result.imageCount} 张图片` : ''}
               {result?.textLength ? ` · ${result.textLength.toLocaleString()} 字` : ''}
               {truncated && totalChars ? ` · 已截断 (${totalChars.toLocaleString()} 字符)` : ''}
@@ -801,4 +897,6 @@ export default function FilePreviewModal({
       </div>
     </div>
   );
-}
+});
+
+export default FilePreviewModal;

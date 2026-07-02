@@ -29,7 +29,6 @@ from typing import Any
 from app.config import (
     COMMAND_EXECUTE_MAX_OUTPUT,
     COMMAND_EXECUTE_TIMEOUT,
-    PROJECT_ROOT,
     SKILLS_DIR_PROJECT,
     SKILLS_DIR_USER,
 )
@@ -369,7 +368,7 @@ async def command_execute_handler(
 
     Args:
         command: The full shell command to execute.
-        cwd: Working directory for the command (default: PROJECT_ROOT).
+        cwd: Working directory for the command (default: session workspace).
         timeout: Maximum execution time in seconds (default 60, max 120).
     """
     if not command or not command.strip():
@@ -391,10 +390,13 @@ async def command_execute_handler(
         }
 
     # ── Resolve working directory ────────────────────────────────────
+    from app.services.workspace_context import get_workspace_root
+
+    ws_root = get_workspace_root()
     if cwd and cwd.strip():
         cwd_path = Path(cwd.strip()).expanduser()
         if not cwd_path.is_absolute():
-            cwd_path = PROJECT_ROOT / cwd_path
+            cwd_path = ws_root / cwd_path
         try:
             cwd_path = cwd_path.resolve()
         except OSError:
@@ -402,7 +404,7 @@ async def command_execute_handler(
 
         # Security: ensure cwd is within allowed tree
         allowed_roots = [
-            PROJECT_ROOT.resolve(),
+            ws_root.resolve(),
             SKILLS_DIR_USER.resolve(),
             SKILLS_DIR_PROJECT.resolve(),
         ]
@@ -413,13 +415,13 @@ async def command_execute_handler(
                     "success": False,
                     "error": (
                         f"工作目录 '{cwd_path}' 不在允许范围内。"
-                        f"允许的目录: 项目根目录、技能目录。"
+                        f"允许的目录: 用户工作区、技能目录。"
                     ),
                 }
         except (OSError, ValueError):
             return {"success": False, "error": f"无法验证工作目录安全性: {cwd}"}
     else:
-        cwd_path = PROJECT_ROOT
+        cwd_path = ws_root
 
     if not await aisdir(cwd_path):
         return {"success": False, "error": f"工作目录不存在: {cwd_path}"}

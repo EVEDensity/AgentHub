@@ -11,19 +11,22 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends
 
 from app.db.session import afetch_all
-from app.services.auth_service import get_current_user, require_admin
+from app.services.auth_service import get_current_user
 
 router = APIRouter(prefix="/analytics", tags=["admin-analytics"])
 
 
 @router.get("/token-usage")
 async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
-    """Aggregate 365 days of token usage grouped by day.
+    """Aggregate 365 days of token usage grouped by day (user-scoped).
+
+    Each registered user can view their own token usage data — cross-user
+    aggregation is intentionally blocked to enforce data isolation.
 
     Returns daily sessions, messages, and token counts plus summary
     statistics for today, yesterday, and the trailing 30 days.
     """
-    require_admin(user)
+    current_uid = user["id"]
 
     # PostgreSQL: check column existence via information_schema
     cols = await afetch_all(
@@ -38,18 +41,21 @@ async def token_usage_heatmap(user: dict = Depends(get_current_user)) -> dict:
     end_day = date.today()
     start_day = end_day - timedelta(days=364)
 
+    # ── User-level data isolation ──────────────────────────────────
+    # Always filter by current user's ID — admins cannot see other
+    # users' token consumption data.
     if has_total_tokens:
         rows = await afetch_all(
             "SELECT substr(created_at, 1, 10) AS day, session_id AS \"sessionId\", content, "
             "total_tokens, prompt_tokens, completion_tokens "
-            "FROM messages WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at ASC",
-            f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59",
+            "FROM messages WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY created_at ASC",
+            current_uid, f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59",
         )
     else:
         rows = await afetch_all(
             "SELECT substr(created_at, 1, 10) AS day, session_id AS sessionId, content "
-            "FROM messages WHERE created_at >= $1 AND created_at <= $2 ORDER BY created_at ASC",
-            f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59",
+            "FROM messages WHERE user_id = $1 AND created_at >= $2 AND created_at <= $3 ORDER BY created_at ASC",
+            current_uid, f"{start_day.isoformat()}T00:00:00", f"{end_day.isoformat()}T23:59:59",
         )
 
     # Aggregate per-day stats

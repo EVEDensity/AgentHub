@@ -34,8 +34,14 @@ async def stream_message(
     agent: dict | None = None,
     collab_ctx: str = "",
     on_tool_event=None,
+    quote_references: list[dict] | None = None,
+    preprocess_context: str = "",
+    simple_mode: bool = False,
 ) -> AsyncGenerator[str, None] | None:
     return await stream_agent_response(
         session_id, content, user_id, token, attachments or [],
         agent=agent, collab_ctx=collab_ctx, on_tool_event=on_tool_event,
+        quote_references=quote_references,
+        preprocess_context=preprocess_context,
+        simple_mode=simple_mode,
     )

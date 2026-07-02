@@ -1,16 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
 import ChatHeader from '../components/chat/ChatHeader';
 import ChatInput from '../components/chat/ChatInput';
-import FilePreviewModal from '../components/chat/FilePreviewModal';
-import DagModal from '../components/chat/DagModal';
+
+import UserRoster from '../components/collaboration/UserRoster';
+import TypingIndicator from '../components/collaboration/TypingIndicator';
+import { getPresenceStore } from '../lib/presenceStore';
+import { getCollaborationStore } from '../lib/collaborationStore';
+import ShareDialog from '../components/collaboration/ShareDialog';
+import OneClickDeployModal from '../components/chat/OneClickDeployModal';
 import MessageList from '../components/chat/MessageList';
+import { type ExecPermission } from '../components/chat/PermissionModePopover';
 import SessionSidebar from '../components/chat/SessionSidebar';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import FilePreviewPanel from '../components/chat/FilePreviewPanel';
 import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
+import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeReferences } from '../lib/references';
 import {
   useSessionMessages,
@@ -25,10 +32,32 @@ import {
   unpinSession,
   type StreamBuffer,
 } from '../lib/sessionStore';
-import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
+import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
+import { ToastProvider, useAddToast } from '../components/ui/Toast';
 
-const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy'] as const;
+// ── Dynamic imports for heavy / conditionally-rendered components ──
+const FilePreviewModal = dynamic(() => import('../components/chat/FilePreviewModal'), {
+  ssr: false,
+  loading: () => null,
+});
+const FilePreviewPanel = dynamic(() => import('../components/chat/FilePreviewPanel'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-full items-center justify-center bg-white">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+        <span className="text-sm text-warm-400">加载预览面板...</span>
+      </div>
+    </div>
+  ),
+});
+const DagModal = dynamic(() => import('../components/chat/DagModal'), {
+  ssr: false,
+  loading: () => null,
+});
+
+const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy', 'Implement'] as const;
 const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
   agentId,
   domain: agentId.toLowerCase(),
@@ -47,33 +76,6 @@ function sortSessions(items: ChatSession[]): ChatSession[] {
   });
 }
 
-function detectFileCategory(name: string, _mimeType: string): string {
-  const ext = (name.split('.').pop() || '').toLowerCase();
-  const configs: Record<string, { extensions: string[] }> = {
-    code: { extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'] },
-    document: { extensions: ['txt','md','pdf','docx','rtf','tex','rst','org','log'] },
-    image: { extensions: ['png','jpg','jpeg','gif','svg','webp','bmp','ico'] },
-    archive: { extensions: ['zip','rar','7z','tar','gz','bz2','xz'] },
-    spreadsheet: { extensions: ['xlsx','xls','csv','tsv'] },
-    config: { extensions: ['json','yaml','yml','xml','toml','ini','cfg','env','conf','cnf','editorconfig','gitignore','dockerfile','makefile','prisma','graphql','proto'] },
-  };
-  for (const [cat, cfg] of Object.entries(configs)) {
-    if (cfg.extensions.includes(ext)) return cat;
-  }
-  return 'unknown';
-}
-
-function extractApiError(err: unknown): string {
-  if (err && typeof err === 'object' && 'detail' in err) {
-    const detail = (err as Record<string, unknown>).detail;
-    if (typeof detail === 'string') return detail;
-    if (Array.isArray(detail)) {
-      return (detail as Array<{ msg?: string }>).map((d) => d.msg || '').filter(Boolean).join('; ') || 'Validation error';
-    }
-  }
-  return 'Upload failed';
-}
-
 export default function AgentHubIM(): JSX.Element {
   const [token, setToken] = useState<string>('');
   const [user, setUser] = useState<User | null>(null);
@@ -86,6 +88,7 @@ export default function AgentHubIM(): JSX.Element {
   const [sessionId, setSessionId] = useState<string>('');
   const messages = useSessionMessages(sessionId);
   const isStreaming = useSessionStreaming(sessionId);
+  const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
@@ -109,11 +112,31 @@ export default function AgentHubIM(): JSX.Element {
   const [editingId, setEditingId] = useState<string>('');
   const [editName, setEditName] = useState<string>('');
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [quoteReferences, setQuoteReferences] = useState<QuoteReference[]>([]);
+  const [pmState, setPmState] = useState<import('../types').PMState>('IDLE');
+  const [degradationStatus, setDegradationStatus] = useState<import('../types').DegradationStatus | null>(null);
+  // ── Streaming UX state ────────────────────────────────────────
+  // Phase-based progress: tracks the current stage of the agent pipeline
+  const [streamPhase, setStreamPhase] = useState<'idle' | 'thinking' | 'executing' | 'generating' | 'done'>('idle');
+  // Currently executing tool names (shown in ChatHeader)
+  const [activeTools, setActiveTools] = useState<string[]>([]);
+  // WebSocket send state: idle → sending → sent
+  const [sendState, setSendState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  // Current agent name extracted from the message content
+  const [currentAgentName, setCurrentAgentName] = useState<string>('');
+  // ── Share dialog state ─────────────────────────────────────────
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sessionVisibility, setSessionVisibility] = useState<string>('');
+  // ── One-click deploy dialog state ───────────────────────────────
+  const [deployOpen, setDeployOpen] = useState(false);
   // 附件卡片的全屏预览弹窗 (点击眼睛按钮触发)
   const [previewFile, setPreviewFile] = useState<FilePreviewTarget | null>(null);
   const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
   const [previewTabs, setPreviewTabs] = useState<WorkspacePreviewTab[]>([]);
   const [activePreviewTabId, setActivePreviewTabId] = useState<string | null>(null);
+  // Workspace change counter — incremented on each file write/delete to
+  // trigger auto-refresh in the file tree panel without full page reload.
+  const [workspaceVersion, setWorkspaceVersion] = useState(0);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [previewPanelOpen, setPreviewPanelOpen] = useState<boolean>(false);
   /**
@@ -121,6 +144,14 @@ export default function AgentHubIM(): JSX.Element {
    * 写一个递增 counter，让 FilePreviewPanel 用 effect 监听变化并执行滚动。
    */
   const [pendingScrollRef, setPendingScrollRef] = useState<{ id: string; nonce: number } | null>(null);
+
+  // ── 执行权限模式 ─────────────────────────────────────────────────
+  // 1=询问权限  2=跳过权限  3=计划模式
+  const [execPermission, setExecPermission] = useState<ExecPermission>(1);
+  // 自动回复模式：为 true 时，无@Agent的对话自动使用默认Agent回复
+  const [autoReply, setAutoReply] = useState(true);
+  const autoReplyRef = useRef(autoReply);
+  autoReplyRef.current = autoReply;
 
   // ── 可调整布局尺寸（localStorage 持久化） ──────────────
   // 左侧会话栏宽度：默认 320px，可在 240-480 之间调整
@@ -151,6 +182,13 @@ export default function AgentHubIM(): JSX.Element {
   // ★ streamBufferRef 不再使用——buffer 走 SessionStore。
   // ★ streamFlushRafRef 改为 per-session Map，让每个 session 独立 RAF 调度 flush。
   const streamFlushRafRef = useRef<Map<string, number>>(new Map());
+  // ★ progressiveFlushTimersRef: per-session setTimeout IDs for progressive
+  //    chunk release (one chunk every ~8ms for a natural typing effect).
+  const progressiveFlushTimersRef = useRef<Map<string, number>>(new Map());
+  // ★ streamInterruptedAtRef 记录每个 session 上次 stream_interrupted 的时间戳。
+  //   用于在 800ms 窗口内阻断迟到的 agent_thinking 事件重新激活流式状态
+  //   (避免标题栏"AI streaming..."状态卡死)。
+  const streamInterruptedAtRef = useRef<Map<string, number>>(new Map());
   const retryRef = useRef<PendingMessage[]>([]);
   const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -159,6 +197,7 @@ export default function AgentHubIM(): JSX.Element {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
+  const tokenRef = useRef<string>(token);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const mentionStartRef = useRef<number>(-1);
   const mentionPanelRef = useRef<HTMLDivElement | null>(null);
@@ -176,13 +215,16 @@ export default function AgentHubIM(): JSX.Element {
   // 也能拿到“此时此刻”真实的 sessionId，而不是上一次渲染的快照。
   const activeSessionIdRef = useRef<string>(sessionId);
   activeSessionIdRef.current = sessionId;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Effects ──────────────────────────────────────────────
 
   useEffect(() => {
     currentSessionRef.current = sessionId;
-  }, [sessionId]);
+    tokenRef.current = token;
+  }, [sessionId, token]);
 
   useEffect(() => {
     const saved = localStorage.getItem('agenthub_token');
@@ -202,36 +244,98 @@ export default function AgentHubIM(): JSX.Element {
     document.body.style.zoom = `${zoom}%`;
   }, []);
 
+  // Load user settings from backend and merge into localStorage
+  useEffect(() => {
+    const token = localStorage.getItem('agenthub_token');
+    if (!token) return;
+    fetch('/api/user/settings', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: { settings?: Record<string, string> } | null) => {
+        if (!data?.settings) return;
+        const s = data.settings;
+        if (s.theme && !localStorage.getItem('agenthub_theme')) { localStorage.setItem('agenthub_theme', s.theme); document.documentElement.setAttribute('data-theme', s.theme); }
+        if (s.lang && !localStorage.getItem('agenthub_lang')) { localStorage.setItem('agenthub_lang', s.lang); document.documentElement.lang = s.lang === 'en' ? 'en' : 'zh-CN'; }
+        if (s.zoom && !localStorage.getItem('agenthub_zoom')) { localStorage.setItem('agenthub_zoom', s.zoom); document.body.style.zoom = `${s.zoom}%`; }
+      })
+      .catch(() => { /* backend off — use localStorage defaults */ });
+  }, [token]);
+
+  /** Centralised handler for expired / invalid auth tokens.
+   *  Clears stored credentials, tears down all active connections,
+   *  and returns the UI to the login screen with an explanatory notice. */
+  function handleTokenExpired(): void {
+    // Prevent duplicate logout cascades
+    if (!localStorage.getItem('agenthub_token')) return;
+
+    localStorage.removeItem('agenthub_token');
+    localStorage.removeItem('agenthub_user');
+    // Close every open WebSocket — the token is dead
+    Array.from(wsRef.current.keys()).forEach((sid) => closeWs(sid));
+    Array.from(wsRef.current.keys()).forEach((sid) => clearSession(sid));
+    if (reconnectRef.current) {
+      clearTimeout(reconnectRef.current);
+      reconnectRef.current = null;
+    }
+    streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
+    streamFlushRafRef.current.clear();
+    progressiveFlushTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+    progressiveFlushTimersRef.current.clear();
+    setToken('');
+    setUser(null);
+    setNotice('登录已过期，请重新登录');
+  }
+
   useEffect(() => {
     if (!token) return;
+    // ── Fetch sessions ──────────────────────────────────────────────
     fetch('/api/chat/sessions', { headers: authHeaders() })
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) {
+          if (r.status === 401) throw new Error('TOKEN_EXPIRED');
+          throw new Error(`HTTP ${r.status}`);
+        }
+        return r.json();
+      })
       .then((data: ChatSession[]) => {
+        if (!Array.isArray(data)) return; // defensive: 401 返回的不是数组
         setSessions(sortSessions(data));
         if (!data.find((s) => s.id === sessionId) && data.length) {
           setSessionId(data[0].id);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if ((err as Error).message === 'TOKEN_EXPIRED') {
+          handleTokenExpired();
+        }
+      });
+    // ── Fetch agents ───────────────────────────────────────────────
     fetch('/api/agent/registry', { headers: authHeaders() })
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: Agent[]) => setAgents(data.length ? data : FALLBACK_AGENTS))
       .catch(() => setAgents(FALLBACK_AGENTS));
+    // ── Fetch workflows ─────────────────────────────────────────────
     fetch('/api/chat/workflows', { headers: authHeaders() })
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: WorkflowSummary[]) => setWorkflows(data))
       .catch(() => {});
+    // ── Fetch skills ────────────────────────────────────────────────
     fetch('/api/skills')
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: { skills: SkillMeta[] }) => setSkills(data.skills || []))
       .catch(() => {});
   }, [token]);
 
   async function reloadMessages(merge = false): Promise<void> {
     const sid = currentSessionRef.current;
+    // Guard: never issue requests with an empty session id — the
+    // resulting double-slash URL (…/sessions//messages) would 404.
+    if (!sid) return;
     try {
-      const res = await fetch(`/api/chat/sessions/${sid}/messages`, { headers: authHeaders() });
-      if (!res.ok) return;
+      const res = await fetch(`/api/chat/sessions/${encodeURIComponent(sid)}/messages`, { headers: authHeaders() });
+      if (!res.ok) {
+        if (res.status === 401) handleTokenExpired();
+        return;
+      }
       const data: Message[] = (await res.json()) as Message[];
       if (merge) {
         updateSessionMessages(sid, (prev) => {
@@ -257,6 +361,21 @@ export default function AgentHubIM(): JSX.Element {
   function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const localToken = typeof window !== 'undefined' ? localStorage.getItem('agenthub_token') : '';
     return localToken ? { ...extra, Authorization: `Bearer ${localToken}` } : extra;
+  }
+
+  /** Fetch wrapper that attaches auth headers and auto-logouts on 401.
+   *  Any component-level API call SHOULD use this instead of raw fetch
+   *  so stale/expired tokens are caught uniformly. */
+  async function fetchAuth(url: string, init: RequestInit = {}): Promise<Response> {
+    const res = await fetch(url, {
+      ...init,
+      headers: { ...authHeaders(), ...(init.headers as Record<string, string> || {}) },
+    });
+    if (res.status === 401) {
+      handleTokenExpired();
+      throw new Error('TOKEN_EXPIRED');
+    }
+    return res;
   }
 
   useEffect(() => {
@@ -290,6 +409,10 @@ export default function AgentHubIM(): JSX.Element {
     };
   }, [token, sessionId]);
 
+  // ── Scroll-to-bottom helper refs ──────────────────────────
+  const scrollRafRef = useRef<number>(0);
+  const lastScrollTimeRef = useRef<number>(0);
+
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -300,18 +423,34 @@ export default function AgentHubIM(): JSX.Element {
     prevMessageCountRef.current = currentCount;
     prevSessionRef.current = sessionId;
 
+    // Session switch: immediate scroll to bottom
     if (isSessionSwitch) {
-      requestAnimationFrame(() => {
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = requestAnimationFrame(() => {
         container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
       });
       return;
     }
 
+    // New message during streaming: throttle to ~30fps to avoid scroll jank
+    // The progressive flush releases chunks at ~8ms intervals (125Hz) —
+    // scrolling on every chunk causes layout thrashing.
     if (isNewMessage) {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      const now = performance.now();
+      // Throttle: max one scroll per ~32ms (~30fps)
+      if (now - lastScrollTimeRef.current < 32) return;
+      lastScrollTimeRef.current = now;
+
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+      scrollRafRef.current = requestAnimationFrame(() => {
+        // Use auto (not smooth) during streaming — smooth animation
+        // competes with DOM updates from progressive chunk release
+        container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
+      });
       return;
     }
 
+    // User is near the bottom: keep them anchored
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     if (distanceToBottom < 120) {
       container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
@@ -321,10 +460,19 @@ export default function AgentHubIM(): JSX.Element {
   // ── Streaming ────────────────────────────────────────────
 
   /**
-   * 把指定 session 的 buffer 中的 chunks 应用到对应 session 的 messages。
-   * 每个 session 独立调度：切到别的 session 时旧 session 的 chunks 仍能被正确
-   * 累积到对应 session 的 messages 里，切回来时直接看到完整流式结果。
+   * Progressive chunk release: release ONE chunk at a time, then
+   * schedule the next release via setTimeout.  This ensures text
+   * appears progressively even when chunks arrive faster than the
+   * animation frame rate (e.g., when the LLM adapter returns the
+   * entire response in one big chunk, or when chunks arrive over
+   * a very fast network connection within a single RAF window).
+   *
+   * Each chunk is ~1-5 characters (individual SSE tokens), so
+   * releasing them at ~8ms intervals gives ~125-625 chars/sec —
+   * a natural "streaming typewriter" feel.
    */
+  const PROGRESSIVE_FLUSH_INTERVAL_MS = 8;
+
   function flushStreamBuffer(sessionId: string): void {
     const buf = getSessionBuffer(sessionId);
     if (!buf) return;
@@ -341,14 +489,18 @@ export default function AgentHubIM(): JSX.Element {
       return;
     }
 
-    const contentDelta = buf.chunks.join('');
-    const finalFlag = buf.isFinal;
-    // 重置 buffer 内容（保留 isFinal 以便 isFinal 分支消费）
+    // ── Release only the FIRST chunk per flush ──
+    // Remaining chunks stay in the buffer and will be flushed by
+    // subsequent timer/RAF calls, creating a visible typing effect.
+    const chunk = buf.chunks[0];
+    const remaining = buf.chunks.slice(1);
+    const isLastChunk = remaining.length === 0 && buf.isFinal;
+
     const nextBuf: StreamBuffer = {
       messageId: buf.messageId,
       sessionId: buf.sessionId,
-      chunks: [],
-      isFinal: finalFlag ? false : buf.isFinal,
+      chunks: remaining,
+      isFinal: isLastChunk ? false : buf.isFinal,
     };
     setSessionBuffer(buf.sessionId, nextBuf);
 
@@ -360,8 +512,8 @@ export default function AgentHubIM(): JSX.Element {
         const updated = [...prev];
         updated[idx] = {
           ...updated[idx],
-          content: updated[idx].content + contentDelta,
-          isStreaming: !finalFlag,
+          content: updated[idx].content + chunk,
+          isStreaming: !isLastChunk,
         };
         return updated;
       }
@@ -369,18 +521,30 @@ export default function AgentHubIM(): JSX.Element {
         event: 'message',
         sessionId: buf.sessionId,
         sender: 'agent',
-        content: contentDelta,
+        content: chunk,
         type: 'text',
         timestamp: new Date().toISOString(),
         messageId: bufMessageId,
-        isStreaming: !finalFlag,
+        isStreaming: !isLastChunk,
       };
       return [...prev, newMsg];
     });
 
-    if (finalFlag) {
+    if (isLastChunk) {
       setSessionStreaming(buf.sessionId, false);
       setSessionBuffer(buf.sessionId, null);
+      return;
+    }
+
+    // ── Schedule next chunk release ──
+    // If there are more chunks in the buffer, release the next one
+    // after a short delay to maintain the progressive typing effect.
+    if (remaining.length > 0) {
+      const timerId = window.setTimeout(() => {
+        progressiveFlushTimersRef.current.delete(sessionId);
+        flushStreamBuffer(sessionId);
+      }, PROGRESSIVE_FLUSH_INTERVAL_MS);
+      progressiveFlushTimersRef.current.set(sessionId, timerId);
     }
   }
 
@@ -410,8 +574,16 @@ export default function AgentHubIM(): JSX.Element {
     // 导致新建/切换会话时连到了旧 sid —— 表现就是 "只能发到固定会话"。
     const sid = targetSid || currentSessionRef.current;
     currentSessionRef.current = sid;
+
+    // Guard: empty session id produces malformed ws://…/ws/ URLs that 404.
+    // Also refuse to connect when the stored token is missing (already
+    // logged out) — this prevents spurious reconnection attempts after
+    // handleTokenExpired() fires.  Use tokenRef to avoid stale-closure
+    // issues when connectWs is called from setTimeout.
+    if (!sid || !tokenRef.current) return;
+
     // eslint-disable-next-line no-console
-    console.log('[agenthub] connectWs called', { targetSid, ref: currentSessionRef.current, finalSid: sid, alreadyHas: wsRef.current.has(sid), wsMapKeys: Array.from(wsRef.current.keys()) });
+    if (process.env.NODE_ENV === "development") { console.log("[agenthub] connectWs", { targetSid, finalSid: sid, hasSocket: wsRef.current.has(sid) }); }
     // ★ 关键修复：如果该 session 已有 ws 但已 CLOSED/CLOSING，删掉重建。
     // 仅当 ws 是 OPEN/CONNECTING 时才跳过。
     const existing = wsRef.current.get(sid);
@@ -475,8 +647,25 @@ export default function AgentHubIM(): JSX.Element {
       flushStreamBuffer(sid);
       setSessionBuffer(sid, null);
       setSessionStreaming(sid, false);
-      // 仅当用户当前还在这个 session 才重连
-      if (currentSessionRef.current === sid) {
+      // 清理该 session 的中断标记
+      streamInterruptedAtRef.current.delete(sid);
+      // ★ 方案4: 重连通知
+      const attempt = reconnectAttemptsRef.current;
+      if (currentSessionRef.current === sid && attempt === 0) {
+        addToast({ type: 'warning', title: 'WebSocket 连接断开', message: '正在尝试重新连接...', duration: 5000 });
+      } else if (currentSessionRef.current === sid && attempt >= 3) {
+        addToast({ type: 'error', title: '连接不稳定', message: `已尝试重连 ${attempt + 1} 次，请检查网络`, duration: 0 });
+      }
+      // 仅当用户当前还在这个 session 且 token 仍有效才重连
+      // tokenRef 检查防止已过期登出后仍继续无效重连
+      if (currentSessionRef.current === sid && tokenRef.current) {
+        // Cap reconnection attempts to avoid infinite loops on
+        // permanent failures (e.g. expired token, deleted session).
+        if (reconnectAttemptsRef.current >= 10) {
+          setNotice('连接已断开，请刷新页面或重新登录');
+          addToast({ type: 'error', title: '连接彻底断开', message: '请刷新页面或重新登录', duration: 0 });
+          return;
+        }
         reconnectAttemptsRef.current += 1;
         if (reconnectRef.current) clearTimeout(reconnectRef.current);
         reconnectRef.current = setTimeout(connectWs, _reconnectDelay());
@@ -486,6 +675,10 @@ export default function AgentHubIM(): JSX.Element {
     ws.onerror = () => {
       wsReadyRef.current.delete(sid);
       setConnected(false);
+      // Ensure cleanup even if browser doesn't fire onclose after error
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        try { ws.close(); } catch { /* best-effort */ }
+      }
     };
 
     ws.onmessage = (event: MessageEvent<string>) => {
@@ -522,22 +715,99 @@ export default function AgentHubIM(): JSX.Element {
         if (msgId) lastMessageIdRef.current = msgId;
       }
 
+      // ── Workspace file change events ─────────────────────────────
+      if (evt === 'workspace_change') {
+        setWorkspaceVersion(v => v + 1);
+        // Preview tabs: if the changed file is open in a tab, refresh its content
+        const changePath = raw.path as string;
+        if (changePath) {
+          setPreviewTabs(prev =>
+            prev.map(t => (t.path === changePath ? { ...t, _version: (t as any)._version + 1 || 1 } : t))
+          );
+        }
+      }
+
+      if (evt === 'file_conflict') {
+        const conflictPath = raw.path as string;
+        const backupPath = raw.backupPath as string;
+        if (conflictPath) {
+          setNotice(
+            `⚠️ 文件冲突: ${conflictPath} 被其他用户修改过` +
+            (backupPath ? ` (原文件已备份为 ${backupPath})` : '')
+          );
+        }
+        // Still refresh the file tree
+        setWorkspaceVersion(v => v + 1);
+      }
+
+      if (evt === 'file_lock_change') {
+        // Increment version so lock indicators update in the file tree
+        setWorkspaceVersion(v => v + 1);
+      }
+
       if (evt === 'task_update') {
-        setDag({ total: raw.total as number || 0, completed: raw.completed as number || 0, nodes: raw.nodes as DagState['nodes'] || [] });
+        // Per-node incremental update — merge into existing dag state
+        const tu = raw as { nodeId: string; status: string; detail?: { error?: string; retries?: number }; sessionId: string };
+        if (tu.nodeId && tu.status) {
+          setDag(prev => {
+            const nodes = prev.nodes.map(n =>
+              n.id === tu.nodeId ? { ...n, status: tu.status, error: tu.detail?.error } : n
+            );
+            return {
+              ...prev,
+              nodes,
+              completed: nodes.filter(n => n.status === 'SUCCESS' || n.status === 'FAILED').length,
+            };
+          });
+        }
       }
 
       if (evt === 'message_chunk') {
         const chunk = raw as unknown as StreamChunk;
         const cSessionId = chunk.sessionId || chunkSessionId;
+        // ★ 中断守卫：stream_interrupted 后 800ms 内的迟到的 chunk 直接丢弃，
+        //   避免旧 buffer 的残余内容被写入新会话的渲染区。
+        const interruptedAt = streamInterruptedAtRef.current.get(cSessionId);
+        if (interruptedAt && Date.now() - interruptedAt < 800) {
+          return;
+        }
         setSessionStreaming(cSessionId, !chunk.isFinal);
+        // ★ 方案2: 第一个文本chunk到达 → 进入"生成回复"阶段
+        setStreamPhase('generating');
 
         const existingBuf = getSessionBuffer(cSessionId);
         if (!existingBuf || existingBuf.messageId !== chunk.messageId) {
-          // First chunk of a new stream — clean up any thinking placeholder
-          // from the agent_thinking event (it has a different messageId)
+          // ★ 方案3: 保留最后一个 thinking 占位，更新为 "工具完成，生成回复中"
+          // 而非全部删除。这样用户始终看到阶段上下文。
           updateSessionMessages(cSessionId, (prev) => {
+            const lastThinkingIdx = (() => {
+              for (let i = prev.length - 1; i >= 0; i--) {
+                if (prev[i].isStreaming && prev[i].sender !== 'user' && !prev[i].diffFilePath && prev[i].type === 'text') {
+                  return i;
+                }
+              }
+              return -1;
+            })();
+            if (lastThinkingIdx >= 0) {
+              const updated = [...prev];
+              if (!updated[lastThinkingIdx].content || updated[lastThinkingIdx].content.startsWith('🔧')) {
+                updated[lastThinkingIdx] = {
+                  ...updated[lastThinkingIdx],
+                  content: '工具执行完成，正在综合结果生成回复...',
+                };
+              }
+              // Delete OLDER thinking placeholders but keep the latest one
+              return updated.filter((m, i) => {
+                if (i === lastThinkingIdx) return true;
+                if (m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text') {
+                  return false;
+                }
+                return true;
+              });
+            }
+            // Fallback: clean up all (no thinking buffer found)
             const cleaned = prev.filter(
-              (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
+              (m) => !(m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text')
             );
             return cleaned.length !== prev.length ? cleaned : prev;
           });
@@ -548,6 +818,8 @@ export default function AgentHubIM(): JSX.Element {
             chunks: [],
             isFinal: false,
           });
+          // ★ 全新流开始了，清除该 session 的打断标记
+          streamInterruptedAtRef.current.delete(cSessionId);
         }
 
         // 把 chunk 追加到对应 session 的 buffer
@@ -562,8 +834,12 @@ export default function AgentHubIM(): JSX.Element {
           });
         }
 
-        // 调度该 session 自己的 RAF flush
-        if (!streamFlushRafRef.current.has(cSessionId)) {
+        // 调度该 session 自己的 RAF flush — only if no progressive
+        // timer is already running (which would release chunks one at a time).
+        if (
+          !streamFlushRafRef.current.has(cSessionId) &&
+          !progressiveFlushTimersRef.current.has(cSessionId)
+        ) {
           const raf = window.requestAnimationFrame(() => {
             streamFlushRafRef.current.delete(cSessionId);
             flushStreamBuffer(cSessionId);
@@ -574,13 +850,34 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'stream_interrupted') {
         const iSessionId = chunkSessionId;
+        // ★ 方案2+3: 重置 UX 状态
+        setStreamPhase('idle');
+        setActiveTools([]);
+        setCurrentAgentName('');
+        // ★ 强制定位：清除该 session 的所有 streaming 状态、buffer、待调度 RAF
+        //   以及流式 filter 状态。即便后续 stream_chunk 因为竞态到达，buffer
+        //   已经被清空，flush 时不会把老内容写入新消息。
         setSessionStreaming(iSessionId, false);
+        setSessionBuffer(iSessionId, null);
+        const pendingRaf = streamFlushRafRef.current.get(iSessionId);
+        if (pendingRaf) {
+          window.cancelAnimationFrame(pendingRaf);
+          streamFlushRafRef.current.delete(iSessionId);
+        }
+        // Clear any pending progressive flush timer
+        const pendingTimer = progressiveFlushTimersRef.current.get(iSessionId);
+        if (pendingTimer) {
+          window.clearTimeout(pendingTimer);
+          progressiveFlushTimersRef.current.delete(iSessionId);
+        }
+        // 记录打断时刻；800ms 内的 agent_thinking / stream_chunk 会被忽略
+        streamInterruptedAtRef.current.set(iSessionId, Date.now());
         updateSessionMessages(iSessionId, (prev) => {
           const updated = [...prev];
           let changed = false;
           for (let i = updated.length - 1; i >= 0; i--) {
             if (updated[i].isStreaming) {
-              // If it's a thinking placeholder (empty or progress text), remove it entirely
+              // thinking placeholder（空或"正在..."进度文案）整体删除
               if (!updated[i].content || updated[i].content.startsWith('正在')) {
                 updated.splice(i, 1);
               } else {
@@ -605,14 +902,52 @@ export default function AgentHubIM(): JSX.Element {
           phase?: string;
           details?: string;
         };
+        // ★ 中断守卫：如果该 session 在 800ms 内被 stream_interrupted，
+        //   迟到的 agent_thinking 事件不应该重新激活流式状态，否则标题
+        //   栏"AI streaming..."会卡死。 直接 return，等下一次新会话。
+        const interruptedAt = streamInterruptedAtRef.current.get(chunkSessionId);
+        if (interruptedAt && Date.now() - interruptedAt < 800) {
+          return;
+        }
+        // 过了窗口期就清掉标记，避免污染下一次正常流
+        if (interruptedAt) {
+          streamInterruptedAtRef.current.delete(chunkSessionId);
+        }
         setSessionStreaming(chunkSessionId, true);
+        // ★ 方案2: 更新阶段进度
+        const phase = payload.phase || '';
+        if (phase === 'analyzing' || phase === 'planning') {
+          setStreamPhase('thinking');
+        } else if (phase === 'executing') {
+          setStreamPhase('executing');
+        } else if (phase === 'synthesizing') {
+          setStreamPhase('generating');
+        }
+        if (payload.agentId) setCurrentAgentName(payload.agentId);
+
         // Insert or update the thinking placeholder with phase details.
         // Subsequent agent_thinking events (e.g. "executing", "synthesizing")
         // update the same placeholder in-place so the user sees live progress.
         updateSessionMessages(chunkSessionId, (prev) => {
+          // ★ 方案1: 如果有乐观占位，替换它而非新增
+          const optimisticIdx = prev.findIndex(
+            (m) => (m as any)._optimistic && m.isStreaming
+          );
           const existingIdx = prev.findIndex(
             (m) => m.messageId === payload.messageId && m.isStreaming
           );
+          if (optimisticIdx >= 0) {
+            // Replace optimistic placeholder with real agent_thinking
+            const updated = [...prev];
+            updated[optimisticIdx] = {
+              ...updated[optimisticIdx],
+              messageId: payload.messageId,
+              sender: payload.agentId || updated[optimisticIdx].sender,
+              content: payload.details || '模型正在思考中...',
+              _optimistic: undefined,
+            };
+            return updated;
+          }
           if (existingIdx >= 0) {
             // Update existing placeholder with new phase info
             const updated = [...prev];
@@ -641,11 +976,34 @@ export default function AgentHubIM(): JSX.Element {
       // ── Tool call events ──────────────────────────────────────────
       if (evt === 'tool_call') {
         const payload = raw as unknown as ToolCallEvent;
+        // ★ 方案2+3: 更新阶段和活跃工具列表
+        setStreamPhase('executing');
+        if (payload.toolCalls && payload.toolCalls.length > 0) {
+          setActiveTools(payload.toolCalls.map((c: any) => c.name || ''));
+        }
         updateSessionMessages(chunkSessionId, (prev) => {
-          // Remove empty thinking placeholders — tool execution has started
-          const cleaned = prev.filter(
-            (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
-          );
+          // ★ 方案3: 保留最后一个 thinking 占位，更新为 "工具执行中"
+          // 而不是全部删除。这样用户始终看到最近的上下文。
+          const lastThinkingIdx = (() => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].isStreaming && prev[i].sender !== 'user' && !prev[i].diffFilePath && prev[i].type === 'text') {
+                return i;
+              }
+            }
+            return -1;
+          })();
+          let cleaned = prev;
+          if (lastThinkingIdx >= 0) {
+            cleaned = prev.map((m, i) => {
+              if (i === lastThinkingIdx) {
+                return { ...m, content: '🔧 正在执行工具...' };
+              }
+              if (m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text') {
+                return null; // Remove older thinking placeholders
+              }
+              return m;
+            }).filter(Boolean) as Message[];
+          }
           return [
             ...cleaned,
             {
@@ -664,6 +1022,23 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'tool_result') {
         const payload = raw as unknown as ToolResultEvent;
+        // ★ 方案3: 从活跃工具列表中移除完成的工具
+        if (payload.results) {
+          setActiveTools(prev => prev.filter(
+            name => !payload.results.some((r: any) => r.tool_name === name)
+          ));
+          // ★ 方案4: 工具失败时弹出 toast 通知
+          for (const result of payload.results) {
+            if (!result.success) {
+              addToast({
+                type: 'error',
+                title: `工具执行失败: ${result.tool_name}`,
+                message: result.error || '未知错误',
+                duration: 8000,
+              });
+            }
+          }
+        }
         updateSessionMessages(chunkSessionId, (prev) => {
           // Find the matching tool_call message and update it
           const updated = [...prev];
@@ -708,6 +1083,316 @@ export default function AgentHubIM(): JSX.Element {
         }
       }
 
+      // ── PM state & degradation events ────────────────────────────
+
+      if (evt === 'pm_state_change') {
+        const payload = raw as unknown as import('../types').PMStateChangeEvent;
+        setPmState(payload.state);
+      }
+
+      if (evt === 'degradation_change') {
+        const payload = raw as unknown as import('../types').DegradationEvent;
+        setDegradationStatus(payload.status);
+      }
+
+      // ── Multi-user collaboration events ───────────────────────────
+
+      if (evt === 'user_roster') {
+        // Initial roster of online users when connecting
+        const roster = raw as unknown as import('../types').UserRosterEvent;
+        getPresenceStore().setRoster(chunkSessionId, roster.users);
+      }
+
+      if (evt === 'user_joined') {
+        const joined = raw as unknown as import('../types').UserJoinedEvent;
+        getPresenceStore().addUser(chunkSessionId, {
+          userId: joined.userId,
+          name: joined.userName,
+          role: joined.role,
+          status: 'online',
+        });
+      }
+
+      if (evt === 'user_left') {
+        const left = raw as unknown as import('../types').UserLeftEvent;
+        getPresenceStore().removeUser(chunkSessionId, left.userId);
+        getCollaborationStore().setTyping(chunkSessionId, left.userId, left.userName, false);
+      }
+
+      if (evt === 'presence_update') {
+        const pu = raw as unknown as import('../types').PresenceUpdateEvent;
+        getPresenceStore().bulkUpdateStatus(chunkSessionId, pu.users);
+      }
+
+      if (evt === 'typing_indicator') {
+        const ti = raw as unknown as import('../types').TypingIndicatorEvent;
+        getCollaborationStore().setTyping(chunkSessionId, ti.userId, ti.userName, ti.isTyping);
+      }
+
+      // ── PM interaction state sync ─────────────────────────────────
+
+      if (evt === 'interaction_already_resolved') {
+        const iar = raw as unknown as import('../types').InteractionAlreadyResolvedEvent;
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            const m = updated[i];
+            if ((m.messageId || m.id) === iar.messageId) {
+              // Update all PM interaction data types with resolvedBy
+              const resolver = { resolvedBy: iar.resolvedBy, resolvedByName: iar.userName };
+              if (m.questionData) {
+                updated[i] = { ...m, questionData: { ...m.questionData, ...resolver } };
+              } else if (m.riskWarningData) {
+                updated[i] = { ...m, riskWarningData: { ...m.riskWarningData, ...resolver } };
+              } else if (m.todoData) {
+                updated[i] = { ...m, todoData: { ...m.todoData, ...resolver } };
+              } else if (m.taskPreviewData) {
+                updated[i] = { ...m, taskPreviewData: { ...m.taskPreviewData, ...resolver } };
+              }
+              break;
+            }
+          }
+          return updated;
+        });
+      }
+
+      if (evt === 'permission_mode_changed') {
+        const pmc = raw as unknown as import('../types').PermissionModeChangedEvent;
+        if (pmc.mode === 1 || pmc.mode === 2 || pmc.mode === 3) {
+          setExecPermission(pmc.mode as ExecPermission);
+        }
+      }
+
+      // ── PM/PMO agent interaction events ──────────────────────────
+
+      if (evt === 'agent_question') {
+        const payload = raw as unknown as import('../types').AgentQuestionEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'PM',
+            content: payload.question,
+            type: 'agent_question' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            questionData: payload,
+          },
+        ]);
+      }
+
+      if (evt === 'progress_update') {
+        const payload = raw as unknown as import('../types').ProgressUpdateEvent;
+        // Replace existing progress message with same messageId, or append new
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const existingIdx = prev.findIndex(
+            (m) => m.messageId === payload.messageId && m.type === 'progress_update'
+          );
+          if (existingIdx >= 0) {
+            const updated = [...prev];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              content: payload.currentStep,
+              progressData: payload,
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              event: 'message',
+              sessionId: chunkSessionId,
+              sender: payload.agentId || 'PM',
+              content: payload.currentStep,
+              type: 'progress_update' as const,
+              timestamp: payload.timestamp,
+              messageId: payload.messageId,
+              progressData: payload,
+            },
+          ];
+        });
+      }
+
+      if (evt === 'risk_warning') {
+        const payload = raw as unknown as import('../types').RiskWarningEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'PM',
+            content: payload.title + '\n' + payload.description,
+            type: 'risk_warning' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            riskWarningData: payload,
+          },
+        ]);
+      }
+
+      if (evt === 'agent_todo') {
+        const payload = raw as unknown as import('../types').AgentTodoEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'PM',
+            content: payload.title + '\n' + payload.description,
+            type: 'agent_todo' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            todoData: payload,
+          },
+        ]);
+      }
+
+      if (evt === 'task_preview') {
+        const payload = raw as unknown as import('../types').TaskPreviewEvent;
+        // Initialize DAG state for real-time node status tracking
+        setDag({
+          total: payload.tasks.length,
+          completed: 0,
+          nodes: payload.tasks.map(t => ({
+            id: t.id,
+            agent: t.agent,
+            description: t.description,
+            dependencies: t.dependencies,
+            status: 'PENDING',
+          })),
+        });
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: 'system',
+            content: '任务预览',
+            type: 'task_preview' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            taskPreviewData: payload,
+          },
+        ]);
+      }
+
+      // ── Solution proposal event ──────────────────────────────────────
+      if (evt === 'solution_proposal') {
+        const payload = raw as unknown as import('../types').SolutionProposalEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: 'Orchestrator',
+            content: `方案分析 — ${payload.solutions.length} 个方案`,
+            type: 'solution_proposal' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            solutionProposalData: payload,
+          },
+        ]);
+      }
+
+      // ── Deploy card event ──────────────────────────────────────────
+      if (evt === 'deploy_card') {
+        const payload = raw as unknown as import('../types').DeployCardEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: payload.agentId || 'Deploy',
+            content: payload.description || '部署完成',
+            type: 'deploy_card' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            deployCardData: payload,
+          },
+        ]);
+      }
+
+      // ── CloudCode: terminal output (streaming) ────────────────────
+      if (evt === 'terminal_output') {
+        const payload = raw as unknown as import('../types').TerminalOutputEvent;
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const existingIdx = prev.findIndex(
+            (m) => m.messageId === payload.messageId && m.type === 'terminal'
+          );
+          if (existingIdx >= 0) {
+            const updated = [...prev];
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              content: updated[existingIdx].content + payload.content,
+              isStreaming: true,
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              event: 'message',
+              sessionId: chunkSessionId,
+              sender: payload.sender || 'system',
+              content: payload.content,
+              type: 'terminal' as const,
+              timestamp: payload.timestamp,
+              messageId: payload.messageId,
+              isStreaming: true,
+            },
+          ];
+        });
+      }
+
+      // ── CloudCode: diff update ────────────────────────────────────
+      if (evt === 'diff_update') {
+        const payload = raw as unknown as import('../types').DiffUpdateEvent;
+        updateSessionMessages(chunkSessionId, (prev) => [
+          ...prev,
+          {
+            event: 'message',
+            sessionId: chunkSessionId,
+            sender: 'system',
+            content: payload.diff,
+            type: 'diff' as const,
+            timestamp: payload.timestamp,
+            messageId: payload.messageId,
+            diffFilePath: payload.path,
+            diffDecisionState: 'pending' as const,
+          },
+        ]);
+      }
+
+      // ── Diff decision (user clicked Accept/Reject on a diff bubble) ──
+      if (evt === 'diff_decision') {
+        const payload = raw as unknown as import('../types').DiffDecisionEvent;
+        updateSessionMessages(chunkSessionId, (prev) => {
+          const updated = [...prev];
+          for (let i = updated.length - 1; i >= 0; i--) {
+            if (updated[i].messageId === payload.messageId && updated[i].type === 'diff') {
+              updated[i] = {
+                ...updated[i],
+                diffDecisionState: payload.decision === 'accept' ? 'accepted' : 'rejected',
+              };
+              // Forward decision to server
+              const targetWs = wsRef.current.get(chunkSessionId);
+              if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+                targetWs.send(JSON.stringify({
+                  event: 'diff_decision',
+                  sessionId: payload.sessionId,
+                  messageId: payload.messageId,
+                  decision: payload.decision,
+                  path: payload.path,
+                }));
+              }
+              break;
+            }
+          }
+          return updated;
+        });
+      }
+
       if (evt === 'session_renamed') {
         const payload = raw as { sessionId: string; name: string };
         setSessions((prev) => prev.map((s) => (s.id === payload.sessionId ? { ...s, name: payload.name } : s)));
@@ -715,29 +1400,60 @@ export default function AgentHubIM(): JSX.Element {
       }
 
       if (evt === 'message') {
+        // ★ 方案2: 消息完成，标记阶段为 done，2秒后恢复 idle
+        setStreamPhase('done');
+        setActiveTools([]);
+        setTimeout(() => setStreamPhase('idle'), 2000);
         // Flush any pending stream buffer for THIS session before searching
         // for the placeholder — the RAF callback may not have fired yet.
         const cSessionId = chunkSessionId;
         const buf = getSessionBuffer(cSessionId);
-        if (buf && streamFlushRafRef.current.has(cSessionId)) {
-          const raf = streamFlushRafRef.current.get(cSessionId);
-          if (raf != null) window.cancelAnimationFrame(raf);
-          streamFlushRafRef.current.delete(cSessionId);
-          flushStreamBuffer(cSessionId);
+        if (buf) {
+          const pendingRaf = streamFlushRafRef.current.get(cSessionId);
+          if (pendingRaf != null) {
+            window.cancelAnimationFrame(pendingRaf);
+            streamFlushRafRef.current.delete(cSessionId);
+          }
+          const pendingTimer = progressiveFlushTimersRef.current.get(cSessionId);
+          if (pendingTimer != null) {
+            window.clearTimeout(pendingTimer);
+            progressiveFlushTimersRef.current.delete(cSessionId);
+          }
+          // Flush ALL remaining chunks at once before the final message
+          if (buf.chunks.length > 0) {
+            const allContent = buf.chunks.join('');
+            const bufMsgId = buf.messageId;
+            updateSessionMessages(cSessionId, (prev) => {
+              const idx = prev.findIndex((m) => m.messageId === bufMsgId);
+              if (idx >= 0) {
+                const updated = [...prev];
+                updated[idx] = {
+                  ...updated[idx],
+                  content: updated[idx].content + allContent,
+                  isStreaming: false,
+                };
+                return updated;
+              }
+              return prev;
+            });
+          }
+          setSessionBuffer(cSessionId, null);
         }
         setSessionStreaming(cSessionId, false);
         const msg = raw as unknown as Message;
         const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
         updateSessionMessages(cSessionId, (prev) => {
-          // Clean up any empty thinking placeholders (from agent_thinking) before
-          // adding/replacing the final message
+          // Clean up ALL streaming thinking placeholders (from agent_thinking)
+          // before adding/replacing the final message.  The prior narrow filter
+          // (empty or "正在"-prefixed) missed the "synthesizing" phase content
+          // like "工具执行完成，正在综合结果生成回复..."
           let cleaned = prev;
-          const hasEmptyThinkers = prev.some(
-            (m) => m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在'))
+          const hasStaleStreamers = prev.some(
+            (m) => m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text'
           );
-          if (hasEmptyThinkers) {
+          if (hasStaleStreamers) {
             cleaned = prev.filter(
-              (m) => !(m.isStreaming && m.sender !== 'user' && (!m.content || m.content.startsWith('正在')))
+              (m) => !(m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text')
             );
           }
 
@@ -786,6 +1502,22 @@ export default function AgentHubIM(): JSX.Element {
   // ── Mention detection ────────────────────────────────────
 
   function detectMention(value: string, cursor: number): void {
+    // ── Observer restriction in multi-user sessions ──────────────────
+    // Only allow plain text — block @mentions, #workflows, /skills
+    // Use refs to avoid stale-closure issues (this function is not a
+    // useCallback, but consistent with the handler guards below).
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    const myRole = currentSession?.myRole || 'viewer';
+    const memberCount = currentSession?.memberCount ?? 0;
+    const isObserverInMultiUser = myRole === 'viewer' && memberCount > 1;
+    if (isObserverInMultiUser) {
+      setMentionOpen(false);
+      setMentionActiveIndex(0);
+      mentionStartRef.current = -1;
+      return;
+    }
+
     const textBefore = value.slice(0, cursor);
     const lastAt = textBefore.lastIndexOf('@');
     const lastHash = textBefore.lastIndexOf('#');
@@ -864,17 +1596,24 @@ export default function AgentHubIM(): JSX.Element {
     }
     streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
     streamFlushRafRef.current.clear();
+    progressiveFlushTimersRef.current.forEach((tid) => window.clearTimeout(tid));
+    progressiveFlushTimersRef.current.clear();
     setToken('');
     setUser(null);
   }, []);
 
   const handleCreateSession = useCallback(async () => {
     const name = `Untitled Session ${sessions.length + 1}`;
-    const res = await fetch('/api/chat/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ name }),
-    });
+    let res: Response;
+    try {
+      res = await fetchAuth('/api/chat/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+    } catch {
+      return; // fetchAuth already called handleTokenExpired on 401
+    }
     const data = await res.json();
     if (!res.ok) {
       setNotice(data.detail || 'Create session failed');
@@ -889,11 +1628,12 @@ export default function AgentHubIM(): JSX.Element {
 
   const handleSelectSession = useCallback((id: string) => {
     // eslint-disable-next-line no-console
-    console.log('[agenthub] select session', { from: currentSessionRef.current, to: id });
+    if (process.env.NODE_ENV === "development") { console.log("[agenthub] select session", { from: currentSessionRef.current, to: id }); }
     currentSessionRef.current = id;
-    activeSessionIdRef.current = id;  // 立即同步给“当前活跃 session” ref，避免下一帧前就发消息
+    activeSessionIdRef.current = id;  // 立即同步给”当前活跃 session” ref，避免下一帧前就发消息
     setSessionId(id);
     setTaskOpen(false);
+    setQuoteReferences([]);
   }, []);
 
   const handleDeleteSession = useCallback((id: string) => {
@@ -907,10 +1647,17 @@ export default function AgentHubIM(): JSX.Element {
     const { id } = confirmDelete;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/chat/sessions/${id}`, { method: 'DELETE', headers: authHeaders() });
+      let res: Response;
+      try {
+        res = await fetchAuth(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch {
+        setDeleting(false);
+        return; // fetchAuth already called handleTokenExpired on 401
+      }
       const data = await res.json();
       if (!res.ok) {
         setNotice(data.detail || 'Delete failed');
+        setDeleting(false);
         return;
       }
       // 关闭这个 session 的 WebSocket、清理 Store、清理重连定时器
@@ -1149,6 +1896,11 @@ export default function AgentHubIM(): JSX.Element {
   }, [mentionOpen, mentionTrigger, mentionActiveIndex, filteredAgents, filteredWorkflows, filteredSkills]);
 
   const handleInsertMention = useCallback((agentId: string) => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const mention = `@${agentId} `;
@@ -1176,6 +1928,11 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   const handleInsertAllMentions = useCallback(() => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const mentions = agents.map((a) => `@${a.agentId} `).join('');
@@ -1203,6 +1960,11 @@ export default function AgentHubIM(): JSX.Element {
   }, [agents]);
 
   const handleInsertWorkflow = useCallback((wf: WorkflowSummary) => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const name = `#route:${wf.name}`;
@@ -1230,6 +1992,11 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   const handleInsertSkill = useCallback((skill: SkillMeta) => {
+    // ── Observer restriction ───────────────────────────────────────
+    const sid = activeSessionIdRef.current;
+    const currentSession = sessionsRef.current.find((s) => s.id === sid);
+    if ((currentSession?.myRole || 'viewer') === 'viewer' && (currentSession?.memberCount ?? 0) > 1) return;
+
     setMentionOpen(false);
     setMentionSearch('');
     const trigger = `/${skill.name} `;
@@ -1329,14 +2096,9 @@ export default function AgentHubIM(): JSX.Element {
 
     const displayContent = text || (currentFiles.length > 0 ? `发送了 ${currentFiles.length} 个文件` : '');
 
-    // eslint-disable-next-line no-console
-    console.log('[agenthub] handleSend', {
-      closureSessionId: sessionId,
-      refSessionId: activeSessionId,
-      text,
-      wsMapKeys: Array.from(wsRef.current.keys()),
-      targetWsState: wsRef.current.get(activeSessionId)?.readyState,
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[agenthub] handleSend', { sessionId: activeSessionId, text });
+    }
 
     const clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const localMsg: Message = {
@@ -1345,6 +2107,7 @@ export default function AgentHubIM(): JSX.Element {
       sessionId: activeSessionId,
       content: displayContent,
       sender: user?.name || 'user',
+      userId: user?.id || '',
       timestamp: new Date().toISOString(),
       type: 'text',
       attachments: fileMetas.length > 0 ? fileMetas : undefined,
@@ -1357,27 +2120,67 @@ export default function AgentHubIM(): JSX.Element {
       timestamp: new Date().toISOString(),
       type: 'text',
       attachments: currentFiles,
+      quoteReferences: quoteReferences.length > 0 ? quoteReferences : undefined,
+      exec_permission: execPermission,
+      auto_reply: autoReplyRef.current,
     };
 
     if (isStreaming) {
       setSessionStreaming(activeSessionId, false);
     }
+    // ── Reset streaming UX state for new message ──
+    setStreamPhase('idle');
+    setActiveTools([]);
+    setSendState('sending');
+
     updateSessionMessages(activeSessionId, (prev) => [...prev, localMsg]);
+
+    // ★ 方案1: 乐观 Thinking 占位 — 发送后立即显示 "AI思考中" 消除黑洞期
+    const optimisticMsgId = `optimistic-${Date.now()}`;
+    // Detect which agent is being mentioned
+    let detectedAgentName = 'AI';
+    const mentionMatch = text.match(/@(\w+)/);
+    if (mentionMatch) {
+      const agent = agents.find(a => a.agentId === mentionMatch[1]);
+      if (agent) {
+        detectedAgentName = agent.displayName || agent.agentId;
+        setCurrentAgentName(detectedAgentName);
+      }
+    }
+    updateSessionMessages(activeSessionId, (prev) => [
+      ...prev,
+      {
+        event: 'message',
+        sessionId: activeSessionId,
+        sender: detectedAgentName,
+        content: '正在理解你的需求...',
+        type: 'text' as const,
+        timestamp: new Date().toISOString(),
+        messageId: optimisticMsgId,
+        isStreaming: true,
+        _optimistic: true as any,
+      },
+    ]);
+
     setSessions((prev) => sortSessions(prev.map((s) => (s.id === activeSessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
     const targetWs = wsRef.current.get(activeSessionId);
     if (targetWs && targetWs.readyState === WebSocket.OPEN) {
       targetWs.send(JSON.stringify(wsMsg));
+      setSendState('sent');
     } else {
       // ws 还没连上：保险起见触发一次连接（如果本来就在连，就是 no-op）。
       connectWs(activeSessionId);
       retryRef.current.push(wsMsg);
       setPending((prev) => [...prev, wsMsg]);
       setNotice('Message queued for retry');
+      addToast({ type: 'warning', title: '消息已排队', message: 'WebSocket 未连接，正在尝试重连后发送...', duration: 5000 });
+      setSendState('error');
     }
     setInput('');
     setAttachedFiles([]);
     setFileReferences([]);
-  }, [sessionId, user, isStreaming, fileReferences]);
+    setQuoteReferences([]);
+  }, [sessionId, user, isStreaming, fileReferences, quoteReferences]);
 
   const handleRetryMessage = useCallback((msg: PendingMessage) => {
     const targetWs = wsRef.current.get(msg.sessionId);
@@ -1504,13 +2307,21 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   // Open workspace file in preview panel (fetched by FilePreviewPanel)
-  const handleOpenWorkspaceFile = useCallback((path: string, content: string, language: string, state: string) => {
+  const handleOpenWorkspaceFile = useCallback((path: string, content: string, language: string, state: string, meta?: Record<string, unknown>) => {
     setPreviewPanelOpen(true);
     setPreviewTabs((prev) => {
       const existing = prev.find((t) => t.path === path && t.kind === 'file');
       if (existing) {
         setActivePreviewTabId(existing.id);
-        return prev.map((t) => (t.id === existing.id ? { ...t, content, language, state: state as WorkspacePreviewTab['state'] } : t));
+        return prev.map((t) => (t.id === existing.id ? {
+          ...t, content, language, state: state as WorkspacePreviewTab['state'],
+          contentType: (meta?.contentType as string) || t.contentType,
+          slideCount: (meta?.slideCount as number) ?? t.slideCount,
+          imageCount: (meta?.imageCount as number) ?? t.imageCount,
+          textLength: (meta?.textLength as number) ?? t.textLength,
+          totalChars: (meta?.totalChars as number) ?? t.totalChars,
+          truncated: (meta?.truncated as boolean) ?? t.truncated,
+        } : t));
       }
       const newTab: WorkspacePreviewTab = {
         id: `ws-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -1519,6 +2330,12 @@ export default function AgentHubIM(): JSX.Element {
         content,
         language,
         state: state as WorkspacePreviewTab['state'],
+        contentType: meta?.contentType as string | undefined,
+        slideCount: meta?.slideCount as number | undefined,
+        imageCount: meta?.imageCount as number | undefined,
+        textLength: meta?.textLength as number | undefined,
+        totalChars: meta?.totalChars as number | undefined,
+        truncated: meta?.truncated as boolean | undefined,
       };
       setActivePreviewTabId(newTab.id);
       return [...prev, newTab];
@@ -1546,8 +2363,10 @@ export default function AgentHubIM(): JSX.Element {
       // 没找到 tab，尝试从工作区 API 拉取
       try {
         const token = localStorage.getItem('agenthub_token') || '';
+        const readParams = new URLSearchParams({ path: ref.path });
+        if (sessionId) readParams.set('session_id', sessionId);
         const resp = await fetch(
-          `/api/files/workspace/read?path=${encodeURIComponent(ref.path)}`,
+          `/api/files/workspace/read?${readParams.toString()}`,
           { headers: token ? { Authorization: `Bearer ${token}` } : {} },
         );
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1555,7 +2374,14 @@ export default function AgentHubIM(): JSX.Element {
         const content = data?.content ?? '';
         const language = data?.language ?? '';
         const state = data?.state ?? 'ok';
-        handleOpenWorkspaceFile(ref.path, content, language, state);
+        handleOpenWorkspaceFile(ref.path, content, language, state, {
+          contentType: data?.contentType,
+          slideCount: data?.slideCount,
+          imageCount: data?.imageCount,
+          textLength: data?.textLength,
+          totalChars: data?.totalChars,
+          truncated: data?.truncated,
+        });
         setPendingScrollRef({ id: ref.id, nonce: Date.now() });
       } catch (err) {
         // 拿不到内容也至少提示一下；不让 console 全是红
@@ -1563,151 +2389,71 @@ export default function AgentHubIM(): JSX.Element {
         setNotice(`无法打开文件: ${ref.path}`);
       }
     },
-    [handleOpenWorkspaceFile, setNotice],
+    [handleOpenWorkspaceFile, setNotice, sessionId],
   );
 
-  // ── File upload ──────────────────────────────────────────
-
-  async function uploadFileChunked(file: File): Promise<string> {
-    const CHUNK_SIZE = 512 * 1024;
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-
-    const initRes = await fetch('/api/files/upload/init', { method: 'POST', headers: authHeaders() });
-    const { uploadId } = (await initRes.json()) as { uploadId: string; chunkSizeHint: number };
-
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-
-      const formData = new FormData();
-      formData.append('file', chunk, `${file.name}.chunk${i}`);
-      formData.append('upload_id', uploadId);
-      formData.append('chunk_index', String(i));
-      formData.append('total_chunks', String(totalChunks));
-      formData.append('file_name', file.name);
-
-      const res = await fetch('/api/files/upload/chunk', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(extractApiError(err) || `Chunk ${i} failed`);
-      }
-
-      setAttachedFiles((prev) => prev.map((f) =>
-        f.name === file.name
-          ? { ...f, uploadProgress: Math.round(((i + 1) / totalChunks) * 100), uploadStatus: 'uploading' as const }
-          : f,
-      ));
-    }
-
-    const completeRes = await fetch('/api/files/upload/complete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ upload_id: uploadId, file_name: file.name, total_chunks: totalChunks }),
-    });
-
-    if (!completeRes.ok) {
-      throw new Error('Upload completion failed');
-    }
-
-    return uploadId;
-  }
-
-  // Shared file-processing helper — used by both file input and clipboard paste
-  function processFiles(files: File[]): void {
-    const MAX_INLINE = 2 * 1024 * 1024;
-    const MAX_TOTAL = 50 * 1024 * 1024;
-
-    files.forEach(async (file) => {
-      const ext = (file.name.split('.').pop() || '').toLowerCase();
-      const category = detectFileCategory(file.name, file.type);
-
-      if (category === 'unknown') {
-        setNotice(`不支持的文件类型: ${file.name}`);
-        return;
-      }
-
-      if (file.size > MAX_TOTAL) {
-        setNotice(`文件 ${file.name} 超过 50MB 限制`);
-        return;
-      }
-
-      const base: AttachedFile = {
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        category: category as AttachedFile['category'],
-        uploadStatus: 'pending',
-      };
-
-      const isInlineText = (category === 'code' || category === 'config' || (category === 'document' && ext !== 'pdf' && ext !== 'docx' && ext !== 'rtf'));
-      const isInlineImage = category === 'image' && file.size <= MAX_INLINE;
-      const canInline = (isInlineText && file.size <= MAX_INLINE) || isInlineImage;
-
-      if (canInline) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          setAttachedFiles((prev) => [...prev, {
-            ...base,
-            content: reader.result as string,
-            uploadStatus: 'done' as const,
-            uploadProgress: 100,
-          }]);
-        };
-        reader.onerror = () => {
-          setNotice(`读取文件失败: ${file.name}`);
-        };
-        if (isInlineImage) {
-          reader.readAsDataURL(file);
-        } else {
-          reader.readAsText(file);
-        }
-      } else {
-        setAttachedFiles((prev) => [...prev, { ...base, uploadProgress: 0 }]);
-
-        try {
-          const fileId = await uploadFileChunked(file);
-          setAttachedFiles((prev) => prev.map((f) =>
-            f.name === file.name
-              ? { ...f, fileId, uploadStatus: 'done' as const, uploadProgress: 100 }
-              : f,
-          ));
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : 'Upload failed';
-          setAttachedFiles((prev) => prev.map((f) =>
-            f.name === file.name
-              ? { ...f, uploadStatus: 'error' as const, uploadError: msg }
-              : f,
-          ));
-          setNotice(`上传失败: ${file.name} - ${msg}`);
-        }
-      }
-    });
-  }
-
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const fs = e.target.files;
-    if (!fs || fs.length === 0) return;
-    processFiles(Array.from(fs));
-    e.target.value = '';
-  }, []);
-
-  const handlePasteFiles = useCallback((files: File[]) => {
-    if (files.length === 0) return;
-    processFiles(files);
-    setNotice(`已从剪贴板添加 ${files.length} 张图片`);
-  }, []);
-
-  const handleRemoveFile = useCallback((index: number) => {
-    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  // ── File upload (extracted to hook) ──────────────────────
+  const { handleFileChange, handlePasteFiles, handleRemoveFile } = useFileUpload({
+    authHeaders, setAttachedFiles, setNotice,
+  });
 
   // 点击附件卡片上的预览按钮: 弹出全屏预览模态
+  // ── PM/PMO 事件发送 ────────────────────────────────────────────────
+  // Automatically injects sender / userId so bubble components don't
+  // need to know the current user.
+  const handleSendPMEvent = useCallback((event: Record<string, unknown>) => {
+    const activeSessionId = activeSessionIdRef.current;
+    if (!activeSessionId) return;
+    const targetWs = wsRef.current.get(activeSessionId);
+    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
+      targetWs.send(JSON.stringify({
+        ...event,
+        sender: user?.name || 'user',
+        userId: user?.id || '',
+      }));
+    }
+  }, [user]);
+
+  // ── 对话引用 ──────────────────────────────────────────────────────
+  const handleQuoteMessage = useCallback((msg: Message, selectedText?: string) => {
+    setQuoteReferences((prev) => {
+      const quoteRef: QuoteReference = {
+        id: `quote-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        messageId: msg.messageId || msg.id || '',
+        quotedText: selectedText || msg.content,
+        originalSender: msg.sender,
+        originalTimestamp: msg.timestamp,
+        isFullMessage: !selectedText,
+      };
+      // 去重：同一消息 + 相同引文片段
+      const exists = prev.some(
+        (r) => r.messageId === quoteRef.messageId && r.quotedText === quoteRef.quotedText
+      );
+      if (exists) return prev;
+      return [...prev, quoteRef];
+    });
+  }, []);
+
+  const handleRemoveQuoteReference = useCallback((index: number) => {
+    setQuoteReferences((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleClearAllQuoteReferences = useCallback(() => {
+    setQuoteReferences([]);
+  }, []);
+
+  // ── Share dialog ────────────────────────────────────────────────
+  const handleOpenShare = useCallback(() => setShareOpen(true), []);
+  const handleCloseShare = useCallback(() => setShareOpen(false), []);
+  const handleVisibilityChange = useCallback((vis: string) => {
+    setSessionVisibility(vis);
+    setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, visibility: vis } : s)));
+  }, [sessionId]);
+
+  // ── One-click deploy dialog ─────────────────────────────────────
+  const handleOpenDeploy = useCallback(() => setDeployOpen(true), []);
+  const handleCloseDeploy = useCallback(() => setDeployOpen(false), []);
+
   // 支持两种路径：
   //   1. 内联文件（小文件 <2MB）— 内容已在 file.content 中，走 FilePreviewModal 的 inlineContent 快速路径
   //   2. 大文件（已上传）        — 通过 fileId 走 /api/files/preview/{fileId} 获取内容
@@ -1763,6 +2509,11 @@ export default function AgentHubIM(): JSX.Element {
     return sessions.find((s) => s.id === sessionId)?.name || 'New Session';
   }, [sessions, sessionId]);
 
+  // Memoize current session to avoid repeated .find() in render
+  const currentSession = useMemo(() => {
+    return sessions.find((s) => s.id === sessionId);
+  }, [sessions, sessionId]);
+
   const percent = useMemo(() => {
     return dag.total ? Math.round((dag.completed / dag.total) * 100) : 0;
   }, [dag.total, dag.completed]);
@@ -1788,7 +2539,9 @@ export default function AgentHubIM(): JSX.Element {
     );
   }
 
+  // ★ Wrap with ToastProvider so toast notifications render on top
   return (
+    <ToastProvider>
     <div className="flex h-screen bg-warm-50 text-warm-800 overflow-hidden">
       <SessionSidebar
         user={user}
@@ -1812,6 +2565,10 @@ export default function AgentHubIM(): JSX.Element {
         onEditNameKeyDown={handleEditNameKeyDown}
         onEditNameBlur={handleEditNameBlur}
         onLogout={handleLogout}
+        onOpenShare={handleOpenShare}
+        currentRole={currentSession?.myRole}
+        currentVisibility={currentSession?.visibility || sessionVisibility}
+        authHeaders={authHeaders()}
         width={sidebarWidthLive ?? sidebarWidth}
       />
 
@@ -1833,30 +2590,88 @@ export default function AgentHubIM(): JSX.Element {
         bubbleSide="left"
       />
 
-      <main className="flex flex-1 flex-col min-h-0">
-        <ChatHeader
-          sessionName={sessionName}
-          sessionId={sessionId}
-          connected={connected}
-          isStreaming={isStreaming}
-          isAutoNaming={isAutoNaming}
-          percent={percent}
-          onTaskClick={handleTaskClick}
-          onRenameSession={handleChatHeaderRename}
-          onRegenerateName={() => handleRegenerateName()}
-          onTogglePreview={handleTogglePreviewPanel}
-          previewOpen={previewPanelOpen}
-          onResetLayout={() => {
-            resetSidebarWidth();
-            resetPreviewWidth();
-            try {
-              window.localStorage.removeItem('agenthub.layout.previewTreeWidth');
-              window.location.reload();
-            } catch {
-              /* ignore */
-            }
-          }}
-        />
+      <main className="flex flex-1 flex-col min-h-0 min-w-0">
+        {/* ── Unified Top Bar: Title + Task Controls + UserRoster + Share ── */}
+        <header className="border-b border-warm-150 bg-white shrink-0">
+          <div className="flex items-stretch">
+            <div className="flex-1 min-w-0">
+              <ChatHeader
+                sessionName={sessionName}
+                sessionId={sessionId}
+                connected={connected}
+                isStreaming={isStreaming}
+                isAutoNaming={isAutoNaming}
+                percent={percent}
+                onTaskClick={handleTaskClick}
+                onRenameSession={handleChatHeaderRename}
+                onRegenerateName={() => handleRegenerateName()}
+                onTogglePreview={handleTogglePreviewPanel}
+                previewOpen={previewPanelOpen}
+                onResetLayout={() => {
+                  resetSidebarWidth();
+                  resetPreviewWidth();
+                  try {
+                    window.localStorage.removeItem('agenthub.layout.previewTreeWidth');
+                    window.location.reload();
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                pmState={pmState}
+                degradationStatus={degradationStatus}
+                streamPhase={streamPhase}
+                activeTools={activeTools}
+                currentAgentName={currentAgentName}
+                onInterruptStream={() => {
+                  const ws = wsRef.current.get(activeSessionIdRef.current);
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ event: 'interrupt_stream' }));
+                    addToast({ type: 'info', title: '已发送中断请求', duration: 3000 });
+                  }
+                }}
+              />
+            </div>
+            {/* Right accessory strip: UserRoster + Share + Deploy */}
+            {sessionId && (
+              <div className="flex items-center gap-1 shrink-0 self-center pr-4 pl-2 border-l border-warm-100">
+                <UserRoster sessionId={sessionId} />
+                <span className="h-5 w-px bg-warm-150" />
+                <button
+                  onClick={handleOpenShare}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-warm-500 hover:text-primary-600 hover:bg-warm-100 transition-colors"
+                  title="分享会话 / 管理成员"
+                  aria-label="分享会话"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="18" cy="5" r="3" />
+                    <circle cx="6" cy="12" r="3" />
+                    <circle cx="18" cy="19" r="3" />
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                  </svg>
+                  <span className="text-xs font-medium">分享</span>
+                </button>
+                <span className="h-5 w-px bg-warm-150" />
+                <button
+                  onClick={handleOpenDeploy}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-warm-500 hover:text-primary-600 hover:bg-warm-100 active:scale-95 transition-all"
+                  title="一键部署当前会话"
+                  aria-label="一键部署"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+                    <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
+                    <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
+                    <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+                  </svg>
+                  <span className="text-xs font-medium">一键部署</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </header>
+
+
 
         <MessageList
           messages={messages}
@@ -1865,7 +2680,14 @@ export default function AgentHubIM(): JSX.Element {
           onCommit={handleCommit}
           messagesContainerRef={messagesContainerRef}
           bottomRef={bottomRef}
+          onQuoteMessage={handleQuoteMessage}
+          onSendPMEvent={handleSendPMEvent}
+          agents={agents}
+          sessionId={sessionId}
+          isStreaming={isStreaming}
         />
+
+        {/* ── Permission Mode Toggle 已被挪入 ChatInput 工具栏（next to 工具） ── */}
 
         <ChatInput
           input={input}
@@ -1898,11 +2720,27 @@ export default function AgentHubIM(): JSX.Element {
           onMentionSearchChange={handleMentionSearchChange}
           onMentionActiveIndexChange={handleMentionActiveIndexChange}
           onRiskLevelChange={handleRiskLevelChange}
+          execPermission={execPermission}
+          onExecPermissionChange={(mode: ExecPermission) => {
+              setExecPermission(mode);
+              const ws = wsRef.current.get(activeSessionIdRef.current);
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ event: 'set_exec_permission', mode }));
+              }
+            }}
+          autoReply={autoReply}
+          onAutoReplyChange={setAutoReply}
           fileReferences={fileReferences}
           onRemoveReference={handleRemoveReference}
           onClearAllReferences={handleClearAllReferences}
           onJumpToReference={handleJumpToReference}
+          quoteReferences={quoteReferences}
+          onRemoveQuoteReference={handleRemoveQuoteReference}
+          onClearAllQuoteReferences={handleClearAllQuoteReferences}
+          userRole={currentSession?.myRole}
+          memberCount={currentSession?.memberCount}
         />
+        <TypingIndicator sessionId={sessionId} />
       </main>
 
       {/* ── File Preview Panel (right side) ──────────────────── */}
@@ -1938,8 +2776,10 @@ export default function AgentHubIM(): JSX.Element {
               onCloseTab={handleClosePreviewTab}
               onAddReference={handleAddReference}
               onOpenWorkspaceFile={handleOpenWorkspaceFile}
+              sessionId={sessionId}
               references={fileReferences}
               pendingScrollRef={pendingScrollRef}
+              workspaceVersion={workspaceVersion}
             />
           </aside>
         </>
@@ -1981,6 +2821,26 @@ export default function AgentHubIM(): JSX.Element {
         onCancel={cancelDeleteSession}
       />
 
+      {/* ── Session sharing dialog ─────────────────────────────── */}
+      <ShareDialog
+        open={shareOpen}
+        sessionId={sessionId}
+        sessionName={sessionName}
+        userRole={currentSession?.myRole || 'viewer'}
+        visibility={currentSession?.visibility || sessionVisibility}
+        authHeaders={authHeaders()}
+        onClose={handleCloseShare}
+        onVisibilityChange={handleVisibilityChange}
+      />
+
+      {/* ── One-click deploy modal ──────────────────────────────── */}
+      <OneClickDeployModal
+        open={deployOpen}
+        sessionId={sessionId}
+        sessionName={sessionName}
+        onClose={handleCloseDeploy}
+      />
+
       {/* 附件文件全屏预览弹窗 - 点击附件卡片上的眼睛按钮触发 */}
       <FilePreviewModal
         file={previewFile}
@@ -1988,5 +2848,6 @@ export default function AgentHubIM(): JSX.Element {
         authToken={token}
       />
     </div>
+    </ToastProvider>
   );
 }

@@ -4,8 +4,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from app.config import PROJECT_ROOT
-
 logger = logging.getLogger("agenthub.tools.browser")
 
 # ── Security constraints ──────────────────────────────────────────────

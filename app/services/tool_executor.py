@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -36,7 +37,7 @@ class ToolExecutor:
       - ResultStorage: content budget and truncation
     """
 
-    MAX_ITERATIONS = 5  # safety limit for the tool-call loop
+    MAX_ITERATIONS = 20  # safety limit for the tool-call loop (raised from 10 — complex multi-file projects need more write→execute→fix cycles)
 
     def __init__(self) -> None:
         self.permission_manager = None

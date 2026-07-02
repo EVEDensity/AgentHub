@@ -140,7 +140,7 @@ export default function TokenUsageHeatmap(): JSX.Element {
   const [data, setData] = useState<HeatmapData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [retryCount, setRetryCount] = useState(0);
+  const retryCountRef = useRef(0);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; day: HeatmapDay } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -183,16 +183,16 @@ export default function TokenUsageHeatmap(): JSX.Element {
       }
       
       setData(jsonData as HeatmapData);
+      retryCountRef.current = 0; // reset on success
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : '网络错误';
       console.error('Token usage load error:', err);
-      
+
       // Retry up to 3 times with backoff
-      if (retryCount < 3) {
-        setTimeout(() => {
-          setRetryCount(prev => prev + 1);
-          void load();
-        }, 1000 * (retryCount + 1));
+      if (retryCountRef.current < 3) {
+        const delay = 1000 * (retryCountRef.current + 1);
+        retryCountRef.current += 1;
+        setTimeout(() => void load(), delay);
         return;
       }
       
@@ -287,7 +287,7 @@ export default function TokenUsageHeatmap(): JSX.Element {
           <button 
             className="btn-primary mt-4" 
             onClick={() => {
-              setRetryCount(0);
+              retryCountRef.current = 0;
               void load();
             }}
           >

@@ -7,7 +7,7 @@
  *       不发 API 也能恢复。后端 WebSocketManager 本身已按 sessionId 隔离推流，前端
  *       只需要把单例改成 Map 即可。
  */
-import { useSyncExternalStore } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import type { Message } from '../types';
 
 export interface StreamBuffer {
@@ -28,7 +28,10 @@ const MAX_CACHED_SESSIONS = 8;
 
 class SessionStore {
   private sessions = new Map<string, SessionState>();
+  /** Global listeners — notified on ANY session change (backward compat) */
   private listeners = new Set<() => void>();
+  /** Per-session listeners — only notified when their specific session changes */
+  private listenersBySession = new Map<string, Set<() => void>>();
   /** LRU 队列：队尾 = 最新访问，队首 = 最早访问 */
   private lru: string[] = [];
   /** 引用计数：正在被 WebSocket 推送的 session 不能被 LRU 踢出 */
@@ -57,7 +60,7 @@ class SessionStore {
     this.sessions.set(sessionId, next);
     this.touchLRU(sessionId);
     this.evictIfNeeded();
-    this.notify();
+    this.notify(sessionId);
   }
 
   removeSession(sessionId: string): void {
@@ -65,7 +68,8 @@ class SessionStore {
     this.sessions.delete(sessionId);
     this.lru = this.lru.filter((id) => id !== sessionId);
     this.pinned.delete(sessionId);
-    this.notify();
+    this.listenersBySession.delete(sessionId);
+    this.notify(sessionId);
   }
 
   pin(sessionId: string): void {
@@ -76,7 +80,7 @@ class SessionStore {
   unpin(sessionId: string): void {
     this.pinned.delete(sessionId);
     this.evictIfNeeded();
-    this.notify();
+    this.notify(sessionId);
   }
 
   private touchLRU(sessionId: string): void {
@@ -86,7 +90,22 @@ class SessionStore {
   }
 
   private evictIfNeeded(): void {
+    let iterations = 0;
+    const maxIterations = this.lru.length * 2;
     while (this.lru.length > MAX_CACHED_SESSIONS) {
+      if (iterations++ > maxIterations) {
+        // Safety valve: if all sessions are pinned, break to avoid infinite loop.
+        // Falls back to evicting the oldest pinned session.
+        console.warn(
+          '[SessionStore] LRU eviction stuck — all sessions pinned. Evicting oldest pinned session.',
+        );
+        const fallbackId = this.lru.shift();
+        if (fallbackId) {
+          this.pinned.delete(fallbackId);
+          this.sessions.delete(fallbackId);
+        }
+        continue;
+      }
       const evictId = this.lru[0];
       if (this.pinned.has(evictId)) {
         // 被 pin 的不能踢，把它移到队尾重新排队
@@ -99,15 +118,36 @@ class SessionStore {
     }
   }
 
-  subscribe(listener: () => void): () => void {
+  subscribe(listener: () => void, sessionId?: string): () => void {
+    if (sessionId) {
+      let set = this.listenersBySession.get(sessionId);
+      if (!set) {
+        set = new Set();
+        this.listenersBySession.set(sessionId, set);
+      }
+      set.add(listener);
+      return () => {
+        set?.delete(listener);
+        if (set && set.size === 0) {
+          this.listenersBySession.delete(sessionId);
+        }
+      };
+    }
+    // Global listener (backward compat)
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
     };
   }
 
-  private notify(): void {
+  private notify(sessionId?: string): void {
+    // Notify global listeners
     this.listeners.forEach((l) => l());
+    // Notify per-session listeners for the specific session
+    if (sessionId) {
+      const set = this.listenersBySession.get(sessionId);
+      if (set) set.forEach((l) => l());
+    }
   }
 }
 
@@ -129,23 +169,38 @@ const EMPTY_MESSAGES: Message[] = Object.freeze([]) as unknown as Message[];
  * 切到别的 session 后，旧 session 的 messages 仍在 Map 里持续更新，
  * 切回来时 React 自动从 useSyncExternalStore 拿到最新值。
  *
- * 第三个参数 getServerSnapshot 是 Next.js Pages Router SSR 必需的：
- * 不传的话 React 18 会在服务端渲染时抛 "useSyncExternalStore requires
- * getServerSnapshot" 错误，导致整个页面挂掉。
+ * Now uses per-session subscriptions — only re-subscribes when sessionId changes,
+ * so streaming chunks on session A never trigger getSnapshot calls on session B.
  */
 export function useSessionMessages(sessionId: string): Message[] {
-  return useSyncExternalStore(
-    storeSubscribe,
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => sessionStore.subscribe(onStoreChange, sessionId),
+    [sessionId],
+  );
+  const getSnapshot = useCallback(
     () => sessionStore.getState(sessionId).messages,
+    [sessionId],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
     () => EMPTY_MESSAGES,
   );
 }
 
-/** 订阅指定 session 的 isStreaming 状态。 */
+/** 订阅指定 session 的 isStreaming 状态。Per-session subscription. */
 export function useSessionStreaming(sessionId: string): boolean {
-  return useSyncExternalStore(
-    storeSubscribe,
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => sessionStore.subscribe(onStoreChange, sessionId),
+    [sessionId],
+  );
+  const getSnapshot = useCallback(
     () => sessionStore.getState(sessionId).isStreaming,
+    [sessionId],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
     () => false,
   );
 }

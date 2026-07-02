@@ -7,11 +7,15 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.config import PROJECT_ROOT
 from app.services.git_service import git_service
 
-GENERATED_DIR = PROJECT_ROOT / "agenthub_generated"
-GENERATED_DIR.mkdir(exist_ok=True)
+
+def _get_generated_dir() -> Path:
+    """Return the generated-code directory inside the current workspace."""
+    from app.services.workspace_context import get_workspace_root
+    d = get_workspace_root() / "agenthub_generated"
+    d.mkdir(exist_ok=True)
+    return d
 
 
 def _safe_rel_path(name: str) -> Path:
@@ -105,14 +109,15 @@ async def write_generated_files(model_output: str, original: str) -> dict:
 
     async def _write_one(item: dict) -> dict:
         rel = _safe_rel_path(item["path"])
-        target = GENERATED_DIR / rel
+        gen_dir = _get_generated_dir()
+        target = gen_dir / rel
 
         def _sync():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(item["content"], encoding="utf-8")
 
         await asyncio.to_thread(_sync)
-        return {"path": str(target.relative_to(PROJECT_ROOT)), "content": item["content"], "language": item["language"]}
+        return {"path": str(target.relative_to(gen_dir)), "content": item["content"], "language": item["language"]}
 
     for item in files:
         public_files.append(await _write_one(item))

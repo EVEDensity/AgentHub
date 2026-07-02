@@ -1,4 +1,4 @@
-export type FileCategory = 'code' | 'document' | 'image' | 'archive' | 'spreadsheet' | 'config' | 'unknown';
+export type FileCategory = 'code' | 'document' | 'image' | 'archive' | 'spreadsheet' | 'presentation' | 'config' | 'unknown';
 
 export interface AttachmentMeta {
   name: string;
@@ -52,8 +52,12 @@ export interface Message {
   sessionId: string;
   sender: string;
   content: string;
-  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result';
+  type: 'text' | 'code' | 'system' | 'diff' | 'tool_call' | 'tool_result' | 'agent_question' | 'progress_update' | 'risk_warning' | 'agent_todo' | 'task_preview' | 'solution_proposal' | 'terminal' | 'deploy_card';
   timestamp: string;
+  userId?: string;           // JWT-derived user ID (empty for agent messages)
+  /** Multi-turn request tracking */
+  turnId?: string;
+  threadId?: string;
   guardrailResult?: GuardrailResult;
   symbolic?: SymbolicData & {
     generated?: GeneratedData;
@@ -63,6 +67,19 @@ export interface Message {
   toolCallData?: ToolCallData;
   toolResultData?: ToolResultData;
   attachments?: AttachmentMeta[];
+  /** PM interaction payloads */
+  questionData?: AgentQuestionEvent;
+  progressData?: ProgressUpdateEvent;
+  riskWarningData?: RiskWarningEvent;
+  todoData?: AgentTodoEvent;
+  taskPreviewData?: TaskPreviewEvent;
+  solutionProposalData?: SolutionProposalEvent;
+  deployCardData?: DeployCardEvent;
+  /** Diff accept/reject */
+  diffDecisionState?: 'pending' | 'accepted' | 'rejected';
+  diffFilePath?: string;
+  /** Optimistic thinking placeholder (replaced by real agent_thinking event) */
+  _optimistic?: boolean;
 }
 
 export interface StreamChunk {
@@ -71,6 +88,8 @@ export interface StreamChunk {
   sessionId: string;
   content: string;
   isFinal: boolean;
+  turnId?: string;
+  threadId?: string;
 }
 
 export interface StreamInterrupted {
@@ -110,8 +129,54 @@ export interface Agent {
   baseModelName?: string;
   rankLevel?: string;
   dutyNote?: string;
+  displayName?: string;
+  avatarUrl?: string;
+  capabilityTags?: string[];
   baseUrl?: string;
+  /** Local agent fields */
+  isLocal?: boolean;
+  localStatus?: 'online' | 'offline' | 'unknown';
+  installPath?: string;
+  version?: string;
 }
+
+// ── Platform labels & colors for agent adapter types ──────────────
+
+export const PLATFORM_LABELS: Record<string, string> = {
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  ollama: 'Ollama',
+  deepseek: 'DeepSeek',
+  minimax: 'MiniMax',
+  zhipu: '智谱AI',
+  qwen: '通义千问',
+  doubao: '字节豆包',
+  kimi: 'Kimi',
+  custom_openai: '自定义',
+  cloud_code: 'CloudCode',
+  local_claude: 'Claude Code',
+  local_codex: 'Codex CLI',
+  local_openclaw: 'OpenClaw',
+  mock: 'Mock',
+};
+
+export const PLATFORM_COLORS: Record<string, string> = {
+  openai: '#10a37f',
+  anthropic: '#d97706',
+  ollama: '#1a1a1a',
+  deepseek: '#4f46e5',
+  minimax: '#6366f1',
+  zhipu: '#dc2626',
+  qwen: '#6d28d9',
+  doubao: '#0891b2',
+  kimi: '#f59e0b',
+  custom_openai: '#0ea5e9',
+  cloud_code: '#8b5cf6',
+  local_claude: '#d97706',
+  local_codex: '#10a37f',
+  local_openclaw: '#6366f1',
+  mock: '#6b7280',
+};
 
 export interface Task {
   taskId: string;
@@ -155,13 +220,24 @@ export interface TestState {
 }
 
 export interface User {
+  id?: string;
   name: string;
   role: string;
+  created_at?: string;
 }
 
 export interface AuthFormState {
   name: string;
   password: string;
+}
+
+export interface QuoteReference {
+  id: string;
+  messageId: string;
+  quotedText: string;
+  originalSender: string;
+  originalTimestamp: string;
+  isFullMessage: boolean;
 }
 
 export interface PendingMessage {
@@ -171,6 +247,9 @@ export interface PendingMessage {
   timestamp: string;
   type: 'text' | 'code' | 'system' | 'diff';
   attachments?: AttachmentMeta[];
+  quoteReferences?: QuoteReference[];
+  exec_permission?: number;  // 1=询问 2=跳过 3=计划
+  auto_reply?: boolean;      // 无@Agent时是否自动使用默认Agent回复（默认 true）
 }
 
 export interface GeneratedFileDetail {
@@ -226,6 +305,10 @@ export interface ChatSession {
   createdAt?: string;
   isPinned?: number;
   lastMessageAt?: string;
+  ownerId?: string;
+  visibility?: string;
+  myRole?: string;
+  memberCount?: number;
 }
 
 export interface DagState {
@@ -236,8 +319,13 @@ export interface DagState {
     name?: string;
     status?: string;
     agent?: string;
+    domain?: string;
     description?: string;
     dependencies?: string[];
+    priority?: number;
+    estimated_effort?: string;
+    error?: string;
+    duration_ms?: number;
   }>;
 }
 
@@ -449,6 +537,7 @@ export interface ToolCallItem {
   arguments: Record<string, unknown>;
   status: 'queued' | 'executing' | 'calling' | 'success' | 'error';
   progress?: ToolProgressEvent;
+  toolUseId?: string;
 }
 
 export interface ToolCallData {
@@ -470,6 +559,8 @@ export interface ToolCallEvent {
   event: 'tool_call';
   sessionId: string;
   messageId: string;
+  turnId?: string;
+  threadId?: string;
   toolCalls: ToolCallItem[];
   timestamp: string;
 }
@@ -478,6 +569,8 @@ export interface ToolResultEvent {
   event: 'tool_result';
   sessionId: string;
   messageId: string;
+  turnId?: string;
+  threadId?: string;
   results: ToolResultItem[];
   timestamp: string;
 }
@@ -570,10 +663,57 @@ export interface WorkspacePreviewTab {
   language?: string;
   state?: 'loading' | 'ok' | 'binary' | 'too_large' | 'missing' | 'error';
   content?: string;
+  contentType?: string;        // "text" | "html" — for rich document previews
   diffOld?: string;
   diffNew?: string;
   status?: WorkspaceFileStatus;
+  /** PPTX-specific metadata */
+  slideCount?: number;
+  imageCount?: number;
+  textLength?: number;
+  totalChars?: number;
+  truncated?: boolean;
 }
+
+// ── Agent 真落盘 — workspace real-time event types ──────────────────────
+
+export interface WorkspaceChangeEvent {
+  event: 'workspace_change';
+  sessionId: string;
+  path: string;
+  operation: 'write' | 'delete' | 'rename';
+  userId: string;
+  agentId?: string;
+  sizeBytes: number;
+  diffPreview?: string;
+  oldPath?: string;
+  timestamp: string;
+}
+
+export interface FileConflictEvent {
+  event: 'file_conflict';
+  sessionId: string;
+  path: string;
+  oursUserId: string;
+  theirsUserId: string;
+  oursPreview?: string;
+  theirsPreview?: string;
+  diff?: string;
+  backupPath?: string;
+  timestamp: string;
+}
+
+export interface FileLockChangeEvent {
+  event: 'file_lock_change';
+  sessionId: string;
+  path: string;
+  userId: string;
+  locked: boolean;
+  holderName?: string;
+  timestamp: string;
+}
+
+export type WorkspaceEvent = WorkspaceChangeEvent | FileConflictEvent | FileLockChangeEvent;
 
 export interface FileReference {
   id: string;
@@ -583,4 +723,522 @@ export interface FileReference {
   lineEnd?: number;
   quote?: string;
   kind?: 'file' | 'folder' | 'chat-selection' | 'markdown-paragraph';
+}
+
+// ── PM/PMO Agent Interaction Types ───────────────────────────────────
+
+/** PM agent state machine */
+export type PMState = 'DECOMPOSING' | 'DISPATCHING' | 'WAITING_USER' | 'EXECUTING' | 'SUMMARIZING' | 'IDLE';
+
+/** PM state labels for UI display */
+export const PM_STATE_LABELS: Record<PMState, string> = {
+  IDLE: '就绪',
+  DECOMPOSING: '拆解中',
+  DISPATCHING: '调度中',
+  WAITING_USER: '等待用户',
+  EXECUTING: '执行中',
+  SUMMARIZING: '汇总中',
+};
+
+/** PM state change event from backend */
+export interface PMStateChangeEvent {
+  event: 'pm_state_change';
+  sessionId: string;
+  state: PMState;
+  previousState: PMState;
+  details?: string;
+  timestamp: string;
+}
+
+/** Agent asks user a clarifying question with clickable options */
+export interface AgentQuestionEvent {
+  event: 'agent_question';
+  sessionId: string;
+  messageId: string;
+  agentId: string;
+  question: string;
+  options: AgentQuestionOption[];
+  allowCustomAnswer: boolean;
+  timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
+}
+
+export interface AgentQuestionOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/** User's response to an agent question */
+export interface AgentQuestionResponse {
+  event: 'agent_question_response';
+  sessionId: string;
+  messageId: string;
+  questionMessageId: string;
+  selectedOptionId?: string;
+  customAnswer?: string;
+}
+
+/** PM reports progress update */
+export interface ProgressUpdateEvent {
+  event: 'progress_update';
+  sessionId: string;
+  messageId: string;
+  completedSteps: number;
+  totalSteps: number;
+  currentStep: string;
+  estimatedRemainingSeconds?: number;
+  agentId: string;
+  timestamp: string;
+}
+
+/** PM warns about a risk */
+export interface RiskWarningEvent {
+  event: 'risk_warning';
+  sessionId: string;
+  messageId: string;
+  agentId: string;
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  title: string;
+  description: string;
+  actions: RiskWarningAction[];
+  timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
+}
+
+export interface RiskWarningAction {
+  id: string;
+  label: string;
+  /** 'continue' = proceed anyway, 'mitigate' = apply mitigation, 'cancel' = stop */
+  intent: 'continue' | 'mitigate' | 'cancel';
+  description?: string;
+}
+
+/** User's response to a risk warning */
+export interface RiskWarningResponse {
+  event: 'risk_warning_response';
+  sessionId: string;
+  warningMessageId: string;
+  selectedActionId: string;
+  timestamp: string;
+}
+
+/** PM pushes a decision/todo to user */
+export interface AgentTodoEvent {
+  event: 'agent_todo';
+  sessionId: string;
+  messageId: string;
+  agentId: string;
+  title: string;
+  description: string;
+  actions: AgentTodoAction[];
+  priority: 'low' | 'medium' | 'high';
+  timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
+}
+
+export interface AgentTodoAction {
+  id: string;
+  label: string;
+  intent: 'approve' | 'reject' | 'modify';
+  description?: string;
+}
+
+/** User's response to an agent todo */
+export interface AgentTodoResponse {
+  event: 'agent_todo_response';
+  sessionId: string;
+  todoMessageId: string;
+  selectedActionId: string;
+  comment?: string;
+  timestamp: string;
+}
+
+/** Degradation mode status */
+export interface DegradationStatus {
+  active: boolean;
+  reason: string;
+  startedAt: string;
+  failedModels: string[];
+  recoveryAttempts: number;
+  lastRecoveryAttempt?: string;
+}
+
+/** Degradation state change event */
+export interface DegradationEvent {
+  event: 'degradation_change';
+  sessionId: string;
+  status: DegradationStatus;
+  timestamp: string;
+}
+
+/** PM task preview for user confirmation */
+export interface TaskPreviewEvent {
+  event: 'task_preview';
+  sessionId: string;
+  messageId: string;
+  tasks: TaskPreviewItem[];
+  estimatedTotalSeconds?: number;
+  timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
+}
+
+export interface TaskPreviewItem {
+  id: string;
+  description: string;
+  agent: string;
+  dependencies: string[];
+  estimatedSeconds?: number;
+}
+
+/** User confirms or modifies task preview */
+export interface TaskPreviewResponse {
+  event: 'task_preview_response';
+  sessionId: string;
+  previewMessageId: string;
+  decision: 'confirm' | 'cancel' | 'modify';
+  modifications?: string;
+  timestamp: string;
+}
+
+// ── Solution Proposal Event ───────────────────────────────────────────
+
+/** A single solution option within a solution proposal */
+export interface SolutionOption {
+  id: string;
+  name: string;
+  techStack: string[];
+  architecture: string;
+  pros: string[];
+  cons: string[];
+  estimatedEffort: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  score: number;
+}
+
+/** Orchestrator sends solution proposal for user to review and select */
+export interface SolutionProposalEvent {
+  event: 'solution_proposal';
+  sessionId: string;
+  messageId: string;
+  intentType: string;
+  requirements: string[];
+  nonFunctionalRequirements: string[];
+  constraints: string[];
+  solutions: SolutionOption[];
+  recommendedSolutionId: string;
+  recommendationReason: string;
+  autoConfirmSeconds: number;
+  timestamp: string;
+  /** Multi-user: set by interaction_already_resolved event */
+  resolvedBy?: string;
+  resolvedByName?: string;
+}
+
+/** User selects a solution (or frontend auto-selects on timeout) */
+export interface SolutionSelectionEvent {
+  event: 'solution_selection';
+  sessionId: string;
+  messageId: string;
+  solutionId: string;
+  autoSelected: boolean;
+  timestamp: string;
+}
+
+// ── Deploy Card Event ────────────────────────────────────────────────
+
+/** Deploy agent sends a deployment card when project is completed */
+export interface DeployCardEvent {
+  event: 'deploy_card';
+  sessionId: string;
+  messageId: string;
+  /** Git commit hash (short) */
+  version: string;
+  /** ISO timestamp when the version was created */
+  completedAt: string;
+  /** Project description / feat message */
+  description: string;
+  /** List of affected/changed files */
+  affectedFiles: string[];
+  /** Agent that generated this card */
+  agentId: string;
+  timestamp: string;
+  /** 项目 ID */
+  projectId?: string;
+  /** 默认分支 */
+  defaultBranch?: string;
+  /** 默认域名 */
+  defaultDomain?: string;
+  /** 部署类型候选 */
+  deployTypeOptions?: ('preview' | 'production' | 'custom')[];
+}
+
+/** User requests deployment details */
+export interface DeployRequest {
+  event: 'deploy_request';
+  sessionId: string;
+  messageId: string;
+  version: string;
+  /** 目标项目 ID */
+  projectId: string;
+  /** Git 分支 */
+  branch: string;
+  /** 自定义域名 */
+  domain: string;
+  /** 部署类型 */
+  deployType: 'preview' | 'production' | 'custom';
+  /** Deployment environment */
+  environment: string;
+  /** Deployment notes */
+  notes: string;
+  /** Deploy target (currently frontend only) */
+  targets: string[];
+  timestamp: string;
+}
+
+/** User requests version rollback */
+export interface DeployRollbackRequest {
+  event: 'deploy_rollback';
+  sessionId: string;
+  messageId: string;
+  version: string;
+  timestamp: string;
+}
+
+// ── CloudCode: diff events ───────────────────────────────────────
+
+/** Real-time diff update from CloudCode agent (edit_file tool use) */
+export interface DiffUpdateEvent {
+  event: 'diff_update';
+  sessionId: string;
+  messageId: string;
+  turnId?: string;
+  path: string;
+  diff: string;
+  timestamp: string;
+}
+
+/** User accepts or rejects a diff displayed in DiffBubble */
+export interface DiffDecisionEvent {
+  event: 'diff_decision';
+  sessionId: string;
+  messageId: string;
+  decision: 'accept' | 'reject';
+  path: string;
+}
+
+/** Terminal output streaming from CloudCode agent (run_command tool use) */
+export interface TerminalOutputEvent {
+  event: 'terminal_output';
+  sessionId: string;
+  messageId: string;
+  turnId?: string;
+  content: string;
+  sender: string;
+  timestamp: string;
+}
+
+/** Session badge for pending user decisions */
+export interface SessionBadge {
+  pendingDecisions: number;
+  hasRiskWarnings: boolean;
+  hasQuestions: boolean;
+}
+
+// ── Multi-User Collaboration Event Types ───────────────────────────────
+
+export interface PresenceUser {
+  userId: string;
+  name: string;
+  role: string;
+  status: 'online' | 'idle' | 'typing' | 'offline';
+}
+
+export interface UserJoinedEvent {
+  event: 'user_joined';
+  sessionId: string;
+  userId: string;
+  userName: string;
+  role: string;
+  timestamp: string;
+}
+
+export interface UserLeftEvent {
+  event: 'user_left';
+  sessionId: string;
+  userId: string;
+  userName: string;
+  timestamp: string;
+}
+
+export interface UserRosterEvent {
+  event: 'user_roster';
+  sessionId: string;
+  users: PresenceUser[];
+}
+
+export interface PresenceUpdateEvent {
+  event: 'presence_update';
+  sessionId: string;
+  users: Array<{ userId: string; status: string }>;
+}
+
+export interface TypingIndicatorEvent {
+  event: 'typing_indicator';
+  sessionId: string;
+  userId: string;
+  userName: string;
+  isTyping: boolean;
+}
+
+export interface SessionMember {
+  userId: string;
+  userName: string;
+  userRole: string;
+  role: string;
+  invitedBy: string;
+  joinedAt: string;
+  onlineStatus?: string;
+}
+
+// ── Multi-User Interaction Sync Events ────────────────────────────────────
+
+/** Broadcast when a PM interaction has been resolved by any user */
+export interface InteractionAlreadyResolvedEvent {
+  event: 'interaction_already_resolved';
+  sessionId: string;
+  messageId: string;
+  resolvedBy: string;
+  userName: string;
+  timestamp: string;
+}
+
+/** Broadcast when the execution permission mode is changed */
+export interface PermissionModeChangedEvent {
+  event: 'permission_mode_changed';
+  sessionId: string;
+  mode: number;
+  changedBy: string;
+  changedByName: string;
+  timestamp: string;
+}
+
+// ── Local Agent Discovery Types ──────────────────────────────────────
+
+/** A single discovered local AI CLI tool candidate */
+export interface LocalAgentCandidate {
+  adapterType: string;
+  displayName: string;
+  binary: string;
+  installPath: string;
+  version: string;
+  installed: boolean;
+  healthy: boolean;
+  errorMessage: string;
+  capabilities: string[];
+  headlessCommand: string;
+  registered?: boolean;
+  registeredAgentId?: string;
+  registeredStatus?: string;
+}
+
+/** Response from GET /api/agent/local/discover */
+export interface LocalAgentDiscoverResponse {
+  candidates: LocalAgentCandidate[];
+  total: number;
+}
+
+/** Request body for POST /api/agent/local/register */
+export interface LocalAgentRegisterRequest {
+  adapterType: string;
+  agentId?: string;
+  domain?: string;
+  displayName?: string;
+  riskLevel?: string;
+  baseModelName?: string;
+  capabilityTags?: string[];
+}
+
+/** A single local agent status entry from GET /api/agent/local/status */
+export interface LocalAgentStatus {
+  agentId: string;
+  adapterType: string;
+  online: boolean;
+  version: string;
+  installPath: string;
+  message: string;
+}
+
+/** Response from GET /api/agent/local/status */
+export interface LocalAgentStatusResponse {
+  agents: LocalAgentStatus[];
+  total: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MCP Dashboard Types
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Response from GET /api/admin/mcp/dashboard */
+export interface MCPDashboardData {
+  timestamp: string;
+  health: {
+    status: 'healthy' | 'degraded';
+    issues: string[];
+  };
+  agents: {
+    total: number;
+    byStatus: Record<string, {
+      count: number;
+      adapters: Record<string, number>;
+    }>;
+  };
+  sessions: {
+    activeWebSocket: number;
+    today: number;
+  };
+  messages: {
+    today: number;
+    thisWeek: number;
+  };
+  tokens: {
+    today: number;
+    thisWeek: number;
+    perModel: Array<{ model: string; messages: number; tokens: number }>;
+  };
+  tools: {
+    todayCalls: number;
+    todaySuccess: number;
+    topTools: Array<{ name: string; count: number; successCount: number }>;
+  };
+  performance: Record<string, unknown>;
+  system: {
+    cpuPercent: number;
+    memoryPercent: number;
+    memoryUsedGB: number;
+    memoryTotalGB: number;
+    pythonPid: number;
+    note?: string;
+  };
+  database: {
+    connected: boolean;
+    poolSize: number;
+    poolFree: number;
+  };
+  recentEvents: Array<{
+    id?: string;
+    agentId?: string;
+    action?: string;
+    riskLevel?: string;
+    decision?: string;
+    timestamp?: string;
+  }>;
 }

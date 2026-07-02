@@ -72,6 +72,7 @@ class StreamingToolExecutor:
         self._hook_manager = hook_manager
         self._progress_tracker = progress_tracker
         self._on_state_change: Callable[[ToolExecutionItem], Awaitable[None]] | None = None
+        self._context_overrides: dict[str, str] = {}
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -208,8 +209,9 @@ class StreamingToolExecutor:
 
             context = {
                 "tool_name": item.name,
-                "session_id": "",  # populated by caller via set_context
-                "agent_id": "",
+                "session_id": self._context_overrides.get("session_id", ""),
+                "agent_id": self._context_overrides.get("agent_id", ""),
+                "user_id": self._context_overrides.get("user_id", ""),
                 "progress_tracker": self._progress_tracker,
             }
 
@@ -218,12 +220,14 @@ class StreamingToolExecutor:
                 from app.services.tools.permission import (
                     PermissionBehavior,
                     ToolPermissionContext,
+                    get_permission_mode_for_session,
                 )
 
                 perm_context = ToolPermissionContext(
                     user_id=context.get("user_id", ""),
                     agent_id=context.get("agent_id", ""),
                     session_id=context.get("session_id", ""),
+                    mode=get_permission_mode_for_session(context.get("session_id", "")),
                 )
                 perm_result = await self._permission_manager.check(
                     item.name,

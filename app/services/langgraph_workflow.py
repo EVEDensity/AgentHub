@@ -32,7 +32,7 @@ async def persist_user_message_node(state: AgentGraphState) -> AgentGraphState:
 
 
 async def create_task_node(state: AgentGraphState) -> AgentGraphState:
-    task = await task_state_machine.create_task(state["session_id"], state["content"])
+    task = await task_state_machine.create_task(state["session_id"], state["content"], state.get("user_id", ""))
     await manager.broadcast(state["session_id"], {"event": "task_update", **task["dagProgress"]})
     return {**state, "task": task}
 

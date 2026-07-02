@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import time
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db.init_db import now
@@ -21,19 +20,6 @@ from app.services.auth_service import get_current_user, require_admin, write_aud
 from app.services.secret_service import decrypt_secret, encrypt_secret
 
 router = APIRouter(prefix="/models", tags=["admin-models"])
-
-# ---------------------------------------------------------------------------
-# Provider → default base URL mapping for connectivity tests
-# ---------------------------------------------------------------------------
-_OPENAI_COMPATIBLE: dict[str, str] = {
-    "openai": "https://api.openai.com/v1",
-    "deepseek": "https://api.deepseek.com/v1",
-    "minimax": "https://api.minimax.chat/v1",
-    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
-    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "doubao": "https://ark.cn-beijing.volces.com/api/v3",
-    "custom_openai": "",
-}
 
 
 # ── CREATE ────────────────────────────────────────────────────────────────
@@ -93,44 +79,17 @@ async def test_model(model_id: int, user: dict = Depends(get_current_user)) -> d
     provider = (row["provider"] or "mock").lower()
     base_url = (row.get("baseUrl") or "").rstrip("/")
     api_key = decrypt_secret(row.get("apiKey") or "")
+    model_name = row.get("modelName") or ""
+
+    from app.services.adapter_manager import adapter_manager
 
     start = time.perf_counter()
     status = "success"
     message = "连接正常"
-    endpoint = "mock://local"
 
     try:
-        if provider == "mock":
-            message = "Mock 模型可用，本地无需网络检测"
-        elif provider == "ollama":
-            endpoint = (base_url or "http://localhost:11434") + "/api/tags"
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(endpoint)
-            if resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail=resp.text[:300])
-            model_count = len(resp.json().get("models", []))
-            message = f"Ollama 已连接，可用模型 {model_count} 个"
-        elif provider in _OPENAI_COMPATIBLE:
-            endpoint = (base_url or _OPENAI_COMPATIBLE[provider]) + "/models"
-            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(endpoint, headers=headers)
-            if resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail=resp.text[:300])
-            message = f"{provider} OpenAI 兼容接口连接正常"
-        elif provider == "anthropic":
-            endpoint = (base_url or "https://api.anthropic.com") + "/v1/models"
-            headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"} if api_key else {}
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(endpoint, headers=headers)
-            if resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail=resp.text[:300])
-            message = "Anthropic 接口连接正常"
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
-    except HTTPException:
-        status = "failed"
-        raise
+        adapter = adapter_manager.get_adapter(provider)
+        message = await adapter.ping(model_name, api_key, base_url)
     except Exception as exc:
         status = "failed"
         message = str(exc)
@@ -142,4 +101,4 @@ async def test_model(model_id: int, user: dict = Depends(get_current_user)) -> d
         )
 
     return {"status": status, "message": message, "latencyMs": latency_ms,
-            "endpoint": endpoint, "checkedAt": now()}
+            "checkedAt": now()}

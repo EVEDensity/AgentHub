@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentHub — 整体 UI 设计方案</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   AgentHub UI Design System — 整体设计方案
+   参考 Claude Desktop & Coze 平台设计语言
+   ═══════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+/* ── CSS Variables (mirroring actual project design tokens) ────── */
+:root {
+  --warm-50:  #FAF9F7;
+  --warm-100: #F5F4F0;
+  --warm-150: #EEE9E4;
+  --warm-200: #E6E5DF;
+  --warm-300: #CDCBB8;
+  --warm-400: #ADABA3;
+  --warm-500: #8D8B84;
+  --warm-600: #6D6B65;
+  --warm-700: #4D4C47;
+  --warm-800: #32312E;
+  --warm-900: #1C1B19;
+
+  --primary-50:  #F0F3FF;
+  --primary-100: #E0E7FF;
+  --primary-200: #C7D7FE;
+  --primary-300: #A4B8FD;
+  --primary-400: #8099FB;
+  --primary-500: #4F6CF7;
+  --primary-600: #4361E2;
+  --primary-700: #3651CC;
+
+  --success-500: #5B8C5A;
+  --warning-500: #C4A35A;
+  --danger-500:  #C4675A;
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans SC', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font-sans);
+  background: #F7F6F3;
+  color: var(--warm-800);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.6;
+}
+
+/* ── Top hero ───────────────────────────────────────────────────── */
+.hero {
+  background: linear-gradient(165deg, #1C1B19 0%, #2D2B27 40%, #3D3A34 100%);
+  color: #F0EFEA;
+  padding: 80px 0 60px;
+  position: relative;
+  overflow: hidden;
+}
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -200px; right: -200px;
+  width: 700px; height: 700px;
+  background: radial-gradient(circle, rgba(79,108,247,0.12) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.hero::after {
+  content: '';
+  position: absolute;
+  bottom: -100px; left: 10%;
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(196,163,90,0.08) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.hero-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 40px;
+  position: relative;
+  z-index: 1;
+}
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 100px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.7);
+  margin-bottom: 32px;
+  backdrop-filter: blur(10px);
+}
+.hero-badge span {
+  color: var(--primary-400);
+  font-weight: 600;
+}
+.hero h1 {
+  font-size: 52px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-bottom: 20px;
+}
+.hero h1 em {
+  font-style: normal;
+  background: linear-gradient(135deg, #8099FB 0%, #A4B8FD 50%, #C4A35A 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero p {
+  font-size: 18px;
+  color: rgba(255,255,255,0.6);
+  max-width: 600px;
+  line-height: 1.7;
+}
+
+/* ── Container ───────────────────────────────────────────────────── */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 40px;
+}
+
+/* ── Section ─────────────────────────────────────────────────────── */
+.section {
+  padding: 72px 0;
+}
+.section-header {
+  margin-bottom: 48px;
+}
+.section-label {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--primary-600);
+  background: var(--primary-50);
+  border: 1px solid var(--primary-100);
+  padding: 4px 12px;
+  border-radius: 100px;
+  margin-bottom: 16px;
+}
+.section-header h2 {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--warm-900);
+  margin-bottom: 8px;
+}
+.section-header p {
+  font-size: 15px;
+  color: var(--warm-500);
+  max-width: 560px;
+}
+
+/* ── Color palette ───────────────────────────────────────────────── */
+.palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 10px;
+}
+.palette-swatch {
+  aspect-ratio: 3/4;
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 12px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  transition: transform 0.2s;
+  cursor: default;
+}
+.palette-swatch:hover { transform: translateY(-4px); }
+.palette-name { font-size: 10px; opacity: 0.7; margin-top: 2px; }
+
+/* ── Card ────────────────────────────────────────────────────────── */
+.card {
+  background: #FFFFFF;
+  border: 1px solid var(--warm-150);
+  border-radius: var(--radius-xl);
+  padding: 28px;
+  box-shadow: 0 1px 2px rgba(30,29,26,0.04), 0 1px 3px rgba(30,29,26,0.03);
+  transition: all 0.2s;
+}
+.card:hover {
+  border-color: var(--warm-200);
+  box-shadow: 0 2px 4px rgba(30,29,26,0.04), 0 4px 8px rgba(30,29,26,0.03);
+}
+
+/* ── Grid ────────────────────────────────────────────────────────── */
+.grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+/* ── Typography showcase ─────────────────────────────────────────── */
+.type-sample { margin-bottom: 36px; }
+.type-sample .label { font-family: var(--font-mono); font-size: 11px; color: var(--warm-400); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.type-sample .spec { font-size: 12px; color: var(--warm-500); margin-top: 4px; }
+.h1-display { font-size: 42px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; color: var(--warm-900); }
+.h2-display { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25; color: var(--warm-800); }
+.h3-display { font-size: 20px; font-weight: 600; line-height: 1.3; color: var(--warm-800); }
+.body-display { font-size: 15px; line-height: 1.7; color: var(--warm-700); max-width: 560px; }
+.caption-display { font-size: 12px; line-height: 1.5; color: var(--warm-500); }
+.mono-display { font-family: var(--font-mono); font-size: 13px; color: var(--warm-700); }
+
+/* ── Button showcase ─────────────────────────────────────────────── */
+.btn-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-sans); font-size: 14px; font-weight: 500;
+  border-radius: var(--radius-md); padding: 8px 20px;
+  border: none; cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+}
+.btn-primary { background: var(--primary-500); color: #FFF; }
+.btn-primary:hover { background: var(--primary-600); box-shadow: 0 1px 3px rgba(79,108,247,0.25); }
+.btn-secondary { background: #FFF; color: var(--warm-700); border: 1px solid var(--warm-200); }
+.btn-secondary:hover { background: var(--warm-50); border-color: var(--warm-300); }
+.btn-ghost { background: transparent; color: var(--warm-600); }
+.btn-ghost:hover { background: var(--warm-50); }
+.btn-danger { background: var(--danger-500); color: #FFF; }
+.btn-danger:hover { background: #B05040; }
+
+/* ── Component preview ───────────────────────────────────────────── */
+.comp-preview {
+  background: #FFF;
+  border: 1px solid var(--warm-150);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  margin-bottom: 32px;
+}
+.comp-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--warm-100);
+  background: var(--warm-50);
+}
+.comp-preview-dot { width: 10px; height: 10px; border-radius: 50%; }
+.comp-preview-dot.r { background: #FF5F57; }
+.comp-preview-dot.y { background: #FFBD2E; }
+.comp-preview-dot.g { background: #28CA41; }
+.comp-preview-title {
+  font-size: 12px; font-weight: 600; color: var(--warm-400);
+  font-family: var(--font-mono);
+  margin-left: 4px;
+}
+.comp-preview-body { padding: 24px; }
+
+/* ── Deploy button specific ──────────────────────────────────────── */
+.topbar-mock {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--warm-150);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background: #FFF;
+}
+.topbar-left {
+  flex: 1;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding-right: 12px;
+  border-left: 1px solid var(--warm-100);
+  padding-left: 8px;
+}
+.tb-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--warm-600);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tb-btn:hover { background: var(--warm-50); color: var(--primary-600); }
+.tb-btn svg { width: 16px; height: 16px; }
+.tb-divider { width: 1px; height: 20px; background: var(--warm-150); margin: 0 4px; }
+
+/* ── Deploy modal mock ───────────────────────────────────────────── */
+.modal-backdrop {
+  background: rgba(28,27,25,0.45);
+  backdrop-filter: blur(4px);
+  border-radius: var(--radius-xl);
+  padding: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-card {
+  background: #FFF;
+  border-radius: var(--radius-2xl);
+  border: 1px solid var(--warm-150);
+  box-shadow: 0 4px 12px rgba(30,29,26,0.05), 0 8px 24px rgba(30,29,26,0.04);
+  width: 100%;
+  max-width: 560px;
+  overflow: hidden;
+}
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--warm-100);
+}
+.modal-header-icon {
+  width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--primary-500);
+  border-radius: 12px;
+  color: #FFF;
+  flex-shrink: 0;
+}
+.modal-header-text { margin-left: 12px; flex: 1; }
+.modal-header-text h3 { font-size: 17px; font-weight: 700; color: var(--warm-800); }
+.modal-header-text p { font-size: 12px; color: var(--warm-400); margin-top: 2px; }
+.modal-close {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  color: var(--warm-400);
+  background: transparent; border: none; cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.modal-close:hover { background: var(--warm-100); color: var(--warm-600); }
+.modal-body { padding: 16px 24px; }
+.modal-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 24px;
+  border-top: 1px solid var(--warm-100);
+  background: var(--warm-50);
+}
+.deploy-option {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--warm-150);
+  background: #FFF;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+.deploy-option:hover { border-color: var(--warm-250); background: var(--warm-50); }
+.deploy-option.active { border-color: var(--primary-400); background: var(--primary-50); }
+.deploy-option-icon {
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--warm-100);
+  color: var(--warm-500);
+}
+.deploy-option.active .deploy-option-icon { background: var(--primary-100); color: var(--primary-600); }
+.deploy-option-label { font-size: 14px; font-weight: 600; color: var(--warm-700); }
+.deploy-option.active .deploy-option-label { color: var(--primary-700); }
+.deploy-option-desc { font-size: 11px; color: var(--warm-400); line-height: 1.3; }
+
+/* ── Architecture tree ───────────────────────────────────────────── */
+.tree {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 2;
+  background: var(--warm-50);
+  border: 1px solid var(--warm-150);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+}
+.tree .dim { color: var(--warm-400); }
+.tree .key { color: var(--primary-600); font-weight: 600; }
+.tree .val { color: var(--warm-700); }
+.tree .comment { color: var(--warm-400); font-style: italic; }
+
+/* ── Status tag ──────────────────────────────────────────────────── */
+.tag { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+.tag-done { background: #E6F7EE; color: #009950; }
+.tag-warn { background: #FFF7E6; color: #FF9800; }
+.tag-block { background: #FEE; color: #D93030; }
+.tag-info { background: var(--primary-50); color: var(--primary-600); }
+
+/* ── Claude Desktop reference ────────────────────────────────────── */
+.ref-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.ref-card {
+  background: #FFF;
+  border: 1px solid var(--warm-150);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+.ref-card-img {
+  aspect-ratio: 16/10;
+  background: var(--warm-100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warm-400);
+  font-size: 14px;
+}
+.ref-card-body { padding: 16px 20px; }
+.ref-card-body h4 { font-size: 15px; font-weight: 600; color: var(--warm-800); margin-bottom: 4px; }
+.ref-card-body p { font-size: 13px; color: var(--warm-500); line-height: 1.5; }
+
+/* ── Deploy flow diagram ─────────────────────────────────────────── */
+.flow-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 24px 0;
+}
+.flow-step {
+  flex: 1;
+  text-align: center;
+  position: relative;
+}
+.flow-step::after {
+  content: '';
+  position: absolute;
+  top: 20px; left: calc(50% + 28px);
+  width: calc(100% - 56px);
+  height: 2px;
+  background: var(--warm-200);
+}
+.flow-step:last-child::after { display: none; }
+.flow-step-icon {
+  width: 40px; height: 40px;
+  margin: 0 auto 10px;
+  border-radius: 50%;
+  background: var(--warm-100);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--warm-500);
+  font-size: 18px;
+}
+.flow-step.active .flow-step-icon { background: var(--primary-100); color: var(--primary-600); }
+.flow-step.done .flow-step-icon { background: #E6F7EE; color: #009950; }
+.flow-step-label { font-size: 13px; font-weight: 600; color: var(--warm-700); }
+.flow-step-desc { font-size: 11px; color: var(--warm-400); margin-top: 2px; }
+
+/* ── Responsive ──────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .hero h1 { font-size: 34px; }
+  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  .ref-row { grid-template-columns: 1fr; }
+  .flow-steps { flex-direction: column; gap: 20px; }
+  .flow-step::after { display: none; }
+}
+
+/* ── Animations ──────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.anim-up { animation: fadeUp 0.6s ease-out both; }
+.anim-up:nth-child(1) { animation-delay: 0s; }
+.anim-up:nth-child(2) { animation-delay: 0.1s; }
+.anim-up:nth-child(3) { animation-delay: 0.2s; }
+.anim-up:nth-child(4) { animation-delay: 0.3s; }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════
+     HERO — 项目设计概览
+     ════════════════════════════════════════════════════════════════ -->
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-badge">
+      <span>v1.2</span> Design System Proposal
+    </div>
+    <h1>AgentHub<br><em>整体 UI 设计方案</em></h1>
+    <p>
+      基于现有 warm 设计语言，融合 Claude Desktop 的极简克制与 Coze 平台的一键部署体验，
+      构建统一、可扩展、具有辨识度的企业级 AI 协作平台界面。
+    </p>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     SECTION 1 — 设计系统总览
+     ════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="container">
+    <div class="section-header anim-up">
+      <div class="section-label">01 · Design Tokens</div>
+      <h2>色彩与字体系统</h2>
+      <p>现有 warm 主题以大地色系为基底，primary 蓝色为功能色，三套主题 (warm / light / dark) 通过 CSS 变量切换，已形成成熟的设计令牌体系。</p>
+    </div>
+
+    <!-- Color palette -->
+    <div class="card anim-up" style="margin-bottom:32px;">
+      <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:16px;">🎨 色板 — Warm 主题 (默认)</h3>
+      <div class="palette-grid">
+        <div class="palette-swatch" style="background:rgb(250,249,247);color:var(--warm-800);"><span>50</span><span class="palette-name">#FAF9F7</span></div>
+        <div class="palette-swatch" style="background:rgb(245,244,240);color:var(--warm-800);"><span>100</span><span class="palette-name">#F5F4F0</span></div>
+        <div class="palette-swatch" style="background:rgb(238,233,228);color:var(--warm-800);"><span>150</span><span class="palette-name">#EEE9E4</span></div>
+        <div class="palette-swatch" style="background:rgb(230,229,223);color:var(--warm-800);"><span>200</span><span class="palette-name">#E6E5DF</span></div>
+        <div class="palette-swatch" style="background:rgb(205,203,184);color:var(--warm-800);"><span>300</span><span class="palette-name">#CDCBB8</span></div>
+        <div class="palette-swatch" style="background:rgb(173,171,163);color:#FFF;"><span>400</span><span class="palette-name">#ADABA3</span></div>
+        <div class="palette-swatch" style="background:rgb(141,139,132);color:#FFF;"><span>500</span><span class="palette-name">#8D8B84</span></div>
+        <div class="palette-swatch" style="background:rgb(109,107,101);color:#FFF;"><span>600</span><span class="palette-name">#6D6B65</span></div>
+        <div class="palette-swatch" style="background:rgb(77,76,71);color:#FFF;"><span>700</span><span class="palette-name">#4D4C47</span></div>
+        <div class="palette-swatch" style="background:rgb(50,49,46);color:#FFF;"><span>800</span><span class="palette-name">#32312E</span></div>
+        <div class="palette-swatch" style="background:rgb(28,27,25);color:#FFF;"><span>900</span><span class="palette-name">#1C1B19</span></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:16px;">
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:24px;height:24px;border-radius:6px;background:var(--primary-500);"></span><span style="font-size:12px;color:var(--warm-500);">Primary</span></div>
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:24px;height:24px;border-radius:6px;background:var(--success-500);"></span><span style="font-size:12px;color:var(--warm-500);">Success</span></div>
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:24px;height:24px;border-radius:6px;background:var(--warning-500);"></span><span style="font-size:12px;color:var(--warm-500);">Warning</span></div>
+        <div style="display:flex;align-items:center;gap:8px;"><span style="width:24px;height:24px;border-radius:6px;background:var(--danger-500);"></span><span style="font-size:12px;color:var(--warm-500);">Danger</span></div>
+      </div>
+    </div>
+
+    <!-- Typography -->
+    <div class="card anim-up">
+      <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:24px;">🔤 字体层级</h3>
+      <div class="type-sample">
+        <div class="label">Heading 1 / 页面标题</div>
+        <div class="h1-display">AgentHub 协作平台</div>
+        <div class="spec">font-size: 42px · weight: 700 · letter-spacing: -0.03em</div>
+      </div>
+      <div class="type-sample">
+        <div class="label">Heading 2 / 区块标题</div>
+        <div class="h2-display">服务商管理 · 部署配置</div>
+        <div class="spec">font-size: 28px · weight: 600 · letter-spacing: -0.02em</div>
+      </div>
+      <div class="type-sample">
+        <div class="label">Heading 3 / 卡片标题</div>
+        <div class="h3-display">Orchestrator · 默认对话模型</div>
+        <div class="spec">font-size: 20px · weight: 600 · line-height: 1.3</div>
+      </div>
+      <div class="type-sample">
+        <div class="label">Body / 正文</div>
+        <div class="body-display">快速将当前对话部署为在线服务、API 接口或独立应用。支持多种部署方式，一键生成链接与密钥。</div>
+        <div class="spec">font-size: 15px · line-height: 1.7</div>
+      </div>
+      <div class="type-sample">
+        <div class="label">Caption / 辅助文字</div>
+        <div class="caption-display">WebSocket: Connected · 7 个服务商 · 16 条审计日志</div>
+        <div class="spec">font-size: 12px · line-height: 1.5</div>
+      </div>
+      <div class="type-sample">
+        <div class="label">Mono / 代码 & 数据</div>
+        <div class="mono-display">agenthub-frontend · main · 0x89504e47…</div>
+        <div class="spec">font-family: IBM Plex Mono · 13px</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     SECTION 2 — 组件与布局
+     ════════════════════════════════════════════════════════════════ -->
+<section class="section" style="background:#FFF;">
+  <div class="container">
+    <div class="section-header anim-up">
+      <div class="section-label">02 · Components</div>
+      <h2>核心组件体系</h2>
+      <p>按钮、卡片、输入框、标签 — 所有基础组件已通过 Tailwind @layer components 统一封装，确保全局一致性。</p>
+    </div>
+
+    <!-- Buttons -->
+    <div class="card anim-up" style="margin-bottom:24px;">
+      <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:20px;">🔘 按钮层级</h3>
+      <div class="btn-row">
+        <button class="btn btn-primary">+ 添加服务商</button>
+        <button class="btn btn-primary" style="opacity:0.6;">Disabled</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary">💻 接入本地 Agent</button>
+        <button class="btn btn-secondary">重置配置</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-ghost">编辑</button>
+        <button class="btn btn-ghost">测试</button>
+        <button class="btn btn-ghost" style="color:var(--danger-500);">删除</button>
+      </div>
+      <div class="btn-row" style="margin-top:12px;">
+        <span style="font-size:12px;color:var(--warm-400);">
+          btn-primary / btn-secondary / btn-ghost — 三级权重递减，覆盖所有交互场景
+        </span>
+      </div>
+    </div>
+
+    <!-- Deploy button focus -->
+    <div class="card anim-up" style="margin-bottom:24px;border-color:var(--primary-200);background:linear-gradient(135deg,#FAFBFF,#F0F3FF);">
+      <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:4px;">🚀 一键部署按钮 — 重点设计</h3>
+      <p style="font-size:13px;color:var(--warm-500);margin-bottom:20px;">
+        位于 ChatHeader 右侧操作栏，紧邻「分享」按钮，视觉层级与分享按钮一致，交互逻辑对标 Coze 平台。
+      </p>
+
+      <!-- Top bar mock -->
+      <div class="topbar-mock">
+        <div class="topbar-left">
+          <span style="font-weight:600;font-size:15px;color:var(--warm-800);">AgentHub 协作会话</span>
+          <span style="font-size:12px;color:var(--warm-400);">WebSocket: Connected</span>
+        </div>
+        <div class="topbar-right">
+          <button class="tb-btn" title="在线成员">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </button>
+          <div class="tb-divider"></div>
+          <!-- Share button -->
+          <button class="tb-btn" title="分享会话">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            <span>分享</span>
+          </button>
+          <div class="tb-divider"></div>
+          <!-- ⭐ One-click deploy button (焦点) -->
+          <button class="tb-btn" style="color:var(--primary-600);" title="一键部署">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+            <span>一键部署</span>
+          </button>
+        </div>
+      </div>
+      <div style="display:flex;gap:24px;margin-top:16px;font-size:12px;color:var(--warm-500);">
+        <span>✓ 与分享按钮等间距排列</span>
+        <span>✓ hover 态：bg-warm-50 + text-primary-600</span>
+        <span>✓ active 态：scale-[0.97]</span>
+        <span>✓ 图标+文字组合，视觉弱化不抢焦点</span>
+      </div>
+    </div>
+
+    <!-- Tags & labels -->
+    <div class="card anim-up">
+      <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:16px;">🏷️ 标签与徽章</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <span class="tag tag-done">✅ online</span>
+        <span class="tag tag-warn">🔐 requires_confirmation</span>
+        <span class="tag tag-block">🚫 BLOCKED</span>
+        <span class="tag tag-info">OpenAI</span>
+        <span class="tag tag-info">默认对话模型</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:100px;background:linear-gradient(135deg,#F59E0B,#D97706);color:#FFF;font-size:11px;font-weight:600;">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width:12px;height:12px;"><path d="M5 16h14l1.5-9-4.5 3-4-6-4 6L3.5 7 5 16Zm0 2v2h14v-2H5Z"/></svg>
+          主 Agent
+        </span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     SECTION 3 — 一键部署功能详解
+     ════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="container">
+    <div class="section-header anim-up">
+      <div class="section-label">03 · One-Click Deploy</div>
+      <h2>一键部署 — 完整交互设计</h2>
+      <p>对标 Coze 平台部署弹窗结构，覆盖从按钮点击到部署完成的完整交互链路。</p>
+    </div>
+
+    <!-- Deploy flow -->
+    <div class="card anim-up" style="margin-bottom:24px;">
+      <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:20px;">📋 交互流程</h3>
+      <div class="flow-steps">
+        <div class="flow-step done">
+          <div class="flow-step-icon">✓</div>
+          <div class="flow-step-label">点击按钮</div>
+          <div class="flow-step-desc">ChatHeader 右侧</div>
+        </div>
+        <div class="flow-step active">
+          <div class="flow-step-icon">2</div>
+          <div class="flow-step-label">选择部署方式</div>
+          <div class="flow-step-desc">4 种部署目标</div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-icon">3</div>
+          <div class="flow-step-label">配置参数</div>
+          <div class="flow-step-desc">项目/分支/域名</div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-step-icon">4</div>
+          <div class="flow-step-label">生成 & 复制</div>
+          <div class="flow-step-desc">一键获取结果</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Deploy modal mock -->
+    <div class="card anim-up" style="padding:0;overflow:hidden;">
+      <div class="comp-preview-header">
+        <div class="comp-preview-dot r"></div>
+        <div class="comp-preview-dot y"></div>
+        <div class="comp-preview-dot g"></div>
+        <span class="comp-preview-title">OneClickDeployModal.tsx</span>
+      </div>
+      <div class="modal-backdrop">
+        <div class="modal-card">
+          <!-- Header -->
+          <div class="modal-header">
+            <div class="modal-header-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+            </div>
+            <div class="modal-header-text">
+              <h3>一键部署</h3>
+              <p>快速将当前对话 / 智能体部署为在线服务、API 接口或独立应用</p>
+            </div>
+            <button class="modal-close">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <!-- Body -->
+          <div class="modal-body">
+            <!-- Session context -->
+            <div style="background:var(--warm-50);border:1px solid var(--warm-100);border-radius:var(--radius-md);padding:8px 12px;font-size:12px;color:var(--warm-500);margin-bottom:16px;">
+              📄 部署会话：AgentHub 协作会话
+            </div>
+
+            <!-- Config section -->
+            <div style="margin-bottom:16px;">
+              <div style="font-size:14px;font-weight:600;color:var(--warm-700);margin-bottom:10px;">部署配置</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+                <select style="width:100%;padding:8px 12px;border:1px solid var(--warm-200);border-radius:var(--radius-md);font-size:13px;color:var(--warm-800);background:#FFF;">
+                  <option>agenthub-frontend</option>
+                </select>
+                <input type="text" value="main" placeholder="分支" style="width:100%;padding:8px 12px;border:1px solid var(--warm-200);border-radius:var(--radius-md);font-size:13px;font-family:var(--font-mono);">
+                <input type="text" value="agenthub" placeholder="域名" style="width:100%;padding:8px 12px;border:1px solid var(--warm-200);border-radius:var(--radius-md);font-size:13px;font-family:var(--font-mono);">
+              </div>
+            </div>
+
+            <!-- Deploy option cards -->
+            <div style="margin-bottom:12px;">
+              <div style="font-size:14px;font-weight:600;color:var(--warm-700);margin-bottom:10px;">选择部署方式</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                <div class="deploy-option active">
+                  <div class="deploy-option-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                  </div>
+                  <span class="deploy-option-label">在线网页应用 ✓</span>
+                  <span class="deploy-option-desc">部署为独立网页链接，可直接分享访问</span>
+                </div>
+                <div class="deploy-option">
+                  <div class="deploy-option-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                  </div>
+                  <span class="deploy-option-label">API 接口服务</span>
+                  <span class="deploy-option-desc">生成标准调用 API与密钥</span>
+                </div>
+                <div class="deploy-option">
+                  <div class="deploy-option-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                  </div>
+                  <span class="deploy-option-label">嵌入组件</span>
+                  <span class="deploy-option-desc">生成 iframe 代码片段</span>
+                </div>
+                <div class="deploy-option">
+                  <div class="deploy-option-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+                  </div>
+                  <span class="deploy-option-label">本地部署包</span>
+                  <span class="deploy-option-desc">下载完整项目包离线部署</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Result preview -->
+            <div style="background:var(--warm-50);border:1px solid var(--warm-150);border-radius:var(--radius-lg);padding:12px 16px;">
+              <div style="font-size:12px;font-weight:600;color:var(--warm-500);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">在线网页应用 · 配置</div>
+              <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#FFF;border:1px solid var(--warm-200);border-radius:var(--radius-md);">
+                <span style="font-size:12px;color:var(--warm-400);">🔗</span>
+                <code style="font-family:var(--font-mono);font-size:12px;color:var(--primary-600);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">https://agenthub.agenthub.app/deploy/frontend-a8f3c2</code>
+                <button style="padding:4px 10px;border:1px solid var(--warm-200);border-radius:6px;background:#FFF;font-size:11px;color:var(--warm-500);cursor:pointer;">复制</button>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px;">
+                <div style="background:#FFF;border:1px solid var(--warm-100);border-radius:6px;padding:6px 10px;font-size:10px;color:var(--warm-400);text-transform:uppercase;">Framework<span style="display:block;font-size:12px;color:var(--warm-700);font-weight:500;">Next.js</span></div>
+                <div style="background:#FFF;border:1px solid var(--warm-100);border-radius:6px;padding:6px 10px;font-size:10px;color:var(--warm-400);text-transform:uppercase;">Region<span style="display:block;font-size:12px;color:var(--warm-700);font-weight:500;">ap-se-1</span></div>
+                <div style="background:#FFF;border:1px solid var(--warm-100);border-radius:6px;padding:6px 10px;font-size:10px;color:var(--warm-400);text-transform:uppercase;">Runtime<span style="display:block;font-size:12px;color:var(--warm-700);font-weight:500;">Node.js 20</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer -->
+          <div class="modal-footer">
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;">🔄 重置配置</button>
+              <button class="btn btn-secondary" style="font-size:12px;padding:6px 14px;">📄 查看文档</button>
+            </div>
+            <button class="btn btn-primary" style="font-size:13px;padding:10px 24px;">
+              🚀 生成链接
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     SECTION 4 — 页面架构与导航
+     ════════════════════════════════════════════════════════════════ -->
+<section class="section" style="background:#FFF;">
+  <div class="container">
+    <div class="section-header anim-up">
+      <div class="section-label">04 · Architecture</div>
+      <h2>页面架构与导航层级</h2>
+      <p>四大核心页面 + 管理面板的多模块结构，参考 Claude Desktop 的侧栏导航模式。</p>
+    </div>
+
+    <div class="grid-2 anim-up">
+      <!-- Page tree -->
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:16px;">📁 路由结构</h3>
+        <div class="tree">
+          <div><span class="dim">/</span> <span class="key">chat</span> <span class="comment">← 主聊天页 (Pages Router)</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">SessionSidebar</span> <span class="dim">会话列表</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">ChatHeader</span> <span class="dim">标题 + 分享 + 部署</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">MessageList</span> <span class="dim">消息流</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">ChatInput</span> <span class="dim">输入框 + @mention</span></div>
+          <div style="padding-left:16px;">└─ <span class="val">PreviewSidebar</span> <span class="dim">文件预览面板</span></div>
+          <div><span class="dim">/admin</span> <span class="key">管理面板</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">MCPDashboard</span> <span class="dim">运营总览</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">ServiceProviderModule</span> <span class="dim">服务商管理</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">GeneralSettings</span> <span class="dim">通用设置</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">SkillsModule</span> <span class="dim">技能管理</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">MemoryModule</span> <span class="dim">记忆系统</span></div>
+          <div style="padding-left:16px;">├─ <span class="val">AuditLogList</span> <span class="dim">审计日志</span></div>
+          <div style="padding-left:16px;">└─ <span class="val">UserManagement</span> <span class="dim">用户管理</span></div>
+          <div><span class="dim">/charts</span> <span class="key">架构图</span></div>
+          <div><span class="dim">/canvas</span> <span class="key">Agent 流程画布</span></div>
+        </div>
+      </div>
+
+      <!-- Naming reference -->
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:16px;">🧩 组件命名规范</h3>
+        <div style="font-size:13px;color:var(--warm-600);line-height:2;">
+          <div><span style="color:var(--primary-600);font-weight:600;">Page</span> — <code style="font-family:var(--font-mono);font-size:12px;">app/{name}/page.tsx</code></div>
+          <div><span style="color:var(--primary-600);font-weight:600;">Module</span> — <code style="font-family:var(--font-mono);font-size:12px;">*Module.tsx</code> 管理面板子模块</div>
+          <div><span style="color:var(--primary-600);font-weight:600;">Modal</span> — <code style="font-family:var(--font-mono);font-size:12px;">*Modal.tsx</code> 模态弹窗</div>
+          <div><span style="color:var(--primary-600);font-weight:600;">Panel</span> — <code style="font-family:var(--font-mono);font-size:12px;">*Panel.tsx</code> 侧栏/底部面板</div>
+          <div><span style="color:var(--primary-600);font-weight:600;">Card</span> — <code style="font-family:var(--font-mono);font-size:12px;">*Card.tsx</code> 消息卡片组件</div>
+          <div><span style="color:var(--primary-600);font-weight:600;">Bubble</span> — <code style="font-family:var(--font-mono);font-size:12px;">*Bubble.tsx</code> 消息气泡</div>
+          <div><span style="color:var(--primary-600);font-weight:600;">Dialog</span> — <code style="font-family:var(--font-mono);font-size:12px;">*Dialog.tsx</code> 确认/分享对话框</div>
+          <div><span style="color:var(--primary-600);font-weight:600;">Store</span> — <code style="font-family:var(--font-mono);font-size:12px;">stores/*Store.ts</code> Zustand 状态</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     SECTION 5 — Claude Desktop 参考
+     ════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="container">
+    <div class="section-header anim-up">
+      <div class="section-label">05 · Reference</div>
+      <h2>Claude Desktop 设计参考</h2>
+      <p>提取 Claude Desktop 的核心设计模式，与 AgentHub 现有设计语言进行对比与融合建议。</p>
+    </div>
+
+    <div class="ref-row anim-up">
+      <div class="ref-card">
+        <div class="ref-card-img" style="background:linear-gradient(135deg,#1E1E1E,#2D2D2D);color:#D4D4D4;">
+          <div style="text-align:center;">
+            <div style="font-size:48px;margin-bottom:8px;">◧</div>
+            <div style="font-size:13px;">Claude Desktop — 暗色主题</div>
+          </div>
+        </div>
+        <div class="ref-card-body">
+          <h4>极简暗色界面</h4>
+          <p>Claude Desktop 采用深色背景 (#1E1E1E) + 柔和前景色，AgentHub 的 dark 主题已对齐此方案。</p>
+        </div>
+      </div>
+      <div class="ref-card">
+        <div class="ref-card-img" style="background:linear-gradient(135deg,#F7F6F3,#EDEBE5);color:var(--warm-700);">
+          <div style="text-align:center;">
+            <div style="font-size:48px;margin-bottom:8px;">☰</div>
+            <div style="font-size:13px;">AgentHub — Warm 主题</div>
+          </div>
+        </div>
+        <div class="ref-card-body">
+          <h4>温润明亮主色调</h4>
+          <p>AgentHub 独创 warm 色系 — 暖灰基底配合蓝紫强调色，在技术产品中营造人文温度。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="ref-row anim-up">
+      <div class="ref-card">
+        <div class="ref-card-body">
+          <h4>🎯 可借鉴的设计模式</h4>
+          <p style="margin-top:8px;">
+            <strong>1. 侧栏优先导航</strong> — Claude Desktop 左侧会话列表 + 右侧内容区，AgentHub 已采用相同布局。<br><br>
+            <strong>2. 上下文感知工具栏</strong> — 根据当前状态动态显示操作按钮（如中断、部署），避免信息过载。<br><br>
+            <strong>3. 渐进式披露</strong> — 高级配置折叠，默认只展示核心选项，AgentHub DeployModal 已实现。<br><br>
+            <strong>4. Toast 通知体系</strong> — 非阻塞式操作反馈，AgentHub 已通过 ToastProvider 实现。<br><br>
+            <strong>5. 代码高亮与 Diff</strong> — Claude Desktop 的代码渲染质量是标杆，AgentHub 已有完整支持。
+          </p>
+        </div>
+      </div>
+      <div class="ref-card">
+        <div class="ref-card-body">
+          <h4>🔧 差异化优势 (AgentHub 独有)</h4>
+          <p style="margin-top:8px;">
+            <strong>1. 多 Agent 编排可视化</strong> — DAG 任务图、Agent 流程画布、PM 状态机，超越单一对话模型。<br><br>
+            <strong>2. 一键部署集成</strong> — 从对话直接到生产部署，Claude Desktop 无此能力。<br><br>
+            <strong>3. 多用户协作</strong> — 实时 Presence、Typing Indicator、权限角色，对标 Slack/Notion。<br><br>
+            <strong>4. 记忆系统</strong> — 持久化用户偏好和项目上下文，跨会话知识积累。<br><br>
+            <strong>5. 三主题切换</strong> — Warm / Light / Dark，比 Claude Desktop 的单暗色主题更灵活。
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     SECTION 6 — 改进建议
+     ════════════════════════════════════════════════════════════════ -->
+<section class="section" style="background:#FFF;">
+  <div class="container">
+    <div class="section-header anim-up">
+      <div class="section-label">06 · Roadmap</div>
+      <h2>UI 改进路线图</h2>
+      <p>基于设计审计发现的可优化点，按优先级排列。</p>
+    </div>
+
+    <div class="card anim-up" style="margin-bottom:20px;">
+      <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:16px;">
+        <span class="tag tag-done" style="margin-right:8px;">✅ 已完成</span> P0 — 一键部署
+      </h3>
+      <div style="font-size:13px;color:var(--warm-600);line-height:1.8;">
+        ├─ 按钮已位于 ChatHeader 分享按钮右侧 ✓<br>
+        ├─ OneClickDeployModal 已实现完整交互 ✓<br>
+        ├─ 4 种部署方式卡片选择 ✓<br>
+        ├─ 项目/分支/域名配置 ✓<br>
+        ├─ 一键复制 & 下载功能 ✓<br>
+        └─ Toast 反馈提示 ✓
+      </div>
+    </div>
+
+    <div class="grid-2 anim-up" style="margin-bottom:20px;">
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:12px;">
+          <span class="tag tag-warn" style="margin-right:8px;">🔜 P1</span> 导航体验优化
+        </h3>
+        <ul style="font-size:13px;color:var(--warm-600);padding-left:18px;line-height:2;">
+          <li>侧栏折叠/展开动画过渡</li>
+          <li>移动端响应式适配 (当前仅桌面)</li>
+          <li>面包屑导航 (admin 深层页面)</li>
+          <li>键盘快捷键全局提示面板</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:12px;">
+          <span class="tag tag-warn" style="margin-right:8px;">🔜 P1</span> 视觉细节打磨
+        </h3>
+        <ul style="font-size:13px;color:var(--warm-600);padding-left:18px;line-height:2;">
+          <li>消息气泡交错动画 (staggered reveal)</li>
+          <li>Agent 头像生成器多样化</li>
+          <li>空状态插画 (empty state illustrations)</li>
+          <li>加载骨架屏 (skeleton screens)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid-2 anim-up">
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:12px;">
+          <span class="tag tag-info" style="margin-right:8px;">📋 P2</span> 部署功能增强
+        </h3>
+        <ul style="font-size:13px;color:var(--warm-600);padding-left:18px;line-height:2;">
+          <li>部署历史记录页面</li>
+          <li>部署状态实时推送 (WebSocket)</li>
+          <li>自定义域名绑定 UI</li>
+          <li>环境变量批量配置</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="font-size:15px;font-weight:600;color:var(--warm-800);margin-bottom:12px;">
+          <span class="tag tag-info" style="margin-right:8px;">📋 P3</span> 长期愿景
+        </h3>
+        <ul style="font-size:13px;color:var(--warm-600);padding-left:18px;line-height:2;">
+          <li>自定义主题构建器 (用户品牌色)</li>
+          <li>多语言国际化 (i18n)</li>
+          <li>无障碍 (a11y) 全面审计</li>
+          <li>PWA 离线支持</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+     FOOTER
+     ════════════════════════════════════════════════════════════════ -->
+<footer style="border-top:1px solid var(--warm-150);padding:40px 0;text-align:center;">
+  <div class="container">
+    <p style="font-size:13px;color:var(--warm-400);">
+      AgentHub UI Design System v1.2 · 参考 Claude Desktop & Coze 设计语言 · 2026
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
