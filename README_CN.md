@@ -221,3 +221,26 @@ AgentHub 站在巨人的肩膀上：
 <p align="center">
   <sub>由 <a href="https://github.com/Density">Density</a> 与 AgentHub 社区用 ❤️ 构建</sub>
 </p>
+
+
+## 🌟 贡献者
+
+感谢每一位为 AgentHub 做出贡献的伙伴：
+
+<a href="https://github.com/EVEDensity/AgentHub/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EVEDensity/AgentHub" />
+</a>
+
+---
+
+## ⭐ Star 历史
+
+如果 AgentHub 对你有帮助，**请点一个 Star** — 让更多人发现这个项目！
+
+<a href="https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
+ </picture>
+</a>

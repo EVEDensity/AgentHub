@@ -221,3 +221,25 @@ AgentHub stands on the shoulders of giants:
 <p align="center">
   <sub>Built with ❤️ by <a href="https://github.com/Density">Density</a> and the AgentHub community</sub>
 </p>
+
+## 🌟 Contributors
+
+Thanks to every amazing contributor who has helped build AgentHub:
+
+<a href="https://github.com/EVEDensity/AgentHub/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EVEDensity/AgentHub" />
+</a>
+
+---
+
+## ⭐ Star History
+
+If you find AgentHub useful, **please give it a star** — it really helps others discover the project!
+
+<a href="https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
+ </picture>
+</a>
