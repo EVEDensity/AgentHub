@@ -1,0 +1,44 @@
+[package]
+name = "memory-segment-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Context window compaction, memory pruning and summary checkpoint engine for the AgentHub platform."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "memory-segment-core-service"
+path = "src/bin/memory-segment-core-service.rs"
+
+[dependencies]
+platform-events = { path = "../platform-events" }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# NATS 接入
+async-nats = "0.33"
+
+# HTTP 服务（轻量，避免 axum 带来的额外编译开销）
+hyper = { version = "0.14", features = ["server", "http1", "runtime", "tcp"] }
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# 唯一 ID
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

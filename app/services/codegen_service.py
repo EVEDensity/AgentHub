@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
 
 from fastapi import HTTPException
 
-from app.config import PROJECT_ROOT
 from app.services.git_service import git_service
 
-GENERATED_DIR = PROJECT_ROOT / "agenthub_generated"
-GENERATED_DIR.mkdir(exist_ok=True)
+
+def _get_generated_dir() -> Path:
+    """Return the generated-code directory inside the current workspace."""
+    from app.services.workspace_context import get_workspace_root
+    d = get_workspace_root() / "agenthub_generated"
+    d.mkdir(exist_ok=True)
+    return d
 
 
 def _safe_rel_path(name: str) -> Path:
@@ -53,33 +58,67 @@ def strip_code_fence(text: str) -> str:
     return match.group(1).strip() if match else text.strip()
 
 
-def extract_files(model_output: str, original: str) -> list[dict]:
+def _try_parse_json_with_files(text: str) -> dict | None:
+    """Parse JSON with a 'files' key, tolerating non-JSON prefixes/suffixes."""
+    # Direct parse first
     try:
-        data = json.loads(model_output)
+        data = json.loads(text)
         if isinstance(data, dict) and isinstance(data.get("files"), list):
-            files = []
-            for item in data["files"]:
-                rel = _safe_rel_path(str(item.get("path") or infer_filename(original)))
-                content = str(item.get("content") or default_content(str(rel), original))
-                files.append({"path": str(rel), "content": strip_code_fence(content), "language": language_for(str(rel))})
-            if files:
-                return files
+            return data
     except json.JSONDecodeError:
         pass
+    # Try to locate the JSON object containing "files"
+    for m in re.finditer(r"\{[^{}]*\"files\"\s*:\s*\[[^\]]*\][^{}]*\}", text):
+        try:
+            data = json.loads(m.group())
+            if isinstance(data, dict) and isinstance(data.get("files"), list):
+                return data
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def extract_files(model_output: str, original: str) -> list[dict]:
+    # Strip decorative prefixes so JSON parsing can succeed
+    cleaned = re.sub(r"^(【[^】]*】\s*)+", "", model_output.strip())
+    data = _try_parse_json_with_files(cleaned)
+    if data:
+        files = []
+        for item in data["files"]:
+            rel = _safe_rel_path(str(item.get("path") or infer_filename(original)))
+            content = str(item.get("content") or default_content(str(rel), original))
+            files.append({"path": str(rel), "content": strip_code_fence(content), "language": language_for(str(rel))})
+        if files:
+            return files
+    # Fallback: treat entire output as single file content, but only if it
+    # looks like actual code — don't create bogus files from chat replies.
     rel = _safe_rel_path(infer_filename(original))
     content = strip_code_fence(model_output)
     if not content or content.startswith("本地 Mock 模型响应") or content.startswith("模型调用失败"):
         content = default_content(str(rel), original)
+    # Only create a file if the content resembles source code
+    is_code = bool(re.search(r"\b(def |class |import |from |function |const |export |require\(|package |use )", content))
+    if not is_code:
+        return []
     return [{"path": str(rel), "content": content, "language": language_for(str(rel))}]
 
 
-def write_generated_files(model_output: str, original: str) -> dict:
+async def write_generated_files(model_output: str, original: str) -> dict:
     files = extract_files(model_output, original)
     public_files: list[dict] = []
-    for item in files:
+
+    async def _write_one(item: dict) -> dict:
         rel = _safe_rel_path(item["path"])
-        target = GENERATED_DIR / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(item["content"], encoding="utf-8")
-        public_files.append({"path": str(target.relative_to(PROJECT_ROOT)), "content": item["content"], "language": item["language"]})
+        gen_dir = _get_generated_dir()
+        target = gen_dir / rel
+
+        def _sync():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+
+        await asyncio.to_thread(_sync)
+        return {"path": str(target.relative_to(gen_dir)), "content": item["content"], "language": item["language"]}
+
+    for item in files:
+        public_files.append(await _write_one(item))
     return {"files": [file["path"] for file in public_files], "fileDetails": public_files, "diff": git_service.diff().get("diff", "")}

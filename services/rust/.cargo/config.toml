@@ -1,0 +1,17 @@
+# Cargo 镜像配置：使用 rsproxy（rsproxy.cn）作为国内镜像源，保证在受限网络环境下
+# 也能拉取 crates。如需切换为官方源，删除本文件即可。
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.affine"
+
+[registries.rsproxy]
+index = "https://rsproxy.cn/crates.affine"
+
+[net]
+# 首次拉取大依赖时放宽 git 超时
+git-fetch-with-cli = true

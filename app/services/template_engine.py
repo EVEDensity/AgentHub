@@ -2,30 +2,29 @@ from __future__ import annotations
 
 import json
 
-from app.db.session import dict_rows, get_connection
+from app.db.session import afetch_all, aexecute
 from app.schemas.dag import DAGConfig
 
 
 class TemplateEngine:
-    def list_templates(self) -> list[dict]:
-        rows = dict_rows("SELECT id,name,category,keywords,dag_json,usage_count,created_at FROM dag_templates ORDER BY id")
+    async def list_templates(self) -> list[dict]:
+        rows = await afetch_all("SELECT id,name,category,keywords,dag_json,usage_count,created_at FROM dag_templates ORDER BY id")
         for row in rows:
             row["keywords"] = json.loads(row["keywords"])
             row["dag"] = json.loads(row.pop("dag_json"))
         return rows
 
-    def match_template(self, intent: str) -> tuple[DAGConfig, int | None]:
+    async def match_template(self, intent: str) -> tuple[DAGConfig, int | None]:
         best: tuple[float, dict | None] = (0.0, None)
         intent_lower = intent.lower()
-        for template in dict_rows("SELECT id,name,keywords,dag_json FROM dag_templates"):
+        for template in await afetch_all("SELECT id,name,keywords,dag_json FROM dag_templates"):
             keywords = json.loads(template["keywords"])
             hits = sum(1 for keyword in keywords if keyword.lower() in intent_lower or keyword in intent)
             score = hits / max(len(keywords), 1)
             if score > best[0]:
                 best = (score, template)
         if best[1] and best[0] >= 0.2:
-            with get_connection() as conn:
-                conn.execute("UPDATE dag_templates SET usage_count=usage_count+1 WHERE id=?", (best[1]["id"],))
+            await aexecute("UPDATE dag_templates SET usage_count=usage_count+1 WHERE id=$1", best[1]["id"])
             dag = json.loads(best[1]["dag_json"])
             dag["templateId"] = best[1]["id"]
             dag["templateName"] = best[1]["name"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from app.schemas.common import AuthOut, LoginRequest, RegisterRequest
+from app.services.agent_service import seed_default_agents_for_user
 from app.services.auth_service import authenticate_user, create_access_token, create_user, get_current_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -10,13 +11,15 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/register", response_model=AuthOut)
 async def register(data: RegisterRequest) -> dict:
-    user = create_user(data.name, data.password, data.role)
+    user = await create_user(data.name, data.password, data.role)
+    # Seed the 6 default multi-agent roles for the new user
+    await seed_default_agents_for_user(user["id"])
     return {"accessToken": create_access_token(user), "tokenType": "bearer", "user": user}
 
 
 @router.post("/login", response_model=AuthOut)
 async def login(data: LoginRequest) -> dict:
-    user = authenticate_user(data.name, data.password)
+    user = await authenticate_user(data.name, data.password)
     return {"accessToken": create_access_token(user), "tokenType": "bearer", "user": user}
 
 

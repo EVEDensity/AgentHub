@@ -39,12 +39,11 @@ class MessageOut(BaseModel):
     sender: str
     timestamp: str
     type: str = "text"
-    fidelityScore: float = 0.95
     symbolic: dict | None = None
 
 
 class ModelConfigRequest(BaseModel):
-    provider: str = Field(pattern="^(openai|anthropic|ollama|mock|deepseek|minimax|zhipu|qwen|doubao|custom_openai)$")
+    provider: str = Field(pattern="^(openai|anthropic|ollama|mock|deepseek|minimax|zhipu|qwen|doubao|custom_openai|kimi|cloud_code)$")
     modelName: str
     apiKey: str = ""
     baseUrl: str = ""
@@ -91,4 +90,87 @@ class AgentCreateRequest(BaseModel):
     agentId: str
     domain: str
     adapterType: str = "mock"
-    riskLevel: str = "L1"
+    baseModelName: str = ""
+    rankLevel: str = "L1"
+    dutyNote: str = ""
+    displayName: str = ""
+    avatarUrl: str = ""
+    capabilityTags: list[str] = Field(default_factory=list)
+    baseUrl: str = ""
+    apiKey: str = ""
+
+
+class AgentUpdateRequest(BaseModel):
+    agentId: str
+    domain: str
+    adapterType: str = "mock"
+    baseModelName: str = ""
+    rankLevel: str = "L1"
+    dutyNote: str = ""
+    displayName: str = ""
+    avatarUrl: str = ""
+    capabilityTags: list[str] = Field(default_factory=list)
+    baseUrl: str = ""
+    apiKey: str = ""
+
+
+class DefaultChatAgentRequest(BaseModel):
+    agentId: str
+
+
+# ── Tool-calling schemas ────────────────────────────────────────────
+
+class ToolParameterSchema(BaseModel):
+    name: str
+    type: str = "string"
+    required: bool = False
+    description: str = ""
+
+
+class ToolCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str = Field(..., min_length=1)
+    category: str = "integration"
+    parameters: list[ToolParameterSchema] = []
+    return_type: str = "json"
+    examples: list[dict] = []
+    risk_level: str = "L1"
+    enabled: bool = True
+
+
+class ToolUpdateRequest(BaseModel):
+    description: str | None = None
+    category: str | None = None
+    parameters: list[ToolParameterSchema] | None = None
+    return_type: str | None = None
+    examples: list[dict] | None = None
+    risk_level: str | None = None
+    enabled: bool | None = None
+
+
+class AgentToolBindRequest(BaseModel):
+    agent_id: str
+    tool_ids: list[int]
+
+
+# ── Permission rule schemas ─────────────────────────────────────────
+
+class PermissionRuleCreateRequest(BaseModel):
+    agent_id: str = "*"
+    tool_pattern: str = Field(..., min_length=1)
+    path_pattern: str = "*"
+    behavior: str = Field(pattern="^(allow|deny|ask)$")
+    priority: int = 0
+
+
+class PermissionRuleUpdateRequest(BaseModel):
+    tool_pattern: str | None = None
+    path_pattern: str | None = None
+    behavior: str | None = Field(default=None, pattern="^(allow|deny|ask)$")
+    priority: int | None = None
+    enabled: bool | None = None
+
+
+class ToolPermissionResponse(BaseModel):
+    requestId: str = Field(..., min_length=1)
+    decision: str = Field(pattern="^(allow|deny)$")
