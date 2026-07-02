@@ -67,7 +67,23 @@ func main() {
 	store := state.Connect(getenv("REDIS_ADDR", "127.0.0.1:6379"))
 	defer store.Close()
 	budgets := DefaultBudgets()
-	machine := NewReactMachine(store, bus, budgets)
+
+	// DeepSearch 客户端：model-adapter (LLM 步骤) + retrieval-core (混合检索)。
+	// 两者均通过 HTTP 直连，避免 NATS 异步链路在同步 ReAct 循环中引入额外延迟。
+	// 默认地址指向 Docker Compose 中的服务名；本地开发可通过环境变量覆盖。
+	//
+	// P2-7/8: 用 ResilientDeepSearchFlow 包装，提供：
+	//   - 并发池上限（DEEPSEARCH_MAX_CONCURRENT，默认 50）防止高并发压垮下游
+	//   - model-adapter / retrieval-core 双熔断器（连续失败 5 次熔断 30s）
+	//   - 轻量检索降级（deepsearch 模式失败 → simple 模式重试，在 deepsearch.go 内）
+	modelAdapter := NewModelAdapterClient(getenv("MODEL_ADAPTER_URL", "http://model-adapter-service:8091"))
+	retrievalCore := NewRetrievalCoreClient(getenv("RETRIEVAL_CORE_URL", "http://retrieval-core:8102"))
+	innerFlow := NewDeepSearchFlow(modelAdapter, retrievalCore)
+	maxConcurrent := parseMaxConcurrent(getenv("DEEPSEARCH_MAX_CONCURRENT", "50"))
+	deepSearch := NewResilientDeepSearchFlow(innerFlow, maxConcurrent)
+	// Sprint D: RustCoreBridge unifies NATS communication with all five Rust cores.
+		rustBridge := NewRustCoreBridge(bus)
+		machine := NewReactMachine(store, bus, budgets, deepSearch, rustBridge)
 
 	// Session events: the main ingress for the ReAct loop. Risky messages are
 	// intercepted for permission approval before the loop begins; everything
@@ -204,6 +220,16 @@ func main() {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		obs.MetricsHandler().ServeHTTP(w, r)
 	})
+	// P2-7/8: 熔断器与并发池状态端点，用于运维观测故障降级链状态。
+	mux.HandleFunc("/resilience/state", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"circuit_breakers":  deepSearch.BreakerStates(),
+			"pool_active":       deepSearch.pool.Active(),
+			"pool_max":           cap(deepSearch.pool.sem),
+				"rust_bridge_pending":   rustBridge.PendingCounts(),
+		})
+	})
 
 	addr := getenv("ORCHESTRATOR_ADDR", ":8082")
 	log.Printf("realtime-orchestrator listening on %s (react budgets: steps=%d tools=%d retrieval=%d time=%s)",
@@ -227,3 +253,12 @@ func str(m map[string]any,k string)string{v,ok:=m[k];if !ok||v==nil{return ""};i
 func js(v any)string{if v==nil{return ""};b,err:=json.Marshal(v);if err!=nil{return ""};return string(b)}
 func pick(a,b string)string{if a!=""{return a};return b}
 func getenv(k,d string)string{if v:=os.Getenv(k);v!=""{return v};return d}
+
+// parseMaxConcurrent 解析 DEEPSEARCH_MAX_CONCURRENT 环境变量，默认 50，最小 1。
+func parseMaxConcurrent(raw string) int {
+	var n int
+	if _, err := fmt.Sscanf(raw, "%d", &n); err == nil && n > 0 {
+		return n
+	}
+	return 50
+}

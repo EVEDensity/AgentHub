@@ -108,20 +108,32 @@ type ReactRun struct {
 }
 
 // ReactMachine drives the state machine for a session. It owns the Redis store
-// for persistence and the eventbus for publishing transition events.
+// for persistence and the eventbus for publishing transition events. When
+// deepSearch is non-nil, the retrieve and synthesize stages run the full
+// DeepSearch pipeline (query rewrite → hybrid retrieve → answer synthesis)
+// wrapped with circuit breakers and a concurrency pool (ResilientDeepSearchFlow);
+// otherwise they fall back to placeholder behavior.
+//
+// Sprint D: rustBridge provides NATS-based communication with all five Rust
+// core services (retrieval-core, fanout-core, patch-merge-core,
+// memory-segment-core, stream-core).
 type ReactMachine struct {
-	store   *state.Store
-	bus     *eventbus.Client
-	budgets Budgets
-	instance string
+	store      *state.Store
+	bus        *eventbus.Client
+	budgets    Budgets
+	deepSearch *ResilientDeepSearchFlow
+	rustBridge *RustCoreBridge
+	instance   string
 }
 
-func NewReactMachine(store *state.Store, bus *eventbus.Client, budgets Budgets) *ReactMachine {
+func NewReactMachine(store *state.Store, bus *eventbus.Client, budgets Budgets, deepSearch *ResilientDeepSearchFlow, rustBridge *RustCoreBridge) *ReactMachine {
 	return &ReactMachine{
-		store:    store,
-		bus:      bus,
-		budgets:  budgets,
-		instance: getenv("HOSTNAME", "local"),
+		store:      store,
+		bus:        bus,
+		budgets:    budgets,
+		deepSearch: deepSearch,
+		rustBridge: rustBridge,
+		instance:   getenv("HOSTNAME", "local"),
 	}
 }
 
@@ -357,12 +369,42 @@ func (m *ReactMachine) runReactLoop(ctx context.Context, env events.Envelope) er
 	_ = run
 	m.dispatchAgent(ctx, env, StateClassify, content)
 
+	// deepSearchResult carries retrieval evidence from the retrieve stage to the
+	// synthesize stage. Populated only when DeepSearch is enabled and retrieval
+	// is not skipped; otherwise synthesize falls back to a placeholder answer.
+	var deepSearchResult *DeepSearchResult
+
 	// Stage 3 (conditional): retrieve — Search agent handles DeepSearch.
+	// When deepSearch is configured, run the full pipeline (query_rewrite →
+	// multi_hop_decompose → hybrid_retrieve → citation_grounding). The
+	// dispatchAgent call is kept for audit/observability regardless.
 	if !decision.SkipRetrieval {
 		if _, err = m.Advance(ctx, env, StateRetrieve, "retrieve: search agent deepsearch"); err != nil {
 			return err
 		}
 		m.dispatchAgent(ctx, env, StateRetrieve, content)
+		if m.deepSearch != nil {
+			deepSearchResult, _ = m.deepSearch.Retrieve(ctx, content, env.TenantID, env.SessionID, env.TraceID)
+		}
+
+		// Sprint D: fire-and-forget NATS retrieval query for async audit/replay.
+		if m.rustBridge != nil {
+			startMs := time.Now().UnixMilli()
+			_ = m.rustBridge.PublishFanoutEvent(ctx, "retrieval", env)
+			go func() {
+				natsCtx, natsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer natsCancel()
+				reqID := fmt.Sprintf("nats-retr-%s-%d", env.SessionID, startMs)
+				_, _ = m.rustBridge.PublishRetrievalQuery(natsCtx, retrievalRequest{
+					RequestID:      reqID,
+					Query:          content,
+					Mode:           "deepsearch",
+					KnowledgeScope: []string{"docs", "code", "memory"},
+					TopK:           8,
+					TimeoutMs:      5000,
+				})
+			}()
+		}
 	}
 
 	// Stage 4: plan — Planner agent creates an execution plan.
@@ -388,6 +430,16 @@ func (m *ReactMachine) runReactLoop(ctx context.Context, env events.Envelope) er
 	}
 	m.dispatchAgent(ctx, env, StateReflect, content)
 
+	// Sprint D: trigger memory-segment-core window compaction at checkpoints.
+	if m.rustBridge != nil && run.StepCount >= 6 {
+		go func() {
+			memCtx, memCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer memCancel()
+			_, _ = m.rustBridge.PublishMemoryCompact(memCtx, env.TenantID, env.SessionID,
+				env.TraceID, env.MessageID, run.StepCount, "", "")
+		}()
+	}
+
 	// Stage 8: continue_or_finish — Critic agent decides whether to loop or
 	// finish. For the synchronous landing we always finish on the first pass.
 	// P1-3 will add real continuation logic driven by the critic's response.
@@ -397,15 +449,32 @@ func (m *ReactMachine) runReactLoop(ctx context.Context, env events.Envelope) er
 	m.dispatchAgent(ctx, env, StateContinueOrFinish, content)
 
 	// Stage 9: synthesize — Summarizer agent builds the grounded answer.
+	// When deepSearch produced evidence, run answer_synthesis via model-adapter;
+	// otherwise emit a placeholder so the stream lifecycle completes cleanly.
 	if _, err = m.Advance(ctx, env, StateSynthesize, "synthesize: summarizer agent building answer"); err != nil {
 		return err
 	}
 	m.dispatchAgent(ctx, env, StateSynthesize, content)
-	m.emitSynthesis(ctx, env)
+	answer := "[synthesized response]"
+	if m.deepSearch != nil && deepSearchResult != nil {
+		if synthesized, synthErr := m.deepSearch.Synthesize(ctx, deepSearchResult); synthErr == nil && synthesized != "" {
+			answer = synthesized
+		}
+	}
+	m.emitSynthesis(ctx, env, answer)
 
 	// Stage 10: stream_back — orchestrator emits the final stream output.
 	if _, err = m.Advance(ctx, env, StateStreamBack, "stream_back: emitting aggregated output"); err != nil {
 		return err
+	}
+
+	// Sprint D: fanout the final stream output to fanout-core for broadcast.
+	if m.rustBridge != nil {
+		go func() {
+			fanoutCtx, fanoutCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer fanoutCancel()
+			_ = m.rustBridge.PublishFanoutEvent(fanoutCtx, "stream", env)
+		}()
 	}
 
 	// Terminal: finished.
@@ -415,11 +484,12 @@ func (m *ReactMachine) runReactLoop(ctx context.Context, env events.Envelope) er
 	return nil
 }
 
-// emitSynthesis publishes a stream chunk with the synthesized answer. In the
-// synchronous landing this is a placeholder; P1-3 will stream real model output.
-func (m *ReactMachine) emitSynthesis(ctx context.Context, env events.Envelope) {
+// emitSynthesis publishes a stream chunk with the synthesized answer, followed
+// by flush and complete events to close the stream lifecycle cleanly. The
+// answer text comes from DeepSearch.Synthesize (when enabled) or a placeholder.
+func (m *ReactMachine) emitSynthesis(ctx context.Context, env events.Envelope, answer string) {
 	chunkEvt := chunk(env, "stream-synth-"+env.EventID, 1,
-		"[synthesized response]", false, "synthesizing", "", events.PriorityNormal)
+		answer, false, "synthesizing", "", events.PriorityNormal)
 	flushEvt := sib(events.EventSessionStreamFlush, chunkEvt, chunkEvt.EventID+"-flush", env.MessageID, "flush")
 	completeEvt := sib(events.EventSessionStreamComplete, chunkEvt, chunkEvt.EventID+"-complete", env.MessageID, "complete")
 

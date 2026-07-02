@@ -54,3 +54,19 @@ func (s *Store) HGetAll(ctx context.Context, key string) (map[string]string, err
 func (s *Store) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return s.client.Expire(ctx, key, ttl).Err()
 }
+
+func (s *Store) HDel(ctx context.Context, key string, fields ...string) error {
+	return s.client.HDel(ctx, key, fields...).Err()
+}
+
+func (s *Store) HLen(ctx context.Context, key string) (int64, error) {
+	return s.client.HLen(ctx, key).Result()
+}
+
+func (s *Store) Del(ctx context.Context, keys ...string) error {
+	return s.client.Del(ctx, keys...).Err()
+}
+
+func (s *Store) Keys(ctx context.Context, pattern string) ([]string, error) {
+	return s.client.Keys(ctx, pattern).Result()
+}

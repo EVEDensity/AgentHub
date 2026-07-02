@@ -28,6 +28,11 @@ const (
 	EventRetrievalQueryCompleted EventType = "retrieval.query.completed"
 	EventRetrievalFusionComplete EventType = "retrieval.fusion.completed"
 	EventAuditSecurity           EventType = "audit.security.event"
+
+	// Sprint D: Rust core → Go events (published by Rust async_nats, consumed by Go via core NATS).
+	EventFanoutDelivered       EventType = "fanout.event.delivered"
+	EventPatchMergeCompleted   EventType = "patch.merge.completed"
+	EventMemoryCompactCompleted EventType = "memory.compact.completed"
 )
 
 type Producer struct {

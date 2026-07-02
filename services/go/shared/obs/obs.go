@@ -101,6 +101,21 @@ func (s *statusRecorder) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
+// Flush 委托给底层 ResponseWriter 的 Flush，使 SSE/streaming 端点能在
+// obs.Middleware 包装下正常工作。若底层不支持 Flush 则为空操作。
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap 暴露底层 ResponseWriter，使 http.ResponseController（Go 1.20+）
+// 能透过 middleware wrapper 查找底层的 Flusher / Hijacker / SetWriteDeadline
+// 等接口。这对于 SSE 写超时（ResponseController.SetWriteDeadline）是必需的。
+func (s *statusRecorder) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}
+
 // InitTracer configures the global OpenTelemetry tracer provider. If endpoint
 // is non-empty it exports spans via OTLP/HTTP; otherwise it installs a no-op
 // tracer so the process runs without a collector. The returned shutdown func

@@ -6,8 +6,10 @@ require (
 	github.com/agenthub/platform/shared/db v0.0.0
 	github.com/agenthub/platform/shared/eventbus v0.0.0
 	github.com/agenthub/platform/shared/events v0.0.0
+	github.com/agenthub/platform/shared/iam v0.0.0
 	github.com/agenthub/platform/shared/obs v0.0.0
 	github.com/agenthub/platform/shared/state v0.0.0
+	github.com/prometheus/client_golang v1.19.1
 )
 
 require (
@@ -17,6 +19,7 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.19.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
@@ -27,7 +30,6 @@ require (
 	github.com/nats-io/nats.go v1.37.0 // indirect
 	github.com/nats-io/nkeys v0.4.7 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
-	github.com/prometheus/client_golang v1.19.1 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect
@@ -59,3 +61,5 @@ replace github.com/agenthub/platform/shared/state => ../shared/state
 replace github.com/agenthub/platform/shared/obs => ../shared/obs
 
 replace github.com/agenthub/platform/shared/db => ../shared/db
+
+replace github.com/agenthub/platform/shared/iam => ../shared/iam

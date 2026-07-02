@@ -13,6 +13,10 @@ import (
 
 // Subjects. Stream chunks live under "agenthub.session.>" so they are
 // captured by the SESSION JetStream alongside session lifecycle events.
+//
+// Sprint D: 新增 fanout / patch / memory 三类 subject，打通 Go↔Rust NATS 集成。
+// Go→Rust 方向走 JetStream（自动 fanout 到 Rust core NATS subscriber），
+// Rust→Go 方向走 core NATS subscribe（Rust 用 async_nats publish）。
 const (
 	SessionEventsSubject          = "agenthub.session.events"
 	StreamEventsSubject           = "agenthub.session.stream.events"
@@ -23,16 +27,32 @@ const (
 	RetrievalQuerySubject         = "agenthub.retrieval.query"
 	RetrievalFusionSubject        = "agenthub.retrieval.fusion"
 	AuditSecurityEventsSubject    = "agenthub.audit.security.events"
+
+	// Sprint D: Rust core integration subjects (Go → Rust via JetStream).
+	FanoutEventsSubject           = "agenthub.fanout.events"
+	PatchMergeRequestedSubject    = "agenthub.patch.merge.requested"
+	MemoryCompactRequestedSubject = "agenthub.memory.compact.requested"
+
+	// Sprint D: Rust core audit subjects (Rust → Go via core NATS).
+	FanoutAuditSubject   = "agenthub.fanout.audit"
+	PatchAuditSubject    = "agenthub.patch.audit"
+	MemoryAuditSubject   = "agenthub.memory.audit"
 )
 
-// streamDefs declares the five durable JetStream streams mandated by
-// platform/data_plane.json. EnsureStreams creates/updates them idempotently.
+// streamDefs declares the JetStream streams mandated by platform/data_plane.json.
+// EnsureStreams creates/updates them idempotently.
+//
+// Sprint D: 新增 FANOUT / PATCH / MEMORY 三条 stream，覆盖 Rust core 的 subject 空间。
+// Rust 通过 core NATS publish，JetStream stream 捕获后持久化，Go 通过 durable consumer 消费。
 var streamDefs = []nats.StreamConfig{
 	{Name: "SESSION", Subjects: []string{"agenthub.session.>"}, Retention: nats.LimitsPolicy, MaxAge: 72 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 	{Name: "AGENT-RUNTIME", Subjects: []string{"agenthub.agent.runtime.>"}, Retention: nats.LimitsPolicy, MaxAge: 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 	{Name: "RETRIEVAL", Subjects: []string{"agenthub.retrieval.>"}, Retention: nats.LimitsPolicy, MaxAge: 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 	{Name: "TOOL-PERMISSIONS", Subjects: []string{"agenthub.tool.permission.>"}, Retention: nats.LimitsPolicy, MaxAge: 7 * 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 	{Name: "AUDIT", Subjects: []string{"agenthub.audit.>"}, Retention: nats.LimitsPolicy, MaxAge: 90 * 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
+	{Name: "FANOUT", Subjects: []string{"agenthub.fanout.>"}, Retention: nats.LimitsPolicy, MaxAge: 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
+	{Name: "PATCH", Subjects: []string{"agenthub.patch.>"}, Retention: nats.LimitsPolicy, MaxAge: 7 * 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
+	{Name: "MEMORY", Subjects: []string{"agenthub.memory.>"}, Retention: nats.LimitsPolicy, MaxAge: 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 }
 
 // Client wraps a NATS connection with a JetStream context. All publishes go
@@ -84,6 +104,11 @@ func (c *Client) ensureStreams() error {
 	}
 	return nil
 }
+
+// Conn returns the underlying NATS connection. Callers that need core NATS
+// subscriptions (e.g. for Rust→Go messages published via async_nats) can use
+// this instead of the JetStream context.
+func (c *Client) Conn() *nats.Conn { return c.conn }
 
 func (c *Client) Close() {
 	if c != nil && c.conn != nil {
@@ -144,6 +169,26 @@ func (c *Client) QueueSubscribe(durable, queue, subject string, handler func(eve
 		nats.AckWait(30*time.Second),
 		nats.MaxDeliver(5),
 	)
+}
+
+// SubscribeCore creates a core NATS subscription (non-JetStream). Use this for
+// subjects where the publisher uses core NATS (e.g. Rust async_nats). Messages
+// are ephemeral — no persistence, no replay, no ack. For durable delivery,
+// ensure a JetStream stream covers the subject and use Subscribe instead.
+func (c *Client) SubscribeCore(subject string, handler func(events.Envelope)) (*nats.Subscription, error) {
+	return c.conn.Subscribe(subject, func(msg *nats.Msg) {
+		var env events.Envelope
+		if err := json.Unmarshal(msg.Data, &env); err != nil {
+			log.Printf("eventbus: core sub unmarshal failed: %v", err)
+			return
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("eventbus: core sub handler panic recovered: %v", r)
+			}
+		}()
+		handler(env)
+	})
 }
 
 func dispatch(handler func(events.Envelope)) func(*nats.Msg) {

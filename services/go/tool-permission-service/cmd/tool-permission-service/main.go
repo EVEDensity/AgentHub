@@ -11,9 +11,27 @@ import (
 	"github.com/agenthub/platform/shared/db"
 	"github.com/agenthub/platform/shared/eventbus"
 	"github.com/agenthub/platform/shared/events"
+	"github.com/agenthub/platform/shared/iam"
 	"github.com/agenthub/platform/shared/obs"
 	"github.com/agenthub/platform/shared/state"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// ── P3-1 sensitive-tool classification metrics ────────────────────────
+var (
+	toolRiskClassified = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "tool_permission_risk_classified_total", Help: "Permission requests classified by server-side risk."},
+		[]string{"risk_level", "source"},
+	)
+	toolAutoDenied = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "tool_permission_auto_denied_total", Help: "Critical tools auto-denied because actor lacked approve scope."},
+		[]string{"tool_name"},
+	)
+)
+
+func init() {
+	obs.MustRegister(toolRiskClassified, toolAutoDenied)
+}
 
 type PermissionPolicy struct {
 	Storage      string   `json:"storage"`
@@ -94,11 +112,19 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		requestID := stringValue(env.Payload, "request_id", env.EventID)
-		toolName := stringValue(env.Payload, "tool_name", "unknown")
-		riskLevel := stringValue(env.Payload, "risk_level", "normal")
-		reason := stringValue(env.Payload, "reason", "")
-		arguments := jsonStringValue(env.Payload["arguments"])
-		ttlSecs := intValue(env.Payload, "timeout_seconds", 30)
+			toolName := stringValue(env.Payload, "tool_name", "unknown")
+			riskLevel := stringValue(env.Payload, "risk_level", "normal")
+			reason := stringValue(env.Payload, "reason", "")
+			arguments := jsonStringValue(env.Payload["arguments"])
+			ttlSecs := intValue(env.Payload, "timeout_seconds", 30)
+			// P3-1: server-side risk classification. The client-provided
+			// risk_level is a hint; the authoritative classification comes from
+			// platform_sensitive_tools (tenant override) then the builtin
+			// pattern table. We take the higher of the two so a client cannot
+			// downgrade a critical tool to "normal" to skip confirmation.
+			serverRisk, source := classifyToolRisk(ctx, pool, env.TenantID, toolName)
+			riskLevel = higherRisk(riskLevel, serverRisk)
+			toolRiskClassified.WithLabelValues(riskLevel, source).Inc()
 		key := state.PermissionKey(env.TenantID, requestID)
 		if err := store.HSet(ctx, key,
 			"session_id", env.SessionID,
@@ -153,12 +179,19 @@ func main() {
 		if ttl <= 0 {
 			ttl = 30 * time.Second
 		}
+		// P3-1: server-side risk classification — same as the NATS subscriber.
+		// The client-provided risk_level is a hint; the authoritative level
+		// comes from platform_sensitive_tools then the builtin pattern table,
+		// taking the higher of the two so a client cannot downgrade.
+		serverRisk, source := classifyToolRisk(ctx, pool, req.TenantID, req.ToolName)
+		riskLevel := higherRisk(req.RiskLevel, serverRisk)
+		toolRiskClassified.WithLabelValues(riskLevel, source).Inc()
 		if err := store.HSet(ctx, key,
 			"session_id", req.SessionID,
 			"trace_id", req.TraceID,
 			"actor_id", req.ActorID,
 			"tool_name", req.ToolName,
-			"risk_level", req.RiskLevel,
+			"risk_level", riskLevel,
 			"reason", req.Reason,
 			"decision", "pending",
 			"arguments", string(args),
@@ -168,7 +201,7 @@ func main() {
 			return
 		}
 		_ = store.Expire(ctx, key, ttl)
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "key": key, "ttl_seconds": int(ttl.Seconds())})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "key": key, "ttl_seconds": int(ttl.Seconds()), "risk_level": riskLevel, "risk_source": source})
 	})
 	mux.HandleFunc("/requests/decision", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -245,6 +278,66 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"key": key, "data": data})
+	})
+	// /requests/evaluate is the P3-1 ABAC endpoint: given a pending request and
+	// the actor's roles/scopes, return allow / deny / need_confirmation. The
+	// orchestrator calls this before dispatching a tool so it knows whether to
+	// wait for human confirmation. Critical tools whose actor lacks the
+	// tool:approve scope are auto-denied here.
+	mux.HandleFunc("/requests/evaluate", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			TenantID  string   `json:"tenant_id"`
+			RequestID string   `json:"request_id"`
+			Roles     []string `json:"roles"`
+			Scopes    []string `json:"scopes"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		key := state.PermissionKey(req.TenantID, req.RequestID)
+		data, err := store.HGetAll(ctx, key)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		toolName := data["tool_name"]
+		riskLevel := data["risk_level"]
+		if riskLevel == "" {
+			// Not yet classified (or evicted from Redis): classify now.
+			riskLevel, _ = classifyToolRisk(ctx, pool, req.TenantID, toolName)
+		}
+		principal := iam.TenantContext{
+			TenantID: req.TenantID,
+			UserID:   data["actor_id"],
+			Roles:    req.Roles,
+			Scopes:   req.Scopes,
+		}
+		decision := iam.Evaluate(iam.AuthzRequest{
+			Principal: principal,
+			Action:    iam.ActionExecute,
+			Resource:  iam.Resource{Type: "tool", TenantID: req.TenantID},
+			ToolRisk:  riskLevel,
+		})
+		if decision == iam.DecisionDeny && riskLevel == iam.RiskCritical {
+			toolAutoDenied.WithLabelValues(toolName).Inc()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"request_id":      req.RequestID,
+			"tool_name":       toolName,
+			"risk_level":      riskLevel,
+			"decision":        string(decision),
+			"requires_confirm": decision == iam.DecisionNeedConfirmation,
+		})
 	})
 
 	addr := getenv("PERMISSION_ADDR", ":8084")
@@ -340,6 +433,36 @@ func jsonStringValue(value any) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// riskRank orders risk levels so higherRisk can compare them. A client must
+// never be able to downgrade a server-classified critical tool to "normal".
+var riskRank = map[string]int{
+	iam.RiskLow: 1, iam.RiskNormal: 2, iam.RiskHigh: 3, iam.RiskCritical: 4,
+}
+
+// higherRisk returns the more severe of two risk levels.
+func higherRisk(a, b string) string {
+	if riskRank[b] > riskRank[a] {
+		return b
+	}
+	return a
+}
+
+// classifyToolRisk looks up the tenant-specific rule in PG, then falls back to
+// the builtin pattern table. Returns (riskLevel, source) where source is
+// "tenant_rule" or "builtin".
+func classifyToolRisk(ctx context.Context, pool *db.Pool, tenantID, toolName string) (string, string) {
+	if pool != nil && tenantID != "" {
+		var risk string
+		var conf bool
+		err := pool.QueryRow(ctx, `SELECT risk_level, requires_confirmation FROM platform_sensitive_tools WHERE tenant_id=$1 AND lower(tool_name)=lower($2)`, tenantID, toolName).Scan(&risk, &conf)
+		if err == nil && risk != "" {
+			return risk, "tenant_rule"
+		}
+	}
+	risk, _ := iam.BuiltinToolRisk(toolName)
+	return risk, "builtin"
 }
 
 // persistPermissionRequest upserts a permission request into PG for the audit

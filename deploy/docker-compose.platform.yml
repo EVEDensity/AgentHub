@@ -78,7 +78,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
     volumes:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
-    ports: ["3000:3000"]
+    ports: ["3001:3000"]
     depends_on: [prometheus, tempo]
 
   # ═══════════════════════════════════════════════════════════════════
@@ -102,7 +102,9 @@ services:
     environment:
       <<: *go-env
       ORCHESTRATOR_ADDR: ":8082"
-    depends_on: [nats, redis, tempo]
+      MODEL_ADAPTER_URL: "http://model-adapter-service:8091"
+      RETRIEVAL_CORE_URL: "http://retrieval-core:8102"
+    depends_on: [nats, redis, model-adapter-service, retrieval-core, tempo]
     ports: ["8082:8082"]
 
   session-service:
@@ -156,6 +158,31 @@ services:
       AUDIT_ADDR: ":8087"
     depends_on: [nats, postgres, tempo]
     ports: ["8087:8087"]
+
+  iam-service:
+    build:
+      context: ..
+      dockerfile: services/go/iam-service/Dockerfile
+    environment:
+      <<: *go-env
+      IAM_ADDR: ":8088"
+      JWT_SECRET: "${JWT_SECRET:-}"
+      JWT_TTL: "24h"
+    depends_on: [postgres, tempo]
+    ports: ["8088:8088"]
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  FRONTEND
+  # ═══════════════════════════════════════════════════════════════════
+  frontend:
+    build:
+      context: ..
+      dockerfile: frontend/Dockerfile
+    environment:
+      GO_GATEWAY_URL: "http://gateway-service:8081"
+      API_BACKEND: "go"
+    depends_on: [gateway-service]
+    ports: ["3000:3000"]
 
   # ═══════════════════════════════════════════════════════════════════
   #  PYTHON OFFLINE TIER
@@ -277,3 +304,52 @@ services:
       RC_FUSION_PER_SOURCE_LIMIT: "50"
     depends_on: [nats, qdrant, opensearch, model-adapter-service, tempo]
     ports: ["8102:8102"]
+
+  fanout-core:
+    build:
+      context: ..
+      dockerfile: services/rust/crates/fanout-core/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+      FANOUT_CORE_ADDR: "0.0.0.0:8103"
+      RUST_LOG: "info,fanout_core=info"
+      # 分区：初始 8 个，最大 32，每分区 1000 事件触发扩容
+      FC_INITIAL_PARTITIONS: "8"
+      FC_MAX_PARTITIONS: "32"
+      FC_PARTITION_SCALE_THRESHOLD: "1000"
+      # 订阅者：256 容量，lag 超限时丢弃最旧消息
+      FC_SUBSCRIBER_CAPACITY: "256"
+      FC_SLOW_SUBSCRIBER_POLICY: "drop_oldest"
+    depends_on: [nats, tempo]
+    ports: ["8103:8103"]
+
+  patch-merge-core:
+    build:
+      context: ..
+      dockerfile: services/rust/crates/patch-merge-core/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+      PATCH_MERGE_CORE_ADDR: "0.0.0.0:8104"
+      RUST_LOG: "info,patch_merge_core=info"
+      # 文本上限 8 MiB，diff/patch/merge 操作上限 200000 条
+      PMC_MAX_TEXT_BYTES: "8388608"
+      PMC_MAX_OPS: "200000"
+    depends_on: [nats, tempo]
+    ports: ["8104:8104"]
+
+  memory-segment-core:
+    build:
+      context: ..
+      dockerfile: services/rust/crates/memory-segment-core/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+      MEMORY_SEGMENT_CORE_ADDR: "0.0.0.0:8105"
+      RUST_LOG: "info,memory_segment_core=info"
+      # 压缩触发：40 条消息 或 32000 tokens
+      MSC_COMPACT_TRIGGER_MESSAGES: "40"
+      MSC_MAX_TOKENS: "32000"
+      # 保留最近 10 条原消息，4 字符 ≈ 1 token
+      MSC_KEEP_RECENT: "10"
+      MSC_CHARS_PER_TOKEN: "4.0"
+    depends_on: [nats, tempo]
+    ports: ["8105:8105"]

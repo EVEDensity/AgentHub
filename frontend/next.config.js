@@ -5,12 +5,11 @@ const withBundleAnalyzer = process.env.ANALYZE === 'true'
 
 // Dual-track migration: the frontend can route API traffic to either the legacy
 // Python monolith (port 8000) or the new Go gateway (port 8081).
-//   API_BACKEND=legacy  (default) → http://127.0.0.1:8000/api/*
-//   API_BACKEND=go                  → http://127.0.0.1:8081/api/*
-//   API_BACKEND_URL=http://host:port → custom URL (overrides the above)
-// The /platform/* path always routes to the Go gateway regardless of API_BACKEND,
-// so new platform features can coexist with legacy APIs during migration.
-const apiBackend = process.env.API_BACKEND || 'legacy';
+//   API_BACKEND=go     (default) → http://127.0.0.1:8081/api/*
+//   API_BACKEND=legacy            → http://127.0.0.1:8000/api/* (Python monolith)
+//   GO_GATEWAY_URL=http://host:port → custom gateway URL (overrides the above)
+// The /platform/* path always routes to the Go gateway regardless of API_BACKEND.
+const apiBackend = process.env.API_BACKEND || 'go';
 const legacyUrl = process.env.API_BACKEND_URL || 'http://127.0.0.1:8000';
 const goGatewayUrl = process.env.GO_GATEWAY_URL || 'http://127.0.0.1:8081';
 const apiDestination = apiBackend === 'go' ? goGatewayUrl : legacyUrl;
