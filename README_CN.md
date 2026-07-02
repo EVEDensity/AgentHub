@@ -219,7 +219,7 @@ AgentHub 站在巨人的肩膀上：
 ---
 
 <p align="center">
-  <sub>由 <a href="https://github.com/Density">Density</a> 与 AgentHub 社区用 ❤️ 构建</sub>
+  <sub>由 <a href="https://github.com/EVEDensity">Density</a> 与 AgentHub 社区用 ❤️ 构建</sub>
 </p>
 
 
