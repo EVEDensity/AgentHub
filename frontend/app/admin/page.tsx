@@ -55,6 +55,84 @@ const WorkflowModule = dynamic(() => import('../../components/admin/WorkflowModu
   ),
 });
 
+const KnowledgeBaseModule = dynamic(() => import('../../components/admin/KnowledgeBaseModule'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const TemplateMarketplace = dynamic(() => import('../../components/admin/TemplateMarketplace'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const WorkspaceManager = dynamic(() => import('../../components/admin/WorkspaceManager'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const ToolMarketplace = dynamic(() => import('../../components/admin/ToolMarketplace'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const ChannelModule = dynamic(() => import('../../components/admin/ChannelModule'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const MemoryDashboard = dynamic(() => import('../../components/admin/MemoryDashboard'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const AgentNetTopology = dynamic(() => import('../../components/admin/AgentNetTopology'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const AgentIdentityCard = dynamic(() => import('../../components/admin/AgentIdentityCard'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const AgentSandboxPanel = dynamic(() => import('../../components/admin/AgentSandboxPanel'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const AgentWorkspace = dynamic(() => import('../../components/admin/AgentWorkspace'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const LogsViewer = dynamic(() => import('../../components/admin/LogsViewer'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+
 export default function AdminPage(): JSX.Element {
   // ── Read from stores ────────────────────────────────────────────
   const user = useAuthStore((s) => s.user);
@@ -345,6 +423,8 @@ export default function AdminPage(): JSX.Element {
             handleDeleteUser={handleDeleteUser} loadTokenUsage={loadTokenUsage}
           />
         );
+      case 'IM 接入':
+        return <ChannelModule authHeaders={authHeaders} setNotice={setNotice} />;
       case 'MCP':
         return <MCPLayout />;
       case '工作流':
@@ -354,6 +434,26 @@ export default function AdminPage(): JSX.Element {
             setNotice={setNotice}
           />
         );
+      case '知识库':
+        return <KnowledgeBaseModule authHeaders={authHeaders} setNotice={setNotice} />;
+      case '模板市场':
+        return <TemplateMarketplace authHeaders={authHeaders} setNotice={setNotice} />;
+      case '工具市场':
+        return <ToolMarketplace />;
+      case '工作空间':
+        return <WorkspaceManager authHeaders={authHeaders} setNotice={setNotice} />;
+      case '上下文引擎':
+        return <MemoryDashboard authHeaders={authHeaders} setNotice={setNotice} />;
+      case 'AgentNet':
+        return <AgentNetTopology authHeaders={authHeaders} setNotice={setNotice} />;
+      case 'Agent 身份':
+        return <AgentIdentityCard authHeaders={authHeaders} setNotice={setNotice} />;
+      case 'Docker 沙箱':
+        return <AgentSandboxPanel authHeaders={authHeaders} setNotice={setNotice} />;
+      case '多模态工作区':
+        return <AgentWorkspace authHeaders={authHeaders} setNotice={setNotice} />;
+      case '集中日志':
+        return <LogsViewer authHeaders={authHeaders} setNotice={setNotice} />;
       default:
         return (
           <section className="card p-6">

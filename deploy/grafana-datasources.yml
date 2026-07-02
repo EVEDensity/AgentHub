@@ -16,3 +16,14 @@ datasources:
     jsonData:
       tracesToMetrics:
         datasourceUid: prometheus
+      tracesToLogs:
+        datasourceUid: loki
+        tags: ['service', 'container', 'trace_id']
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: true
+    jsonData:
+      maxLines: 1000

@@ -79,7 +79,24 @@ services:
     volumes:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
     ports: ["3001:3000"]
-    depends_on: [prometheus, tempo]
+    depends_on: [prometheus, tempo, loki]
+
+  # Sprint J4: Loki centralized logging — log aggregation.
+  loki:
+    image: grafana/loki:latest
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["3100:3100"]
+    volumes:
+      - loki-data:/loki
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log:ro
+    command: ["-config.file=/etc/promtail/config.yml"]
+    depends_on: [loki]
 
   # ═══════════════════════════════════════════════════════════════════
   #  GO ONLINE TIER
@@ -353,3 +370,7 @@ services:
       MSC_CHARS_PER_TOKEN: "4.0"
     depends_on: [nats, tempo]
     ports: ["8105:8105"]
+
+# ── Named volumes ──────────────────────────────────────────────────────
+volumes:
+  loki-data:

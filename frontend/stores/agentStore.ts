@@ -13,12 +13,16 @@ interface AgentFormState {
   agentId: string; domain: string; adapterType: string; baseModelName: string;
   rankLevel: string; dutyNote: string; displayName: string; avatarUrl: string;
   capabilityTags: string[]; baseUrl: string; apiKey: string;
+  systemPrompt: string; userPrompt: string; assistantPrompt: string;
+  promptVariables: Record<string, string>;
 }
 
 const EMPTY_AGENT_FORM: AgentFormState = {
   agentId: '', domain: '', adapterType: 'deepseek', baseModelName: '',
   rankLevel: 'L1', dutyNote: '', displayName: '', avatarUrl: '',
   capabilityTags: [], baseUrl: '', apiKey: '',
+  systemPrompt: '', userPrompt: '', assistantPrompt: '',
+  promptVariables: {},
 };
 
 interface AgentState {
@@ -236,6 +240,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         rankLevel: agent.rankLevel || 'L1', dutyNote: agent.dutyNote || '',
         displayName: agent.displayName || '', avatarUrl: agent.avatarUrl || '',
         capabilityTags: agent.capabilityTags || [], baseUrl: agent.baseUrl || '', apiKey: '',
+        systemPrompt: (agent as any).systemPrompt || '',
+        userPrompt: (agent as any).userPrompt || '',
+        assistantPrompt: (agent as any).assistantPrompt || '',
+        promptVariables: (agent as any).promptVariables || {},
       },
     });
   },

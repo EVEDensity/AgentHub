@@ -138,6 +138,11 @@ export interface Agent {
   localStatus?: 'online' | 'offline' | 'unknown';
   installPath?: string;
   version?: string;
+  /** Prompt template fields (Sprint F3) */
+  systemPrompt?: string;
+  userPrompt?: string;
+  assistantPrompt?: string;
+  promptVariables?: Record<string, string>;
 }
 
 // ── Platform labels & colors for agent adapter types ──────────────
@@ -1181,6 +1186,295 @@ export interface LocalAgentStatus {
 export interface LocalAgentStatusResponse {
   agents: LocalAgentStatus[];
   total: number;
+}
+
+// ── Knowledge Base Types (Sprint F1) ─────────────────────────────────
+
+export interface KnowledgeDocument {
+  source_id: string;
+  collection: string;
+  tenant_id: string;
+  chunk_count: number;
+  file_type?: string;
+  size_bytes?: number;
+  created_at?: string;
+}
+
+export interface CollectionInfo {
+  name: string;
+  points_count: number;
+}
+
+export interface ChunkDetail {
+  id: string;
+  index: number;
+  total: number;
+  content: string;
+  start_offset: number;
+  end_offset: number;
+}
+
+export interface RetrievalResult {
+  id: string;
+  score: number;
+  content: string;
+  source_id: string;
+  collection: string;
+  chunk_index: number;
+}
+
+// ── Template Types (Sprint F2) ───────────────────────────────────────
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  icon: string;
+  tags: string[];
+  source: 'builtin' | 'user';
+  version: string;
+  author: string;
+  agent_config: Record<string, unknown>;
+  workflow_json: string;
+  prompt_json: string;
+  tools_json: string[];
+  knowledge_json: string;
+  usage_count: number;
+  rating: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptBlock {
+  type: 'system' | 'user' | 'assistant';
+  content: string;
+  variables: string[];
+}
+
+// ── Workspace Types (Sprint F4) ──────────────────────────────────────
+
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  owner_id: string;
+  member_count: number;
+  created_at: string;
+}
+
+export interface WorkspaceMember {
+  user_id: string;
+  display_name: string;
+  email: string;
+  role: 'admin' | 'editor' | 'viewer';
+  joined_at: string;
+}
+
+// ── AgentNet Types (Sprint I) ─────────────────────────────────────────
+
+export interface AgentCapability {
+  agent_id: string;
+  display_name: string;
+  capabilities: string[];
+  preferred_tools: string[];
+  quality_score: number;
+  current_load: number;
+  max_concurrent: number;
+  cost_per_task: number;
+  status: 'idle' | 'busy' | 'overloaded' | 'offline';
+  last_heartbeat: string;
+  registered_at: string;
+}
+
+export interface AgentNetTask {
+  task_id: string;
+  parent_task_id?: string;
+  dag_id?: string;
+  correlation_id: string;
+  category: string;
+  description: string;
+  required_capability: string;
+  assigned_agent?: string;
+  status: 'pending' | 'assigned' | 'running' | 'completed' | 'failed';
+  input?: unknown;
+  result?: unknown;
+  error?: string;
+  created_at: string;
+  assigned_at?: string;
+  completed_at?: string;
+}
+
+export interface AgentNetDAGNode {
+  id: string;
+  task_id?: string;
+  agent_id?: string;
+  description: string;
+  required_capability: string;
+  dependencies: string[];
+  status: 'pending' | 'ready' | 'running' | 'completed' | 'failed';
+  priority: number;
+  estimated_seconds: number;
+  result?: unknown;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface AgentNetDAGEdge {
+  from: string;
+  to: string;
+  label?: string;
+  weight: number;
+}
+
+export interface AgentNetDAG {
+  dag_id: string;
+  name: string;
+  tenant_id: string;
+  session_id: string;
+  nodes: AgentNetDAGNode[];
+  edges: AgentNetDAGEdge[];
+  status: 'created' | 'running' | 'completed' | 'failed' | 'cancelled';
+  strategy: 'round-robin' | 'least-loaded' | 'capability-match' | 'cost-optimized';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentSpawn {
+  spawn_id: string;
+  parent_id: string;
+  child_id: string;
+  child_name: string;
+  reason: string;
+  capabilities: string[];
+  status: 'created' | 'running' | 'completed' | 'destroyed';
+  created_at: string;
+  completed_at?: string;
+  ttl_seconds: number;
+}
+
+export interface SharedMemoryEntry {
+  id: string;
+  agent_id: string;
+  content: string;
+  intent?: string;
+  target?: string;
+  timestamp: string;
+}
+
+export interface AgentNetStats {
+  total_agents: number;
+  active_agents: number;
+  agents_by_status: Record<string, number>;
+  total_tasks: number;
+  tasks_by_status: Record<string, number>;
+  active_dags: number;
+  active_spawns: number;
+  memory_entries: number;
+  avg_quality_score: number;
+}
+
+export interface TopologyNode {
+  id: string;
+  label: string;
+  type: 'agent' | 'task' | 'spawn';
+  status: string;
+  quality?: number;
+  load?: number;
+  max_load?: number;
+  description?: string;
+}
+
+export interface TopologyEdge {
+  from: string;
+  to: string;
+  label: string;
+  status: string;
+}
+
+export interface TopologyResponse {
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+  updated_at: string;
+}
+
+// ── Sprint J: Digital Identity + Sandbox + Workspace Types ────────────
+
+export interface AgentIdentity {
+  id: string;
+  agent_id: string;
+  tenant_id: string;
+  email: string;
+  ssh_pubkey: string;
+  ssh_key_type: string;
+  gpg_key: string;
+  oauth2_provider: string;
+  oauth2_creds: string;
+  status: 'pending' | 'active' | 'suspended' | 'revoked';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SandboxContainer {
+  id: string;
+  agent_id: string;
+  tenant_id: string;
+  container_name: string;
+  image: string;
+  status: 'created' | 'starting' | 'running' | 'stopped' | 'failed' | 'destroyed';
+  cpu_limit: number;
+  memory_mb: number;
+  disk_mb: number;
+  network_allow: string[];
+  workspace_path: string;
+  seccomp_profile: string;
+  started_at?: string;
+  stopped_at?: string;
+  idle_timeout_s: number;
+  max_runtime_s: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SandboxExecLog {
+  id: string;
+  container_id: string;
+  agent_id: string;
+  tenant_id: string;
+  command: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  executed_at: string;
+}
+
+export interface SandboxStats {
+  total_containers: number;
+  active_containers: number;
+  by_status: Record<string, number>;
+  total_execs: number;
+  avg_duration_ms: number;
+}
+
+export interface WorkspaceTab {
+  id: string;
+  type: 'code' | 'document' | 'canvas' | 'data' | 'collaboration';
+  label: string;
+  path?: string;
+  content?: string;
+  language?: string;
+  isDirty?: boolean;
+}
+
+export interface WorkspaceOpEvent {
+  id: string;
+  agent_id: string;
+  operation: string;
+  target: string;
+  detail: string;
+  timestamp: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

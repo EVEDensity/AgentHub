@@ -4,6 +4,7 @@ import { type JSX, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '../../stores/authStore';
 import { useAdminStore, MENU_META, MENU_GROUPS, type MenuItem } from '../../stores/adminStore';
+import { WorkspaceSelector } from '../../components/admin/WorkspaceSelector';
 
 function UserAvatar({ name }: { name: string }): JSX.Element {
   const initial = (name || '?')[0].toUpperCase();
@@ -140,6 +141,8 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
           <div className="mx-auto flex max-w-7xl items-center justify-between">
             <div className="flex items-center gap-3 min-w-0">
               <h1 className="text-h2 text-warm-900 shrink-0">管理控制台</h1>
+              <div className="w-px h-5 bg-warm-200" />
+              <WorkspaceSelector />
               <span className="hidden sm:inline-flex tag tag-warm">{user?.name} · {user?.role}</span>
               <span className="tag tag-blue shrink-0">{activeMenu}</span>
             </div>

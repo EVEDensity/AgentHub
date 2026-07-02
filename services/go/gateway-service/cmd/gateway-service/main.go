@@ -80,6 +80,12 @@ func main() {
 	}
 	defer shutdown(context.Background())
 
+	// ── Knowledge proxy ───────────────────────────────────────────
+	knowledgeURL := parseKnowledgeServiceURL()
+	docPipelineURL := parseDocPipelineURL()
+	knowledgeHandler := newKnowledgeProxy(knowledgeURL)
+	log.Printf("knowledge proxy: %s (doc pipeline: %s)", knowledgeURL, docPipelineURL)
+
 	// WebSocket hub: per-instance connection registry. The broadcast consumer
 	// fans stream events out to connected clients by session_id.
 	hub := NewHub()
@@ -323,6 +329,53 @@ func main() {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		obs.MetricsHandler().ServeHTTP(w, r)
 	})
+
+	// ── Knowledge CRUD + retrieval ────────────────────────────────
+	mux.Handle("/platform/knowledge/upload", handleKnowledgeUpload(docPipelineURL))
+	mux.Handle("/platform/knowledge/", knowledgeHandler)
+
+	// ── Template marketplace ───────────────────────────────────────
+	templates := newTemplateHandler(nil) // nil pool: returns presets only (no PG on gateway)
+	mux.Handle("/platform/templates", templates)
+	mux.Handle("/platform/templates/", templates)
+
+	// ── Workspaces ─────────────────────────────────────────────────
+	workspaces := newWorkspaceHandler()
+	mux.Handle("/platform/workspaces", workspaces)
+	mux.Handle("/platform/workspaces/", workspaces)
+
+	// ── API Keys + Public API ─────────────────────────────────────
+	apiKeys := newAPIKeyHandler()
+	mux.Handle("/platform/api-keys", apiKeys)
+	mux.Handle("/platform/api-keys/", apiKeys)
+	mux.HandleFunc("/v1/public/chat", func(w http.ResponseWriter, r *http.Request) {
+		handlePublicChat(bus, apiKeys, w, r)
+	})
+
+	// ── Channel Connector (Feishu/WeCom) ──────────────────────────
+	channels := newChannelConnector(bus)
+	mux.Handle("/platform/channels", channels)
+	mux.Handle("/platform/channels/", channels)
+
+	// ── ContextOS — Unified Context Engine ───────────────────────
+	ctxEngine := newContextEngine(bus)
+	mux.Handle("/context/", ctxEngine)
+	mux.Handle("/context", ctxEngine)
+
+	// ── AgentNet — Decentralized Multi-Agent Collaboration ──────────
+	agentNet := newAgentNetHandler(bus)
+	mux.Handle("/agentnet/", agentNet)
+	mux.Handle("/agentnet", agentNet)
+
+	// ── Digital Identity + Sandbox (Sprint J) ──────────────────────
+	digitalID := newDigitalIdentityHandler(bus)
+	mux.Handle("/digital/", digitalID)
+	mux.Handle("/digital", digitalID)
+
+	// ── Logs proxy (Sprint J4) ────────────────────────────────────
+	logs := newLogsHandler()
+	mux.Handle("/logs/", logs)
+	mux.Handle("/logs", logs)
 
 	addr := getenv("GATEWAY_ADDR", ":8081")
 	log.Printf("gateway-service listening on %s (dev_mode=%v jwt_enforced=%v rate limit: user=%.0f/%.0f tenant=%.0f/%.0f agent=%.0f/%.0f tool=%.0f/%.0f)",

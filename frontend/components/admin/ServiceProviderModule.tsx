@@ -32,11 +32,15 @@ export interface ServiceProviderModuleProps {
     agentId: string; domain: string; adapterType: string; baseModelName: string;
     rankLevel: string; dutyNote: string; displayName: string; avatarUrl: string;
     capabilityTags: string[]; baseUrl: string; apiKey: string;
+    systemPrompt: string; userPrompt: string; assistantPrompt: string;
+    promptVariables: Record<string, string>;
   };
   editAgent: {
     agentId: string; domain: string; adapterType: string; baseModelName: string;
     rankLevel: string; dutyNote: string; displayName: string; avatarUrl: string;
     capabilityTags: string[]; baseUrl: string; apiKey: string;
+    systemPrompt: string; userPrompt: string; assistantPrompt: string;
+    promptVariables: Record<string, string>;
   };
   defaultChatAgent: string;
   // Setters

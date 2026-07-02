@@ -1,7 +1,8 @@
 'use client';
 
-import { type FormEvent, type JSX } from 'react';
+import { type FormEvent, type JSX, useState } from 'react';
 import TagInput from './TagInput';
+import { PromptEditor, type PromptBlockData } from './PromptEditor';
 
 interface AdapterOption {
   id: string; name: string; description: string;
@@ -13,6 +14,8 @@ interface AgentFormState {
   agentId: string; domain: string; adapterType: string; baseModelName: string;
   rankLevel: string; dutyNote: string; displayName: string; avatarUrl: string;
   capabilityTags: string[]; baseUrl: string; apiKey: string;
+  systemPrompt: string; userPrompt: string; assistantPrompt: string;
+  promptVariables: Record<string, string>;
 }
 
 export interface AgentEditModalProps {
@@ -41,6 +44,27 @@ export default function AgentEditModal(props: AgentEditModalProps): JSX.Element 
 
   const { mode, agentForm: f, setAgentForm: setF, editingAgentId } = props;
   const isEdit = mode === 'edit';
+  const [showPromptEditor, setShowPromptEditor] = useState(false);
+
+  // Convert flat form state ↔ PromptBlockData[]
+  const promptBlocks: PromptBlockData[] = [
+    { type: 'system', content: f.systemPrompt || '' },
+    { type: 'user', content: f.userPrompt || '' },
+    { type: 'assistant', content: f.assistantPrompt || '' },
+  ];
+
+  const handlePromptBlocksChange = (blocks: PromptBlockData[]) => {
+    setF((p) => ({
+      ...p,
+      systemPrompt: blocks.find((b) => b.type === 'system')?.content || '',
+      userPrompt: blocks.find((b) => b.type === 'user')?.content || '',
+      assistantPrompt: blocks.find((b) => b.type === 'assistant')?.content || '',
+    }));
+  };
+
+  const handlePromptVarsChange = (vars: Record<string, string>) => {
+    setF((p) => ({ ...p, promptVariables: vars }));
+  };
 
   return (
     <div
@@ -240,6 +264,34 @@ export default function AgentEditModal(props: AgentEditModalProps): JSX.Element 
                 placeholder="输入标签后按 Enter 添加..."
                 maxTags={8}
               />
+            </div>
+
+            {/* ── Prompt Template Editor (Sprint F3) ───────────────── */}
+            <div className="md:col-span-2 border-t border-warm-100 pt-4">
+              <button
+                type="button"
+                className="flex items-center gap-2 text-sm font-medium text-warm-600 hover:text-primary-600 transition-colors w-full text-left"
+                onClick={() => setShowPromptEditor(!showPromptEditor)}
+              >
+                <span className="material-symbols-outlined text-[16px]">
+                  {showPromptEditor ? 'expand_less' : 'expand_more'}
+                </span>
+                <span className="material-symbols-outlined text-[14px]">edit_note</span>
+                Prompt 模板编辑
+                {(f.systemPrompt || f.userPrompt || f.assistantPrompt) && (
+                  <span className="tag tag-blue text-[10px]">已配置</span>
+                )}
+              </button>
+              {showPromptEditor && (
+                <div className="mt-3">
+                  <PromptEditor
+                    blocks={promptBlocks}
+                    onChange={handlePromptBlocksChange}
+                    variables={f.promptVariables || {}}
+                    onVariablesChange={handlePromptVarsChange}
+                  />
+                </div>
+              )}
             </div>
 
             {/* API Key */}

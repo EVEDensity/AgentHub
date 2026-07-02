@@ -37,6 +37,25 @@ const (
 	FanoutAuditSubject   = "agenthub.fanout.audit"
 	PatchAuditSubject    = "agenthub.patch.audit"
 	MemoryAuditSubject   = "agenthub.memory.audit"
+
+	// Sprint H: ContextOS — unified context engine subjects.
+	ContextSearchSubject   = "agenthub.context.search"
+	ContextSegmentSubject  = "agenthub.context.segment"
+	ContextCompressSubject = "agenthub.context.compress"
+	ContextDecisionSubject = "agenthub.context.decision"
+
+	// Sprint I: AgentNet — decentralized multi-agent collaboration subjects.
+	AgentNetCapabilitiesSubject = "agenthub.agentnet.capabilities"
+	AgentNetTasksSubject        = "agenthub.agentnet.tasks"
+	AgentNetResultsSubject      = "agenthub.agentnet.results"
+	AgentNetSpawnSubject        = "agenthub.agentnet.spawn"
+	AgentNetMemorySubject       = "agenthub.agentnet.memory"
+
+	// Sprint J: Digital Identity + Sandbox subjects.
+	AgentIdentitySubject = "agenthub.agent.identity"
+	SandboxControlSubject = "agenthub.sandbox.control"
+	SandboxExecSubject    = "agenthub.sandbox.exec"
+	WorkspaceFileSubject  = "agenthub.workspace.file"
 )
 
 // streamDefs declares the JetStream streams mandated by platform/data_plane.json.
@@ -53,6 +72,10 @@ var streamDefs = []nats.StreamConfig{
 	{Name: "FANOUT", Subjects: []string{"agenthub.fanout.>"}, Retention: nats.LimitsPolicy, MaxAge: 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 	{Name: "PATCH", Subjects: []string{"agenthub.patch.>"}, Retention: nats.LimitsPolicy, MaxAge: 7 * 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 	{Name: "MEMORY", Subjects: []string{"agenthub.memory.>"}, Retention: nats.LimitsPolicy, MaxAge: 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
+	{Name: "CONTEXT", Subjects: []string{"agenthub.context.>"}, Retention: nats.LimitsPolicy, MaxAge: 7 * 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
+	{Name: "AGENTNET", Subjects: []string{"agenthub.agentnet.>"}, Retention: nats.LimitsPolicy, MaxAge: 72 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
+	{Name: "SANDBOX", Subjects: []string{"agenthub.sandbox.>"}, Retention: nats.LimitsPolicy, MaxAge: 24 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
+	{Name: "WORKSPACE", Subjects: []string{"agenthub.workspace.>"}, Retention: nats.LimitsPolicy, MaxAge: 72 * time.Hour, Storage: nats.FileStorage, Replicas: 1},
 }
 
 // Client wraps a NATS connection with a JetStream context. All publishes go
