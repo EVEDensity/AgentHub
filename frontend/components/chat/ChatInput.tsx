@@ -79,9 +79,9 @@ interface ChatInputProps {
   filteredAgents: Agent[];
   filteredWorkflows: WorkflowSummary[];
   filteredSkills: SkillMeta[];
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  mentionPanelRef: React.RefObject<HTMLDivElement | null>;
-  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  mentionPanelRef: React.RefObject<HTMLDivElement>;
+  fileInputRef: React.RefObject<HTMLInputElement>;
   onInputChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onBlur: () => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;

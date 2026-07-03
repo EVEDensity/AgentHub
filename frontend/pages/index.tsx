@@ -241,7 +241,7 @@ export default function AgentHubIM(): JSX.Element {
 
     document.documentElement.setAttribute('data-theme', theme);
     document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
-    document.body.style.zoom = `${zoom}%`;
+    (document.body.style as unknown as Record<string, string>).zoom = `${zoom}%`;
   }, []);
 
   // Load user settings from backend and merge into localStorage
@@ -255,7 +255,7 @@ export default function AgentHubIM(): JSX.Element {
         const s = data.settings;
         if (s.theme && !localStorage.getItem('agenthub_theme')) { localStorage.setItem('agenthub_theme', s.theme); document.documentElement.setAttribute('data-theme', s.theme); }
         if (s.lang && !localStorage.getItem('agenthub_lang')) { localStorage.setItem('agenthub_lang', s.lang); document.documentElement.lang = s.lang === 'en' ? 'en' : 'zh-CN'; }
-        if (s.zoom && !localStorage.getItem('agenthub_zoom')) { localStorage.setItem('agenthub_zoom', s.zoom); document.body.style.zoom = `${s.zoom}%`; }
+        if (s.zoom && !localStorage.getItem('agenthub_zoom')) { localStorage.setItem('agenthub_zoom', s.zoom); (document.body.style as unknown as Record<string, string>).zoom = `${s.zoom}%`; }
       })
       .catch(() => { /* backend off — use localStorage defaults */ });
   }, [token]);

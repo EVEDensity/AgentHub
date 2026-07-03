@@ -198,6 +198,59 @@ groups:
           description: "Audit log buffer has {{ $value }} pending events. Batch writes may be falling behind."
           runbook: "Check PostgreSQL write throughput, consider increasing batch size."
 
+      # Sprint M: Circuit breaker open (any breaker in open state)
+      - alert: CircuitBreakerOpen
+        expr: gateway_circuit_breaker_state{state="open"} == 1
+        for: 2m
+        labels:
+          severity: warning
+          service: gateway-service
+        annotations:
+          summary: "Circuit breaker {{ $labels.breaker }} is OPEN"
+          description: "Circuit breaker '{{ $labels.breaker }}' has been open for 2 minutes. Requests to this downstream are being fast-failed."
+          runbook: "Check downstream service health (/healthz), review recent error logs, verify connectivity. Breaker auto-transitions to half-open after cooldown."
+
+      # Sprint M: Cache hit rate critically low (< 20%)
+      - alert: CacheHitRateLow
+        expr: |
+          (
+            sum(rate(gateway_cache_hits_total[10m]))
+            /
+            (sum(rate(gateway_cache_hits_total[10m])) + sum(rate(gateway_cache_misses_total[10m])))
+          ) < 0.20
+        for: 10m
+        labels:
+          severity: info
+          service: gateway-service
+        annotations:
+          summary: "Cache hit rate below 20%"
+          description: "Gateway cache hit rate is {{ $value | humanizePercentage }}. Backend may be under unnecessary load."
+          runbook: "Check Redis connectivity, review cache TTL configuration, verify cache warming behavior."
+
+      # Sprint M: NATS slow consumer detected
+      - alert: NATSSlowConsumer
+        expr: rate(eventbus_slow_consumer_warnings_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway-service
+        annotations:
+          summary: "NATS slow consumer detected"
+          description: "One or more NATS consumers are falling behind (backlog building up). Messages may be dropped."
+          runbook: "Check consumer handler latency, scale consumer instances, review JetStream consumer configuration."
+
+      # Sprint M: Distributed rate limiting fallback (Redis unavailable)
+      - alert: RateLimitDistributedFallback
+        expr: gateway_rate_limit_hits_total{layer="redis_fallback"} > 0
+        for: 5m
+        labels:
+          severity: info
+          service: gateway-service
+        annotations:
+          summary: "Rate limiting falling back to single-instance mode"
+          description: "Redis-backed distributed rate limiting is unavailable. Using in-memory token buckets only."
+          runbook: "Check Redis connectivity, verify REDIS_ADDR env var, review Redis memory usage."
+
   # ═══════════════════════════════════════════════════════════════════
   # P3 — DAILY SUMMARY: informational only
   # ═══════════════════════════════════════════════════════════════════

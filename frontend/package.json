@@ -30,6 +30,7 @@
     "@next/bundle-analyzer": "^13.5.7",
     "@types/node": "25.8.0",
     "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.3.7",
     "@types/react-syntax-highlighter": "^15.5.13",
     "autoprefixer": "^10.4.19",
     "critters": "^0.0.23",

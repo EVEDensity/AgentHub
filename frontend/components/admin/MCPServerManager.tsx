@@ -256,7 +256,7 @@ function CallResultViewer({ result, isExecuting }: { result: typeof useMCPStore.
         </span>
         <span className="text-sm font-medium text-warm-700">执行结果</span>
       </div>
-      {result.content.map((c, i) => (
+      {(result.content as Array<{type: string; text?: string; data?: string; mimeType?: string}>).map((c, i) => (
         <div key={i} className="mt-1">
           {c.type === 'text' && (
             <pre className="text-xs text-warm-700 whitespace-pre-wrap font-mono bg-white rounded p-2 border border-warm-100 max-h-60 overflow-auto">{c.text}</pre>

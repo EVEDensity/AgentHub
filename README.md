@@ -257,11 +257,11 @@ AgentHub exists because of its community. Every bug report, PR, doc fix, and fea
 
 The growth of AgentHub over time — each star represents someone who believes in open-source multi-agent orchestration.
 
-<a href="https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left">
+<a href="https://star-history.com/#EVEDensity%2FAgentHub&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=EVEDensity/AgentHub&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=EVEDensity/AgentHub&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=EVEDensity/AgentHub&type=Date" />
  </picture>
 </a>
 

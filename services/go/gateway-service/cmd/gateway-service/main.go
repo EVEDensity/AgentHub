@@ -529,6 +529,17 @@ func main() {
 		handler = ChaosMiddleware(chaosCfg, handler)
 	}
 
+	// ── Security Middleware (Sprint N6) ─────────────────────────────
+	// Order (outer→inner): body limit → CORS → security headers → trace → obs metrics → chaos → rate limit → auth → mux
+	handler = bodyLimitMiddleware(handler)
+	handler = corsMiddleware(handler)
+	handler = securityHeadersMiddleware(handler)
+	handler = noSensitiveHeaders(handler)
+
+	// ── Tracing Middleware (Sprint N1) ──────────────────────────────
+	// Creates OTel spans for every request; slow requests (>500ms) emit span events.
+	handler = obs.TraceMiddleware("gateway-service", handler)
+
 	// ── Graceful Shutdown (Sprint M6) ───────────────────────────────
 	srv := &http.Server{
 		Addr:         addr,

@@ -8,7 +8,7 @@ import type { WorkflowExecution, NodeExecutionResult } from '../../types';
 // ── Types ────────────────────────────────────────────────────────────
 
 interface Props {
-  authHeaders: Record<string, string>;
+  authHeaders: () => Record<string, string>;
   setNotice: (msg: string) => void;
 }
 

@@ -41,6 +41,7 @@ export interface ApiKeyInfo {
   id: string;
   name: string;
   keyPrefix: string;
+  fullKey?: string;
   scopes: string[];
   rateLimit: number;
   createdAt: string;

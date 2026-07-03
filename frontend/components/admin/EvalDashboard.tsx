@@ -416,12 +416,12 @@ export default function EvalDashboard(): JSX.Element {
                 {(validationResult.results as Array<Record<string, unknown>>)?.map((r, i) => (
                   <div key={i} className="p-2 rounded bg-warm-50 text-xs">
                     <div className="flex justify-between">
-                      <span className="font-medium">#{r.item_index} {String(r.query || '').slice(0, 60)}</span>
+                      <span className="font-medium">#{String(r.item_index)} {String(r.query || '').slice(0, 60)}</span>
                       {r.error ? (
                         <span className="text-red-500">{String(r.error)}</span>
                       ) : (
                         <span className={r.exact_match === 1.0 ? 'text-emerald-600' : 'text-amber-600'}>
-                          匹配: {r.exact_match} | {Number(r.latency_ms).toFixed(0)}ms
+                          匹配: {String(r.exact_match)} | {Number(r.latency_ms).toFixed(0)}ms
                         </span>
                       )}
                     </div>
@@ -547,7 +547,7 @@ export default function EvalDashboard(): JSX.Element {
           ) : currentRun ? (
             <div className="card p-4 space-y-3">
               {/* Regression alert */}
-              {currentRun.results && (currentRun.results as Record<string, unknown>).regression_detected && (
+              {currentRun.results && Boolean((currentRun.results as Record<string, unknown>).regression_detected) && (
                 <RegressionBanner
                   details={(currentRun.results as Record<string, unknown>).regression_details as RegrDetail[] || []}
                 />

@@ -11,7 +11,7 @@ interface AgentQuestionBubbleProps {
 }
 
 const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreaming, onSendEvent }: AgentQuestionBubbleProps): JSX.Element {
-  const [selected, setSelected] = useState<string | null>(data.resolvedBy ? (data as Record<string, unknown>).selectedOptionId as string || null : null);
+  const [selected, setSelected] = useState<string | null>(data.resolvedBy ? (data as unknown as Record<string, unknown>).selectedOptionId as string || null : null);
   const [customAnswer, setCustomAnswer] = useState('');
   const [showCustom, setShowCustom] = useState(false);
   const [submittedLocal, setSubmittedLocal] = useState(false);

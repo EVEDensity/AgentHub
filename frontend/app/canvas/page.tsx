@@ -19,8 +19,8 @@ export default function CanvasPage(): JSX.Element {
   const [isNew, setIsNew] = useState(false);
 
   useEffect(() => {
-    const idParam = searchParams.get('id');
-    const newParam = searchParams.get('new');
+    const idParam = searchParams?.get('id');
+    const newParam = searchParams?.get('new');
 
     if (idParam) {
       const id = parseInt(idParam, 10);
