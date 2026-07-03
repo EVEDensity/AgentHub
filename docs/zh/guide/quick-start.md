@@ -12,7 +12,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/agenthub/platform.git
+git clone https://github.com/EVEDensity/AgentHub.git
 cd platform
 
 # 2. 启动所有服务（首次约 3-5 分钟拉取镜像）

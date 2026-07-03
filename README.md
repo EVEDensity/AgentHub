@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/agenthub/platform/main/frontend/public/logo.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/EVEDensity/AgentHub/main/frontend/public/logo.svg">
     <img alt="AgentHub" src="frontend/public/logo.svg" width="120">
   </picture>
 </p>
@@ -15,19 +15,19 @@
 
 <p align="center">
   <a href="https://github.com/EVEDensity/AgentHub/stargazers">
-    <img src="https://img.shields.io/github/stars/agenthub/platform?style=flat-square&color=yellow" alt="Stars">
+    <img src="https://img.shields.io/github/stars/EVEDensity/AgentHub?style=flat-square&color=yellow" alt="Stars">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0">
   </a>
   <a href="https://github.com/EVEDensity/AgentHub/releases">
-    <img src="https://img.shields.io/github/v/release/agenthub/platform?style=flat-square&color=purple" alt="Release">
+    <img src="https://img.shields.io/github/v/release/EVEDensity/AgentHub?style=flat-square&color=purple" alt="Release">
   </a>
   <a href="CONTRIBUTING.md">
     <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome">
   </a>
   <a href="https://github.com/EVEDensity/AgentHub/issues">
-    <img src="https://img.shields.io/github/issues/agenthub/platform?style=flat-square&color=red" alt="Issues">
+    <img src="https://img.shields.io/github/issues/EVEDensity/AgentHub?style=flat-square&color=red" alt="Issues">
   </a>
 </p>
 

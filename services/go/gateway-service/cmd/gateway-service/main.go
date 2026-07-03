@@ -397,7 +397,7 @@ func main() {
 	mux.Handle("/context", ctxEngine)
 
 	// ── AgentNet — Decentralized Multi-Agent Collaboration ──────────
-	agentNet := newAgentNetHandler(bus)
+	agentNet := newAgentNetHandler(bus, pool)
 	mux.Handle("/agentnet/", agentNet)
 	mux.Handle("/agentnet", agentNet)
 

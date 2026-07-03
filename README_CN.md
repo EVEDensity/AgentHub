@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/agenthub/platform/main/frontend/public/logo.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/EVEDensity/AgentHub/main/frontend/public/logo.svg">
     <img alt="AgentHub" src="frontend/public/logo.svg" width="120">
   </picture>
 </p>
@@ -14,20 +14,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/agenthub/platform/stargazers">
-    <img src="https://img.shields.io/github/stars/agenthub/platform?style=flat-square&color=yellow" alt="Stars">
+  <a href="https://github.com/EVEDensity/AgentHub/stargazers">
+    <img src="https://img.shields.io/github/stars/EVEDensity/AgentHub?style=flat-square&color=yellow" alt="Stars">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0">
   </a>
-  <a href="https://github.com/agenthub/platform/releases">
-    <img src="https://img.shields.io/github/v/release/agenthub/platform?style=flat-square&color=purple" alt="Release">
+  <a href="https://github.com/EVEDensity/AgentHub/releases">
+    <img src="https://img.shields.io/github/v/release/EVEDensity/AgentHub?style=flat-square&color=purple" alt="Release">
   </a>
   <a href="CONTRIBUTING.md">
     <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome">
   </a>
-  <a href="https://github.com/agenthub/platform/issues">
-    <img src="https://img.shields.io/github/issues/agenthub/platform?style=flat-square&color=red" alt="Issues">
+  <a href="https://github.com/EVEDensity/AgentHub/issues">
+    <img src="https://img.shields.io/github/issues/EVEDensity/AgentHub?style=flat-square&color=red" alt="Issues">
   </a>
 </p>
 
@@ -66,7 +66,7 @@
 
 ```bash
 # 克隆即启动 — 一条命令搞定
-git clone https://github.com/agenthub/platform.git
+git clone https://github.com/EVEDensity/AgentHub.git
 cd platform/deploy
 docker compose -f docker-compose.platform.yml up -d
 ```
@@ -163,19 +163,19 @@ AgentHub 是社区驱动的项目 — **你的贡献会让它变得更好**。�
 
 ### 贡献方式
 
-| 🐛 [报告 Bug](https://github.com/agenthub/platform/issues/new) | 💡 [建议功能](https://github.com/agenthub/platform/issues/new) | 📝 [改进文档](https://github.com/agenthub/platform) | 🔌 [添加提供商](CONTRIBUTING.md) | ⭐ [Star 项目](https://github.com/agenthub/platform) |
+| 🐛 [报告 Bug](https://github.com/EVEDensity/AgentHub/issues/new) | 💡 [建议功能](https://github.com/EVEDensity/AgentHub/issues/new) | 📝 [改进文档](https://github.com/EVEDensity/AgentHub) | 🔌 [添加提供商](CONTRIBUTING.md) | ⭐ [Star 项目](https://github.com/EVEDensity/AgentHub) |
 |---|---|---|---|---|
 
 ### 贡献者入门指南
 
 1. **阅读** [`CONTRIBUTING.md`](CONTRIBUTING.md) — 了解 Issue 优先策略、提交规范、开发环境搭建
-2. **找一个**带有 [`good first issue`](https://github.com/agenthub/platform/issues?q=label%3A%22good+first+issue%22) 标签的 Issue
+2. **找一个**带有 [`good first issue`](https://github.com/EVEDensity/AgentHub/issues?q=label%3A%22good+first+issue%22) 标签的 Issue
 3. **评论** Issue，让其他人知道你在做
 4. **提交 PR** — 保持聚焦、引用 Issue，我们会尽快 Review！
 
 ```bash
 # 开发环境搭建
-git clone https://github.com/agenthub/platform.git
+git clone https://github.com/EVEDensity/AgentHub.git
 cd platform
 docker compose -f deploy/docker-compose.platform.yml up -d nats postgres redis
 
@@ -195,7 +195,7 @@ cd frontend && npm install && npm run dev
 如果 AgentHub 对你有帮助，不妨：
 
 - ⭐ **Star 项目** — 帮助更多人发现它
-- 🐦 **分享**你的使用场景到 [Discussions](https://github.com/agenthub/platform/discussions)
+- 🐦 **分享**你的使用场景到 [Discussions](https://github.com/EVEDensity/AgentHub/discussions)
 - 🔧 **贡献**代码、文档或反馈建议
 - 📣 **告诉**你的朋友和同事
 

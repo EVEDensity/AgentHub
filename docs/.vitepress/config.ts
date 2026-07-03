@@ -23,7 +23,7 @@ export default defineConfig({
       { text: '指南', link: '/zh/guide/what-is-agenthub' },
       { text: 'API', link: '/zh/api/overview' },
       { text: '高级', link: '/zh/advanced/architecture' },
-      { text: 'GitHub', link: 'https://github.com/agenthub/platform' },
+      { text: 'GitHub', link: 'https://github.com/EVEDensity/AgentHub' },
     ],
 
     sidebar: {
@@ -83,11 +83,11 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/agenthub/platform' },
+      { icon: 'github', link: 'https://github.com/EVEDensity/AgentHub' },
     ],
 
     editLink: {
-      pattern: 'https://github.com/agenthub/platform/edit/main/docs/:path',
+      pattern: 'https://github.com/EVEDensity/AgentHub/edit/main/docs/:path',
       text: '在 GitHub 上编辑此页',
     },
 

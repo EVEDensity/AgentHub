@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agenthub/platform/shared/db"
 	"github.com/agenthub/platform/shared/eventbus"
 	"github.com/agenthub/platform/shared/events"
 )
@@ -33,21 +35,21 @@ type AgentCapability struct {
 
 // AgentNetTask represents a task published to the agent network.
 type AgentNetTask struct {
-	TaskID         string     `json:"task_id"`
-	ParentTaskID   string     `json:"parent_task_id,omitempty"`
-	DAGID          string     `json:"dag_id,omitempty"`
-	CorrelationID  string     `json:"correlation_id"`
-	Category       string     `json:"category"`
-	Description    string     `json:"description"`
-	RequiredCap    string     `json:"required_capability"`
-	AssignedAgent  string     `json:"assigned_agent,omitempty"`
-	Status         string     `json:"status"` // pending, assigned, running, completed, failed
-	Input          any        `json:"input,omitempty"`
-	Result         any        `json:"result,omitempty"`
-	Error          string     `json:"error,omitempty"`
-	CreatedAt      string     `json:"created_at"`
-	AssignedAt     string     `json:"assigned_at,omitempty"`
-	CompletedAt    string     `json:"completed_at,omitempty"`
+	TaskID         string `json:"task_id"`
+	ParentTaskID   string `json:"parent_task_id,omitempty"`
+	DAGID          string `json:"dag_id,omitempty"`
+	CorrelationID  string `json:"correlation_id"`
+	Category       string `json:"category"`
+	Description    string `json:"description"`
+	RequiredCap    string `json:"required_capability"`
+	AssignedAgent  string `json:"assigned_agent,omitempty"`
+	Status         string `json:"status"` // pending, assigned, running, completed, failed
+	Input          any    `json:"input,omitempty"`
+	Result         any    `json:"result,omitempty"`
+	Error          string `json:"error,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	AssignedAt     string `json:"assigned_at,omitempty"`
+	CompletedAt    string `json:"completed_at,omitempty"`
 }
 
 // DAGNode is a node in the dynamic DAG graph.
@@ -69,10 +71,10 @@ type DAGNode struct {
 
 // DAGEdge represents a directed edge between two DAG nodes.
 type DAGEdge struct {
-	From      string  `json:"from"`
-	To        string  `json:"to"`
-	Label     string  `json:"label,omitempty"`
-	Weight    float64 `json:"weight"`
+	From   string  `json:"from"`
+	To     string  `json:"to"`
+	Label  string  `json:"label,omitempty"`
+	Weight float64 `json:"weight"`
 }
 
 // DAG represents a dynamic task graph.
@@ -83,7 +85,7 @@ type DAG struct {
 	SessionID string    `json:"session_id"`
 	Nodes     []DAGNode `json:"nodes"`
 	Edges     []DAGEdge `json:"edges"`
-	Status    string    `json:"status"` // created, running, completed, failed, cancelled
+	Status    string    `json:"status"`   // created, running, completed, failed, cancelled
 	Strategy  string    `json:"strategy"` // round-robin, least-loaded, capability-match, cost-optimized
 	CreatedAt string    `json:"created_at"`
 	UpdatedAt string    `json:"updated_at"`
@@ -91,16 +93,16 @@ type DAG struct {
 
 // AgentSpawn represents a child agent spawned by a parent.
 type AgentSpawn struct {
-	SpawnID      string `json:"spawn_id"`
-	ParentID     string `json:"parent_id"`
-	ChildID      string `json:"child_id"`
-	ChildName    string `json:"child_name"`
-	Reason       string `json:"reason"`
+	SpawnID      string   `json:"spawn_id"`
+	ParentID     string   `json:"parent_id"`
+	ChildID      string   `json:"child_id"`
+	ChildName    string   `json:"child_name"`
+	Reason       string   `json:"reason"`
 	Capabilities []string `json:"capabilities"`
-	Status       string `json:"status"` // created, running, completed, destroyed
-	CreatedAt    string `json:"created_at"`
-	CompletedAt  string `json:"completed_at,omitempty"`
-	TTLSeconds   int    `json:"ttl_seconds"`
+	Status       string   `json:"status"` // created, running, completed, destroyed
+	CreatedAt    string   `json:"created_at"`
+	CompletedAt  string   `json:"completed_at,omitempty"`
+	TTLSeconds   int      `json:"ttl_seconds"`
 }
 
 // SharedMemoryEntry is a message written to the shared agent memory channel.
@@ -128,33 +130,37 @@ type AgentNetStats struct {
 
 // ── AgentNet handler ───────────────────────────────────────────────────
 
-// agentNetHandler implements the AgentNet REST API as an http.Handler.
+// agentNetHandler implements the AgentNet REST API with PostgreSQL-backed persistence.
 type agentNetHandler struct {
 	mu sync.RWMutex
 
+	// In-memory fallback (used when pool is nil)
 	capabilities map[string]*AgentCapability // keyed by agent_id
 	tasks        map[string]*AgentNetTask    // keyed by task_id
 	dags         map[string]*DAG             // keyed by dag_id
 	spawns       map[string]*AgentSpawn      // keyed by spawn_id
 	memories     []SharedMemoryEntry
 
+	pool     *db.Pool
 	bus      *eventbus.Client
 	instance string
 }
 
-func newAgentNetHandler(bus *eventbus.Client) *agentNetHandler {
+func newAgentNetHandler(bus *eventbus.Client, pool *db.Pool) *agentNetHandler {
 	return &agentNetHandler{
 		capabilities: make(map[string]*AgentCapability),
 		tasks:        make(map[string]*AgentNetTask),
 		dags:         make(map[string]*DAG),
 		spawns:       make(map[string]*AgentSpawn),
 		memories:     make([]SharedMemoryEntry, 0),
+		pool:         pool,
 		bus:          bus,
 		instance:     getenv("HOSTNAME", "local"),
 	}
 }
 
-// randomSuffix is defined in workspace_handler.go — reused here.
+// pg returns true if PostgreSQL is available for persistence.
+func (h *agentNetHandler) pg() bool { return h.pool != nil }
 
 func (h *agentNetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -257,6 +263,12 @@ func (h *agentNetHandler) serveCapabilities(w http.ResponseWriter, r *http.Reque
 		}
 		cap.LastHeartbeat = now
 
+		// Persist to PostgreSQL
+		if h.pg() {
+			h.createCapabilityPG(r, &cap)
+		}
+
+		// Always update in-memory cache
 		h.mu.Lock()
 		h.capabilities[cap.AgentID] = &cap
 		h.mu.Unlock()
@@ -275,12 +287,18 @@ func (h *agentNetHandler) serveCapabilities(w http.ResponseWriter, r *http.Reque
 	case http.MethodGet:
 		if subPath == "" {
 			// GET /agentnet/capabilities — list all
-			h.mu.RLock()
-			list := make([]*AgentCapability, 0, len(h.capabilities))
-			for _, c := range h.capabilities {
-				list = append(list, c)
+			var list []*AgentCapability
+
+			if h.pg() {
+				list = h.listCapabilitiesPG(r)
+			} else {
+				h.mu.RLock()
+				list = make([]*AgentCapability, 0, len(h.capabilities))
+				for _, c := range h.capabilities {
+					list = append(list, c)
+				}
+				h.mu.RUnlock()
 			}
-			h.mu.RUnlock()
 
 			// Optional filter by capability
 			filter := r.URL.Query().Get("capability")
@@ -306,10 +324,19 @@ func (h *agentNetHandler) serveCapabilities(w http.ResponseWriter, r *http.Reque
 		}
 
 		// GET /agentnet/capabilities/{agent_id} — get specific
-		h.mu.RLock()
-		cap, ok := h.capabilities[subPath]
-		h.mu.RUnlock()
-		if !ok {
+		var cap *AgentCapability
+		if h.pg() {
+			cap = h.getCapabilityPG(r, subPath)
+		} else {
+			h.mu.RLock()
+			c, ok := h.capabilities[subPath]
+			if ok {
+				cap = c
+			}
+			h.mu.RUnlock()
+		}
+
+		if cap == nil {
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{"error": "agent not found"})
 			return
@@ -318,6 +345,9 @@ func (h *agentNetHandler) serveCapabilities(w http.ResponseWriter, r *http.Reque
 
 	case http.MethodDelete:
 		// DELETE /agentnet/capabilities/{agent_id} — unregister
+		if h.pg() {
+			h.deleteCapabilityPG(r, subPath)
+		}
 		h.mu.Lock()
 		delete(h.capabilities, subPath)
 		h.mu.Unlock()
@@ -343,12 +373,22 @@ func (h *agentNetHandler) serveDiscover(w http.ResponseWriter, r *http.Request) 
 		strategy = "capability-match"
 	}
 
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	// Load all registered agents
+	var allCaps []*AgentCapability
+	if h.pg() {
+		allCaps = h.listCapabilitiesPG(r)
+	} else {
+		h.mu.RLock()
+		allCaps = make([]*AgentCapability, 0, len(h.capabilities))
+		for _, c := range h.capabilities {
+			allCaps = append(allCaps, c)
+		}
+		h.mu.RUnlock()
+	}
 
 	// Find agents matching the required capability
 	var candidates []*AgentCapability
-	for _, c := range h.capabilities {
+	for _, c := range allCaps {
 		if c.Status == "offline" {
 			continue
 		}
@@ -435,6 +475,10 @@ func (h *agentNetHandler) serveTasks(w http.ResponseWriter, r *http.Request, sub
 			task.Status = "pending"
 			task.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 
+			if h.pg() {
+				h.createTaskPG(r, &task)
+			}
+
 			h.mu.Lock()
 			h.tasks[task.TaskID] = &task
 			h.mu.Unlock()
@@ -457,6 +501,18 @@ func (h *agentNetHandler) serveTasks(w http.ResponseWriter, r *http.Request, sub
 		parts := strings.SplitN(subPath, "/", 3)
 		if len(parts) == 2 && parts[1] == "result" {
 			taskID := parts[0]
+			var result struct {
+				AgentID string `json:"agent_id"`
+				Result  any    `json:"result"`
+				Error   string `json:"error,omitempty"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]string{"error": "invalid json"})
+				return
+			}
+			now := time.Now().UTC().Format(time.RFC3339)
+
 			h.mu.Lock()
 			task, ok := h.tasks[taskID]
 			if !ok {
@@ -465,18 +521,6 @@ func (h *agentNetHandler) serveTasks(w http.ResponseWriter, r *http.Request, sub
 				json.NewEncoder(w).Encode(map[string]string{"error": "task not found"})
 				return
 			}
-			var result struct {
-				AgentID string `json:"agent_id"`
-				Result  any    `json:"result"`
-				Error   string `json:"error,omitempty"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&result); err != nil {
-				h.mu.Unlock()
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid json"})
-				return
-			}
-			now := time.Now().UTC().Format(time.RFC3339)
 			task.CompletedAt = now
 			task.Result = result.Result
 			task.Error = result.Error
@@ -487,11 +531,15 @@ func (h *agentNetHandler) serveTasks(w http.ResponseWriter, r *http.Request, sub
 			}
 			h.mu.Unlock()
 
+			if h.pg() {
+				h.updateTaskResultPG(r, taskID, result.Result, result.Error, task.Status, now)
+			}
+
 			h.publishAgentNetEvent(events.EventAgentTaskCompleted, "", "", map[string]any{
-				"task_id":   taskID,
-				"agent_id":  result.AgentID,
-				"status":    task.Status,
-				"error":     result.Error,
+				"task_id":  taskID,
+				"agent_id": result.AgentID,
+				"status":   task.Status,
+				"error":    result.Error,
 			})
 
 			json.NewEncoder(w).Encode(task)
@@ -505,18 +553,23 @@ func (h *agentNetHandler) serveTasks(w http.ResponseWriter, r *http.Request, sub
 			statusFilter := r.URL.Query().Get("status")
 			dagFilter := r.URL.Query().Get("dag_id")
 
-			h.mu.RLock()
-			list := make([]*AgentNetTask, 0, len(h.tasks))
-			for _, t := range h.tasks {
-				if statusFilter != "" && t.Status != statusFilter {
-					continue
+			var list []*AgentNetTask
+			if h.pg() {
+				list = h.listTasksPG(r, statusFilter, dagFilter)
+			} else {
+				h.mu.RLock()
+				list = make([]*AgentNetTask, 0, len(h.tasks))
+				for _, t := range h.tasks {
+					if statusFilter != "" && t.Status != statusFilter {
+						continue
+					}
+					if dagFilter != "" && t.DAGID != dagFilter {
+						continue
+					}
+					list = append(list, t)
 				}
-				if dagFilter != "" && t.DAGID != dagFilter {
-					continue
-				}
-				list = append(list, t)
+				h.mu.RUnlock()
 			}
-			h.mu.RUnlock()
 
 			sort.Slice(list, func(i, j int) bool {
 				return list[i].CreatedAt > list[j].CreatedAt
@@ -527,10 +580,18 @@ func (h *agentNetHandler) serveTasks(w http.ResponseWriter, r *http.Request, sub
 		}
 
 		// GET /agentnet/tasks/{task_id} — get specific task
-		h.mu.RLock()
-		task, ok := h.tasks[subPath]
-		h.mu.RUnlock()
-		if !ok {
+		var task *AgentNetTask
+		if h.pg() {
+			task = h.getTaskPG(r, subPath)
+		} else {
+			h.mu.RLock()
+			t, ok := h.tasks[subPath]
+			if ok {
+				task = t
+			}
+			h.mu.RUnlock()
+		}
+		if task == nil {
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{"error": "task not found"})
 			return
@@ -577,6 +638,10 @@ func (h *agentNetHandler) serveDAG(w http.ResponseWriter, r *http.Request, subPa
 			dag.Edges = make([]DAGEdge, 0)
 		}
 
+		if h.pg() {
+			h.createDAGPG(r, &dag)
+		}
+
 		h.mu.Lock()
 		h.dags[dag.DAGID] = &dag
 		h.mu.Unlock()
@@ -587,12 +652,17 @@ func (h *agentNetHandler) serveDAG(w http.ResponseWriter, r *http.Request, subPa
 	case http.MethodGet:
 		if subPath == "" {
 			// GET /agentnet/dag — list all DAGs
-			h.mu.RLock()
-			list := make([]*DAG, 0, len(h.dags))
-			for _, d := range h.dags {
-				list = append(list, d)
+			var list []*DAG
+			if h.pg() {
+				list = h.listDAGsPG(r)
+			} else {
+				h.mu.RLock()
+				list = make([]*DAG, 0, len(h.dags))
+				for _, d := range h.dags {
+					list = append(list, d)
+				}
+				h.mu.RUnlock()
 			}
-			h.mu.RUnlock()
 			sort.Slice(list, func(i, j int) bool {
 				return list[i].CreatedAt > list[j].CreatedAt
 			})
@@ -603,10 +673,18 @@ func (h *agentNetHandler) serveDAG(w http.ResponseWriter, r *http.Request, subPa
 		parts := strings.SplitN(subPath, "/", 3)
 		dagID := parts[0]
 
-		h.mu.RLock()
-		dag, ok := h.dags[dagID]
-		h.mu.RUnlock()
-		if !ok {
+		var dag *DAG
+		if h.pg() {
+			dag = h.getDAGPG(r, dagID)
+		} else {
+			h.mu.RLock()
+			d, ok := h.dags[dagID]
+			if ok {
+				dag = d
+			}
+			h.mu.RUnlock()
+		}
+		if dag == nil {
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{"error": "dag not found"})
 			return
@@ -640,6 +718,14 @@ func (h *agentNetHandler) serveDAG(w http.ResponseWriter, r *http.Request, subPa
 
 		h.mu.Lock()
 		dag, ok := h.dags[dagID]
+		if !ok && h.pg() {
+			// Try loading from PG into cache
+			dag = h.getDAGPG(r, dagID)
+			if dag != nil {
+				h.dags[dagID] = dag
+				ok = true
+			}
+		}
 		if !ok {
 			h.mu.Unlock()
 			w.WriteHeader(http.StatusNotFound)
@@ -656,7 +742,6 @@ func (h *agentNetHandler) serveDAG(w http.ResponseWriter, r *http.Request, subPa
 				json.NewEncoder(w).Encode(map[string]string{"error": "invalid json"})
 				return
 			}
-			// Remove node if action=remove
 			if r.URL.Query().Get("action") == "remove" {
 				for i, n := range dag.Nodes {
 					if n.ID == node.ID {
@@ -665,7 +750,6 @@ func (h *agentNetHandler) serveDAG(w http.ResponseWriter, r *http.Request, subPa
 					}
 				}
 			} else {
-				// Update existing or append new
 				found := false
 				for i, n := range dag.Nodes {
 					if n.ID == node.ID {
@@ -710,6 +794,10 @@ func (h *agentNetHandler) serveDAG(w http.ResponseWriter, r *http.Request, subPa
 			return
 		}
 
+		// Persist updated DAG to PG
+		if h.pg() {
+			h.updateDAGPG(r, dag)
+		}
 		h.mu.Unlock()
 		json.NewEncoder(w).Encode(dag)
 
@@ -781,6 +869,11 @@ func (h *agentNetHandler) serveSpawn(w http.ResponseWriter, r *http.Request, sub
 			spawn.TTLSeconds = 600 // default 10 min
 		}
 
+		// Persist spawn to PG
+		if h.pg() {
+			h.createSpawnPG(r, &spawn)
+		}
+
 		h.mu.Lock()
 		h.spawns[spawn.SpawnID] = &spawn
 
@@ -798,6 +891,11 @@ func (h *agentNetHandler) serveSpawn(w http.ResponseWriter, r *http.Request, sub
 		}
 		h.capabilities[spawn.ChildID] = childCap
 		h.mu.Unlock()
+
+		// Persist child capability too
+		if h.pg() {
+			h.createCapabilityPG(r, childCap)
+		}
 
 		// Publish spawn event
 		h.publishAgentNetEvent(events.EventAgentSpawnRequested, "", "", map[string]any{
@@ -817,6 +915,10 @@ func (h *agentNetHandler) serveSpawn(w http.ResponseWriter, r *http.Request, sub
 			}
 			h.mu.Unlock()
 
+			if h.pg() {
+				h.updateSpawnStatusPG(spawn.SpawnID, "running", "")
+			}
+
 			h.publishAgentNetEvent(events.EventAgentSpawnCompleted, "", "", map[string]any{
 				"spawn_id": spawn.SpawnID,
 				"child_id": spawn.ChildID,
@@ -825,15 +927,22 @@ func (h *agentNetHandler) serveSpawn(w http.ResponseWriter, r *http.Request, sub
 
 			// Auto-destroy after TTL
 			time.Sleep(time.Duration(spawn.TTLSeconds) * time.Second)
+			now := time.Now().UTC().Format(time.RFC3339)
 			h.mu.Lock()
 			if s, ok := h.spawns[spawn.SpawnID]; ok {
 				s.Status = "destroyed"
-				s.CompletedAt = time.Now().UTC().Format(time.RFC3339)
+				s.CompletedAt = now
 			}
 			if c, ok := h.capabilities[spawn.ChildID]; ok {
 				c.Status = "offline"
 			}
 			h.mu.Unlock()
+
+			if h.pg() {
+				h.updateSpawnStatusPG(spawn.SpawnID, "destroyed", now)
+				h.updateCapabilityStatusPG(spawn.ChildID, "offline")
+			}
+
 			log.Printf("agentnet: spawn %s auto-destroyed after TTL", spawn.SpawnID)
 		}()
 
@@ -843,12 +952,17 @@ func (h *agentNetHandler) serveSpawn(w http.ResponseWriter, r *http.Request, sub
 	case http.MethodGet:
 		if subPath == "" {
 			// GET /agentnet/spawn — list all spawns
-			h.mu.RLock()
-			list := make([]*AgentSpawn, 0, len(h.spawns))
-			for _, s := range h.spawns {
-				list = append(list, s)
+			var list []*AgentSpawn
+			if h.pg() {
+				list = h.listSpawnsPG(r)
+			} else {
+				h.mu.RLock()
+				list = make([]*AgentSpawn, 0, len(h.spawns))
+				for _, s := range h.spawns {
+					list = append(list, s)
+				}
+				h.mu.RUnlock()
 			}
-			h.mu.RUnlock()
 			sort.Slice(list, func(i, j int) bool {
 				return list[i].CreatedAt > list[j].CreatedAt
 			})
@@ -857,10 +971,18 @@ func (h *agentNetHandler) serveSpawn(w http.ResponseWriter, r *http.Request, sub
 		}
 
 		// GET /agentnet/spawn/{spawn_id} — get spawn status
-		h.mu.RLock()
-		spawn, ok := h.spawns[subPath]
-		h.mu.RUnlock()
-		if !ok {
+		var spawn *AgentSpawn
+		if h.pg() {
+			spawn = h.getSpawnPG(r, subPath)
+		} else {
+			h.mu.RLock()
+			s, ok := h.spawns[subPath]
+			if ok {
+				spawn = s
+			}
+			h.mu.RUnlock()
+		}
+		if spawn == nil {
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{"error": "spawn not found"})
 			return
@@ -889,6 +1011,10 @@ func (h *agentNetHandler) serveMemory(w http.ResponseWriter, r *http.Request) {
 		entry.ID = "mem-" + randomSuffix()
 		entry.Timestamp = time.Now().UTC().Format(time.RFC3339)
 
+		if h.pg() {
+			h.createMemoryPG(r, &entry)
+		}
+
 		h.mu.Lock()
 		h.memories = append(h.memories, entry)
 		// Keep max 1000 entries in memory
@@ -912,23 +1038,25 @@ func (h *agentNetHandler) serveMemory(w http.ResponseWriter, r *http.Request) {
 		intentFilter := r.URL.Query().Get("intent")
 		limit := 50
 
-		h.mu.RLock()
-		defer h.mu.RUnlock()
-
 		var results []SharedMemoryEntry
-		// Iterate from newest
-		for i := len(h.memories) - 1; i >= 0; i-- {
-			m := h.memories[i]
-			if agentFilter != "" && m.AgentID != agentFilter {
-				continue
+		if h.pg() {
+			results = h.listMemoryPG(r, agentFilter, intentFilter, limit)
+		} else {
+			h.mu.RLock()
+			for i := len(h.memories) - 1; i >= 0; i-- {
+				m := h.memories[i]
+				if agentFilter != "" && m.AgentID != agentFilter {
+					continue
+				}
+				if intentFilter != "" && m.Intent != intentFilter {
+					continue
+				}
+				results = append(results, m)
+				if len(results) >= limit {
+					break
+				}
 			}
-			if intentFilter != "" && m.Intent != intentFilter {
-				continue
-			}
-			results = append(results, m)
-			if len(results) >= limit {
-				break
-			}
+			h.mu.RUnlock()
 		}
 
 		json.NewEncoder(w).Encode(results)
@@ -948,10 +1076,12 @@ func (h *agentNetHandler) serveHeartbeat(w http.ResponseWriter, r *http.Request,
 
 	w.Header().Set("Content-Type", "application/json")
 
+	now := time.Now().UTC().Format(time.RFC3339)
+
 	h.mu.Lock()
 	cap, ok := h.capabilities[agentID]
 	if ok {
-		cap.LastHeartbeat = time.Now().UTC().Format(time.RFC3339)
+		cap.LastHeartbeat = now
 		cap.Status = "idle"
 
 		// Decode optional load update
@@ -977,6 +1107,11 @@ func (h *agentNetHandler) serveHeartbeat(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	// Persist heartbeat to PG
+	if h.pg() {
+		h.heartbeatPG(r, agentID, cap.CurrentLoad, cap.Status)
+	}
+
 	h.publishAgentNetEvent(events.EventAgentHeartbeat, "", "", map[string]any{
 		"agent_id":     agentID,
 		"status":       cap.Status,
@@ -995,6 +1130,12 @@ func (h *agentNetHandler) serveStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+
+	if h.pg() {
+		stats := h.statsPG(r)
+		json.NewEncoder(w).Encode(stats)
+		return
+	}
 
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -1071,6 +1212,12 @@ func (h *agentNetHandler) serveTopology(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 
+	if h.pg() {
+		topo := h.topologyPG(r)
+		json.NewEncoder(w).Encode(topo)
+		return
+	}
+
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -1099,7 +1246,6 @@ func (h *agentNetHandler) serveTopology(w http.ResponseWriter, r *http.Request) 
 			Status:      t.Status,
 			Description: t.RequiredCap,
 		})
-		// Task-spawn edges
 		if t.ParentTaskID != "" {
 			topo.Edges = append(topo.Edges, TopologyEdge{
 				From:   t.ParentTaskID,
@@ -1135,6 +1281,601 @@ func (h *agentNetHandler) serveTopology(w http.ResponseWriter, r *http.Request) 
 	topo.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	json.NewEncoder(w).Encode(topo)
+}
+
+// ── PostgreSQL persistence helpers ─────────────────────────────────────
+
+// ── Capabilities PG ────────────────────────────────────────────────────
+
+func (h *agentNetHandler) createCapabilityPG(r *http.Request, cap *AgentCapability) {
+	_, err := h.pool.Exec(r.Context(),
+		`INSERT INTO agentnet_capabilities (agent_id, display_name, capabilities, preferred_tools,
+		 quality_score, current_load, max_concurrent, cost_per_task, status, last_heartbeat, registered_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		 ON CONFLICT (agent_id) DO UPDATE SET
+		   display_name=$2, capabilities=$3, preferred_tools=$4, quality_score=$5,
+		   current_load=$6, max_concurrent=$7, cost_per_task=$8, status=$9,
+		   last_heartbeat=$10`,
+		cap.AgentID, cap.DisplayName, cap.Capabilities, cap.PreferredTools,
+		cap.QualityScore, cap.CurrentLoad, cap.MaxConcurrent, cap.CostPerTask,
+		cap.Status, cap.LastHeartbeat, cap.RegisteredAt)
+	if err != nil {
+		log.Printf("agentnet: createCapabilityPG error: %v", err)
+	}
+}
+
+func (h *agentNetHandler) listCapabilitiesPG(r *http.Request) []*AgentCapability {
+	rows, err := h.pool.Query(r.Context(),
+		`SELECT agent_id, display_name, capabilities, preferred_tools,
+		        quality_score, current_load, max_concurrent, cost_per_task,
+		        status, last_heartbeat, registered_at
+		 FROM agentnet_capabilities
+		 ORDER BY quality_score DESC`)
+	if err != nil {
+		log.Printf("agentnet: listCapabilitiesPG error: %v", err)
+		return []*AgentCapability{}
+	}
+	defer rows.Close()
+
+	var list []*AgentCapability
+	for rows.Next() {
+		c := &AgentCapability{}
+		var lhb, ra time.Time
+		if err := rows.Scan(&c.AgentID, &c.DisplayName, &c.Capabilities, &c.PreferredTools,
+			&c.QualityScore, &c.CurrentLoad, &c.MaxConcurrent, &c.CostPerTask,
+			&c.Status, &lhb, &ra); err != nil {
+			log.Printf("agentnet: listCapabilitiesPG scan error: %v", err)
+			continue
+		}
+		c.LastHeartbeat = lhb.Format(time.RFC3339)
+		c.RegisteredAt = ra.Format(time.RFC3339)
+		list = append(list, c)
+	}
+	return list
+}
+
+func (h *agentNetHandler) getCapabilityPG(r *http.Request, agentID string) *AgentCapability {
+	c := &AgentCapability{}
+	var lhb, ra time.Time
+	err := h.pool.QueryRow(r.Context(),
+		`SELECT agent_id, display_name, capabilities, preferred_tools,
+		        quality_score, current_load, max_concurrent, cost_per_task,
+		        status, last_heartbeat, registered_at
+		 FROM agentnet_capabilities WHERE agent_id=$1`, agentID).
+		Scan(&c.AgentID, &c.DisplayName, &c.Capabilities, &c.PreferredTools,
+			&c.QualityScore, &c.CurrentLoad, &c.MaxConcurrent, &c.CostPerTask,
+			&c.Status, &lhb, &ra)
+	if err != nil {
+		return nil
+	}
+	c.LastHeartbeat = lhb.Format(time.RFC3339)
+	c.RegisteredAt = ra.Format(time.RFC3339)
+	return c
+}
+
+func (h *agentNetHandler) deleteCapabilityPG(r *http.Request, agentID string) {
+	_, err := h.pool.Exec(r.Context(), `DELETE FROM agentnet_capabilities WHERE agent_id=$1`, agentID)
+	if err != nil {
+		log.Printf("agentnet: deleteCapabilityPG error: %v", err)
+	}
+}
+
+func (h *agentNetHandler) updateCapabilityStatusPG(agentID, status string) {
+	_, err := h.pool.Exec(context.Background(),
+		`UPDATE agentnet_capabilities SET status=$1, last_heartbeat=now() WHERE agent_id=$2`,
+		status, agentID)
+	if err != nil {
+		log.Printf("agentnet: updateCapabilityStatusPG error: %v", err)
+	}
+}
+
+// ── Tasks PG ───────────────────────────────────────────────────────────
+
+func (h *agentNetHandler) createTaskPG(r *http.Request, task *AgentNetTask) {
+	inputJSON, _ := json.Marshal(task.Input)
+	_, err := h.pool.Exec(r.Context(),
+		`INSERT INTO agentnet_tasks (task_id, parent_task_id, dag_id, correlation_id, category,
+		 description, required_capability, status, input, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		task.TaskID, nilIfEmpty(task.ParentTaskID), nilIfEmpty(task.DAGID), task.CorrelationID,
+		task.Category, task.Description, task.RequiredCap, task.Status, inputJSON, task.CreatedAt)
+	if err != nil {
+		log.Printf("agentnet: createTaskPG error: %v", err)
+	}
+}
+
+func (h *agentNetHandler) listTasksPG(r *http.Request, statusFilter, dagFilter string) []*AgentNetTask {
+	query := `SELECT task_id, parent_task_id, dag_id, correlation_id, category,
+	                 description, required_capability, assigned_agent, status,
+	                 input, result, error_message, created_at, assigned_at, completed_at
+	          FROM agentnet_tasks WHERE 1=1`
+	args := []any{}
+	argIdx := 1
+
+	if statusFilter != "" {
+		query += " AND status=$" + itoa(argIdx)
+		args = append(args, statusFilter)
+		argIdx++
+	}
+	if dagFilter != "" {
+		query += " AND dag_id=$" + itoa(argIdx)
+		args = append(args, dagFilter)
+		argIdx++
+	}
+	query += " ORDER BY created_at DESC LIMIT 200"
+
+	rows, err := h.pool.Query(r.Context(), query, args...)
+	if err != nil {
+		log.Printf("agentnet: listTasksPG error: %v", err)
+		return []*AgentNetTask{}
+	}
+	defer rows.Close()
+
+	var list []*AgentNetTask
+	for rows.Next() {
+		t := &AgentNetTask{}
+		var inputJSON, resultJSON []byte
+		var parentTaskID, dagID, assignedAgent, errMsg *string
+		var assignedAt, completedAt *time.Time
+		var createdAt time.Time
+		if err := rows.Scan(&t.TaskID, &parentTaskID, &dagID, &t.CorrelationID, &t.Category,
+			&t.Description, &t.RequiredCap, &assignedAgent, &t.Status,
+			&inputJSON, &resultJSON, &errMsg, &createdAt, &assignedAt, &completedAt); err != nil {
+			log.Printf("agentnet: listTasksPG scan error: %v", err)
+			continue
+		}
+		if parentTaskID != nil {
+			t.ParentTaskID = *parentTaskID
+		}
+		if dagID != nil {
+			t.DAGID = *dagID
+		}
+		if assignedAgent != nil {
+			t.AssignedAgent = *assignedAgent
+		}
+		if errMsg != nil {
+			t.Error = *errMsg
+		}
+		t.CreatedAt = createdAt.Format(time.RFC3339)
+		if assignedAt != nil {
+			t.AssignedAt = assignedAt.Format(time.RFC3339)
+		}
+		if completedAt != nil {
+			t.CompletedAt = completedAt.Format(time.RFC3339)
+		}
+		if len(inputJSON) > 0 {
+			json.Unmarshal(inputJSON, &t.Input)
+		}
+		if len(resultJSON) > 0 {
+			json.Unmarshal(resultJSON, &t.Result)
+		}
+		list = append(list, t)
+	}
+	return list
+}
+
+func (h *agentNetHandler) getTaskPG(r *http.Request, taskID string) *AgentNetTask {
+	t := &AgentNetTask{}
+	var inputJSON, resultJSON []byte
+	var parentTaskID, dagID, assignedAgent, errMsg *string
+	var assignedAt, completedAt *time.Time
+	var createdAt time.Time
+	err := h.pool.QueryRow(r.Context(),
+		`SELECT task_id, parent_task_id, dag_id, correlation_id, category,
+		        description, required_capability, assigned_agent, status,
+		        input, result, error_message, created_at, assigned_at, completed_at
+		 FROM agentnet_tasks WHERE task_id=$1`, taskID).
+		Scan(&t.TaskID, &parentTaskID, &dagID, &t.CorrelationID, &t.Category,
+			&t.Description, &t.RequiredCap, &assignedAgent, &t.Status,
+			&inputJSON, &resultJSON, &errMsg, &createdAt, &assignedAt, &completedAt)
+	if err != nil {
+		return nil
+	}
+	if parentTaskID != nil {
+		t.ParentTaskID = *parentTaskID
+	}
+	if dagID != nil {
+		t.DAGID = *dagID
+	}
+	if assignedAgent != nil {
+		t.AssignedAgent = *assignedAgent
+	}
+	if errMsg != nil {
+		t.Error = *errMsg
+	}
+	t.CreatedAt = createdAt.Format(time.RFC3339)
+	if assignedAt != nil {
+		t.AssignedAt = assignedAt.Format(time.RFC3339)
+	}
+	if completedAt != nil {
+		t.CompletedAt = completedAt.Format(time.RFC3339)
+	}
+	if len(inputJSON) > 0 {
+		json.Unmarshal(inputJSON, &t.Input)
+	}
+	if len(resultJSON) > 0 {
+		json.Unmarshal(resultJSON, &t.Result)
+	}
+	return t
+}
+
+func (h *agentNetHandler) updateTaskResultPG(r *http.Request, taskID string, result any, errMsg string, status, completedAt string) {
+	resultJSON, _ := json.Marshal(result)
+	errStr := nilIfEmpty(errMsg)
+	_, err := h.pool.Exec(r.Context(),
+		`UPDATE agentnet_tasks SET result=$1, error_message=$2, status=$3, completed_at=$4 WHERE task_id=$5`,
+		resultJSON, errStr, status, completedAt, taskID)
+	if err != nil {
+		log.Printf("agentnet: updateTaskResultPG error: %v", err)
+	}
+}
+
+// ── DAGs PG ────────────────────────────────────────────────────────────
+
+func (h *agentNetHandler) createDAGPG(r *http.Request, dag *DAG) {
+	nodesJSON, _ := json.Marshal(dag.Nodes)
+	edgesJSON, _ := json.Marshal(dag.Edges)
+	_, err := h.pool.Exec(r.Context(),
+		`INSERT INTO agentnet_dags (dag_id, name, tenant_id, session_id, strategy, status, nodes, edges, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		dag.DAGID, dag.Name, dag.TenantID, dag.SessionID, dag.Strategy, dag.Status,
+		nodesJSON, edgesJSON, dag.CreatedAt, dag.UpdatedAt)
+	if err != nil {
+		log.Printf("agentnet: createDAGPG error: %v", err)
+	}
+}
+
+func (h *agentNetHandler) listDAGsPG(r *http.Request) []*DAG {
+	rows, err := h.pool.Query(r.Context(),
+		`SELECT dag_id, name, tenant_id, session_id, strategy, status, nodes, edges, created_at, updated_at
+		 FROM agentnet_dags ORDER BY created_at DESC LIMIT 100`)
+	if err != nil {
+		log.Printf("agentnet: listDAGsPG error: %v", err)
+		return []*DAG{}
+	}
+	defer rows.Close()
+
+	var list []*DAG
+	for rows.Next() {
+		d := &DAG{}
+		var nodesJSON, edgesJSON []byte
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&d.DAGID, &d.Name, &d.TenantID, &d.SessionID, &d.Strategy, &d.Status,
+			&nodesJSON, &edgesJSON, &createdAt, &updatedAt); err != nil {
+			log.Printf("agentnet: listDAGsPG scan error: %v", err)
+			continue
+		}
+		json.Unmarshal(nodesJSON, &d.Nodes)
+		json.Unmarshal(edgesJSON, &d.Edges)
+		d.CreatedAt = createdAt.Format(time.RFC3339)
+		d.UpdatedAt = updatedAt.Format(time.RFC3339)
+		list = append(list, d)
+	}
+	return list
+}
+
+func (h *agentNetHandler) getDAGPG(r *http.Request, dagID string) *DAG {
+	d := &DAG{}
+	var nodesJSON, edgesJSON []byte
+	var createdAt, updatedAt time.Time
+	err := h.pool.QueryRow(r.Context(),
+		`SELECT dag_id, name, tenant_id, session_id, strategy, status, nodes, edges, created_at, updated_at
+		 FROM agentnet_dags WHERE dag_id=$1`, dagID).
+		Scan(&d.DAGID, &d.Name, &d.TenantID, &d.SessionID, &d.Strategy, &d.Status,
+			&nodesJSON, &edgesJSON, &createdAt, &updatedAt)
+	if err != nil {
+		return nil
+	}
+	json.Unmarshal(nodesJSON, &d.Nodes)
+	json.Unmarshal(edgesJSON, &d.Edges)
+	d.CreatedAt = createdAt.Format(time.RFC3339)
+	d.UpdatedAt = updatedAt.Format(time.RFC3339)
+	return d
+}
+
+func (h *agentNetHandler) updateDAGPG(r *http.Request, dag *DAG) {
+	nodesJSON, _ := json.Marshal(dag.Nodes)
+	edgesJSON, _ := json.Marshal(dag.Edges)
+	_, err := h.pool.Exec(r.Context(),
+		`UPDATE agentnet_dags SET nodes=$1, edges=$2, status=$3, strategy=$4, updated_at=$5 WHERE dag_id=$6`,
+		nodesJSON, edgesJSON, dag.Status, dag.Strategy, dag.UpdatedAt, dag.DAGID)
+	if err != nil {
+		log.Printf("agentnet: updateDAGPG error: %v", err)
+	}
+}
+
+// ── Spawns PG ──────────────────────────────────────────────────────────
+
+func (h *agentNetHandler) createSpawnPG(r *http.Request, spawn *AgentSpawn) {
+	_, err := h.pool.Exec(r.Context(),
+		`INSERT INTO agentnet_spawns (spawn_id, parent_id, child_id, child_name, reason, capabilities, status, ttl_seconds, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		spawn.SpawnID, spawn.ParentID, spawn.ChildID, spawn.ChildName, spawn.Reason,
+		spawn.Capabilities, spawn.Status, spawn.TTLSeconds, spawn.CreatedAt)
+	if err != nil {
+		log.Printf("agentnet: createSpawnPG error: %v", err)
+	}
+}
+
+func (h *agentNetHandler) listSpawnsPG(r *http.Request) []*AgentSpawn {
+	rows, err := h.pool.Query(r.Context(),
+		`SELECT spawn_id, parent_id, child_id, child_name, reason, capabilities,
+		        status, ttl_seconds, created_at, completed_at
+		 FROM agentnet_spawns ORDER BY created_at DESC LIMIT 100`)
+	if err != nil {
+		log.Printf("agentnet: listSpawnsPG error: %v", err)
+		return []*AgentSpawn{}
+	}
+	defer rows.Close()
+
+	var list []*AgentSpawn
+	for rows.Next() {
+		s := &AgentSpawn{}
+		var completedAt *time.Time
+		var createdAt time.Time
+		if err := rows.Scan(&s.SpawnID, &s.ParentID, &s.ChildID, &s.ChildName, &s.Reason,
+			&s.Capabilities, &s.Status, &s.TTLSeconds, &createdAt, &completedAt); err != nil {
+			log.Printf("agentnet: listSpawnsPG scan error: %v", err)
+			continue
+		}
+		s.CreatedAt = createdAt.Format(time.RFC3339)
+		if completedAt != nil {
+			s.CompletedAt = completedAt.Format(time.RFC3339)
+		}
+		list = append(list, s)
+	}
+	return list
+}
+
+func (h *agentNetHandler) getSpawnPG(r *http.Request, spawnID string) *AgentSpawn {
+	s := &AgentSpawn{}
+	var completedAt *time.Time
+	var createdAt time.Time
+	err := h.pool.QueryRow(r.Context(),
+		`SELECT spawn_id, parent_id, child_id, child_name, reason, capabilities,
+		        status, ttl_seconds, created_at, completed_at
+		 FROM agentnet_spawns WHERE spawn_id=$1`, spawnID).
+		Scan(&s.SpawnID, &s.ParentID, &s.ChildID, &s.ChildName, &s.Reason,
+			&s.Capabilities, &s.Status, &s.TTLSeconds, &createdAt, &completedAt)
+	if err != nil {
+		return nil
+	}
+	s.CreatedAt = createdAt.Format(time.RFC3339)
+	if completedAt != nil {
+		s.CompletedAt = completedAt.Format(time.RFC3339)
+	}
+	return s
+}
+
+func (h *agentNetHandler) updateSpawnStatusPG(spawnID, status, completedAt string) {
+	if completedAt != "" {
+		_, err := h.pool.Exec(context.Background(),
+			`UPDATE agentnet_spawns SET status=$1, completed_at=$2 WHERE spawn_id=$3`,
+			status, completedAt, spawnID)
+		if err != nil {
+			log.Printf("agentnet: updateSpawnStatusPG error: %v", err)
+		}
+	} else {
+		_, err := h.pool.Exec(context.Background(),
+			`UPDATE agentnet_spawns SET status=$1 WHERE spawn_id=$2`, status, spawnID)
+		if err != nil {
+			log.Printf("agentnet: updateSpawnStatusPG error: %v", err)
+		}
+	}
+}
+
+// ── Memory PG ──────────────────────────────────────────────────────────
+
+func (h *agentNetHandler) createMemoryPG(r *http.Request, entry *SharedMemoryEntry) {
+	_, err := h.pool.Exec(r.Context(),
+		`INSERT INTO agentnet_shared_memory (id, agent_id, content, intent, target, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6)`,
+		entry.ID, entry.AgentID, entry.Content, entry.Intent, entry.Target, entry.Timestamp)
+	if err != nil {
+		log.Printf("agentnet: createMemoryPG error: %v", err)
+	}
+}
+
+func (h *agentNetHandler) listMemoryPG(r *http.Request, agentFilter, intentFilter string, limit int) []SharedMemoryEntry {
+	query := `SELECT id, agent_id, content, intent, target, created_at
+	          FROM agentnet_shared_memory WHERE 1=1`
+	args := []any{}
+	argIdx := 1
+
+	if agentFilter != "" {
+		query += " AND agent_id=$" + itoa(argIdx)
+		args = append(args, agentFilter)
+		argIdx++
+	}
+	if intentFilter != "" {
+		query += " AND intent=$" + itoa(argIdx)
+		args = append(args, intentFilter)
+		argIdx++
+	}
+	query += " ORDER BY created_at DESC LIMIT $" + itoa(argIdx)
+	args = append(args, limit)
+
+	rows, err := h.pool.Query(r.Context(), query, args...)
+	if err != nil {
+		log.Printf("agentnet: listMemoryPG error: %v", err)
+		return []SharedMemoryEntry{}
+	}
+	defer rows.Close()
+
+	var results []SharedMemoryEntry
+	for rows.Next() {
+		m := SharedMemoryEntry{}
+		var ts time.Time
+		if err := rows.Scan(&m.ID, &m.AgentID, &m.Content, &m.Intent, &m.Target, &ts); err != nil {
+			log.Printf("agentnet: listMemoryPG scan error: %v", err)
+			continue
+		}
+		m.Timestamp = ts.Format(time.RFC3339)
+		results = append(results, m)
+	}
+	return results
+}
+
+// ── Heartbeat PG ───────────────────────────────────────────────────────
+
+func (h *agentNetHandler) heartbeatPG(r *http.Request, agentID string, currentLoad int, status string) {
+	_, err := h.pool.Exec(r.Context(),
+		`UPDATE agentnet_capabilities SET last_heartbeat=now(), current_load=$1, status=$2 WHERE agent_id=$3`,
+		currentLoad, status, agentID)
+	if err != nil {
+		log.Printf("agentnet: heartbeatPG error: %v", err)
+	}
+}
+
+// ── Stats PG ───────────────────────────────────────────────────────────
+
+func (h *agentNetHandler) statsPG(r *http.Request) AgentNetStats {
+	stats := AgentNetStats{
+		AgentByStatus: make(map[string]int),
+		TasksByStatus: make(map[string]int),
+	}
+
+	// Agent stats
+	h.pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM agentnet_capabilities`).Scan(&stats.TotalAgents)
+	h.pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM agentnet_capabilities WHERE status != 'offline'`).Scan(&stats.ActiveAgents)
+	h.pool.QueryRow(r.Context(),
+		`SELECT COALESCE(AVG(quality_score), 0) FROM agentnet_capabilities`).Scan(&stats.AvgQualityScore)
+
+	rows, _ := h.pool.Query(r.Context(),
+		`SELECT status, COUNT(*) FROM agentnet_capabilities GROUP BY status`)
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var s string
+			var c int
+			if rows.Scan(&s, &c) == nil {
+				stats.AgentByStatus[s] = c
+			}
+		}
+	}
+
+	// Task stats
+	h.pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM agentnet_tasks`).Scan(&stats.TotalTasks)
+	rows2, _ := h.pool.Query(r.Context(),
+		`SELECT status, COUNT(*) FROM agentnet_tasks GROUP BY status`)
+	if rows2 != nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var s string
+			var c int
+			if rows2.Scan(&s, &c) == nil {
+				stats.TasksByStatus[s] = c
+			}
+		}
+	}
+
+	// DAG stats
+	h.pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM agentnet_dags WHERE status='running'`).Scan(&stats.ActiveDAGs)
+
+	// Spawn stats
+	h.pool.QueryRow(r.Context(),
+		`SELECT COUNT(*) FROM agentnet_spawns WHERE status IN ('created','running')`).Scan(&stats.ActiveSpawns)
+
+	// Memory stats
+	h.pool.QueryRow(r.Context(), `SELECT COUNT(*) FROM agentnet_shared_memory`).Scan(&stats.MemoryEntries)
+
+	return stats
+}
+
+// ── Topology PG ────────────────────────────────────────────────────────
+
+func (h *agentNetHandler) topologyPG(r *http.Request) TopologyResponse {
+	var topo TopologyResponse
+
+	// Agents as nodes
+	rows, err := h.pool.Query(r.Context(),
+		`SELECT agent_id, display_name, status, quality_score, current_load, max_concurrent, capabilities
+		 FROM agentnet_capabilities`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, name, status string
+			var quality float64
+			var load, maxLoad int
+			var caps []string
+			if rows.Scan(&id, &name, &status, &quality, &load, &maxLoad, &caps) == nil {
+				topo.Nodes = append(topo.Nodes, TopologyNode{
+					ID:          id,
+					Label:       name,
+					Type:        "agent",
+					Status:      status,
+					Quality:     quality,
+					Load:        load,
+					MaxLoad:     maxLoad,
+					Description: strings.Join(caps, ", "),
+				})
+			}
+		}
+	}
+
+	// Tasks as nodes
+	rows2, err2 := h.pool.Query(r.Context(),
+		`SELECT task_id, description, required_capability, status, parent_task_id
+		 FROM agentnet_tasks LIMIT 200`)
+	if err2 == nil {
+		defer rows2.Close()
+		for rows2.Next() {
+			var id, desc, reqCap, status string
+			var parentTaskID *string
+			if rows2.Scan(&id, &desc, &reqCap, &status, &parentTaskID) == nil {
+				topo.Nodes = append(topo.Nodes, TopologyNode{
+					ID:          id,
+					Label:       desc,
+					Type:        "task",
+					Status:      status,
+					Description: reqCap,
+				})
+				if parentTaskID != nil && *parentTaskID != "" {
+					topo.Edges = append(topo.Edges, TopologyEdge{
+						From:   *parentTaskID,
+						To:     id,
+						Label:  "subtask",
+						Status: status,
+					})
+				}
+			}
+		}
+	}
+
+	// Spawn edges
+	rows3, err3 := h.pool.Query(r.Context(),
+		`SELECT spawn_id, parent_id, child_id, child_name, status
+		 FROM agentnet_spawns LIMIT 200`)
+	if err3 == nil {
+		defer rows3.Close()
+		for rows3.Next() {
+			var spawnID, parentID, childID, childName, status string
+			if rows3.Scan(&spawnID, &parentID, &childID, &childName, &status) == nil {
+				topo.Nodes = append(topo.Nodes, TopologyNode{
+					ID:    childID,
+					Label: childName,
+					Type:  "agent",
+					Status: func() string {
+						if status == "destroyed" {
+							return "offline"
+						}
+						return "idle"
+					}(),
+				})
+				topo.Edges = append(topo.Edges, TopologyEdge{
+					From:   parentID,
+					To:     childID,
+					Label:  "spawned",
+					Status: status,
+				})
+			}
+		}
+	}
+
+	topo.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return topo
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -1181,4 +1922,17 @@ func max(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+// nilIfEmpty returns nil for empty strings, used for nullable PG columns.
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// itoa converts int to string for dynamic SQL $N placeholders.
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }
