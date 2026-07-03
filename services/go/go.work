@@ -10,6 +10,7 @@ use (
 	./audit-log-service
 	./iam-service
 	./mcp-gateway
+	./sandbox-service
 	./shared/obs
 	./shared/state
 	./shared/eventbus

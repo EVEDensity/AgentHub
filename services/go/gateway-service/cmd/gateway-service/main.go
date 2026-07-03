@@ -353,6 +353,11 @@ func main() {
 	mux.Handle("/platform/mcp/", mcpProxy)
 	mux.Handle("/platform/mcp", mcpProxy)
 
+	// ── A2A Protocol (P2-2) ─────────────────────────────────────────
+	a2aBaseURL := getenv("PUBLIC_BASE_URL", "http://localhost:8081")
+	a2a := newA2AHandler(a2aBaseURL)
+	mux.Handle("/platform/a2a/", http.StripPrefix("/platform/a2a", a2a))
+
 	// ── API Keys + Public API ─────────────────────────────────────
 	apiKeys := newAPIKeyHandler()
 	mux.Handle("/platform/api-keys", apiKeys)

@@ -1458,6 +1458,97 @@ export interface JSONRPCResponse {
   };
 }
 
+// ── A2A Protocol Types (P2-2) ──────────────────────────────────────────
+
+export interface A2AAgentCard {
+  protocolVersion: string;
+  name: string;
+  description: string;
+  url: string;
+  provider?: {
+    name?: string;
+    url?: string;
+    organization?: string;
+  };
+  capabilities: {
+    streaming: boolean;
+    pushNotifications: boolean;
+    stateTransitionHistory: boolean;
+    multimodal?: boolean;
+    codeExecution?: boolean;
+  };
+  skills: A2ASkill[];
+  endpoints: {
+    taskApi: string;
+    streaming?: string;
+    webhookUrl?: string;
+  };
+  authSchemes?: A2AAuthScheme[];
+  version?: string;
+  documentation?: string;
+  iconUrl?: string;
+  tenantId?: string;
+  source?: 'internal' | 'external';
+  status?: 'active' | 'inactive' | 'error';
+  lastSeenAt?: string;
+  createdAt?: string;
+  tags?: string[];
+}
+
+export interface A2ASkill {
+  id: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  examples?: string[];
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+}
+
+export interface A2AAuthScheme {
+  type: 'bearer' | 'oauth2' | 'apiKey';
+  description?: string;
+  tokenUrl?: string;
+  scopes?: string[];
+}
+
+export interface A2ATask {
+  id: string;
+  sessionId?: string;
+  status: 'pending' | 'working' | 'completed' | 'failed' | 'cancelled';
+  message?: {
+    role: string;
+    parts: Array<{
+      type: 'text' | 'file' | 'data';
+      text?: string;
+      file?: { name?: string; mimeType?: string; bytes?: string; url?: string };
+      data?: Record<string, unknown>;
+    }>;
+  };
+  artifacts?: A2AArtifact[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface A2AArtifact {
+  artifactId: string;
+  name: string;
+  parts: Array<{
+    type: string;
+    text?: string;
+    data?: Record<string, unknown>;
+  }>;
+}
+
+export interface A2ADiscoveryQuery {
+  capabilities?: string[];
+}
+
+export interface A2ADiscoveryResponse {
+  agents: A2AAgentCard[];
+  count: number;
+}
+
 // ── RAG Document Search Types (P1-1) ──────────────────────────────────
 
 export type RAGSourceType = 'project_docs' | 'api_docs' | 'uploaded_docs' | 'code_repos' | 'sessions' | 'artifacts';

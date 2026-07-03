@@ -2,9 +2,11 @@
 
 import { useState, useEffect, type JSX, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '../../stores/authStore';
 import { useAdminStore, MENU_META, MENU_GROUPS, type MenuItem } from '../../stores/adminStore';
 import { WorkspaceSelector } from '../../components/admin/WorkspaceSelector';
+import { I18nProvider, LocaleSwitcher } from '../../lib/i18n';
 
 function UserAvatar({ name }: { name: string }): JSX.Element {
   const initial = (name || '?')[0].toUpperCase();
@@ -137,6 +139,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <LocaleSwitcher />
               <span className="hidden sm:inline-flex tag tag-warm text-xs">{user?.name}</span>
               <a className="btn-secondary shrink-0 text-xs md:text-sm transition-all active:scale-[0.98]" href="/">← 返回</a>
             </div>
@@ -146,7 +149,18 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
         {/* Content */}
         <main className="flex-1 overflow-hidden min-h-0 px-4 md:px-6 lg:px-8 py-4 md:py-8">
           <div className="mx-auto max-w-7xl h-full flex flex-col space-y-4 md:space-y-6 overflow-y-auto">
-            {children}
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={activeMenu}
+                initial={{ opacity: 0, y: 12, scale: 0.995 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.995 }}
+                transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                style={{ flex: 1, minHeight: 0 }}
+              >
+                {children}
+              </motion.div>
+            </AnimatePresence>
           </div>
         </main>
       </div>

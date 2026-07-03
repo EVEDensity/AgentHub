@@ -146,6 +146,20 @@ const RAGDocViewer = dynamic(() => import('../../components/admin/RAGDocViewer')
     </div>
   ),
 });
+const A2AAgentManager = dynamic(() => import('../../components/admin/A2AAgentManager'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const ABTestManager = dynamic(() => import('../../components/admin/ABTestManager'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
 
 export default function AdminPage(): JSX.Element {
   // ── Read from stores ────────────────────────────────────────────
@@ -472,6 +486,10 @@ export default function AdminPage(): JSX.Element {
         return <ModuleRelationshipGraph />;
       case 'RAG 检索':
         return <RAGDocViewer authHeaders={authHeaders} setNotice={setNotice} />;
+      case 'A2A 互操作':
+        return <A2AAgentManager authHeaders={authHeaders} setNotice={setNotice} />;
+      case 'A/B 测试':
+        return <ABTestManager />;
       default:
         return (
           <section className="card p-6">

@@ -11,6 +11,7 @@
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
     "@tanstack/react-virtual": "^3.11.3",
+    "framer-motion": "^12.42.2",
     "konva": "^9.3.18",
     "lucide-react": "^1.16.0",
     "next": "^13.5.7",
