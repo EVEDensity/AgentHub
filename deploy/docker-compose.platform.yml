@@ -59,6 +59,7 @@ services:
     image: prom/prometheus:latest
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./agenthub_rules.yml:/etc/prometheus/agenthub_rules.yml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
@@ -78,6 +79,8 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
     volumes:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
     ports: ["3001:3000"]
     depends_on: [prometheus, tempo, loki]
 
@@ -97,6 +100,17 @@ services:
       - /var/log:/var/log:ro
     command: ["-config.file=/etc/promtail/config.yml"]
     depends_on: [loki]
+
+  # Sprint K3: Alertmanager — centralized alert routing with P0-P3 severity.
+  alertmanager:
+    image: prom/alertmanager:latest
+    volumes:
+      - ./agenthub_alerts.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--web.external-url=http://localhost:9093"
+    ports: ["9093:9093"]
+    depends_on: [prometheus]
 
   # ═══════════════════════════════════════════════════════════════════
   #  GO ONLINE TIER

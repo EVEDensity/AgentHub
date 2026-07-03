@@ -183,7 +183,7 @@ func rateLimitMiddleware(rl *MultiLayerRateLimiter, next http.Handler) http.Hand
 
 		// Bypass monitoring and health paths.
 		switch r.URL.Path {
-		case "/healthz", "/metrics", "/profile", "/stats":
+		case "/healthz", "/healthz/readiness", "/metrics", "/profile", "/stats":
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -192,6 +192,7 @@ func rateLimitMiddleware(rl *MultiLayerRateLimiter, next http.Handler) http.Hand
 
 		// Layer 1+2: user and tenant (all paths)
 		if rejected := rl.CheckUser(p.UserID, p.TenantID); rejected != "" {
+			rateLimitHits.WithLabelValues(string(rejected)).Inc()
 			w.Header().Set("Retry-After", "1")
 			w.Header().Set("X-RateLimit-Layer", string(rejected))
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -216,6 +217,7 @@ func rateLimitMiddleware(rl *MultiLayerRateLimiter, next http.Handler) http.Hand
 				}
 			}
 			if rejected := rl.CheckAgent(agentRole, toolName); rejected != "" {
+				rateLimitHits.WithLabelValues(string(rejected)).Inc()
 				w.Header().Set("Retry-After", "1")
 				w.Header().Set("X-RateLimit-Layer", string(rejected))
 				w.WriteHeader(http.StatusTooManyRequests)

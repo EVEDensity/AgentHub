@@ -161,6 +161,22 @@ const ABTestManager = dynamic(() => import('../../components/admin/ABTestManager
   ),
 });
 
+const CostAnalytics = dynamic(() => import('../../components/admin/CostAnalytics'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+
+const SloDashboard = dynamic(() => import('../../components/admin/SloDashboard'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+
 export default function AdminPage(): JSX.Element {
   // ── Read from stores ────────────────────────────────────────────
   const user = useAuthStore((s) => s.user);
@@ -490,6 +506,10 @@ export default function AdminPage(): JSX.Element {
         return <A2AAgentManager authHeaders={authHeaders} setNotice={setNotice} />;
       case 'A/B 测试':
         return <ABTestManager />;
+      case '成本分析':
+        return <CostAnalytics />;
+      case 'SLO 仪表板':
+        return <SloDashboard />;
       default:
         return (
           <section className="card p-6">

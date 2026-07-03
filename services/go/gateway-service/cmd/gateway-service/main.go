@@ -25,8 +25,30 @@ var authDenied = prometheus.NewCounterVec(
 	[]string{"reason"},
 )
 
+// Sprint K1: Additional gateway metrics for observability completeness.
+var (
+	// rateLimitHits counts requests rejected at each rate-limiting layer.
+	rateLimitHits = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "gateway_rate_limit_hits_total", Help: "Requests rejected by rate limiter, per layer."},
+		[]string{"layer"},
+	)
+	// sensitiveConfirm counts sensitive-tool confirm/deny decisions.
+	sensitiveConfirm = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "gateway_sensitive_confirm_total", Help: "Sensitive tool confirmation decisions."},
+		[]string{"risk_level", "decision"},
+	)
+	// sandboxLifecycle counts sandbox container state transitions.
+	sandboxLifecycle = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "gateway_sandbox_lifecycle_total", Help: "Sandbox container lifecycle state transitions."},
+		[]string{"status"},
+	)
+)
+
 func init() {
 	obs.MustRegister(authDenied)
+	obs.MustRegister(rateLimitHits)
+	obs.MustRegister(sensitiveConfirm)
+	obs.MustRegister(sandboxLifecycle)
 }
 
 type ServiceProfile struct {
@@ -173,9 +195,49 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+	// Sprint K6: Enhanced health check — reports PG and NATS dependency status.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		pgOK := true
+		if pool != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := pool.Ping(ctx); err != nil {
+				pgOK = false
+			}
+		}
+		natsOK := bus.Conn().IsConnected()
+		status := http.StatusOK
+		health := map[string]any{"status": "ok", "pg": pgOK, "nats": natsOK}
+		if !pgOK || !natsOK {
+			status = http.StatusServiceUnavailable
+			health["status"] = "degraded"
+		}
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(health)
+	})
+	mux.HandleFunc("/healthz/readiness", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		ready := map[string]any{"status": "ready", "pg": "connected", "nats": bus.Conn().IsConnected()}
+		code := http.StatusOK
+		if pool != nil {
+			if err := pool.Ping(ctx); err != nil {
+				ready["pg"] = err.Error()
+				ready["status"] = "not_ready"
+				code = http.StatusServiceUnavailable
+			}
+		} else {
+			ready["pg"] = "disabled"
+		}
+		if !bus.Conn().IsConnected() {
+			ready["nats"] = false
+			ready["status"] = "not_ready"
+			code = http.StatusServiceUnavailable
+		}
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(ready)
 	})
 	mux.HandleFunc("/profile", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -402,9 +464,14 @@ func main() {
 	mux.Handle("/agentnet", agentNet)
 
 	// ── Digital Identity + Sandbox (Sprint J) ──────────────────────
-	digitalID := newDigitalIdentityHandler(bus)
+	digitalID := newDigitalIdentityHandler(bus, pool)
 	mux.Handle("/digital/", digitalID)
 	mux.Handle("/digital", digitalID)
+
+		// ── Audit log (Sprint J4) ─────────────────────────────────────
+		auditH := newAuditHandler(pool)
+		mux.Handle("/audit/", auditH)
+		mux.Handle("/audit", auditH)
 
 	// ── Logs proxy (Sprint J4) ────────────────────────────────────
 	logs := newLogsHandler()
