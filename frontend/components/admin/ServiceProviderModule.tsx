@@ -1,4 +1,4 @@
-import { type FormEvent, type JSX } from 'react';
+import { type FormEvent, type JSX, useState } from 'react';
 import dynamic from 'next/dynamic';
 import type { Agent } from '../../types';
 import { PLATFORM_LABELS, PLATFORM_COLORS } from '../../types';
@@ -8,6 +8,10 @@ const LocalAgentModal = dynamic(() => import('./LocalAgentModal'), {
   loading: () => null,
 });
 const AgentEditModal = dynamic(() => import('./AgentEditModal'), {
+  ssr: false,
+  loading: () => null,
+});
+const AgentVersionHistory = dynamic(() => import('./AgentVersionHistory'), {
   ssr: false,
   loading: () => null,
 });
@@ -68,6 +72,7 @@ export interface ServiceProviderModuleProps {
 
 export default function ServiceProviderModule(props: ServiceProviderModuleProps): JSX.Element {
   const isDefault = (a: Agent) => a.agentId === props.defaultChatAgent;
+  const [versionAgentId, setVersionAgentId] = useState<string | null>(null);
 
   return (
     <section className="space-y-4">
@@ -190,6 +195,13 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                   )}
                   <button className="btn-ghost px-3 py-1 text-sm" onClick={() => props.startEditAgent(a)}>编辑</button>
                   <button className="btn-ghost px-3 py-1 text-sm" onClick={() => { void props.testAgent(a.agentId); }}>测试</button>
+                  <button
+                    className={`btn-ghost px-3 py-1 text-sm ${versionAgentId === a.agentId ? 'text-primary-600 bg-primary-50' : ''}`}
+                    onClick={() => setVersionAgentId(versionAgentId === a.agentId ? null : a.agentId)}
+                    title="版本历史"
+                  >
+                    <span className="material-symbols-outlined text-[14px] align-middle">history</span> 版本
+                  </button>
                   {a.agentId !== 'Orchestrator' && (
                     <button className="btn-ghost px-3 py-1 text-sm text-red-500" onClick={() => { void props.removeAgent(a.agentId); }}>删除</button>
                   )}
@@ -200,6 +212,12 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                   {test.message}
                 </div>
               ) : null}
+              {/* Version History Panel (P1-6) */}
+              {versionAgentId === a.agentId && (
+                <div className="mt-3">
+                  <AgentVersionHistory agentId={a.agentId} onClose={() => setVersionAgentId(null)} />
+                </div>
+              )}
             </div>
           );
         })}

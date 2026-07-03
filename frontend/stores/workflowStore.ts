@@ -6,7 +6,7 @@ import { useAdminStore } from './adminStore';
 
 export interface FlowNode {
   id: string;
-  type: 'start' | 'agent' | 'tool' | 'ifelse' | 'end';
+  type: 'start' | 'agent' | 'tool' | 'ifelse' | 'end' | 'code' | 'http' | 'knowledge' | 'human';
   name: string;
   description: string;
   x: number;
@@ -14,6 +14,11 @@ export interface FlowNode {
   agent?: string;
   layer?: string;
   dependencies: string[];
+  // P1-4: Node-specific configs
+  codeConfig?: { language?: string; code?: string; timeout?: number };
+  httpConfig?: { method?: string; url?: string; headers?: string; body?: string; timeout?: number; retry?: number };
+  knowledgeConfig?: { collectionId?: string; query?: string; topK?: number; scoreThreshold?: number };
+  humanConfig?: { prompt?: string; assignee?: string; timeout?: number };
 }
 
 export interface FlowEdge {

@@ -38,9 +38,24 @@ class Settings(BaseSettings):
     # 单次 ingestion 最大 chunk 数，防止超大文档打爆下游。
     max_chunks_per_ingest: int = 500
 
+    # ── 多模态 (P1-5) ────────────────────────────────────────────────
+    # 图片 embedding 模型名（model-adapter 需支持此模型）。
+    multimodal_image_model: str = "clip-vit-base-patch32"
+    # 是否启用多模态（图片 embedding + 图片搜索）。
+    multimodal_enabled: bool = True
+    # 图片 collection 后缀（实际 collection 名为 {name}_images）。
+    image_collection_suffix: str = "_images"
+    # 最大图片尺寸（像素，超出会等比缩放）。
+    max_image_dim: int = 1024
+
     @property
     def collections(self) -> list[str]:
         return [c.strip() for c in self.collections_csv.split(",") if c.strip()]
+
+    @property
+    def image_collections(self) -> list[str]:
+        """Return the list of image collection names."""
+        return [c + self.image_collection_suffix for c in self.collections]
 
 
 settings = Settings()

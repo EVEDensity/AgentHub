@@ -1,9 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { Circle, Group, Layer, Line, Rect, Stage, Text, Transformer, Arrow } from 'react-konva';
 import type Konva from 'konva';
+import NodeConfigPanel from './NodeConfigPanel';
 
-type T='start'|'agent'|'tool'|'decision'|'end';
-type N={id:string;type:T;title:string;desc:string;x:number;y:number;w:number;h:number;color:string;z:number;agent?:string;layer?:string};
+type T='start'|'agent'|'tool'|'decision'|'end'|'code'|'http'|'knowledge'|'human';
+type N={
+  id:string;type:T;title:string;desc:string;x:number;y:number;w:number;h:number;
+  color:string;z:number;agent?:string;layer?:string;
+  // P1-4: node-specific configs
+  codeConfig?:{language:string;code:string;timeout?:number};
+  httpConfig?:{method:string;url:string;headers?:string;body?:string;timeout?:number;retry?:number};
+  knowledgeConfig?:{collectionId:string;query:string;topK?:number;scoreThreshold?:number};
+  humanConfig?:{prompt:string;options?:string;assignee?:string;timeout?:number};
+  // P1-4: variable interpolation flag for desc/agent fields
+  useVariables?:boolean;
+};
 type E={id:string;from:string;to:string;label?:string};
 type D={nodes:N[];edges:E[];viewport:{x:number;y:number;scale:number}};
 
@@ -12,16 +23,25 @@ interface EmbedData {
   name: string;
   description: string;
   triggerKeywords: string[];
-  nodes: { id:string; type:string; name:string; description:string; x:number; y:number; agent?:string; layer?:string; dependencies:string[] }[];
+  nodes: { id:string; type:string; name:string; description:string; x:number; y:number; agent?:string; layer?:string; dependencies:string[]; codeConfig?:unknown; httpConfig?:unknown; knowledgeConfig?:unknown; humanConfig?:unknown }[];
   edges: { from:string; to:string; label?:string }[];
   isDefault: boolean;
   active: boolean;
 }
 
-const CID='agent-flow',W=260,H=128,G=28;
-const lib:Array<{type:T;title:string;desc:string;color:string}>=[
- {type:'start',title:'Start',desc:'触发工作流输入',color:'#22A06B'},{type:'agent',title:'Agent',desc:'LLM 角色节点',color:'#4F6CF7'},
- {type:'tool',title:'Tool',desc:'调用外部工具/API',color:'#8B5CF6'},{type:'decision',title:'IF / ELSE',desc:'条件分支判断',color:'#D97706'},{type:'end',title:'End',desc:'输出最终结果',color:'#64748B'}];
+const CID='agent-flow',W=268,H=148,G=28;
+const lib:Array<{type:T;title:string;desc:string;color:string;icon:string}>=[
+ {type:'start',title:'Start',desc:'触发工作流输入',color:'#22A06B',icon:'play_circle'},
+ {type:'agent',title:'Agent',desc:'LLM 角色节点',color:'#4F6CF7',icon:'smart_toy'},
+ {type:'tool',title:'Tool',desc:'调用外部工具/API',color:'#8B5CF6',icon:'build'},
+ {type:'decision',title:'IF / ELSE',desc:'条件分支判断',color:'#D97706',icon:'account_tree'},
+ {type:'end',title:'End',desc:'输出最终结果',color:'#64748B',icon:'flag'},
+ // P1-4: New node types
+ {type:'code',title:'Code',desc:'执行代码脚本 (Py/JS/Bash/SQL)',color:'#0EA5E9',icon:'code'},
+ {type:'http',title:'HTTP',desc:'发送 HTTP API 请求',color:'#EC4899',icon:'http'},
+ {type:'knowledge',title:'Knowledge',desc:'检索知识库文档',color:'#14B8A6',icon:'book_5'},
+ {type:'human',title:'Human',desc:'人工审批/确认节点',color:'#F59E0B',icon:'person_check'},
+];
 const init:D={viewport:{x:0,y:0,scale:1},nodes:[
  {id:'start',type:'start',title:'Start',desc:'接收用户需求',x:100,y:210,w:W,h:H,color:'#22A06B',z:0},
  {id:'orchestrator',type:'agent',title:'Orchestrator',desc:'拆解任务并调度 Agent',x:440,y:210,w:W,h:H,color:'#4F6CF7',z:1},
@@ -47,10 +67,16 @@ function edgePath(a:N,b:N){
 
 function embedToDoc(ed:EmbedData):D{
   const nodes:N[]=ed.nodes.map((n,i)=>{
-    const typeMap:Record<string,T>={start:'start',agent:'agent',tool:'tool',ifelse:'decision',decision:'decision',end:'end'};
+    const typeMap:Record<string,T>={start:'start',agent:'agent',tool:'tool',ifelse:'decision',decision:'decision',end:'end',code:'code',http:'http',knowledge:'knowledge',human:'human'};
     const t:T=typeMap[n.type]||'agent';
-    const colorMap:Record<T,string>={start:'#22A06B',agent:'#4F6CF7',tool:'#8B5CF6',decision:'#D97706',end:'#64748B'};
-    return{id:n.id,type:t,title:n.name,desc:n.description,x:n.x||300+Math.random()*400,y:n.y||200+Math.random()*300,w:W,h:H,color:n.type==='tool'?colorMap.tool:colorMap[t],z:i,agent:n.agent,layer:n.layer};
+    const colorMap:Record<T,string>={start:'#22A06B',agent:'#4F6CF7',tool:'#8B5CF6',decision:'#D97706',end:'#64748B',code:'#0EA5E9',http:'#EC4899',knowledge:'#14B8A6',human:'#F59E0B'};
+    return{
+      id:n.id,type:t,title:n.name,desc:n.description,x:n.x||300+Math.random()*400,y:n.y||200+Math.random()*300,w:W,h:H,
+      color:n.type==='tool'?colorMap.tool:n.type==='code'?colorMap.code:n.type==='http'?colorMap.http:n.type==='knowledge'?colorMap.knowledge:n.type==='human'?colorMap.human:colorMap[t],
+      z:i,agent:n.agent,layer:n.layer,
+      codeConfig:n.codeConfig as N['codeConfig'],httpConfig:n.httpConfig as N['httpConfig'],
+      knowledgeConfig:n.knowledgeConfig as N['knowledgeConfig'],humanConfig:n.humanConfig as N['humanConfig'],
+    };
   });
   const edges:E[]=ed.edges.map((e,i)=>({id:`ee-${i}`,from:e.from,to:e.to,label:e.label}));
   return{viewport:{x:0,y:0,scale:1},nodes,edges};
@@ -66,14 +92,15 @@ function docToEmbed(doc:D,embedId?:number,name?:string,desc?:string,keys?:string
     triggerKeywords:(keys||'').split(',').map(k=>k.trim()).filter(Boolean),
     nodes:doc.nodes.map(n=>({
       id:n.id,type:n.type==='decision'?'ifelse':n.type,name:n.title,description:n.desc,
-      x:n.x,y:n.y,agent:n.agent||n.title,layer:n.layer||'domain',dependencies:deps.get(n.id)||[]
+      x:n.x,y:n.y,agent:n.agent||n.title,layer:n.layer||'domain',dependencies:deps.get(n.id)||[],
+      codeConfig:n.codeConfig,httpConfig:n.httpConfig,knowledgeConfig:n.knowledgeConfig,humanConfig:n.humanConfig,
     })),
     edges:doc.edges.map(e=>({from:e.from,to:e.to,label:e.label})),
     isDefault:isDefault||false,active:active??true
   };
 }
 
-function normalize(d:D|null|undefined):D{if(!d?.nodes?.length)return init;return{viewport:{x:Number.isFinite(d.viewport?.x)?d.viewport.x:0,y:Number.isFinite(d.viewport?.y)?d.viewport.y:0,scale:lim(Number.isFinite(d.viewport?.scale)?d.viewport.scale:1)},nodes:d.nodes.map((n,i)=>({...n,w:Math.max(200,n.w||W),h:Math.max(100,n.h||H),z:Number.isFinite(n.z)?n.z:i})),edges:Array.isArray(d.edges)?d.edges:[]}}
+function normalize(d:D|null|undefined):D{if(!d?.nodes?.length)return init;return{viewport:{x:Number.isFinite(d.viewport?.x)?d.viewport.x:0,y:Number.isFinite(d.viewport?.y)?d.viewport.y:0,scale:lim(Number.isFinite(d.viewport?.scale)?d.viewport.scale:1)},nodes:d.nodes.map((n,i)=>({...n,w:Math.max(200,n.w||W),h:Math.max(100,n.h||H),z:Number.isFinite(n.z)?n.z:i,codeConfig:n.codeConfig,httpConfig:n.httpConfig,knowledgeConfig:n.knowledgeConfig,humanConfig:n.humanConfig})),edges:Array.isArray(d.edges)?d.edges:[]}}
 
 export default function AgentCanvas(props?:{
   embedded?:boolean;initialData?:EmbedData;
@@ -106,7 +133,7 @@ export default function AgentCanvas(props?:{
  function redo(){if(hiRef.current<hist.length-1){hiRef.current+=1;setHi(hiRef.current);setDoc(cp(hist[hiRef.current]))}}
  function del(){if(!sel)return;commit({...doc,nodes:doc.nodes.filter(n=>n.id!==sel),edges:doc.edges.filter(e=>e.from!==sel&&e.to!==sel)});setSel('');setFrom('');fromRef.current='';setMsg('已删除节点与关联连线')}
  function dup(){if(!sn)return;const n={...sn,id:`${sn.id}-copy-${Date.now()}`,title:`${sn.title} Copy`,x:sn.x+40,y:sn.y+40,z:doc.nodes.length+1};commit({...doc,nodes:[...doc.nodes,n]});setSel(n.id)}
- function add(b:(typeof lib)[number]){const i=doc.nodes.length+1,n:N={id:`${b.type}-${Date.now()}`,type:b.type,title:b.title==='Agent'?`Agent ${i}`:b.title,desc:b.desc,x:190+i*36,y:140+i*28,w:W,h:H,color:b.color,z:i,agent:embedded&&b.type==='agent'?props?.agents?.[0]?.agentId:undefined,layer:b.type==='start'?'meta':b.type==='end'?'micro':'domain'};commit({...doc,nodes:[...doc.nodes,n]});setSel(n.id)}
+ function add(b:(typeof lib)[number]){const i=doc.nodes.length+1;const cfg:Partial<N>={};if(b.type==='code')cfg.codeConfig={language:'python',code:'# Write your code here\n',timeout:30000};else if(b.type==='http')cfg.httpConfig={method:'GET',url:'https://',timeout:10000,retry:1};else if(b.type==='knowledge')cfg.knowledgeConfig={collectionId:'',query:'',topK:5,scoreThreshold:.6};else if(b.type==='human')cfg.humanConfig={prompt:'请审核以下内容：',assignee:'',timeout:3600};const n:N={id:`${b.type}-${Date.now()}`,type:b.type,title:b.title==='Agent'?`Agent ${i}`:b.type==='code'?`Code ${i}`:b.type==='http'?`HTTP ${i}`:b.type==='knowledge'?`KB ${i}`:b.type==='human'?`Human ${i}`:b.title,desc:b.desc,x:190+i*36,y:140+i*28,w:W,h:H,color:b.color,z:i,agent:embedded&&b.type==='agent'?props?.agents?.[0]?.agentId:undefined,layer:b.type==='start'?'meta':b.type==='end'?'micro':'domain',...cfg};commit({...doc,nodes:[...doc.nodes,n]});setSel(n.id)}
  function link(to:string){const f=fromRef.current||from;if(!f){setFrom(to);fromRef.current=to;setMsg('连线模式：请选择目标节点完成业务关系');return}if(f===to){setFrom('');fromRef.current='';setMsg('已取消自连接');return}if(doc.edges.some(e=>e.from===f&&e.to===to)){setFrom('');fromRef.current='';setMsg('该流程关系已存在');return}const a=map.get(f),b=map.get(to),label=a?.type==='decision'?'branch':b?.type==='tool'?'call':'flow';commit({...doc,edges:[...doc.edges,{id:`e-${Date.now()}`,from:f,to,label}]});setMsg('连线已创建');setFrom('');fromRef.current=''}
 
  async function save(){
@@ -191,7 +218,7 @@ export default function AgentCanvas(props?:{
     <div className="space-y-2.5">{lib.map(b=><button key={b.type} className="group w-full rounded-xl border border-warm-150 bg-white p-4 text-left transition-all duration-200 hover:border-primary-200 hover:shadow-card hover:-translate-y-px" onClick={()=>add(b)}>
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{background:`${b.color}14`}}>
-          <span className="h-2.5 w-2.5 rounded-full" style={{background:b.color}}/>
+          <span className="material-symbols-outlined text-[18px]" style={{color:b.color}}>{b.icon}</span>
         </span>
         <div>
           <div className="text-sm font-semibold text-warm-800">{b.title}</div>
@@ -350,6 +377,8 @@ export default function AgentCanvas(props?:{
          <select className="input-field text-sm" value={sn.layer||'domain'} onChange={e=>patch(sn.id,{layer:e.target.value})}><option value="meta">Layer 1 · Meta</option><option value="domain">Layer 2 · Domain</option><option value="micro">Layer 3 · Micro</option></select>
         </div>
        </>}
+       {/* P1-4: New node type config panels */}
+       {embedded&&<NodeConfigPanel node={sn} onPatch={patch}/>}
        {embedded&&<div className="space-y-1.5">
         <label className="text-[11px] font-medium text-warm-400 uppercase tracking-wide">依赖节点</label>
         <div className="rounded-lg bg-warm-50 px-3 py-2 text-[11px] text-warm-500">{(depMap.get(sn.id)||[]).join(', ')||'无（通过连线自动推导）'}</div>

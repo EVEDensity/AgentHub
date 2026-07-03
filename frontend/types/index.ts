@@ -341,6 +341,107 @@ export interface WorkflowSummary {
   triggerKeywords: string[];
 }
 
+// ── Workflow Enhancement Types (P1-4) ──────────────────────────────
+
+/** Extended node types beyond the original 5 */
+export type WorkflowNodeType = 'start' | 'agent' | 'tool' | 'ifelse' | 'end' | 'code' | 'http' | 'knowledge' | 'human';
+
+/** Code execution config for 'code' nodes */
+export interface CodeNodeConfig {
+  language: 'python' | 'javascript' | 'bash' | 'sql';
+  code: string;
+  timeout?: number; // ms, default 30000
+  env?: Record<string, string>;
+}
+
+/** HTTP call config for 'http' nodes */
+export interface HttpNodeConfig {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  url: string;
+  headers?: Record<string, string>;
+  body?: string;        // supports {{variable}} interpolation
+  timeout?: number;
+  retry?: number;
+}
+
+/** Knowledge retrieval config for 'knowledge' nodes */
+export interface KnowledgeNodeConfig {
+  collectionId: string;
+  query: string;         // supports {{variable}} interpolation
+  topK?: number;
+  scoreThreshold?: number;
+  fusion?: 'hybrid' | 'semantic' | 'keyword';
+}
+
+/** Human approval config for 'human' nodes */
+export interface HumanNodeConfig {
+  prompt: string;        // shown to the human reviewer
+  options?: string[];    // predefined response options
+  timeout?: number;      // auto-approve/reject after timeout (seconds)
+  assignee?: string;     // specific user/role to assign
+}
+
+/** Variable reference in prompts/configs: {{node_id.output}} or {{node_id.field}} */
+export interface VariableReference {
+  raw: string;           // original {{...}} text
+  nodeId: string;
+  field: string;         // e.g., "output", "status", "result.code"
+  isResolved: boolean;
+  resolvedValue?: string;
+}
+
+/** Condition rule for ifelse branches */
+export type ConditionOperator = 'eq' | 'neq' | 'contains' | 'not_contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'regex' | 'exists' | 'empty';
+
+export interface ConditionRule {
+  id: string;
+  left: string;          // variable reference or literal
+  operator: ConditionOperator;
+  right: string;         // comparison value
+  label?: string;        // human-readable label for the edge
+}
+
+export interface BranchCondition {
+  id: string;
+  label: string;         // shown on the branch edge
+  rules: ConditionRule[];
+  logic: 'AND' | 'OR';   // how to combine multiple rules
+}
+
+/** Execution record for a workflow run */
+export interface WorkflowExecution {
+  id: string;
+  workflowId: number;
+  workflowName: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'awaiting_human';
+  triggeredBy: string;   // user message or manual trigger
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  nodeResults: NodeExecutionResult[];
+  error?: string;
+}
+
+export interface NodeExecutionResult {
+  nodeId: string;
+  nodeName: string;
+  nodeType: WorkflowNodeType;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'awaiting_human';
+  input?: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+}
+
+/** Variable scope for the {{node_id.output}} engine */
+export interface WorkflowVariableScope {
+  nodeOutputs: Record<string, unknown>;  // nodeId → output value
+  triggerInput?: string;                 // original user input
+  workflowParams?: Record<string, string>;
+}
+
 export interface AttachedFile {
   name: string;
   content?: string;
@@ -1221,6 +1322,140 @@ export interface RetrievalResult {
   source_id: string;
   collection: string;
   chunk_index: number;
+}
+
+// ── Agent Version Management Types (P1-6) ────────────────────────────
+
+export interface AgentVersion {
+  id: string;
+  agentId: string;
+  version: number;
+  snapshot: Record<string, unknown>;    // full agent config at this version
+  changeSummary: string;                 // human-readable summary of what changed
+  changedFields: string[];               // list of field keys that changed
+  createdBy: string;                     // user who triggered the save
+  createdAt: string;
+}
+
+export interface AgentVersionDiff {
+  versionA: number;
+  versionB: number;
+  fieldDiffs: AgentFieldDiff[];
+  createdAtA: string;
+  createdAtB: string;
+}
+
+export interface AgentFieldDiff {
+  field: string;
+  label: string;                         // human-readable field name
+  oldValue: unknown;
+  newValue: unknown;
+  type: 'added' | 'removed' | 'modified' | 'unchanged';
+}
+
+export interface AgentVersionListResponse {
+  agentId: string;
+  versions: AgentVersion[];
+  total: number;
+}
+
+export interface AgentRollbackRequest {
+  agentId: string;
+  targetVersion: number;
+}
+
+// ── MCP Gateway Types (P1-2) ───────────────────────────────────────────
+
+export interface MCPServerConfig {
+  id: string;
+  name: string;
+  description: string;
+  transport: 'stdio' | 'sse';
+  // STDIO transport
+  command?: string;          // e.g. "node", "python", "uvx"
+  args?: string[];           // e.g. ["server.js"]
+  env?: Record<string, string>;
+  // SSE transport
+  url?: string;              // e.g. "http://localhost:8099/mcp"
+  // Status
+  status: 'connected' | 'disconnected' | 'error' | 'unknown';
+  lastConnectedAt?: string;
+  errorMessage?: string;
+  // Metadata
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MCPToolInfo {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: string;
+    properties?: Record<string, {
+      type: string;
+      description?: string;
+      enum?: unknown[];
+      default?: unknown;
+    }>;
+    required?: string[];
+  };
+  serverId: string;
+  serverName: string;
+}
+
+export interface MCPResourceInfo {
+  uri: string;
+  name: string;
+  description: string;
+  mimeType?: string;
+  serverId: string;
+  serverName: string;
+}
+
+export interface MCPPromptInfo {
+  name: string;
+  description: string;
+  arguments?: Array<{
+    name: string;
+    description?: string;
+    required?: boolean;
+  }>;
+  serverId: string;
+  serverName: string;
+}
+
+export interface MCPToolCallResult {
+  content: Array<{
+    type: 'text' | 'image' | 'resource';
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  isError?: boolean;
+}
+
+export interface MCPServerListResponse {
+  servers: MCPServerConfig[];
+}
+
+// JSON-RPC 2.0 types used by MCP protocol
+export interface JSONRPCRequest {
+  jsonrpc: '2.0';
+  id?: number;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+export interface JSONRPCResponse {
+  jsonrpc: '2.0';
+  id: number;
+  result?: unknown;
+  error?: {
+    code: number;
+    message: string;
+    data?: unknown;
+  };
 }
 
 // ── RAG Document Search Types (P1-1) ──────────────────────────────────

@@ -9,6 +9,7 @@ use (
 	./stream-delivery-service
 	./audit-log-service
 	./iam-service
+	./mcp-gateway
 	./shared/obs
 	./shared/state
 	./shared/eventbus

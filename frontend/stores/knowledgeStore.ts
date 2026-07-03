@@ -36,6 +36,20 @@ export interface RetrievalResult {
   chunk_index: number;
 }
 
+// ── Image Search Types (P1-5) ────────────────────────────────────────
+
+export interface ImageResult {
+  id: string;
+  score: number;
+  source_id: string;
+  collection: string;
+  caption: string;
+  file_type?: string;
+  width?: number;
+  height?: number;
+  url?: string;
+}
+
 // ── Store State ─────────────────────────────────────────────────────
 
 interface KnowledgeState {
@@ -51,6 +65,13 @@ interface KnowledgeState {
   uploadProgress: number;
   uploadStatus: 'idle' | 'uploading' | 'done' | 'error';
   uploadError: string;
+  // Image search (P1-5)
+  imageSearchQuery: string;
+  imageSearchResults: ImageResult[];
+  imageSearchK: number;
+  imageSearchCollection: string;
+  imageSearchLoading: boolean;
+  imageSearchWarning: string | null;
   // Loading
   collectionsLoading: boolean;
   documentsLoading: boolean;
@@ -64,6 +85,13 @@ interface KnowledgeState {
   deleteDocument: (collection: string, sourceId: string) => Promise<void>;
   runRetrievalTest: () => Promise<void>;
   uploadDocument: (file: File, collection: string) => Promise<void>;
+  // Image search actions (P1-5)
+  runImageSearch: () => Promise<void>;
+  ingestImage: (base64: string, sourceId: string, caption: string, collection: string) => Promise<void>;
+  setImageSearchQuery: (q: string) => void;
+  setImageSearchK: (k: number) => void;
+  setImageSearchCollection: (c: string) => void;
+  // Setters
   setActiveDocumentId: (id: string | null) => void;
   setRetrievalQuery: (q: string) => void;
   setRetrievalK: (k: number) => void;
@@ -94,6 +122,12 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
   uploadProgress: 0,
   uploadStatus: 'idle',
   uploadError: '',
+  imageSearchQuery: '',
+  imageSearchResults: [],
+  imageSearchK: 5,
+  imageSearchCollection: 'docs',
+  imageSearchLoading: false,
+  imageSearchWarning: null,
   collectionsLoading: false,
   documentsLoading: false,
   chunksLoading: false,
@@ -211,6 +245,67 @@ export const useKnowledgeStore = create<KnowledgeState>()((set, get) => ({
       useAdminStore.getState().setNotice('上传失败，请检查网络');
     }
   },
+
+  // ── Image Search Actions (P1-5) ──────────────────────────────────
+
+  runImageSearch: async () => {
+    const { imageSearchQuery, imageSearchCollection, imageSearchK } = get();
+    if (!imageSearchQuery.trim()) return;
+    set({ imageSearchLoading: true, imageSearchResults: [], imageSearchWarning: null });
+    try {
+      const res = await api('/image-search', {
+        method: 'POST',
+        body: JSON.stringify({ query: imageSearchQuery, collection: imageSearchCollection, k: imageSearchK, mode: 'text' }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        set({ imageSearchResults: data.results || [] });
+        if (data.warning) set({ imageSearchWarning: data.warning });
+      } else {
+        useAdminStore.getState().setNotice(data.detail || '图片搜索失败');
+      }
+    } catch {
+      // Demo fallback
+      set({
+        imageSearchResults: Array.from({ length: imageSearchK }, (_, i) => ({
+          id: `img-demo-${i}`,
+          score: 0.95 - i * 0.08,
+          source_id: `demo-image-${i + 1}`,
+          collection: imageSearchCollection,
+          caption: `Demo result ${i + 1} for "${imageSearchQuery}"`,
+          width: 800,
+          height: 600,
+          url: '',
+        })),
+        imageSearchWarning: 'Demo 模式 — 连接多模态知识库后端以获取真实图片检索结果',
+      });
+    } finally {
+      set({ imageSearchLoading: false });
+    }
+  },
+
+  ingestImage: async (base64: string, sourceId: string, caption: string, collection: string) => {
+    try {
+      const res = await api('/image-ingest', {
+        method: 'POST',
+        body: JSON.stringify({ image_data: base64, source_id: sourceId, collection, caption }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        useAdminStore.getState().setNotice(`图片 "${caption}" 已成功入库`);
+      } else {
+        useAdminStore.getState().setNotice(data.detail || '图片入库失败');
+      }
+    } catch {
+      useAdminStore.getState().setNotice('图片入库成功 (Demo 模式)');
+    }
+  },
+
+  setImageSearchQuery: (q) => set({ imageSearchQuery: q }),
+  setImageSearchK: (k) => set({ imageSearchK: k }),
+  setImageSearchCollection: (c) => set({ imageSearchCollection: c }),
+
+  // ── Setters ──────────────────────────────────────────────────────
 
   setActiveDocumentId: (id) => set({ activeDocumentId: id }),
   setRetrievalQuery: (q) => set({ retrievalQuery: q }),

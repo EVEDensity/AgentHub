@@ -344,6 +344,15 @@ func main() {
 	mux.Handle("/platform/workspaces", workspaces)
 	mux.Handle("/platform/workspaces/", workspaces)
 
+	// ── Agent Versions (P1-6) ───────────────────────────────────────
+	agentVersions := newAgentVersionHandler()
+	mux.Handle("/platform/agent-versions/", agentVersions)
+
+	// ── MCP Gateway Proxy (P1-2) ────────────────────────────────────
+	mcpProxy := newMCPProxy(getenv("MCP_GATEWAY_URL", "http://127.0.0.1:8099"))
+	mux.Handle("/platform/mcp/", mcpProxy)
+	mux.Handle("/platform/mcp", mcpProxy)
+
 	// ── API Keys + Public API ─────────────────────────────────────
 	apiKeys := newAPIKeyHandler()
 	mux.Handle("/platform/api-keys", apiKeys)
