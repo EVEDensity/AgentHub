@@ -50,13 +50,82 @@ func (h *templateHandler) listTemplates(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// PG-connected path (reached when pool is wired, e.g. via future gateway PG integration)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"templates": []interface{}{}})
+	rows, err := h.pool.Query(r.Context(),
+		`SELECT id, tenant_id, name, description, category, icon, tags, source, version, author,
+		        workflow_json, prompt_json, tools_json, knowledge_json, agent_config, usage_count, rating,
+		        created_at, updated_at
+		 FROM platform_agent_templates
+		 ORDER BY source ASC, usage_count DESC`)
+	if err != nil {
+		log.Printf("template list error: %v", err)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"templates": []interface{}{}})
+		return
+	}
+	defer rows.Close()
+
+	templates := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		var id, tenantID, name, description, category, icon, source, version, author string
+		var workflowJSON, promptJSON, knowledgeJSON, agentConfig string
+		var tags, toolsJSON []string
+		var usageCount int
+		var rating float64
+		var createdAt, updatedAt interface{}
+
+		if err := rows.Scan(&id, &tenantID, &name, &description, &category, &icon, &tags,
+			&source, &version, &author, &workflowJSON, &promptJSON, &toolsJSON, &knowledgeJSON,
+			&agentConfig, &usageCount, &rating, &createdAt, &updatedAt); err != nil {
+			log.Printf("template row scan error: %v", err)
+			continue
+		}
+
+		templates = append(templates, map[string]interface{}{
+			"id": id, "tenant_id": tenantID, "name": name, "description": description,
+			"category": category, "icon": icon, "tags": tags, "source": source,
+			"version": version, "author": author, "workflow_json": workflowJSON,
+			"prompt_json": promptJSON, "tools_json": toolsJSON, "knowledge_json": knowledgeJSON,
+			"agent_config": agentConfig, "usage_count": usageCount, "rating": rating,
+			"created_at": createdAt, "updated_at": updatedAt,
+		})
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"templates": templates})
 }
 
-func (h *templateHandler) getTemplate(w http.ResponseWriter, _ *http.Request, _ string) {
-	// No PG on gateway — return 404; presets served from frontend fallback.
-	http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+func (h *templateHandler) getTemplate(w http.ResponseWriter, r *http.Request, id string) {
+	if h.pool == nil {
+		http.Error(w, `{"error":"database not available"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var tenantID, name, description, category, icon, source, version, author string
+	var workflowJSON, promptJSON, knowledgeJSON, agentConfig string
+	var tags, toolsJSON []string
+	var usageCount int
+	var rating float64
+	var createdAt, updatedAt interface{}
+
+	err := h.pool.QueryRow(r.Context(),
+		`SELECT id, tenant_id, name, description, category, icon, tags, source, version, author,
+		        workflow_json, prompt_json, tools_json, knowledge_json, agent_config, usage_count, rating,
+		        created_at, updated_at
+		 FROM platform_agent_templates WHERE id=$1`, id).
+		Scan(&id, &tenantID, &name, &description, &category, &icon, &tags,
+			&source, &version, &author, &workflowJSON, &promptJSON, &toolsJSON, &knowledgeJSON,
+			&agentConfig, &usageCount, &rating, &createdAt, &updatedAt)
+	if err != nil {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"id": id, "tenant_id": tenantID, "name": name, "description": description,
+		"category": category, "icon": icon, "tags": tags, "source": source,
+		"version": version, "author": author, "workflow_json": workflowJSON,
+		"prompt_json": promptJSON, "tools_json": toolsJSON, "knowledge_json": knowledgeJSON,
+		"agent_config": agentConfig, "usage_count": usageCount, "rating": rating,
+		"created_at": createdAt, "updated_at": updatedAt,
+	})
 }
 
 func (h *templateHandler) createTemplate(w http.ResponseWriter, r *http.Request) {

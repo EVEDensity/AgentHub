@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/agenthub/platform/shared/db"
 	"github.com/agenthub/platform/shared/eventbus"
 	"github.com/agenthub/platform/shared/events"
 	"github.com/agenthub/platform/shared/iam"
@@ -73,6 +74,20 @@ func main() {
 		log.Fatalf("connect event bus: %v", err)
 	}
 	defer bus.Close()
+
+	// ── Database pool (for templates, workspaces, etc.) ──────────────
+	dbDSN := getenv("DATABASE_DSN", getenv("DATABASE_URL", "postgres://agenthub:agenthub@127.0.0.1:5434/agenthub?sslmode=disable"))
+	pool, err := db.Connect(context.Background(), dbDSN)
+	if err != nil {
+		log.Printf("WARNING: database connection failed (templates/workspaces will use fallback): %v", err)
+		pool = nil // gateway starts without DB; frontend presets serve as fallback
+	}
+	if pool != nil {
+		defer pool.Close()
+		if err := pool.Migrate(context.Background()); err != nil {
+			log.Printf("WARNING: db migration failed (continuing): %v", err)
+		}
+	}
 
 	shutdown, err := obs.InitTracer(context.Background(), getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "gateway-service")
 	if err != nil {
@@ -335,7 +350,7 @@ func main() {
 	mux.Handle("/platform/knowledge/", knowledgeHandler)
 
 	// ── Template marketplace ───────────────────────────────────────
-	templates := newTemplateHandler(nil) // nil pool: returns presets only (no PG on gateway)
+	templates := newTemplateHandler(pool)
 	mux.Handle("/platform/templates", templates)
 	mux.Handle("/platform/templates/", templates)
 
@@ -345,7 +360,7 @@ func main() {
 	mux.Handle("/api/admin/tools/", tools)
 
 	// ── Workspaces ─────────────────────────────────────────────────
-	workspaces := newWorkspaceHandler()
+	workspaces := newWorkspaceHandler(pool)
 	mux.Handle("/platform/workspaces", workspaces)
 	mux.Handle("/platform/workspaces/", workspaces)
 
