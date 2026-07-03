@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/EVEDensity/AgentHub/discussions
+    about: Ask questions, share ideas, and discuss AgentHub with the community
+  - name: 📖 Documentation
+    url: https://github.com/EVEDensity/AgentHub/tree/main/docs
+    about: Check the documentation before filing an issue
+  - name: 🔒 Security Vulnerability
+    url: https://github.com/EVEDensity/AgentHub/security/advisories/new
+    about: Privately report a security vulnerability

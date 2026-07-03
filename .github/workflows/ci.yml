@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Frontend ─────────────────────────────────────────────
+  frontend:
+    name: 'Frontend · TypeScript'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  # ── Go Gateway ───────────────────────────────────────────
+  go-gateway:
+    name: 'Go · Gateway'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: services/go/go.sum
+      - run: go work sync
+      - run: go vet ./gateway-service/...
+
+  # ── Go MCP Gateway ───────────────────────────────────────
+  go-mcp:
+    name: 'Go · MCP Gateway'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: services/go/go.sum
+      - run: go work sync
+      - run: go vet ./mcp-gateway/...
+
+  # ── Go Sandbox Service ───────────────────────────────────
+  go-sandbox:
+    name: 'Go · Sandbox'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: services/go/go.sum
+      - run: go work sync
+      - run: go vet ./sandbox-service/...

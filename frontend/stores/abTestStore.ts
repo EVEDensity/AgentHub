@@ -150,7 +150,7 @@ interface ABTestState {
   pauseTest: (id: string) => Promise<void>;
   completeTest: (id: string) => Promise<void>;
   deleteTest: (id: string) => Promise<void>;
-  getWinner: (test: ABTestConfig) => string | null;
+  getWinner: (test: ABTestConfig) => string | undefined;
 }
 
 export const useABTestStore = create<ABTestState>()((set, get) => ({
@@ -240,7 +240,7 @@ export const useABTestStore = create<ABTestState>()((set, get) => ({
       await fetch(`${API_BASE}/${id}/complete`, { method: 'POST', headers: useAuthStore.getState().authHeaders() });
     } catch { /* demo */ }
     const test = get().tests.find((t) => t.id === id);
-    const winner = test ? get().getWinner(test) : null;
+    const winner = test ? get().getWinner(test) : undefined;
     set((s) => ({
       tests: s.tests.map((t) => t.id === id ? { ...t, status: 'completed' as const, endedAt: new Date().toISOString(), winnerId: winner } : t),
     }));
@@ -255,12 +255,12 @@ export const useABTestStore = create<ABTestState>()((set, get) => ({
     useAdminStore.getState().setNotice('A/B 测试已删除');
   },
 
-  getWinner: (test: ABTestConfig): string | null => {
+  getWinner: (test: ABTestConfig): string | undefined => {
     const { variantA, variantB, significance } = test.metrics;
-    if (significance < 90) return null;
+    if (significance < 90) return undefined;
     const scoreA = variantA.avgQuality * 0.5 + variantA.userSatisfaction * 0.3 + variantA.successRate * 10 * 0.2;
     const scoreB = variantB.avgQuality * 0.5 + variantB.userSatisfaction * 0.3 + variantB.successRate * 10 * 0.2;
-    if (Math.abs(scoreA - scoreB) < 0.3) return null;
+    if (Math.abs(scoreA - scoreB) < 0.3) return undefined;
     return scoreB > scoreA ? 'B' : 'A';
   },
 }));

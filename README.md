@@ -224,17 +224,38 @@ AgentHub stands on the shoulders of giants:
 
 ## 🌟 Contributors
 
-Thanks to every amazing contributor who has helped build AgentHub:
+AgentHub exists because of its community. Every bug report, PR, doc fix, and feature idea helps push the project forward.
 
 <a href="https://github.com/EVEDensity/AgentHub/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=EVEDensity/AgentHub" />
+</a>
+
+### 🏅 Hall of Fame
+
+| Contributor | Role | Contributions |
+|-------------|------|---------------|
+| [@EVEDensity](https://github.com/EVEDensity) | 🧭 Creator & Maintainer | Architecture, Gateway, AgentNet, ContextOS |
+| [@Nat-xu](https://github.com/Nat-xu) | 🔧 Core Contributor | Frontend, Workflow Engine, MCP Integration |
+
+> 💡 **Your name here?** Check our [CONTRIBUTING.md](CONTRIBUTING.md) and pick up a [`good first issue`](https://github.com/EVEDensity/AgentHub/issues?q=label%3A%22good+first+issue%22)!
+
+### 📊 Contribution Activity
+
+<a href="https://github.com/EVEDensity/AgentHub/pulse">
+  <img src="https://img.shields.io/github/commit-activity/m/EVEDensity/AgentHub?style=flat-square&color=blue" alt="Commit Activity">
+</a>
+<a href="https://github.com/EVEDensity/AgentHub/pulse">
+  <img src="https://img.shields.io/github/last-commit/EVEDensity/AgentHub?style=flat-square&color=purple" alt="Last Commit">
+</a>
+<a href="https://github.com/EVEDensity/AgentHub/graphs/contributors">
+  <img src="https://img.shields.io/github/contributors/EVEDensity/AgentHub?style=flat-square&color=green" alt="Contributors">
 </a>
 
 ---
 
 ## ⭐ Star History
 
-If you find AgentHub useful, **please give it a star** — it really helps others discover the project!
+The growth of AgentHub over time — each star represents someone who believes in open-source multi-agent orchestration.
 
 <a href="https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left">
  <picture>
@@ -243,4 +264,9 @@ If you find AgentHub useful, **please give it a star** — it really helps other
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
  </picture>
 </a>
+
+<p align="center">
+  <b>⭐ Star this repo</b> if you find it useful — it helps others discover AgentHub!<br>
+  <sub>We reach <code>#1</code> on GitHub Trending when you star. Every ⭐ counts.</sub>
+</p>
 

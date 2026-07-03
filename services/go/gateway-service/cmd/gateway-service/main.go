@@ -339,6 +339,11 @@ func main() {
 	mux.Handle("/platform/templates", templates)
 	mux.Handle("/platform/templates/", templates)
 
+	// ── Tool marketplace (G1) ──────────────────────────────────────
+	tools := newToolHandler()
+	mux.Handle("/api/admin/tools", tools)
+	mux.Handle("/api/admin/tools/", tools)
+
 	// ── Workspaces ─────────────────────────────────────────────────
 	workspaces := newWorkspaceHandler()
 	mux.Handle("/platform/workspaces", workspaces)
