@@ -4,7 +4,7 @@ export const SETTINGS_MENU = [
   '服务商', '工作流', '权限', '通用', 'IM 接入', 'MCP', '技能', '记忆', '插件',
   'Computer Use', '审计日志', '用户管理',
   '知识库', '模板市场', '工具市场', '工作空间', '上下文引擎', 'AgentNet',
-  'Agent 身份', 'Docker 沙箱', '多模态工作区', '集中日志',
+  'Agent 身份', 'Docker 沙箱', '多模态工作区', '集中日志', '模块连线', 'RAG 检索',
 ] as const;
 
 export type MenuItem = (typeof SETTINGS_MENU)[number];
@@ -45,6 +45,8 @@ export const MENU_META: readonly MenuItemMeta[] = [
   { key: 'Docker 沙箱',  icon: '🐳', group: '系统运维' },
   { key: '多模态工作区', icon: '🎯', group: '核心配置' },
   { key: '集中日志',     icon: '📋', group: '系统运维' },
+  { key: '模块连线',     icon: '🔗', group: '系统运维' },
+  { key: 'RAG 检索',     icon: '🔎', group: '能力扩展' },
 ] as const;
 
 interface AdminState {

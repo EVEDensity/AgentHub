@@ -1223,6 +1223,47 @@ export interface RetrievalResult {
   chunk_index: number;
 }
 
+// ── RAG Document Search Types (P1-1) ──────────────────────────────────
+
+export type RAGSourceType = 'project_docs' | 'api_docs' | 'uploaded_docs' | 'code_repos' | 'sessions' | 'artifacts';
+
+export interface RAGSearchResult {
+  source_id: string;
+  chunk_id: string;
+  text: string;
+  score: number;
+  source_type: RAGSourceType;
+  metadata: Record<string, string | undefined>;
+  highlights: string[];
+}
+
+export interface ImageResult {
+  id: string;
+  url: string;
+  caption: string;
+  score: number;
+  source_id: string;
+  source_type: RAGSourceType;
+  width?: number;
+  height?: number;
+}
+
+export interface RAGSearchResponse {
+  query: string;
+  rewrites: string[];
+  results: RAGSearchResult[];
+  images: ImageResult[];
+  fusion: string;
+  latency_ms: number;
+}
+
+export interface RAGSourceItem {
+  key: RAGSourceType;
+  label: string;
+  icon: string;
+  description: string;
+}
+
 // ── Template Types (Sprint F2) ───────────────────────────────────────
 
 export interface AgentTemplate {

@@ -132,6 +132,20 @@ const LogsViewer = dynamic(() => import('../../components/admin/LogsViewer'), {
     </div>
   ),
 });
+const ModuleRelationshipGraph = dynamic(() => import('../../components/admin/ModuleRelationshipGraph'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+const RAGDocViewer = dynamic(() => import('../../components/admin/RAGDocViewer'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
 
 export default function AdminPage(): JSX.Element {
   // ── Read from stores ────────────────────────────────────────────
@@ -454,6 +468,10 @@ export default function AdminPage(): JSX.Element {
         return <AgentWorkspace authHeaders={authHeaders} setNotice={setNotice} />;
       case '集中日志':
         return <LogsViewer authHeaders={authHeaders} setNotice={setNotice} />;
+      case '模块连线':
+        return <ModuleRelationshipGraph />;
+      case 'RAG 检索':
+        return <RAGDocViewer authHeaders={authHeaders} setNotice={setNotice} />;
       default:
         return (
           <section className="card p-6">
