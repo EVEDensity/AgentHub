@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
@@ -34,6 +35,8 @@ type ContextSegment struct {
 	Entities            []string       `json:"entities"`
 	Metadata            map[string]any `json:"metadata"`
 	CompressedAt        string         `json:"compressed_at,omitempty"`
+	DecayWeight         float64        `json:"decay_weight"`
+	LastAccessed        string         `json:"last_accessed,omitempty"`
 	CreatedAt           string         `json:"created_at"`
 }
 
@@ -87,6 +90,21 @@ type CompressionRun struct {
 	TokensAfter        int64  `json:"tokens_after"`
 	EntitiesExtracted  int    `json:"entities_extracted"`
 	ErrorMessage       string `json:"error_message,omitempty"`
+}
+
+// ── Multimodal LLM Types ───────────────────────────────────────────
+
+// ContentPart is a single part within a multimodal message.
+type ContentPart struct {
+	Type     string `json:"type"`            // "text" or "image_url"
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+// MultimodalMessage is a message that can contain text and images.
+type MultimodalMessage struct {
+	Role    string        `json:"role"`
+	Content []ContentPart `json:"content"`
 }
 
 // MemoryDecision records an LLM memory strategy decision.
@@ -194,6 +212,24 @@ func (ce *contextEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ce.listDecisions(w, r)
 	case rel == "decisions" && r.Method == http.MethodPost:
 		ce.recordDecision(w, r)
+	case rel == "decisions/conflicts" && r.Method == http.MethodGet:
+		ce.handleDecisionsConflicts(w, r)
+	case rel == "decisions/resolve" && r.Method == http.MethodPost:
+		ce.handleDecisionsResolve(w, r)
+
+	// Memory decay
+	case rel == "decay" && r.Method == http.MethodPost:
+		ce.handleDecay(w, r)
+	case rel == "decay/config" && r.Method == http.MethodGet:
+		ce.handleDecayGetConfig(w, r)
+	case rel == "decay/config" && r.Method == http.MethodPut:
+		ce.handleDecayPutConfig(w, r)
+
+	// Memory retrieval & semantic search
+	case rel == "memory/retrieve" && r.Method == http.MethodPost:
+		ce.handleMemoryRetrieve(w, r)
+	case rel == "memory/semantic-search" && r.Method == http.MethodPost:
+		ce.handleSemanticSearch(w, r)
 
 	// Stats dashboard
 	case rel == "stats" && r.Method == http.MethodGet:
@@ -236,6 +272,11 @@ func (ce *contextEngine) search(w http.ResponseWriter, r *http.Request) {
 		segments, entities = ce.searchPG(r.Context(), q, sources)
 	} else {
 		segments, entities = ce.searchMem(q, sources)
+	}
+
+	// Track last_accessed for all found segments (async)
+	for _, seg := range segments {
+		go ce.touchSegmentAccess(seg)
 	}
 
 	sourceList := make([]string, 0, len(sources))
@@ -417,6 +458,11 @@ func (ce *contextEngine) recall(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(result, func(i, j int) bool {
 			return result[i].SourceSequenceStart < result[j].SourceSequenceStart
 		})
+	}
+
+	// Track last_accessed for all recalled segments (async)
+	for _, seg := range result {
+		go ce.touchSegmentAccess(seg)
 	}
 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1374,6 +1420,8 @@ func (ce *contextEngine) listDecisionsPG(w http.ResponseWriter, r *http.Request,
 
 // evaluateMemoryDecision runs after a new segment is created.
 // It checks if similar entities exist and auto-generates ADD/NOOP decisions.
+// When conflict_detected is true and similarity_score > 0.8, auto-resolves by
+// comparing segment recency, content length, and entity confidence.
 func (ce *contextEngine) evaluateMemoryDecision(seg ContextSegment) {
 	if !ce.pgOrMem() {
 		return // Only runs with PostgreSQL (has real persistence)
@@ -1391,26 +1439,89 @@ func (ce *contextEngine) evaluateMemoryDecision(seg ContextSegment) {
 
 	for _, name := range potentialNames {
 		// Check if entity already exists
-		var count int
+		var existingEntityID string
+		var existingDesc string
+		var existingConfidence float64
+		var existingCreatedAt time.Time
 		err := ce.pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM platform_entities WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)`,
-			seg.TenantID, name).Scan(&count)
-		if err != nil {
-			continue
-		}
+			`SELECT id, description, confidence, created_at FROM platform_entities WHERE tenant_id=$1 AND LOWER(name)=LOWER($2)`,
+			seg.TenantID, name).Scan(&existingEntityID, &existingDesc, &existingConfidence, &existingCreatedAt)
+		entityExists := err == nil
 
 		now := time.Now().UTC()
-		if count > 0 {
-			// Entity exists — NOOP (update last_seen_at)
-			_, _ = ce.pool.Exec(ctx,
-				`UPDATE platform_entities SET last_seen_at=$1, updated_at=$1 WHERE tenant_id=$2 AND LOWER(name)=LOWER($3)`,
-				now, seg.TenantID, name)
 
-			decID := "dec-" + randomSuffix()
-			_, _ = ce.pool.Exec(ctx,
-				`INSERT INTO platform_memory_decisions (id, tenant_id, entity_id, decision, existing_memory, new_information, reasoning, similarity_score, conflict_detected, decided_at)
-				 VALUES ($1,$2,$3,'NOOP',$4,$5,'Entity already exists; updated last_seen_at',0.95,false,$6)`,
-				decID, seg.TenantID, name, name, seg.Title, now)
+		if entityExists {
+			// Compute similarity between existing description and new segment content
+			simScore := keywordSimilarity(seg.Title+" "+seg.Content, existingDesc+name)
+
+			// Check for conflicts: if similarity is high but content differs significantly
+			conflictDetected := simScore > 0.8 && len(seg.Content) > 20
+
+			if conflictDetected {
+				// Auto-resolve: compare recency (created_at), content length, and entity confidence
+				newLen := len(seg.Content)
+				existingLen := len(existingDesc)
+				newAgeHours := time.Since(now).Hours() // new segment is just created = 0
+				existingAgeHours := time.Since(existingCreatedAt).Hours()
+
+				// Score: newer is better (40%), longer content is better (30%), higher confidence is better (30%)
+				newRecencyScore := 1.0 / (1.0 + newAgeHours/24.0)
+				existingRecencyScore := 1.0 / (1.0 + existingAgeHours/24.0)
+
+				newLenScore := math.Log1p(float64(newLen)) / math.Log1p(1000)
+				existingLenScore := math.Log1p(float64(existingLen)) / math.Log1p(1000)
+
+				newTotal := newRecencyScore*0.4 + newLenScore*0.3 + 0.8*0.3 // segment confidence = 0.8
+				existingTotal := existingRecencyScore*0.4 + existingLenScore*0.3 + existingConfidence*0.3
+
+				if newTotal > existingTotal {
+					// Prefer new information — UPDATE
+					reasoning := fmt.Sprintf("Auto-resolved conflict: PREFER_NEWER (new_score=%.3f vs existing=%.3f). New segment is more recent (created now vs %s), longer (%d vs %d chars).",
+						newTotal, existingTotal, existingCreatedAt.Format("2006-01-02"), newLen, existingLen)
+
+					_, _ = ce.pool.Exec(ctx,
+						`UPDATE platform_entities SET description=$1, confidence=$2, last_seen_at=$3, updated_at=$3 WHERE id=$4`,
+						fmt.Sprintf("%s | updated: %s", existingDesc, truncateForLLM(seg.Content, 200)),
+						math.Max(existingConfidence, 0.8), now, existingEntityID)
+
+					decID := "dec-" + randomSuffix()
+					_, _ = ce.pool.Exec(ctx,
+						`INSERT INTO platform_memory_decisions (id, tenant_id, entity_id, decision, existing_memory, new_information, reasoning, similarity_score, conflict_detected, decided_at)
+						 VALUES ($1,$2,$3,'UPDATE',$4,$5,$6,$7,true,$8)`,
+						decID, seg.TenantID, existingEntityID, existingDesc, seg.Title, reasoning, simScore, now)
+
+					log.Printf("context-engine: auto-resolved conflict (PREFER_NEWER) entity=%s (%s) reason=%s",
+						existingEntityID, name, reasoning)
+				} else {
+					// Keep existing — NOOP with conflict logged
+					reasoning := fmt.Sprintf("Auto-resolved conflict: PREFER_EXISTING (existing_score=%.3f vs new=%.3f). Existing entity is more established (confidence=%.2f, age=%.0fd).",
+						existingTotal, newTotal, existingConfidence, existingAgeHours/24.0)
+
+					_, _ = ce.pool.Exec(ctx,
+						`UPDATE platform_entities SET last_seen_at=$1, updated_at=$1 WHERE id=$2`,
+						now, existingEntityID)
+
+					decID := "dec-" + randomSuffix()
+					_, _ = ce.pool.Exec(ctx,
+						`INSERT INTO platform_memory_decisions (id, tenant_id, entity_id, decision, existing_memory, new_information, reasoning, similarity_score, conflict_detected, decided_at)
+						 VALUES ($1,$2,$3,'NOOP',$4,$5,$6,$7,true,$8)`,
+						decID, seg.TenantID, existingEntityID, existingDesc, seg.Title, reasoning, simScore, now)
+
+					log.Printf("context-engine: auto-resolved conflict (PREFER_EXISTING) entity=%s (%s) reason=%s",
+						existingEntityID, name, reasoning)
+				}
+			} else {
+				// No conflict — NOOP (update last_seen_at)
+				_, _ = ce.pool.Exec(ctx,
+					`UPDATE platform_entities SET last_seen_at=$1, updated_at=$1 WHERE tenant_id=$2 AND LOWER(name)=LOWER($3)`,
+					now, seg.TenantID, name)
+
+				decID := "dec-" + randomSuffix()
+				_, _ = ce.pool.Exec(ctx,
+					`INSERT INTO platform_memory_decisions (id, tenant_id, entity_id, decision, existing_memory, new_information, reasoning, similarity_score, conflict_detected, decided_at)
+					 VALUES ($1,$2,$3,'NOOP',$4,$5,'Entity already exists; updated last_seen_at',0.95,false,$6)`,
+					decID, seg.TenantID, name, name, seg.Title, now)
+			}
 		} else {
 			// New entity — ADD
 			entID := "ent-" + randomSuffix()
@@ -1532,10 +1643,61 @@ func (ce *contextEngine) summarizeContent(ctx context.Context, title, content st
 
 // callLLM sends a prompt to the model-adapter service.
 func (ce *contextEngine) callLLM(ctx context.Context, prompt string) (string, error) {
+	messages := []MultimodalMessage{
+		{
+			Role: "user",
+			Content: []ContentPart{
+				{Type: "text", Text: prompt},
+			},
+		},
+	}
+	return ce.callLLMMultimodal(ctx, messages)
+}
+
+// callLLMMultimodal sends multimodal messages to the model-adapter service.
+// Each message can contain a mix of text and image_url content parts.
+func (ce *contextEngine) callLLMMultimodal(ctx context.Context, messages []MultimodalMessage) (string, error) {
 	llmURL := getenv("MODEL_ADAPTER_URL", "http://127.0.0.1:8001")
+
+	// Build messages payload: text-only messages use a simple string content;
+	// multimodal messages use the ContentPart array.
+	apiMessages := make([]map[string]interface{}, len(messages))
+	for i, msg := range messages {
+		if len(msg.Content) == 1 && msg.Content[0].Type == "text" {
+			// Backward-compatible text-only format
+			apiMessages[i] = map[string]interface{}{
+				"role":    msg.Role,
+				"content": msg.Content[0].Text,
+			}
+		} else {
+			// Multimodal format with content array
+			contentParts := make([]map[string]interface{}, len(msg.Content))
+			for j, part := range msg.Content {
+				if part.Type == "image_url" {
+					contentParts[j] = map[string]interface{}{
+						"type": "image_url",
+						"image_url": map[string]interface{}{
+							"url":    part.ImageURL,
+							"detail": "auto",
+						},
+					}
+				} else {
+					contentParts[j] = map[string]interface{}{
+						"type": "text",
+						"text": part.Text,
+					}
+				}
+			}
+			apiMessages[i] = map[string]interface{}{
+				"role":    msg.Role,
+				"content": contentParts,
+			}
+		}
+	}
+
 	reqBody := map[string]interface{}{
 		"model":       getenv("COMPRESSION_MODEL", "deepseek-chat"),
-		"messages":    []map[string]string{{"role": "user", "content": prompt}},
+		"messages":    apiMessages,
 		"max_tokens":  1024,
 		"temperature": 0.3,
 	}
@@ -1571,6 +1733,44 @@ func (ce *contextEngine) callLLM(ctx context.Context, prompt string) (string, er
 		return "", fmt.Errorf("empty LLM response")
 	}
 	return result.Choices[0].Message.Content, nil
+}
+
+// CallLLMWithImages sends a multimodal prompt with system prompt, user text,
+// and optional images to the LLM. Each image can be a base64 data URL or an
+// HTTP URL. Returns the LLM response text or an error.
+func (ce *contextEngine) CallLLMWithImages(ctx context.Context, systemPrompt, userText string, images []string) (string, error) {
+	messages := make([]MultimodalMessage, 0, 2)
+
+	// Add system message if provided
+	if systemPrompt != "" {
+		messages = append(messages, MultimodalMessage{
+			Role: "system",
+			Content: []ContentPart{
+				{Type: "text", Text: systemPrompt},
+			},
+		})
+	}
+
+	// Build user message with text and images
+	parts := make([]ContentPart, 0, 1+len(images))
+	if userText != "" {
+		parts = append(parts, ContentPart{Type: "text", Text: userText})
+	}
+	for _, img := range images {
+		// If the image is not already a data URL and not an HTTP URL, treat as base64 data URL
+		imageURL := img
+		if !strings.HasPrefix(img, "data:") && !strings.HasPrefix(img, "http://") && !strings.HasPrefix(img, "https://") {
+			imageURL = "data:image/jpeg;base64," + img
+		}
+		parts = append(parts, ContentPart{Type: "image_url", ImageURL: imageURL})
+	}
+
+	messages = append(messages, MultimodalMessage{
+		Role:    "user",
+		Content: parts,
+	})
+
+	return ce.callLLMMultimodal(ctx, messages)
 }
 
 // extractiveSummary provides a fallback when LLM is unavailable.

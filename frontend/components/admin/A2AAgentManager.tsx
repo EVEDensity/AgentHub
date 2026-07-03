@@ -4,9 +4,10 @@
 // Management UI for the Agent-to-Agent protocol: agent card viewer,
 // discovery, registration, and task testing.
 
-import { useState, useEffect, type JSX } from 'react';
+import { useState, useEffect, useRef, type JSX } from 'react';
 import { useA2AStore } from '../../stores/a2aStore';
 import type { A2AAgentCard } from '../../types';
+import A2ASecurityPanel from './A2ASecurityPanel';
 
 // ── Sub-components ────────────────────────────────────────────────────
 
@@ -200,12 +201,23 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
   const [registerUrl, setRegisterUrl] = useState('');
   const [discoveryCapabilities, setDiscoveryCapabilities] = useState('');
   const [taskMessage, setTaskMessage] = useState('');
-  const [activeTab, setActiveTab] = useState<'agents' | 'discover' | 'test'>('agents');
+  const [activeTab, setActiveTab] = useState<'agents' | 'discover' | 'test' | 'security'>('agents');
+  const [taskLatencyMs, setTaskLatencyMs] = useState<number | null>(null);
+  const taskStartRef = useRef<number>(0);
 
   useEffect(() => {
     void loadAgents();
     void loadSelfCard();
   }, []);
+
+  // Track task latency: when taskLoading transitions from true to false, record elapsed time
+  useEffect(() => {
+    if (!taskLoading && taskStartRef.current > 0 && taskResult) {
+      const elapsed = performance.now() - taskStartRef.current;
+      setTaskLatencyMs(elapsed);
+      taskStartRef.current = 0;
+    }
+  }, [taskLoading, taskResult]);
 
   const selectedAgent = agents.find((a) => a.url === selectedAgentUrl) || null;
 
@@ -248,6 +260,7 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
           ['agents', '已注册 Agent'],
           ['discover', '发现 Agent'],
           ['test', '任务测试'],
+          ['security', '安全'],
         ] as const).map(([key, label]) => (
           <button
             key={key}
@@ -419,7 +432,11 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
               <button
                 className="btn-primary"
                 disabled={taskLoading || !selectedAgentUrl || !taskMessage.trim()}
-                onClick={() => void sendTask(selectedAgentUrl!, taskMessage)}
+                onClick={() => {
+                  taskStartRef.current = performance.now();
+                  setTaskLatencyMs(null);
+                  void sendTask(selectedAgentUrl!, taskMessage);
+                }}
               >
                 {taskLoading ? (
                   <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
@@ -427,6 +444,16 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
               </button>
             </div>
           </div>
+
+          {/* Task Latency */}
+          {taskLatencyMs !== null && (
+            <div className="rounded-lg border border-primary-150 bg-primary-50/50 px-4 py-2.5 flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary-500 text-sm">timer</span>
+              <span className="text-xs text-primary-700">
+                往返延迟: <strong>{taskLatencyMs.toFixed(0)} ms</strong>
+              </span>
+            </div>
+          )}
 
           {/* Task Result */}
           {taskResult && (
@@ -439,6 +466,9 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
           )}
         </div>
       )}
+      {/* ── Security Tab ────────────────────────────────────────────── */}
+      {activeTab === 'security' && <A2ASecurityPanel />}
+
     </section>
   );
 }

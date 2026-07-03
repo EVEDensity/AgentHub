@@ -51,6 +51,16 @@ type ChannelConfig struct {
 	BotName       string `json:"bot_name"`
 }
 
+// ImageAttachment represents an image extracted from a channel message.
+type ImageAttachment struct {
+	URL       string `json:"url"`        // image URL or data URI
+	Platform  string `json:"platform"`   // feishu, wecom, etc.
+	ImageKey  string `json:"image_key"`  // platform-specific image identifier
+	SenderID  string `json:"sender_id"`  // who sent the image
+	ChatID    string `json:"chat_id"`    // conversation identifier
+	Timestamp string `json:"timestamp"`  // when it was received
+}
+
 // ── Feishu Adapter ────────────────────────────────────────────────
 
 type feishuAdapter struct{}
@@ -291,6 +301,41 @@ func (cc *channelConnector) handleWebhook(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if msg.Content == "" {
+		// Check for image attachment before silently ignoring
+		img := extractImageFromChannel(*msg)
+		if img != nil {
+			// Publish image received event
+			imgEvent := events.NewEnvelope(
+				"channel.image.received",
+				"channel-"+platform,
+				msg.ChatID,
+				"ch-img-"+platform+"-"+randomSuffix(),
+				events.Producer{Service: "gateway-service", Instance: getenv("HOSTNAME", "local")},
+				map[string]any{
+					"image_url":   img.URL,
+					"platform":    img.Platform,
+					"image_key":   img.ImageKey,
+					"sender_id":   img.SenderID,
+					"chat_id":     img.ChatID,
+					"timestamp":   img.Timestamp,
+					"channel_raw": msg.Raw,
+				},
+			)
+			imgEvent.EventID = "ch-img-evt-" + randomSuffix()
+			imgEvent.Routing = &events.Routing{
+				Channel:      "channel",
+				PartitionKey: msg.ChatID,
+				Priority:     events.PriorityNormal,
+			}
+
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			if err := cc.bus.PublishEnvelope(ctx, eventbus.SessionEventsSubject, imgEvent); err != nil {
+				log.Printf("channel %s image event publish error: %v", platform, err)
+			} else {
+				log.Printf("channel %s: image received from %s (key=%s)", platform, img.SenderID, img.ImageKey)
+			}
+		}
 		// Empty message (e.g., file share, sticker) — acknowledge silently
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
@@ -340,6 +385,95 @@ func (cc *channelConnector) handleWebhook(w http.ResponseWriter, r *http.Request
 
 	log.Printf("channel %s: message published session=%s sender=%s", platform, sessionID, msg.SenderID)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// ── Image Extraction ─────────────────────────────────────────────────
+
+// extractImageFromChannel checks a ChannelMessage for image attachments.
+// Feishu: looks for image_key in raw payload
+// WeCom: looks for PicUrl in raw payload
+// Returns nil if no image attachment is found.
+func extractImageFromChannel(msg ChannelMessage) *ImageAttachment {
+	if msg.Raw == nil {
+		return nil
+	}
+
+	img := &ImageAttachment{
+		Platform:  msg.Platform,
+		SenderID:  msg.SenderID,
+		ChatID:    msg.ChatID,
+		Timestamp: msg.Timestamp,
+	}
+
+	switch msg.Platform {
+	case "feishu":
+		// Feishu: image_key in message content or raw payload
+		if imageKey, ok := msg.Raw["image_key"].(string); ok && imageKey != "" {
+			img.ImageKey = imageKey
+			img.URL = "feishu://image/" + imageKey
+			return img
+		}
+		// Check nested event.message for image_key
+		if event, ok := msg.Raw["event"].(map[string]any); ok {
+			if message, ok := event["message"].(map[string]any); ok {
+				if imageKey, ok := message["image_key"].(string); ok && imageKey != "" {
+					img.ImageKey = imageKey
+					img.URL = "feishu://image/" + imageKey
+					return img
+				}
+			}
+		}
+		// Check msgType for image indicator
+		if msgType, ok := msg.Raw["msg_type"].(string); ok && msgType == "image" {
+			if imageKey, ok := msg.Raw["image_key"].(string); ok && imageKey != "" {
+				img.ImageKey = imageKey
+				img.URL = "feishu://image/" + imageKey
+				return img
+			}
+		}
+	case "wecom":
+		// WeCom: PicUrl in raw payload
+		if picURL, ok := msg.Raw["PicUrl"].(string); ok && picURL != "" {
+			img.ImageKey = picURL
+			img.URL = picURL
+			return img
+		}
+		// Check msgtype for image
+		if msgType, ok := msg.Raw["msgtype"].(string); ok && msgType == "image" {
+			if image, ok := msg.Raw["image"].(map[string]any); ok {
+				if picURL, ok := image["PicUrl"].(string); ok && picURL != "" {
+					img.ImageKey = picURL
+					img.URL = picURL
+					return img
+				}
+				if mediaID, ok := image["media_id"].(string); ok && mediaID != "" {
+					img.ImageKey = mediaID
+					img.URL = "https://qyapi.weixin.qq.com/cgi-bin/media/get?media_id=" + mediaID
+					return img
+				}
+			}
+		}
+	}
+
+	// Generic fallback: check for common image-related fields
+	if imageURL, ok := msg.Raw["image_url"].(string); ok && imageURL != "" {
+		img.ImageKey = imageURL
+		img.URL = imageURL
+		return img
+	}
+	if picURL, ok := msg.Raw["pic_url"].(string); ok && picURL != "" {
+		img.ImageKey = picURL
+		img.URL = picURL
+		return img
+	}
+	if msg.MessageType == "image" && msg.Content != "" {
+		// In some platforms, Content might be the image URL for image messages
+		img.ImageKey = msg.Content
+		img.URL = msg.Content
+		return img
+	}
+
+	return nil
 }
 
 // ── HMAC helper ────────────────────────────────────────────────────

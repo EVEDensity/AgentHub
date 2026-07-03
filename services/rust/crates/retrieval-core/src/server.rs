@@ -1,4 +1,4 @@
-//! HTTP 服务：健康检查、指标、统计、同步检索（debug）。
+//! HTTP 服务：健康检查、指标、统计、同步检索（debug）、权重读写。
 //!
 //! 端点：
 //! - `GET /healthz` → "ok"
@@ -6,6 +6,8 @@
 //! - `GET /stats` → JSON 运行时统计
 //! - `GET /health/details` → JSON 下游依赖健康状态
 //! - `POST /retrieve` → 同步检索（debug 用，body = RetrievalRequest）
+//! - `GET /weights` → 当前融合权重（BM25 / dense / rerank / freshness）
+//! - `POST /weights` → 更新融合权重（自动归一化到总和 1.0）
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -74,6 +76,35 @@ async fn handle(core: Arc<RetrievalCore>, req: Request<Body>) -> Result<Response
             };
             let result = core.retrieve(&req).await;
             json_resp(StatusCode::OK, &result)
+        }
+        (&Method::GET, "/weights") => {
+            let w = core.weights();
+            json_resp(StatusCode::OK, &w.to_json())
+        }
+        (&Method::POST, "/weights") => {
+            let body_bytes = match hyper::body::to_bytes(body).await {
+                Ok(b) => b,
+                Err(_) => return Ok(text_resp(StatusCode::BAD_REQUEST, "bad body", "text/plain")),
+            };
+            #[derive(serde::Deserialize)]
+            struct WeightsBody {
+                bm25: f32,
+                dense: f32,
+                rerank: f32,
+                freshness: f32,
+            }
+            let wb: WeightsBody = match serde_json::from_slice(&body_bytes) {
+                Ok(w) => w,
+                Err(e) => {
+                    return Ok(json_resp(
+                        StatusCode::BAD_REQUEST,
+                        &serde_json::json!({"error": e.to_string()}),
+                    ))
+                }
+            };
+            let w = core.weights();
+            w.set(wb.bm25, wb.dense, wb.rerank, wb.freshness);
+            json_resp(StatusCode::OK, &w.to_json())
         }
         _ => text_resp(StatusCode::NOT_FOUND, "not found", "text/plain"),
     };

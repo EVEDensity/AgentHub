@@ -437,7 +437,12 @@ func main() {
 
 	// ── A2A Protocol (P2-2) ─────────────────────────────────────────
 	a2aBaseURL := getenv("PUBLIC_BASE_URL", "http://localhost:8081")
-	a2a := newA2AHandler(a2aBaseURL)
+	a2aTLS := a2aTLSConfigFromEnv()
+	if a2aTLS.Enabled {
+		log.Printf("a2a: TLS enabled (cert=%s, key=%s, ca=%s, strict=%v)",
+			a2aTLS.CertFile, a2aTLS.KeyFile, a2aTLS.CAFile, a2aTLS.StrictVerify)
+	}
+	a2a := newA2AHandler(a2aBaseURL, pool, a2aTLS)
 	mux.Handle("/platform/a2a/", http.StripPrefix("/platform/a2a", a2a))
 
 	// ── API Keys + Public API ─────────────────────────────────────
@@ -448,6 +453,15 @@ func main() {
 		handlePublicChat(bus, apiKeys, w, r)
 	})
 
+	// ── Image Preprocessing (Sprint L1) ───────────────────────────
+		imagePreproc := newImagePreprocHandler()
+		mux.Handle("/platform/utils/image-preprocess", imagePreproc)
+
+	// ── Video Frame Extraction (Sprint L1) ───────────────────────────
+		videoH := newVideoHandler(bus)
+		mux.Handle("/platform/utils/video-frames", videoH)
+		mux.Handle("/platform/utils/video-frames/", videoH)
+
 	// ── Channel Connector (Feishu/WeCom) ──────────────────────────
 	channels := newChannelConnector(bus)
 	mux.Handle("/platform/channels", channels)
@@ -457,6 +471,9 @@ func main() {
 	ctxEngine := newContextEngine(bus, pool)
 	mux.Handle("/context/", ctxEngine)
 	mux.Handle("/context", ctxEngine)
+	// Initialize decay config with defaults
+	cfg := ctxEngine.getDecayConfig()
+	log.Printf("context-engine: decay config initialized lambda=%.4f half_life=%.1f days", cfg.Lambda, cfg.HalfLife)
 
 	// ── AgentNet — Decentralized Multi-Agent Collaboration ──────────
 	agentNet := newAgentNetHandler(bus, pool)

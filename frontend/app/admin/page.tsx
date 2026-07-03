@@ -146,6 +146,13 @@ const RAGDocViewer = dynamic(() => import('../../components/admin/RAGDocViewer')
     </div>
   ),
 });
+const RetrievalEvalPanel = dynamic(() => import('../../components/admin/RetrievalEvalPanel'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
 const A2AAgentManager = dynamic(() => import('../../components/admin/A2AAgentManager'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
@@ -170,6 +177,14 @@ const CostAnalytics = dynamic(() => import('../../components/admin/CostAnalytics
 });
 
 const SloDashboard = dynamic(() => import('../../components/admin/SloDashboard'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+
+const EvalDashboard = dynamic(() => import('../../components/admin/EvalDashboard'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
       <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
@@ -502,6 +517,8 @@ export default function AdminPage(): JSX.Element {
         return <ModuleRelationshipGraph />;
       case 'RAG 检索':
         return <RAGDocViewer authHeaders={authHeaders} setNotice={setNotice} />;
+      case '检索评估':
+        return <RetrievalEvalPanel authHeaders={authHeaders} setNotice={setNotice} />;
       case 'A2A 互操作':
         return <A2AAgentManager authHeaders={authHeaders} setNotice={setNotice} />;
       case 'A/B 测试':
@@ -510,6 +527,8 @@ export default function AdminPage(): JSX.Element {
         return <CostAnalytics />;
       case 'SLO 仪表板':
         return <SloDashboard />;
+      case '离线评估':
+        return <EvalDashboard />;
       default:
         return (
           <section className="card p-6">

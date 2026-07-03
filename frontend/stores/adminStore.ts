@@ -4,8 +4,8 @@ export const SETTINGS_MENU = [
   '服务商', '工作流', '权限', '通用', 'IM 接入', 'MCP', '技能', '记忆', '插件',
   'Computer Use', '审计日志', '用户管理',
   '知识库', '模板市场', '工具市场', '工作空间', '上下文引擎', 'AgentNet',
-  'Agent 身份', 'Docker 沙箱', '多模态工作区', '集中日志', '模块连线', 'RAG 检索', 'A2A 互操作', 'A/B 测试',
-  '成本分析', 'SLO 仪表板',
+  'Agent 身份', 'Docker 沙箱', '多模态工作区', '集中日志', '模块连线', 'RAG 检索', '检索评估', 'A2A 互操作', 'A/B 测试',
+  '成本分析', 'SLO 仪表板', '离线评估',
 ] as const;
 
 export type MenuItem = (typeof SETTINGS_MENU)[number];
@@ -48,10 +48,12 @@ export const MENU_META: readonly MenuItemMeta[] = [
   { key: '集中日志',     icon: '📋', group: '系统运维' },
   { key: '模块连线',     icon: '🔗', group: '系统运维' },
   { key: 'RAG 检索',     icon: '🔎', group: '能力扩展' },
+  { key: '检索评估',     icon: '📊', group: '能力扩展' },
   { key: 'A2A 互操作',   icon: '🔗', group: '能力扩展' },
   { key: 'A/B 测试',     icon: '🧪', group: '能力扩展' },
   { key: '成本分析',     icon: '💰', group: '系统运维' },
   { key: 'SLO 仪表板',   icon: '🎯', group: '系统运维' },
+  { key: '离线评估',     icon: '🧪', group: '系统运维' },
 ] as const;
 
 interface AdminState {

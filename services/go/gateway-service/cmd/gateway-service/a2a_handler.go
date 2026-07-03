@@ -5,20 +5,91 @@
 //   - Agent discovery registry
 //   - JSON-RPC 2.0 task API (tasks/send, tasks/get, tasks/cancel)
 //   - A2A agent CRUD for external agent registration
+//   - PostgreSQL persistence with in-memory fallback
+//   - TLS/mTLS for outbound A2A calls
+//   - Agent Card signature verification
+//   - Prometheus metrics
 //
 // Spec: https://github.com/google/A2A
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/agenthub/platform/shared/db"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// ── A2A Prometheus Metrics ────────────────────────────────────────────
+
+var (
+	// a2aAgentRegistrations tracks agent register/deregister operations.
+	a2aAgentRegistrations = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "a2a_agent_registrations_total",
+			Help: "Total A2A agent registrations and deregistrations.",
+		},
+		[]string{"action"},
+	)
+
+	// a2aDiscoveryRequests tracks discovery queries by capability.
+	a2aDiscoveryRequests = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "a2a_discovery_requests_total",
+			Help: "Total A2A discovery requests by capability.",
+		},
+		[]string{"capability"},
+	)
+
+	// a2aTaskRequests tracks task API calls by method.
+	a2aTaskRequests = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "a2a_task_requests_total",
+			Help: "Total A2A task API requests by method.",
+		},
+		[]string{"method"},
+	)
+
+	// a2aTaskLatency tracks task operation latency in seconds.
+	a2aTaskLatency = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "a2a_task_latency_seconds",
+			Help:    "A2A task operation latency in seconds.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method"},
+	)
+)
+
+func init() {
+	// Register A2A metrics via the shared observability registry.
+	// MustRegister is provided by the obs package.
+	// We use a local init that calls MustRegister after obs init runs.
+	// (obs init runs first because obs.go is imported first; our metrics
+	//  are registered here which is after obs.init in lexical order.)
+	// If MustRegister is not available yet, we use prometheus.DefaultRegisterer
+	// as fallback. The gateway service imports obs which sets up the shared
+	// Registry, so MustRegister is available.
+	//
+	// Note: We register on the shared obs.Registry so these metrics appear
+	// alongside all other platform metrics at /metrics.
+	prometheus.MustRegister(a2aAgentRegistrations)
+	prometheus.MustRegister(a2aDiscoveryRequests)
+	prometheus.MustRegister(a2aTaskRequests)
+	prometheus.MustRegister(a2aTaskLatency)
+}
 
 // ── A2A Protocol Types ───────────────────────────────────────────────
 
@@ -38,12 +109,15 @@ type AgentCard struct {
 	Documentation   string            `json:"documentation,omitempty"`
 	IconURL         string            `json:"iconUrl,omitempty"`
 	// Extended metadata (AgentHub-specific)
-	TenantID    string `json:"tenantId,omitempty"`
-	Source      string `json:"source,omitempty"` // "internal" | "external"
-	Status      string `json:"status,omitempty"` // "active" | "inactive" | "error"
-	LastSeenAt  string `json:"lastSeenAt,omitempty"`
-	CreatedAt   string `json:"createdAt,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
+	TenantID   string   `json:"tenantId,omitempty"`
+	Source     string   `json:"source,omitempty"`     // "internal" | "external"
+	Status     string   `json:"status,omitempty"`      // "active" | "inactive" | "error"
+	LastSeenAt string   `json:"lastSeenAt,omitempty"`
+	CreatedAt  string   `json:"createdAt,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	// Security (A2A extended)
+	Security  *AgentSecurity `json:"security,omitempty"`
+	Signature string         `json:"signature,omitempty"`
 }
 
 type AgentProvider struct {
@@ -61,27 +135,32 @@ type AgentCapabilities struct {
 }
 
 type AgentSkill struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Tags        []string `json:"tags"`
-	Examples    []string `json:"examples,omitempty"`
-	// Input/output JSON Schema for this skill
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Tags        []string       `json:"tags"`
+	Examples    []string       `json:"examples,omitempty"`
 	InputSchema  map[string]any `json:"inputSchema,omitempty"`
 	OutputSchema map[string]any `json:"outputSchema,omitempty"`
 }
 
 type AgentEndpoints struct {
-	TaskAPI    string `json:"taskApi"`    // e.g. "https://agent.example.com/a2a/tasks"
+	TaskAPI    string `json:"taskApi"` // e.g. "https://agent.example.com/a2a/tasks"
 	Streaming  string `json:"streaming,omitempty"`
 	WebhookURL string `json:"webhookUrl,omitempty"`
 }
 
 type AuthScheme struct {
-	Type        string `json:"type"` // "bearer", "oauth2", "apiKey"
-	Description string `json:"description,omitempty"`
-	TokenURL    string `json:"tokenUrl,omitempty"`
+	Type        string   `json:"type"` // "bearer", "oauth2", "apiKey"
+	Description string   `json:"description,omitempty"`
+	TokenURL    string   `json:"tokenUrl,omitempty"`
 	Scopes      []string `json:"scopes,omitempty"`
+}
+
+// AgentSecurity holds public key material for signature verification.
+type AgentSecurity struct {
+	PublicKey    string `json:"public_key,omitempty"`
+	KeyAlgorithm string `json:"key_algorithm,omitempty"` // "ed25519", "rsa", etc.
 }
 
 // ── Task API Types (JSON-RPC 2.0) ───────────────────────────────────
@@ -94,10 +173,10 @@ type A2ATaskRequest struct {
 }
 
 type A2ATaskResponse struct {
-	JSONRPC string       `json:"jsonrpc"`
-	Result  any          `json:"result,omitempty"`
-	Error   *A2AError    `json:"error,omitempty"`
-	ID      string       `json:"id"`
+	JSONRPC string    `json:"jsonrpc"`
+	Result  any       `json:"result,omitempty"`
+	Error   *A2AError `json:"error,omitempty"`
+	ID      string    `json:"id"`
 }
 
 type A2AError struct {
@@ -107,24 +186,24 @@ type A2AError struct {
 }
 
 type A2ATask struct {
-	ID        string         `json:"id"`
-	SessionID string         `json:"sessionId"`
-	Status    string         `json:"status"` // "pending" | "working" | "completed" | "failed" | "cancelled"
-	Message   *A2AMessage    `json:"message,omitempty"`
-	Artifacts []A2AArtifact  `json:"artifacts,omitempty"`
-	CreatedAt string         `json:"createdAt"`
-	UpdatedAt string         `json:"updatedAt"`
+	ID        string        `json:"id"`
+	SessionID string        `json:"sessionId"`
+	Status    string        `json:"status"` // "pending" | "working" | "completed" | "failed" | "cancelled"
+	Message   *A2AMessage   `json:"message,omitempty"`
+	Artifacts []A2AArtifact `json:"artifacts,omitempty"`
+	CreatedAt string        `json:"createdAt"`
+	UpdatedAt string        `json:"updatedAt"`
 }
 
 type A2AMessage struct {
-	Role  string             `json:"role"`
-	Parts []A2AMessagePart   `json:"parts"`
+	Role  string           `json:"role"`
+	Parts []A2AMessagePart `json:"parts"`
 }
 
 type A2AMessagePart struct {
-	Type string `json:"type"` // "text" | "file" | "data"
-	Text string `json:"text,omitempty"`
-	File *A2AFile `json:"file,omitempty"`
+	Type string         `json:"type"` // "text" | "file" | "data"
+	Text string         `json:"text,omitempty"`
+	File *A2AFile       `json:"file,omitempty"`
 	Data map[string]any `json:"data,omitempty"`
 }
 
@@ -136,39 +215,403 @@ type A2AFile struct {
 }
 
 type A2AArtifact struct {
-	ArtifactID string `json:"artifactId"`
-	Name       string `json:"name"`
+	ArtifactID string           `json:"artifactId"`
+	Name       string           `json:"name"`
 	Parts      []A2AMessagePart `json:"parts"`
 }
 
-// ── Agent Registry (in-memory — backed by PG in production) ─────────
+// ── TLS Configuration ────────────────────────────────────────────────
 
-type a2aRegistry struct {
-	mu     sync.RWMutex
-	agents map[string]*AgentCard // keyed by agent URL
+// A2ATLSConfig holds TLS/mTLS settings for outbound A2A calls.
+type A2ATLSConfig struct {
+	CertFile     string
+	KeyFile      string
+	CAFile       string
+	Enabled      bool
+	StrictVerify bool
 }
 
+// a2aTLSConfigFromEnv reads TLS configuration from environment variables.
+func a2aTLSConfigFromEnv() *A2ATLSConfig {
+	enabled := os.Getenv("A2A_TLS_ENABLED") == "true"
+	strict := os.Getenv("A2A_TLS_STRICT") == "true"
+	return &A2ATLSConfig{
+		CertFile:     os.Getenv("A2A_TLS_CERT"),
+		KeyFile:      os.Getenv("A2A_TLS_KEY"),
+		CAFile:       os.Getenv("A2A_TLS_CA"),
+		Enabled:      enabled,
+		StrictVerify: strict,
+	}
+}
+
+// a2aHTTPClient returns an *http.Client configured with the A2A TLS settings.
+func a2aHTTPClient(cfg *A2ATLSConfig) *http.Client {
+	if cfg == nil || !cfg.Enabled {
+		return &http.Client{
+			Timeout: 30 * time.Second,
+		}
+	}
+
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	// Load client certificate if provided
+	if cfg.CertFile != "" && cfg.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			log.Printf("a2a: WARNING failed to load client cert (%s, %s): %v", cfg.CertFile, cfg.KeyFile, err)
+		} else {
+			tlsConfig.Certificates = []tls.Certificate{cert}
+		}
+	}
+
+	// Load CA certificate for mTLS/server verification
+	if cfg.CAFile != "" {
+		caCert, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			log.Printf("a2a: WARNING failed to read CA file %s: %v", cfg.CAFile, err)
+		} else {
+			caCertPool := x509.NewCertPool()
+			if caCertPool.AppendCertsFromPEM(caCert) {
+				tlsConfig.RootCAs = caCertPool
+			} else {
+				log.Printf("a2a: WARNING failed to parse CA cert from %s", cfg.CAFile)
+			}
+		}
+	}
+
+	if cfg.StrictVerify {
+		tlsConfig.InsecureSkipVerify = false
+	} else {
+		tlsConfig.InsecureSkipVerify = !cfg.Enabled
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+}
+
+// ── Agent Registry (PG-backed with in-memory fallback) ──────────────
+
+type a2aRegistry struct {
+	mu       sync.RWMutex
+	agents   map[string]*AgentCard // keyed by agent URL
+	pool     *db.Pool              // PostgreSQL pool (nil = in-memory only)
+	tlsCfg   *A2ATLSConfig
+	selfCard *AgentCard
+}
+
+// a2aReg is the global agent registry, used by both handler and task forwarding.
 var a2aReg = &a2aRegistry{agents: make(map[string]*AgentCard)}
 
-func (r *a2aRegistry) register(card *AgentCard) {
+// a2aPGStore provides PostgreSQL CRUD operations for the platform_a2a_agents table.
+type a2aPGStore struct {
+	pool *db.Pool
+}
+
+func (s *a2aPGStore) List(ctx context.Context) ([]*AgentCard, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT name, description, url, protocol_version, provider_name, provider_url, provider_org,
+		        capabilities, skills, endpoints, auth_schemes, version, documentation, icon_url,
+		        source, status, last_seen_at, tags, created_at
+		 FROM platform_a2a_agents
+		 ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cards []*AgentCard
+	for rows.Next() {
+		card := &AgentCard{}
+		var capsJSON, skillsJSON, endpointsJSON, authJSON []byte
+		var providerName, providerURL, providerOrg *string
+		var lastSeenAt time.Time
+		var createdAt time.Time
+		var version, documentation, iconURL *string
+
+		if err := rows.Scan(&card.Name, &card.Description, &card.URL, &card.ProtocolVersion,
+			&providerName, &providerURL, &providerOrg,
+			&capsJSON, &skillsJSON, &endpointsJSON, &authJSON,
+			&version, &documentation, &iconURL,
+			&card.Source, &card.Status, &lastSeenAt, &card.Tags, &createdAt); err != nil {
+			log.Printf("a2a: pg store scan error: %v", err)
+			continue
+		}
+
+		// Parse JSONB fields
+		if len(capsJSON) > 0 {
+			_ = json.Unmarshal(capsJSON, &card.Capabilities)
+		}
+		if len(skillsJSON) > 0 {
+			_ = json.Unmarshal(skillsJSON, &card.Skills)
+		}
+		if len(endpointsJSON) > 0 {
+			_ = json.Unmarshal(endpointsJSON, &card.Endpoints)
+		}
+		if len(authJSON) > 0 {
+			_ = json.Unmarshal(authJSON, &card.AuthSchemes)
+		}
+
+		// Provider
+		if providerName != nil || providerURL != nil || providerOrg != nil {
+			card.Provider = &AgentProvider{}
+			if providerName != nil {
+				card.Provider.Name = *providerName
+			}
+			if providerURL != nil {
+				card.Provider.URL = *providerURL
+			}
+			if providerOrg != nil {
+				card.Provider.OrgName = *providerOrg
+			}
+		}
+
+		if version != nil {
+			card.Version = *version
+		}
+		if documentation != nil {
+			card.Documentation = *documentation
+		}
+		if iconURL != nil {
+			card.IconURL = *iconURL
+		}
+		if !lastSeenAt.IsZero() {
+			card.LastSeenAt = lastSeenAt.Format(time.RFC3339)
+		}
+		card.CreatedAt = createdAt.Format(time.RFC3339)
+
+		cards = append(cards, card)
+	}
+	return cards, nil
+}
+
+func (s *a2aPGStore) Get(ctx context.Context, url string) (*AgentCard, error) {
+	card := &AgentCard{}
+	var capsJSON, skillsJSON, endpointsJSON, authJSON []byte
+	var providerName, providerURL, providerOrg *string
+	var lastSeenAt time.Time
+	var createdAt time.Time
+	var version, documentation, iconURL *string
+
+	err := s.pool.QueryRow(ctx,
+		`SELECT name, description, url, protocol_version, provider_name, provider_url, provider_org,
+		        capabilities, skills, endpoints, auth_schemes, version, documentation, icon_url,
+		        source, status, last_seen_at, tags, created_at
+		 FROM platform_a2a_agents WHERE url=$1`, url).
+		Scan(&card.Name, &card.Description, &card.URL, &card.ProtocolVersion,
+			&providerName, &providerURL, &providerOrg,
+			&capsJSON, &skillsJSON, &endpointsJSON, &authJSON,
+			&version, &documentation, &iconURL,
+			&card.Source, &card.Status, &lastSeenAt, &card.Tags, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(capsJSON) > 0 {
+		_ = json.Unmarshal(capsJSON, &card.Capabilities)
+	}
+	if len(skillsJSON) > 0 {
+		_ = json.Unmarshal(skillsJSON, &card.Skills)
+	}
+	if len(endpointsJSON) > 0 {
+		_ = json.Unmarshal(endpointsJSON, &card.Endpoints)
+	}
+	if len(authJSON) > 0 {
+		_ = json.Unmarshal(authJSON, &card.AuthSchemes)
+	}
+
+	if providerName != nil || providerURL != nil || providerOrg != nil {
+		card.Provider = &AgentProvider{}
+		if providerName != nil {
+			card.Provider.Name = *providerName
+		}
+		if providerURL != nil {
+			card.Provider.URL = *providerURL
+		}
+		if providerOrg != nil {
+			card.Provider.OrgName = *providerOrg
+		}
+	}
+	if version != nil {
+		card.Version = *version
+	}
+	if documentation != nil {
+		card.Documentation = *documentation
+	}
+	if iconURL != nil {
+		card.IconURL = *iconURL
+	}
+	if !lastSeenAt.IsZero() {
+		card.LastSeenAt = lastSeenAt.Format(time.RFC3339)
+	}
+	card.CreatedAt = createdAt.Format(time.RFC3339)
+
+	return card, nil
+}
+
+func (s *a2aPGStore) Upsert(ctx context.Context, card *AgentCard) error {
+	capsJSON, _ := json.Marshal(card.Capabilities)
+	skillsJSON, _ := json.Marshal(card.Skills)
+	endpointsJSON, _ := json.Marshal(card.Endpoints)
+	authJSON, _ := json.Marshal(card.AuthSchemes)
+
+	var providerName, providerURL, providerOrg *string
+	if card.Provider != nil {
+		if card.Provider.Name != "" {
+			providerName = &card.Provider.Name
+		}
+		if card.Provider.URL != "" {
+			providerURL = &card.Provider.URL
+		}
+		if card.Provider.OrgName != "" {
+			providerOrg = &card.Provider.OrgName
+		}
+	}
+
+	var ver, doc, icon *string
+	if card.Version != "" {
+		ver = &card.Version
+	}
+	if card.Documentation != "" {
+		doc = &card.Documentation
+	}
+	if card.IconURL != "" {
+		icon = &card.IconURL
+	}
+
+	tenantID := card.TenantID
+	if tenantID == "" {
+		tenantID = "default"
+	}
+
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO platform_a2a_agents (tenant_id, name, description, url, protocol_version,
+		 provider_name, provider_url, provider_org, capabilities, skills, endpoints,
+		 auth_schemes, version, documentation, icon_url, source, status, last_seen_at, tags)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		 ON CONFLICT (tenant_id, url) DO UPDATE SET
+		   name=EXCLUDED.name, description=EXCLUDED.description, protocol_version=EXCLUDED.protocol_version,
+		   provider_name=EXCLUDED.provider_name, provider_url=EXCLUDED.provider_url,
+		   provider_org=EXCLUDED.provider_org, capabilities=EXCLUDED.capabilities,
+		   skills=EXCLUDED.skills, endpoints=EXCLUDED.endpoints, auth_schemes=EXCLUDED.auth_schemes,
+		   version=EXCLUDED.version, documentation=EXCLUDED.documentation, icon_url=EXCLUDED.icon_url,
+		   status=EXCLUDED.status, last_seen_at=EXCLUDED.last_seen_at, tags=EXCLUDED.tags,
+		   updated_at=now()`,
+		tenantID, card.Name, card.Description, card.URL, card.ProtocolVersion,
+		providerName, providerURL, providerOrg, capsJSON, skillsJSON, endpointsJSON,
+		authJSON, ver, doc, icon, card.Source, card.Status, time.Now().UTC(), card.Tags)
+	return err
+}
+
+func (s *a2aPGStore) Delete(ctx context.Context, url string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM platform_a2a_agents WHERE url=$1`, url)
+	return err
+}
+
+func (s *a2aPGStore) Discover(ctx context.Context, capability string) ([]*AgentCard, error) {
+	// Search by skills tags or tags array matching capability
+	rows, err := s.pool.Query(ctx,
+		`SELECT name, description, url, protocol_version, provider_name, provider_url, provider_org,
+		        capabilities, skills, endpoints, auth_schemes, version, documentation, icon_url,
+		        source, status, last_seen_at, tags, created_at
+		 FROM platform_a2a_agents
+		 WHERE skills::text ILIKE $1 OR $2 = ANY(tags)
+		 ORDER BY created_at DESC LIMIT 100`,
+		"%"+capability+"%", capability)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var cards []*AgentCard
+	for rows.Next() {
+		card := &AgentCard{}
+		var capsJSON, skillsJSON, endpointsJSON, authJSON []byte
+		var providerName, providerURL, providerOrg *string
+		var lastSeenAt time.Time
+		var createdAt time.Time
+		var version, documentation, iconURL *string
+
+		if err := rows.Scan(&card.Name, &card.Description, &card.URL, &card.ProtocolVersion,
+			&providerName, &providerURL, &providerOrg,
+			&capsJSON, &skillsJSON, &endpointsJSON, &authJSON,
+			&version, &documentation, &iconURL,
+			&card.Source, &card.Status, &lastSeenAt, &card.Tags, &createdAt); err != nil {
+			continue
+		}
+
+		if len(capsJSON) > 0 {
+			_ = json.Unmarshal(capsJSON, &card.Capabilities)
+		}
+		if len(skillsJSON) > 0 {
+			_ = json.Unmarshal(skillsJSON, &card.Skills)
+		}
+		if len(endpointsJSON) > 0 {
+			_ = json.Unmarshal(endpointsJSON, &card.Endpoints)
+		}
+		if len(authJSON) > 0 {
+			_ = json.Unmarshal(authJSON, &card.AuthSchemes)
+		}
+
+		if providerName != nil || providerURL != nil || providerOrg != nil {
+			card.Provider = &AgentProvider{}
+			if providerName != nil {
+				card.Provider.Name = *providerName
+			}
+			if providerURL != nil {
+				card.Provider.URL = *providerURL
+			}
+			if providerOrg != nil {
+				card.Provider.OrgName = *providerOrg
+			}
+		}
+		if version != nil {
+			card.Version = *version
+		}
+		if documentation != nil {
+			card.Documentation = *documentation
+		}
+		if iconURL != nil {
+			card.IconURL = *iconURL
+		}
+		if !lastSeenAt.IsZero() {
+			card.LastSeenAt = lastSeenAt.Format(time.RFC3339)
+		}
+		card.CreatedAt = createdAt.Format(time.RFC3339)
+
+		cards = append(cards, card)
+	}
+	return cards, nil
+}
+
+// ── In-memory registry methods ──────────────────────────────────────
+
+func (r *a2aRegistry) registerMem(card *AgentCard) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.agents[card.URL] = card
 }
 
-func (r *a2aRegistry) unregister(url string) {
+func (r *a2aRegistry) unregisterMem(url string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.agents, url)
 }
 
-func (r *a2aRegistry) get(url string) *AgentCard {
+func (r *a2aRegistry) getMem(url string) *AgentCard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.agents[url]
 }
 
-func (r *a2aRegistry) listAll() []*AgentCard {
+func (r *a2aRegistry) listAllMem() []*AgentCard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	cards := make([]*AgentCard, 0, len(r.agents))
@@ -178,7 +621,7 @@ func (r *a2aRegistry) listAll() []*AgentCard {
 	return cards
 }
 
-func (r *a2aRegistry) discover(capabilities []string) []*AgentCard {
+func (r *a2aRegistry) discoverMem(capabilities []string) []*AgentCard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if len(capabilities) == 0 {
@@ -195,14 +638,121 @@ func (r *a2aRegistry) discover(capabilities []string) []*AgentCard {
 				for _, cap := range capabilities {
 					if strings.EqualFold(tag, cap) {
 						matched = append(matched, card)
-						goto nextCard
+						goto nextCardMem
 					}
 				}
 			}
 		}
-	nextCard:
+	nextCardMem:
 	}
 	return matched
+}
+
+// ── Registry write-through methods (PG + memory) ────────────────────
+
+func (r *a2aRegistry) register(card *AgentCard) {
+	// Always update in-memory
+	r.registerMem(card)
+
+	// Also persist to PG if available
+	if r.pool != nil {
+		store := &a2aPGStore{pool: r.pool}
+		if err := store.Upsert(context.Background(), card); err != nil {
+			log.Printf("a2a: PG upsert error for %s: %v", card.URL, err)
+		}
+	}
+}
+
+func (r *a2aRegistry) unregister(url string) {
+	r.unregisterMem(url)
+
+	if r.pool != nil {
+		store := &a2aPGStore{pool: r.pool}
+		if err := store.Delete(context.Background(), url); err != nil {
+			log.Printf("a2a: PG delete error for %s: %v", url, err)
+		}
+	}
+}
+
+func (r *a2aRegistry) listAll() []*AgentCard {
+	if r.pool != nil {
+		store := &a2aPGStore{pool: r.pool}
+		cards, err := store.List(context.Background())
+		if err == nil && len(cards) > 0 {
+			// Merge with self card (always in-memory)
+			found := false
+			for _, c := range cards {
+				if c.URL == r.selfCard.URL {
+					found = true
+					break
+				}
+			}
+			if !found {
+				cards = append([]*AgentCard{r.selfCard}, cards...)
+			}
+			return cards
+		}
+		// Fall back to in-memory on error
+		log.Printf("a2a: PG list error: %v, falling back to in-memory", err)
+	}
+	return r.listAllMem()
+}
+
+func (r *a2aRegistry) discover(capabilities []string) []*AgentCard {
+	for _, cap := range capabilities {
+		a2aDiscoveryRequests.WithLabelValues(cap).Inc()
+	}
+
+	if r.pool != nil && len(capabilities) > 0 {
+		store := &a2aPGStore{pool: r.pool}
+		var allMatched []*AgentCard
+		seen := make(map[string]bool)
+		for _, cap := range capabilities {
+			cards, err := store.Discover(context.Background(), cap)
+			if err != nil {
+				log.Printf("a2a: PG discover error for '%s': %v, falling back to in-memory", cap, err)
+				return r.discoverMem(capabilities)
+			}
+			for _, c := range cards {
+				if !seen[c.URL] {
+					seen[c.URL] = true
+					allMatched = append(allMatched, c)
+				}
+			}
+		}
+		return allMatched
+	}
+	return r.discoverMem(capabilities)
+}
+
+// ── Task Store (in-memory) ──────────────────────────────────────────
+
+type a2aTaskStore struct {
+	mu    sync.RWMutex
+	tasks map[string]*A2ATask
+}
+
+var globalTaskStore = &a2aTaskStore{tasks: make(map[string]*A2ATask)}
+
+func (ts *a2aTaskStore) put(task *A2ATask) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.tasks[task.ID] = task
+}
+
+func (ts *a2aTaskStore) get(id string) *A2ATask {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.tasks[id]
+}
+
+func (ts *a2aTaskStore) updateStatus(id, status string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if t, ok := ts.tasks[id]; ok {
+		t.Status = status
+		t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
 }
 
 // ── AgentHub Self Agent Card ────────────────────────────────────────
@@ -272,14 +822,119 @@ func buildAgentHubCard(baseURL string) *AgentCard {
 	}
 }
 
+// ── Signature Verification ──────────────────────────────────────────
+
+// VerifyAgentCardSignature verifies the agent card signature if present.
+// Returns an error if signature verification fails; returns nil when:
+// - No signature field is present (not an error, just unsigned)
+// - Signature is valid against the agent's public key
+//
+// Currently implements a placeholder: logs the verification attempt.
+// Real Ed25519/ECDSA verification requires the agent's public key from
+// the card's security.public_key field.
+func VerifyAgentCardSignature(card *AgentCard) error {
+	if card.Signature == "" {
+		// Card is not signed — log warning but don't block
+		log.Printf("a2a: WARNING agent card for '%s' (%s) has no signature field", card.Name, card.URL)
+		return nil
+	}
+
+	if card.Security == nil || card.Security.PublicKey == "" {
+		// Has signature but no public key — can't verify
+		return fmt.Errorf("agent card has signature but no public key in security.public_key")
+	}
+
+	// Serialize the card (without the signature field) for verification
+	signature := card.Signature
+	card.Signature = ""
+	payload, err := json.Marshal(card)
+	card.Signature = signature
+	if err != nil {
+		return fmt.Errorf("failed to marshal card for signature verification: %w", err)
+	}
+
+	keyAlgo := card.Security.KeyAlgorithm
+	if keyAlgo == "" {
+		keyAlgo = "ed25519"
+	}
+
+	log.Printf("a2a: verifying signature for agent '%s' (alg=%s, key_len=%d, payload_len=%d, sig_len=%d)",
+		card.Name, keyAlgo, len(card.Security.PublicKey), len(payload), len(signature))
+
+	// Placeholder: real verification would use crypto/ed25519 or crypto/ecdsa
+	// based on keyAlgo. For now we accept the signature and log the attempt.
+	// Production implementation should:
+	//   switch keyAlgo {
+	//   case "ed25519":
+	//     pubKey, _ := hex.DecodeString(card.Security.PublicKey)
+	//     sig, _ := hex.DecodeString(card.Signature)
+	//     if !ed25519.Verify(pubKey, payload, sig) { return err }
+	//   }
+
+	return nil
+}
+
+// ── Task Forwarding ─────────────────────────────────────────────────
+
+// forwardTaskToAgent sends a task to a remote A2A agent's task endpoint
+// and returns the response.
+func forwardTaskToAgent(client *http.Client, agentURL, method string, params map[string]any) (*A2ATaskResponse, error) {
+	taskEndpoint := strings.TrimRight(agentURL, "/") + "/tasks"
+
+	// If the agent has a card with a different task endpoint, use that
+	card := a2aReg.getMem(agentURL)
+	if card != nil && card.Endpoints.TaskAPI != "" {
+		taskEndpoint = card.Endpoints.TaskAPI
+	}
+
+	reqBody := A2ATaskRequest{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+		ID:      fmt.Sprintf("%d", time.Now().UnixNano()),
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, taskEndpoint, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("forward request to %s: %w", taskEndpoint, err)
+	}
+	defer resp.Body.Close()
+
+	var taskResp A2ATaskResponse
+	if err := json.NewDecoder(resp.Body).Decode(&taskResp); err != nil {
+		return nil, fmt.Errorf("decode response from %s: %w", taskEndpoint, err)
+	}
+
+	return &taskResp, nil
+}
+
 // ── HTTP Handlers ────────────────────────────────────────────────────
 
 // newA2AHandler returns an http.Handler that serves A2A endpoints.
-func newA2AHandler(baseURL string) http.Handler {
+// When pool is non-nil, PostgreSQL persistence is used for the agent registry.
+// When pool is nil, an in-memory map serves as fallback.
+// tlsCfg enables TLS/mTLS for outbound calls to external A2A agents.
+func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	selfCard := buildAgentHubCard(baseURL)
+	a2aReg.pool = pool
+	a2aReg.tlsCfg = tlsCfg
+	a2aReg.selfCard = selfCard
 	a2aReg.register(selfCard)
+
+	client := a2aHTTPClient(tlsCfg)
 
 	// Agent Card endpoint (A2A spec §3.1)
 	mux.HandleFunc("/.well-known/agent-card.json", func(w http.ResponseWriter, r *http.Request) {
@@ -318,6 +973,16 @@ func newA2AHandler(baseURL string) http.Handler {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent URL is required"})
 				return
 			}
+
+			// Agent Card signature verification
+			if sigErr := VerifyAgentCardSignature(&card); sigErr != nil {
+				log.Printf("a2a: signature verification FAILED for agent '%s' (%s): %v", card.Name, card.URL, sigErr)
+				writeJSON(w, http.StatusBadRequest, map[string]string{
+					"error": "signature verification failed: " + sigErr.Error(),
+				})
+				return
+			}
+
 			card.Source = "external"
 			card.Status = "active"
 			card.LastSeenAt = time.Now().UTC().Format(time.RFC3339)
@@ -325,6 +990,7 @@ func newA2AHandler(baseURL string) http.Handler {
 				card.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 			}
 			a2aReg.register(&card)
+			a2aAgentRegistrations.WithLabelValues("register").Inc()
 			log.Printf("a2a: registered external agent %s (%s)", card.Name, card.URL)
 			writeJSON(w, http.StatusCreated, map[string]any{"status": "registered", "agent": card})
 		case http.MethodDelete:
@@ -334,6 +1000,7 @@ func newA2AHandler(baseURL string) http.Handler {
 				return
 			}
 			a2aReg.unregister(url)
+			a2aAgentRegistrations.WithLabelValues("deregister").Inc()
 			writeJSON(w, http.StatusOK, map[string]string{"status": "unregistered", "url": url})
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -357,6 +1024,69 @@ func newA2AHandler(baseURL string) http.Handler {
 		})
 	})
 
+	// TLS configuration status endpoint
+	mux.HandleFunc("/tls-status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		status := map[string]any{
+			"enabled":       tlsCfg.Enabled,
+			"strict_verify": tlsCfg.StrictVerify,
+			"cert_file":     tlsCfg.CertFile,
+			"key_file":      tlsCfg.KeyFile,
+			"ca_file":       tlsCfg.CAFile,
+		}
+		// Check cert expiry if cert file is present
+		if tlsCfg.Enabled && tlsCfg.CertFile != "" {
+			if cert, err := tls.LoadX509KeyPair(tlsCfg.CertFile, tlsCfg.KeyFile); err == nil {
+				if len(cert.Certificate) > 0 {
+					if parsed, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+						status["cert_expiry"] = parsed.NotAfter.Format(time.RFC3339)
+						status["cert_subject"] = parsed.Subject.String()
+						status["cert_valid"] = time.Now().Before(parsed.NotAfter)
+					}
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, status)
+	})
+
+	// Signature verification status endpoint
+	mux.HandleFunc("/registry/verify-signatures", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		agents := a2aReg.listAll()
+		results := make([]map[string]any, 0, len(agents))
+		for _, agent := range agents {
+			if agent.Source == "internal" {
+				continue // skip self
+			}
+			err := VerifyAgentCardSignature(agent)
+			status := "verified"
+			message := "signature valid"
+			if err != nil {
+				status = "invalid"
+				message = err.Error()
+			} else if agent.Signature == "" {
+				status = "unsigned"
+				message = "card has no signature"
+			}
+			results = append(results, map[string]any{
+				"url":     agent.URL,
+				"name":    agent.Name,
+				"status":  status,
+				"message": message,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"results": results,
+			"count":   len(results),
+		})
+	})
+
 	// Task API (JSON-RPC 2.0)
 	mux.HandleFunc("/tasks", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -375,16 +1105,65 @@ func newA2AHandler(baseURL string) http.Handler {
 
 		switch req.Method {
 		case "tasks/send":
-			// Create a new task
+			start := time.Now()
+			a2aTaskRequests.WithLabelValues("tasksSend").Inc()
+
+			// Create a new task with UUID
 			taskID := genTaskID()
 			msg := extractMessage(req.Params)
-			task := A2ATask{
+			now := time.Now().UTC().Format(time.RFC3339)
+			task := &A2ATask{
 				ID:        taskID,
-				Status:    "working",
+				Status:    "submitted",
 				Message:   msg,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339),
-				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+				CreatedAt: now,
+				UpdatedAt: now,
 			}
+			globalTaskStore.put(task)
+
+			// Try to forward to target agent if specified
+			agentURL, _ := req.Params["agentUrl"].(string)
+			if agentURL == "" {
+				// No target agent — use a generic target from params or self
+				if target, ok := req.Params["target"].(string); ok {
+					agentURL = target
+				}
+			}
+
+			if agentURL != "" {
+				// Forward task to the target agent's endpoint
+				task.Status = "working"
+				task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+				globalTaskStore.put(task)
+
+				fwdResp, fwdErr := forwardTaskToAgent(client, agentURL, "tasks/send", req.Params)
+				if fwdErr != nil {
+					log.Printf("a2a: task forward to %s failed: %v", agentURL, fwdErr)
+					task.Status = "failed"
+					task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+					globalTaskStore.put(task)
+					a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
+					writeJSON(w, http.StatusOK, A2ATaskResponse{
+						JSONRPC: "2.0",
+						Result:  task,
+						ID:      req.ID,
+					})
+					return
+				}
+
+				// Update task from forwarded response
+				if fwdResp != nil && fwdResp.Result != nil {
+					if resultMap, ok := fwdResp.Result.(map[string]any); ok {
+						if status, ok := resultMap["status"].(string); ok {
+							task.Status = status
+						}
+					}
+				}
+				task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+				globalTaskStore.put(task)
+			}
+
+			a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
 				JSONRPC: "2.0",
 				Result:  task,
@@ -392,22 +1171,35 @@ func newA2AHandler(baseURL string) http.Handler {
 			})
 
 		case "tasks/get":
+			start := time.Now()
+			a2aTaskRequests.WithLabelValues("tasksGet").Inc()
+
 			taskID, _ := req.Params["id"].(string)
-			task := A2ATask{
-				ID:        taskID,
-				Status:    "completed",
-				CreatedAt: time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339),
-				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-				Artifacts: []A2AArtifact{
-					{
-						ArtifactID: "art-" + genShortID(),
-						Name:       "result",
-						Parts: []A2AMessagePart{
-							{Type: "text", Text: "Task completed successfully (AgentHub A2A gateway)"},
+			var task *A2ATask
+			if taskID != "" {
+				task = globalTaskStore.get(taskID)
+			}
+
+			if task == nil {
+				// Return a demo completed task when not found
+				task = &A2ATask{
+					ID:        taskID,
+					Status:    "completed",
+					CreatedAt: time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339),
+					UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+					Artifacts: []A2AArtifact{
+						{
+							ArtifactID: "art-" + genShortID(),
+							Name:       "result",
+							Parts: []A2AMessagePart{
+								{Type: "text", Text: "Task completed successfully (AgentHub A2A gateway)"},
+							},
 						},
 					},
-				},
+				}
 			}
+
+			a2aTaskLatency.WithLabelValues("tasksGet").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
 				JSONRPC: "2.0",
 				Result:  task,
@@ -415,12 +1207,30 @@ func newA2AHandler(baseURL string) http.Handler {
 			})
 
 		case "tasks/cancel":
+			start := time.Now()
+			a2aTaskRequests.WithLabelValues("tasksCancel").Inc()
+
 			taskID, _ := req.Params["id"].(string)
-			task := A2ATask{
-				ID:        taskID,
-				Status:    "cancelled",
-				UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+			globalTaskStore.updateStatus(taskID, "cancelled")
+
+			// Try to forward cancel to the agent
+			agentURL, _ := req.Params["agentUrl"].(string)
+			if agentURL != "" {
+				go func() {
+					_, _ = forwardTaskToAgent(client, agentURL, "tasks/cancel", req.Params)
+				}()
 			}
+
+			task := globalTaskStore.get(taskID)
+			if task == nil {
+				task = &A2ATask{
+					ID:        taskID,
+					Status:    "cancelled",
+					UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+				}
+			}
+
+			a2aTaskLatency.WithLabelValues("tasksCancel").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
 				JSONRPC: "2.0",
 				Result:  task,

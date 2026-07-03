@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -289,6 +292,96 @@ func (h *toolHandler) handleBindings(w http.ResponseWriter, r *http.Request, age
 	default:
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 	}
+}
+
+// ── Image Search Result Types ────────────────────────────────────────
+
+// ImageSearchResult represents a single result from the image search API.
+type ImageSearchResult struct {
+	ID         string  `json:"id"`
+	Score      float64 `json:"score"`
+	SourceID   string  `json:"source_id"`
+	Collection string  `json:"collection"`
+	Caption    string  `json:"caption"`
+	FileType   string  `json:"file_type"`
+	Width      int     `json:"width,omitempty"`
+	Height     int     `json:"height,omitempty"`
+	URL        string  `json:"url,omitempty"`
+}
+
+// ImageSearchResponse wraps the Python image search API response.
+type ImageSearchResponse struct {
+	Query      string              `json:"query"`
+	Collection string              `json:"collection"`
+	K          int                 `json:"k"`
+	Results    []ImageSearchResult `json:"results"`
+	Warning    string              `json:"warning,omitempty"`
+}
+
+// ExecuteImageSearch calls the Python offline-knowledge-service image-search endpoint.
+// It performs a text-to-image similarity search across the stored image vectors.
+func ExecuteImageSearch(query string, collection string, k int) (*ImageSearchResponse, error) {
+	if k <= 0 {
+		k = 5
+	}
+	if collection == "" {
+		collection = "docs"
+	}
+
+	knowledgeURL := getenv("KNOWLEDGE_SERVICE_URL", "http://127.0.0.1:8092")
+	endpoint := knowledgeURL + "/image-search"
+
+	reqBody := map[string]interface{}{
+		"query":      query,
+		"collection": collection,
+		"k":          k,
+		"mode":       "text",
+	}
+	bodyBytes, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("tool-search-image: request failed: %v", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("tool-search-image: non-200 response (%d): %s", resp.StatusCode, string(respBytes))
+		return nil, &ImageSearchError{StatusCode: resp.StatusCode, Body: string(respBytes)}
+	}
+
+	var result ImageSearchResponse
+	if err := json.Unmarshal(respBytes, &result); err != nil {
+		return nil, err
+	}
+
+	if result.Results == nil {
+		result.Results = []ImageSearchResult{}
+	}
+
+	return &result, nil
+}
+
+// ImageSearchError wraps a non-200 response from the image search API.
+type ImageSearchError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *ImageSearchError) Error() string {
+	return fmt.Sprintf("image search API returned status %d: %s", e.StatusCode, e.Body)
 }
 
 // (randomSuffix is shared via workspace_handler.go)

@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from . import embedding_client, qdrant_repo
 from .config import settings
+from .retrieval_eval import evaluate_retrieval
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,70 @@ async def retrieval_test(
     k = min(max(int(body.get("k", 5)), 1), 50)
     results = await _retrieval_test(query, collection, k)
     return JSONResponse({"query": query, "collection": collection, "k": k, "results": results})
+
+
+@router.post("/evaluate-retrieval")
+async def evaluate_retrieval_endpoint(
+    body: dict[str, Any],
+):
+    """Run a retrieval evaluation with golden chunk IDs.
+
+    Body:
+      {
+        query: str,
+        collection: str = "docs",
+        golden_chunk_ids: [str, ...],   // list of ground-truth chunk IDs
+        k: int = 10                      // top-K to retrieve
+      }
+
+    Returns:
+      {
+        query, collection, k,
+        metrics: { ndcg_at_5, ndcg_at_10, mrr, recall_at_5, recall_at_10,
+                   precision_at_5, precision_at_10, ap },
+        results: [{id, score, content, source_id, chunk_index, relevant}]  // relevant: bool
+      }
+    """
+    query = body.get("query", "")
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    collection = body.get("collection", "docs")
+    golden_chunk_ids = body.get("golden_chunk_ids", [])
+    if not isinstance(golden_chunk_ids, list) or not golden_chunk_ids:
+        raise HTTPException(status_code=400, detail="golden_chunk_ids must be a non-empty list")
+    k = min(max(int(body.get("k", 10)), 1), 50)
+
+    results = await _retrieval_test(query, collection, k)
+
+    # Compute evaluation metrics
+    golden_set = set(golden_chunk_ids)
+    metrics = evaluate_retrieval(query, results, golden_chunk_ids)
+
+    # Annotate each result with a relevance flag
+    annotated_results = []
+    for r in results:
+        rid = str(r.get("id", ""))
+        annotated_results.append({
+            **r,
+            "relevant": rid in golden_set,
+        })
+
+    return JSONResponse({
+        "query": query,
+        "collection": collection,
+        "k": k,
+        "metrics": {
+            "ndcg_at_5": metrics["ndcg_at_5"],
+            "ndcg_at_10": metrics["ndcg_at_10"],
+            "mrr": metrics["mrr"],
+            "recall_at_5": metrics["recall_at_5"],
+            "recall_at_10": metrics["recall_at_10"],
+            "precision_at_5": metrics["precision_at_5"],
+            "precision_at_10": metrics["precision_at_10"],
+            "ap": metrics["ap"],
+        },
+        "results": annotated_results,
+    })
 
 
 # ── Multimodal / Image Search Routes (P1-5) ───────────────────────────

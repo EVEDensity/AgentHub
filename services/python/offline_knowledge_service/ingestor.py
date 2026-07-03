@@ -44,6 +44,7 @@ async def ingest(req: IngestRequest, repo: qdrant_repo.QdrantRepo) -> IngestResu
         req.content,
         chunk_size=req.chunking.chunk_size,
         overlap=req.chunking.overlap,
+        document_id=req.source_id,
     )
 
     if not chunks:

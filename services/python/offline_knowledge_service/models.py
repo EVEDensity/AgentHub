@@ -39,6 +39,9 @@ class Chunk(BaseModel):
     index: int  # 在原文中的序号（0-based）
     start_offset: int  # 原文字符偏移
     end_offset: int
+    chunk_id: str = ""  # 确定性 chunk ID（{document_id}_chunk_{index}）
+    prev_chunk_id: str = ""  # 前一个 chunk ID（用于上下文扩展）
+    next_chunk_id: str = ""  # 后一个 chunk ID（用于上下文扩展）
 
 
 class IngestResult(BaseModel):

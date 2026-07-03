@@ -143,6 +143,9 @@ class QdrantRepo:
                 "chunk_total": total,
                 "start_offset": chunk.start_offset,
                 "end_offset": chunk.end_offset,
+                "chunk_id": chunk.chunk_id,
+                "prev_chunk_id": chunk.prev_chunk_id,
+                "next_chunk_id": chunk.next_chunk_id,
             }
             # 扁平化文档级 metadata（不覆盖上述保留字段）。
             for k, v in metadata.items():
