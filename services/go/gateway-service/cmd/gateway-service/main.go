@@ -392,7 +392,7 @@ func main() {
 	mux.Handle("/platform/channels/", channels)
 
 	// ── ContextOS — Unified Context Engine ───────────────────────
-	ctxEngine := newContextEngine(bus)
+	ctxEngine := newContextEngine(bus, pool)
 	mux.Handle("/context/", ctxEngine)
 	mux.Handle("/context", ctxEngine)
 

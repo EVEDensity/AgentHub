@@ -1,21 +1,21 @@
 go 1.22.0
 
 use (
-	./gateway-service
-	./realtime-orchestrator
-	./session-service
-	./tool-permission-service
 	./agent-runtime-control-plane
-	./stream-delivery-service
 	./audit-log-service
+	./gateway-service
 	./iam-service
 	./mcp-gateway
+	./realtime-orchestrator
 	./sandbox-service
-	./shared/obs
-	./shared/state
+	./session-service
+	./shared/crypto
+	./shared/db
 	./shared/eventbus
 	./shared/events
-	./shared/db
 	./shared/iam
-	./shared/crypto
+	./shared/obs
+	./shared/state
+	./stream-delivery-service
+	./tool-permission-service
 )

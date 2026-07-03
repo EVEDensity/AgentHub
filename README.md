@@ -14,19 +14,19 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/agenthub/platform/stargazers">
+  <a href="https://github.com/EVEDensity/AgentHub/stargazers">
     <img src="https://img.shields.io/github/stars/agenthub/platform?style=flat-square&color=yellow" alt="Stars">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0">
   </a>
-  <a href="https://github.com/agenthub/platform/releases">
+  <a href="https://github.com/EVEDensity/AgentHub/releases">
     <img src="https://img.shields.io/github/v/release/agenthub/platform?style=flat-square&color=purple" alt="Release">
   </a>
   <a href="CONTRIBUTING.md">
     <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome">
   </a>
-  <a href="https://github.com/agenthub/platform/issues">
+  <a href="https://github.com/EVEDensity/AgentHub/issues">
     <img src="https://img.shields.io/github/issues/agenthub/platform?style=flat-square&color=red" alt="Issues">
   </a>
 </p>
@@ -66,7 +66,7 @@ Most AI platforms treat agents as **glorified chatbots with tool access**. Agent
 
 ```bash
 # Clone and start everything — one command
-git clone https://github.com/agenthub/platform.git
+git clone https://github.com/EVEDensity/AgentHub.git
 cd platform/deploy
 docker compose -f docker-compose.platform.yml up -d
 ```
@@ -163,19 +163,19 @@ AgentHub is a community-driven project — **your contributions make it better**
 
 ### Ways to Contribute
 
-| 🐛 [Report Bugs](https://github.com/agenthub/platform/issues/new) | 💡 [Suggest Features](https://github.com/agenthub/platform/issues/new) | 📝 [Improve Docs](https://github.com/agenthub/platform) | 🔌 [Add Providers](CONTRIBUTING.md) | ⭐ [Star the Repo](https://github.com/agenthub/platform) |
+| 🐛 [Report Bugs](https://github.com/EVEDensity/AgentHub/issues/new) | 💡 [Suggest Features](https://github.com/EVEDensity/AgentHub/issues/new) | 📝 [Improve Docs](https://github.com/EVEDensity/AgentHub) | 🔌 [Add Providers](CONTRIBUTING.md) | ⭐ [Star the Repo](https://github.com/EVEDensity/AgentHub) |
 |---|---|---|---|---|
 
 ### Getting Started as a Contributor
 
 1. **Read** [`CONTRIBUTING.md`](CONTRIBUTING.md) — issue-first policy, commit conventions, dev setup
-2. **Find an issue** tagged [`good first issue`](https://github.com/agenthub/platform/issues?q=label%3A%22good+first+issue%22)
+2. **Find an issue** tagged [`good first issue`](https://github.com/EVEDensity/AgentHub/issues?q=label%3A%22good+first+issue%22)
 3. **Comment** on the issue to let others know you're working on it
 4. **Open a PR** — keep it focused, reference the issue, and we'll review!
 
 ```bash
 # Development setup
-git clone https://github.com/agenthub/platform.git
+git clone https://github.com/EVEDensity/AgentHub.git
 cd platform
 docker compose -f deploy/docker-compose.platform.yml up -d nats postgres redis
 
@@ -195,7 +195,7 @@ cd frontend && npm install && npm run dev
 If AgentHub helps you, consider:
 
 - ⭐ **Starring the repo** — it helps others discover the project
-- 🐦 **Sharing** your use case in [Discussions](https://github.com/agenthub/platform/discussions)
+- 🐦 **Sharing** your use case in [Discussions](https://github.com/EVEDensity/AgentHub/discussions)
 - 🔧 **Contributing** code, docs, or feedback
 - 📣 **Telling** your friends and colleagues
 
