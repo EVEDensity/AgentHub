@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/agenthub/platform/shared/db"
@@ -128,19 +130,9 @@ func main() {
 	hub := NewHub()
 	instance := getenv("HOSTNAME", "local")
 
-	// Redis connection registry (optional — works without Redis in dev mode).
-	// When REDIS_ADDR is set, the hub writes per-connection route entries so
-	// multi-instance deployments can discover which gateway holds a session.
+	// Redis will be connected after rate limiter creation (for WithDistributed).
 	redisAddr := getenv("REDIS_ADDR", "")
-	if redisAddr != "" {
-		store := state.Connect(redisAddr)
-		defer store.Close()
-		rr := newRouteRegistry(store, instance)
-		hub.WithRouteRegistry(rr)
-		log.Printf("gateway route registry enabled: redis=%s instance=%s", redisAddr, instance)
-	} else {
-		log.Printf("gateway route registry disabled (REDIS_ADDR not set) — running with in-memory hub only")
-	}
+	var redisStore *state.Store
 
 	jwtSecret := []byte(getenv("JWT_SECRET", ""))
 	// TokenIssuer is shared by the HTTP auth middleware and the WebSocket
@@ -193,6 +185,22 @@ func main() {
 		LayerAgent:  {Capacity: getenvFloat("RATE_LIMIT_AGENT_CAPACITY", 50), Rate: getenvFloat("RATE_LIMIT_AGENT_RATE", 20)},
 		LayerTool:   {Capacity: getenvFloat("RATE_LIMIT_TOOL_CAPACITY", 20), Rate: getenvFloat("RATE_LIMIT_TOOL_RATE", 5)},
 	})
+
+	// ── Redis (Sprint M6: distributed rate limiting + cache + routes) ──
+	if redisAddr != "" {
+		redisStore = state.Connect(redisAddr)
+		defer redisStore.Close()
+		rr := newRouteRegistry(redisStore, instance)
+		hub.WithRouteRegistry(rr)
+		rl.WithDistributed(redisStore)
+		log.Printf("gateway: redis enabled addr=%s instance=%s (routes+ratelimit+cache)", redisAddr, instance)
+	} else {
+		log.Printf("gateway: redis disabled (REDIS_ADDR not set) — single-instance mode")
+	}
+
+	// ── Cache Manager (Sprint M3) ────────────────────────────────────
+	cacheMgr := NewCacheManager(redisStore)
+	_ = cacheMgr
 
 	mux := http.NewServeMux()
 	// Sprint K6: Enhanced health check — reports PG and NATS dependency status.
@@ -253,6 +261,8 @@ func main() {
 				"connections":       hub.clientCount(),
 				"jwt_enforced":      len(jwtSecret) > 0,
 				"rate_limit_buckets": rl.ActiveBuckets(),
+				"rate_limit_stats":   rl.Stats(),
+				"redis_connected":    redisStore != nil,
 			})
 		})
 		mux.HandleFunc("/routes", func(w http.ResponseWriter, r *http.Request) {
@@ -503,6 +513,7 @@ func main() {
 		getenvFloat("RATE_LIMIT_TENANT_CAPACITY", 200), getenvFloat("RATE_LIMIT_TENANT_RATE", 100),
 		getenvFloat("RATE_LIMIT_AGENT_CAPACITY", 50), getenvFloat("RATE_LIMIT_AGENT_RATE", 20),
 		getenvFloat("RATE_LIMIT_TOOL_CAPACITY", 20), getenvFloat("RATE_LIMIT_TOOL_RATE", 5))
+
 	// Auth middleware sits inside rate limiting (so rejected auth still counts
 	// against the caller's bucket) and outside the route mux. Public endpoints
 	// (/healthz, /metrics, /profile, /ws) bypass auth; /ws runs its own JWT
@@ -511,7 +522,66 @@ func main() {
 		authDenied.WithLabelValues("unauthorized").Inc()
 	})
 	handler := obs.Middleware("gateway-service", rateLimitMiddleware(rl, authMW(mux)))
-	log.Fatal(http.ListenAndServe(addr, handler))
+
+	// ── Optional Chaos Middleware (Sprint M6) ────────────────────────
+	chaosCfg := ChaosConfigFromEnv()
+	if chaosCfg.LatencyMs > 0 || chaosCfg.ErrorRate > 0 {
+		handler = ChaosMiddleware(chaosCfg, handler)
+	}
+
+	// ── Graceful Shutdown (Sprint M6) ───────────────────────────────
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Channel to capture server errors
+	errCh := make(chan error, 1)
+
+	// Start server in a goroutine
+	go func() {
+		log.Printf("gateway-service: http server starting on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+
+	// ── Wait for shutdown signal ────────────────────────────────────
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case sig := <-quit:
+		log.Printf("gateway-service: received signal %v, initiating graceful shutdown...", sig)
+	case err := <-errCh:
+		log.Printf("gateway-service: server error: %v, shutting down...", err)
+	}
+
+	// Mark as shutting down (health/readiness probes will fail)
+	shutdownCtx := NewShutdownContext(DefaultShutdownConfig())
+	shutdownCtx.Initiate()
+
+	// Give load balancer time to detect the failing readiness probe
+	log.Printf("gateway-service: draining for %v before stopping...", shutdownCtx.config.HealthFailDelay)
+	time.Sleep(shutdownCtx.config.HealthFailDelay)
+
+	// Create a deadline for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownCtx.config.DrainTimeout)
+	defer cancel()
+
+	// Shutdown HTTP server (stops accepting new connections, waits for active)
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("gateway-service: forced shutdown after timeout: %v", err)
+	} else {
+		log.Printf("gateway-service: http server gracefully stopped")
+	}
+
+	// Close WebSocket hub
+	hub.Shutdown()
+
+	log.Printf("gateway-service: shutdown complete")
 }
 
 func getenv(key, fallback string) string {
@@ -542,4 +612,13 @@ func fallbackInt(primary, secondary int) int {
 		return primary
 	}
 	return secondary
+}
+
+func getenvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }
