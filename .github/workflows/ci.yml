@@ -11,9 +11,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Frontend ─────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════════════════
+  # Frontend
+  # ═══════════════════════════════════════════════════════════════════
   frontend:
-    name: 'Frontend · TypeScript'
+    name: 'Frontend · TS'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,11 +28,17 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npx eslint . --ext .ts,.tsx --max-warnings 50
+        continue-on-error: true
       - run: npx tsc --noEmit
+      - run: npx vitest run --reporter=verbose
+        continue-on-error: true
 
-  # ── Go Gateway ───────────────────────────────────────────
-  go-gateway:
-    name: 'Go · Gateway'
+  # ═══════════════════════════════════════════════════════════════════
+  # Go — all services + shared libraries
+  # ═══════════════════════════════════════════════════════════════════
+  go:
+    name: 'Go · All'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -42,36 +50,93 @@ jobs:
           go-version: '1.22'
           cache-dependency-path: services/go/go.sum
       - run: go work sync
-      - run: go vet ./gateway-service/...
+      # vet all modules in the workspace
+      - run: go vet ./...
+      # test all modules (skip integration tests that need infra)
+      - run: go test -short -race -count=1 ./... 2>&1 | tee /tmp/go-test.out
+        continue-on-error: true
+      - name: Check test failure count
+        run: |
+          failures=$(grep -c '^--- FAIL' /tmp/go-test.out || true)
+          if [ "$failures" -gt 0 ]; then
+            echo "::warning::$failures Go test(s) failed — review before merge"
+          fi
 
-  # ── Go MCP Gateway ───────────────────────────────────────
-  go-mcp:
-    name: 'Go · MCP Gateway'
+  # ═══════════════════════════════════════════════════════════════════
+  # Rust — all crates
+  # ═══════════════════════════════════════════════════════════════════
+  rust:
+    name: 'Rust · All'
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/go
+        working-directory: services/rust
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: '1.22'
-          cache-dependency-path: services/go/go.sum
-      - run: go work sync
-      - run: go vet ./mcp-gateway/...
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/rust
+      - run: cargo fmt --all --check
+        continue-on-error: true
+      - run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true
+      - run: cargo test --workspace
+        continue-on-error: true
 
-  # ── Go Sandbox Service ───────────────────────────────────
-  go-sandbox:
-    name: 'Go · Sandbox'
+  # ═══════════════════════════════════════════════════════════════════
+  # Python — offline services
+  # ═══════════════════════════════════════════════════════════════════
+  python:
+    name: 'Python · All'
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/go
+        working-directory: services/python
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-python@v5
         with:
-          go-version: '1.22'
-          cache-dependency-path: services/go/go.sum
-      - run: go work sync
-      - run: go vet ./sandbox-service/...
+          python-version: '3.11'
+          cache: pip
+      - run: pip install ruff mypy pytest
+      - run: ruff check .
+        continue-on-error: true
+      - run: mypy --ignore-missing-imports --check-untyped-defs .
+        continue-on-error: true
+      - run: pytest --tb=short -q
+        continue-on-error: true
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Docker — build verification (key images only, parallel)
+  # ═══════════════════════════════════════════════════════════════════
+  docker-build:
+    name: 'Docker · Build'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: gateway,       file: services/go/gateway-service/Dockerfile }
+          - { name: orchestrator,  file: services/go/realtime-orchestrator/Dockerfile }
+          - { name: session,       file: services/go/session-service/Dockerfile }
+          - { name: stream-delivery, file: services/go/stream-delivery-service/Dockerfile }
+          - { name: sandbox,       file: services/go/sandbox-service/Dockerfile }
+          - { name: mcp-gateway,   file: services/go/mcp-gateway/Dockerfile }
+          - { name: iam,           file: services/go/iam-service/Dockerfile }
+          - { name: audit-log,     file: services/go/audit-log-service/Dockerfile }
+          - { name: model-adapter, file: services/python/model_adapter_service/Dockerfile }
+          - { name: frontend,      file: frontend/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.image.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.image.file }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

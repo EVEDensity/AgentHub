@@ -212,6 +212,7 @@ func (c *Client) Exec(containerID string, command string) (*ExecResult, error) {
 		"AttachStdout": true,
 		"AttachStderr": true,
 	}
+	// Use application/vnd.docker.raw-stream for proper TTY=false multiplexing
 	createResp, err := c.do("POST", "/containers/"+containerID+"/exec", createBody)
 	if err != nil {
 		return nil, fmt.Errorf("docker exec create: %w", err)
@@ -224,22 +225,39 @@ func (c *Client) Exec(containerID string, command string) (*ExecResult, error) {
 		return nil, fmt.Errorf("parse exec create: %w", err)
 	}
 
-	// Step 2: Start exec and capture output
+	// Step 2: Start exec — use raw streaming endpoint with upgraded connection
 	startBody := map[string]any{
 		"Detach": false,
 		"Tty":    false,
 	}
-	startResp, err := c.do("POST", "/exec/"+execCreate.ID+"/start", startBody)
+
+	// Use the raw exec start endpoint that returns the multiplexed stream.
+	// Docker API returns: [STREAM_TYPE:1][0x00×3][SIZE:4BE][PAYLOAD:SIZE]...
+	//   STREAM_TYPE 1 = stdout, 2 = stderr
+	rawResp, err := c.doRaw("POST", "/exec/"+execCreate.ID+"/start", startBody)
 	if err != nil {
 		return nil, fmt.Errorf("docker exec start: %w", err)
 	}
 
-	// The Docker API streams exec output in a multiplexed format.
-	// For simplicity, we treat the raw response as stdout (proper parsing
-	// would decode the Docker stream headers — see Docker API docs).
+	// Step 3: Demux the multiplexed Docker stream
+	stdout, stderr := demuxDockerStream(rawResp)
+
+	// Step 4: Inspect the exec instance for the exit code
+	exitCode := 0
+	inspectResp, err := c.do("GET", "/exec/"+execCreate.ID+"/json", nil)
+	if err == nil {
+		var inspect struct {
+			ExitCode int `json:"ExitCode"`
+		}
+		if json.Unmarshal(inspectResp, &inspect) == nil {
+			exitCode = inspect.ExitCode
+		}
+	}
+
 	result := &ExecResult{
-		ExitCode:   0,
-		Stdout:     string(startResp),
+		ExitCode:   exitCode,
+		Stdout:     stdout,
+		Stderr:     stderr,
 		DurationMs: time.Since(start).Milliseconds(),
 	}
 	return result, nil
@@ -292,6 +310,42 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+// doRaw performs a request and returns the raw response body bytes without
+// attempting JSON parsing. Used for Docker's multiplexed stream endpoints.
+func (c *Client) doRaw(method, path string, body any) ([]byte, error) {
+	var r io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		r = bytes.NewReader(b)
+	}
+
+	req, err := http.NewRequest(method, c.baseURL+path, r)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("docker API error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+
+	return data, nil
+}
+
 func (c *Client) do(method, path string, body any) ([]byte, error) {
 	var r io.Reader
 	if body != nil {
@@ -329,4 +383,54 @@ func (c *Client) do(method, path string, body any) ([]byte, error) {
 func shortID() string {
 	// Minimal unique ID without crypto/rand (used only in noop mode).
 	return fmt.Sprintf("%x", time.Now().UnixNano())[:8]
+}
+
+// ── Docker Multiplexed Stream Decoder ──────────────────────────────────
+//
+// When AttachStdout+AttachStderr are set and Tty=false, Docker returns a
+// multiplexed stream with the following frame format (8-byte header):
+//
+//	[STREAM_TYPE:1 byte][0x00:3 bytes][SIZE:4 bytes big-endian][PAYLOAD:SIZE bytes]
+//
+// STREAM_TYPE values:
+//
+//	0 = stdin  (not used in exec output)
+//	1 = stdout
+//	2 = stderr
+//
+// Reference: https://docs.docker.com/reference/api/engine/version/v1.47/#tag/Exec
+
+func demuxDockerStream(raw []byte) (stdout, stderr string) {
+	var outBuf, errBuf []byte
+	offset := 0
+
+	for offset+8 <= len(raw) {
+		streamType := raw[offset]
+		// Skip 3 reserved bytes (offset+1, +2, +3)
+		size := int(raw[offset+4])<<24 | int(raw[offset+5])<<16 | int(raw[offset+6])<<8 | int(raw[offset+7])
+		offset += 8
+
+		if offset+size > len(raw) {
+			// Truncated frame — append remaining as raw
+			if streamType == 2 {
+				errBuf = append(errBuf, raw[offset:]...)
+			} else {
+				outBuf = append(outBuf, raw[offset:]...)
+			}
+			break
+		}
+
+		payload := raw[offset : offset+size]
+		offset += size
+
+		switch streamType {
+		case 1: // stdout
+			outBuf = append(outBuf, payload...)
+		case 2: // stderr
+			errBuf = append(errBuf, payload...)
+		}
+		// streamType 0 (stdin) is ignored in exec output
+	}
+
+	return string(outBuf), string(errBuf)
 }

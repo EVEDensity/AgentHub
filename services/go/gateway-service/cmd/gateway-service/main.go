@@ -472,6 +472,16 @@ func main() {
 		mux.Handle("/platform/utils/video-frames", videoH)
 		mux.Handle("/platform/utils/video-frames/", videoH)
 
+		// ── Public Bot Endpoint (Web App route) ──────────────────────
+		globalAgentVersionHandler = agentVersions
+		mux.HandleFunc("/api/public/bots/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodOptions {
+				handlePublicBotOptions(w, r)
+				return
+			}
+			handlePublicBotConfig(w, r)
+		})
+
 	// ── Channel Connector (Feishu/WeCom) ──────────────────────────
 	channels := newChannelConnector(bus)
 	mux.Handle("/platform/channels", channels)
@@ -518,7 +528,7 @@ func main() {
 	// against the caller's bucket) and outside the route mux. Public endpoints
 	// (/healthz, /metrics, /profile, /ws) bypass auth; /ws runs its own JWT
 	// check during the WebSocket upgrade.
-	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws"}, func(r *http.Request, reason string) {
+	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/api/public/bots/"}, func(r *http.Request, reason string) {
 		authDenied.WithLabelValues("unauthorized").Inc()
 	})
 	handler := obs.Middleware("gateway-service", rateLimitMiddleware(rl, authMW(mux)))
