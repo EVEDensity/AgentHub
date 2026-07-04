@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import type { JSX, ReactNode } from 'react';
 import '../styles/globals.css';
+import { PageTransitionProvider } from '../lib/animations/pageTransitionProvider';
 
 export const metadata: Metadata = {
   title: 'AgentHub — Collaborative AI Development Platform',
@@ -16,9 +17,36 @@ export default function RootLayout({ children }: { children: ReactNode }): JSX.E
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=block"
         />
+        {/* Reduced motion: respect OS-level accessibility preference */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              try {
+                if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                  document.documentElement.classList.add('reduce-motion');
+                }
+                window.matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', function(e) {
+                  document.documentElement.classList.toggle('reduce-motion', e.matches);
+                });
+              } catch(e) {}
+            `,
+          }}
+        />
       </head>
       <body className="bg-warm-50 text-warm-800 antialiased">
-        {children}
+        {/* Skip-to-content link for keyboard navigation (WCAG 2.4.1) */}
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-toast focus:px-4 focus:py-2 focus:bg-primary-500 focus:text-white focus:rounded-lg focus:outline-none focus:shadow-lg"
+        >
+          跳转到内容
+        </a>
+
+        <PageTransitionProvider>
+          <div id="main-content" tabIndex={-1}>
+            {children}
+          </div>
+        </PageTransitionProvider>
       </body>
     </html>
   );

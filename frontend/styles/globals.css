@@ -849,3 +849,52 @@ body {
 .chat-scroll-container {
   contain: layout style;
 }
+
+/* ── Accessibility utilities (WCAG 2.1 AA) ────────────────────────── */
+
+/* Screen-reader-only text (WCAG 1.3.1) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Undo sr-only on focus — show skip-to-content link (WCAG 2.4.1) */
+.sr-only.focus\:not-sr-only:focus {
+  position: static;
+  width: auto;
+  height: auto;
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+/* Keyboard focus ring (WCAG 2.4.7) — visible outline for :focus-visible */
+*:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Suppress focus ring for mouse/touch users (browser default behavior enhanced) */
+*:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Reduced motion: class-based overrides for JS-driven animations */
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
