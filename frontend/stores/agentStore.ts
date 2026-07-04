@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent } from '../types';
+import type { Agent, PublicConfig } from '../types';
 import { useAuthStore } from './authStore';
 import { useAdminStore } from './adminStore';
 
@@ -15,6 +15,7 @@ interface AgentFormState {
   capabilityTags: string[]; baseUrl: string; apiKey: string;
   systemPrompt: string; userPrompt: string; assistantPrompt: string;
   promptVariables: Record<string, string>;
+  publicConfig: PublicConfig;
 }
 
 const EMPTY_AGENT_FORM: AgentFormState = {
@@ -23,6 +24,14 @@ const EMPTY_AGENT_FORM: AgentFormState = {
   capabilityTags: [], baseUrl: '', apiKey: '',
   systemPrompt: '', userPrompt: '', assistantPrompt: '',
   promptVariables: {},
+  publicConfig: {
+    enabled: false,
+    welcomeMessage: '',
+    placeholder: '',
+    themeColor: '#6366f1',
+    logoUrl: '',
+    suggestedQuestions: [],
+  },
 };
 
 interface AgentState {
@@ -231,6 +240,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   startEditAgent: (agent) => {
     const adapter = get().adapterOptions.find((a) => a.id === agent.adapterType) || null;
+    const existingConfig = agent.publicConfig || ({} as Partial<PublicConfig>);
     set({
       editingAgentId: agent.agentId,
       editSelectedAdapterInfo: adapter,
@@ -244,6 +254,14 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         userPrompt: (agent as any).userPrompt || '',
         assistantPrompt: (agent as any).assistantPrompt || '',
         promptVariables: (agent as any).promptVariables || {},
+        publicConfig: {
+          enabled: existingConfig.enabled === true,
+          welcomeMessage: existingConfig.welcomeMessage || '',
+          placeholder: existingConfig.placeholder || '',
+          themeColor: existingConfig.themeColor || '#6366f1',
+          logoUrl: existingConfig.logoUrl || '',
+          suggestedQuestions: existingConfig.suggestedQuestions || [],
+        },
       },
     });
   },

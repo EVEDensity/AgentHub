@@ -3,6 +3,7 @@
 import { type FormEvent, type JSX, useState } from 'react';
 import TagInput from './TagInput';
 import { PromptEditor, type PromptBlockData } from './PromptEditor';
+import type { PublicConfig } from '../../types';
 
 interface AdapterOption {
   id: string; name: string; description: string;
@@ -16,6 +17,7 @@ interface AgentFormState {
   capabilityTags: string[]; baseUrl: string; apiKey: string;
   systemPrompt: string; userPrompt: string; assistantPrompt: string;
   promptVariables: Record<string, string>;
+  publicConfig: PublicConfig;
 }
 
 export interface AgentEditModalProps {
@@ -45,6 +47,7 @@ export default function AgentEditModal(props: AgentEditModalProps): JSX.Element 
   const { mode, agentForm: f, setAgentForm: setF, editingAgentId } = props;
   const isEdit = mode === 'edit';
   const [showPromptEditor, setShowPromptEditor] = useState(false);
+  const [showPublicShare, setShowPublicShare] = useState(false);
 
   // Convert flat form state ↔ PromptBlockData[]
   const promptBlocks: PromptBlockData[] = [
@@ -290,6 +293,146 @@ export default function AgentEditModal(props: AgentEditModalProps): JSX.Element 
                     variables={f.promptVariables || {}}
                     onVariablesChange={handlePromptVarsChange}
                   />
+                </div>
+              )}
+            </div>
+
+            {/* ── Public Share Config (公开分享) ────────────────── */}
+            <div className="md:col-span-2 border-t border-warm-100 pt-4">
+              <button
+                type="button"
+                className="flex items-center gap-2 text-sm font-medium text-warm-600 hover:text-primary-600 transition-colors w-full text-left"
+                onClick={() => setShowPublicShare(!showPublicShare)}
+              >
+                <span className="material-symbols-outlined text-[16px]">
+                  {showPublicShare ? 'expand_less' : 'expand_more'}
+                </span>
+                <span className="material-symbols-outlined text-[14px]">share</span>
+                公开分享设置
+                {f.publicConfig?.enabled && (
+                  <span className="tag tag-green text-[10px]">已启用</span>
+                )}
+              </button>
+              {showPublicShare && (
+                <div className="mt-3 space-y-3 rounded-lg border border-warm-150 bg-warm-50/50 p-4">
+                  {/* Enable toggle */}
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-warm-300 text-primary-600 focus:ring-primary-500"
+                      checked={f.publicConfig?.enabled || false}
+                      onChange={(e) =>
+                        setF((p) => ({
+                          ...p,
+                          publicConfig: { ...p.publicConfig, enabled: e.target.checked },
+                        }))
+                      }
+                    />
+                    <span className="text-sm font-medium text-warm-700">
+                      启用公开访问页面
+                    </span>
+                    <span className="text-xs text-warm-400">
+                      （开启后用户可通过 /app/{'{agentId}'} 访问此 Agent 的公开聊天页）
+                    </span>
+                  </label>
+
+                  {f.publicConfig?.enabled && (
+                    <>
+                      {/* Welcome message */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-warm-500">欢迎消息</label>
+                        <textarea
+                          className="input-field"
+                          rows={2}
+                          placeholder="你好！我是 AI 助手，有什么可以帮你的？"
+                          value={f.publicConfig.welcomeMessage || ''}
+                          onChange={(e) =>
+                            setF((p) => ({
+                              ...p,
+                              publicConfig: { ...p.publicConfig, welcomeMessage: e.target.value },
+                            }))
+                          }
+                        />
+                      </div>
+
+                      {/* Placeholder */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-warm-500">输入框占位文字</label>
+                        <input
+                          className="input-field"
+                          placeholder="输入消息..."
+                          value={f.publicConfig.placeholder || ''}
+                          onChange={(e) =>
+                            setF((p) => ({
+                              ...p,
+                              publicConfig: { ...p.publicConfig, placeholder: e.target.value },
+                            }))
+                          }
+                        />
+                      </div>
+
+                      {/* Theme color + Logo URL side by side */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-warm-500">主题色</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              className="h-8 w-8 cursor-pointer rounded border border-warm-200 p-0"
+                              value={f.publicConfig.themeColor || '#6366f1'}
+                              onChange={(e) =>
+                                setF((p) => ({
+                                  ...p,
+                                  publicConfig: { ...p.publicConfig, themeColor: e.target.value },
+                                }))
+                              }
+                            />
+                            <input
+                              className="input-field flex-1 font-mono text-sm"
+                              placeholder="#6366f1"
+                              value={f.publicConfig.themeColor || ''}
+                              onChange={(e) =>
+                                setF((p) => ({
+                                  ...p,
+                                  publicConfig: { ...p.publicConfig, themeColor: e.target.value },
+                                }))
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-medium text-warm-500">Logo URL</label>
+                          <input
+                            className="input-field"
+                            placeholder="https://..."
+                            value={f.publicConfig.logoUrl || ''}
+                            onChange={(e) =>
+                              setF((p) => ({
+                                ...p,
+                                publicConfig: { ...p.publicConfig, logoUrl: e.target.value },
+                              }))
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      {/* Suggested questions */}
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-warm-500">推荐问题</label>
+                        <TagInput
+                          tags={f.publicConfig.suggestedQuestions || []}
+                          onChange={(tags) =>
+                            setF((p) => ({
+                              ...p,
+                              publicConfig: { ...p.publicConfig, suggestedQuestions: tags },
+                            }))
+                          }
+                          placeholder="输入推荐问题后按 Enter 添加..."
+                          maxTags={8}
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </div>

@@ -98,6 +98,7 @@ class AgentCreateRequest(BaseModel):
     capabilityTags: list[str] = Field(default_factory=list)
     baseUrl: str = ""
     apiKey: str = ""
+    publicConfig: PublicConfig | None = None
 
 
 class AgentUpdateRequest(BaseModel):
@@ -112,6 +113,18 @@ class AgentUpdateRequest(BaseModel):
     capabilityTags: list[str] = Field(default_factory=list)
     baseUrl: str = ""
     apiKey: str = ""
+    publicConfig: PublicConfig | None = None
+
+
+# ── Public Bot Config ────────────────────────────────────────────────
+
+class PublicConfig(BaseModel):
+    enabled: bool = False
+    welcomeMessage: str = ""
+    placeholder: str = ""
+    themeColor: str = "#6366f1"
+    logoUrl: str = ""
+    suggestedQuestions: list[str] = Field(default_factory=list)
 
 
 class DefaultChatAgentRequest(BaseModel):

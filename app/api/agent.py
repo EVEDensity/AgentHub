@@ -194,6 +194,7 @@ async def registry(user: dict = Depends(get_current_user)) -> list[dict]:
         + _AVATAR_SQL + ","
         "a.capability_tags AS \"capabilityTags\","
         "a.base_url AS \"baseUrl\","
+        "a.config,"
         "(a.avatar_data IS NULL) AS \"avatarMissing\""
     )
     rows = await afetch_all(
@@ -253,6 +254,13 @@ async def registry(user: dict = Depends(get_current_user)) -> list[dict]:
             row["capabilityTags"] = json.loads(row.get("capabilityTags", "[]") or "[]")
         except (json.JSONDecodeError, TypeError):
             row["capabilityTags"] = []
+        # Parse config JSON and extract publicConfig
+        try:
+            config = json.loads(row.get("config", "{}") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            config = {}
+        row["publicConfig"] = config.get("publicConfig", {})
+        del row["config"]  # don't leak the raw config to frontend
     return rows
 
 
@@ -273,10 +281,14 @@ async def create_agent(data: AgentCreateRequest, user: dict = Depends(get_curren
             avatar_url = _avatar_url_for(agent_id, user["id"])
 
     try:
+        config_json = json.dumps(
+            {"publicConfig": data.publicConfig.model_dump() if data.publicConfig else {}},
+            ensure_ascii=False,
+        )
         await aexecute(
             "INSERT INTO agent_registry(agent_id,user_id,domain,status,adapter_type,base_model_name,"
-            "risk_level,duty_note,display_name,avatar_url,capability_tags,base_url,api_key) "
-            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            "risk_level,duty_note,display_name,avatar_url,capability_tags,base_url,api_key,config) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
             agent_id,
             user["id"],
             data.domain.strip(),
@@ -290,6 +302,7 @@ async def create_agent(data: AgentCreateRequest, user: dict = Depends(get_curren
             json.dumps(data.capabilityTags or [], ensure_ascii=False),
             data.baseUrl.strip(),
             encrypt_secret(data.apiKey.strip()),
+            config_json,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Agent 已存在或参数无效") from exc
@@ -331,24 +344,28 @@ async def update_agent(agent_id: str, data: AgentUpdateRequest, user: dict = Dep
             avatar_url = _avatar_url_for(agent_id, user["id"])
 
     tags_json = json.dumps(data.capabilityTags or [], ensure_ascii=False)
+    config_json = json.dumps(
+        {"publicConfig": data.publicConfig.model_dump() if data.publicConfig else {}},
+        ensure_ascii=False,
+    )
     if data.apiKey.strip():
         await aexecute(
             "UPDATE agent_registry SET domain=$1,adapter_type=$2,base_model_name=$3,"
             "risk_level=$4,duty_note=$5,display_name=$6,avatar_url=$7,"
-            "capability_tags=$8,base_url=$9,api_key=$10 WHERE agent_id=$11 AND user_id=$12",
+            "capability_tags=$8,base_url=$9,api_key=$10,config=$11 WHERE agent_id=$12 AND user_id=$13",
             data.domain.strip(), data.adapterType, data.baseModelName.strip(),
             data.rankLevel, data.dutyNote.strip(), data.displayName.strip(),
             avatar_url, tags_json, data.baseUrl.strip(),
-            encrypt_secret(data.apiKey.strip()), agent_id, user["id"],
+            encrypt_secret(data.apiKey.strip()), config_json, agent_id, user["id"],
         )
     else:
         await aexecute(
             "UPDATE agent_registry SET domain=$1,adapter_type=$2,base_model_name=$3,"
             "risk_level=$4,duty_note=$5,display_name=$6,avatar_url=$7,"
-            "capability_tags=$8,base_url=$9 WHERE agent_id=$10 AND user_id=$11",
+            "capability_tags=$8,base_url=$9,config=$10 WHERE agent_id=$11 AND user_id=$12",
             data.domain.strip(), data.adapterType, data.baseModelName.strip(),
             data.rankLevel, data.dutyNote.strip(), data.displayName.strip(),
-            avatar_url, tags_json, data.baseUrl.strip(), agent_id, user["id"],
+            avatar_url, tags_json, data.baseUrl.strip(), config_json, agent_id, user["id"],
         )
 
     audit_id = write_audit(user["id"], agent_id, "agent_update", "L2", "approve", {**data.model_dump(), "apiKey": "***" if data.apiKey else ""})

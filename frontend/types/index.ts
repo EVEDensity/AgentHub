@@ -143,6 +143,18 @@ export interface Agent {
   userPrompt?: string;
   assistantPrompt?: string;
   promptVariables?: Record<string, string>;
+  /** Public bot sharing config (stored in agent_registry.config column) */
+  publicConfig?: PublicConfig;
+}
+
+/** Public bot sharing configuration — branding for the /app/[botId] page */
+export interface PublicConfig {
+  enabled: boolean;
+  welcomeMessage: string;
+  placeholder: string;
+  themeColor: string;
+  logoUrl: string;
+  suggestedQuestions: string[];
 }
 
 // ── Platform labels & colors for agent adapter types ──────────────

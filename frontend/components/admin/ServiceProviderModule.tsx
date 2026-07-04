@@ -38,6 +38,7 @@ export interface ServiceProviderModuleProps {
     capabilityTags: string[]; baseUrl: string; apiKey: string;
     systemPrompt: string; userPrompt: string; assistantPrompt: string;
     promptVariables: Record<string, string>;
+    publicConfig: { enabled: boolean; welcomeMessage: string; placeholder: string; themeColor: string; logoUrl: string; suggestedQuestions: string[] };
   };
   editAgent: {
     agentId: string; domain: string; adapterType: string; baseModelName: string;
@@ -45,6 +46,7 @@ export interface ServiceProviderModuleProps {
     capabilityTags: string[]; baseUrl: string; apiKey: string;
     systemPrompt: string; userPrompt: string; assistantPrompt: string;
     promptVariables: Record<string, string>;
+    publicConfig: { enabled: boolean; welcomeMessage: string; placeholder: string; themeColor: string; logoUrl: string; suggestedQuestions: string[] };
   };
   defaultChatAgent: string;
   // Setters

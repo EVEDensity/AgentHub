@@ -479,7 +479,7 @@ func main() {
 				handlePublicBotOptions(w, r)
 				return
 			}
-			handlePublicBotConfig(w, r)
+			handlePublicBotConfig(w, r, pool)
 		})
 
 	// ── Channel Connector (Feishu/WeCom) ──────────────────────────

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/agenthub/platform/shared/db"
 )
 
 // ── Public Bot Config ──────────────────────────────────────────────────
@@ -11,9 +14,10 @@ import (
 // GET /api/public/bots/:botId → returns the public-facing configuration for a
 // bot/agent so the standalone web app page can render custom branding.
 //
-// The bot config is stored inside the agent's metadata JSON field in the
-// platform_agents table. When no custom config is set, sensible defaults are
-// returned so every agent is embeddable out of the box.
+// The bot config is resolved from two sources, merged in priority order:
+//  1. agent_registry.config JSON column (Python API — admin-configured metadata)
+//  2. platform_agent_versions.snapshot["metadata"] (Go version store)
+//  3. Hard-coded defaults for everything else
 
 // publicBotConfig is the subset of agent data safe to expose on the public
 // internet (no API keys, no internal IDs, no quotas).
@@ -32,7 +36,7 @@ type publicBotConfig struct {
 // Query parameters:
 //
 //	embed=true  — omit header/footer chrome for iframe embedding
-func handlePublicBotConfig(w http.ResponseWriter, r *http.Request) {
+func handlePublicBotConfig(w http.ResponseWriter, r *http.Request, pool *db.Pool) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "GET required"})
@@ -50,7 +54,7 @@ func handlePublicBotConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Try to load real agent config from the in-memory agent store.
 	// Falls back to defaults if the agent doesn't exist or has no public config.
-	cfg := loadPublicBotConfig(botID)
+	cfg := loadPublicBotConfig(botID, pool)
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -68,9 +72,11 @@ func handlePublicBotOptions(w http.ResponseWriter, r *http.Request) {
 
 // ── Config Resolution ──────────────────────────────────────────────────
 
-// loadPublicBotConfig returns the public config for a bot. It first checks the
-// global agentVersionHandler's in-memory store, then falls back to defaults.
-func loadPublicBotConfig(botID string) publicBotConfig {
+// loadPublicBotConfig returns the public config for a bot. It reads from:
+//  1. agent_registry.config → publicConfig (admin-configured via Python API)
+//  2. platform_agent_versions.snapshot["metadata"] (Go version store)
+//  3. Hard-coded defaults
+func loadPublicBotConfig(botID string, pool *db.Pool) publicBotConfig {
 	cfg := publicBotConfig{
 		BotID:          botID,
 		Name:           botID,
@@ -80,7 +86,47 @@ func loadPublicBotConfig(botID string) publicBotConfig {
 		PoweredBy:      "AgentHub",
 	}
 
-	// Try to resolve from the global agent version handler
+	// ── Source 1: agent_registry.config (Python API metadata) ──────
+	if pool != nil {
+		var configJSON string
+		err := pool.QueryRow(
+			context.Background(),
+			"SELECT config FROM agent_registry WHERE agent_id=$1 AND config IS NOT NULL AND config != '{}' LIMIT 1",
+			botID,
+		).Scan(&configJSON)
+		if err == nil && configJSON != "" {
+			var config map[string]interface{}
+			if json.Unmarshal([]byte(configJSON), &config) == nil {
+				if pc, ok := config["publicConfig"].(map[string]interface{}); ok {
+					if enabled, _ := pc["enabled"].(bool); !enabled {
+						// Public share disabled — but still serve defaults
+						// (config exists but publicConfig.enabled is false)
+					}
+					if wm, ok := pc["welcomeMessage"].(string); ok && wm != "" {
+						cfg.WelcomeMessage = wm
+					}
+					if ph, ok := pc["placeholder"].(string); ok && ph != "" {
+						cfg.Placeholder = ph
+					}
+					if tc, ok := pc["themeColor"].(string); ok && tc != "" {
+						cfg.ThemeColor = tc
+					}
+					if logo, ok := pc["logoUrl"].(string); ok && logo != "" {
+						cfg.LogoURL = logo
+					}
+					if sq, ok := pc["suggestedQuestions"].([]interface{}); ok {
+						for _, q := range sq {
+							if qs, ok := q.(string); ok {
+								cfg.SuggestedQuestions = append(cfg.SuggestedQuestions, qs)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ── Source 2: platform_agent_versions.snapshot metadata ────────
 	if globalAgentVersionHandler != nil {
 		versions, ok := globalAgentVersionHandler.store[botID]
 
@@ -92,22 +138,33 @@ func loadPublicBotConfig(botID string) publicBotConfig {
 				cfg.Name = name
 			}
 			if meta, ok := snapshot["metadata"].(map[string]interface{}); ok {
-				if wm, ok := meta["welcomeMessage"].(string); ok && wm != "" {
-					cfg.WelcomeMessage = wm
+				// Only fill fields NOT already set by agent_registry.config
+				if cfg.WelcomeMessage == "你好！我是 AI 助手，有什么可以帮你的？" {
+					if wm, ok := meta["welcomeMessage"].(string); ok && wm != "" {
+						cfg.WelcomeMessage = wm
+					}
 				}
-				if ph, ok := meta["placeholder"].(string); ok && ph != "" {
-					cfg.Placeholder = ph
+				if cfg.Placeholder == "输入消息..." {
+					if ph, ok := meta["placeholder"].(string); ok && ph != "" {
+						cfg.Placeholder = ph
+					}
 				}
-				if tc, ok := meta["themeColor"].(string); ok && tc != "" {
-					cfg.ThemeColor = tc
+				if cfg.ThemeColor == "#6366f1" {
+					if tc, ok := meta["themeColor"].(string); ok && tc != "" {
+						cfg.ThemeColor = tc
+					}
 				}
-				if logo, ok := meta["logoUrl"].(string); ok && logo != "" {
-					cfg.LogoURL = logo
+				if cfg.LogoURL == "" {
+					if logo, ok := meta["logoUrl"].(string); ok && logo != "" {
+						cfg.LogoURL = logo
+					}
 				}
-				if sq, ok := meta["suggestedQuestions"].([]interface{}); ok {
-					for _, q := range sq {
-						if qs, ok := q.(string); ok {
-							cfg.SuggestedQuestions = append(cfg.SuggestedQuestions, qs)
+				if len(cfg.SuggestedQuestions) == 0 {
+					if sq, ok := meta["suggestedQuestions"].([]interface{}); ok {
+						for _, q := range sq {
+							if qs, ok := q.(string); ok {
+								cfg.SuggestedQuestions = append(cfg.SuggestedQuestions, qs)
+							}
 						}
 					}
 				}
@@ -115,7 +172,7 @@ func loadPublicBotConfig(botID string) publicBotConfig {
 		}
 	}
 
-	// Default suggested questions if none configured
+	// ── Default suggested questions if none configured ─────────────
 	if len(cfg.SuggestedQuestions) == 0 {
 		cfg.SuggestedQuestions = []string{
 			"你能做什么？",
