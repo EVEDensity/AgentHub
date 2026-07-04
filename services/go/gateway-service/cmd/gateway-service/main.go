@@ -528,7 +528,7 @@ func main() {
 	// against the caller's bucket) and outside the route mux. Public endpoints
 	// (/healthz, /metrics, /profile, /ws) bypass auth; /ws runs its own JWT
 	// check during the WebSocket upgrade.
-	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/api/public/bots/"}, func(r *http.Request, reason string) {
+	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/api/public/bots/", "/v1/public/"}, func(r *http.Request, reason string) {
 		authDenied.WithLabelValues("unauthorized").Inc()
 	})
 	handler := obs.Middleware("gateway-service", rateLimitMiddleware(rl, authMW(mux)))

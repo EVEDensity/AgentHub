@@ -112,21 +112,14 @@ export default function BotAppPage({ botId, embed, config, error }: PageProps) {
       setInput('');
       setSending(true);
 
-      // Determine API endpoint — route through the same origin in prod to
-      // avoid CORS, or go directly to the gateway.
-      const apiBase = process.env.NEXT_PUBLIC_API_BASE || '/api';
-      const chatURL = `${apiBase}/v1/public/chat`;
+      // Route chat through the Next.js API proxy, which injects the
+      // server-side API key and forwards to the Go gateway.
+      const chatURL = '/api/chat/send';
 
       try {
         const res = await fetch(chatURL, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            // Include API key if configured (for authenticated bots)
-            ...(process.env.NEXT_PUBLIC_BOT_API_KEY
-              ? { Authorization: `Bearer ${process.env.NEXT_PUBLIC_BOT_API_KEY}` }
-              : {}),
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: text.trim(),
             agent_id: botId,
