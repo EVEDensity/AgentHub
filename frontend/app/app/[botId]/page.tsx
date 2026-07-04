@@ -108,33 +108,92 @@ export default function PublishedBotPage(): JSX.Element {
       if (reader) {
         const decoder = new TextDecoder();
         let fullContent = '';
+        let streamDone = false;
+        let streamError = false;
+        let streamUpdated = false;
+        let buffer = '';
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           const chunk = decoder.decode(value, { stream: true });
-          // Parse SSE
-          const lines = chunk.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                if (data.content) {
-                  fullContent += data.content;
+          // Parse SSE — each frame is terminated by \n\n
+          buffer += chunk;
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || ''; // keep incomplete frame
+
+          for (const frame of parts) {
+            const lines = frame.split('\n');
+            let eventType = '';
+            let dataStr = '';
+
+            for (const line of lines) {
+              if (line.startsWith('event: ')) {
+                eventType = line.slice(7).trim();
+              } else if (line.startsWith('data: ')) {
+                dataStr = line.slice(6);
+              }
+            }
+
+            if (!dataStr) continue;
+
+            try {
+              const envelope = JSON.parse(dataStr);
+
+              if (eventType === 'session.stream.chunk' || eventType === 'session.stream.flush') {
+                const content = envelope?.payload?.content || '';
+                if (content) {
+                  fullContent += content;
+                  streamUpdated = true;
                   setMessages((prev) =>
                     prev.map((m) =>
                       m.id === assistantMsg.id ? { ...m, content: fullContent, status: 'sent' } : m
                     )
                   );
                 }
-              } catch { /* ignore parse errors */ }
+              } else if (eventType === 'session.stream.complete') {
+                streamDone = true;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantMsg.id
+                      ? { ...m, content: fullContent || '(no response)', status: 'sent' }
+                      : m
+                  )
+                );
+              } else if (eventType === 'session.stream.error') {
+                streamError = true;
+                const errMsg = envelope?.payload?.error || 'Stream error';
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantMsg.id
+                      ? { ...m, content: fullContent || '⚠ ' + errMsg, status: 'error' }
+                      : m
+                  )
+                );
+              } else if (eventType === 'timeout') {
+                streamDone = true;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === assistantMsg.id
+                      ? { ...m, content: fullContent || '(stream timed out)', status: 'sent' }
+                      : m
+                  )
+                );
+              }
+            } catch {
+              // Skip unparseable SSE frames
             }
           }
         }
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsg.id ? { ...m, content: fullContent || '(empty response)', status: 'sent' } : m
-          )
-        );
+        // Finalize if stream did not reach a terminal event
+        if (!streamDone && !streamError) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id && m.status === 'sending'
+                ? { ...m, content: fullContent || '(no response)', status: 'sent' }
+                : m
+            )
+          );
+        }
       }
     } catch (err) {
       setMessages((prev) =>
