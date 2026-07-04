@@ -1,28 +1,26 @@
 'use client';
 
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { Stage, Layer, Circle, Line, Text, Group } from 'react-konva';
-import type { KonvaEventObject } from 'konva/lib/Node';
+import { Application, Graphics, Text, Container, TextStyle } from 'pixi.js';
 import type { TopologyNode, TopologyEdge } from '../../types';
 import {
   FPSTracker,
   getQualityTier,
-  supportsWebGL,
   type QualityTier,
 } from '../../lib/performance/adaptiveQuality';
 import PerformanceMonitor, { usePerformanceMonitorToggle } from './PerformanceMonitor';
 
 /**
- * Particle-Enhanced Agent Topology Canvas
+ * Particle-Enhanced Agent Topology Canvas (PixiJS WebGL)
  *
- * Upgrades the previous Canvas 2D force-directed graph with:
+ * Renders a force-directed agent topology graph with:
  * - Web Worker physics simulation (off-main-thread)
- * - Glow particles around agent nodes
+ * - Glow particles orbiting agent nodes
  * - Data-flow particles traveling along edges
- * - Emergence burst effects on shared memory events
- * - Adaptive quality based on FPS
+ * - Emergence burst effects on shared-memory events
+ * - Adaptive quality based on measured FPS
  *
- * Part of AgentHub V5.1 P0 — Particle Topology Visualization
+ * Part of AgentHub V5.1 P0 — PixiJS v8 WebGL Particle Topology
  */
 
 // ── Constants ──────────────────────────────────────────────────────
@@ -43,7 +41,18 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: '#9ca3af',
 };
 
-// ── SimNode with rendering state ────────────────────────────────────
+const TYPE_ICON: Record<string, string> = {
+  agent: '🤖',
+  task: '📋',
+  spawn: '🧬',
+  memory: '🧿',
+};
+
+function hexToNumber(hex: string): number {
+  return parseInt(hex.replace('#', ''), 16);
+}
+
+// ── Sim Node with rendering state ─────────────────────────────────
 
 interface RenderNode {
   id: string;
@@ -88,12 +97,38 @@ interface ParticleTopologyCanvasProps {
   height?: number;
 }
 
+// ── PixiJS-based Component ────────────────────────────────────────
+
 export default function ParticleTopologyCanvas({
   nodes,
   edges,
   width = 780,
   height = 560,
 }: ParticleTopologyCanvasProps): JSX.Element {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const appRef = useRef<Application | null>(null);
+  const layersRef = useRef<{
+    bgGlow: Container;
+    edges: Container;
+    nodes: Container;
+    effects: Container;
+  } | null>(null);
+  const graphicsRef = useRef<{
+    bgGlowGfx: Graphics;
+    edgeLines: Graphics;
+    flowParticles: Graphics;
+    glowRings: Graphics;
+    glowOrbits: Graphics;
+    nodeBodies: Graphics;
+    emergenceGfx: Graphics;
+  } | null>(null);
+  const textsRef = useRef<{
+    nodeLabels: Map<string, Text>;
+    edgeLabels: Map<string, Text>;
+    nodeIcons: Map<string, Text>;
+    hoverTooltip: Container | null;
+  }>({ nodeLabels: new Map(), edgeLabels: new Map(), nodeIcons: new Map(), hoverTooltip: null });
+
   const [renderNodes, setRenderNodes] = useState<RenderNode[]>([]);
   const [flowParticles, setFlowParticles] = useState<FlowParticle[]>([]);
   const [emergenceBursts, setEmergenceBursts] = useState<EmergenceBurst[]>([]);
@@ -107,10 +142,20 @@ export default function ParticleTopologyCanvas({
   const nodesRef = useRef<RenderNode[]>([]);
   const edgesRef = useRef<TopologyEdge[]>(edges);
   const tickCountRef = useRef(0);
+  const flowParticlesRef = useRef<FlowParticle[]>([]);
+  const emergenceBurstsRef = useRef<EmergenceBurst[]>([]);
+  const qualityTierRef = useRef<QualityTier>(qualityTier);
+  const hoveredNodeRef = useRef<string | null>(null);
 
   const [perfVisible] = usePerformanceMonitorToggle();
 
-  // ── Initialize Web Worker ──────────────────────────────────────
+  // Keep refs in sync
+  useEffect(() => { qualityTierRef.current = qualityTier; }, [qualityTier]);
+  useEffect(() => { flowParticlesRef.current = flowParticles; }, [flowParticles]);
+  useEffect(() => { emergenceBurstsRef.current = emergenceBursts; }, [emergenceBursts]);
+  useEffect(() => { hoveredNodeRef.current = hoveredNodeId; }, [hoveredNodeId]);
+
+  // ── Initialize Web Worker ────────────────────────────────────────
 
   useEffect(() => {
     try {
@@ -122,17 +167,17 @@ export default function ParticleTopologyCanvas({
       worker.onmessage = (e: MessageEvent) => {
         if (e.data.type === 'ready') return;
 
-        const { positions, settled } = e.data;
+        const { positions } = e.data as { positions?: Array<{ id: string; x: number; y: number; vx: number; vy: number }> };
         if (positions && positions.length > 0) {
-          setRenderNodes((prev) =>
-            prev.map((n) => {
-              const pos = positions.find((p: { id: string }) => p.id === n.id);
-              if (pos) {
-                return { ...n, x: pos.x, y: pos.y, vx: pos.vx, vy: pos.vy };
-              }
-              return n;
-            }),
-          );
+          const posMap = new Map(positions.map((p) => [p.id, p] as const));
+          nodesRef.current = nodesRef.current.map((n) => {
+            const pos = posMap.get(n.id);
+            if (pos) {
+              return { ...n, x: pos.x, y: pos.y, vx: pos.vx, vy: pos.vy };
+            }
+            return n;
+          });
+          setRenderNodes([...nodesRef.current]);
         }
       };
 
@@ -140,12 +185,118 @@ export default function ParticleTopologyCanvas({
         worker.terminate();
         workerRef.current = null;
       };
-    } catch (err) {
+    } catch {
       console.warn('Web Worker not available, falling back to main-thread physics');
     }
   }, []);
 
-  // ── Initialize / update nodes ──────────────────────────────────
+  // ── Initialize PixiJS Application ────────────────────────────────
+
+  useEffect(() => {
+    const app = new Application();
+    appRef.current = app;
+
+    const initPixi = async () => {
+      await app.init({
+        width,
+        height,
+        backgroundAlpha: 0,
+        antialias: true,
+        resolution: Math.min(window.devicePixelRatio || 1, 2),
+        autoDensity: true,
+        eventMode: 'static',
+        eventFeatures: {
+          move: true,
+          click: true,
+          wheel: false,
+        },
+      });
+
+      if (!containerRef.current) return;
+      containerRef.current.appendChild(app.canvas);
+
+      // ── Create layer structure ──────────────────────────────────
+      const bgGlow = new Container();
+      const edgeContainer = new Container();
+      const nodeContainer = new Container();
+      const effectContainer = new Container();
+
+      app.stage.addChild(bgGlow, edgeContainer, nodeContainer, effectContainer);
+      layersRef.current = {
+        bgGlow,
+        edges: edgeContainer,
+        nodes: nodeContainer,
+        effects: effectContainer,
+      };
+
+      // ── Create Graphics objects per layer ────────────────────────
+      const bgGlowGfx = new Graphics();
+      const edgeLines = new Graphics();
+      const flowParticles = new Graphics();
+      const glowRings = new Graphics();
+      const glowOrbits = new Graphics();
+      const nodeBodies = new Graphics();
+      const emergenceGfx = new Graphics();
+
+      bgGlow.addChild(bgGlowGfx);
+      edgeContainer.addChild(edgeLines);
+      edgeContainer.addChild(flowParticles);
+      nodeContainer.addChild(glowRings);
+      nodeContainer.addChild(glowOrbits);
+      nodeContainer.addChild(nodeBodies);
+      effectContainer.addChild(emergenceGfx);
+
+      graphicsRef.current = {
+        bgGlowGfx,
+        edgeLines,
+        flowParticles,
+        glowRings,
+        glowOrbits,
+        nodeBodies,
+        emergenceGfx,
+      };
+
+      // ── Hover detection ─────────────────────────────────────────
+      app.stage.hitArea = { contains: () => true };
+      app.stage.on('pointermove', (e) => {
+        const pos = e.global;
+        let found: string | null = null;
+        for (const n of nodesRef.current) {
+          const dx = pos.x - n.x;
+          const dy = pos.y - n.y;
+          if (Math.sqrt(dx * dx + dy * dy) <= n.radius + 4) {
+            found = n.id;
+            break;
+          }
+        }
+        if (found !== hoveredNodeRef.current) {
+          setHoveredNodeId(found);
+        }
+      });
+      app.stage.on('pointerleave', () => {
+        setHoveredNodeId(null);
+      });
+    };
+
+    initPixi();
+
+    return () => {
+      // Clean up text objects
+      for (const t of textsRef.current.nodeLabels.values()) t.destroy();
+      for (const t of textsRef.current.edgeLabels.values()) t.destroy();
+      for (const t of textsRef.current.nodeIcons.values()) t.destroy();
+      textsRef.current.nodeLabels.clear();
+      textsRef.current.edgeLabels.clear();
+      textsRef.current.nodeIcons.clear();
+
+      app.destroy(true, { children: true });
+      appRef.current = null;
+      layersRef.current = null;
+      graphicsRef.current = null;
+    };
+  }, [width, height]);
+
+  // ── Initialize / update nodes and edges ──────────────────────────
 
   useEffect(() => {
     edgesRef.current = edges;
@@ -156,10 +307,8 @@ export default function ParticleTopologyCanvas({
         return { ...existing, type: n.type, status: n.status, label: n.label || n.id };
       }
 
-      // Create with glow particles
       const radius = n.type === 'agent' ? 20 : n.type === 'task' ? 14 : 11;
       const glowCount = n.type === 'agent' ? 6 : n.type === 'task' ? 3 : 2;
-      const baseColor = STATUS_COLORS[n.status] || '#9ca3af';
 
       return {
         id: n.id,
@@ -205,7 +354,7 @@ export default function ParticleTopologyCanvas({
     }
 
     // Initialize flow particles
-    const flowCount = qualityTier.edgeFlowEnabled ? Math.min(edges.length * 3, 80) : 0;
+    const flowCount = qualityTierRef.current.edgeFlowEnabled ? Math.min(edges.length * 3, 80) : 0;
     const initialFlows: FlowParticle[] = [];
     for (let i = 0; i < flowCount; i++) {
       const edgeIdx = i % edges.length;
@@ -225,19 +374,63 @@ export default function ParticleTopologyCanvas({
       }
     }
     setFlowParticles(initialFlows);
-  }, [nodes, edges, width, height, qualityTier.edgeFlowEnabled]);
 
-  // ── Animation loop ─────────────────────────────────────────────
+    // Rebuild node label texts in PixiJS
+    rebuildNodeTexts(newNodes);
+  }, [nodes, edges, width, height]);
+
+  // ── Rebuild node label/icon Text objects ─────────────────────────
+
+  const rebuildNodeTexts = useCallback((rnodes: RenderNode[]) => {
+    const nodeLayer = layersRef.current?.nodes;
+    if (!nodeLayer) return;
+
+    // Destroy old texts
+    for (const t of textsRef.current.nodeLabels.values()) t.destroy();
+    for (const t of textsRef.current.nodeIcons.values()) t.destroy();
+    textsRef.current.nodeLabels.clear();
+    textsRef.current.nodeIcons.clear();
+
+    for (const n of rnodes) {
+      const icon = TYPE_ICON[n.type] || '🧬';
+      const iconText = new Text({
+        text: icon,
+        style: { fontSize: n.radius, fontFamily: 'system-ui' },
+      });
+      iconText.anchor.set(0.5);
+      iconText.x = n.x;
+      iconText.y = n.y;
+      nodeLayer.addChild(iconText);
+      textsRef.current.nodeIcons.set(n.id, iconText);
+
+      const labelStr = n.label.length > 14 ? n.label.slice(0, 14) + '...' : n.label;
+      const labelText = new Text({
+        text: labelStr,
+        style: new TextStyle({
+          fontSize: 10,
+          fontFamily: 'system-ui',
+          fill: '#6b7280',
+          align: 'center',
+        }),
+      });
+      labelText.anchor.set(0.5, 0);
+      labelText.x = n.x;
+      labelText.y = n.y + n.radius + 6;
+      nodeLayer.addChild(labelText);
+      textsRef.current.nodeLabels.set(n.id, labelText);
+    }
+  }, []);
+
+  // ── Animation loop ───────────────────────────────────────────────
 
   useEffect(() => {
     const tick = () => {
       tickCountRef.current++;
 
-      // Update FPS tracker
+      // ── FPS Tracking ──────────────────────────────────────────
       fpsTrackerRef.current.tick();
       const currentFps = fpsTrackerRef.current.fps;
 
-      // Update quality tier every 60 frames
       if (tickCountRef.current % 60 === 0) {
         setQualityTier((prev) => {
           const next = getQualityTier(currentFps);
@@ -246,62 +439,61 @@ export default function ParticleTopologyCanvas({
         });
       }
 
-      // Tick worker for physics
+      // ── Physics tick ──────────────────────────────────────────
+      const qTier = qualityTierRef.current;
       if (workerRef.current && tickCountRef.current % 2 === 0) {
         workerRef.current.postMessage({ type: 'tick', iterations: 1 });
       } else if (!workerRef.current) {
-        // Fallback: main-thread physics (simplified)
         mainThreadPhysicsStep(nodesRef.current, edgesRef.current, width, height);
-        // Update positions
-        setRenderNodes([...nodesRef.current]);
       }
 
-      // Update flow particles
-      setFlowParticles((prev) =>
-        prev.map((fp) => {
-          let progress = fp.progress + fp.speed;
-          if (progress > 1) progress -= 1;
-          if (progress < 0) progress += 1;
-          // Update from/to references
-          const fromNode = nodesRef.current.find((n) => n.id === fp.from.id);
-          const toNode = nodesRef.current.find((n) => n.id === fp.to.id);
-          return {
-            ...fp,
-            progress,
-            from: fromNode || fp.from,
-            to: toNode || fp.to,
-          };
-        }),
+      // ── Update flow particles ─────────────────────────────────
+      const flows = flowParticlesRef.current.map((fp) => {
+        let progress = fp.progress + fp.speed;
+        if (progress > 1) progress -= 1;
+        if (progress < 0) progress += 1;
+        const fromNode = nodesRef.current.find((n) => n.id === fp.from.id);
+        const toNode = nodesRef.current.find((n) => n.id === fp.to.id);
+        return {
+          ...fp,
+          progress,
+          from: fromNode || fp.from,
+          to: toNode || fp.to,
+        };
+      });
+      flowParticlesRef.current = flows;
+
+      // ── Update emergence bursts ───────────────────────────────
+      const bursts = emergenceBurstsRef.current
+        .map((b) => ({
+          ...b,
+          age: b.age + 1,
+          particles: b.particles.map((p) => ({ ...p, life: p.life + 1 })),
+        }))
+        .filter((b) => b.age < b.maxAge);
+      emergenceBurstsRef.current = bursts;
+
+      // ── Update glow phases ────────────────────────────────────
+      for (const n of nodesRef.current) {
+        n.glowPhase += 0.02;
+      }
+
+      // ── RENDER with PixiJS ────────────────────────────────────
+      renderPixiFrame(
+        nodesRef.current,
+        edgesRef.current,
+        flows,
+        bursts,
+        hoveredNodeRef.current,
+        qTier,
       );
 
-      // Update emergence bursts (decay)
-      setEmergenceBursts((prev) =>
-        prev
-          .map((b) => ({
-            ...b,
-            age: b.age + 1,
-            particles: b.particles.map((p) => ({
-              ...p,
-              life: p.life + 1,
-            })),
-          }))
-          .filter((b) => b.age < b.maxAge),
-      );
-
-      // Update particle count for monitor
+      // ── Update particle count for monitor ─────────────────────
       const totalParticles =
-        renderNodes.length * 3 + // glow particles (avg 3 per node)
-        flowParticles.length * 2 + // flow + trail
-        emergenceBursts.flatMap((b) => b.particles).length;
+        nodesRef.current.length * 3 +
+        flows.length * 2 +
+        bursts.flatMap((b) => b.particles).length;
       setParticleCount(totalParticles);
-
-      // Update glow phases
-      setRenderNodes((prev) =>
-        prev.map((n) => ({
-          ...n,
-          glowPhase: n.glowPhase + 0.02,
-        })),
-      );
 
       animRef.current = requestAnimationFrame(tick);
     };
@@ -310,13 +502,142 @@ export default function ParticleTopologyCanvas({
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
-  }, [width, height]);
+  }, [width, height, rebuildNodeTexts]);
 
-  // ── Trigger emergence burst (exposed for external calls) ───────
+  // ── Render one PixiJS frame ──────────────────────────────────────
+
+  function renderPixiFrame(
+    rnodes: RenderNode[],
+    redges: TopologyEdge[],
+    flows: FlowParticle[],
+    bursts: EmergenceBurst[],
+    hoveredId: string | null,
+    qTier: QualityTier,
+  ): void {
+    const gfx = graphicsRef.current;
+    const texts = textsRef.current;
+    if (!gfx) return;
+
+    // ── Edge lines ──────────────────────────────────────────────
+    gfx.edgeLines.clear();
+    for (const e of redges) {
+      const from = rnodes.find((n) => n.id === e.from);
+      const to = rnodes.find((n) => n.id === e.to);
+      if (!from || !to) continue;
+
+      const isHovered = hoveredId === e.from || hoveredId === e.to;
+      const edgeColor = STATUS_COLORS[e.status] || '#9ca3af';
+      const strokeColor = isHovered ? hexToNumber(edgeColor) : 0x9ca3af;
+      const alpha = isHovered ? 1 : 0.25;
+      const strokeW = isHovered ? 2 : 1;
+
+      gfx.edgeLines
+        .moveTo(from.x, from.y)
+        .lineTo(to.x, to.y)
+        .stroke({ color: strokeColor, width: strokeW, alpha });
+    }
+
+    // ── Flow particles on edges ─────────────────────────────────
+    gfx.flowParticles.clear();
+    if (qTier.edgeFlowEnabled) {
+      for (const fp of flows) {
+        const x = fp.from.x + (fp.to.x - fp.from.x) * fp.progress;
+        const y = fp.from.y + (fp.to.y - fp.from.y) * fp.progress;
+        const color = hexToNumber(fp.color);
+        gfx.flowParticles.circle(x, y, fp.size).fill({ color, alpha: 0.7 });
+      }
+    }
+
+    // ── Background glow ─────────────────────────────────────────
+    gfx.bgGlowGfx.clear();
+    if (qTier.glowEnabled) {
+      for (const n of rnodes) {
+        const color = hexToNumber(STATUS_COLORS[n.status] || '#9ca3af');
+        const alpha = 0.06 + Math.sin(n.glowPhase) * 0.03;
+        gfx.bgGlowGfx.circle(n.x, n.y, n.radius + 8).fill({ color, alpha });
+      }
+    }
+
+    // ── Glow rings (ambient node glow) ──────────────────────────
+    gfx.glowRings.clear();
+    if (qTier.glowEnabled) {
+      for (const n of rnodes) {
+        const color = hexToNumber(STATUS_COLORS[n.status] || '#9ca3af');
+        const alpha = 0.12 + Math.sin(n.glowPhase) * 0.04;
+        gfx.glowRings.circle(n.x, n.y, n.radius + 6).fill({ color, alpha });
+      }
+    }
+
+    // ── Glow orbit particles ────────────────────────────────────
+    gfx.glowOrbits.clear();
+    if (qTier.glowEnabled) {
+      for (const n of rnodes) {
+        const color = hexToNumber(STATUS_COLORS[n.status] || '#9ca3af');
+        for (let gi = 0; gi < n.glowParticles.length; gi++) {
+          const gp = n.glowParticles[gi];
+          const angle = gp.angle + n.glowPhase * gp.speed * 10;
+          const px = n.x + Math.cos(angle) * gp.radius;
+          const py = n.y + Math.sin(angle) * gp.radius;
+          const alpha = Math.max(0, Math.min(1, gp.alpha + Math.sin(n.glowPhase + gi) * 0.15));
+          gfx.glowOrbits.circle(px, py, gp.size).fill({ color, alpha });
+        }
+      }
+    }
+
+    // ── Node bodies ─────────────────────────────────────────────
+    gfx.nodeBodies.clear();
+    for (const n of rnodes) {
+      const color = hexToNumber(STATUS_COLORS[n.status] || '#9ca3af');
+      const isHovered = hoveredId === n.id;
+
+      // Outer stroke (white ring)
+      gfx.nodeBodies.circle(n.x, n.y, n.radius + 2).fill({ color: 0xffffff, alpha: isHovered ? 0.9 : 0.7 });
+      // Main body
+      gfx.nodeBodies.circle(n.x, n.y, n.radius).fill({ color, alpha: 1 });
+    }
+
+    // ── Update icon positions ───────────────────────────────────
+    for (const n of rnodes) {
+      const iconText = texts.nodeIcons.get(n.id);
+      if (iconText) {
+        iconText.x = n.x;
+        iconText.y = n.y;
+        iconText.visible = true;
+      }
+
+      const labelText = texts.nodeLabels.get(n.id);
+      if (labelText) {
+        labelText.x = n.x;
+        labelText.y = n.y + n.radius + 6;
+        const isHovered = hoveredId === n.id;
+        labelText.style.fill = isHovered ? '#1f2937' : '#6b7280';
+        labelText.style.fontWeight = isHovered ? '700' : '400';
+      }
+    }
+
+    // ── Emergence bursts ────────────────────────────────────────
+    gfx.emergenceGfx.clear();
+    if (qTier.emergenceEnabled) {
+      for (const burst of bursts) {
+        for (const bp of burst.particles) {
+          const dist = bp.speed * bp.life;
+          const px = burst.x + Math.cos(bp.angle) * dist;
+          const py = burst.y + Math.sin(bp.angle) * dist;
+          const lifeRatio = 1 - bp.life / bp.maxLife;
+          const alpha = Math.max(0, lifeRatio * 0.8);
+          const color = hexToNumber(bp.color);
+          gfx.emergenceGfx.circle(px, py, bp.size * lifeRatio).fill({ color, alpha });
+        }
+      }
+    }
+  }
+
+  // ── Trigger emergence burst (exposed for external calls) ─────────
 
   const triggerEmergence = useCallback(
     (x: number, y: number) => {
-      if (!qualityTier.emergenceEnabled) return;
+      const qTier = qualityTierRef.current;
+      if (!qTier.emergenceEnabled) return;
       const id = `burst-${Date.now()}`;
       const burst: EmergenceBurst = {
         id,
@@ -335,243 +656,55 @@ export default function ParticleTopologyCanvas({
       };
       setEmergenceBursts((prev) => [...prev, burst].slice(-5));
     },
-    [qualityTier.emergenceEnabled],
+    [],
   );
 
-  // ── Edge label visibility ──────────────────────────────────────
+  // ── Hover tooltip ────────────────────────────────────────────────
 
-  const showEdgeLabels = qualityTier.label !== 'Low';
+  const hoveredNode = hoveredNodeId
+    ? renderNodes.find((n) => n.id === hoveredNodeId)
+    : null;
 
-  // ── Render with Konva ──────────────────────────────────────────
+  const statusLabelMap: Record<string, string> = {
+    idle: '空闲',
+    busy: '忙碌',
+    offline: '离线',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败',
+  };
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative', width, height }}>
       <PerformanceMonitor visible={perfVisible} particleCount={particleCount} />
 
-      <Stage width={width} height={height}>
-        {/* ── Background glow layer ─────────────────────────── */}
-        <Layer>
-          {qualityTier.glowEnabled &&
-            renderNodes.map((n) => {
-              const color = STATUS_COLORS[n.status] || '#9ca3af';
-              return (
-                <Circle
-                  key={`glow-${n.id}`}
-                  x={n.x}
-                  y={n.y}
-                  radius={n.radius + 8}
-                  fill={color}
-                  opacity={0.06 + Math.sin(n.glowPhase) * 0.03}
-                  listening={false}
-                />
-              );
-            })}
-        </Layer>
+      {/* PixiJS canvas container */}
+      <div ref={containerRef} style={{ width, height }} />
 
-        {/* ── Edges layer ──────────────────────────────────── */}
-        <Layer>
-          {edges.map((e, i) => {
-            const from = renderNodes.find((n) => n.id === e.from);
-            const to = renderNodes.find((n) => n.id === e.to);
-            if (!from || !to) return null;
-
-            const isHovered =
-              hoveredNodeId === e.from || hoveredNodeId === e.to;
-            const edgeColor = STATUS_COLORS[e.status] || '#9ca3af';
-
-            return (
-              <Group key={`edge-${i}`}>
-                {/* Edge line */}
-                <Line
-                  points={[from.x, from.y, to.x, to.y]}
-                  stroke={isHovered ? edgeColor : 'rgba(156,163,175,0.25)'}
-                  strokeWidth={isHovered ? 2 : 1}
-                  hitStrokeWidth={8}
-                  listening={true}
-                  onMouseEnter={() => {}}
-                />
-
-                {/* Label at midpoint */}
-                {showEdgeLabels && e.label && (
-                  <Text
-                    x={(from.x + to.x) / 2 - 15}
-                    y={(from.y + to.y) / 2 - 8}
-                    text={e.label}
-                    fontSize={9}
-                    fontFamily="system-ui"
-                    fill={isHovered ? '#6b7280' : '#9ca3af'}
-                    align="center"
-                    listening={false}
-                  />
-                )}
-              </Group>
-            );
-          })}
-
-          {/* Flow particles on edges */}
-          {qualityTier.edgeFlowEnabled &&
-            flowParticles.map((fp) => {
-              const x = fp.from.x + (fp.to.x - fp.from.x) * fp.progress;
-              const y = fp.from.y + (fp.to.y - fp.from.y) * fp.progress;
-              return (
-                <Circle
-                  key={fp.id}
-                  x={x}
-                  y={y}
-                  radius={fp.size}
-                  fill={fp.color}
-                  opacity={0.7}
-                  listening={false}
-                />
-              );
-            })}
-        </Layer>
-
-        {/* ── Nodes layer ──────────────────────────────────── */}
-        <Layer>
-          {renderNodes.map((n) => {
-            const color = STATUS_COLORS[n.status] || '#9ca3af';
-            const isHovered = hoveredNodeId === n.id;
-            const icon =
-              n.type === 'agent' ? '🤖' : n.type === 'task' ? '📋' : '🧬';
-
-            return (
-              <Group
-                key={`node-${n.id}`}
-                onMouseEnter={() => setHoveredNodeId(n.id)}
-                onMouseLeave={() => setHoveredNodeId(null)}
-              >
-                {/* Glow particles (orbit) */}
-                {qualityTier.glowEnabled &&
-                  n.glowParticles.map((gp, gi) => {
-                    const angle = gp.angle + n.glowPhase * gp.speed * 10;
-                    const px = n.x + Math.cos(angle) * gp.radius;
-                    const py = n.y + Math.sin(angle) * gp.radius;
-                    return (
-                      <Circle
-                        key={`gp-${n.id}-${gi}`}
-                        x={px}
-                        y={py}
-                        radius={gp.size}
-                        fill={color}
-                        opacity={gp.alpha + Math.sin(n.glowPhase + gi) * 0.15}
-                        listening={false}
-                      />
-                    );
-                  })}
-
-                {/* Outer glow ring */}
-                <Circle
-                  x={n.x}
-                  y={n.y}
-                  radius={n.radius + 6}
-                  fill={color}
-                  opacity={0.12 + Math.sin(n.glowPhase) * 0.04}
-                  listening={false}
-                />
-
-                {/* Node circle */}
-                <Circle
-                  x={n.x}
-                  y={n.y}
-                  radius={n.radius}
-                  fill={color}
-                  stroke="#fff"
-                  strokeWidth={isHovered ? 3 : 2}
-                  shadowColor={color}
-                  shadowBlur={isHovered ? 16 : 6}
-                  shadowOpacity={0.4}
-                />
-
-                {/* Type emoji */}
-                <Text
-                  x={n.x - n.radius * 0.5}
-                  y={n.y - n.radius * 0.5}
-                  text={icon}
-                  fontSize={n.radius}
-                  fontFamily="system-ui"
-                  align="center"
-                  verticalAlign="middle"
-                  width={n.radius}
-                  height={n.radius}
-                  listening={false}
-                />
-
-                {/* Label */}
-                <Text
-                  x={n.x - 30}
-                  y={n.y + n.radius + 6}
-                  text={n.label.length > 14 ? n.label.slice(0, 14) + '...' : n.label}
-                  fontSize={10}
-                  fontFamily="system-ui"
-                  fill={isHovered ? '#1f2937' : '#6b7280'}
-                  fontWeight={isHovered ? 700 : 400}
-                  align="center"
-                  width={60}
-                  listening={false}
-                />
-              </Group>
-            );
-          })}
-
-          {/* Emergence bursts */}
-          {qualityTier.emergenceEnabled &&
-            emergenceBursts.map((burst) =>
-              burst.particles.map((bp, i) => {
-                const dist = bp.speed * bp.life;
-                const px = burst.x + Math.cos(bp.angle) * dist;
-                const py = burst.y + Math.sin(bp.angle) * dist;
-                const lifeRatio = 1 - bp.life / bp.maxLife;
-                const alpha = Math.max(0, lifeRatio * 0.8);
-                return (
-                  <Circle
-                    key={`${burst.id}-${i}`}
-                    x={px}
-                    y={py}
-                    radius={bp.size * lifeRatio}
-                    fill={bp.color}
-                    opacity={alpha}
-                    listening={false}
-                  />
-                );
-              }),
-            )}
-        </Layer>
-
-        {/* ── Hover info tooltip ────────────────────────────── */}
-        <Layer>
-          {hoveredNodeId &&
-            (() => {
-              const n = renderNodes.find((rn) => rn.id === hoveredNodeId);
-              if (!n) return null;
-              const statusLabel =
-                {
-                  idle: '空闲',
-                  busy: '忙碌',
-                  offline: '离线',
-                  running: '运行中',
-                  completed: '已完成',
-                  failed: '失败',
-                }[n.status] || n.status;
-              return (
-                <Group x={n.x + n.radius + 12} y={n.y - 20}>
-                  {/* Tooltip bg */}
-                  <Circle x={0} y={10} radius={3} fill="rgba(17,24,39,0.9)" />
-                  <Text
-                    x={6}
-                    y={0}
-                    text={`${n.label}\n类型: ${n.type} · 状态: ${statusLabel}`}
-                    fontSize={10}
-                    fontFamily="system-ui"
-                    fill="#f9fafb"
-                    padding={6}
-                    fillAfterStrokeEnabled
-                  />
-                </Group>
-              );
-            })()}
-        </Layer>
-      </Stage>
+      {/* Hover tooltip (React overlay) */}
+      {hoveredNode && (
+        <div
+          style={{
+            position: 'absolute',
+            left: hoveredNode.x + hoveredNode.radius + 12,
+            top: hoveredNode.y - 20,
+            background: 'rgba(17,24,39,0.92)',
+            color: '#f9fafb',
+            borderRadius: 8,
+            padding: '6px 10px',
+            fontSize: 10,
+            fontFamily: 'system-ui',
+            pointerEvents: 'none',
+            zIndex: 10,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 2 }}>{hoveredNode.label}</div>
+          <div style={{ opacity: 0.75 }}>
+            类型: {hoveredNode.type} · 状态: {statusLabelMap[hoveredNode.status] || hoveredNode.status}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -589,7 +722,6 @@ function mainThreadPhysicsStep(
   const damping = 0.85;
   const centerGravity = 0.01;
 
-  // Build adjacency
   const adj = new Map<string, Set<string>>();
   for (const e of edges) {
     if (!adj.has(e.from)) adj.set(e.from, new Set());
@@ -601,7 +733,6 @@ function mainThreadPhysicsStep(
   for (let i = 0; i < simNodes.length; i++) {
     const a = simNodes[i];
 
-    // Repulsion
     for (let j = i + 1; j < simNodes.length; j++) {
       const b = simNodes[j];
       const dx = b.x - a.x;
@@ -616,7 +747,6 @@ function mainThreadPhysicsStep(
       b.vy += fy;
     }
 
-    // Attraction
     const neighbors = adj.get(a.id);
     if (neighbors) {
       for (const nid of neighbors) {
@@ -631,17 +761,13 @@ function mainThreadPhysicsStep(
       }
     }
 
-    // Center gravity
     a.vx += (width / 2 - a.x) * centerGravity;
     a.vy += (height / 2 - a.y) * centerGravity;
-
-    // Damping
     a.vx *= damping;
     a.vy *= damping;
     a.x += a.vx;
     a.y += a.vy;
 
-    // Boundary
     a.x = Math.max(a.radius, Math.min(width - a.radius, a.x));
     a.y = Math.max(a.radius, Math.min(height - a.radius, a.y));
   }

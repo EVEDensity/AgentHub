@@ -18,6 +18,7 @@
     "lucide-react": "^1.16.0",
     "next": "^13.5.7",
     "pdfjs-dist": "^4.0.379",
+    "pixi.js": "^8.19.0",
     "prism-react-renderer": "^2.4.1",
     "react": "^18.2.0",
     "react-diff-viewer-continued": "^4.2.2",

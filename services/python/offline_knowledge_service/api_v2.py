@@ -504,3 +504,262 @@ async def image_ingest(
         "collection": image_collection,
         "points_upserted": 1,
     })
+
+
+# ── RAG Search Routes (P1-1) ────────────────────────────────────────────
+
+# Source type → Qdrant collection mapping
+_SOURCE_TO_COLLECTION: dict[str, str] = {
+    "project_docs": "docs",
+    "api_docs": "docs",
+    "uploaded_docs": "docs",
+    "code_repos": "code",
+    "sessions": "memory",
+    "artifacts": "artifacts",
+}
+
+_SOURCE_TYPE_LABELS: dict[str, str] = {
+    "project_docs": "project_docs",
+    "api_docs": "api_docs",
+    "uploaded_docs": "uploaded_docs",
+    "code_repos": "code_repos",
+    "sessions": "sessions",
+    "artifacts": "artifacts",
+}
+
+
+def _generate_rewrites(query: str, limit: int = 3) -> list[str]:
+    """Generate simple query rewrite variants without LLM.
+
+    Uses suffix patterns to help the retrieval system find more
+    relevant documents across different knowledge sources.
+    """
+    rewrites = [query]
+    # Basic variants
+    suffixes = [
+        " 架构设计",
+        " 实现原理",
+        " 最佳实践",
+        " 技术方案",
+        " 使用方法",
+    ]
+    for suffix in suffixes[: limit - 1]:
+        variant = query + suffix
+        if variant != query:
+            rewrites.append(variant)
+    return rewrites[:limit]
+
+
+def _extract_highlights(text: str, query_terms: list[str]) -> list[str]:
+    """Extract highlighting fragments from text based on query terms."""
+    highlights: list[str] = []
+    text_lower = text.lower()
+    for term in query_terms:
+        term_lower = term.lower()
+        if term_lower in text_lower and len(term) > 1:
+            # Find the surrounding context (up to 50 chars)
+            idx = text_lower.find(term_lower)
+            start = max(0, idx - 20)
+            end = min(len(text), idx + len(term) + 30)
+            highlights.append(text[start:end].strip())
+    return highlights[:5]  # max 5 highlight fragments
+
+
+def _rrf_fusion(
+    results_by_collection: dict[str, list[dict[str, Any]]],
+    k: int = 60,
+) -> list[dict[str, Any]]:
+    """Reciprocal Rank Fusion: merge multiple result sets into one ranked list.
+
+    RRF score = sum(1 / (k + rank_i)) for each result across collections.
+    """
+    scores: dict[str, dict[str, Any]] = {}
+    for collection, results in results_by_collection.items():
+        for rank, item in enumerate(results):
+            key = f"{collection}:{item.get('id', '')}"
+            if key not in scores:
+                scores[key] = {
+                    **item,
+                    "collection": collection,
+                    "rrf_rank_sum": 0.0,
+                    "rrf_contributions": 0,
+                }
+            rrf_score = 1.0 / (k + rank + 1)
+            scores[key]["rrf_rank_sum"] += rrf_score
+            scores[key]["rrf_contributions"] += 1
+            # Keep the highest individual score
+            if item.get("score", 0) > scores[key].get("score", 0):
+                scores[key]["score"] = item["score"]
+
+    # Sort by RRF score descending
+    merged = sorted(
+        scores.values(),
+        key=lambda x: x["rrf_rank_sum"],
+        reverse=True,
+    )
+    return merged
+
+
+@router.get("/rag-search")
+async def rag_search(
+    q: str = Query(..., description="Search query"),
+    source: list[str] = Query(default=["project_docs"], description="Source types to search"),
+    top_k: int = Query(default=10, ge=1, le=50, description="Max results"),
+    include_images: bool = Query(default=True, description="Include image results"),
+    time_range: str = Query(default="30d", description="Time range filter (7d/30d/90d/all)"),
+    sort: str = Query(default="relevance", description="Sort mode (relevance/newest/oldest)"),
+):
+    """RAG hybrid search across knowledge sources with query rewriting and RRF fusion.
+
+    Frontend: RAGDocViewer.tsx calls this endpoint.
+    Returns: RAGSearchResponse { query, rewrites, results, images, fusion, latency_ms }
+    """
+    import time as _time
+    t_start = _time.monotonic()
+
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="q is required")
+
+    # ── 1. Generate query rewrites ──────────────────────────────────
+    rewrites = _generate_rewrites(q.strip())
+
+    # ── 2. Map source types to collections ──────────────────────────
+    target_collections = set()
+    for s in source:
+        coll = _SOURCE_TO_COLLECTION.get(s)
+        if coll:
+            target_collections.add(coll)
+    if not target_collections:
+        target_collections = {"docs"}
+
+    # ── 3. Embed the primary query ─────────────────────────────────
+    dim = _embedding_dim()
+    try:
+        query_vec = await embedding_client.get_embedding(q.strip())
+    except Exception as e:
+        logger.error("RAG search embedding failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Embedding service unavailable: {e}")
+
+    # ── 4. Search across target collections ────────────────────────
+    r = _repo()
+    results_by_collection: dict[str, list[dict[str, Any]]] = {}
+    search_k = max(top_k * 2, 20)  # Oversample for RRF
+
+    for collection in target_collections:
+        try:
+            hits = await r.client.search(
+                collection_name=collection,
+                query_vector=query_vec,
+                limit=search_k,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as e:
+            logger.warning("RAG search in collection %s failed: %s", collection, e)
+            continue
+
+        # Also try rewrites for better coverage
+        for i, rewrite in enumerate(rewrites[1:], 1):  # skip first (original)
+            try:
+                rw_vec = await embedding_client.get_embedding(rewrite)
+                rw_hits = await r.client.search(
+                    collection_name=collection,
+                    query_vector=rw_vec,
+                    limit=max(5, top_k // 2),
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                hits.extend(rw_hits)
+            except Exception:
+                pass  # rewrite search is best-effort
+
+        # Deduplicate by ID within collection
+        seen_ids: set[str] = set()
+        deduped: list[dict[str, Any]] = []
+        for h in hits:
+            hid = str(h.id)
+            if hid not in seen_ids:
+                seen_ids.add(hid)
+                p = h.payload or {}
+                # Determine source type from collection
+                src_type = "project_docs"
+                for st, sc in _SOURCE_TO_COLLECTION.items():
+                    if sc == collection:
+                        src_type = st
+                        break
+
+                query_terms = [w for w in q.strip().split(" ") if len(w) > 1]
+                deduped.append({
+                    "source_id": p.get("source_id", ""),
+                    "chunk_id": str(p.get("chunk_index", h.id)),
+                    "text": p.get("content", ""),
+                    "score": round(h.score, 6),
+                    "source_type": src_type,
+                    "metadata": {
+                        "file_path": p.get("file_path", ""),
+                        "section": p.get("section", ""),
+                        "file_type": p.get("file_type", ""),
+                        "line": str(p.get("start_offset", "")) if p.get("start_offset") is not None else "",
+                    },
+                    "highlights": _extract_highlights(p.get("content", ""), query_terms),
+                })
+        if deduped:
+            results_by_collection[collection] = deduped
+
+    # ── 5. RRF fusion ─────────────────────────────────────────────
+    fused = _rrf_fusion(results_by_collection, k=60)
+
+    # Sort by relevance or time
+    if sort == "newest":
+        fused.sort(key=lambda x: x.get("metadata", {}).get("file_path", ""), reverse=True)
+    elif sort == "oldest":
+        fused.sort(key=lambda x: x.get("metadata", {}).get("file_path", ""))
+
+    # Apply top_k limit
+    results = fused[:top_k]
+
+    # ── 6. Image search (if requested) ────────────────────────────
+    images: list[dict[str, Any]] = []
+    if include_images:
+        from .config import settings as s
+        for collection in target_collections:
+            image_collection = f"{collection}_images"
+            try:
+                img_hits = await r.client.search(
+                    collection_name=image_collection,
+                    query_vector=query_vec,
+                    limit=max(5, top_k // 3),
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                for h in img_hits:
+                    p = h.payload or {}
+                    src_type = "project_docs"
+                    for st, sc in _SOURCE_TO_COLLECTION.items():
+                        if sc == collection:
+                            src_type = st
+                            break
+                    images.append({
+                        "id": str(h.id),
+                        "url": p.get("url", ""),
+                        "caption": p.get("caption", ""),
+                        "score": round(h.score, 6),
+                        "source_id": p.get("source_id", ""),
+                        "source_type": src_type,
+                        "width": p.get("width"),
+                        "height": p.get("height"),
+                    })
+            except Exception:
+                pass  # Image collection may not exist
+
+    # ── 7. Build response ────────────────────────────────────────
+    elapsed = (_time.monotonic() - t_start) * 1000
+
+    return JSONResponse({
+        "query": q.strip(),
+        "rewrites": rewrites,
+        "results": results,
+        "images": sorted(images, key=lambda x: x["score"], reverse=True)[:top_k],
+        "fusion": "rrf",
+        "latency_ms": round(elapsed, 2),
+    })
