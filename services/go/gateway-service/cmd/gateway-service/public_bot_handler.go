@@ -82,9 +82,7 @@ func loadPublicBotConfig(botID string) publicBotConfig {
 
 	// Try to resolve from the global agent version handler
 	if globalAgentVersionHandler != nil {
-		globalAgentVersionHandler.mu.RLock()
 		versions, ok := globalAgentVersionHandler.store[botID]
-		globalAgentVersionHandler.mu.RUnlock()
 
 		if ok && len(versions) > 0 {
 			latest := versions[0] // versions are stored desc by version number

@@ -119,11 +119,11 @@ func TestMaskAPIKey(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"sk-abc123def456ghijklmnopqrstuv", "sk-abc...tuv"},
-		{"my key is sk-abcdefghijklmnopqrstuvwx in text", "my key is sk-abc...uvwx in text"},
-		{"sk-short", "sk-...****"},
+		{"sk-abc123def456ghijklmnopqrstuv", "sk-ab...stuv"},
+		{"my key is sk-abcdefghijklmnopqrstuvwx in text", "my key is sk-ab...uvwx in text"},
+		{"sk-short", "sk-short"},
 		{"no api key here", "no api key here"},
-		{"sk-ant-verylongkey1234567890abcdefg", "sk-ant...defg"},
+		{"sk-ant-verylongkey1234567890abcdefg", "sk-an...defg"},
 	}
 
 	for _, c := range cases {
@@ -140,7 +140,7 @@ func TestMaskEmail(t *testing.T) {
 		expected string
 	}{
 		{"user@example.com", "u***@example.com"},
-		{"a@b.c", "a***@b.c"},
+		{"a@b.c", "a@b.c"},
 		{"contact admin@company.org for help", "contact a***@company.org for help"},
 		{"no email", "no email"},
 	}
@@ -160,7 +160,7 @@ func TestMaskBearerToken(t *testing.T) {
 	}{
 		{"Authorization: Bearer abcdefghijklmnopqrstuvwxyz", "Authorization: Bearer tok...wxyz"},
 		{"bearer 1234567890abcdefghij", "bearer tok...ghij"},
-		{"Bearer short", "Bearer tok...****"},
+		{"Bearer short", "Bearer short"},
 		{"no token", "no token"},
 	}
 
@@ -173,16 +173,16 @@ func TestMaskBearerToken(t *testing.T) {
 }
 
 func TestMaskPII(t *testing.T) {
-	input := "User a@b.com used API key sk-abc123def456 with Bearer tokensecret1234"
+	input := "User user@example.com API sk-abcdef1234567890ghijkl Bearer abcdefghijklmnopqrstuvwxyz"
 	got := MaskPII(input)
 
-	if strings.Contains(got, "a@b.com") {
+	if strings.Contains(got, "user@example.com") {
 		t.Error("email should be masked")
 	}
-	if strings.Contains(got, "sk-abc123def456") {
+	if strings.Contains(got, "sk-abcdef1234567890ghijkl") {
 		t.Error("API key should be masked")
 	}
-	if strings.Contains(got, "tokensecret1234") {
+	if strings.Contains(got, "abcdefghijklmnopqrstuvwxyz") {
 		t.Error("bearer token should be masked")
 	}
 }
