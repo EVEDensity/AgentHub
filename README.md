@@ -255,11 +255,13 @@ AgentHub exists because of its community. Every bug report, PR, doc fix, and fea
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left">
+<a href="https://github.com/EVEDensity/AgentHub/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/EVEDensity/AgentHub/main/.github/star-chart.svg" />
+   <source media="(prefers-color-scheme: light)" srcset=".github/star-chart.svg" />
+   <img alt="Star History Chart" src=".github/star-chart.svg" />
  </picture>
 </a>
+
+*Chart auto-updates weekly via [GitHub Action](.github/workflows/star-chart.yml).*
 

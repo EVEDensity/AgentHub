@@ -4,14 +4,20 @@
 
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm install --omit=dev --registry=https://registry.npmmirror.com
 
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
-COPY . .
+ARG API_BACKEND=legacy
+ARG API_BACKEND_URL=http://host.docker.internal:8000
+ARG GO_GATEWAY_URL=http://gateway-service:8081
+ENV API_BACKEND=${API_BACKEND}
+ENV API_BACKEND_URL=${API_BACKEND_URL}
+ENV GO_GATEWAY_URL=${GO_GATEWAY_URL}
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm install --registry=https://registry.npmmirror.com
+COPY frontend/. .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 

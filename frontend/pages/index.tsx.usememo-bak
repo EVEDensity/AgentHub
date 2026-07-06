@@ -1,5 +1,4 @@
-import React, { useCallback, useRef, useState, type JSX } from 'react';
-function useXffect(_fn: () => (() => void) | void, _deps?: readonly unknown[]): void {}
+import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
 import ChatHeader from '../components/chat/ChatHeader';
@@ -87,10 +86,9 @@ export default function AgentHubIM(): JSX.Element {
   // 切回来时直接命中缓存，流的 chunks 不会丢。
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionId, setSessionId] = useState<string>('');
-  // STUB: store hooks
-  const messages: Message[] = [];
-  const isStreaming = false;
-  const addToast = () => {};
+  const messages = useSessionMessages(sessionId);
+  const isStreaming = useSessionStreaming(sessionId);
+  const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
@@ -155,13 +153,21 @@ export default function AgentHubIM(): JSX.Element {
   const autoReplyRef = useRef(autoReply);
   autoReplyRef.current = autoReply;
 
-  // STUB: useResizableSize
-  const sidebarWidth = 320;
-  const setSidebarWidth = (_v: number) => {};
-  const resetSidebarWidth = () => {};
-  const previewWidth = 540;
-  const setPreviewWidth = (_v: number) => {};
-  const resetPreviewWidth = () => {};
+  // ── 可调整布局尺寸（localStorage 持久化） ──────────────
+  // 左侧会话栏宽度：默认 320px，可在 240-480 之间调整
+  const [sidebarWidth, setSidebarWidth, resetSidebarWidth] = useResizableSize(
+    'agenthub.layout.sidebarWidth',
+    320,
+    240,
+    480,
+  );
+  // 右侧预览面板宽度：默认 540px，可在 360-960 之间调整
+  const [previewWidth, setPreviewWidth, resetPreviewWidth] = useResizableSize(
+    'agenthub.layout.previewWidth',
+    540,
+    360,
+    960,
+  );
   // 拖动过程中的临时值（实时预览，松手才提交）
   const [sidebarWidthLive, setSidebarWidthLive] = useState<number | null>(null);
   const [previewWidthLive, setPreviewWidthLive] = useState<number | null>(null);
@@ -215,12 +221,12 @@ export default function AgentHubIM(): JSX.Element {
 
   // ── Effects ──────────────────────────────────────────────
 
-  useXffect(() => {
+  useEffect(() => {
     currentSessionRef.current = sessionId;
     tokenRef.current = token;
   }, [sessionId, token]);
 
-  useXffect(() => {
+  useEffect(() => {
     const saved = localStorage.getItem('agenthub_token');
     const savedUser = localStorage.getItem('agenthub_user');
     if (saved) setToken(saved);
@@ -228,7 +234,7 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   // Apply global settings (theme, lang, zoom) on page load
-  useXffect(() => {
+  useEffect(() => {
     const theme = localStorage.getItem('agenthub_theme') || 'warm';
     const lang = localStorage.getItem('agenthub_lang') || 'zh';
     const zoom = localStorage.getItem('agenthub_zoom') || '100';
@@ -239,7 +245,7 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   // Load user settings from backend and merge into localStorage
-  useXffect(() => {
+  useEffect(() => {
     const token = localStorage.getItem('agenthub_token');
     if (!token) return;
     fetch('/api/user/settings', { headers: { Authorization: `Bearer ${token}` } })
@@ -279,7 +285,7 @@ export default function AgentHubIM(): JSX.Element {
     setNotice('登录已过期，请重新登录');
   }
 
-  useXffect(() => {
+  useEffect(() => {
     if (!token) return;
     // ── Fetch sessions ──────────────────────────────────────────────
     fetch('/api/chat/sessions', { headers: authHeaders() })
@@ -372,7 +378,7 @@ export default function AgentHubIM(): JSX.Element {
     return res;
   }
 
-  useXffect(() => {
+  useEffect(() => {
     if (!token || !sessionId) return;
     // Reset session-scoped refs to prevent stale data leaking across sessions
     lastMessageIdRef.current = '';
@@ -407,7 +413,7 @@ export default function AgentHubIM(): JSX.Element {
   const scrollRafRef = useRef<number>(0);
   const lastScrollTimeRef = useRef<number>(0);
 
-  useXffect(() => {
+  useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
 
@@ -1810,11 +1816,33 @@ export default function AgentHubIM(): JSX.Element {
     }, 200);
   }, []);
 
-  const filteredAgents: Agent[] = FALLBACK_AGENTS; // STUB: useMemo removed
+  const filteredAgents = useMemo(() => agents.filter((agent) => {
+    const matchesSearch = mentionSearch === '' ||
+      agent.agentId.toLowerCase().includes(mentionSearch.toLowerCase()) ||
+      agent.domain.toLowerCase().includes(mentionSearch.toLowerCase());
+    const matchesLevel = selectedRiskLevel === 'all' || agent.rankLevel === selectedRiskLevel;
+    return matchesSearch && matchesLevel;
+  }), [agents, mentionSearch, selectedRiskLevel]);
 
-  const filteredWorkflows: WorkflowSummary[] = []; // STUB: useMemo removed
+  const filteredWorkflows = useMemo(() => workflows.filter((w) => {
+    if (mentionSearch === '') return true;
+    const q = mentionSearch.toLowerCase();
+    return (
+      w.name.toLowerCase().includes(q) ||
+      w.description.toLowerCase().includes(q) ||
+      w.triggerKeywords.some((k) => k.toLowerCase().includes(q))
+    );
+  }), [workflows, mentionSearch]);
 
-  const filteredSkills: SkillMeta[] = []; // STUB: useMemo removed
+  const filteredSkills = useMemo(() => skills.filter((s) => {
+    if (mentionSearch === '') return true;
+    const q = mentionSearch.toLowerCase();
+    return (
+      s.name.toLowerCase().includes(q) ||
+      (s.display_name || '').toLowerCase().includes(q) ||
+      (s.description || '').toLowerCase().includes(q)
+    );
+  }), [skills, mentionSearch]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionOpen) {
@@ -2364,10 +2392,10 @@ export default function AgentHubIM(): JSX.Element {
     [handleOpenWorkspaceFile, setNotice, sessionId],
   );
 
-  // STUB: useFileUpload
-  const handleFileChange = (_e: React.ChangeEvent<HTMLInputElement>) => {};
-  const handlePasteFiles = (_e: React.ClipboardEvent) => {};
-  const handleRemoveFile = (_id: string) => {};
+  // ── File upload (extracted to hook) ──────────────────────
+  const { handleFileChange, handlePasteFiles, handleRemoveFile } = useFileUpload({
+    authHeaders, setAttachedFiles, setNotice,
+  });
 
   // 点击附件卡片上的预览按钮: 弹出全屏预览模态
   // ── PM/PMO 事件发送 ────────────────────────────────────────────────
@@ -2477,14 +2505,24 @@ export default function AgentHubIM(): JSX.Element {
 
   // ── Memoized values ──────────────────────────────────────
 
-  const sessionName = 'New Session'; // STUB: useMemo removed
+  const sessionName = useMemo(() => {
+    return sessions.find((s) => s.id === sessionId)?.name || 'New Session';
+  }, [sessions, sessionId]);
 
   // Memoize current session to avoid repeated .find() in render
-  const currentSession: ChatSession | undefined = undefined; // STUB: useMemo removed
+  const currentSession = useMemo(() => {
+    return sessions.find((s) => s.id === sessionId);
+  }, [sessions, sessionId]);
 
-  const percent = 0; // STUB: useMemo removed
+  const percent = useMemo(() => {
+    return dag.total ? Math.round((dag.completed / dag.total) * 100) : 0;
+  }, [dag.total, dag.completed]);
 
-  const filteredSessions: ChatSession[] = []; // STUB: useMemo removed
+  const filteredSessions = useMemo(() => {
+    const q = sessionQuery.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) => s.name.toLowerCase().includes(q));
+  }, [sessions, sessionQuery]);
 
   // ── Render ───────────────────────────────────────────────
 

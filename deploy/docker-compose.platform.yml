@@ -17,7 +17,7 @@ services:
   redis:
     image: redis:7.2
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6379:6379"]
+    ports: ["6389:6379"]
 
   nats:
     image: nats:2.10
@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: agenthub
       POSTGRES_PASSWORD: agenthub
       POSTGRES_DB: agenthub
-    ports: ["5432:5432"]
+    ports: ["5435:5432"]
 
   minio:
     image: minio/minio:latest
@@ -211,8 +211,11 @@ services:
       dockerfile: frontend/Dockerfile
     environment:
       GO_GATEWAY_URL: "http://gateway-service:8081"
-      API_BACKEND: "go"
+      API_BACKEND: "legacy"
+      API_BACKEND_URL: "http://host.docker.internal:8000"
     depends_on: [gateway-service]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports: ["3000:3000"]
 
   # ═══════════════════════════════════════════════════════════════════

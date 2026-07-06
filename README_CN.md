@@ -237,10 +237,12 @@ AgentHub 站在巨人的肩膀上：
 
 如果 AgentHub 对你有帮助，**请点一个 Star** — 让更多人发现这个项目！
 
-<a href="https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left">
+<a href="https://github.com/EVEDensity/AgentHub/stargazers">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/EVEDensity/AgentHub/main/.github/star-chart.svg" />
+   <source media="(prefers-color-scheme: light)" srcset=".github/star-chart.svg" />
+   <img alt="Star History Chart" src=".github/star-chart.svg" />
  </picture>
 </a>
+
+*图表通过 [GitHub Action](.github/workflows/star-chart.yml) 每周自动更新。*

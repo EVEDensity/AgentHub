@@ -1,0 +1,175 @@
+import React, { useCallback, useRef, useState, type JSX } from 'react';
+import dynamic from 'next/dynamic';
+import AuthForm from '../components/chat/AuthForm';
+import ChatHeader from '../components/chat/ChatHeader';
+import ChatInput from '../components/chat/ChatInput';
+import UserRoster from '../components/collaboration/UserRoster';
+import TypingIndicator from '../components/collaboration/TypingIndicator';
+import { getPresenceStore } from '../lib/presenceStore';
+import { getCollaborationStore } from '../lib/collaborationStore';
+import ShareDialog from '../components/collaboration/ShareDialog';
+import OneClickDeployModal from '../components/chat/OneClickDeployModal';
+import MessageList from '../components/chat/MessageList';
+import { type ExecPermission } from '../components/chat/PermissionModePopover';
+import SessionSidebar from '../components/chat/SessionSidebar';
+import PreviewSidebar from '../components/shared/PreviewSidebar';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import ResizableDivider from '../components/common/ResizableDivider';
+import { useResizableSize } from '../hooks/useResizableSize';
+import { useFileUpload } from '../hooks/useFileUpload';
+import { normalizeReferences } from '../lib/references';
+import {
+  useSessionMessages,
+  useSessionStreaming,
+  updateSessionMessages,
+  setSessionStreaming,
+  getSessionBuffer,
+  setSessionBuffer,
+  replaceSessionMessages,
+  clearSession,
+  pinSession,
+  unpinSession,
+  type StreamBuffer,
+} from '../lib/sessionStore';
+import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
+import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
+import { ToastProvider, useAddToast } from '../components/ui/Toast';
+
+// ── Dynamic imports ──
+const FilePreviewModal = dynamic(() => import('../components/chat/FilePreviewModal'), { ssr: false, loading: () => null });
+const FilePreviewPanel = dynamic(() => import('../components/chat/FilePreviewPanel'), {
+  ssr: false,
+  loading: () => (<div className="flex h-full items-center justify-center bg-white"><div className="flex flex-col items-center gap-3"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" /><span className="text-sm text-warm-400">加载预览面板...</span></div></div>),
+});
+const DagModal = dynamic(() => import('../components/chat/DagModal'), { ssr: false, loading: () => null });
+
+const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy', 'Implement'] as const;
+const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
+  agentId, domain: agentId.toLowerCase(), status: 'sleeping', adapterType: 'mock',
+  riskLevel: agentId === 'Deploy' ? 'L3' : agentId === 'CodeGen' || agentId === 'Orchestrator' ? 'L2' : 'L1',
+}));
+
+/**
+ * AgentHub IM — BISECT: All useState + useRef from full file.
+ * Store hooks, useResizableSize, useFileUpload, useCallback (complex), useEffect ALL STUBBED.
+ */
+export default function AgentHubIM(): JSX.Element {
+  // ── All useState hooks ──────────────────────────────────
+  const [token, setToken] = useState<string>('');
+  const [user, setUser] = useState<User | null>(null);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authForm, setAuthForm] = useState<{ name: string; password: string }>({ name: 'admin', password: 'admin123' });
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [sessionId, setSessionId] = useState<string>('');
+  // ★ STUB: store hooks
+  const messages: Message[] = [];
+  const isStreaming = false;
+  const addToast = () => {};
+  const [sessionQuery, setSessionQuery] = useState<string>('');
+  const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
+  const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
+  const [taskOpen, setTaskOpen] = useState<boolean>(false);
+  const [previewOpen, setPreviewOpen] = useState<boolean>(false);
+  const [previewUrl, setPreviewUrl] = useState<string>('');
+  const [connected, setConnected] = useState<boolean>(false);
+  const [notice, setNotice] = useState<string>('');
+  const [pending, setPending] = useState<PendingMessage[]>([]);
+  const [generated, setGenerated] = useState<GeneratedData | null>(null);
+  const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
+  const [mentionSearch, setMentionSearch] = useState<string>('');
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState<boolean>(false);
+  const [selectedRiskLevel, setSelectedRiskLevel] = useState<string>('all');
+  const [mentionOpen, setMentionOpen] = useState<boolean>(false);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState<number>(0);
+  const [mentionTrigger, setMentionTrigger] = useState<'@' | '#' | '/'>( '@');
+  const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
+  const [skills, setSkills] = useState<SkillMeta[]>([]);
+  const [editingId, setEditingId] = useState<string>('');
+  const [editName, setEditName] = useState<string>('');
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [quoteReferences, setQuoteReferences] = useState<QuoteReference[]>([]);
+  const [pmState, setPmState] = useState<import('../types').PMState>('IDLE');
+  const [degradationStatus, setDegradationStatus] = useState<import('../types').DegradationStatus | null>(null);
+  const [streamPhase, setStreamPhase] = useState<'idle' | 'thinking' | 'executing' | 'generating' | 'done'>('idle');
+  const [activeTools, setActiveTools] = useState<string[]>([]);
+  const [sendState, setSendState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [currentAgentName, setCurrentAgentName] = useState<string>('');
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sessionVisibility, setSessionVisibility] = useState<string>('');
+  const [deployOpen, setDeployOpen] = useState(false);
+  const [previewFile, setPreviewFile] = useState<FilePreviewTarget | null>(null);
+  const [isAutoNaming, setIsAutoNaming] = useState<boolean>(false);
+  const [previewTabs, setPreviewTabs] = useState<WorkspacePreviewTab[]>([]);
+  const [activePreviewTabId, setActivePreviewTabId] = useState<string | null>(null);
+  const [workspaceVersion, setWorkspaceVersion] = useState(0);
+  const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
+  const [previewPanelOpen, setPreviewPanelOpen] = useState<boolean>(false);
+  const [pendingScrollRef, setPendingScrollRef] = useState<{ id: string; nonce: number } | null>(null);
+  const [execPermission, setExecPermission] = useState<ExecPermission>(1);
+  const [autoReply, setAutoReply] = useState(true);
+  const autoReplyRef = useRef(autoReply);
+  autoReplyRef.current = autoReply;
+
+  // ── Layout (★ STUB: useResizableSize) ──────────────────
+  const sidebarWidth = 320;
+  const setSidebarWidth = (_v: number) => {};
+  const resetSidebarWidth = () => {};
+  const previewWidth = 540;
+  const setPreviewWidth = (_v: number) => {};
+  const resetPreviewWidth = () => {};
+  const [sidebarWidthLive] = useState<number | null>(null);
+  const [previewWidthLive] = useState<number | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // ── All useRef hooks ────────────────────────────────────
+  const wsRef = useRef<Map<string, WebSocket>>(new Map());
+  const wsReadyRef = useRef<Map<string, boolean>>(new Map());
+  const streamFlushRafRef = useRef<Map<string, number>>(new Map());
+  const progressiveFlushTimersRef = useRef<Map<string, number>>(new Map());
+  const streamInterruptedAtRef = useRef<Map<string, number>>(new Map());
+  const retryRef = useRef<PendingMessage[]>([]);
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const lastMessageIdRef = useRef<string>('');
+  const dedupIdsRef = useRef<Set<string>>(new Set());
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const messagesContainerRef = useRef<HTMLElement | null>(null);
+  const currentSessionRef = useRef<string>(sessionId);
+  const tokenRef = useRef<string>(token);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mentionStartRef = useRef<number>(-1);
+  const mentionPanelRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef(input);
+  inputRef.current = input;
+  const attachedFilesRef = useRef(attachedFiles);
+  attachedFilesRef.current = attachedFiles;
+  const previewTabsRef = useRef(previewTabs);
+  previewTabsRef.current = previewTabs;
+  const prevMessageCountRef = useRef(0);
+  const prevSessionRef = useRef<string>(sessionId);
+  const activeSessionIdRef = useRef<string>(sessionId);
+  activeSessionIdRef.current = sessionId;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollRafRef = useRef<number>(0);
+  const lastScrollTimeRef = useRef<number>(0);
+
+  // ★ STUB: All useCallback and complex logic
+  const handleAuthSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => { e.preventDefault(); }, []);
+  const handleToggleAuthMode = useCallback(() => { setAuthMode((m) => m === 'login' ? 'register' : 'login'); }, []);
+  const handleAuthFormChange = useCallback((update: Partial<{ name: string; password: string }>) => { setAuthForm((prev) => ({ ...prev, ...update })); }, []);
+
+  return (
+    <AuthForm
+      authMode={authMode}
+      authForm={authForm}
+      notice={notice}
+      onSubmit={handleAuthSubmit}
+      onToggleMode={handleToggleAuthMode}
+      onAuthFormChange={handleAuthFormChange}
+    />
+  );
+}

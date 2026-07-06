@@ -22,18 +22,26 @@ export function useResizableSize(
 ): [number, (v: number) => void, () => void] {
   const safeDefault = clamp(default_, min, max);
 
-  const [size, setSizeState] = useState<number>(() => {
-    if (typeof window === 'undefined') return safeDefault;
+  // Always start with the safe default for both SSR and client hydration.
+  // Defer localStorage read to useEffect to avoid hydration mismatches
+  // when the stored value differs from the default.
+  const [size, setSizeState] = useState<number>(safeDefault);
+
+  // Hydrate from localStorage on mount (client-only).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     try {
       const raw = window.localStorage.getItem(key);
-      if (raw == null) return safeDefault;
-      const n = Number.parseFloat(raw);
-      if (!Number.isFinite(n)) return safeDefault;
-      return clamp(n, min, max);
+      if (raw != null) {
+        const n = Number.parseFloat(raw);
+        if (Number.isFinite(n)) {
+          setSizeState(clamp(n, min, max));
+        }
+      }
     } catch {
-      return safeDefault;
+      /* privacy mode — ignore */
     }
-  });
+  }, [key, min, max]);
 
   // Cross-tab sync
   useEffect(() => {

@@ -1,7 +1,9 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY services/python/pyproject.toml /app/pyproject.toml
-RUN pip install --no-cache-dir fastapi uvicorn[standard] pydantic pydantic-settings httpx qdrant-client opensearch-py minio redis tenacity prometheus_client nats-py
+RUN pip install --no-cache-dir fastapi uvicorn[standard] pydantic pydantic-settings httpx qdrant-client opensearch-py minio redis tenacity prometheus_client nats-py \
+    -i https://mirrors.aliyun.com/pypi/simple \
+    --trusted-host mirrors.aliyun.com
 COPY services/python/offline_knowledge_service /app/offline_knowledge_service
 COPY services/python/shared /app/shared
 EXPOSE 8092

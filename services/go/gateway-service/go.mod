@@ -3,10 +3,12 @@ module github.com/agenthub/platform/gateway-service
 go 1.22.0
 
 require (
+	github.com/agenthub/platform/shared/db v0.0.0
 	github.com/agenthub/platform/shared/eventbus v0.0.0
 	github.com/agenthub/platform/shared/events v0.0.0
 	github.com/agenthub/platform/shared/iam v0.0.0
 	github.com/agenthub/platform/shared/obs v0.0.0
+	github.com/agenthub/platform/shared/state v0.0.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/prometheus/client_golang v1.19.1
 )
@@ -44,6 +46,8 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 )
 
+replace github.com/agenthub/platform/shared/db => ../shared/db
+
 replace github.com/agenthub/platform/shared/events => ../shared/events
 
 replace github.com/agenthub/platform/shared/eventbus => ../shared/eventbus
@@ -51,3 +55,5 @@ replace github.com/agenthub/platform/shared/eventbus => ../shared/eventbus
 replace github.com/agenthub/platform/shared/obs => ../shared/obs
 
 replace github.com/agenthub/platform/shared/iam => ../shared/iam
+
+replace github.com/agenthub/platform/shared/state => ../shared/state
