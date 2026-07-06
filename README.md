@@ -262,4 +262,3 @@ AgentHub exists because of its community. Every bug report, PR, doc fix, and fea
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
  </picture>
 </a>
-
