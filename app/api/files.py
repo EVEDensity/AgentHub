@@ -194,7 +194,7 @@ async def get_upload_status(upload_id: str) -> dict:
 
 
 @router.get("/download/{file_id}")
-async def download_file(file_id: str) -> dict:
+async def download_file(file_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Return file metadata and content for AI consumption."""
     chunk_dir = UPLOAD_DIR / file_id
     if not await aexists(chunk_dir):

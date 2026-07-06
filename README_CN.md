@@ -64,12 +64,15 @@
 
 ## 🚀 快速开始
 
+### 一键启动（推荐）
+
 ```bash
-# 克隆即启动 — 一条命令搞定
 git clone https://github.com/EVEDensity/AgentHub.git
-cd platform/deploy
-docker compose -f docker-compose.platform.yml up -d
+cd AgentHub
+start.bat
 ```
+
+自动启动 PostgreSQL（Docker）、Python 后端和前端。
 
 | 服务 | 地址 |
 |---------|-----|
@@ -79,6 +82,27 @@ docker compose -f docker-compose.platform.yml up -d
 | 📈 Prometheus | `http://localhost:9090` |
 
 > 💡 **本地开发无需 API Key** — 内置 mock 提供商，离线即可测试全部功能。
+
+### 手动启动
+
+```bash
+# 1. 启动 PostgreSQL
+docker run -d --name agenthub-pg \
+  -e POSTGRES_USER=agenthub \
+  -e POSTGRES_PASSWORD=agenthub \
+  -e POSTGRES_DB=agenthub \
+  -p 5435:5432 \
+  postgres:16
+
+# 2. 启动 Python 后端
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# 3. 启动前端（legacy 模式）
+cd frontend
+set API_BACKEND=legacy
+npm install
+npm run dev
+```
 
 ### 想用自己的模型？
 
@@ -176,8 +200,8 @@ AgentHub 是社区驱动的项目 — **你的贡献会让它变得更好**。�
 ```bash
 # 开发环境搭建
 git clone https://github.com/EVEDensity/AgentHub.git
-cd platform
-docker compose -f deploy/docker-compose.platform.yml up -d nats postgres redis
+cd deploy
+docker compose -f docker-compose.platform.yml up -d nats postgres redis
 
 # Go 服务
 cd services/go && go work sync

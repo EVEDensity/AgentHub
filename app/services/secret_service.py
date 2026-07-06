@@ -3,10 +3,22 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 
-_SECRET = os.getenv("AGENTHUB_SECRET_KEY", "agenthub-local-dev-secret").encode("utf-8")
+_DEFAULT_SECRET = "agenthub-local-dev-secret"
+_SECRET = os.getenv("AGENTHUB_SECRET_KEY", _DEFAULT_SECRET).encode("utf-8")
 _PREFIX = "enc:"
+
+
+def validate_secret() -> None:
+    """Check that AGENTHUB_SECRET_KEY is not the default.  Call at startup."""
+    if os.getenv("AGENTHUB_SECRET_KEY") is None:
+        logging.getLogger("agenthub.startup").warning(
+            "AGENTHUB_SECRET_KEY is not set — using built-in default. "
+            "Set a strong random secret in production to prevent JWT forgery "
+            "and API-key decryption."
+        )
 
 
 def _keystream(length: int, salt: bytes) -> bytes:

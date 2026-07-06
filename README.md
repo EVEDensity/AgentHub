@@ -64,12 +64,15 @@ Most AI platforms treat agents as **glorified chatbots with tool access**. Agent
 
 ## 🚀 Quick Start
 
+### One-command start (recommended)
+
 ```bash
-# Clone and start everything — one command
 git clone https://github.com/EVEDensity/AgentHub.git
-cd platform/deploy
-docker compose -f docker-compose.platform.yml up -d
+cd AgentHub
+start.bat
 ```
+
+This automatically starts PostgreSQL (via Docker), the Python backend, and the frontend.
 
 | Service | URL |
 |---------|-----|
@@ -79,6 +82,27 @@ docker compose -f docker-compose.platform.yml up -d
 | 📈 Prometheus | `http://localhost:9090` |
 
 > 💡 **No API key needed for local dev** — a built-in mock provider lets you test everything offline.
+
+### Manual start
+
+```bash
+# 1. Start PostgreSQL
+docker run -d --name agenthub-pg \
+  -e POSTGRES_USER=agenthub \
+  -e POSTGRES_PASSWORD=agenthub \
+  -e POSTGRES_DB=agenthub \
+  -p 5435:5432 \
+  postgres:16
+
+# 2. Start Python backend
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# 3. Start frontend (legacy mode)
+cd frontend
+set API_BACKEND=legacy
+npm install
+npm run dev
+```
 
 ### Want to use your own model?
 
@@ -176,8 +200,8 @@ AgentHub is a community-driven project — **your contributions make it better**
 ```bash
 # Development setup
 git clone https://github.com/EVEDensity/AgentHub.git
-cd platform
-docker compose -f deploy/docker-compose.platform.yml up -d nats postgres redis
+cd deploy
+docker compose -f docker-compose.platform.yml up -d nats postgres redis
 
 # Go services
 cd services/go && go work sync
