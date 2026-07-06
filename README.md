@@ -262,6 +262,4 @@ AgentHub exists because of its community. Every bug report, PR, doc fix, and fea
    <img alt="Star History Chart" src=".github/star-chart.svg" />
  </picture>
 </a>
-
 *Chart auto-updates weekly via [GitHub Action](.github/workflows/star-chart.yml).*
-
