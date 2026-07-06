@@ -289,16 +289,16 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
           <StatCard
             label="总审计记录"
             value={data.total.toLocaleString()}
-            bg="bg-white border-warm-200"
+            bg="bg-warm-100 border-warm-200"
             text="text-warm-800"
-            icon="📋"
+            icon="[clipboard]"
           />
           <StatCard
             label="高风险操作"
             value={data.items.filter(l => l.riskLevel === 'L3' || l.riskLevel === 'L4' || l.riskLevel === 'high').length}
             bg="bg-red-50 border-red-200"
             text="text-red-700"
-            icon="🔴"
+            icon="[red]"
             subtitle={`共 ${data.items.filter(l => l.riskLevel === 'L3' || l.riskLevel === 'L4' || l.riskLevel === 'high').length > 0 ? data.items.filter(l => l.riskLevel === 'L3' || l.riskLevel === 'L4' || l.riskLevel === 'high').length : 0} 条高风险`}
           />
           <StatCard
@@ -306,22 +306,22 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
             value={data.items.filter(l => l.action.includes('agent_execute')).length}
             bg="bg-blue-50 border-blue-200"
             text="text-blue-700"
-            icon="🤖"
+            icon="[bot]"
           />
           <StatCard
             label="已批准操作"
             value={data.items.filter(l => l.decision === 'approve' || l.decision === 'auto').length}
             bg="bg-green-50 border-green-200"
             text="text-green-700"
-            icon="✅"
+            icon="[check]"
           />
         </div>
       )}
 
       {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-warm-200 bg-white px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-warm-200 bg-warm-100 px-4 py-3">
         {/* Free-text search */}
-        <div className="flex items-center gap-1.5 rounded-lg border border-warm-200 bg-warm-50 px-3 py-2 flex-1 min-w-[200px] max-w-[320px] transition-colors focus-within:border-primary-300 focus-within:bg-white">
+        <div className="flex items-center gap-1.5 rounded-lg border border-warm-200 bg-warm-50 px-3 py-2 flex-1 min-w-[200px] max-w-[320px] transition-colors focus-within:border-primary-300 focus-within:bg-warm-100">
           <span className="material-symbols-outlined text-[18px] text-warm-400 shrink-0">search</span>
           <input
             className="min-w-0 flex-1 bg-transparent text-sm text-warm-800 outline-none placeholder:text-warm-400"
@@ -341,7 +341,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
 
         {/* Agent ID filter */}
         <input
-          className="rounded-lg border border-warm-200 bg-warm-50 px-3 py-2 text-sm text-warm-700 outline-none placeholder:text-warm-400 w-[130px] transition-colors focus:border-primary-300 focus:bg-white"
+          className="rounded-lg border border-warm-200 bg-warm-50 px-3 py-2 text-sm text-warm-700 outline-none placeholder:text-warm-400 w-[130px] transition-colors focus:border-primary-300 focus:bg-warm-100"
           placeholder="Agent ID"
           value={filterAgentId}
           onChange={(e) => setFilterAgentId(e.target.value)}
@@ -390,7 +390,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
 
       {/* Loading state */}
       {loading && !data && (
-        <div className="flex justify-center py-16 rounded-2xl border border-warm-200 bg-white">
+        <div className="flex justify-center py-16 rounded-2xl border border-warm-200 bg-warm-100">
           <div className="flex flex-col items-center gap-3">
             <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-warm-300 border-t-primary-500" />
             <span className="text-sm text-warm-500">加载审计日志...</span>
@@ -411,7 +411,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
 
       {/* Empty state */}
       {!loading && !error && data && data.items.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-warm-200 bg-white px-8 py-16 text-center">
+        <div className="rounded-2xl border border-dashed border-warm-200 bg-warm-100 px-8 py-16 text-center">
           <span className="material-symbols-outlined text-[56px] text-warm-300 mb-4 block">receipt_long</span>
           <h3 className="text-base font-semibold text-warm-700 mb-1">暂无审计日志</h3>
           <p className="text-sm text-warm-500 max-w-md mx-auto">
@@ -430,7 +430,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
       {/* Data table */}
       {data && data.items.length > 0 && (
         <>
-          <div className="overflow-hidden rounded-2xl border border-warm-200 bg-white">
+          <div className="overflow-hidden rounded-2xl border border-warm-200 bg-warm-100">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
@@ -528,7 +528,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
           </div>
 
           {/* Pagination */}
-          <div className="flex items-center justify-between rounded-2xl border border-warm-200 bg-white px-5 py-3">
+          <div className="flex items-center justify-between rounded-2xl border border-warm-200 bg-warm-100 px-5 py-3">
             {/* Page size selector */}
             <div className="flex items-center gap-2 text-sm text-warm-500">
               <span>每页</span>
@@ -646,11 +646,11 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
           onClick={closeDetail}
         >
           <div
-            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl"
+            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-warm-100 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal header */}
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-warm-150 bg-white px-6 py-4 rounded-t-2xl">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-warm-150 bg-warm-100 px-6 py-4 rounded-t-2xl">
               <div>
                 <h3 className="text-lg font-semibold text-warm-900">审计日志详情</h3>
                 <p className="text-xs text-warm-500 mt-0.5 font-mono">ID: {detailLog.id}</p>

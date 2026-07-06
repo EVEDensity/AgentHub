@@ -235,22 +235,22 @@ const ChatInput = memo(function ChatInput({
   const canSend = input.trim().length > 0 || attachedFiles.length > 0 || (fileReferences && fileReferences.length > 0) || (quoteReferences && quoteReferences.length > 0);
 
   return (
-    <footer className="shrink-0 relative border-t border-warm-150 bg-white px-6 py-4">
+    <footer className="shrink-0 relative border-t border-warm-200 px-6 py-4">
       {/* ── Observer-mode indicator ─────────────────────────────── */}
       {isObserverInMultiUser && (
-        <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+        <div className="mb-3 flex items-center gap-2 border border-warning-100 bg-warning-50 px-3 py-2 text-sm text-warning-600">
           <svg className="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
             <circle cx="12" cy="12" r="3"/>
             <line x1="1" y1="12" x2="23" y2="12"/>
           </svg>
           <span className="font-medium">观察者模式</span>
-          <span className="text-amber-600">— 多人对话中仅允许发送纯文本消息</span>
+          <span className="text-warning-600">— 多人对话中仅允许发送纯文本消息</span>
         </div>
       )}
 
       {mentionOpen && mentionTrigger === '@' && (
-        <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
+        <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] border border-warm-200 bg-warm-100 p-3 shadow-card">
           <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
             <span>@ Select Agent</span>
             <button className="text-primary-500" onClick={onInsertAllMentions}>@All Agents</button>
@@ -314,7 +314,7 @@ const ChatInput = memo(function ChatInput({
                           )}
                           {agent.agentId === 'Architect' && (
                             <span
-                              className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm"
+                              className="inline-flex items-center gap-0.5 bg-primary-500 px-1.5 py-0.5 text-[9px] font-semibold text-warm-50"
                               title="主 Agent（PM / PMO）：负责任务拆解、调度、降级、仲裁与人工交接"
                             >
                               <svg
@@ -359,7 +359,7 @@ const ChatInput = memo(function ChatInput({
       )}
 
       {mentionOpen && mentionTrigger === '#' && (
-        <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
+        <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[520px] border border-warm-200 bg-warm-100 p-3 shadow-card">
           <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
             <span># Select Workflow</span>
             <span className="text-warm-400">{filteredWorkflows.length} workflows</span>
@@ -411,7 +411,7 @@ const ChatInput = memo(function ChatInput({
       )}
 
       {mentionOpen && mentionTrigger === '/' && (
-        <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[560px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal">
+        <div ref={mentionPanelRef} className="absolute bottom-24 left-6 z-20 w-[560px] border border-warm-200 bg-warm-100 p-3 shadow-card">
           <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
             <span>/ Select Skill</span>
             <span className="text-warm-400">{filteredSkills.length} skills</span>
@@ -453,7 +453,7 @@ const ChatInput = memo(function ChatInput({
                     onMouseEnter={() => onMentionActiveIndexChange(idx)}
                   >
                     <div className="flex items-center gap-2">
-                      <span className="shrink-0 text-lg">{skill.icon || '🔧'}</span>
+                      <span className="shrink-0 text-lg">{skill.icon || '◇'}</span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-warm-800">/{skill.name}</span>
@@ -474,7 +474,7 @@ const ChatInput = memo(function ChatInput({
       {emojiOpen && (
         <div
           ref={emojiPanelRef}
-          className="absolute bottom-16 left-6 z-30 w-[320px] rounded-xl border border-warm-150 bg-white p-3 shadow-modal"
+          className="absolute bottom-16 left-6 z-30 w-[320px] border border-warm-200 bg-warm-100 p-3 shadow-card"
         >
           <div className="mb-2 flex items-center justify-between text-caption text-warm-500">
             <span>选择表情</span>
@@ -871,14 +871,14 @@ const ChatInput = memo(function ChatInput({
             <button
               type="button"
               onClick={() => onAutoReplyChange(!autoReply)}
-              className={`relative inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border transition-all duration-150 ease-out ${
+              className={`relative inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium border transition-colors ${
                 autoReply
-                  ? 'bg-teal-500 text-white border-teal-500 shadow-sm'
-                  : 'border-warm-200 text-warm-400 hover:border-teal-300 hover:bg-teal-50 hover:text-teal-600'
+                  ? 'bg-primary-500 text-warm-50 border-primary-500'
+                  : 'border-warm-300 text-warm-400 hover:border-primary-400 hover:text-primary-500'
               }`}
               title={autoReply ? '自动回复已启用：无@Agent时默认Agent回复' : '仅发送模式：无@Agent时只发送消息不回复。@Agent始终有效'}
             >
-              <span className="text-sm leading-none">{autoReply ? '🤖' : '💬'}</span>
+              <span className="text-sm leading-none">{autoReply ? 'A' : 'M'}</span>
               <span>{autoReply ? '自动' : '仅发送'}</span>
             </button>
           </div>

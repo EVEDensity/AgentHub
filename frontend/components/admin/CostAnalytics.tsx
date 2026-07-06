@@ -68,14 +68,14 @@ function AnomalyBadge({ days }: { days: UsageDay[] }) {
   if (spike > 200) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700 ring-1 ring-red-200">
-        🚨 异常增长 +{spike.toFixed(0)}%
+        [alert] 异常增长 +{spike.toFixed(0)}%
       </span>
     );
   }
   if (spike > 100) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
-        ⚠️ 大幅增长 +{spike.toFixed(0)}%
+        [warn] 大幅增长 +{spike.toFixed(0)}%
       </span>
     );
   }
@@ -115,7 +115,7 @@ export default function CostAnalytics(): JSX.Element {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-h3">💰 成本分析</h2>
+          <h2 className="text-h3">[cost] 成本分析</h2>
           <p className="mt-1 text-sm text-warm-500">
             Token 消耗、成本估算与用量趋势
           </p>
@@ -166,7 +166,7 @@ export default function CostAnalytics(): JSX.Element {
       {/* Usage chart */}
       <div className="card p-5">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-warm-800">📈 30 天 Token 消耗趋势</h3>
+          <h3 className="text-sm font-semibold text-warm-800">[chart] 30 天 Token 消耗趋势</h3>
           <AnomalyBadge days={days} />
         </div>
         <TinyBarChart data={days} height={140} />
@@ -180,9 +180,9 @@ export default function CostAnalytics(): JSX.Element {
       {billingByTenant.length > 0 && (
         <div className="card p-5">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-warm-800">🏢 租户配额 & 账单</h3>
+            <h3 className="text-sm font-semibold text-warm-800">[stats] 租户配额 & 账单</h3>
             <select
-              className="text-sm border border-warm-200 rounded-lg px-3 py-1.5 bg-white text-warm-700"
+              className="text-sm border border-warm-200 rounded-lg px-3 py-1.5 bg-warm-100 text-warm-700"
               value={selectedTenant}
               onChange={(e) => setSelectedTenant(e.target.value)}
             >
@@ -257,7 +257,7 @@ export default function CostAnalytics(): JSX.Element {
       {/* Cost breakdown table */}
       {costEstimate && costEstimate.byModel.length > 0 && (
         <div className="card p-5">
-          <h3 className="text-sm font-semibold text-warm-800 mb-3">📊 模型成本分布</h3>
+          <h3 className="text-sm font-semibold text-warm-800 mb-3">[chart] 模型成本分布</h3>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-warm-100 text-left text-xs uppercase tracking-wide text-warm-500">

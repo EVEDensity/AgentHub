@@ -135,7 +135,7 @@ export default function DataTable<T = Record<string, unknown>>({
   }
 
   return (
-    <div className={`my-4 rounded-2xl border border-warm-150 bg-white ${className}`}>
+    <div className={`my-4 rounded-2xl border border-warm-150 bg-warm-100 ${className}`}>
       {/* 工具栏 - 完全参照图二样式 */}
       <div className="flex items-center justify-between px-4 py-2.5">
         <div className="flex items-center gap-2">
@@ -200,7 +200,7 @@ export default function DataTable<T = Record<string, unknown>>({
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  className="border-b border-warm-200 bg-white px-6 py-3 text-left text-sm font-semibold text-warm-700"
+                  className="border-b border-warm-200 bg-warm-100 px-6 py-3 text-left text-sm font-semibold text-warm-700"
                   style={{
                     textAlign: col.align || 'left',
                     width: col.width,

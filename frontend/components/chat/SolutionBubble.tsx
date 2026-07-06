@@ -87,12 +87,12 @@ const SolutionBubble = memo(function SolutionBubble({
     : 0;
 
   return (
-    <div className="my-3 mx-auto max-w-[720px] rounded-2xl border border-warm-150 bg-white shadow-sm overflow-hidden">
+    <div className="my-3 mx-auto max-w-[720px] rounded-2xl border border-warm-150 bg-warm-100 shadow-sm overflow-hidden">
       {/* Header */}
       <div className="border-b border-warm-100 bg-gradient-to-r from-primary-50/50 to-white px-5 py-3.5">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-100 text-sm">
-            💡
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-100 text-xs font-bold text-primary-600">
+            [idea]
           </span>
           <div className="flex-1 min-w-0">
             <h4 className="text-sm font-semibold text-warm-800">
@@ -105,7 +105,7 @@ const SolutionBubble = memo(function SolutionBubble({
           {/* Countdown badge */}
           {!isResolved && !selectedId && countdown > 0 && (
             <span className="flex-shrink-0 rounded-full bg-primary-50 px-2.5 py-1 text-[11px] font-medium text-primary-600">
-              ⏱ {formatCountdown(countdown)}
+              [time] {formatCountdown(countdown)}
             </span>
           )}
           {isResolved && (
@@ -228,7 +228,7 @@ const SolutionBubble = memo(function SolutionBubble({
       {recommendationReason && (
         <div className="border-t border-warm-100 bg-primary-50/30 px-5 py-3">
           <div className="flex items-start gap-2">
-            <span className="mt-0.5 text-xs">⭐</span>
+            <span className="mt-0.5 text-xs text-primary-500 font-bold">*</span>
             <div>
               <span className="text-[11px] font-semibold text-warm-700">推荐理由</span>
               <p className="mt-0.5 text-[11px] text-warm-500 leading-relaxed">{recommendationReason}</p>
@@ -266,13 +266,13 @@ const SolutionCard = memo(function SolutionCard({
           ? 'border-primary-300 bg-primary-50/20 shadow-sm shadow-primary-100/50'
           : isSelected
           ? 'border-accent-300 bg-accent-50/20'
-          : 'border-warm-150 bg-white hover:border-warm-200'
+          : 'border-warm-150 bg-warm-100 hover:border-warm-200'
       } ${isDisabled ? 'opacity-60 pointer-events-none' : ''}`}
     >
       {/* Recommended badge */}
       {isRecommended && (
         <div className="absolute -top-2.5 right-3 rounded-full bg-primary-500 px-2.5 py-0.5 text-[10px] font-semibold text-white shadow-sm">
-          ⭐ 推荐方案
+          * 推荐方案
         </div>
       )}
 
@@ -334,7 +334,7 @@ const SolutionCard = memo(function SolutionCard({
 
       {/* Metadata row */}
       <div className="flex items-center gap-2 mb-3 text-[10px] text-warm-400">
-        <span>⏱ {solution.estimatedEffort}</span>
+        <span>[time] {solution.estimatedEffort}</span>
         <span className="text-warm-200">|</span>
         <span
           className="rounded-full px-1.5 py-0.5 font-medium"

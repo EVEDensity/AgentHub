@@ -108,7 +108,7 @@ const TaskPreviewCard = memo(function TaskPreviewCard({ data, isStreaming, onSen
 
   return (
     <div className="mb-4 flex justify-start">
-      <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-white border-2 border-primary-200 shadow-md">
+      <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-warm-100 border-2 border-primary-200 shadow-md">
         {/* Header */}
         <div className="mb-3 flex items-center gap-2 text-xs">
           <ListTodo className="h-4 w-4 text-primary-500" />

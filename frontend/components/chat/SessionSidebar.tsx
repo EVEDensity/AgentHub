@@ -55,28 +55,28 @@ const SessionSidebar = memo(function SessionSidebar({
 }: SessionSidebarProps) {
   return (
     <aside
-      className="border-r border-warm-150 bg-white p-4 flex h-screen flex-col shrink-0"
+      className="border-r border-warm-200 p-4 flex h-screen flex-col shrink-0 bg-[#151412]"
       style={width ? { width: `${width}px` } : undefined}
     >
       <div className="mb-5">
-        <div className="text-h2 text-warm-900 tracking-tight">Agent<span className="text-primary-500">Hub</span></div>
+        <div className="text-h2 text-warm-800 tracking-tight">Agent<span className="text-primary-500">Hub</span></div>
         <div className="mt-1 text-caption text-warm-500 flex items-center gap-2">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-success-500 shadow-[0_0_0_2px_rgba(91,140,90,0.2)]" />
+          <span className="inline-block w-1.5 h-1.5 bg-success-500" />
           {user?.name} · {user?.role}
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
-        <a className="btn-secondary block w-full text-center transition-all active:scale-[0.98]" href="/admin">⚙️ 管理面板</a>
-        <a className="btn-secondary block w-full text-center transition-all active:scale-[0.98]" href="/canvas">🎨 智能体画布</a>
-        <a className="btn-secondary block w-full text-center transition-all active:scale-[0.98]" href="/admin?menu=%E8%AE%B0%E5%BF%86">🧠 记忆管理</a>
-        <button className="btn-ghost w-full text-warm-500 hover:text-danger-600 transition-all active:scale-[0.98]" onClick={onLogout}>退出登录</button>
+        <a className="btn-secondary block w-full text-center" href="/admin">管理面板</a>
+        <a className="btn-secondary block w-full text-center" href="/canvas">智能体画布</a>
+        <a className="btn-secondary block w-full text-center" href="/admin?menu=%E8%AE%B0%E5%BF%86">记忆管理</a>
+        <button className="btn-ghost w-full text-warm-500 hover:text-danger-600" onClick={onLogout}>退出登录</button>
       </div>
-      {notice && <div className="mt-3 rounded-lg bg-warning-50 p-2 text-xs text-warning-600">{notice}</div>}
-      <div className="mb-3 mt-4 flex items-center justify-between border-b border-warm-150 pb-3">
+      {notice && <div className="mt-3 bg-warning-50 p-2 text-xs text-warning-600">{notice}</div>}
+      <div className="mb-3 mt-4 flex items-center justify-between border-b border-warm-200 pb-3">
         <button className="btn-ghost flex items-center gap-2" onClick={onCreateSession}><span className="text-lg">+</span><span>New Session</span></button>
         {/* 分享按钮已移至顶部 Header 区域（与 UserRoster 并列） */}
       </div>
-      <div className="mb-3 flex items-center gap-2 rounded-xl border border-warm-150 bg-warm-50 px-3 py-2">
+      <div className="mb-3 flex items-center gap-2 border border-warm-200 bg-warm-100 px-3 py-2">
         <span className="text-warm-400">Search</span>
         <input className="w-full bg-transparent text-sm outline-none" placeholder="Search sessions..." value={sessionQuery} onChange={(e) => onSessionQueryChange(e.target.value)} />
       </div>
@@ -84,7 +84,7 @@ const SessionSidebar = memo(function SessionSidebar({
       <div className="flex-1 overflow-hidden">
         <div className="h-full space-y-1 overflow-auto pr-1">
         {filteredSessions.map((s) => (
-          <div key={s.id} className={`group flex items-center gap-1 rounded-lg px-2 py-1 transition-all ${s.id === sessionId ? 'bg-primary-50 border border-primary-100 shadow-sm' : 'hover:bg-warm-50 border border-transparent'}`}>
+          <div key={s.id} className={`group flex items-center gap-1 px-2 py-1 ${s.id === sessionId ? 'bg-primary-50 border border-primary-100' : 'hover:bg-warm-100 border border-transparent'}`}>
             {editingId === s.id ? (
               <input
                 className="flex-1 rounded border border-primary-300 px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-primary-500"
@@ -97,7 +97,11 @@ const SessionSidebar = memo(function SessionSidebar({
             ) : (
               <button className={`flex-1 rounded-lg px-2 py-2 text-left text-sm ${s.id === sessionId ? 'text-warm-800' : 'text-warm-600'}`} onClick={() => onSelectSession(s.id)}>
                 <div className="flex items-center gap-1.5 truncate">
-                  {s.isPinned ? <span className="shrink-0 text-amber-500" title="Pinned">📌</span> : null}
+                  {s.isPinned ? (
+                    <svg className="shrink-0 h-3.5 w-3.5 text-accent-500" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-label="Pinned">
+                      <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/>
+                    </svg>
+                  ) : null}
                   <span className="truncate">{s.name || 'Untitled'}</span>
                   {s.id === sessionId && isAutoNaming && (
                     <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary-500" title="AI 生成名称中..." />
@@ -106,13 +110,13 @@ const SessionSidebar = memo(function SessionSidebar({
               </button>
             )}
             {/* Pin button */}
-            <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-amber-500 group-hover:visible" title="Pin session" onClick={() => onTogglePin(s.id, s.isPinned || 0)}>
+            <button className="invisible rounded p-1 text-warm-400 transition hover:bg-warm-100 hover:text-amber-500 group-hover:visible" title="Pin session" onClick={() => onTogglePin(s.id, s.isPinned || 0)}>
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill={s.isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M12 2l3 7h5l-4 6 1 7-5-3-5 3 1-7-4-6h5z" />
               </svg>
             </button>
             {/* Rename button */}
-            <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-primary-500 group-hover:visible" title="Rename session" onClick={() => onStartRename(s)}>
+            <button className="invisible rounded p-1 text-warm-400 transition hover:bg-warm-100 hover:text-primary-500 group-hover:visible" title="Rename session" onClick={() => onStartRename(s)}>
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
               </svg>
@@ -120,7 +124,7 @@ const SessionSidebar = memo(function SessionSidebar({
             {/* AI Regenerate name button — shown when name looks generic */}
             {looksGeneric(s.name) && (
               <button
-                className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-accent-500 group-hover:visible"
+                className="invisible rounded p-1 text-warm-400 transition hover:bg-warm-100 hover:text-accent-500 group-hover:visible"
                 title="AI 自动生成名称"
                 onClick={() => onRegenerateName(s.id)}
                 disabled={s.id === sessionId && isAutoNaming}
@@ -132,7 +136,7 @@ const SessionSidebar = memo(function SessionSidebar({
               </button>
             )}
             {/* Delete button */}
-            <button className="invisible rounded p-1 text-warm-400 transition hover:bg-white hover:text-danger-500 group-hover:visible" title="Delete session" onClick={() => onDeleteSession(s.id)}>
+            <button className="invisible rounded p-1 text-warm-400 transition hover:bg-warm-100 hover:text-danger-500 group-hover:visible" title="Delete session" onClick={() => onDeleteSession(s.id)}>
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M3 6h18" />
                 <path d="M8 6V4h8v2" />

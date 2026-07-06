@@ -156,7 +156,7 @@ export default function AgentSandboxPanel({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-h4">🐳 Docker 安全沙箱</h3>
+          <h3 className="text-h4">[whale] Docker 安全沙箱</h3>
           <p className="text-xs text-gray-400 mt-1">隔离的 Agent 执行环境 · Seccomp 安全策略 · 资源配额管理</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">
@@ -167,12 +167,12 @@ export default function AgentSandboxPanel({
       {/* Stats bar */}
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <MiniStatCard icon="📦" label="总容器" value={stats.total_containers} />
-          <MiniStatCard icon="🟢" label="运行中" value={stats.active_containers} color="green" />
-          <MiniStatCard icon="⚡" label="总执行" value={stats.total_execs} />
-          <MiniStatCard icon="⏱️" label="平均耗时" value={`${stats.avg_duration_ms.toFixed(0)}ms`} />
+          <MiniStatCard icon="[package]" label="总容器" value={stats.total_containers} />
+          <MiniStatCard icon="[green]" label="运行中" value={stats.active_containers} color="green" />
+          <MiniStatCard icon="[bolt]" label="总执行" value={stats.total_execs} />
+          <MiniStatCard icon="[timer]" label="平均耗时" value={`${stats.avg_duration_ms.toFixed(0)}ms`} />
           <MiniStatCard
-            icon="📊"
+            icon="[chart]"
             label="状态分布"
             value={Object.entries(stats.by_status)
               .map(([k, v]) => `${STATUS_LABELS[k] || k}:${v}`)
@@ -216,7 +216,7 @@ export default function AgentSandboxPanel({
           <div key={c.id} className="card overflow-hidden">
             <div className="flex items-center justify-between p-4">
               <div className="flex items-center gap-3">
-                <span className="text-2xl">🐳</span>
+                <span className="text-2xl">[whale]</span>
                 <div>
                   <div className="flex items-center gap-2">
                     <h4 className="font-semibold text-gray-800 font-mono text-sm">{c.id}</h4>
@@ -234,15 +234,15 @@ export default function AgentSandboxPanel({
               </div>
               <div className="flex items-center gap-2">
                 {c.status === 'created' && (
-                  <button onClick={() => handleStart(c.id)} className="btn-primary text-xs">▶ 启动</button>
+                  <button onClick={() => handleStart(c.id)} className="btn-primary text-xs">[play] 启动</button>
                 )}
                 {c.status === 'running' && (
-                  <button onClick={() => handleStop(c.id)} className="btn-secondary text-xs">⏹ 停止</button>
+                  <button onClick={() => handleStop(c.id)} className="btn-secondary text-xs">[stop] 停止</button>
                 )}
                 {(c.status === 'stopped' || c.status === 'failed') && (
-                  <button onClick={() => handleStart(c.id)} className="btn-ghost text-xs">🔄 重启</button>
+                  <button onClick={() => handleStart(c.id)} className="btn-ghost text-xs">[sync] 重启</button>
                 )}
-                <button onClick={() => handleDelete(c.id)} className="btn-ghost text-xs text-red-500">🗑️</button>
+                <button onClick={() => handleDelete(c.id)} className="btn-ghost text-xs text-red-500">[delete]</button>
                 <button
                   onClick={() => {
                     const nextId = activeLogsId === c.id ? null : c.id;
@@ -251,7 +251,7 @@ export default function AgentSandboxPanel({
                   }}
                   className="btn-ghost text-xs"
                 >
-                  {activeLogsId === c.id ? '📋 ▲' : '📋'}
+                  {activeLogsId === c.id ? '[clipboard] [up]' : '[clipboard]'}
                 </button>
               </div>
             </div>
@@ -298,17 +298,17 @@ export default function AgentSandboxPanel({
 
             {/* Seccomp / workspace info */}
             <div className="border-t border-gray-100 px-4 py-2 flex gap-4 text-[11px] text-gray-400">
-              <span>🔒 Seccomp: {c.seccomp_profile}</span>
-              <span>📁 Workspace: {c.workspace_path}</span>
-              <span>⏱️ 空闲超时: {c.idle_timeout_s}s</span>
-              <span>⏰ 最大运行: {c.max_runtime_s}s</span>
+              <span>[lock] Seccomp: {c.seccomp_profile}</span>
+              <span>[folder] Workspace: {c.workspace_path}</span>
+              <span>[timer] 空闲超时: {c.idle_timeout_s}s</span>
+              <span>[alarm] 最大运行: {c.max_runtime_s}s</span>
             </div>
           </div>
         ))}
 
         {containers.length === 0 && !showCreate && (
           <div className="text-center py-16 text-gray-400">
-            <p className="text-5xl mb-4">🐳</p>
+            <p className="text-5xl mb-4">[whale]</p>
             <p className="text-lg mb-1">暂无沙箱容器</p>
             <p className="text-sm">创建隔离容器后，Agent 可在安全环境中执行代码</p>
           </div>

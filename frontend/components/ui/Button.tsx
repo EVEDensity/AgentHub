@@ -2,8 +2,6 @@
 
 import { type JSX, type ButtonHTMLAttributes, type ReactNode } from 'react';
 
-// ── Types ─────────────────────────────────────────────────────────────
-
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline' | 'link';
 export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg';
 
@@ -17,32 +15,21 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   children?: ReactNode;
 }
 
-// ── Style maps ────────────────────────────────────────────────────────
-
 const VARIANT_STYLES: Record<ButtonVariant, string> = {
-  primary: 'bg-primary-500 text-white hover:bg-primary-600 active:bg-primary-700 shadow-sm',
-  secondary: 'bg-white text-warm-700 border border-warm-200 hover:bg-warm-50 active:bg-warm-100 shadow-sm',
-  ghost: 'text-warm-600 hover:bg-warm-100 active:bg-warm-200',
-  danger: 'bg-danger-500 text-white hover:bg-danger-600 active:bg-danger-700 shadow-sm',
-  outline: 'bg-transparent text-primary-600 border border-primary-300 hover:bg-primary-50 active:bg-primary-100',
-  link: 'text-primary-500 hover:text-primary-700 hover:underline bg-transparent p-0',
+  primary: 'bg-primary-500 text-warm-50 hover:bg-primary-600 active:opacity-90',
+  secondary: 'bg-transparent text-warm-600 border border-warm-300 hover:bg-warm-100 hover:border-warm-400',
+  ghost: 'text-warm-600 hover:bg-warm-100',
+  danger: 'bg-danger-500 text-white hover:bg-danger-600',
+  outline: 'bg-transparent text-primary-500 border border-primary-400 hover:bg-primary-50',
+  link: 'text-primary-500 hover:text-primary-600 bg-transparent p-0',
 };
 
 const SIZE_STYLES: Record<ButtonSize, string> = {
-  xs: 'text-[10px] px-2 py-1 rounded-md gap-1',
-  sm: 'text-xs px-3 py-1.5 rounded-lg gap-1.5',
-  md: 'text-sm px-4 py-2 rounded-lg gap-2',
-  lg: 'text-base px-6 py-3 rounded-xl gap-2.5',
+  xs: 'text-[10px] px-2 py-1 gap-1',
+  sm: 'text-xs px-3 py-1.5 gap-1.5',
+  md: 'text-sm px-4 py-2 gap-2',
+  lg: 'text-base px-6 py-3 gap-2.5',
 };
-
-const ICON_SIZE: Record<ButtonSize, string> = {
-  xs: 'text-[12px]',
-  sm: 'text-[14px]',
-  md: 'text-[16px]',
-  lg: 'text-[18px]',
-};
-
-// ── Component ─────────────────────────────────────────────────────────
 
 export function Button({
   variant = 'primary',
@@ -56,9 +43,8 @@ export function Button({
   className = '',
   ...rest
 }: ButtonProps): JSX.Element {
-  const base = 'inline-flex items-center justify-center font-medium transition-all duration-200 ease-out active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100 select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2';
+  const base = 'inline-flex items-center justify-center font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2';
   const widthClass = fullWidth ? 'w-full' : '';
-
   const isDisabled = disabled || loading;
 
   return (
@@ -69,16 +55,16 @@ export function Button({
     >
       {loading && (
         <span
-          className={`shrink-0 inline-block border-2 border-current/30 border-t-current rounded-full animate-spin ${ICON_SIZE[size]}`}
+          className="shrink-0 inline-block border-2 border-current/30 border-t-current rounded-full animate-spin"
           style={{ width: '1em', height: '1em' }}
         />
       )}
       {!loading && icon && iconPosition === 'left' && (
-        <span className={`material-symbols-outlined shrink-0 ${ICON_SIZE[size]}`}>{icon}</span>
+        <span className="shrink-0 text-[1.1em]">{icon}</span>
       )}
       {children && <span>{children}</span>}
       {!loading && icon && iconPosition === 'right' && (
-        <span className={`material-symbols-outlined shrink-0 ${ICON_SIZE[size]}`}>{icon}</span>
+        <span className="shrink-0 text-[1.1em]">{icon}</span>
       )}
     </button>
   );

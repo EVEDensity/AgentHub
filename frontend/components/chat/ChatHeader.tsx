@@ -84,13 +84,13 @@ const ChatHeader = memo(function ChatHeader({
     <div>
       {/* Degradation banner */}
       {degradationStatus?.active && (
-        <div className="px-6 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2 text-sm">
-          <span className="inline-block h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-          <span className="font-semibold text-amber-800">⚠️ 降级模式</span>
-          <span className="text-amber-700">
+        <div className="px-6 py-2 bg-warning-50 border-b border-warning-100 flex items-center gap-2 text-sm">
+          <span className="inline-block h-2 w-2 bg-warning-500 animate-pulse" />
+          <span className="font-semibold text-warning-700">降级模式</span>
+          <span className="text-warning-600">
             — {degradationStatus.reason}
           </span>
-          <span className="text-amber-500 text-xs ml-auto">
+          <span className="text-warning-500 text-xs ml-auto">
             已运行 {(() => {
               const elapsed = Math.floor((Date.now() - new Date(degradationStatus.startedAt).getTime()) / 60000);
               return elapsed < 1 ? '不到1分钟' : `${elapsed} 分钟`;
@@ -169,9 +169,9 @@ const ChatHeader = memo(function ChatHeader({
             {/* WS status + PM state detail */}
             <div className="text-caption text-warm-500 mt-0.5 flex items-center gap-2 flex-wrap">
               <span>WebSocket: {connected ? (
-                streamPhase === 'thinking' ? '🧠 AI 思考中...'
-                : streamPhase === 'executing' ? (activeTools.length > 0 ? `🔧 执行: ${activeTools.join(', ')}` : '🔧 工具执行中...')
-                : streamPhase === 'generating' ? '✍️ 生成回复中...'
+                streamPhase === 'thinking' ? 'AI 思考中...'
+                : streamPhase === 'executing' ? (activeTools.length > 0 ? `执行: ${activeTools.join(', ')}` : '工具执行中...')
+                : streamPhase === 'generating' ? '生成回复中...'
                 : isStreaming ? 'AI streaming...'
                 : 'Connected'
               ) : 'Reconnecting'}</span>
@@ -221,7 +221,7 @@ const ChatHeader = memo(function ChatHeader({
 
             <button
               onClick={onTaskClick}
-              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-warm-500 hover:text-primary-600 hover:bg-warm-50 rounded-md transition-all active:scale-95"
+              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-warm-500 hover:text-primary-500 hover:bg-warm-100 transition-colors"
               title="查看 DAG 任务进度"
             >
               <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -271,7 +271,7 @@ const ChatHeader = memo(function ChatHeader({
             {onInterruptStream && isStreaming && (
               <button
                 onClick={onInterruptStream}
-                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-danger-500 hover:text-danger-700 hover:bg-danger-50 rounded-md transition-all active:scale-95"
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-danger-500 hover:text-danger-600 hover:bg-danger-50 transition-colors"
                 title="中断当前 AI 处理"
               >
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="none">

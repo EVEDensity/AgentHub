@@ -6,10 +6,10 @@ interface SafetyBlockAlertProps {
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
-  pii: '🔒',
-  injection: '🛡️',
-  harmful: '⚠️',
-  high_risk_op: '🔐',
+  pii: '[lock]',
+  injection: '[shield]',
+  harmful: '[warn]',
+  high_risk_op: '[secure]',
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -25,7 +25,7 @@ const SafetyBlockAlert = memo(function SafetyBlockAlert({ result }: SafetyBlockA
   return (
     <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
       <div className="mb-2 flex items-center gap-2">
-        <span className="text-base">🚫</span>
+        <span className="text-base">[block]</span>
         <span className="text-sm font-semibold text-red-800">
           {result.blocked ? '安全护栏已阻断' : '安全护栏检测'}
         </span>

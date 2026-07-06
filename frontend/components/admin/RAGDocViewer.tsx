@@ -513,7 +513,7 @@ export default function RAGDocViewer({ authHeaders, setNotice }: Props): JSX.Ele
           {!searching && contentFilter !== 'text' && contentFilter !== 'code' && images.length > 0 && (
             <>
               <h4 className="text-xs font-semibold text-warm-600 pt-2">
-                📊 图片检索结果 ({images.length})
+                [chart] 图片检索结果 ({images.length})
               </h4>
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                 {images.map((img) => (
@@ -570,11 +570,11 @@ export default function RAGDocViewer({ authHeaders, setNotice }: Props): JSX.Ele
       {/* ── Image lightbox modal ─────────────────────────────────── */}
       {selectedImage && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
           onClick={() => setSelectedImage(null)}
         >
           <div
-            className="bg-white rounded-2xl max-w-2xl w-full mx-4 overflow-hidden shadow-2xl"
+            className="bg-warm-100 rounded-2xl max-w-2xl w-full mx-4 overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-warm-100">

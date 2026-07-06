@@ -7,7 +7,7 @@ export function StatCard({ label, tokens, sessions, messages }: { label: string;
     return `${n}`;
   }
   return (
-    <div className="flex min-w-0 flex-col justify-center rounded-xl border border-warm-150 bg-white px-5 py-4 shadow-card transition-all hover:shadow-card-hover hover:border-primary-200 hover:-translate-y-0.5">
+    <div className="flex min-w-0 flex-col justify-center rounded-xl border border-warm-150 bg-warm-100 px-5 py-4 shadow-card transition-all hover:shadow-card-hover hover:border-primary-200 hover:-translate-y-0.5">
       <div className="text-xs font-semibold text-warm-400 uppercase tracking-wider">{label}</div>
       <div className="mt-1.5 text-xl font-bold text-warm-900 tabular-nums">{fmt(tokens)} <span className="text-sm font-medium text-warm-500">tokens</span></div>
       <div className="mt-1 text-xs text-warm-400">{messages} 条消息 · {sessions} 个会话</div>
@@ -17,7 +17,7 @@ export function StatCard({ label, tokens, sessions, messages }: { label: string;
 
 export function MiniStatBox({ icon, label, value }: { icon: string; label: string; value: string }): JSX.Element {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-warm-150 bg-white px-4 py-3.5 shadow-card transition-all hover:shadow-card-hover hover:border-primary-200 hover:-translate-y-0.5">
+    <div className="flex items-center gap-3 rounded-xl border border-warm-150 bg-warm-100 px-4 py-3.5 shadow-card transition-all hover:shadow-card-hover hover:border-primary-200 hover:-translate-y-0.5">
       <span className="text-xl shrink-0">{icon}</span>
       <div className="min-w-0">
         <div className="text-[11px] font-medium text-warm-400 uppercase tracking-wider leading-tight">{label}</div>

@@ -138,7 +138,7 @@ export default function InteractiveCodeBlock({
                   className="fixed inset-0 z-10"
                   onClick={() => setLangMenuOpen(false)}
                 />
-                <div className="absolute left-0 top-full z-20 mt-1 max-h-48 w-36 overflow-auto rounded-lg border border-warm-200 bg-white py-1 shadow-modal">
+                <div className="absolute left-0 top-full z-20 mt-1 max-h-48 w-36 overflow-auto rounded-lg border border-warm-200 bg-warm-100 py-1 shadow-modal">
                   {LANGUAGES.map((item) => (
                     <button
                       key={item.value}

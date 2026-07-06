@@ -506,7 +506,7 @@ export default function MermaidChart({
   // ── Loading state ─────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div className={`my-4 rounded-2xl border border-warm-150 bg-white ${className}`}>
+      <div className={`my-4 rounded-2xl border border-warm-150 bg-warm-100 ${className}`}>
         <div className="flex items-center justify-between border-b border-warm-150 px-4 py-2">
           <div className="flex items-center gap-2">
             <span className="rounded bg-primary-50 px-2 py-0.5 text-[11px] font-medium text-primary-600">
@@ -572,7 +572,7 @@ export default function MermaidChart({
               <summary className="cursor-pointer text-warm-500 hover:text-warm-700">
                 查看图表代码{errorLine ? `（错误在第 ${errorLine} 行附近）` : ''}（共 {lines.length} 行）
               </summary>
-              <pre className="mt-2 overflow-auto rounded-lg bg-white p-3 text-xs text-warm-700 max-h-60">
+              <pre className="mt-2 overflow-auto rounded-lg bg-warm-100 p-3 text-xs text-warm-700 max-h-60">
                 <code>{code}</code>
               </pre>
             </details>
@@ -583,7 +583,7 @@ export default function MermaidChart({
               <summary className="cursor-pointer text-warm-500 hover:text-warm-700">
                 查看图表代码{errorLine ? `（错误在第 ${errorLine} 行附近）` : ''}
               </summary>
-              <pre className="mt-2 overflow-auto rounded-lg bg-white p-3 text-xs text-warm-700 max-h-40">
+              <pre className="mt-2 overflow-auto rounded-lg bg-warm-100 p-3 text-xs text-warm-700 max-h-40">
                 <code>{code}</code>
               </pre>
             </details>
@@ -595,7 +595,7 @@ export default function MermaidChart({
 
   // ── Success state ─────────────────────────────────────────────────────
   return (
-    <div className={`my-4 rounded-2xl border border-warm-150 bg-white ${className}`}>
+    <div className={`my-4 rounded-2xl border border-warm-150 bg-warm-100 ${className}`}>
       {/* 工具栏 */}
       <div className="flex items-center justify-between border-b border-warm-150 px-4 py-2">
         <div className="flex items-center gap-2">

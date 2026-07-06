@@ -17,13 +17,13 @@ interface ChannelConfig {
 const PLATFORM_INFO: Record<string, { name: string; icon: string; color: string; guide: string }> = {
   feishu: {
     name: '飞书 (Lark)',
-    icon: '🐦',
+    icon: '[bird]',
     color: '#3370FF',
     guide: '在飞书开发者后台创建应用 → 启用机器人能力 → 配置事件订阅 URL → 获取 App ID / App Secret',
   },
   wecom: {
     name: '企业微信',
-    icon: '💚',
+    icon: '[heart]',
     color: '#07C160',
     guide: '在企业微信管理后台创建应用 → 设置接收消息 URL → 配置 Token 和 EncodingAESKey',
   },
@@ -140,7 +140,7 @@ export default function ChannelModule({ authHeaders, setNotice }: {
             return (
               <div key={cfg.platform} className={`card flex items-center justify-between ${cfg.enabled ? 'border-l-4 border-l-green-400' : 'border-l-4 border-l-warm-200'}`}>
                 <div className="flex items-center gap-3">
-                  <span className="text-[20px]">{info?.icon || '🔌'}</span>
+                  <span className="text-[20px]">{info?.icon || '[plug]'}</span>
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-warm-800">{info?.name || cfg.platform}</span>
@@ -223,10 +223,10 @@ function ChannelConfigModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <div className="flex items-center gap-3">
-            <span className="text-[24px]">{info?.icon || '🔌'}</span>
+            <span className="text-[24px]">{info?.icon || '[plug]'}</span>
             <div>
               <h3 className="text-lg font-semibold text-warm-900">
                 {isNew ? '添加' : '编辑'} {info?.name || platform} 渠道

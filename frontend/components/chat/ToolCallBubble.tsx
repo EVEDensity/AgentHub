@@ -10,21 +10,21 @@ interface ToolCallBubbleProps {
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
-  search: '🔍',
-  file: '📁',
-  code: '💻',
-  memory: '🧠',
-  system: '⚙️',
-  integration: '🔌',
+  search: '[search]',
+  file: '[file]',
+  code: '[code]',
+  memory: '[brain]',
+  system: '[gear]',
+  integration: '[plug]',
 };
 
 function getIcon(toolName: string): string {
-  if (toolName.includes('search')) return '🔍';
-  if (toolName.includes('file_read')) return '📖';
-  if (toolName.includes('file_write')) return '✏️';
-  if (toolName.includes('code')) return '💻';
-  if (toolName.includes('memory')) return '🧠';
-  return '🔧';
+  if (toolName.includes('search')) return '[search]';
+  if (toolName.includes('file_read')) return '[doc]';
+  if (toolName.includes('file_write')) return '[edit]';
+  if (toolName.includes('code')) return '[code]';
+  if (toolName.includes('memory')) return '[brain]';
+  return '[tool]';
 }
 
 const ToolCallBubble = memo(function ToolCallBubble({
@@ -152,7 +152,7 @@ const ToolCallBubble = memo(function ToolCallBubble({
                     setExpandedArg(isExpandedArg ? null : item.key)
                   }
                 >
-                  {isExpandedArg ? '收起参数 ▲' : '查看参数 ▼'}
+                  {isExpandedArg ? '收起参数 [up]' : '查看参数 [down]'}
                 </button>
               )}
               {(item.result !== undefined || item.error) && (
@@ -162,7 +162,7 @@ const ToolCallBubble = memo(function ToolCallBubble({
                     setExpandedResult(isExpandedResult ? null : item.key)
                   }
                 >
-                  {isExpandedResult ? '收起结果 ▲' : '查看结果 ▼'}
+                  {isExpandedResult ? '收起结果 [up]' : '查看结果 [down]'}
                 </button>
               )}
             </div>

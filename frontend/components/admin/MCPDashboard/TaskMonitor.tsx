@@ -163,7 +163,7 @@ export default function TaskMonitor(): JSX.Element {
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <select
-                className="rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm"
+                className="rounded-lg border border-warm-200 bg-warm-100 px-3 py-1.5 text-sm"
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
               >
@@ -186,7 +186,7 @@ export default function TaskMonitor(): JSX.Element {
               tasks.map((t) => (
                 <div
                   key={t.id}
-                  className={`rounded-xl border bg-white px-4 py-3 cursor-pointer ${
+                  className={`rounded-xl border bg-warm-100 px-4 py-3 cursor-pointer ${
                     selectedId === t.id ? 'border-primary-400 ring-1 ring-primary-200' : 'border-warm-200 hover:border-warm-300'
                   }`}
                   onClick={() => { setSelectedId(t.id); void fetchDetail(t.id); }}
@@ -228,10 +228,10 @@ export default function TaskMonitor(): JSX.Element {
             )}
           </div>
           {/* Task detail panel */}
-          <div className="rounded-xl border border-warm-200 bg-white p-4 min-h-48">
+          <div className="rounded-xl border border-warm-200 bg-warm-100 p-4 min-h-48">
             {!selectedId ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-8">
-                <span className="text-3xl mb-2">👈</span>
+                <span className="text-3xl mb-2">[left]</span>
                 <p className="text-sm text-warm-400">选择任务查看详情</p>
               </div>
             ) : detailLoading ? (
@@ -250,7 +250,7 @@ export default function TaskMonitor(): JSX.Element {
                     <div className="max-h-40 overflow-auto space-y-1">
                       {detail.executionHistory.map((h: Record<string, unknown>, i: number) => (
                         <div key={i} className="text-xs text-warm-600 bg-warm-50 rounded px-2 py-1">
-                          {h.taskType as string} · {(h.success as boolean) ? '✅' : '❌'} · {(h.durationMs as number) || 0}ms
+                          {h.taskType as string} · {(h.success as boolean) ? '[check]' : '[cross]'} · {(h.durationMs as number) || 0}ms
                         </div>
                       ))}
                     </div>
@@ -274,7 +274,7 @@ export default function TaskMonitor(): JSX.Element {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {templates.map((t) => (
-                <div key={t.id} className="rounded-xl border border-warm-200 bg-white px-4 py-3">
+                <div key={t.id} className="rounded-xl border border-warm-200 bg-warm-100 px-4 py-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold text-warm-800">{t.name}</span>
                     <span className="text-[10px] bg-warm-100 text-warm-500 rounded px-2">{t.category}</span>
@@ -304,7 +304,7 @@ export default function TaskMonitor(): JSX.Element {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {routes.map((r) => (
-                <div key={r.id} className={`rounded-xl border bg-white px-4 py-3 ${r.isDefault ? 'border-primary-300 ring-1 ring-primary-100' : 'border-warm-200'}`}>
+                <div key={r.id} className={`rounded-xl border bg-warm-100 px-4 py-3 ${r.isDefault ? 'border-primary-300 ring-1 ring-primary-100' : 'border-warm-200'}`}>
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="text-sm font-semibold text-warm-800">{r.name}</span>

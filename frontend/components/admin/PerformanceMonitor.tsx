@@ -119,7 +119,7 @@ export default function PerformanceMonitor({
           borderBottom: '1px solid rgba(255,255,255,0.06)',
         }}
       >
-        <span style={{ fontWeight: 700, color: '#f9fafb', fontSize: 13 }}>📊 Performance</span>
+        <span style={{ fontWeight: 700, color: '#f9fafb', fontSize: 13 }}>[chart] Performance</span>
         <span
           style={{
             fontSize: 10,
@@ -176,14 +176,14 @@ export default function PerformanceMonitor({
         }}
       >
         <div>
-          Glow: {stats.qualityTier.glowEnabled ? '✅' : '❌'}
+          Glow: {stats.qualityTier.glowEnabled ? '[check]' : '[cross]'}
           {' · '}
-          Flow: {stats.qualityTier.edgeFlowEnabled ? '✅' : '❌'}
+          Flow: {stats.qualityTier.edgeFlowEnabled ? '[check]' : '[cross]'}
         </div>
         <div>
-          Emerge: {stats.qualityTier.emergenceEnabled ? '✅' : '❌'}
+          Emerge: {stats.qualityTier.emergenceEnabled ? '[check]' : '[cross]'}
           {' · '}
-          AA: {stats.qualityTier.antiAlias ? '✅' : '❌'}
+          AA: {stats.qualityTier.antiAlias ? '[check]' : '[cross]'}
         </div>
       </div>
     </div>

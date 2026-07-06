@@ -2,8 +2,6 @@
 
 import { type JSX, type SelectHTMLAttributes, type ReactNode } from 'react';
 
-// ── Types ─────────────────────────────────────────────────────────────
-
 export interface SelectOption<T = string> {
   value: T;
   label: string;
@@ -21,15 +19,11 @@ export interface SelectProps<T = string> extends Omit<SelectHTMLAttributes<HTMLS
   containerClass?: string;
 }
 
-// ── Size styles ───────────────────────────────────────────────────────
-
 const SIZE_STYLES = {
-  sm: 'text-xs py-1.5 rounded-md',
-  md: 'text-sm py-2 rounded-lg',
-  lg: 'text-base py-2.5 rounded-lg',
+  sm: 'text-xs py-1.5',
+  md: 'text-sm py-2',
+  lg: 'text-base py-2.5',
 };
-
-// ── Component ─────────────────────────────────────────────────────────
 
 export function Select<T extends string = string>({
   label,
@@ -49,7 +43,7 @@ export function Select<T extends string = string>({
 
   const borderClass = error
     ? 'border-danger-300 focus:border-danger-400 focus:ring-danger-200'
-    : 'border-warm-200 focus:border-primary-400 focus:ring-primary-200';
+    : 'border-warm-200 focus:border-primary-500 focus:ring-primary-500';
 
   return (
     <div className={`flex flex-col gap-1 ${containerClass}`}>
@@ -60,7 +54,7 @@ export function Select<T extends string = string>({
       )}
       <select
         id={selectId}
-        className={`w-full bg-white transition-all duration-200 focus:ring-2 focus:ring-offset-0 focus:outline-none
+        className={`w-full bg-warm-100 transition-colors focus:ring-2 focus:ring-offset-0 focus:outline-none text-warm-800
           disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-warm-50
           px-3 border ${borderClass}
           ${SIZE_STYLES[size]}

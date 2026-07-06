@@ -86,7 +86,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
       {/* ══════ Hero: Profile Card (left) + Token Stats (right) ══════ */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* ── Left: User Profile Card ── */}
-        <div className="lg:col-span-2 rounded-2xl border border-warm-200 bg-white overflow-hidden shadow-sm">
+        <div className="lg:col-span-2 rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden shadow-sm">
           <div className="h-20 bg-gradient-to-r from-teal-500 to-cyan-600" />
           <div className="px-6 pb-6 relative">
             <div className="flex items-end -mt-10 mb-3">
@@ -159,7 +159,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
           {props.tokenLoading ? (
             <div className="grid grid-cols-3 gap-3">
               {[0, 1, 2].map((i) => (
-                <div key={i} className="rounded-xl border border-warm-150 bg-white p-4 animate-pulse">
+                <div key={i} className="rounded-xl border border-warm-150 bg-warm-100 p-4 animate-pulse">
                   <div className="h-3 w-12 bg-warm-150 rounded mb-2" />
                   <div className="h-6 w-24 bg-warm-100 rounded" />
                 </div>
@@ -174,7 +174,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
               </div>
 
               {/* Token heatmap */}
-              <div className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+              <div className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
                 <div className="border-b border-warm-100 px-5 py-3 flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-semibold text-warm-900">Token 用量热力图</h3>
@@ -221,7 +221,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
 
       {/* ══════ User Management Table ══════ */}
       {props.user?.role === 'admin' && (
-        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+        <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
           <div className="border-b border-warm-100 px-5 py-3 flex items-center justify-between">
             <div>
               <h3 className="text-base font-semibold text-warm-900">用户管理</h3>

@@ -113,7 +113,7 @@ export default function AgentMonitor(): JSX.Element {
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
         <select
-          className="rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-primary-300"
+          className="rounded-lg border border-warm-200 bg-warm-100 px-3 py-1.5 text-sm outline-none focus:border-primary-300"
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
         >
@@ -123,7 +123,7 @@ export default function AgentMonitor(): JSX.Element {
           <option value="sleeping">休眠</option>
         </select>
         <select
-          className="rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-primary-300"
+          className="rounded-lg border border-warm-200 bg-warm-100 px-3 py-1.5 text-sm outline-none focus:border-primary-300"
           value={filterDomain}
           onChange={(e) => setFilterDomain(e.target.value)}
         >
@@ -155,7 +155,7 @@ export default function AgentMonitor(): JSX.Element {
             agents.map((a) => (
               <div
                 key={a.agentId}
-                className={`rounded-xl border bg-white px-4 py-3 cursor-pointer transition-colors ${
+                className={`rounded-xl border bg-warm-100 px-4 py-3 cursor-pointer transition-colors ${
                   selectedAgent === a.agentId ? 'border-primary-400 ring-1 ring-primary-200' : 'border-warm-200 hover:border-warm-300'
                 }`}
                 onClick={() => setSelectedAgent(selectedAgent === a.agentId ? null : a.agentId)}
@@ -197,10 +197,10 @@ export default function AgentMonitor(): JSX.Element {
         </div>
 
         {/* Right: Agent detail stats */}
-        <div className="rounded-xl border border-warm-200 bg-white p-4 min-h-48">
+        <div className="rounded-xl border border-warm-200 bg-warm-100 p-4 min-h-48">
           {!selectedAgent ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-8">
-              <span className="text-3xl mb-2">👈</span>
+              <span className="text-3xl mb-2">[left]</span>
               <p className="text-sm text-warm-400">选择一个 Agent 查看详情</p>
             </div>
           ) : statsLoading ? (

@@ -227,11 +227,11 @@ export default function MemoryDashboard({
   // ── Render tabs ─────────────────────────────────────────────────
 
   const tabs = [
-    { key: 'overview' as const, label: '📊 总览', icon: 'dashboard' },
-    { key: 'search' as const, label: '🔍 检索', icon: 'search' },
-    { key: 'entities' as const, label: '🕸️ 实体图谱', icon: 'hub' },
-    { key: 'compression' as const, label: '🌙 压缩历史', icon: 'nights_stay' },
-    { key: 'decisions' as const, label: '🧠 记忆策略', icon: 'psychology' },
+    { key: 'overview' as const, label: '[chart] 总览', icon: 'dashboard' },
+    { key: 'search' as const, label: '[search] 检索', icon: 'search' },
+    { key: 'entities' as const, label: '[web] 实体图谱', icon: 'hub' },
+    { key: 'compression' as const, label: '[moon] 压缩历史', icon: 'nights_stay' },
+    { key: 'decisions' as const, label: '[brain] 记忆策略', icon: 'psychology' },
   ];
 
   return (
@@ -249,7 +249,7 @@ export default function MemoryDashboard({
           onClick={handleTriggerCompression}
           disabled={compressing}
         >
-          {compressing ? '⏳ 压缩中...' : '🌙 触发睡眠压缩'}
+          {compressing ? '[hourglass] 压缩中...' : '[moon] 触发睡眠压缩'}
         </button>
       </div>
 
@@ -260,7 +260,7 @@ export default function MemoryDashboard({
             key={tab.key}
             className={`px-4 py-2 text-sm rounded-t-lg transition-colors ${
               activeTab === tab.key
-                ? 'bg-white border border-b-white text-primary-600 font-medium -mb-[1px] relative z-10'
+                ? 'bg-warm-100 border border-b-white text-primary-600 font-medium -mb-[1px] relative z-10'
                 : 'text-warm-500 hover:text-warm-700 hover:bg-warm-50'
             }`}
             onClick={() => setActiveTab(tab.key)}
@@ -315,7 +315,7 @@ export default function MemoryDashboard({
 
           {/* Decisions summary */}
           <div className="card">
-            <h3 className="text-sm font-semibold text-warm-700 mb-3">🧠 LLM 记忆策略统计</h3>
+            <h3 className="text-sm font-semibold text-warm-700 mb-3">[brain] LLM 记忆策略统计</h3>
             <div className="grid grid-cols-5 gap-3 text-center">
               {(['ADD', 'UPDATE', 'DELETE', 'NOOP', 'total'] as const).map((k) => {
                 const key = k === 'total' ? 'total' : `${k.toLowerCase()}_count`;
@@ -335,7 +335,7 @@ export default function MemoryDashboard({
 
           {/* Compression summary */}
           <div className="card">
-            <h3 className="text-sm font-semibold text-warm-700 mb-3">🌙 睡眠压缩摘要</h3>
+            <h3 className="text-sm font-semibold text-warm-700 mb-3">[moon] 睡眠压缩摘要</h3>
             <div className="flex items-center gap-6">
               <div className="text-center">
                 <p className="text-2xl font-bold text-warm-900">{stats.compression.total_runs}</p>
@@ -387,8 +387,8 @@ export default function MemoryDashboard({
 
               {searchResults.segments.length > 0 && (
                 <div>
-                  <h4 className="text-sm font-medium text-warm-700 mb-2">
-                    📝 L1 情节记忆片段 ({searchResults.segments.length})
+                    <h4 className="text-sm font-medium text-warm-700 mb-2">
+                      [memo] L1 情节记忆片段 ({searchResults.segments.length})
                   </h4>
                   <div className="space-y-2">
                     {searchResults.segments.map((seg) => (
@@ -417,7 +417,7 @@ export default function MemoryDashboard({
               {searchResults.entities.length > 0 && (
                 <div>
                   <h4 className="text-sm font-medium text-warm-700 mb-2">
-                    🕸️ L3 实体 ({searchResults.entities.length})
+                    [web] L3 实体 ({searchResults.entities.length})
                   </h4>
                   <div className="flex flex-wrap gap-2">
                     {searchResults.entities.map((ent) => (
@@ -482,7 +482,7 @@ export default function MemoryDashboard({
             {/* New entity modal */}
             {showNewEntity && (
               <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh]" onClick={() => setShowNewEntity(false)}>
-                <form className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()} onSubmit={handleCreateEntity}>
+                <form className="w-full max-w-md rounded-2xl bg-warm-100 shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()} onSubmit={handleCreateEntity}>
                   <h4 className="text-lg font-semibold">新建实体</h4>
                   <input name="name" className="input-field w-full" placeholder="实体名称" required />
                   <select name="type" className="input-field w-full" defaultValue="concept">
@@ -544,7 +544,7 @@ export default function MemoryDashboard({
                             className={`text-xs px-3 py-1.5 rounded-full border-2 ${
                               node.id === selectedEntity.id
                                 ? 'border-primary-400 bg-primary-50 text-primary-700 font-semibold'
-                                : 'border-warm-200 bg-white text-warm-600'
+                                : 'border-warm-200 bg-warm-100 text-warm-600'
                             }`}
                           >
                             {node.name}
@@ -587,7 +587,7 @@ export default function MemoryDashboard({
               </div>
             ) : (
               <div className="card text-center py-12 text-warm-400">
-                <p className="text-4xl mb-2">🕸️</p>
+                <p className="text-4xl mb-2">[web]</p>
                 <p>选择一个实体查看关系图谱</p>
               </div>
             )}
@@ -601,7 +601,7 @@ export default function MemoryDashboard({
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold text-warm-700">压缩运行历史 ({compRuns.length})</h3>
             <button className="btn-secondary text-xs" onClick={handleTriggerCompression} disabled={compressing}>
-              {compressing ? '执行中...' : '🌙 手动触发'}
+              {compressing ? '执行中...' : '[moon] 手动触发'}
             </button>
           </div>
           {compRuns.length === 0 ? (
@@ -721,7 +721,7 @@ export default function MemoryDashboard({
                     </div>
                   </div>
                   {dec.reasoning && (
-                    <p className="text-xs text-warm-500 mt-2 italic">💡 {dec.reasoning}</p>
+                    <p className="text-xs text-warm-500 mt-2 italic">[bulb] {dec.reasoning}</p>
                   )}
                 </div>
               ))}

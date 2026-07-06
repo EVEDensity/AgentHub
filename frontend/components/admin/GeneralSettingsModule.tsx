@@ -86,7 +86,7 @@ index 0000000..e4f5g6h 100644
 +  }, [files]);
 +
 +  return (
-+    <div className="rounded-2xl border border-warm-200 bg-white">
++    <div className="rounded-2xl border border-warm-200 bg-warm-100">
 +      {/* Diff rendering logic */}
 +    </div>
 +  );
@@ -245,7 +245,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
   return (
     <div className="space-y-4 max-w-4xl">
       {/* ── 配色主题 ─────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
         <div className="border-b border-warm-100 px-5 py-3">
           <h3 className="text-base font-semibold text-warm-900">配色主题</h3>
           <p className="text-xs text-warm-500 mt-0.5">在经典暖色、暗色与纯白工作区之间切换。</p>
@@ -258,7 +258,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
               className={`relative rounded-xl border-2 px-4 py-4 text-left transition-all ${
                 generalTheme === opt.value
                   ? 'border-primary-400 bg-primary-50 ring-1 ring-primary-200'
-                  : 'border-warm-150 bg-white hover:border-warm-300 hover:bg-warm-50'
+                  : 'border-warm-150 bg-warm-100 hover:border-warm-300 hover:bg-warm-50'
               }`}
             >
               <div className="flex items-center gap-2 mb-2">
@@ -285,7 +285,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
       </section>
 
       {/* ── 语言 ─────────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
         <div className="border-b border-warm-100 px-5 py-3">
           <h3 className="text-base font-semibold text-warm-900">语言</h3>
           <p className="text-xs text-warm-500 mt-0.5">选择应用程序的显示语言。</p>
@@ -301,7 +301,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
                 onClick={() => { setGeneralLang(opt.value); }}
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
                   generalLang === opt.value
-                    ? 'bg-white text-warm-900 shadow-sm'
+                    ? 'bg-warm-100 text-warm-900 shadow-sm'
                     : 'text-warm-500 hover:text-warm-700'
                 }`}
               >
@@ -313,7 +313,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
       </section>
 
       {/* ── 回复语言 ─────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
         <div className="border-b border-warm-100 px-5 py-3">
           <h3 className="text-base font-semibold text-warm-900">回复语言</h3>
           <p className="text-xs text-warm-500 mt-0.5">指定 Claude 始终以某种语言回复。</p>
@@ -333,7 +333,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
       </section>
 
       {/* ── 推理强度 ─────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
         <div className="border-b border-warm-100 px-5 py-3">
           <h3 className="text-base font-semibold text-warm-900">推理强度</h3>
           <p className="text-xs text-warm-500 mt-0.5">控制模型使用的计算量。更高强度带来更深入的推理，但响应速度会变慢。</p>
@@ -347,7 +347,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
                 className={`flex-1 py-2.5 text-sm font-medium rounded-lg border transition-all ${
                   generalReasoning >= level
                     ? 'bg-primary-50 border-primary-300 text-primary-700'
-                    : 'bg-white border-warm-200 text-warm-500 hover:border-warm-300'
+                    : 'bg-warm-100 border-warm-200 text-warm-500 hover:border-warm-300'
                 }`}
               >
                 {REASONING_LABELS[level - 1]}
@@ -362,7 +362,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
       </section>
 
       {/* ── 思考模式 ─────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
         <div className="px-5 py-4 flex items-center justify-between gap-4">
           <div>
             <h3 className="text-base font-semibold text-warm-900">思考模式</h3>
@@ -378,7 +378,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
             role="switch"
             aria-checked={generalThinking}
           >
-            <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+            <span className={`inline-block h-5 w-5 rounded-full bg-warm-100 shadow-sm transition-transform ${
               generalThinking ? 'translate-x-6' : 'translate-x-1'
             }`} />
           </button>
@@ -386,7 +386,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
       </section>
 
       {/* ── 系统通知 ─────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
         <div className="px-5 py-4 flex items-center justify-between gap-4">
           <div>
             <h3 className="text-base font-semibold text-warm-900">系统通知</h3>
@@ -408,7 +408,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
             role="switch"
             aria-checked={generalNotify}
           >
-            <span className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+            <span className={`inline-block h-5 w-5 rounded-full bg-warm-100 shadow-sm transition-transform ${
               generalNotify ? 'translate-x-6' : 'translate-x-1'
             }`} />
           </button>
@@ -416,7 +416,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
       </section>
 
       {/* ── 界面缩放 ─────────────────────────────────────────── */}
-      <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
         <div className="border-b border-warm-100 px-5 py-3">
           <h3 className="text-base font-semibold text-warm-900">界面缩放</h3>
           <p className="text-xs text-warm-500 mt-0.5">调整整个界面的显示大小。</p>
@@ -437,7 +437,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
             <div className="flex items-center gap-1 ml-2">
               <button
                 onClick={() => setGeneralZoom(Math.max(50, generalZoom - 10))}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-warm-200 bg-white text-warm-500 hover:bg-warm-50 transition-colors"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-warm-200 bg-warm-100 text-warm-500 hover:bg-warm-50 transition-colors"
                 title="缩小"
               >
                 <span className="text-[18px] font-medium">−</span>
@@ -445,7 +445,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
               <span className="w-14 text-center text-sm font-semibold text-warm-700">{generalZoom}%</span>
               <button
                 onClick={() => setGeneralZoom(Math.min(200, generalZoom + 10))}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-warm-200 bg-white text-warm-500 hover:bg-warm-50 transition-colors"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-warm-200 bg-warm-100 text-warm-500 hover:bg-warm-50 transition-colors"
                 title="放大"
               >
                 <span className="text-[18px] font-medium">+</span>
@@ -477,7 +477,7 @@ export default function GeneralSettingsModule({ authHeaders }: GeneralSettingsMo
       </section>
 
       {/* ── 代码审查 Demo ─────────────────────────────────────── */}
-      <section className="rounded-2xl border border-primary-200 bg-white overflow-hidden">
+      <section className="rounded-2xl border border-primary-200 bg-warm-100 overflow-hidden">
         <div className="border-b border-primary-100 bg-primary-50/50 px-5 py-3 flex items-center justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-warm-900">🧪 代码审查演示</h3>

@@ -44,7 +44,7 @@ function AgentCard({ agent, isSelected, onSelect, onDelete }: {
       className={`w-full text-left rounded-xl border p-4 transition-all duration-200 hover:shadow-sm ${
         isSelected
           ? 'border-primary-300 bg-primary-50/50 shadow-sm'
-          : 'border-warm-200 bg-white hover:border-primary-200'
+          : 'border-warm-200 bg-warm-100 hover:border-primary-200'
       }`}
     >
       <div className="flex items-start justify-between gap-2">
@@ -327,7 +327,7 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
           {/* Right: Agent Detail */}
           <div className="lg:col-span-2">
             {selectedAgent ? (
-              <div className="rounded-xl border border-warm-200 bg-white p-5">
+              <div className="rounded-xl border border-warm-200 bg-warm-100 p-5">
                 <div className="flex items-center justify-between mb-4">
                   <h4 className="text-base font-semibold text-warm-900">{selectedAgent.name}</h4>
                   {selectedAgent.source === 'external' && (
@@ -400,7 +400,7 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
       {/* ── Test Tab ────────────────────────────────────────────────── */}
       {activeTab === 'test' && (
         <div className="space-y-4 max-w-2xl">
-          <div className="rounded-xl border border-warm-200 bg-white p-4">
+          <div className="rounded-xl border border-warm-200 bg-warm-100 p-4">
             <h5 className="text-sm font-semibold text-warm-800 mb-3">发送 A2A 任务</h5>
 
             <div className="space-y-3">
@@ -459,7 +459,7 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
           {taskResult && (
             <div className="rounded-xl border border-warm-200 bg-warm-50 p-4">
               <h5 className="text-xs font-semibold text-warm-500 uppercase tracking-wider mb-2">任务结果</h5>
-              <pre className="text-xs text-warm-700 font-mono whitespace-pre-wrap bg-white rounded-lg p-3 border border-warm-150 max-h-[300px] overflow-y-auto">
+              <pre className="text-xs text-warm-700 font-mono whitespace-pre-wrap bg-warm-100 rounded-lg p-3 border border-warm-150 max-h-[300px] overflow-y-auto">
                 {JSON.stringify(taskResult, null, 2)}
               </pre>
             </div>

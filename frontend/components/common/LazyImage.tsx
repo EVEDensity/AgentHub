@@ -122,7 +122,7 @@ export default function LazyImage({
             fontSize: '14px',
           }}
         >
-          <span>🖼 图片加载失败</span>
+          <span>[img] 图片加载失败</span>
         </div>
       )}
 

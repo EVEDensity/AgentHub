@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentHub — 智能体团队编排</title>
+<style>
+/* ═════════════════════════════════════════════════════════════════════
+   AgentHub Design System — Claude Warm Dark + Codex IDE Layout
+   ═════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg: #1C1A18;
+  --bg-sidebar: #151412;
+  --surface: #24221F;
+  --surface-elevated: #2B2925;
+  --surface-overlay: #302E29;
+  --fg: #EBE8E3;
+  --fg-secondary: #A8A49D;
+  --fg-muted: #7A7670;
+  --fg-dim: #4E4B46;
+  --border: #2E2C28;
+  --border-subtle: #272522;
+  --border-focus: #3D3A34;
+  --accent: #C4944A;
+  --accent-hover: #D4A85C;
+  --accent-muted: rgba(196, 148, 74, 0.10);
+  --accent-glow: rgba(196, 148, 74, 0.06);
+  --success: #6B9B6A;
+  --success-muted: rgba(107, 155, 106, 0.12);
+  --warning: #C4A35A;
+  --warning-muted: rgba(196, 163, 90, 0.12);
+  --danger: #C4675A;
+  --danger-muted: rgba(196, 103, 90, 0.12);
+  --info: #7B9CB8;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'SF Pro Text', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  --radius: 4px;
+  --radius-md: 6px;
+  --sidebar-w: 220px;
+  --console-w: 400px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%; width: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── App shell — three-column fixed layout ─────────────────────── */
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr var(--console-w);
+  height: 100vh; width: 100vw;
+}
+
+/* ── Left sidebar ───────────────────────────────────────────────── */
+.sidebar {
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-logo {
+  width: 24px; height: 24px;
+  border-radius: var(--radius);
+  background: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  color: #1C1A18;
+  font-weight: 600; font-size: 12px;
+  flex-shrink: 0;
+}
+
+.sidebar-title {
+  font-size: 14px; font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.sidebar-version {
+  font-size: 10px;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 8px;
+  display: flex; flex-direction: column; gap: 1px;
+  overflow-y: auto;
+}
+
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 450;
+  letter-spacing: 0.01em;
+  transition: background 0.12s, color 0.12s;
+  text-decoration: none;
+}
+
+.nav-item:hover {
+  background: var(--surface);
+  color: var(--fg-secondary);
+}
+
+.nav-item.active {
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-weight: 510;
+}
+
+.nav-icon {
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.nav-item.active .nav-icon { opacity: 1; }
+
+.nav-badge {
+  margin-left: auto;
+  background: var(--accent-muted);
+  color: var(--accent);
+  font-size: 10px; font-weight: 600;
+  padding: 1px 6px; border-radius: 10px;
+  font-family: var(--font-mono);
+}
+
+.nav-section {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 16px 10px 4px;
+}
+
+.sidebar-footer {
+  border-top: 1px solid var(--border-subtle);
+  padding: 10px 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+
+.avatar {
+  width: 28px; height: 28px;
+  border-radius: var(--radius);
+  background: var(--surface-elevated);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600;
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+
+.user-info { flex: 1; min-width: 0; }
+.user-name { font-size: 12px; font-weight: 510; color: var(--fg); line-height: 1.2; }
+.user-role { font-size: 10px; color: var(--fg-dim); }
+
+/* ── Main canvas ─────────────────────────────────────────────────── */
+.canvas {
+  display: flex; flex-direction: column;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.canvas-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  flex-shrink: 0;
+}
+
+.toolbar-title {
+  font-size: 12px; font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg-muted);
+  margin-right: auto;
+  display: flex; align-items: center; gap: 8px;
+}
+
+.toolbar-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.tool-btn {
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px; font-weight: 450;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  letter-spacing: 0.01em;
+}
+.tool-btn:hover { background: var(--surface); color: var(--fg-secondary); border-color: var(--border-focus); }
+.tool-btn.primary { background: var(--accent); color: #1C1A18; border-color: var(--accent); font-weight: 510; }
+.tool-btn.primary:hover { background: var(--accent-hover); }
+
+.canvas-area {
+  flex: 1; position: relative; overflow: auto;
+  background:
+    radial-gradient(circle at 50% 50%, var(--accent-glow) 0%, transparent 60%),
+    linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+  background-size: 100% 100%, 24px 24px, 24px 24px;
+  background-position: 0 0, center, center;
+}
+
+/* ── Agent cards ─────────────────────────────────────────────────── */
+.agent-card {
+  position: absolute;
+  width: 280px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  cursor: grab;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.agent-card:hover {
+  border-color: var(--border-focus);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+.agent-card:active { cursor: grabbing; }
+
+.agent-card-header {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 10px;
+}
+
+.agent-avatar {
+  width: 32px; height: 32px;
+  border-radius: var(--radius);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
+  flex-shrink: 0;
+  color: #1C1A18;
+}
+
+.agent-avatar.router { background: var(--accent); }
+.agent-avatar.planner { background: #9B8EC4; }
+.agent-avatar.executor { background: #7BA89E; }
+.agent-avatar.critic { background: #C49B7A; }
+.agent-avatar.summarizer { background: #8BA4C4; }
+.agent-avatar.search { background: #A4B89B; }
+
+.agent-name { font-size: 13px; font-weight: 600; color: var(--fg); letter-spacing: -0.01em; }
+.agent-role { font-size: 10px; color: var(--fg-dim); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; }
+
+.agent-status {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 510;
+  margin-bottom: 10px;
+}
+.agent-status.running { background: var(--success-muted); color: var(--success); }
+.agent-status.idle { background: rgba(255,255,255,0.04); color: var(--fg-dim); }
+.agent-status.error { background: var(--danger-muted); color: var(--danger); }
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+.agent-stats {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  font-size: 11px;
+}
+.stat-label { color: var(--fg-dim); font-size: 10px; }
+.stat-value { color: var(--fg-secondary); font-family: var(--font-mono); font-size: 12px; }
+
+/* ── Flow connection lines (SVG) ─────────────────────────────────── */
+.flow-svg {
+  position: absolute; inset: 0;
+  pointer-events: none; z-index: 0;
+}
+.flow-line {
+  stroke: var(--border-focus);
+  stroke-width: 1.5;
+  fill: none;
+  stroke-dasharray: 6 3;
+  opacity: 0.6;
+}
+.flow-line.active {
+  stroke: var(--accent);
+  stroke-dasharray: none;
+  opacity: 0.9;
+  stroke-width: 2;
+}
+
+/* ── Right console panel ─────────────────────────────────────────── */
+.console {
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+.console-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.console-tabs {
+  display: flex; gap: 2px;
+}
+.console-tab {
+  padding: 4px 12px;
+  border-radius: var(--radius);
+  font-size: 11px; font-weight: 510;
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  letter-spacing: 0.02em;
+}
+.console-tab:hover { color: var(--fg-muted); }
+.console-tab.active { background: var(--surface); color: var(--accent); }
+
+.console-actions { margin-left: auto; display: flex; gap: 4px; }
+.console-act {
+  width: 24px; height: 24px;
+  border-radius: var(--radius);
+  border: none; background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  transition: background 0.12s, color 0.12s;
+}
+.console-act:hover { background: var(--surface); color: var(--fg-muted); }
+
+.console-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: 0.01em;
+}
+
+.log-entry {
+  padding: 2px 0;
+  display: flex; gap: 8px;
+  color: var(--fg-muted);
+}
+.log-time { color: var(--fg-dim); flex-shrink: 0; font-size: 10px; }
+.log-tag {
+  font-size: 10px; font-weight: 600;
+  padding: 0 4px; border-radius: 2px;
+  flex-shrink: 0; line-height: 1.6;
+}
+.log-tag.info { background: rgba(123,156,184,0.15); color: var(--info); }
+.log-tag.success { background: var(--success-muted); color: var(--success); }
+.log-tag.warn { background: var(--warning-muted); color: var(--warning); }
+.log-tag.error { background: var(--danger-muted); color: var(--danger); }
+.log-tag.react { background: var(--accent-muted); color: var(--accent); }
+.log-msg { flex: 1; min-width: 0; word-break: break-all; }
+
+.console-input-row {
+  display: flex; gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  align-items: center;
+}
+.console-prompt {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.console-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+.console-input::placeholder { color: var(--fg-dim); }
+
+/* ── Resize handle ───────────────────────────────────────────────── */
+.resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+  flex-shrink: 0;
+  position: relative;
+}
+.resize-handle:hover, .resize-handle.active {
+  background: var(--accent);
+}
+
+/* ── Toast ───────────────────────────────────────────────────────── */
+.toast {
+  position: fixed; top: 16px; left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 10px 20px;
+  border-radius: var(--radius);
+  font-size: 12px; font-weight: 450;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.25s, transform 0.25s;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── Scrollbar ──────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-focus); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-dim); }
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+  <!-- Left sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">AH</div>
+      <div>
+        <div class="sidebar-title">AgentHub</div>
+        <div class="sidebar-version">v5.1.0</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">工作区</div>
+      <a class="nav-item active" data-nav="agents" href="agent-orchestration.html">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="6" r="2"/><circle cx="13" cy="6" r="2"/><circle cx="7" cy="14" r="2"/><circle cx="13" cy="14" r="2"/><line x1="8.4" y1="7.3" x2="11.6" y2="12.7"/><line x1="11.6" y1="7.3" x2="8.4" y2="12.7"/></svg>
+        智能体团队
+        <span class="nav-badge">6</span>
+      </a>
+      <a class="nav-item" data-nav="workflow" href="react-state-machine.html">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="4" width="4" height="4" rx="1"/><rect x="8" y="4" width="4" height="4" rx="1"/><rect x="14" y="4" width="4" height="4" rx="1"/><rect x="5" y="12" width="4" height="4" rx="1"/><rect x="11" y="12" width="4" height="4" rx="1"/><line x1="6" y1="8" x2="10" y2="12"/><line x1="12" y1="8" x2="8" y2="12"/><line x1="14" y1="8" x2="13" y2="12"/></svg>
+        任务编排
+      </a>
+      <a class="nav-item" data-nav="rag" href="rag-retrieval.html">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="3"/><line x1="10.5" y1="10.5" x2="16" y2="16"/><rect x="2" y="2" width="5" height="5" rx="1"/></svg>
+        RAG 检索
+      </a>
+      <div class="nav-section">配置</div>
+      <a class="nav-item" data-nav="models" href="settings.html#models">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="6" height="6" rx="1"/><rect x="11" y="5" width="6" height="6" rx="1"/><rect x="7" y="9" width="6" height="6" rx="1"/></svg>
+        模型配置
+      </a>
+      <a class="nav-item" data-nav="permissions" href="settings.html#permissions">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 2 L12 6 L16 6.5 L13 9.5 L14 13.5 L10 11.5 L6 13.5 L7 9.5 L4 6.5 L8 6 Z"/></svg>
+        权限管理
+      </a>
+      <div class="nav-section">观测</div>
+      <a class="nav-item" data-nav="monitoring" href="monitoring.html">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="12" width="3" height="5" rx="0.5"/><rect x="6" y="7" width="3" height="10" rx="0.5"/><rect x="10" y="3" width="3" height="14" rx="0.5"/><rect x="14" y="9" width="3" height="8" rx="0.5"/></svg>
+        观测日志
+      </a>
+      <a class="nav-item" data-nav="settings" href="settings.html">
+        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="3"/><path d="M10 2 L10.5 5.5 L9.5 5.5 Z"/><path d="M10 18 L10.5 14.5 L9.5 14.5 Z"/><path d="M2 10 L5.5 10.5 L5.5 9.5 Z"/><path d="M18 10 L14.5 10.5 L14.5 9.5 Z"/></svg>
+        系统设置
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="avatar">XD</div>
+      <div class="user-info">
+        <div class="user-name">Xyn Design</div>
+        <div class="user-role">管理员</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Resize handle (sidebar) -->
+  <div class="resize-handle" id="resize-sidebar" title="拖拽调整侧边栏宽度"></div>
+
+  <!-- Main canvas -->
+  <main class="canvas">
+    <div class="canvas-toolbar">
+      <div class="toolbar-title">
+        <span class="toolbar-dot"></span>
+        智能体编排画布 · Agent Orchestration
+      </div>
+      <button class="tool-btn" id="btn-zoom-in" title="放大">+</button>
+      <button class="tool-btn" id="btn-zoom-out" title="缩小">−</button>
+      <button class="tool-btn" id="btn-fit" title="适应画布">适应</button>
+      <button class="tool-btn primary" id="btn-run" title="执行任务">▶ 运行</button>
+    </div>
+
+    <div class="canvas-area" id="canvas-area">
+      <!-- SVG flow lines -->
+      <svg class="flow-svg" id="flow-svg">
+        <line class="flow-line" id="line-router-planner" x1="160" y1="120" x2="160" y2="240" />
+        <line class="flow-line active" id="line-planner-executor" x1="160" y1="300" x2="160" y2="420" />
+        <line class="flow-line" id="line-router-search" x1="300" y1="90" x2="480" y2="60" />
+        <line class="flow-line" id="line-executor-critic" x1="160" y1="480" x2="160" y2="560" />
+        <line class="flow-line" id="line-critic-summarizer" x1="160" y1="620" x2="160" y2="700" />
+      </svg>
+
+      <!-- Agent cards — positioned in a vertical pipeline with search off to the right -->
+      <div class="agent-card" id="card-router" style="left:20px;top:40px;" data-agent="router">
+        <div class="agent-card-header">
+          <div class="agent-avatar router">R</div>
+          <div>
+            <div class="agent-name">Router</div>
+            <div class="agent-role">任务路由</div>
+          </div>
+        </div>
+        <div class="agent-status running"><span class="status-dot"></span>运行中</div>
+        <div class="agent-stats">
+          <div><div class="stat-label">任务分派</div><div class="stat-value">1,247</div></div>
+          <div><div class="stat-label">平均延迟</div><div class="stat-value">32ms</div></div>
+        </div>
+      </div>
+
+      <div class="agent-card" id="card-planner" style="left:20px;top:220px;" data-agent="planner">
+        <div class="agent-card-header">
+          <div class="agent-avatar planner">P</div>
+          <div>
+            <div class="agent-name">Planner</div>
+            <div class="agent-role">任务规划</div>
+          </div>
+        </div>
+        <div class="agent-status running"><span class="status-dot"></span>运行中</div>
+        <div class="agent-stats">
+          <div><div class="stat-label">计划生成</div><div class="stat-value">892</div></div>
+          <div><div class="stat-label">成功率</div><div class="stat-value">94.3%</div></div>
+        </div>
+      </div>
+
+      <div class="agent-card" id="card-executor" style="left:20px;top:400px;" data-agent="executor">
+        <div class="agent-card-header">
+          <div class="agent-avatar executor">E</div>
+          <div>
+            <div class="agent-name">Executor</div>
+            <div class="agent-role">任务执行</div>
+          </div>
+        </div>
+        <div class="agent-status running"><span class="status-dot"></span>运行中</div>
+        <div class="agent-stats">
+          <div><div class="stat-label">工具调用</div><div class="stat-value">3,421</div></div>
+          <div><div class="stat-label">平均耗时</div><div class="stat-value">1.8s</div></div>
+        </div>
+      </div>
+
+      <div class="agent-card" id="card-critic" style="left:20px;top:560px;" data-agent="critic">
+        <div class="agent-card-header">
+          <div class="agent-avatar critic">C</div>
+          <div>
+            <div class="agent-name">Critic</div>
+            <div class="agent-role">质量审查</div>
+          </div>
+        </div>
+        <div class="agent-status idle"><span class="status-dot"></span>待命中</div>
+        <div class="agent-stats">
+          <div><div class="stat-label">审查次数</div><div class="stat-value">756</div></div>
+          <div><div class="stat-label">驳回率</div><div class="stat-value">12.7%</div></div>
+        </div>
+      </div>
+
+      <div class="agent-card" id="card-summarizer" style="left:20px;top:700px;" data-agent="summarizer">
+        <div class="agent-card-header">
+          <div class="agent-avatar summarizer">S</div>
+          <div>
+            <div class="agent-name">Summarizer</div>
+            <div class="agent-role">结果汇总</div>
+          </div>
+        </div>
+        <div class="agent-status idle"><span class="status-dot"></span>待命中</div>
+        <div class="agent-stats">
+          <div><div class="stat-label">摘要生成</div><div class="stat-value">634</div></div>
+          <div><div class="stat-label">平均长度</div><div class="stat-value">256t</div></div>
+        </div>
+      </div>
+
+      <div class="agent-card" id="card-search" style="left:460px;top:20px;" data-agent="search">
+        <div class="agent-card-header">
+          <div class="agent-avatar search">SE</div>
+          <div>
+            <div class="agent-name">Search</div>
+            <div class="agent-role">知识检索</div>
+          </div>
+        </div>
+        <div class="agent-status idle"><span class="status-dot"></span>待命中</div>
+        <div class="agent-stats">
+          <div><div class="stat-label">检索次数</div><div class="stat-value">2,103</div></div>
+          <div><div class="stat-label">命中率</div><div class="stat-value">87.2%</div></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Resize handle (console) -->
+  <div class="resize-handle" id="resize-console" title="拖拽调整控制台宽度"></div>
+
+  <!-- Right console panel -->
+  <aside class="console" id="console-panel">
+    <div class="console-header">
+      <div class="console-tabs">
+        <div class="console-tab active" data-tab="logs">执行日志</div>
+        <div class="console-tab" data-tab="state">状态机</div>
+        <div class="console-tab" data-tab="tools">工具调用</div>
+      </div>
+      <div class="console-actions">
+        <button class="console-act" id="btn-clear" title="清空日志">◻</button>
+        <button class="console-act" id="btn-collapse" title="折叠面板">⟩</button>
+      </div>
+    </div>
+    <div class="console-body" id="console-body">
+      <div class="log-entry"><span class="log-time">14:32:01</span><span class="log-tag info">SYS</span><span class="log-msg">AgentHub v5.1.0 工作台已就绪</span></div>
+      <div class="log-entry"><span class="log-time">14:32:01</span><span class="log-tag info">SYS</span><span class="log-msg">已加载 6 个智能体角色 · 3 个工具集 · 2 个知识库</span></div>
+      <div class="log-entry"><span class="log-time">14:32:04</span><span class="log-tag react">ROUTER</span><span class="log-msg">收到任务: "分析Q3营收数据并生成报告" → 路由至 Planner</span></div>
+      <div class="log-entry"><span class="log-time">14:32:04</span><span class="log-tag react">PLANNER</span><span class="log-msg">计划已生成: 5个步骤, 预估耗时 12s</span></div>
+      <div class="log-entry"><span class="log-time">14:32:05</span><span class="log-tag react">EXECUTOR</span><span class="log-msg">Step 1/5: 调用 data_query 工具 · 查询 Q3 营收表</span></div>
+      <div class="log-entry"><span class="log-time">14:32:06</span><span class="log-tag success">OK</span><span class="log-msg">data_query 返回 1,248 行, 耗时 1.2s</span></div>
+      <div class="log-entry"><span class="log-time">14:32:06</span><span class="log-tag react">EXECUTOR</span><span class="log-msg">Step 2/5: 调用 analysis 工具 · 同比/环比计算</span></div>
+      <div class="log-entry"><span class="log-time">14:32:08</span><span class="log-tag success">OK</span><span class="log-msg">analysis 完成, 增长率 8.4%, 环比 +2.1%</span></div>
+      <div class="log-entry"><span class="log-time">14:32:08</span><span class="log-tag react">EXECUTOR</span><span class="log-msg">Step 3/5: 调用 chart_gen 工具 · 生成趋势图</span></div>
+      <div class="log-entry"><span class="log-time">14:32:09</span><span class="log-tag warn">WARN</span><span class="log-msg">chart_gen 部分数据缺失 (Q1 2025), 已使用插值填充</span></div>
+      <div class="log-entry"><span class="log-time">14:32:10</span><span class="log-tag react">CRITIC</span><span class="log-msg">审查完成: 数据一致性 ✓ · 格式规范 ✓ · 一处建议: 补充毛利率分析</span></div>
+      <div class="log-entry"><span class="log-time">14:32:12</span><span class="log-tag success">DONE</span><span class="log-msg">任务完成 · 总耗时 8.1s · 工具调用 5 次 · Token 消耗 3,241</span></div>
+    </div>
+    <div class="console-input-row">
+      <span class="console-prompt">$</span>
+      <input class="console-input" id="console-input" placeholder="输入指令或提问…" autocomplete="off" />
+    </div>
+  </aside>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   AgentHub Workspace — Interactive Behaviors
+   ═══════════════════════════════════════════════════════════════════ */
+
+(function() {
+  /* ── Console tabs ────────────────────────────────────────────── */
+  document.querySelectorAll('.console-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      document.querySelectorAll('.console-tab').forEach(function(t) { t.classList.remove('active'); });
+      this.classList.add('active');
+    });
+  });
+
+  /* ── Clear console ───────────────────────────────────────────── */
+  var consoleBody = document.getElementById('console-body');
+  document.getElementById('btn-clear').addEventListener('click', function() {
+    consoleBody.innerHTML = '';
+  });
+
+  /* ── Console collapse ────────────────────────────────────────── */
+  var consolePanel = document.getElementById('console-panel');
+  var consoleCollapsed = false;
+  document.getElementById('btn-collapse').addEventListener('click', function() {
+    consoleCollapsed = !consoleCollapsed;
+    consolePanel.style.display = consoleCollapsed ? 'none' : 'flex';
+    this.textContent = consoleCollapsed ? '⟨' : '⟩';
+    updateGrid();
+  });
+
+  /* ── Console input ───────────────────────────────────────────── */
+  var consoleInput = document.getElementById('console-input');
+  consoleInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && this.value.trim()) {
+      var msg = this.value.trim();
+      appendLog('14:32:' + String(Math.floor(Math.random()*60)).padStart(2,'0'), 'CMD', msg);
+      this.value = '';
+      consoleBody.scrollTop = consoleBody.scrollHeight;
+
+      setTimeout(function() {
+        appendLog('14:32:' + String(Math.floor(Math.random()*60)).padStart(2,'0'), 'info', 'SYS', '指令已接收，等待智能体处理…');
+        consoleBody.scrollTop = consoleBody.scrollHeight;
+      }, 600);
+    }
+  });
+
+  function appendLog(time, tag, msg, tagClass) {
+    var div = document.createElement('div');
+    div.className = 'log-entry';
+    var cls = tagClass || tag.toLowerCase();
+    div.innerHTML = '<span class="log-time">' + time + '</span><span class="log-tag ' + cls + '">' + tag + '</span><span class="log-msg">' + msg + '</span>';
+    consoleBody.appendChild(div);
+  }
+
+  /* ── Run button ──────────────────────────────────────────────── */
+  document.getElementById('btn-run').addEventListener('click', function() {
+    showToast('任务已提交，智能体团队开始执行…');
+    var now = '14:32:' + String(Math.floor(Math.random()*60)).padStart(2,'0');
+    appendLog(now, 'REACT', 'ROUTER', '新任务已启动 → 路由分析中…');
+    consoleBody.scrollTop = consoleBody.scrollHeight;
+  });
+
+  /* ── Toast ───────────────────────────────────────────────────── */
+  function showToast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._t);
+    t._t = setTimeout(function() { t.classList.remove('show'); }, 2200);
+  }
+
+  /* ── Agent card primary action button ─────────────────────────── */
+  document.querySelectorAll('.agent-card').forEach(function(card) {
+    card.addEventListener('dblclick', function() {
+      var name = this.querySelector('.agent-name').textContent;
+      showToast(name + ' 配置面板 (功能待扩展)');
+    });
+  });
+
+  /* ── Zoom controls ───────────────────────────────────────────── */
+  var zoom = 1;
+  var canvasArea = document.getElementById('canvas-area');
+  document.getElementById('btn-zoom-in').addEventListener('click', function() {
+    zoom = Math.min(2, zoom + 0.1);
+    canvasArea.style.transform = 'scale(' + zoom + ')';
+    canvasArea.style.transformOrigin = 'top left';
+  });
+  document.getElementById('btn-zoom-out').addEventListener('click', function() {
+    zoom = Math.max(0.3, zoom - 0.1);
+    canvasArea.style.transform = 'scale(' + zoom + ')';
+    canvasArea.style.transformOrigin = 'top left';
+  });
+  document.getElementById('btn-fit').addEventListener('click', function() {
+    zoom = 1;
+    canvasArea.style.transform = 'scale(1)';
+  });
+
+  /* ── Console panel resize ────────────────────────────────────── */
+  var resizeConsole = document.getElementById('resize-console');
+  var isResizing = false;
+  resizeConsole.addEventListener('mousedown', function(e) {
+    isResizing = true;
+    resizeConsole.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!isResizing) return;
+    var w = window.innerWidth - e.clientX;
+    w = Math.max(260, Math.min(600, w));
+    var app = document.getElementById('app');
+    app.style.gridTemplateColumns = 'var(--sidebar-w) 1fr ' + w + 'px';
+  });
+  document.addEventListener('mouseup', function() {
+    if (isResizing) {
+      isResizing = false;
+      resizeConsole.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
+
+  /* ── Sidebar resize ──────────────────────────────────────────── */
+  var resizeSidebar = document.getElementById('resize-sidebar');
+  var isResizingS = false;
+  resizeSidebar.addEventListener('mousedown', function(e) {
+    isResizingS = true;
+    resizeSidebar.classList.add('active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!isResizingS) return;
+    var w = e.clientX;
+    w = Math.max(160, Math.min(320, w));
+    document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+  });
+  document.addEventListener('mouseup', function() {
+    if (isResizingS) {
+      isResizingS = false;
+      resizeSidebar.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
+
+  /* ── Grid update helper ──────────────────────────────────────── */
+  function updateGrid() {
+    var app = document.getElementById('app');
+    var cols = [getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w').trim(), '1fr'];
+    cols.push(consoleCollapsed ? '0px' : getComputedStyle(document.documentElement).getPropertyValue('--console-w').trim());
+    app.style.gridTemplateColumns = cols.join(' ');
+  }
+})();
+</script>
+</body>
+</html>

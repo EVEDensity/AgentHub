@@ -536,7 +536,7 @@ export default function ModuleRelationshipGraph(): JSX.Element {
   return (
     <div className="card p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-base font-semibold text-warm-800">🌐 AgentHub 模块关系图</h3>
+        <h3 className="text-base font-semibold text-warm-800">[globe] AgentHub 模块关系图</h3>
         <div className="flex items-center gap-3 text-xs text-warm-500 flex-wrap">
           <span>
             <span className="inline-block w-3 h-[2px] bg-warm-400 mr-1 align-middle" /> 数据流
@@ -626,7 +626,7 @@ export default function ModuleRelationshipGraph(): JSX.Element {
           }} />
           {' '}缩放 {Math.round(scale * 100)}%
         </span>
-        <span>🖱️ 滚轮缩放 · 拖拽平移 · 悬停高亮</span>
+        <span>[mouse] 滚轮缩放 · 拖拽平移 · 悬停高亮</span>
       </div>
     </div>
   );

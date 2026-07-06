@@ -15,9 +15,9 @@ interface SensitiveToolConfirmProps {
 
 const RISK_CONFIG = {
   high: {
-    bg: 'from-orange-50 to-red-50',
+    bg: 'bg-danger-50',
     border: 'border-orange-300',
-    icon: '⚠️',
+    icon: '[warn]',
     iconBg: 'bg-orange-100',
     label: '高风险操作',
     desc: '此工具可能修改系统状态或访问外部资源，需要您确认后执行。',
@@ -27,7 +27,7 @@ const RISK_CONFIG = {
   critical: {
     bg: 'from-red-50 to-rose-100',
     border: 'border-red-400',
-    icon: '🚫',
+    icon: '[forbidden]',
     iconBg: 'bg-red-100',
     label: '严重风险操作',
     desc: '此工具具有破坏性，可能导致数据丢失或系统不可用。请仔细评估后再确认。',

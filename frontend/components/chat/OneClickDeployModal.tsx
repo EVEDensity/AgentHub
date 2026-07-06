@@ -320,11 +320,11 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
       <div
         ref={overlayRef}
         onClick={handleOverlayClick}
-        className="fixed inset-0 z-[110] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 p-4"
       >
         {/* ── Modal container ──────────────────────────────────────── */}
         <div
-          className="w-full max-w-[560px] bg-white rounded-2xl shadow-modal border border-warm-150 overflow-hidden animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh]"
+          className="w-full max-w-[560px] bg-warm-100 rounded-2xl shadow-modal border border-warm-150 overflow-hidden animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh]"
           role="dialog"
           aria-modal="true"
           aria-label="一键部署"
@@ -375,7 +375,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                     id="ocd-project"
                     value={projectId}
                     onChange={(e) => setProjectId(e.target.value)}
-                    className="w-full rounded-lg border border-warm-200 bg-white px-3 py-2.5 text-sm text-warm-800 focus:outline-none focus:ring-2 focus:ring-primary-400/60 focus:border-primary-400 transition-shadow appearance-none bg-[image:url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23999%22%20stroke-width%3D%222%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:16px] bg-[right_8px_center] bg-no-repeat pr-8"
+                    className="w-full rounded-lg border border-warm-200 bg-warm-100 px-3 py-2.5 text-sm text-warm-800 focus:outline-none focus:ring-2 focus:ring-primary-400/60 focus:border-primary-400 transition-shadow appearance-none bg-[image:url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23999%22%20stroke-width%3D%222%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:16px] bg-[right_8px_center] bg-no-repeat pr-8"
                     aria-label="选择部署项目"
                   >
                     <option value="" disabled>
@@ -493,7 +493,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                       className={`flex flex-col items-start gap-1.5 rounded-xl border-2 px-4 py-3.5 text-left transition-all disabled:opacity-60 ${
                         isActive
                           ? 'border-primary-400 bg-primary-50/60 shadow-sm'
-                          : 'border-warm-150 bg-white hover:border-warm-250 hover:bg-warm-50'
+                          : 'border-warm-150 bg-warm-100 hover:border-warm-250 hover:bg-warm-50'
                       }`}
                     >
                       <div className="flex items-center gap-2 w-full">
@@ -579,7 +579,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                         部署地址
                       </label>
                       <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1.5 flex-1 rounded-lg border border-warm-200 bg-white px-3 py-2 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-1 rounded-lg border border-warm-200 bg-warm-100 px-3 py-2 min-w-0">
                           <Link className="h-3.5 w-3.5 text-warm-400 shrink-0" />
                           <code className="text-xs font-mono text-primary-600 truncate">
                             {generated.url}
@@ -591,7 +591,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                           className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all shrink-0 ${
                             copiedField === 'url'
                               ? 'border-success-300 bg-success-50 text-success-600'
-                              : 'border-warm-200 bg-white text-warm-500 hover:border-primary-300 hover:text-primary-600'
+                              : 'border-warm-200 bg-warm-100 text-warm-500 hover:border-primary-300 hover:text-primary-600'
                           }`}
                           title="复制链接"
                         >
@@ -605,7 +605,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       {Object.entries(generated.config).map(([key, val]) => (
-                        <div key={key} className="rounded-lg bg-white border border-warm-100 px-2.5 py-2">
+                        <div key={key} className="rounded-lg bg-warm-100 border border-warm-100 px-2.5 py-2">
                           <span className="block text-[10px] text-warm-400 uppercase">{key}</span>
                           <span className="text-xs font-medium text-warm-700">{val as string}</span>
                         </div>
@@ -626,7 +626,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                         API 端点
                       </label>
                       <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1.5 flex-1 rounded-lg border border-warm-200 bg-white px-3 py-2">
+                        <div className="flex items-center gap-1.5 flex-1 rounded-lg border border-warm-200 bg-warm-100 px-3 py-2">
                           <span className="inline-flex items-center rounded bg-success-100 px-1.5 py-0.5 text-[10px] font-bold text-success-700 font-mono">
                             {generated.method}
                           </span>
@@ -640,7 +640,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                           className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all shrink-0 ${
                             copiedField === 'endpoint'
                               ? 'border-success-300 bg-success-50 text-success-600'
-                              : 'border-warm-200 bg-white text-warm-500 hover:border-primary-300 hover:text-primary-600'
+                              : 'border-warm-200 bg-warm-100 text-warm-500 hover:border-primary-300 hover:text-primary-600'
                           }`}
                           title="复制端点"
                         >
@@ -657,7 +657,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                         API 密钥
                       </label>
                       <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-1.5 flex-1 rounded-lg border border-warm-200 bg-white px-3 py-2">
+                        <div className="flex items-center gap-1.5 flex-1 rounded-lg border border-warm-200 bg-warm-100 px-3 py-2">
                           <Key className="h-3.5 w-3.5 text-warning-500 shrink-0" />
                           <code className="text-xs font-mono text-warm-700 truncate select-all">
                             {generated.apiKey}
@@ -669,7 +669,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                           className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all shrink-0 ${
                             copiedField === 'apiKey'
                               ? 'border-success-300 bg-success-50 text-success-600'
-                              : 'border-warm-200 bg-white text-warm-500 hover:border-primary-300 hover:text-primary-600'
+                              : 'border-warm-200 bg-warm-100 text-warm-500 hover:border-primary-300 hover:text-primary-600'
                           }`}
                           title="复制密钥"
                         >
@@ -683,7 +683,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       {Object.entries(generated.config).map(([key, val]) => (
-                        <div key={key} className="rounded-lg bg-white border border-warm-100 px-2.5 py-2">
+                        <div key={key} className="rounded-lg bg-warm-100 border border-warm-100 px-2.5 py-2">
                           <span className="block text-[10px] text-warm-400 uppercase">{key}</span>
                           <span className="text-xs font-medium text-warm-700">{val as string}</span>
                         </div>
@@ -758,7 +758,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                     </div>
                     <div className="grid grid-cols-3 gap-2">
                       {Object.entries(generated.config).map(([key, val]) => (
-                        <div key={key} className="rounded-lg bg-white border border-warm-100 px-2.5 py-2">
+                        <div key={key} className="rounded-lg bg-warm-100 border border-warm-100 px-2.5 py-2">
                           <span className="block text-[10px] text-warm-400 uppercase">{key}</span>
                           <span className="text-xs font-medium text-warm-700">{val as string}</span>
                         </div>
@@ -770,7 +770,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                 {/* ── Package result ──────────────────────────────────── */}
                 {generated && selectedTarget === 'package' && (
                   <>
-                    <div className="flex items-center gap-3 rounded-xl border border-warm-200 bg-white px-4 py-3">
+                    <div className="flex items-center gap-3 rounded-xl border border-warm-200 bg-warm-100 px-4 py-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-warning-100 shrink-0">
                         <Package className="h-5 w-5 text-warning-600" />
                       </div>
@@ -801,7 +801,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                           className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all shrink-0 ${
                             copiedField === 'command'
                               ? 'border-success-300 bg-success-50 text-success-600'
-                              : 'border-warm-200 bg-white text-warm-500 hover:border-primary-300 hover:text-primary-600'
+                              : 'border-warm-200 bg-warm-100 text-warm-500 hover:border-primary-300 hover:text-primary-600'
                           }`}
                           title="复制命令"
                         >
@@ -821,7 +821,7 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                         {generated.envVars.map((env: string) => (
                           <code
                             key={env}
-                            className="rounded-md bg-white border border-warm-150 px-2 py-1 text-[10px] font-mono text-warm-600"
+                            className="rounded-md bg-warm-100 border border-warm-150 px-2 py-1 text-[10px] font-mono text-warm-600"
                           >
                             {env}
                           </code>
@@ -841,14 +841,14 @@ const OneClickDeployModal = memo(function OneClickDeployModal({
                 type="button"
                 onClick={handleReset}
                 disabled={generating}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-warm-200 bg-white px-3 py-2 text-xs font-medium text-warm-600 hover:bg-warm-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-warm-200 bg-warm-100 px-3 py-2 text-xs font-medium text-warm-600 hover:bg-warm-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 重置配置
               </button>
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-warm-200 bg-white px-3 py-2 text-xs font-medium text-warm-500 hover:bg-warm-100 transition-all"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-warm-200 bg-warm-100 px-3 py-2 text-xs font-medium text-warm-500 hover:bg-warm-100 transition-all"
               >
                 <FileText className="h-3.5 w-3.5" />
                 查看部署文档

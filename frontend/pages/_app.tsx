@@ -20,7 +20,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
     this.setState({ errorInfo });
-    console.error('🔴 ErrorBoundary caught:', error, errorInfo);
+    console.error('[ErrorBoundary] caught:', error, errorInfo);
   }
 
   render(): React.ReactNode {
@@ -29,15 +29,14 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
         <div style={{
           padding: 40,
           fontFamily: 'monospace',
-          background: '#fff5f5',
+          background: '#1C1A18',
           minHeight: '100vh',
-          color: '#c41e3a',
+          color: '#C4675A',
         }}>
-          <h1 style={{ fontSize: 24, marginBottom: 16 }}>🔴 Client Error Caught</h1>
+          <h1 style={{ fontSize: 24, marginBottom: 16, color: '#EBE8E3' }}>Client Error Caught</h1>
           <div style={{
-            background: '#fff',
-            border: '2px solid #c41e3a',
-            borderRadius: 8,
+            background: '#24221F',
+            border: '1px solid #C4675A',
             padding: 20,
             marginBottom: 16,
           }}>

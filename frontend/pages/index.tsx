@@ -1,5 +1,4 @@
-import React, { useCallback, useRef, useState, type JSX } from 'react';
-function useXffect(_fn: () => (() => void) | void, _deps?: readonly unknown[]): void {}
+import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
 import ChatHeader from '../components/chat/ChatHeader';
@@ -11,7 +10,11 @@ import { getPresenceStore } from '../lib/presenceStore';
 import { getCollaborationStore } from '../lib/collaborationStore';
 import ShareDialog from '../components/collaboration/ShareDialog';
 import OneClickDeployModal from '../components/chat/OneClickDeployModal';
-import MessageList from '../components/chat/MessageList';
+// FIX: MessageList SSR causes hydration mismatch — disable SSR
+const MessageList = dynamic(() => import('../components/chat/MessageList'), {
+  ssr: false,
+  loading: () => null,
+});
 import { type ExecPermission } from '../components/chat/PermissionModePopover';
 import SessionSidebar from '../components/chat/SessionSidebar';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
@@ -45,9 +48,9 @@ const FilePreviewModal = dynamic(() => import('../components/chat/FilePreviewMod
 const FilePreviewPanel = dynamic(() => import('../components/chat/FilePreviewPanel'), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center bg-white">
+    <div className="flex h-full items-center justify-center">
       <div className="flex flex-col items-center gap-3">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-warm-300 border-t-primary-500" />
         <span className="text-sm text-warm-400">加载预览面板...</span>
       </div>
     </div>
@@ -87,10 +90,9 @@ export default function AgentHubIM(): JSX.Element {
   // 切回来时直接命中缓存，流的 chunks 不会丢。
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionId, setSessionId] = useState<string>('');
-  // STUB: store hooks
-  const messages: Message[] = [];
-  const isStreaming = false;
-  const addToast = () => {};
+  const messages = useSessionMessages(sessionId);
+  const isStreaming = useSessionStreaming(sessionId);
+  const addToast = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
@@ -155,13 +157,21 @@ export default function AgentHubIM(): JSX.Element {
   const autoReplyRef = useRef(autoReply);
   autoReplyRef.current = autoReply;
 
-  // STUB: useResizableSize
-  const sidebarWidth = 320;
-  const setSidebarWidth = (_v: number) => {};
-  const resetSidebarWidth = () => {};
-  const previewWidth = 540;
-  const setPreviewWidth = (_v: number) => {};
-  const resetPreviewWidth = () => {};
+  // ── 可调整布局尺寸（localStorage 持久化） ──────────────
+  // 左侧会话栏宽度：默认 320px，可在 240-480 之间调整
+  const [sidebarWidth, setSidebarWidth, resetSidebarWidth] = useResizableSize(
+    'agenthub.layout.sidebarWidth',
+    320,
+    240,
+    480,
+  );
+  // 右侧预览面板宽度：默认 540px，可在 360-960 之间调整
+  const [previewWidth, setPreviewWidth, resetPreviewWidth] = useResizableSize(
+    'agenthub.layout.previewWidth',
+    540,
+    360,
+    960,
+  );
   // 拖动过程中的临时值（实时预览，松手才提交）
   const [sidebarWidthLive, setSidebarWidthLive] = useState<number | null>(null);
   const [previewWidthLive, setPreviewWidthLive] = useState<number | null>(null);
@@ -215,44 +225,21 @@ export default function AgentHubIM(): JSX.Element {
 
   // ── Effects ──────────────────────────────────────────────
 
-  useXffect(() => {
+  useEffect(() => {
     currentSessionRef.current = sessionId;
     tokenRef.current = token;
   }, [sessionId, token]);
 
-  useXffect(() => {
+  useEffect(() => {
     const saved = localStorage.getItem('agenthub_token');
     const savedUser = localStorage.getItem('agenthub_user');
     if (saved) setToken(saved);
     if (savedUser) setUser(JSON.parse(savedUser) as User);
   }, []);
 
-  // Apply global settings (theme, lang, zoom) on page load
-  useXffect(() => {
-    const theme = localStorage.getItem('agenthub_theme') || 'warm';
-    const lang = localStorage.getItem('agenthub_lang') || 'zh';
-    const zoom = localStorage.getItem('agenthub_zoom') || '100';
-
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
-    (document.body.style as unknown as Record<string, string>).zoom = `${zoom}%`;
+  useEffect(() => {
+    document.documentElement.lang = 'zh-CN';
   }, []);
-
-  // Load user settings from backend and merge into localStorage
-  useXffect(() => {
-    const token = localStorage.getItem('agenthub_token');
-    if (!token) return;
-    fetch('/api/user/settings', { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.ok ? r.json() : null)
-      .then((data: { settings?: Record<string, string> } | null) => {
-        if (!data?.settings) return;
-        const s = data.settings;
-        if (s.theme && !localStorage.getItem('agenthub_theme')) { localStorage.setItem('agenthub_theme', s.theme); document.documentElement.setAttribute('data-theme', s.theme); }
-        if (s.lang && !localStorage.getItem('agenthub_lang')) { localStorage.setItem('agenthub_lang', s.lang); document.documentElement.lang = s.lang === 'en' ? 'en' : 'zh-CN'; }
-        if (s.zoom && !localStorage.getItem('agenthub_zoom')) { localStorage.setItem('agenthub_zoom', s.zoom); (document.body.style as unknown as Record<string, string>).zoom = `${s.zoom}%`; }
-      })
-      .catch(() => { /* backend off — use localStorage defaults */ });
-  }, [token]);
 
   /** Centralised handler for expired / invalid auth tokens.
    *  Clears stored credentials, tears down all active connections,
@@ -279,7 +266,7 @@ export default function AgentHubIM(): JSX.Element {
     setNotice('登录已过期，请重新登录');
   }
 
-  useXffect(() => {
+  useEffect(() => {
     if (!token) return;
     // ── Fetch sessions ──────────────────────────────────────────────
     fetch('/api/chat/sessions', { headers: authHeaders() })
@@ -372,7 +359,7 @@ export default function AgentHubIM(): JSX.Element {
     return res;
   }
 
-  useXffect(() => {
+  useEffect(() => {
     if (!token || !sessionId) return;
     // Reset session-scoped refs to prevent stale data leaking across sessions
     lastMessageIdRef.current = '';
@@ -407,7 +394,7 @@ export default function AgentHubIM(): JSX.Element {
   const scrollRafRef = useRef<number>(0);
   const lastScrollTimeRef = useRef<number>(0);
 
-  useXffect(() => {
+  useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
 
@@ -1810,11 +1797,33 @@ export default function AgentHubIM(): JSX.Element {
     }, 200);
   }, []);
 
-  const filteredAgents: Agent[] = FALLBACK_AGENTS; // STUB: useMemo removed
+  const filteredAgents = useMemo(() => agents.filter((agent) => {
+    const matchesSearch = mentionSearch === '' ||
+      agent.agentId.toLowerCase().includes(mentionSearch.toLowerCase()) ||
+      agent.domain.toLowerCase().includes(mentionSearch.toLowerCase());
+    const matchesLevel = selectedRiskLevel === 'all' || agent.rankLevel === selectedRiskLevel;
+    return matchesSearch && matchesLevel;
+  }), [agents, mentionSearch, selectedRiskLevel]);
 
-  const filteredWorkflows: WorkflowSummary[] = []; // STUB: useMemo removed
+  const filteredWorkflows = useMemo(() => workflows.filter((w) => {
+    if (mentionSearch === '') return true;
+    const q = mentionSearch.toLowerCase();
+    return (
+      w.name.toLowerCase().includes(q) ||
+      w.description.toLowerCase().includes(q) ||
+      w.triggerKeywords.some((k) => k.toLowerCase().includes(q))
+    );
+  }), [workflows, mentionSearch]);
 
-  const filteredSkills: SkillMeta[] = []; // STUB: useMemo removed
+  const filteredSkills = useMemo(() => skills.filter((s) => {
+    if (mentionSearch === '') return true;
+    const q = mentionSearch.toLowerCase();
+    return (
+      s.name.toLowerCase().includes(q) ||
+      (s.display_name || '').toLowerCase().includes(q) ||
+      (s.description || '').toLowerCase().includes(q)
+    );
+  }), [skills, mentionSearch]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionOpen) {
@@ -2364,10 +2373,10 @@ export default function AgentHubIM(): JSX.Element {
     [handleOpenWorkspaceFile, setNotice, sessionId],
   );
 
-  // STUB: useFileUpload
-  const handleFileChange = (_e: React.ChangeEvent<HTMLInputElement>) => {};
-  const handlePasteFiles = (_e: React.ClipboardEvent) => {};
-  const handleRemoveFile = (_id: string) => {};
+  // ── File upload (extracted to hook) ──────────────────────
+  const { handleFileChange, handlePasteFiles, handleRemoveFile } = useFileUpload({
+    authHeaders, setAttachedFiles, setNotice,
+  });
 
   // 点击附件卡片上的预览按钮: 弹出全屏预览模态
   // ── PM/PMO 事件发送 ────────────────────────────────────────────────
@@ -2477,14 +2486,24 @@ export default function AgentHubIM(): JSX.Element {
 
   // ── Memoized values ──────────────────────────────────────
 
-  const sessionName = 'New Session'; // STUB: useMemo removed
+  const sessionName = useMemo(() => {
+    return sessions.find((s) => s.id === sessionId)?.name || 'New Session';
+  }, [sessions, sessionId]);
 
   // Memoize current session to avoid repeated .find() in render
-  const currentSession: ChatSession | undefined = undefined; // STUB: useMemo removed
+  const currentSession = useMemo(() => {
+    return sessions.find((s) => s.id === sessionId);
+  }, [sessions, sessionId]);
 
-  const percent = 0; // STUB: useMemo removed
+  const percent = useMemo(() => {
+    return dag.total ? Math.round((dag.completed / dag.total) * 100) : 0;
+  }, [dag.total, dag.completed]);
 
-  const filteredSessions: ChatSession[] = []; // STUB: useMemo removed
+  const filteredSessions = useMemo(() => {
+    const q = sessionQuery.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) => s.name.toLowerCase().includes(q));
+  }, [sessions, sessionQuery]);
 
   // ── Render ───────────────────────────────────────────────
 
@@ -2501,10 +2520,10 @@ export default function AgentHubIM(): JSX.Element {
     );
   }
 
-  // ★ Wrap with ToastProvider so toast notifications render on top
+  // TEST: Bisect JSX — Group A + ChatHeader
   return (
     <ToastProvider>
-    <div className="flex h-screen bg-warm-50 text-warm-800 overflow-hidden">
+    <div className="grid h-screen text-warm-800 overflow-hidden" style={{gridTemplateColumns: 'var(--sidebar-w, 220px) 4px 1fr'}}>
       <SessionSidebar
         user={user}
         filteredSessions={filteredSessions}
@@ -2533,7 +2552,6 @@ export default function AgentHubIM(): JSX.Element {
         authHeaders={authHeaders()}
         width={sidebarWidthLive ?? sidebarWidth}
       />
-
       <ResizableDivider
         orientation="horizontal"
         size={sidebarWidthLive ?? sidebarWidth}
@@ -2548,13 +2566,10 @@ export default function AgentHubIM(): JSX.Element {
         onReset={resetSidebarWidth}
         ariaLabel="左侧会话栏宽度"
         title="拖动调整会话栏宽度 · 右键输入数值 · 双击重置"
-        // 气泡出现在被调整的左侧栏内部（分隔条左侧）
         bubbleSide="left"
       />
-
       <main className="flex flex-1 flex-col min-h-0 min-w-0">
-        {/* ── Unified Top Bar: Title + Task Controls + UserRoster + Share ── */}
-        <header className="border-b border-warm-150 bg-white shrink-0">
+        <header className="border-b border-warm-200 shrink-0">
           <div className="flex items-stretch">
             <div className="flex-1 min-w-0">
               <ChatHeader
@@ -2593,48 +2608,8 @@ export default function AgentHubIM(): JSX.Element {
                 }}
               />
             </div>
-            {/* Right accessory strip: UserRoster + Share + Deploy */}
-            {sessionId && (
-              <div className="flex items-center gap-1 shrink-0 self-center pr-4 pl-2 border-l border-warm-100">
-                <UserRoster sessionId={sessionId} />
-                <span className="h-5 w-px bg-warm-150" />
-                <button
-                  onClick={handleOpenShare}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-warm-500 hover:text-primary-600 hover:bg-warm-100 transition-colors"
-                  title="分享会话 / 管理成员"
-                  aria-label="分享会话"
-                >
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="18" cy="5" r="3" />
-                    <circle cx="6" cy="12" r="3" />
-                    <circle cx="18" cy="19" r="3" />
-                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
-                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
-                  </svg>
-                  <span className="text-xs font-medium">分享</span>
-                </button>
-                <span className="h-5 w-px bg-warm-150" />
-                <button
-                  onClick={handleOpenDeploy}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-warm-500 hover:text-primary-600 hover:bg-warm-100 active:scale-95 transition-all"
-                  title="一键部署当前会话"
-                  aria-label="一键部署"
-                >
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
-                    <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
-                    <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
-                    <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
-                  </svg>
-                  <span className="text-xs font-medium">一键部署</span>
-                </button>
-              </div>
-            )}
           </div>
         </header>
-
-
-
         <MessageList
           messages={messages}
           user={user}
@@ -2648,167 +2623,7 @@ export default function AgentHubIM(): JSX.Element {
           sessionId={sessionId}
           isStreaming={isStreaming}
         />
-
-        {/* ── Permission Mode Toggle 已被挪入 ChatInput 工具栏（next to 工具） ── */}
-
-        <ChatInput
-          input={input}
-          isStreaming={isStreaming}
-          attachedFiles={attachedFiles}
-          mentionOpen={mentionOpen}
-          mentionTrigger={mentionTrigger}
-          mentionSearch={mentionSearch}
-          mentionActiveIndex={mentionActiveIndex}
-          selectedRiskLevel={selectedRiskLevel}
-          filteredAgents={filteredAgents}
-          filteredWorkflows={filteredWorkflows}
-          filteredSkills={filteredSkills}
-          textareaRef={textareaRef}
-          mentionPanelRef={mentionPanelRef}
-          fileInputRef={fileInputRef}
-          onInputChange={handleInputChange}
-          onBlur={handleBlur}
-          onKeyDown={handleKeyDown}
-          onSend={handleSend}
-          onFileChange={handleFileChange}
-          onRemoveFile={handleRemoveFile}
-          onPreviewFile={handlePreviewFile}
-          onClearAllFiles={handleClearAllFiles}
-          onPasteFiles={handlePasteFiles}
-          onInsertMention={handleInsertMention}
-          onInsertAllMentions={handleInsertAllMentions}
-          onInsertWorkflow={handleInsertWorkflow}
-          onInsertSkill={handleInsertSkill}
-          onMentionSearchChange={handleMentionSearchChange}
-          onMentionActiveIndexChange={handleMentionActiveIndexChange}
-          onRiskLevelChange={handleRiskLevelChange}
-          execPermission={execPermission}
-          onExecPermissionChange={(mode: ExecPermission) => {
-              setExecPermission(mode);
-              const ws = wsRef.current.get(activeSessionIdRef.current);
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ event: 'set_exec_permission', mode }));
-              }
-            }}
-          autoReply={autoReply}
-          onAutoReplyChange={setAutoReply}
-          fileReferences={fileReferences}
-          onRemoveReference={handleRemoveReference}
-          onClearAllReferences={handleClearAllReferences}
-          onJumpToReference={handleJumpToReference}
-          quoteReferences={quoteReferences}
-          onRemoveQuoteReference={handleRemoveQuoteReference}
-          onClearAllQuoteReferences={handleClearAllQuoteReferences}
-          userRole={currentSession?.myRole}
-          memberCount={currentSession?.memberCount}
-        />
-        <TypingIndicator sessionId={sessionId} />
       </main>
-
-      {/* ── File Preview Panel (right side) ──────────────────── */}
-      {previewPanelOpen && (
-        <>
-          <ResizableDivider
-            orientation="horizontal"
-            size={previewWidthLive ?? previewWidth}
-            onPreview={setPreviewWidthLive}
-            onCommit={(v) => {
-              setPreviewWidthLive(null);
-              setPreviewWidth(v);
-            }}
-            min={360}
-            max={960}
-            defaultValue={540}
-            onReset={resetPreviewWidth}
-            ariaLabel="右侧预览面板宽度"
-            title="拖动调整预览面板宽度 · 右键输入数值 · 双击重置"
-            // 拖动方向反向：向右拖 = 聊天区推开分隔条变宽 = 预览面板变窄
-            reversed
-            // 气泡出现在被调整的预览面板内部（分隔条右侧）
-            bubbleSide="right"
-          />
-          <aside
-            className="border-l border-warm-150 flex flex-col h-full bg-white shrink-0"
-            style={{ width: `${previewWidthLive ?? previewWidth}px` }}
-          >
-            <FilePreviewPanel
-              tabs={previewTabs}
-              activeTabId={activePreviewTabId}
-              onSelectTab={handleSelectPreviewTab}
-              onCloseTab={handleClosePreviewTab}
-              onAddReference={handleAddReference}
-              onOpenWorkspaceFile={handleOpenWorkspaceFile}
-              sessionId={sessionId}
-              references={fileReferences}
-              pendingScrollRef={pendingScrollRef}
-              workspaceVersion={workspaceVersion}
-            />
-          </aside>
-        </>
-      )}
-
-      {taskOpen && (
-        <DagModal dag={dag} onClose={handleTaskClose} />
-      )}
-
-      <PreviewSidebar open={previewOpen} onClose={handlePreviewClose} previewUrl={previewUrl} />
-
-      <ConfirmDialog
-        open={!!confirmDelete}
-        title="删除对话记录"
-        message={
-          confirmDelete ? (
-            <span>
-              确认要删除对话 <b className="text-warm-800">「{confirmDelete.name}」</b> 吗？此操作不可撤销。
-            </span>
-          ) : null
-        }
-        details={
-          <div>
-            <div className="mb-1 font-medium text-warm-700">⚠️ 该操作将同时清理以下内容：</div>
-            <ul className="ml-4 list-disc space-y-0.5">
-              <li>PostgreSQL 中该会话的所有对话消息</li>
-              <li>该会话关联的任务记录</li>
-              <li>.claude/memory/ 下的会话总结文件</li>
-              <li>项目记忆页面中以该会话名命名的所有记忆文件</li>
-              <li>记忆提取状态（cursor）</li>
-            </ul>
-            <div className="mt-2 text-warm-500">删除后无法恢复，请确认是否继续。</div>
-          </div>
-        }
-        confirmText={deleting ? '删除中...' : '确认删除'}
-        cancelText="取消"
-        variant="danger"
-        onConfirm={performDeleteSession}
-        onCancel={cancelDeleteSession}
-      />
-
-      {/* ── Session sharing dialog ─────────────────────────────── */}
-      <ShareDialog
-        open={shareOpen}
-        sessionId={sessionId}
-        sessionName={sessionName}
-        userRole={currentSession?.myRole || 'viewer'}
-        visibility={currentSession?.visibility || sessionVisibility}
-        authHeaders={authHeaders()}
-        onClose={handleCloseShare}
-        onVisibilityChange={handleVisibilityChange}
-      />
-
-      {/* ── One-click deploy modal ──────────────────────────────── */}
-      <OneClickDeployModal
-        open={deployOpen}
-        sessionId={sessionId}
-        sessionName={sessionName}
-        onClose={handleCloseDeploy}
-      />
-
-      {/* 附件文件全屏预览弹窗 - 点击附件卡片上的眼睛按钮触发 */}
-      <FilePreviewModal
-        file={previewFile}
-        onClose={() => setPreviewFile(null)}
-        authToken={token}
-      />
     </div>
     </ToastProvider>
   );

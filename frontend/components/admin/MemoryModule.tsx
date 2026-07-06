@@ -89,7 +89,7 @@ const SUB_TABS: Array<{ key: MemorySubTab; label: string }> = [
 
 export default function MemoryModule(props: MemoryModuleProps): JSX.Element {
   return (
-    <section className="rounded-2xl border border-warm-200 bg-white flex-1 flex flex-col min-h-0">
+    <section className="rounded-2xl border border-warm-200 bg-warm-100 flex-1 flex flex-col min-h-0">
       <nav className="flex shrink-0 border-b border-warm-150">
         {SUB_TABS.map((tab) => (
           <button
@@ -124,7 +124,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
           <div className="text-xs font-medium text-warm-600">内容搜索</div>
           <div className="flex items-center gap-1">
             <input
-              className="flex-1 min-w-0 rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-primary-300"
+              className="flex-1 min-w-0 rounded-lg border border-warm-200 bg-warm-100 px-3 py-1.5 text-sm outline-none focus:border-primary-300"
               placeholder="搜索记忆内容..."
               value={props.memorySearchQuery}
               onChange={(e) => props.setMemorySearchQuery(e.target.value)}
@@ -152,7 +152,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
         <div className="border-b border-warm-150 px-4 py-3 shrink-0">
           <div className="mb-2 text-xs font-medium text-warm-600">文件筛选</div>
           <input
-            className="w-full rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-primary-300"
+            className="w-full rounded-lg border border-warm-200 bg-warm-100 px-3 py-1.5 text-sm outline-none focus:border-primary-300"
             placeholder="筛选文件名..."
             value={props.memoryKeyword}
             onChange={(e) => props.setMemoryKeyword(e.target.value)}
@@ -264,7 +264,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {props.trashItems.map((item) => (
-                  <div key={item.trash_name} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${item.expired ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-white'}`}>
+                  <div key={item.trash_name} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${item.expired ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-warm-100'}`}>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-warm-800">{item.original_name}</div>
                       <div className="text-xs text-warm-500">
@@ -291,7 +291,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
               <span className="text-xs text-warm-400">MARKDOWN</span>
             </div>
             <textarea
-              className="flex-1 w-full resize-none border-0 bg-white px-4 py-3 font-mono text-[13px] leading-6 text-warm-800 outline-none"
+              className="flex-1 w-full resize-none border-0 bg-warm-100 px-4 py-3 font-mono text-[13px] leading-6 text-warm-800 outline-none"
               value={props.memoryBodyDraft}
               onChange={(e) => {
                 props.setMemoryBodyDraft(e.target.value);
@@ -316,16 +316,16 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
       {/* Delete confirmation modal */}
       {props.showDeleteConfirm && props.pendingDeleteFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => { props.setShowDeleteConfirm(false); props.setPendingDeleteFile(null); }}>
-          <div className="bg-white rounded-xl shadow-modal max-w-md w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-warm-100 rounded-xl shadow-modal max-w-md w-full mx-4 p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <span className="text-2xl">⚠️</span>
+              <span className="text-2xl">[warn]</span>
               <div>
                 <div className="text-lg font-semibold text-warm-900">确认删除记忆</div>
                 <div className="text-sm text-warm-600 mt-0.5">「{props.pendingDeleteFile.name}」</div>
               </div>
             </div>
             <div className="mb-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
-              <p className="font-medium mb-1">📋 删除说明：</p>
+              <p className="font-medium mb-1">[clipboard] 删除说明：</p>
               <ul className="list-disc list-inside space-y-1 text-xs">
                 <li>删除后文件将进入<strong>暂存区</strong>保存 <strong>30 天</strong></li>
                 <li>30 天内可随时从暂存区恢复到原位置</li>
@@ -414,7 +414,7 @@ function SessionsTab(props: MemoryModuleProps): JSX.Element {
         <div className="flex-1 overflow-auto bg-[#FCFCFB] px-6 py-4">
           {!props.activeSessionId ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
-              <span className="text-5xl text-warm-300 mb-4">📋</span>
+              <span className="text-5xl text-warm-300 mb-4">[clipboard]</span>
               <p className="text-sm text-warm-500">从左侧选择一个会话查看其自动生成的摘要</p>
               <p className="text-xs text-warm-400 mt-1">会话摘要在您发送消息后自动生成，汇总了对话中的关键信息</p>
             </div>
@@ -470,7 +470,7 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
 
         {!props.consolidationResult && !props.consolidationLoading && (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <span className="text-5xl text-warm-300 mb-4">🧠</span>
+            <span className="text-5xl text-warm-300 mb-4">[brain]</span>
             <p className="text-sm text-warm-600 font-medium">AutoDream 记忆整理</p>
             <p className="text-xs text-warm-500 mt-1 max-w-md leading-relaxed">
               通过 LLM 分析所有记忆文件，自动检测重复内容、过时信息和需要更新的条目。
@@ -516,7 +516,7 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
             {/* Merged items */}
             {props.consolidationResult.merged && props.consolidationResult.merged.length > 0 && (
               <div>
-                <h4 className="text-sm font-semibold text-green-700 mb-2">🟢 待合并（{props.consolidationResult.merged.length} 项）</h4>
+                <h4 className="text-sm font-semibold text-green-700 mb-2">[green] 待合并（{props.consolidationResult.merged.length} 项）</h4>
                 <div className="space-y-2">
                   {props.consolidationResult.merged.map((m, i) => (
                     <div key={i} className="rounded-lg border border-green-200 bg-green-50/30 px-4 py-2">
@@ -535,7 +535,7 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
             {/* Deleted items */}
             {props.consolidationResult.deleted && props.consolidationResult.deleted.length > 0 && (
               <div>
-                <h4 className="text-sm font-semibold text-red-700 mb-2">🔴 待删除（{props.consolidationResult.deleted.length} 项）</h4>
+                <h4 className="text-sm font-semibold text-red-700 mb-2">[red] 待删除（{props.consolidationResult.deleted.length} 项）</h4>
                 <div className="space-y-2">
                   {props.consolidationResult.deleted.map((d, i) => (
                     <div key={i} className="rounded-lg border border-red-200 bg-red-50/30 px-4 py-2">
@@ -550,7 +550,7 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
             {/* Updated items */}
             {props.consolidationResult.updated && props.consolidationResult.updated.length > 0 && (
               <div>
-                <h4 className="text-sm font-semibold text-blue-700 mb-2">🔵 待更新（{props.consolidationResult.updated.length} 项）</h4>
+                <h4 className="text-sm font-semibold text-blue-700 mb-2">[blue] 待更新（{props.consolidationResult.updated.length} 项）</h4>
                 <div className="space-y-2">
                   {props.consolidationResult.updated.map((u, i) => (
                     <div key={i} className="rounded-lg border border-blue-200 bg-blue-50/30 px-4 py-2">
@@ -707,7 +707,7 @@ function ConversationTab(props: MemoryModuleProps): JSX.Element {
         <div className="flex-1 overflow-auto bg-[#FCFCFB] px-6 py-4">
           {!props.activeSessionMemoryId ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
-              <span className="text-5xl text-warm-300 mb-4">💬</span>
+              <span className="text-5xl text-warm-300 mb-4">[chat]</span>
               <p className="text-sm text-warm-500">从左侧选择一个会话查看其对话记忆</p>
               <p className="text-xs text-warm-400 mt-1 max-w-md leading-relaxed">
                 对话记忆以追加模式维护，每次对话自动添加。长对话会自动压缩早期内容。

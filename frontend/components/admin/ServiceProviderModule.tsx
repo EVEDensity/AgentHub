@@ -85,7 +85,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
         </div>
         <div className="flex items-center gap-2">
           <button className="btn-secondary" onClick={() => props.setShowLocalAgentModal(true)}>
-            💻 接入本地 Agent
+            [laptop] 接入本地 Agent
           </button>
           <button className="btn-primary" onClick={() => props.setIsCreatingAgent(true)}>
             + 添加服务商
@@ -147,7 +147,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
           return (
             <div
               key={a.agentId}
-              className={`rounded-2xl border bg-white px-5 py-4 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-green-400' : 'border-warm-200'}`}
+              className={`rounded-2xl border bg-warm-100 px-5 py-4 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-green-400' : 'border-warm-200'}`}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0 flex items-start gap-3">
@@ -164,7 +164,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                       <span className="truncate text-2xl font-semibold text-warm-900">{a.agentId}</span>
                       {a.displayName && <span className="text-sm text-warm-500">{a.displayName}</span>}
                       {a.agentId === 'Architect' && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 px-2 py-0.5 text-xs font-semibold text-white shadow-sm ring-1 ring-amber-300/60" title="主 Agent（PM / PMO）：负责任务拆解、调度、降级、仲裁与人工交接">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-primary-500 px-2 py-0.5 text-xs font-semibold text-white" title="主 Agent（PM / PMO）：负责任务拆解、调度、降级、仲裁与人工交接">
                           <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 16h14l1.5-9-4.5 3-4-6-4 6L3.5 7 5 16Zm0 2v2h14v-2H5Z" /></svg>
                           主 Agent
                         </span>
@@ -173,7 +173,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                         {PLATFORM_LABELS[a.adapterType] || a.adapterType}
                       </span>
                       {a.adapterType?.startsWith('local_') && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">💻 本地</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">[laptop] 本地</span>
                       )}
                       {isDefaultAgent ? <span className="rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700">默认对话模型</span> : null}
                     </div>

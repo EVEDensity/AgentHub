@@ -78,7 +78,7 @@ export default function AgentEditModal(props: AgentEditModalProps): JSX.Element 
     >
       {/* Prevent propagation to keep modal open when clicking inside */}
       <div
-        className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl"
+        className="w-full max-w-2xl rounded-2xl bg-warm-100 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── Header ────────────────────────────────────────────── */}

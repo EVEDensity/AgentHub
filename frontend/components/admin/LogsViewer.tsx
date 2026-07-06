@@ -74,7 +74,7 @@ export default function LogsViewer({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-h4">📋 集中日志</h3>
+          <h3 className="text-h4">[clipboard] 集中日志</h3>
           <p className="text-xs text-gray-400 mt-1">Loki 日志聚合 · 按 service / level / trace_id 检索</p>
         </div>
         <div className="flex items-center gap-3">
@@ -128,7 +128,7 @@ export default function LogsViewer({
           </div>
           <div className="flex items-end">
             <button type="submit" className="btn-primary text-sm w-full" disabled={loading}>
-              {loading ? '⏳ 查询中...' : '🔍 搜索'}
+              {loading ? '[hourglass] 查询中...' : '[search] 搜索'}
             </button>
           </div>
         </div>
@@ -186,7 +186,7 @@ export default function LogsViewer({
 
         {logs.length === 0 && !loading && (
           <div className="text-center py-16 text-gray-400">
-            <p className="text-5xl mb-4">📋</p>
+            <p className="text-5xl mb-4">[clipboard]</p>
             <p className="text-lg mb-1">暂无日志</p>
             <p className="text-sm">
               {query || service || level

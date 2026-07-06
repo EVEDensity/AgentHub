@@ -406,7 +406,7 @@ function HtmlPreview({ htmlContent, slideCount, imageCount, textLength, totalCha
   return (
     <div className="flex flex-col h-full bg-[#f0f2f5]">
       {/* Metadata bar */}
-      <div className="flex items-center gap-4 px-4 py-2 bg-white border-b border-warm-150 text-xs text-warm-500 shrink-0">
+      <div className="flex items-center gap-4 px-4 py-2 bg-warm-100 border-b border-warm-150 text-xs text-warm-500 shrink-0">
         {slideCount != null && slideCount > 0 && (
           <span className="flex items-center gap-1">
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -468,7 +468,7 @@ function SelectionPopover({
 
   return (
     <div
-      className="fixed z-50 inline-flex items-center rounded-full border border-warm-200 bg-white shadow-lg hover:shadow-xl transition-shadow"
+      className="fixed z-50 inline-flex items-center rounded-full border border-warm-200 bg-warm-100 shadow-lg hover:shadow-xl transition-shadow"
       style={{
         left: Math.min(position.x, window.innerWidth - 220),
         top: Math.max(position.y - 48, 8),
@@ -1203,7 +1203,7 @@ function WorkspaceFileTree({
                 : `处理完成 ${uploadProgress.total} 个文件`}
             </span>
             <span className="text-xs text-primary-500">
-              ✓{uploadProgress.ok}{uploadProgress.fail > 0 ? ` ✗${uploadProgress.fail}` : ''}
+              [ok]{uploadProgress.ok}{uploadProgress.fail > 0 ? ` [no]${uploadProgress.fail}` : ''}
             </span>
           </div>
           <div className="h-1.5 bg-primary-200 rounded-full overflow-hidden">
@@ -1472,7 +1472,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
 
   // ── Render ──────────────────────────────────────────────────────────
   return (
-    <div className="flex h-full bg-white">
+    <div className="flex h-full bg-warm-100">
       {/* ── Workspace File Tree (left sidebar) ────────────────────── */}
       <WorkspaceFileTree
         width={treeWidthLive ?? treeWidth}
@@ -1540,7 +1540,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
               data-tab-id={tab.id}
               className={`flex items-center gap-1.5 px-3 py-2 cursor-pointer border-r border-warm-150 text-sm transition-colors select-none shrink-0 ${
                 activeTabId === tab.id
-                  ? 'bg-white text-warm-900 font-medium'
+                  ? 'bg-warm-100 text-warm-900 font-medium'
                   : 'bg-transparent text-warm-500 hover:bg-warm-100 hover:text-warm-700'
               }`}
               onClick={() => onSelectTab(tab.id)}
@@ -1579,7 +1579,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
         onMouseUp={handleMouseUp}
       >
         {!activeTab && (
-          <div className="flex h-full items-center justify-center bg-white">
+          <div className="flex h-full items-center justify-center bg-warm-100">
             <div className="text-center text-warm-400">
               <svg className="mx-auto mb-3 h-12 w-12 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -1593,7 +1593,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
         )}
 
         {activeTab && activeTab.state === 'loading' && (
-          <div className="flex h-full items-center justify-center bg-white">
+          <div className="flex h-full items-center justify-center bg-warm-100">
             <div className="flex flex-col items-center gap-3">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
               <span className="text-sm text-warm-400">加载中...</span>
@@ -1602,7 +1602,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
         )}
 
         {activeTab && activeTab.state === 'error' && (
-          <div className="flex h-full items-center justify-center bg-white">
+          <div className="flex h-full items-center justify-center bg-warm-100">
             <div className="text-center">
               <svg className="mx-auto mb-3 h-12 w-12 text-danger-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                 <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
@@ -1626,7 +1626,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
 
             {/* Markdown preview */}
             {activeTab.kind === 'file' && isMarkdownFile(activeTab.path) && (
-              <div className="markdown-container min-h-full min-w-0 bg-white p-6">
+              <div className="markdown-container min-h-full min-w-0 bg-warm-100 p-6">
                 <MarkdownRenderer content={activeTab.content || ''} references={activeReferences} />
               </div>
             )}
@@ -1664,7 +1664,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
                   truncated={activeTab.truncated}
                 />
               ) : (
-                <div className="flex h-full items-center justify-center bg-white">
+                <div className="flex h-full items-center justify-center bg-warm-100">
                   <div className="text-center text-warm-400">
                     <svg className="mx-auto mb-3 h-12 w-12 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                       <rect x="3" y="3" width="18" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
@@ -1694,7 +1694,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
                   references={activeReferences}
                 />
               ) : (
-                <div className="flex h-full items-center justify-center bg-white">
+                <div className="flex h-full items-center justify-center bg-warm-100">
                   <p className="text-sm text-warm-400">Diff 数据不可用</p>
                 </div>
               )
@@ -1702,7 +1702,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
 
             {/* Binary / too_large states */}
             {activeTab.state === 'binary' && (
-              <div className="flex h-full items-center justify-center bg-white">
+              <div className="flex h-full items-center justify-center bg-warm-100">
                 <div className="text-center text-warm-400">
                   <svg className="mx-auto mb-3 h-12 w-12 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <rect x="2" y="2" width="20" height="20" rx="2" /><path d="M12 8v4l2 2" />
@@ -1712,7 +1712,7 @@ const FilePreviewPanel = memo(function FilePreviewPanel({
               </div>
             )}
             {activeTab.state === 'too_large' && (
-              <div className="flex h-full items-center justify-center bg-white">
+              <div className="flex h-full items-center justify-center bg-warm-100">
                 <div className="text-center text-warm-400">
                   <svg className="mx-auto mb-3 h-12 w-12 opacity-30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />

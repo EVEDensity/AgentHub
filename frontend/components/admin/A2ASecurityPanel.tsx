@@ -104,7 +104,7 @@ export default function A2ASecurityPanel(): JSX.Element {
   return (
     <div className="space-y-6">
       {/* ── TLS Configuration ──────────────────────────────────────── */}
-      <div className="rounded-xl border border-warm-200 bg-white p-5">
+      <div className="rounded-xl border border-warm-200 bg-warm-100 p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-primary-500">lock</span>
@@ -201,7 +201,7 @@ export default function A2ASecurityPanel(): JSX.Element {
       </div>
 
       {/* ── Signature Verification ─────────────────────────────────── */}
-      <div className="rounded-xl border border-warm-200 bg-white p-5">
+      <div className="rounded-xl border border-warm-200 bg-warm-100 p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-primary-500">verified_user</span>

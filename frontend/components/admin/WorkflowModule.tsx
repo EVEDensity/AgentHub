@@ -240,7 +240,7 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
             key={tab.key}
             className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-medium transition-all ${
               subTab === tab.key
-                ? 'bg-white text-warm-800 shadow-sm'
+                ? 'bg-warm-100 text-warm-800 shadow-sm'
                 : 'text-warm-400 hover:text-warm-600'
             }`}
             onClick={() => { setSubTab(tab.key); setSelectedExecution(null); }}
@@ -339,7 +339,7 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
                               {wf.nodes.slice(0, 8).map((n) => (
                                 <span
                                   key={n.id}
-                                  className="inline-flex items-center gap-0.5 rounded-full border border-warm-150 bg-white px-2 py-0.5 text-[10px] text-warm-600"
+                                  className="inline-flex items-center gap-0.5 rounded-full border border-warm-150 bg-warm-100 px-2 py-0.5 text-[10px] text-warm-600"
                                 >
                                   <span className="material-symbols-outlined text-[11px]" style={{ color: nodeTypeColor(n.type) }}>
                                     {nodeTypeIcon(n.type)}
@@ -356,11 +356,11 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
                           {/* P1-4: Mini runtime stats */}
                           {wfStat && wfStat.totalRuns > 0 && (
                             <div className="mt-2 flex items-center gap-3 text-[10px] text-warm-400">
-                              <span>📊 {wfStat.totalRuns} 次运行</span>
+                              <span>[chart] {wfStat.totalRuns} 次运行</span>
                               <span style={{ color: wfStat.successRate >= 80 ? '#22A06B' : '#D97706' }}>
-                                ✅ {wfStat.successRate}% 成功率
+                                [check] {wfStat.successRate}% 成功率
                               </span>
-                              <span>⏱ 平均 {formatDuration(wfStat.avgDuration)}</span>
+                              <span>[timer] 平均 {formatDuration(wfStat.avgDuration)}</span>
                             </div>
                           )}
                         </div>
@@ -603,7 +603,7 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
                 const count = workflows.reduce((s, w) => s + (w.nodes || []).filter((n) => n.type === type).length, 0);
                 if (count === 0) return null;
                 return (
-                  <div key={type} className="flex items-center gap-1.5 rounded-lg border border-warm-150 bg-white px-3 py-1.5">
+                  <div key={type} className="flex items-center gap-1.5 rounded-lg border border-warm-150 bg-warm-100 px-3 py-1.5">
                     <span className="material-symbols-outlined text-[12px]" style={{ color: nodeTypeColor(type) }}>
                       {nodeTypeIcon(type)}
                     </span>
@@ -619,7 +619,7 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirmId !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="card w-full max-w-md p-6 shadow-xl">
             <h3 className="text-lg font-semibold text-warm-800">确认删除</h3>
             <p className="mt-2 text-sm text-warm-600">

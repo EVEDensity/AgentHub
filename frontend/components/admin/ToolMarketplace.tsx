@@ -118,7 +118,7 @@ function ToolDetailModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined text-[24px] text-primary-500">{cat.icon}</span>
@@ -166,7 +166,7 @@ function ToolDetailModal({
               <h4 className="text-xs font-semibold text-warm-700 mb-2">使用示例</h4>
               {tool.examples.map((ex, i) => (
                 <div key={i} className="rounded border border-warm-100 px-3 py-2 text-xs mb-2">
-                  <p className="text-warm-600">💬 {ex.user_question}</p>
+                  <p className="text-warm-600">[chat] {ex.user_question}</p>
                   <pre className="mt-1 text-[10px] bg-warm-50 p-2 rounded overflow-x-auto">
                     {JSON.stringify(ex.parameters, null, 2)}
                   </pre>
@@ -224,9 +224,9 @@ function SwaggerImportModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
-          <h3 className="text-lg font-semibold text-warm-900">📥 导入 Swagger/OpenAPI</h3>
+          <h3 className="text-lg font-semibold text-warm-900">[download] 导入 Swagger/OpenAPI</h3>
           <button className="rounded-lg px-3 py-1.5 text-sm text-warm-500 hover:bg-warm-100" onClick={onClose}>关闭</button>
         </div>
         <div className="px-6 py-4 space-y-4">
@@ -250,7 +250,7 @@ function SwaggerImportModal({
 
           <div className="relative">
             <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-warm-100" /></div>
-            <div className="relative flex justify-center"><span className="bg-white px-2 text-xs text-warm-400">或粘贴 JSON</span></div>
+            <div className="relative flex justify-center"><span className="bg-warm-100 px-2 text-xs text-warm-400">或粘贴 JSON</span></div>
           </div>
 
           <textarea
@@ -305,10 +305,10 @@ function ToolBindingModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[5vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-2xl rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <div>
-            <h3 className="text-lg font-semibold text-warm-900">🔧 工具绑定</h3>
+            <h3 className="text-lg font-semibold text-warm-900">[wrench] 工具绑定</h3>
             <p className="text-xs text-warm-500">Agent: {agentId} · 已选 {selected.size} 个工具</p>
           </div>
           <button className="rounded-lg px-3 py-1.5 text-sm text-warm-500 hover:bg-warm-100" onClick={onClose}>关闭</button>
@@ -391,10 +391,10 @@ export default function ToolMarketplace(): JSX.Element {
         </div>
         <div className="flex items-center gap-2">
           <button className="btn-secondary" onClick={() => setShowSwaggerImport(true)}>
-            📥 导入 Swagger
+            [download] 导入 Swagger
           </button>
           <button className="btn-primary" onClick={() => store.loadTools()}>
-            🔄 刷新
+            [refresh] 刷新
           </button>
         </div>
       </div>

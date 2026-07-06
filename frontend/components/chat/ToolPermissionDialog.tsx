@@ -40,11 +40,11 @@ const ToolPermissionDialog = memo(function ToolPermissionDialog({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-      <div className="mx-4 w-full max-w-md rounded-2xl border border-warm-200 bg-white shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="mx-4 w-full max-w-md rounded-2xl border border-warm-200 bg-warm-100 shadow-2xl">
         {/* Header */}
         <div className="flex items-center gap-3 border-b border-warm-100 px-5 py-4">
-          <span className="text-xl">🔐</span>
+          <span className="text-xl">[secure]</span>
           <div className="flex-1">
             <h3 className="text-base font-semibold text-warm-900">工具调用确认</h3>
             <p className="text-xs text-warm-500">Agent 需要您的授权才能继续执行</p>
@@ -82,7 +82,7 @@ const ToolPermissionDialog = memo(function ToolPermissionDialog({
               className="text-xs font-medium text-blue-600 hover:text-blue-700 transition"
               onClick={() => setExpanded(!expanded)}
             >
-              {expanded ? '▲ 隐藏参数' : '▼ 查看参数'}
+              {expanded ? '[up] 隐藏参数' : '[down] 查看参数'}
             </button>
             {expanded && (
               <pre className="mt-2 max-h-32 overflow-y-auto rounded-lg bg-warm-50 px-3 py-2 font-mono text-xs text-warm-700">
@@ -99,14 +99,14 @@ const ToolPermissionDialog = memo(function ToolPermissionDialog({
             onClick={() => handleDecision('deny')}
             disabled={deciding}
           >
-            ❌ 拒绝
+            [no] 拒绝
           </button>
           <button
             className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 transition disabled:opacity-50"
             onClick={() => handleDecision('allow')}
             disabled={deciding}
           >
-            ✅ 允许
+            [ok] 允许
           </button>
         </div>
       </div>

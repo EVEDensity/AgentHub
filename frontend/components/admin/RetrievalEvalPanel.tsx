@@ -279,7 +279,7 @@ export default function RetrievalEvalPanel({ authHeaders, setNotice }: Props): J
                 {metricCards.map((mc) => (
                   <div
                     key={mc.label}
-                    className="rounded-lg border border-warm-150 bg-white px-3 py-2 shadow-card transition-all hover:shadow-card-hover hover:border-primary-200"
+                    className="rounded-lg border border-warm-150 bg-warm-100 px-3 py-2 shadow-card transition-all hover:shadow-card-hover hover:border-primary-200"
                     title={mc.desc}
                   >
                     <div className="text-[10px] font-semibold text-warm-400 uppercase tracking-wider">
@@ -316,7 +316,7 @@ export default function RetrievalEvalPanel({ authHeaders, setNotice }: Props): J
                 className={`rounded-lg border px-3 py-2.5 flex items-start gap-3 transition-colors ${
                   r.relevant
                     ? 'border-green-200 bg-green-50/50'
-                    : 'border-warm-100 bg-white'
+                    : 'border-warm-100 bg-warm-100'
                 }`}
               >
                 {/* Rank */}

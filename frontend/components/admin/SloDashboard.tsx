@@ -22,7 +22,7 @@ const SLO_TARGETS: SLOTarget[] = [
     description: 'HTTP 5xx 错误率低于 0.1%',
     target: 99.9,
     unit: '%',
-    icon: '🟢',
+    icon: '[green]',
     current: null,
     status: 'loading',
   },
@@ -32,7 +32,7 @@ const SLO_TARGETS: SLOTarget[] = [
     description: '99% 的请求在 2 秒内完成',
     target: 2.0,
     unit: 's',
-    icon: '⚡',
+    icon: '[bolt]',
     current: null,
     status: 'loading',
   },
@@ -42,7 +42,7 @@ const SLO_TARGETS: SLOTarget[] = [
     description: 'IAM Token 签发成功率 > 99.99%',
     target: 99.99,
     unit: '%',
-    icon: '🔐',
+    icon: '[lock]',
     current: null,
     status: 'loading',
   },
@@ -52,7 +52,7 @@ const SLO_TARGETS: SLOTarget[] = [
     description: 'JWT 验证成功率 > 99.9%',
     target: 99.9,
     unit: '%',
-    icon: '✅',
+    icon: '[check]',
     current: null,
     status: 'loading',
   },
@@ -257,9 +257,9 @@ export default function SloDashboard(): JSX.Element {
     : overallStatus === 'fail' ? 'text-red-600'
     : 'text-warm-400';
 
-  const overallLabel = overallStatus === 'ok' ? '✅ 全部 SLO 达标'
-    : overallStatus === 'warn' ? '⚠️ 部分 SLO 接近阈值'
-    : overallStatus === 'fail' ? '🚨 SLO 未达标'
+  const overallLabel = overallStatus === 'ok' ? '[check] 全部 SLO 达标'
+    : overallStatus === 'warn' ? '[warn] 部分 SLO 接近阈值'
+    : overallStatus === 'fail' ? '[alarm] SLO 未达标'
     : '… 评估中';
 
   return (
@@ -267,7 +267,7 @@ export default function SloDashboard(): JSX.Element {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-h3">🎯 SLA/SLO 仪表板</h2>
+          <h2 className="text-h3">[target] SLA/SLO 仪表板</h2>
           <p className="mt-1 text-sm text-warm-500">
             服务等级目标监控 & 错误预算
           </p>
@@ -355,7 +355,7 @@ export default function SloDashboard(): JSX.Element {
 
       {/* Error budget burn-down */}
       <div className="card p-5">
-        <h3 className="text-sm font-semibold text-warm-800 mb-4">📉 错误预算燃尽图 (30天)</h3>
+        <h3 className="text-sm font-semibold text-warm-800 mb-4">[down] 错误预算燃尽图 (30天)</h3>
         <p className="text-xs text-warm-400 mb-4">
           错误预算 = SLO 目标值 − 实际值。预算耗尽意味着当月不能再容忍更多故障，需要冻结变更。
         </p>
@@ -373,7 +373,7 @@ export default function SloDashboard(): JSX.Element {
                 <div className="flex justify-between text-xs mb-1">
                   <span className="text-warm-600">{slo.icon} {slo.name}</span>
                   <span className={`font-medium ${budget <= 0 ? 'text-red-600' : 'text-warm-600'}`}>
-                    {budget <= 0 ? '预算已耗尽 ⚠️' : `剩余 ${slo.key === 'p99_latency' ? `${(budget * 1000).toFixed(0)}ms` : `${budget.toFixed(3)}%`}`}
+                    {budget <= 0 ? '预算已耗尽 [warn]' : `剩余 ${slo.key === 'p99_latency' ? `${(budget * 1000).toFixed(0)}ms` : `${budget.toFixed(3)}%`}`}
                   </span>
                 </div>
                 <div className="h-2 w-full rounded-full bg-warm-100 overflow-hidden">
@@ -392,7 +392,7 @@ export default function SloDashboard(): JSX.Element {
 
       {/* SLA summary table */}
       <div className="card p-5">
-        <h3 className="text-sm font-semibold text-warm-800 mb-3">📋 SLA 达标情况</h3>
+        <h3 className="text-sm font-semibold text-warm-800 mb-3">[clipboard] SLA 达标情况</h3>
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-warm-100 text-left text-xs uppercase tracking-wide text-warm-500">

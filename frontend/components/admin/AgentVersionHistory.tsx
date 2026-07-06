@@ -266,7 +266,7 @@ function DiffPanel({
   onClose: () => void;
 }): JSX.Element {
   return (
-    <div className="rounded-xl border border-warm-200 bg-white overflow-hidden">
+    <div className="rounded-xl border border-warm-200 bg-warm-100 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-warm-50 border-b border-warm-200">
         <div className="flex items-center gap-2">
@@ -400,7 +400,7 @@ function VersionDetail({
   );
 
   return (
-    <div className="rounded-xl border border-warm-200 bg-white overflow-hidden">
+    <div className="rounded-xl border border-warm-200 bg-warm-100 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-warm-50 border-b border-warm-200">
         <div className="flex items-center gap-2">
@@ -546,7 +546,7 @@ export default function AgentVersionHistory({ agentId, onClose }: Props): JSX.El
   const isLoading = loading || diffLoading;
 
   return (
-    <div className="bg-white rounded-2xl border border-warm-200 shadow-sm overflow-hidden">
+    <div className="bg-warm-100 rounded-2xl border border-warm-200 shadow-sm overflow-hidden">
       {/* ── Header ─────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-warm-200 bg-gradient-to-r from-warm-50 to-white">
         <div className="flex items-center gap-2.5">
@@ -570,14 +570,14 @@ export default function AgentVersionHistory({ agentId, onClose }: Props): JSX.El
           {/* Mode toggle */}
           <div className="flex rounded-lg bg-warm-100 p-0.5">
             <button
-              className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-colors ${mode === 'timeline' ? 'bg-white text-warm-800 shadow-sm' : 'text-warm-500'}`}
+              className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-colors ${mode === 'timeline' ? 'bg-warm-100 text-warm-800 shadow-sm' : 'text-warm-500'}`}
               onClick={() => { setMode('timeline'); setSelectedVersion(null); clearDiff(); }}
             >
               时间线
             </button>
             {currentDiff && (
               <button
-                className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-colors ${mode === 'diff' ? 'bg-white text-warm-800 shadow-sm' : 'text-warm-500'}`}
+                className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-colors ${mode === 'diff' ? 'bg-warm-100 text-warm-800 shadow-sm' : 'text-warm-500'}`}
                 onClick={() => setMode('diff')}
               >
                 对比结果

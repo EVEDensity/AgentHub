@@ -230,7 +230,7 @@ export default function EvalDashboard(): JSX.Element {
             onClick={() => setActiveTab(tab.key)}
             className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
               activeTab === tab.key
-                ? 'bg-white text-primary-600 border border-b-white border-warm-200 -mb-[1px]'
+                ? 'bg-warm-100 text-primary-600 border border-b-white border-warm-200 -mb-[1px]'
                 : 'text-warm-500 hover:text-warm-700 hover:bg-warm-50'
             }`}
           >

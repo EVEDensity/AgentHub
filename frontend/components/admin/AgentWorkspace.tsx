@@ -6,11 +6,11 @@ import type { WorkspaceTab, WorkspaceOpEvent } from '../../types';
 type TabType = WorkspaceTab['type'];
 
 const TAB_DEFS: { key: TabType; label: string; icon: string; desc: string }[] = [
-  { key: 'code', label: '代码', icon: '💻', desc: 'Agent 编写和编辑代码' },
-  { key: 'document', label: '文档', icon: '📄', desc: '生成文档和报告' },
-  { key: 'canvas', label: '画布', icon: '🎨', desc: '可视化图表与架构' },
-  { key: 'data', label: '数据', icon: '📊', desc: '数据探索与分析' },
-  { key: 'collaboration', label: '协作', icon: '👥', desc: '人机协作操作历史' },
+  { key: 'code', label: '代码', icon: '[laptop]', desc: 'Agent 编写和编辑代码' },
+  { key: 'document', label: '文档', icon: '[doc]', desc: '生成文档和报告' },
+  { key: 'canvas', label: '画布', icon: '[palette]', desc: '可视化图表与架构' },
+  { key: 'data', label: '数据', icon: '[chart]', desc: '数据探索与分析' },
+  { key: 'collaboration', label: '协作', icon: '[people]', desc: '人机协作操作历史' },
 ];
 
 // Mock workspace tabs
@@ -28,18 +28,18 @@ const MOCK_OPS: WorkspaceOpEvent[] = [
   { id: 'op-2', agent_id: 'coder-agent', operation: 'file:write', target: 'main.py', detail: '实现了数据处理函数', timestamp: '2026-07-02T10:02:15Z' },
   { id: 'op-3', agent_id: 'human:user', operation: 'file:edit', target: 'main.py', detail: '修改了 numpy 导入方式', timestamp: '2026-07-02T10:05:30Z' },
   { id: 'op-4', agent_id: 'coder-agent', operation: 'file:write', target: 'app.tsx', detail: '创建了 React 组件', timestamp: '2026-07-02T10:08:00Z' },
-  { id: 'op-5', agent_id: 'reviewer-agent', operation: 'file:review', target: 'main.py', detail: '代码审查通过 ✅', timestamp: '2026-07-02T10:12:00Z' },
+  { id: 'op-5', agent_id: 'reviewer-agent', operation: 'file:review', target: 'main.py', detail: '代码审查通过 [check]', timestamp: '2026-07-02T10:12:00Z' },
   { id: 'op-6', agent_id: 'coder-agent', operation: 'command:run', target: 'pip install numpy', detail: '安装依赖成功 (exit=0)', timestamp: '2026-07-02T10:15:00Z' },
   { id: 'op-7', agent_id: 'summarizer-agent', operation: 'doc:generate', target: 'README.md', detail: '生成了项目文档', timestamp: '2026-07-02T10:20:00Z' },
 ];
 
 const OP_ICONS: Record<string, string> = {
-  'file:create': '📄',
-  'file:write': '✏️',
-  'file:edit': '🔧',
-  'file:review': '🔍',
-  'command:run': '⚡',
-  'doc:generate': '📝',
+  'file:create': '[doc]',
+  'file:write': '[pencil]',
+  'file:edit': '[wrench]',
+  'file:review': '[search]',
+  'command:run': '[bolt]',
+  'doc:generate': '[memo]',
 };
 
 const AGENT_COLORS: Record<string, string> = {
@@ -83,7 +83,7 @@ export default function AgentWorkspace({
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <h3 className="text-h4">🎯 Agent 多模态工作区</h3>
+        <h3 className="text-h4">[target] Agent 多模态工作区</h3>
         <p className="text-xs text-gray-400 mt-1">代码 · 文档 · 画布 · 数据 · 协作 — Agent 与人类共同工作的统一界面</p>
       </div>
 
@@ -110,7 +110,7 @@ export default function AgentWorkspace({
         <div className="grid grid-cols-[220px_1fr] gap-4" style={{ minHeight: '400px' }}>
           {/* File tree */}
           <div className="card p-3 space-y-1">
-            <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">📁 工作区文件</h4>
+            <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">[folder] 工作区文件</h4>
             {MOCK_TABS.filter((t) => t.type === 'code').map((tab) => (
               <button
                 key={tab.id}
@@ -121,7 +121,7 @@ export default function AgentWorkspace({
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                <span className="text-xs">{tab.language === 'python' ? '🐍' : tab.language === 'typescript' ? '📘' : '📄'}</span>
+                <span className="text-xs">{tab.language === 'python' ? '[snake]' : tab.language === 'typescript' ? '[book]' : '[doc]'}</span>
                 <span className="truncate font-mono">{tab.label}</span>
                 {tab.isDirty && <span className="text-amber-500 text-[10px]">●</span>}
               </button>
@@ -135,13 +135,13 @@ export default function AgentWorkspace({
                 }}
                 className="w-full text-left text-xs px-2 py-1.5 rounded text-gray-500 hover:bg-gray-50"
               >
-                🤖 让 Agent 生成代码
+                [bot] 让 Agent 生成代码
               </button>
               <button
                 onClick={() => handleSelectFile(MOCK_TABS[0])}
                 className="w-full text-left text-xs px-2 py-1.5 rounded text-gray-500 hover:bg-gray-50"
               >
-                📥 查看当前文件
+                [inbox] 查看当前文件
               </button>
             </div>
           </div>
@@ -159,11 +159,11 @@ export default function AgentWorkspace({
                   <div className="flex items-center gap-2">
                     {!isEditing ? (
                       <button onClick={() => setIsEditing(true)} className="btn-ghost text-xs">
-                        ✏️ 人工接管编辑
+                        [pencil] 人工接管编辑
                       </button>
                     ) : (
                       <>
-                        <button onClick={handleSaveEdit} className="btn-primary text-xs">💾 保存</button>
+                        <button onClick={handleSaveEdit} className="btn-primary text-xs">[save] 保存</button>
                         <button onClick={() => { setIsEditing(false); setEditContent(selectedFile.content || ''); }} className="btn-ghost text-xs">取消</button>
                       </>
                     )}
@@ -187,7 +187,7 @@ export default function AgentWorkspace({
             ) : (
               <div className="flex-1 flex items-center justify-center text-gray-400">
                 <div className="text-center">
-                  <p className="text-4xl mb-3">💻</p>
+                  <p className="text-4xl mb-3">[laptop]</p>
                   <p>从左侧选择文件查看或编辑</p>
                 </div>
               </div>
@@ -203,16 +203,16 @@ export default function AgentWorkspace({
             <div key={tab.id} className="card p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-lg">{tab.type === 'document' ? '📄' : '📊'}</span>
+                  <span className="text-lg">{tab.type === 'document' ? '[doc]' : '[chart]'}</span>
                   <h4 className="font-semibold text-gray-800 font-mono text-sm">{tab.label}</h4>
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">{tab.type}</span>
                 </div>
                 <div className="flex gap-2">
                   <button className="btn-ghost text-xs" onClick={() => handleSelectFile(tab)}>
-                    👁️ 预览
+                    [eye] 预览
                   </button>
                   <button className="btn-ghost text-xs" onClick={() => _setNotice('Agent 已收到文档更新指令')}>
-                    🤖 Agent 编辑
+                    [bot] Agent 编辑
                   </button>
                 </div>
               </div>
@@ -224,7 +224,7 @@ export default function AgentWorkspace({
 
           <div className="card p-4 border-2 border-dashed border-gray-200 flex items-center justify-center py-8">
             <button className="text-gray-400 hover:text-gray-600 transition-colors" onClick={() => _setNotice('Agent 开始生成新文档...')}>
-              <span className="text-3xl block mb-2">📝</span>
+              <span className="text-3xl block mb-2">[memo]</span>
               <span className="text-sm">+ Agent 生成新文档</span>
             </button>
           </div>
@@ -235,12 +235,12 @@ export default function AgentWorkspace({
       {activeTab === 'canvas' && (
         <div className="card p-6" style={{ minHeight: '400px' }}>
           <div className="flex items-center justify-between mb-4">
-            <h4 className="font-semibold text-gray-700">🎨 可视化画布</h4>
+            <h4 className="font-semibold text-gray-700">[palette] 可视化画布</h4>
             <div className="flex gap-2">
-              <button className="btn-ghost text-xs">📊 架构图</button>
-              <button className="btn-ghost text-xs">🔄 流程图</button>
-              <button className="btn-ghost text-xs">📈 时序图</button>
-              <button className="btn-primary text-xs" onClick={() => _setNotice('Agent 正在生成可视化图表...')}>🤖 自动生成</button>
+              <button className="btn-ghost text-xs">[chart] 架构图</button>
+              <button className="btn-ghost text-xs">[sync] 流程图</button>
+              <button className="btn-ghost text-xs">[trend] 时序图</button>
+              <button className="btn-primary text-xs" onClick={() => _setNotice('Agent 正在生成可视化图表...')}>[bot] 自动生成</button>
             </div>
           </div>
           <div className="bg-gray-50 rounded-lg flex items-center justify-center" style={{ minHeight: '350px' }}>
@@ -248,16 +248,16 @@ export default function AgentWorkspace({
               {/* Simple text-based architecture diagram */}
               <pre className="text-xs text-gray-500 font-mono leading-relaxed mb-4">
 {`┌─────────────────────────────────────┐
-│           🏗️ AgentHub Platform       │
+│           [build] AgentHub Platform  │
 ├──────────┬──────────┬────────────────┤
 │ Gateway  │ ReAct    │ AgentNet       │
 │  :8081   │ Orch.    │  (P2P Mesh)    │
 ├──────────┼──────────┼────────────────┤
 │ Session  │ Tool-Perm│ Audit          │
 ├──────────┴──────────┴────────────────┤
-│   📦 Docker Sandbox (J2)             │
-│   🪪 Agent Identity (J1)             │
-│   📄 Multimodal Workspace (J3)       │
+│   [package] Docker Sandbox (J2)      │
+│   [id] Agent Identity (J1)           │
+│   [doc] Multimodal Workspace (J3)    │
 └─────────────────────────────────────┘`}
               </pre>
               <p className="text-xs text-gray-400">Agent 可自动生成架构图、流程图和时序图</p>
@@ -269,7 +269,7 @@ export default function AgentWorkspace({
       {/* ── Data Tab ──────────────────────────────────────────────── */}
       {activeTab === 'data' && (
         <div className="card p-4">
-          <h4 className="font-semibold text-gray-700 mb-4">📊 数据探索</h4>
+          <h4 className="font-semibold text-gray-700 mb-4">[chart] 数据探索</h4>
           <div className="overflow-auto">
             <table className="w-full text-sm">
               <thead>
@@ -293,9 +293,9 @@ export default function AgentWorkspace({
             </table>
           </div>
           <div className="flex gap-2 mt-4 pt-4 border-t border-gray-100">
-            <button className="btn-ghost text-xs" onClick={() => _setNotice('Agent 开始分析数据...')}>📈 可视化</button>
-            <button className="btn-ghost text-xs" onClick={() => _setNotice('Agent 正在执行统计分析...')}>📊 统计分析</button>
-            <button className="btn-ghost text-xs">📥 导出 CSV</button>
+            <button className="btn-ghost text-xs" onClick={() => _setNotice('Agent 开始分析数据...')}>[trend] 可视化</button>
+            <button className="btn-ghost text-xs" onClick={() => _setNotice('Agent 正在执行统计分析...')}>[chart] 统计分析</button>
+            <button className="btn-ghost text-xs">[inbox] 导出 CSV</button>
           </div>
         </div>
       )}
@@ -305,7 +305,7 @@ export default function AgentWorkspace({
         <div className="grid grid-cols-1 gap-4">
           {/* Timeline toggle */}
           <div className="flex items-center justify-between">
-            <h4 className="font-semibold text-gray-700">👥 操作时间线</h4>
+            <h4 className="font-semibold text-gray-700">[people] 操作时间线</h4>
             <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
               <input
                 type="checkbox"
@@ -319,7 +319,7 @@ export default function AgentWorkspace({
 
           {/* Lock/unlock notice */}
           <div className="card p-4 bg-amber-50/50 border border-amber-200 flex items-center gap-3">
-            <span className="text-2xl">🔒</span>
+            <span className="text-2xl">[lock]</span>
             <div>
               <p className="text-sm font-medium text-amber-700">Agent 锁定模式</p>
               <p className="text-xs text-amber-600">
@@ -327,7 +327,7 @@ export default function AgentWorkspace({
               </p>
             </div>
             <button className="btn-primary text-xs shrink-0 ml-auto" onClick={() => _setNotice('Agent 锁已释放，您现在可以编辑文件')}>
-              🔓 人工接管
+              [unlock] 人工接管
             </button>
           </div>
 
@@ -346,7 +346,7 @@ export default function AgentWorkspace({
                       className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-xs"
                       style={{ backgroundColor: (AGENT_COLORS[op.agent_id] || '#9ca3af') + '20', color: AGENT_COLORS[op.agent_id] }}
                     >
-                      {OP_ICONS[op.operation] || '📌'}
+                      {OP_ICONS[op.operation] || '[pin]'}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">

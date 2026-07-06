@@ -203,19 +203,19 @@ export default function AgentCanvas(props?:{
 
  return <div className={`flex ${embedded?'h-full':'h-screen'} bg-[#F8F7F4] text-warm-800`}>
   {/* Left Sidebar — Blocks */}
-  <aside className="flex w-[272px] flex-shrink-0 flex-col border-r border-warm-150 bg-white">
+    <aside className="flex w-[272px] flex-shrink-0 flex-col border-r border-warm-150 bg-warm-100">
    <div className="border-b border-warm-150 px-6 py-6">
     <div className="text-lg font-semibold tracking-tight text-warm-800">Agent Flow</div>
     <p className="mt-1 text-xs text-warm-400">低代码 Agent 连接画布</p>
     {!embedded&&<>
-     <a className="btn-ghost mt-4 inline-flex px-0 text-xs text-primary-500" href="/admin?menu=工作流">← 返回工作流管理</a>
-     <a className="btn-ghost mt-1 inline-flex px-0 text-xs text-warm-400" href="/">→ 返回会话</a>
+      <a className="btn-ghost mt-4 inline-flex px-0 text-xs text-primary-500" href="/admin?menu=工作流">[left] 返回工作流管理</a>
+      <a className="btn-ghost mt-1 inline-flex px-0 text-xs text-warm-400" href="/">[right] 返回会话</a>
     </>}
-    {embedded&&<a className="btn-ghost mt-4 inline-flex px-0 text-xs text-primary-500" href="/canvas" target="_blank">全屏画布 →</a>}
+     {embedded&&<a className="btn-ghost mt-4 inline-flex px-0 text-xs text-primary-500" href="/canvas" target="_blank">全屏画布 [right]</a>}
    </div>
    <div className="flex-1 overflow-y-auto px-4 py-5">
-    <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-warm-400">节点类型</div>
-    <div className="space-y-2.5">{lib.map(b=><button key={b.type} className="group w-full rounded-xl border border-warm-150 bg-white p-4 text-left transition-all duration-200 hover:border-primary-200 hover:shadow-card hover:-translate-y-px" onClick={()=>add(b)}>
+      <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-warm-400">节点类型</div>
+     <div className="space-y-2.5">{lib.map(b=><button key={b.type} className="group w-full rounded-xl border border-warm-150 bg-warm-100 p-4 text-left transition-all duration-200 hover:border-primary-200 hover:shadow-card hover:-translate-y-px" onClick={()=>add(b)}>
       <div className="flex items-center gap-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-lg" style={{background:`${b.color}14`}}>
           <span className="material-symbols-outlined text-[18px]" style={{color:b.color}}>{b.icon}</span>
@@ -236,7 +236,7 @@ export default function AgentCanvas(props?:{
   {/* Main Area */}
   <main className="flex min-w-0 flex-1 flex-col">
    {/* Toolbar */}
-   <header className="flex h-14 items-center justify-between border-b border-warm-150 bg-white px-5">
+    <header className="flex h-14 items-center justify-between border-b border-warm-150 bg-warm-100 px-5">
     <div>
      {embedded?<div className="flex items-center gap-3">
       <input className="input-field w-36 text-sm" placeholder="工作流名称" value={wfName} onChange={e=>setWfName(e.target.value)}/>
@@ -338,14 +338,14 @@ export default function AgentCanvas(props?:{
       </Layer>
      </Stage>
      {/* Floating status bar */}
-     <div className="pointer-events-none absolute bottom-4 left-4 rounded-xl border border-warm-150 bg-white/90 backdrop-blur-sm px-4 py-2.5 text-[11px] leading-relaxed text-warm-500 shadow-card">
+      <div className="pointer-events-none absolute bottom-4 left-4 border border-warm-200 bg-warm-100 px-4 py-2.5 text-[11px] leading-relaxed text-warm-500 shadow-card">
       拖动画布平移 · 滚轮缩放 · 点击节点选择 · 再点目标节点连线<br/>
       当前连线源：<span className="font-semibold text-primary-500">{from||'无'}</span>
      </div>
     </section>
 
     {/* Right Sidebar — Properties */}
-    <aside className="w-[288px] flex-shrink-0 border-l border-warm-150 bg-white flex flex-col">
+    <aside className="w-[288px] flex-shrink-0 border-l border-warm-150 bg-warm-100 flex flex-col">
      <div className="border-b border-warm-150 px-5 py-4">
       <div className="text-sm font-semibold text-warm-800">属性面板</div>
       <div className="mt-0.5 text-[11px] text-warm-400">Selection Inspector</div>

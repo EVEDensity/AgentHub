@@ -2,8 +2,6 @@
 
 import { useState, type JSX, type InputHTMLAttributes } from 'react';
 
-// ── Types ─────────────────────────────────────────────────────────────
-
 export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
   label?: string;
   hint?: string;
@@ -16,17 +14,11 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   size?: 'sm' | 'md' | 'lg';
 }
 
-// ── Size styles ───────────────────────────────────────────────────────
-
 const SIZE_STYLES = {
   sm: 'text-xs py-1.5',
   md: 'text-sm py-2',
   lg: 'text-base py-2.5',
 };
-
-const ICON_SIZE = { sm: 'text-[12px]', md: 'text-[14px]', lg: 'text-[16px]' };
-
-// ── Component ─────────────────────────────────────────────────────────
 
 export function Input({
   label,
@@ -53,7 +45,7 @@ export function Input({
 
   const borderClass = error
     ? 'border-danger-300 focus:border-danger-400 focus:ring-danger-200'
-    : 'border-warm-200 focus:border-primary-400 focus:ring-primary-200';
+    : 'border-warm-200 focus:border-primary-500 focus:ring-primary-500';
 
   const isFocused = focused ? 'ring-2 ring-offset-0' : '';
 
@@ -66,13 +58,13 @@ export function Input({
       )}
       <div className="relative">
         {hasLeftIcon && (
-          <span className={`material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none ${ICON_SIZE[size]}`}>
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none text-sm">
             {icon}
           </span>
         )}
         <input
           id={inputId}
-          className={`w-full rounded-lg bg-white transition-all duration-200 placeholder:text-warm-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-warm-50
+          className={`w-full bg-warm-100 transition-colors placeholder:text-warm-400 disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-warm-50
             ${SIZE_STYLES[size]}
             ${hasLeftIcon ? 'pl-9' : 'pl-3'}
             ${hasRightIcon ? 'pr-9' : 'pr-3'}
@@ -88,14 +80,14 @@ export function Input({
         {clearable && value && (
           <button
             type="button"
-            className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-warm-300 hover:text-warm-500 ${ICON_SIZE[size]}`}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-warm-400 hover:text-warm-500 text-sm"
             onClick={() => onClear?.()}
           >
-            <span className="material-symbols-outlined">close</span>
+            ✕
           </button>
         )}
         {!clearable && icon && iconPosition === 'right' && (
-          <span className={`material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none ${ICON_SIZE[size]}`}>
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-warm-400 pointer-events-none text-sm">
             {icon}
           </span>
         )}

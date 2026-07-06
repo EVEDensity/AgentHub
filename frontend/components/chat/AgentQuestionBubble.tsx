@@ -47,7 +47,7 @@ const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreamin
 
   return (
     <div className="mb-4 flex justify-start">
-      <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 shadow-sm">
+      <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-warm-100 border border-warm-200 shadow-sm">
         {/* Header */}
         <div className="mb-2 flex items-center gap-2 text-xs opacity-80">
           <HelpCircle className="h-3.5 w-3.5 text-indigo-500" />
@@ -76,7 +76,7 @@ const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreamin
                   ? 'bg-indigo-500 text-white shadow-sm'
                   : submitted
                     ? 'bg-warm-100 text-warm-400 cursor-not-allowed'
-                    : 'bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 active:scale-[0.97] shadow-sm'
+                    : 'bg-warm-100 border border-indigo-200 text-indigo-700 hover:bg-indigo-50 hover:border-indigo-400 active:scale-[0.97] shadow-sm'
               }`}
               title={opt.description}
             >
@@ -93,7 +93,7 @@ const AgentQuestionBubble = memo(function AgentQuestionBubble({ data, isStreamin
               className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
                 showCustom
                   ? 'bg-warm-100 text-warm-600 border border-warm-200'
-                  : 'bg-white border border-dashed border-warm-300 text-warm-500 hover:border-warm-400'
+                  : 'bg-warm-100 border border-dashed border-warm-300 text-warm-500 hover:border-warm-400'
               }`}
             >
               <MessageSquare className="h-3.5 w-3.5" />

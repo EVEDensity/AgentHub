@@ -49,7 +49,7 @@ export default function ApiKeyManager(): JSX.Element {
       {/* Create modal */}
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={() => setShowCreate(false)}>
-          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
               <h3 className="text-lg font-semibold text-warm-900">🔑 创建 API Key</h3>
               <button className="rounded-lg px-3 py-1.5 text-sm text-warm-500 hover:bg-warm-100" onClick={() => setShowCreate(false)}>关闭</button>
@@ -61,7 +61,7 @@ export default function ApiKeyManager(): JSX.Element {
                 <div className="rounded-xl bg-green-50 border border-green-200 p-4 text-center">
                   <p className="text-sm font-medium text-green-800">✅ API Key 创建成功</p>
                   <p className="text-xs text-green-600 mt-1">请立即复制密钥，关闭后将无法再次查看。</p>
-                  <div className="mt-3 bg-white rounded-lg border border-green-200 px-4 py-3 font-mono text-sm text-green-900 break-all select-all">
+                  <div className="mt-3 bg-warm-100 rounded-lg border border-green-200 px-4 py-3 font-mono text-sm text-green-900 break-all select-all">
                     {createdKey.fullKey}
                   </div>
                   <div className="mt-3 flex gap-2 justify-center">

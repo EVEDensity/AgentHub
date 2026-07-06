@@ -108,7 +108,7 @@ export default function AgentIdentityCard({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-h4">🪪 Agent 数字身份</h3>
+          <h3 className="text-h4">[id] Agent 数字身份</h3>
           <p className="text-xs text-gray-400 mt-1">管理 Agent 的邮箱、SSH 密钥和 OAuth2 凭证</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">
@@ -158,7 +158,7 @@ export default function AgentIdentityCard({
               onClick={() => setExpandedId(expandedId === ident.agent_id ? null : ident.agent_id)}
             >
               <div className="flex items-center gap-3">
-                <span className="text-2xl">🪪</span>
+                <span className="text-2xl">[id]</span>
                 <div>
                   <h4 className="font-semibold text-gray-800 font-mono text-sm">{ident.agent_id}</h4>
                   <p className="text-xs text-gray-400">{ident.email || '(未分配邮箱)'}</p>
@@ -168,7 +168,7 @@ export default function AgentIdentityCard({
                 <span className={`text-xs px-2 py-1 rounded-full border font-medium ${STATUS_COLORS[ident.status] || 'bg-gray-50 text-gray-500'}`}>
                   {ident.status}
                 </span>
-                <span className="text-gray-300 text-xs">{expandedId === ident.agent_id ? '▲' : '▼'}</span>
+                <span className="text-gray-300 text-xs">{expandedId === ident.agent_id ? '[up]' : '[down]'}</span>
               </div>
             </div>
 
@@ -178,13 +178,13 @@ export default function AgentIdentityCard({
                 {/* Quick actions */}
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => handleAction(ident.agent_id, 'email')} className="btn-ghost text-xs">
-                    📧 生成邮箱
+                    [mail] 生成邮箱
                   </button>
                   <button onClick={() => handleAction(ident.agent_id, 'ssh')} className="btn-ghost text-xs">
-                    🔑 生成 SSH
+                    [key] 生成 SSH
                   </button>
                   <button onClick={() => handleAction(ident.agent_id, 'oauth2')} className="btn-ghost text-xs">
-                    🔐 设置 OAuth2
+                    [lock] 设置 OAuth2
                   </button>
                   <select
                     value={ident.status}
@@ -199,7 +199,7 @@ export default function AgentIdentityCard({
                     onClick={() => handleDelete(ident.agent_id)}
                     className="btn-ghost text-xs text-red-500 hover:text-red-700"
                   >
-                    🗑️ 删除
+                    [delete] 删除
                   </button>
                 </div>
 
@@ -237,7 +237,7 @@ export default function AgentIdentityCard({
 
         {identities.length === 0 && !showCreate && (
           <div className="text-center py-16 text-gray-400">
-            <p className="text-5xl mb-4">🪪</p>
+            <p className="text-5xl mb-4">[id]</p>
             <p className="text-lg mb-1">暂无 Agent 数字身份</p>
             <p className="text-sm">创建身份后，Agent 将拥有邮箱、SSH 和 OAuth2 凭证</p>
           </div>

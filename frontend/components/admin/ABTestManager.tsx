@@ -78,7 +78,7 @@ function SignificanceBadge({ significance }: { significance: number }) {
 function WinnerBadge({ variantId, confidence }: { variantId: string; confidence: number }) {
   return (
     <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold border border-green-200">
-      <span className="text-[14px]">🏆</span>
+      <span className="text-[14px]">[trophy]</span>
       Variant {variantId} 胜出 ({confidence.toFixed(0)}%)
     </span>
   );
@@ -128,10 +128,10 @@ function VariantMetricsCard({
 }) {
   if (!metrics) return null;
   return (
-    <div className={`rounded-xl border p-4 ${isWinner ? 'border-green-300 bg-green-50/50' : 'border-warm-200 bg-white'}`}>
+    <div className={`rounded-xl border p-4 ${isWinner ? 'border-green-300 bg-green-50/50' : 'border-warm-200 bg-warm-100'}`}>
       <div className="flex items-center gap-2 mb-3">
         <h4 className="text-sm font-semibold text-warm-800">Variant {label}</h4>
-        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">🏆 胜出</span>}
+        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">[trophy] 胜出</span>}
       </div>
       <div className="space-y-2.5">
         <MetricRow label="请求数" value={metrics.requests.toLocaleString()} />
@@ -174,10 +174,10 @@ function BackendVariantCard({
   isWinner?: boolean;
 }) {
   return (
-    <div className={`rounded-xl border p-4 ${isWinner ? 'border-green-300 bg-green-50/50' : 'border-warm-200 bg-white'}`}>
+    <div className={`rounded-xl border p-4 ${isWinner ? 'border-green-300 bg-green-50/50' : 'border-warm-200 bg-warm-100'}`}>
       <div className="flex items-center gap-2 mb-3">
         <h4 className="text-sm font-semibold text-warm-800">Variant {variantId}</h4>
-        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">🏆 胜出</span>}
+        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">[trophy] 胜出</span>}
       </div>
       <div className="space-y-2.5">
         <MetricRow label="样本量" value={stats.count.toLocaleString()} />
@@ -303,7 +303,7 @@ export default function ABTestManager(): JSX.Element {
                   className={`w-full text-left rounded-xl border p-3.5 transition-all duration-200 hover:shadow-sm ${
                     selectedTestId === test.id
                       ? 'border-primary-300 bg-primary-50/50 shadow-sm'
-                      : 'border-warm-200 bg-white hover:border-primary-200'
+                      : 'border-warm-200 bg-warm-100 hover:border-primary-200'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2 mb-1">
@@ -332,7 +332,7 @@ export default function ABTestManager(): JSX.Element {
               <p className="text-sm text-warm-500">选择或创建一个 A/B 测试开始分析</p>
             </div>
           ) : (
-            <div className="rounded-xl border border-warm-200 bg-white p-5 space-y-4">
+            <div className="rounded-xl border border-warm-200 bg-warm-100 p-5 space-y-4">
               {/* Header */}
               <div className="flex items-start justify-between">
                 <div>
@@ -349,29 +349,29 @@ export default function ABTestManager(): JSX.Element {
                 </div>
                 <div className="flex items-center gap-1.5">
                   {selectedTest.status === 'draft' && (
-                    <button onClick={() => startTest(selectedTest.id)} className="btn-primary text-xs px-3 py-1">▶ 启动</button>
+                    <button onClick={() => startTest(selectedTest.id)} className="btn-primary text-xs px-3 py-1">[play] 启动</button>
                   )}
                   {selectedTest.status === 'running' && (
                     <>
-                      <button onClick={() => pauseTest(selectedTest.id)} className="btn-secondary text-xs px-3 py-1">⏸ 暂停</button>
+                      <button onClick={() => pauseTest(selectedTest.id)} className="btn-secondary text-xs px-3 py-1">[pause] 暂停</button>
                       <button
                         onClick={() => handleComputeResults(selectedTest.id)}
                         disabled={computingId === selectedTest.id}
                         className="btn-primary text-xs px-3 py-1"
                       >
-                        {computingId === selectedTest.id ? '计算中...' : '✅ 完成并计算'}
+                        {computingId === selectedTest.id ? '计算中...' : '[check] 完成并计算'}
                       </button>
                     </>
                   )}
                   {selectedTest.status === 'paused' && (
                     <>
-                      <button onClick={() => startTest(selectedTest.id)} className="btn-primary text-xs px-3 py-1">▶ 继续</button>
+                      <button onClick={() => startTest(selectedTest.id)} className="btn-primary text-xs px-3 py-1">[play] 继续</button>
                       <button
                         onClick={() => handleComputeResults(selectedTest.id)}
                         disabled={computingId === selectedTest.id}
                         className="btn-primary text-xs px-3 py-1"
                       >
-                        {computingId === selectedTest.id ? '计算中...' : '✅ 完成并计算'}
+                        {computingId === selectedTest.id ? '计算中...' : '[check] 完成并计算'}
                       </button>
                     </>
                   )}
@@ -381,10 +381,10 @@ export default function ABTestManager(): JSX.Element {
                       disabled={computingId === selectedTest.id}
                       className="btn-primary text-xs px-3 py-1"
                     >
-                      {computingId === selectedTest.id ? '计算中...' : '🔄 重新计算'}
+                      {computingId === selectedTest.id ? '计算中...' : '[sync] 重新计算'}
                     </button>
                   )}
-                  <button onClick={() => deleteTest(selectedTest.id)} className="btn-ghost text-xs text-red-500 px-2 py-1">🗑️</button>
+                  <button onClick={() => deleteTest(selectedTest.id)} className="btn-ghost text-xs text-red-500 px-2 py-1">[delete]</button>
                 </div>
               </div>
 
@@ -597,8 +597,8 @@ export default function ABTestManager(): JSX.Element {
       {/* Create Modal */}
       {showCreate && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" onClick={() => setShowCreate(false)} />
-          <div className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white rounded-2xl shadow-xl p-6">
+          <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setShowCreate(false)} />
+          <div className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-warm-100 rounded-2xl shadow-xl p-6">
             <h4 className="text-lg font-semibold text-warm-900 mb-4">新建 A/B 测试</h4>
             <div className="space-y-3">
               <div>

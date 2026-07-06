@@ -220,12 +220,12 @@ export default function AgentNetTopology({
 
   // ── Tab definitions ────────────────────────────────────────────────
   const tabs: { key: TabKey; label: string; icon: string }[] = [
-    { key: 'overview', label: '概览', icon: '📊' },
-    { key: 'topology', label: '拓扑图', icon: '🕸️' },
-    { key: 'capabilities', label: '能力清单', icon: '🤖' },
-    { key: 'tasks', label: '任务管理', icon: '📋' },
-    { key: 'dag', label: 'DAG 编排', icon: '🧬' },
-    { key: 'memory', label: '共享记忆', icon: '💭' },
+    { key: 'overview', label: '概览', icon: '[chart]' },
+    { key: 'topology', label: '拓扑图', icon: '[web]' },
+    { key: 'capabilities', label: '能力清单', icon: '[bot]' },
+    { key: 'tasks', label: '任务管理', icon: '[clipboard]' },
+    { key: 'dag', label: 'DAG 编排', icon: '[dna]' },
+    { key: 'memory', label: '共享记忆', icon: '[think]' },
   ];
 
   if (loading) {
@@ -261,17 +261,17 @@ export default function AgentNetTopology({
         <div className="space-y-6">
           {/* Stat cards */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-            <StatCard icon="🤖" label="注册 Agent" value={stats.total_agents} color="blue" />
-            <StatCard icon="🟢" label="活跃 Agent" value={stats.active_agents} color="green" />
-            <StatCard icon="📋" label="总任务数" value={stats.total_tasks} color="purple" />
-            <StatCard icon="🧬" label="活跃 DAG" value={stats.active_dags} color="amber" />
-            <StatCard icon="⭐" label="平均质量分" value={stats.avg_quality_score.toFixed(2)} color="cyan" />
+            <StatCard icon="[bot]" label="注册 Agent" value={stats.total_agents} color="blue" />
+            <StatCard icon="[green]" label="活跃 Agent" value={stats.active_agents} color="green" />
+            <StatCard icon="[clipboard]" label="总任务数" value={stats.total_tasks} color="purple" />
+            <StatCard icon="[dna]" label="活跃 DAG" value={stats.active_dags} color="amber" />
+            <StatCard icon="[star]" label="平均质量分" value={stats.avg_quality_score.toFixed(2)} color="cyan" />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Agent status distribution */}
             <div className="card p-5">
-              <h3 className="text-h4 mb-4">🤖 Agent 状态分布</h3>
+              <h3 className="text-h4 mb-4">[bot] Agent 状态分布</h3>
               <div className="space-y-3">
                 {Object.entries(stats.agents_by_status).map(([status, count]) => (
                   <div key={status} className="flex items-center justify-between">
@@ -304,7 +304,7 @@ export default function AgentNetTopology({
 
             {/* Task status distribution */}
             <div className="card p-5">
-              <h3 className="text-h4 mb-4">📋 任务状态分布</h3>
+              <h3 className="text-h4 mb-4">[clipboard] 任务状态分布</h3>
               <div className="space-y-3">
                 {Object.entries(stats.tasks_by_status).map(([status, count]) => (
                   <div key={status} className="flex items-center justify-between">
@@ -338,7 +338,7 @@ export default function AgentNetTopology({
 
           {/* Quick summary */}
           <div className="card p-5">
-            <h3 className="text-h4 mb-3">🌐 AgentNet 总览</h3>
+            <h3 className="text-h4 mb-3">[globe] AgentNet 总览</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
                 <span className="text-gray-400">活跃 DAG</span>
@@ -365,12 +365,12 @@ export default function AgentNetTopology({
       {activeTab === 'topology' && (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
-            <h3 className="text-h4">🕸️ AgentNet 拓扑图</h3>
+            <h3 className="text-h4">[web] AgentNet 拓扑图</h3>
             <button
               onClick={() => { fetchTopology(); setNotice('拓扑已刷新'); }}
               className="btn-secondary text-sm"
             >
-              🔄 刷新
+              [sync] 刷新
             </button>
           </div>
 
@@ -425,7 +425,7 @@ export default function AgentNetTopology({
       {activeTab === 'capabilities' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-h4">🤖 Agent 能力清单</h3>
+            <h3 className="text-h4">[bot] Agent 能力清单</h3>
             <button onClick={handleRegisterCapability} className="btn-primary text-sm">
               + 注册 Agent
             </button>
@@ -482,14 +482,14 @@ export default function AgentNetTopology({
                     className="text-xs text-gray-400 hover:text-primary-500 transition-colors shrink-0 ml-3"
                     title="发送心跳"
                   >
-                    💓
+                    [heartbeat]
                   </button>
                 </div>
               </div>
             ))}
             {capabilities.length === 0 && (
               <div className="text-center py-12 text-gray-400">
-                <p className="text-4xl mb-3">🤖</p>
+                <p className="text-4xl mb-3">[bot]</p>
                 <p>暂无注册 Agent，点击"注册 Agent"开始</p>
               </div>
             )}
@@ -501,7 +501,7 @@ export default function AgentNetTopology({
       {activeTab === 'tasks' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-h4">📋 任务管理</h3>
+            <h3 className="text-h4">[clipboard] 任务管理</h3>
             <select
               value={taskStatusFilter}
               onChange={(e) => setTaskStatusFilter(e.target.value)}
@@ -549,7 +549,7 @@ export default function AgentNetTopology({
             ))}
             {tasks.length === 0 && (
               <div className="text-center py-12 text-gray-400">
-                <p className="text-4xl mb-3">📋</p>
+                <p className="text-4xl mb-3">[clipboard]</p>
                 <p>暂无任务</p>
               </div>
             )}
@@ -561,7 +561,7 @@ export default function AgentNetTopology({
       {activeTab === 'dag' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-h4">🧬 DAG 编排</h3>
+            <h3 className="text-h4">[dna] DAG 编排</h3>
             <button onClick={() => setShowDagCreate(true)} className="btn-primary text-sm">
               + 创建 DAG
             </button>
@@ -669,7 +669,7 @@ export default function AgentNetTopology({
             ))}
             {dags.length === 0 && !showDagCreate && (
               <div className="text-center py-12 text-gray-400">
-                <p className="text-4xl mb-3">🧬</p>
+                <p className="text-4xl mb-3">[dna]</p>
                 <p>暂无 DAG，点击"创建 DAG"开始</p>
               </div>
             )}
@@ -681,7 +681,7 @@ export default function AgentNetTopology({
       {activeTab === 'memory' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-h4">💭 共享记忆通道</h3>
+            <h3 className="text-h4">[think] 共享记忆通道</h3>
             <input
               type="text"
               value={memoryAgentFilter}
@@ -694,7 +694,7 @@ export default function AgentNetTopology({
             {memories.map((mem) => (
               <div key={mem.id} className="card p-4">
                 <div className="flex items-start gap-3">
-                  <span className="text-lg">💭</span>
+                  <span className="text-lg">[think]</span>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xs font-mono text-gray-400">{mem.agent_id}</span>

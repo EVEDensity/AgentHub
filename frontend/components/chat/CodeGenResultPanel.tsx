@@ -379,7 +379,7 @@ const CodeGenResultPanel = memo(function CodeGenResultPanel({ content }: CodeGen
     <div className="codegen-result my-3">
       {/* ── Card shell ──────────────────────────────────────────── */}
       <div
-        className="overflow-hidden bg-white"
+        className="overflow-hidden bg-warm-100"
         style={{
           borderRadius: '12px',
           border: '1px solid #E2E8F0',

@@ -43,7 +43,7 @@ export function KBDocumentUploader({ collection, onClose, onSuccess }: Props): J
   }, [selectedFile, collection, uploadDocument, onSuccess]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div
         className="card w-full max-w-md shadow-2xl"
         onClick={(e) => e.stopPropagation()}

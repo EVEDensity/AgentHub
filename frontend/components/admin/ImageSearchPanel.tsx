@@ -11,7 +11,7 @@ const KNOWLEDGE_API = '/platform/knowledge';
 
 function ImageResultCard({ result }: { result: ImageResult }): JSX.Element {
   return (
-    <div className="rounded-xl border border-warm-200 bg-white overflow-hidden hover:shadow-md transition-shadow">
+    <div className="rounded-xl border border-warm-200 bg-warm-100 overflow-hidden hover:shadow-md transition-shadow">
       <div className="aspect-[4/3] bg-warm-100 flex items-center justify-center overflow-hidden">
         {result.url ? (
           <img

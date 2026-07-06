@@ -242,7 +242,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
 
             if (columns.length === 0) {
               return (
-                <div className="my-4 rounded-2xl border border-warm-150 bg-white p-4 text-warm-500">
+                <div className="my-4 rounded-2xl border border-warm-150 bg-warm-100 p-4 text-warm-500">
                   表格数据解析失败
                 </div>
               );

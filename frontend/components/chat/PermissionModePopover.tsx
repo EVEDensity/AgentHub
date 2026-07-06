@@ -31,31 +31,31 @@ const MODES: ModeMeta[] = [
     value: 1, label: '询问权限', shortLabel: '询问',
     description: 'CLI 请求时确认文件编辑和高风险命令',
     Icon: Shield,
-    iconWrap: 'bg-gradient-to-br from-blue-50 to-blue-100/60 ring-1 ring-blue-200/60',
-    iconFg:   'text-blue-600',
-    bar:      'bg-blue-500',
-    bg:       'bg-blue-50/70',
-    hover:    'hover:bg-warm-50',
+    iconWrap: 'bg-primary-50',
+    iconFg:   'text-primary-500',
+    bar:      'bg-primary-500',
+    bg:       'bg-primary-50',
+    hover:    'hover:bg-warm-100',
   },
   {
     value: 2, label: '跳过权限', shortLabel: '跳过',
     description: '对 Shell 和文件系统的完整工具访问',
     Icon: Zap,
-    iconWrap: 'bg-gradient-to-br from-amber-50 to-amber-100/60 ring-1 ring-amber-200/60',
-    iconFg:   'text-amber-600',
-    bar:      'bg-amber-500',
-    bg:       'bg-amber-50/70',
-    hover:    'hover:bg-warm-50',
+    iconWrap: 'bg-warning-50',
+    iconFg:   'text-warning-600',
+    bar:      'bg-warning-500',
+    bg:       'bg-warning-50',
+    hover:    'hover:bg-warm-100',
   },
   {
     value: 3, label: '计划模式', shortLabel: '计划',
     description: '仅架构和推理，不操作文件',
     Icon: Compass,
-    iconWrap: 'bg-gradient-to-br from-purple-50 to-purple-100/60 ring-1 ring-purple-200/60',
-    iconFg:   'text-purple-600',
-    bar:      'bg-purple-500',
-    bg:       'bg-purple-50/70',
-    hover:    'hover:bg-warm-50',
+    iconWrap: 'bg-warm-150',
+    iconFg:   'text-warm-500',
+    bar:      'bg-warm-500',
+    bg:       'bg-warm-100',
+    hover:    'hover:bg-warm-100',
   },
 ];
 
@@ -107,7 +107,7 @@ const PermissionModePopover = memo(function PermissionModePopover({
         title={`当前权限：${current.label} — 点击切换`}
         className={`
           group inline-flex h-8 items-center gap-1.5 rounded-lg
-          border bg-white pl-1.5 pr-2 text-warm-600
+          border bg-warm-100 pl-1.5 pr-2 text-warm-600
           transition-all duration-150 ease-out
           hover:border-warm-300 hover:bg-warm-50
           focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-300
@@ -141,7 +141,7 @@ const PermissionModePopover = memo(function PermissionModePopover({
           className="
             absolute bottom-[calc(100%+6px)] left-0 z-50
             w-[320px] origin-bottom-left
-            rounded-2xl border border-warm-200 bg-white p-1.5
+            rounded-2xl border border-warm-200 bg-warm-100 p-1.5
             shadow-[0_18px_40px_-12px_rgba(28,25,23,0.18),0_2px_6px_-2px_rgba(28,25,23,0.08)]
             animate-[perm-popover-in_140ms_cubic-bezier(0.2,0.9,0.3,1.05)]
           "

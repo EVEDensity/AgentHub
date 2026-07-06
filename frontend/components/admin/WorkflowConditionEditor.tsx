@@ -160,7 +160,7 @@ function BranchPanel({
   return (
     <div className="rounded-xl border border-warm-150 bg-warm-50/40 overflow-hidden">
       {/* Branch header */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-white border-b border-warm-100">
+      <div className="flex items-center justify-between px-4 py-2.5 bg-warm-100 border-b border-warm-100">
         <div className="flex items-center gap-2">
           <span
             className="inline-flex h-5 w-5 items-center justify-center rounded text-[10px] font-bold text-white"
@@ -293,7 +293,7 @@ export default function WorkflowConditionEditor({
                 {availableVariables.slice(0, 12).map((v) => (
                   <code
                     key={v}
-                    className="inline-block rounded bg-white border border-primary-100 px-1.5 py-0.5 text-[10px] font-mono text-primary-700 cursor-pointer hover:bg-primary-100 transition-colors"
+                    className="inline-block rounded bg-warm-100 border border-primary-100 px-1.5 py-0.5 text-[10px] font-mono text-primary-700 cursor-pointer hover:bg-primary-100 transition-colors"
                     title={`点击复制 {{${v}}}`}
                     onClick={() => {
                       navigator.clipboard?.writeText(`{{${v}}}`);

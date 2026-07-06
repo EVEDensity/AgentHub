@@ -54,7 +54,7 @@ function ServerCard({ server, isSelected, onSelect, onRemove, onTest }: {
       className={`rounded-xl border px-4 py-3 cursor-pointer transition-all ${
         isSelected
           ? 'border-primary-400 bg-primary-50 ring-1 ring-primary-200'
-          : 'border-warm-200 bg-white hover:border-primary-300 hover:shadow-sm'
+          : 'border-warm-200 bg-warm-100 hover:border-primary-300 hover:shadow-sm'
       }`}
       onClick={onSelect}
     >
@@ -99,7 +99,7 @@ function ToolCard({ tool, onExecute }: { tool: MCPToolInfo; onExecute: () => voi
   const hasParams = tool.inputSchema.properties && Object.keys(tool.inputSchema.properties).length > 0;
 
   return (
-    <div className="rounded-lg border border-warm-200 bg-white p-3">
+    <div className="rounded-lg border border-warm-200 bg-warm-100 p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
@@ -179,7 +179,7 @@ function AddServerModal({ visible, onClose, onAdd }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-warm-100 rounded-2xl shadow-xl p-6 w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-warm-900">添加 MCP 服务器</h3>
         <form onSubmit={handleSubmit} className="mt-4 space-y-3">
           <div>
@@ -202,7 +202,7 @@ function AddServerModal({ visible, onClose, onAdd }: {
                   }`}
                   onClick={() => setTransport(t)}
                 >
-                  {t === 'sse' ? '🌐 SSE (HTTP)' : '💻 STDIO'}
+                  {t === 'sse' ? '[globe] SSE (HTTP)' : '[laptop] STDIO'}
                 </button>
               ))}
             </div>
@@ -259,7 +259,7 @@ function CallResultViewer({ result, isExecuting }: { result: typeof useMCPStore.
       {(result.content as Array<{type: string; text?: string; data?: string; mimeType?: string}>).map((c, i) => (
         <div key={i} className="mt-1">
           {c.type === 'text' && (
-            <pre className="text-xs text-warm-700 whitespace-pre-wrap font-mono bg-white rounded p-2 border border-warm-100 max-h-60 overflow-auto">{c.text}</pre>
+            <pre className="text-xs text-warm-700 whitespace-pre-wrap font-mono bg-warm-100 rounded p-2 border border-warm-100 max-h-60 overflow-auto">{c.text}</pre>
           )}
           {c.type === 'image' && (
             <img src={`data:${c.mimeType};base64,${c.data}`} alt="Result" className="max-w-full rounded" />
@@ -359,7 +359,7 @@ export default function MCPServerManager(): JSX.Element {
           ) : (
             <div className="space-y-3">
               {/* Server Info */}
-              <div className="rounded-xl border border-warm-200 bg-white px-4 py-3">
+              <div className="rounded-xl border border-warm-200 bg-warm-100 px-4 py-3">
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2">
@@ -389,7 +389,7 @@ export default function MCPServerManager(): JSX.Element {
                     }`}
                     onClick={() => setActiveTab(tab)}
                   >
-                    {tab === 'tools' ? '🔧 工具' : tab === 'resources' ? '📦 资源' : '💬 提示模板'}
+                    {tab === 'tools' ? '[wrench] 工具' : tab === 'resources' ? '[package] 资源' : '[chat] 提示模板'}
                     {tab === 'tools' && tools.length > 0 && <span className="ml-1 text-xs">({tools.length})</span>}
                     {tab === 'resources' && resources.length > 0 && <span className="ml-1 text-xs">({resources.length})</span>}
                     {tab === 'prompts' && prompts.length > 0 && <span className="ml-1 text-xs">({prompts.length})</span>}
@@ -432,7 +432,7 @@ export default function MCPServerManager(): JSX.Element {
                     <p className="text-xs text-warm-400 py-4 text-center">未发现资源</p>
                   ) : (
                     resources.map(r => (
-                      <div key={r.uri} className="rounded-lg border border-warm-200 bg-white p-3">
+                      <div key={r.uri} className="rounded-lg border border-warm-200 bg-warm-100 p-3">
                         <div className="flex items-center gap-2">
                           <span className="material-symbols-outlined text-[16px] text-warm-400">description</span>
                           <span className="text-sm font-medium text-warm-800 font-mono truncate">{r.uri}</span>
@@ -450,7 +450,7 @@ export default function MCPServerManager(): JSX.Element {
                     <p className="text-xs text-warm-400 py-4 text-center">未发现提示模板</p>
                   ) : (
                     prompts.map(p => (
-                      <div key={p.name} className="rounded-lg border border-warm-200 bg-white p-3">
+                      <div key={p.name} className="rounded-lg border border-warm-200 bg-warm-100 p-3">
                         <div className="flex items-center gap-2">
                           <span className="material-symbols-outlined text-[16px] text-warm-400">chat</span>
                           <span className="text-sm font-medium text-warm-800 font-mono">{p.name}</span>

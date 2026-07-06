@@ -8,14 +8,14 @@ const SessionManager = dynamic(() => import('./SessionManager'), { ssr: false, l
 const TaskMonitor = dynamic(() => import('./TaskMonitor'), { ssr: false, loading: () => <div className="p-8 text-sm text-warm-400">加载中...</div> });
 
 const MCP_SUB_TABS = [
-  { key: 'overview', label: '📊 仪表盘' },
-  { key: 'agents', label: '🤖 Agents' },
-  { key: 'sessions', label: '💬 会话' },
-  { key: 'tasks', label: '📋 任务' },
-  { key: 'tools', label: '🔧 工具' },
-  { key: 'alerts', label: '🔔 告警' },
-  { key: 'config', label: '⚙️ 配置' },
-  { key: 'database', label: '🗄️ 数据库' },
+  { key: 'overview', label: '[chart] 仪表盘' },
+  { key: 'agents', label: '[bot] Agents' },
+  { key: 'sessions', label: '[chat] 会话' },
+  { key: 'tasks', label: '[clipboard] 任务' },
+  { key: 'tools', label: '[wrench] 工具' },
+  { key: 'alerts', label: '[bell] 告警' },
+  { key: 'config', label: '[gear] 配置' },
+  { key: 'database', label: '[database] 数据库' },
 ] as const;
 
 type SubTab = (typeof MCP_SUB_TABS)[number]['key'];
@@ -102,22 +102,22 @@ export default function MCPLayout({ initialTab = 'overview' }: MCPLayoutProps): 
       {activeTab === 'tasks' && <TaskMonitor />}
       {activeTab === 'tools' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          🔧 工具分析 — 开发中，敬请期待
+          [wrench] 工具分析 — 开发中，敬请期待
         </div>
       )}
       {activeTab === 'alerts' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          🔔 告警管理 — 开发中，敬请期待
+          [bell] 告警管理 — 开发中，敬请期待
         </div>
       )}
       {activeTab === 'config' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          ⚙️ 配置管理 — 开发中，敬请期待
+          [gear] 配置管理 — 开发中，敬请期待
         </div>
       )}
       {activeTab === 'database' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          🗄️ 数据库管理 — 开发中，敬请期待
+          [database] 数据库管理 — 开发中，敬请期待
         </div>
       )}
     </section>

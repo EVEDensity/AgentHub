@@ -2,8 +2,6 @@
 
 import { type JSX, type ReactNode } from 'react';
 
-// ── Types ─────────────────────────────────────────────────────────────
-
 export interface EmptyStateProps {
   icon?: string;
   title: string;
@@ -17,18 +15,14 @@ export interface EmptyStateProps {
   className?: string;
 }
 
-// ── Size styles ───────────────────────────────────────────────────────
-
 const SIZE_STYLES = {
-  sm: { icon: 'text-3xl', title: 'text-sm', desc: 'text-xs', padding: 'py-8' },
-  md: { icon: 'text-4xl', title: 'text-base', desc: 'text-sm', padding: 'py-12' },
-  lg: { icon: 'text-5xl', title: 'text-lg', desc: 'text-base', padding: 'py-16' },
+  sm: { icon: 'text-2xl', title: 'text-sm', desc: 'text-xs', padding: 'py-8' },
+  md: { icon: 'text-3xl', title: 'text-base', desc: 'text-sm', padding: 'py-12' },
+  lg: { icon: 'text-4xl', title: 'text-lg', desc: 'text-base', padding: 'py-16' },
 };
 
-// ── Component ─────────────────────────────────────────────────────────
-
 export function EmptyState({
-  icon = 'inbox',
+  icon = '◇',
   title,
   description,
   action,
@@ -39,7 +33,7 @@ export function EmptyState({
 
   return (
     <div className={`flex flex-col items-center justify-center text-center ${s.padding} ${className}`}>
-      <span className={`material-symbols-outlined ${s.icon} text-warm-200 mb-4 block`}>
+      <span className={`${s.icon} text-warm-400 mb-4 block`}>
         {icon}
       </span>
       <h4 className={`${s.title} font-semibold text-warm-500 mb-1`}>{title}</h4>
@@ -52,7 +46,7 @@ export function EmptyState({
           onClick={action.onClick}
         >
           {action.icon && (
-            <span className="material-symbols-outlined text-[14px]">{action.icon}</span>
+            <span className="text-sm">{action.icon}</span>
           )}
           {action.label}
         </button>

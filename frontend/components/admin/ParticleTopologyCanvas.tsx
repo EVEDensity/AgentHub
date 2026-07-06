@@ -42,10 +42,10 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const TYPE_ICON: Record<string, string> = {
-  agent: '🤖',
-  task: '📋',
-  spawn: '🧬',
-  memory: '🧿',
+  agent: '[bot]',
+  task: '[clipboard]',
+  spawn: '[dna]',
+  memory: '[eye]',
 };
 
 function hexToNumber(hex: string): number {
@@ -392,7 +392,7 @@ export default function ParticleTopologyCanvas({
     textsRef.current.nodeIcons.clear();
 
     for (const n of rnodes) {
-      const icon = TYPE_ICON[n.type] || '🧬';
+      const icon = TYPE_ICON[n.type] || '[dna]';
       const iconText = new Text({
         text: icon,
         style: { fontSize: n.radius, fontFamily: 'system-ui' },

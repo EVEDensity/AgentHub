@@ -13,9 +13,9 @@ interface LocalAgentModalProps {
 type DiscoveryState = 'idle' | 'scanning' | 'done' | 'error';
 
 const PLATFORM_ICONS: Record<string, string> = {
-  local_claude: '🧠',
-  local_codex: '🤖',
-  local_openclaw: '🦞',
+  local_claude: '[brain]',
+  local_codex: '[bot]',
+  local_openclaw: '[lobster]',
 };
 
 export default function LocalAgentModal({
@@ -126,13 +126,13 @@ export default function LocalAgentModal({
       }}
     >
       <div
-        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-2xl"
+        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-warm-100 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <div>
-            <h3 className="text-lg font-semibold text-warm-900">💻 接入本地 Agent</h3>
+            <h3 className="text-lg font-semibold text-warm-900">[laptop] 接入本地 Agent</h3>
             <p className="mt-1 text-sm text-warm-500">
               自动扫描系统中已安装的 AI CLI 工具，一键接入 AgentHub 任务调度
             </p>
@@ -155,7 +155,7 @@ export default function LocalAgentModal({
                 onClick={discover}
                 disabled={discoveryState === 'scanning'}
               >
-                {discoveryState === 'scanning' ? '⏳ 扫描中...' : '🔄 重新扫描'}
+                {discoveryState === 'scanning' ? '[hourglass] 扫描中...' : '[sync] 重新扫描'}
               </button>
               {discoveryState === 'done' && (
                 <span className="text-sm text-warm-500">
@@ -221,14 +221,14 @@ export default function LocalAgentModal({
                       ? 'border-green-200 bg-green-50/30'
                       : candidate.installed
                       ? 'border-amber-200 bg-amber-50/30'
-                      : 'border-warm-150 bg-white opacity-60'
+                      : 'border-warm-150 bg-warm-100 opacity-60'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-4">
                     {/* Left: icon + info */}
                     <div className="flex items-start gap-3 min-w-0">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xl bg-white border border-warm-150 shadow-sm">
-                        {PLATFORM_ICONS[candidate.adapterType] || '🔧'}
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xl bg-warm-100 border border-warm-150 shadow-sm">
+                        {PLATFORM_ICONS[candidate.adapterType] || '[wrench]'}
                       </span>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -310,7 +310,7 @@ export default function LocalAgentModal({
                           onClick={() => register(candidate)}
                           disabled={registering[candidate.adapterType]}
                         >
-                          {registering[candidate.adapterType] ? '接入中...' : '📥 接入'}
+                          {registering[candidate.adapterType] ? '接入中...' : '[inbox] 接入'}
                         </button>
                       )}
                       {candidate.registered && (
@@ -323,7 +323,7 @@ export default function LocalAgentModal({
                           className="btn-secondary px-4 py-2 text-sm whitespace-nowrap"
                           onClick={discover}
                         >
-                          🔄 重新检测
+                          [sync] 重新检测
                         </button>
                       )}
                       {!candidate.installed && (

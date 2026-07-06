@@ -31,7 +31,7 @@ export function WorkspaceSelector(): JSX.Element {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute top-full left-0 mt-1 z-20 bg-white rounded-lg shadow-xl border border-warm-200 min-w-[200px] overflow-hidden">
+          <div className="absolute top-full left-0 mt-1 z-20 bg-warm-100 rounded-lg shadow-xl border border-warm-200 min-w-[200px] overflow-hidden">
             <div className="py-1">
               {workspaces.map((ws) => (
                 <button

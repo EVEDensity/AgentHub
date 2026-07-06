@@ -125,7 +125,7 @@ export default function SessionManager(): JSX.Element {
       {/* Search + cleanup */}
       <div className="flex items-center gap-3 flex-wrap">
         <input
-          className="rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-primary-300 w-64"
+          className="rounded-lg border border-warm-200 bg-warm-100 px-3 py-1.5 text-sm outline-none focus:border-primary-300 w-64"
           placeholder="搜索会话 ID 或名称..."
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
@@ -149,7 +149,7 @@ export default function SessionManager(): JSX.Element {
             sessions.map((s) => (
               <div
                 key={s.id}
-                className={`rounded-xl border bg-white px-4 py-3 cursor-pointer transition-colors ${
+                className={`rounded-xl border bg-warm-100 px-4 py-3 cursor-pointer transition-colors ${
                   selectedId === s.id ? 'border-primary-400 ring-1 ring-primary-200' : 'border-warm-200 hover:border-warm-300'
                 }`}
                 onClick={() => { setSelectedId(s.id); void fetchDetail(s.id); }}
@@ -194,10 +194,10 @@ export default function SessionManager(): JSX.Element {
         {/* Right: Session detail or cleanup tool */}
         <div className="space-y-4">
           {/* Session detail */}
-          <div className="rounded-xl border border-warm-200 bg-white p-4 min-h-48">
+          <div className="rounded-xl border border-warm-200 bg-warm-100 p-4 min-h-48">
             {!selectedId ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-8">
-                <span className="text-3xl mb-2">👈</span>
+                <span className="text-3xl mb-2">[left]</span>
                 <p className="text-sm text-warm-400">选择会话查看详情</p>
               </div>
             ) : detailLoading ? (
@@ -248,7 +248,7 @@ export default function SessionManager(): JSX.Element {
 
           {/* Cleanup tool */}
           <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
-            <h3 className="text-sm font-semibold text-amber-800 mb-3">🗑️ 批量清理</h3>
+            <h3 className="text-sm font-semibold text-amber-800 mb-3">[trash] 批量清理</h3>
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <label className="text-xs text-warm-600 w-24">超过天数</label>
