@@ -519,6 +519,80 @@ class OpenAICompatibleProvider:
 
 
 # ---------------------------------------------------------------------------
+# VLLMProvider  (vLLM local inference — same OpenAI-compatible protocol,
+# configured via VLLM_* env vars with fallback to OPENAI_COMPATIBLE_*)
+# ---------------------------------------------------------------------------
+
+class VLLMProvider(OpenAICompatibleProvider):
+    """vLLM local inference provider.
+
+    vLLM (https://docs.vllm.ai) exposes an OpenAI-compatible HTTP API, so we
+    reuse OpenAICompatibleProvider's logic and only override env-var lookup:
+        VLLM_BASE_URL   (fallback OPENAI_COMPATIBLE_BASE_URL, default http://127.0.0.1:8000/v1)
+        VLLM_API_KEY    (fallback OPENAI_COMPATIBLE_API_KEY, default "not-needed")
+        VLLM_EMBED_MODEL (fallback OPENAI_COMPATIBLE_EMBED_MODEL)
+    """
+
+    name = "vllm"
+
+    def __init__(self) -> None:
+        # Skip parent __init__ so we can read VLLM_* first
+        self.api_key = (
+            os.getenv("VLLM_API_KEY")
+            or os.getenv("OPENAI_COMPATIBLE_API_KEY")
+            or "not-needed"
+        )
+        self.base_url = (
+            os.getenv("VLLM_BASE_URL")
+            or os.getenv("OPENAI_COMPATIBLE_BASE_URL")
+            or "http://127.0.0.1:8000/v1"
+        )
+
+    @staticmethod
+    def _strip_prefix(model: str) -> str:
+        """Strip the 'vllm-' or 'vllm/' routing prefix so vLLM receives the
+        real HF model id (e.g. 'vllm-Qwen/Qwen2.5-7B-Instruct' → 'Qwen/Qwen2.5-7B-Instruct')."""
+        if model.startswith("vllm/"):
+            return model[len("vllm/"):]
+        if model.startswith("vllm-"):
+            return model[len("vllm-"):]
+        return model
+
+    def chat(self, req: ChatCompletionRequest) -> ChatCompletionResponse:
+        # Strip vllm- prefix before forwarding to vLLM server
+        original_model = req.model
+        req.model = self._strip_prefix(original_model)
+        try:
+            return super().chat(req)
+        finally:
+            req.model = original_model
+
+    def chat_stream(self, req: ChatCompletionRequest):
+        original_model = req.model
+        req.model = self._strip_prefix(original_model)
+        try:
+            yield from super().chat_stream(req)
+        finally:
+            req.model = original_model
+
+    def embed(self, text: str) -> list[float]:
+        # Override to honor VLLM_EMBED_MODEL instead of OPENAI_COMPATIBLE_EMBED_MODEL
+        embed_model = (
+            os.getenv("VLLM_EMBED_MODEL")
+            or os.getenv("OPENAI_COMPATIBLE_EMBED_MODEL")
+            or "text-embedding-3-small"
+        )
+        with _httpx_client() as client:
+            resp = client.post(
+                f"{self.base_url}/embeddings",
+                json={"model": embed_model, "input": text},
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()["data"][0]["embedding"]
+
+
+# ---------------------------------------------------------------------------
 # Provider registry
 # ---------------------------------------------------------------------------
 
@@ -534,6 +608,7 @@ def _init_providers() -> dict[str, Any]:
     _providers["anthropic"] = AnthropicClaudeProvider()
     _providers["bge"] = BGEEmbeddingProvider()
     _providers["openai-compatible"] = OpenAICompatibleProvider()
+    _providers["vllm"] = VLLMProvider()
     return _providers
 
 
@@ -546,8 +621,10 @@ def get_provider(model: str) -> Any:
       - "gpt-*", "o1-*", "o3-*" → openai
       - "bge-*", "BAAI/*" → bge
       - "text-embedding-*" → openai (OpenAI embeddings)
-      - "codex"           → openai-compatible (if CODELLM_URL set) else mock
-      - default           → openai-compatible if OPENAI_COMPATIBLE_BASE_URL set, else mock
+      - "vllm-*", "vllm/*" → vllm (if VLLM_BASE_URL or OPENAI_COMPATIBLE_BASE_URL set) else mock
+      - "codex"           → openai-compatible (if OPENAI_COMPATIBLE_BASE_URL set) else mock
+      - default           → vllm if VLLM_BASE_URL set, else openai-compatible if
+                            OPENAI_COMPATIBLE_BASE_URL set, else mock
     """
     providers = _init_providers()
 
@@ -561,11 +638,18 @@ def get_provider(model: str) -> Any:
         return providers["bge"]
     if model.startswith("text-embedding-"):
         return providers["openai"]
+    # ── vLLM 显式路由（vllm-<model> 或 vllm/<model>）─────────────────
+    if model.startswith("vllm-") or model.startswith("vllm/"):
+        if os.getenv("VLLM_BASE_URL") or os.getenv("OPENAI_COMPATIBLE_BASE_URL"):
+            return providers["vllm"]
+        return providers["mock"]
     if model == "codex" or model.startswith("codex-"):
         if os.getenv("OPENAI_COMPATIBLE_BASE_URL"):
             return providers["openai-compatible"]
         return providers["mock"]
-    # Generic fallback
+    # Generic fallback: prefer vllm if VLLM_BASE_URL set, else openai-compatible
+    if os.getenv("VLLM_BASE_URL"):
+        return providers["vllm"]
     if os.getenv("OPENAI_COMPATIBLE_BASE_URL"):
         return providers["openai-compatible"]
     return providers["mock"]
@@ -625,6 +709,14 @@ async def list_models() -> dict:
         {"id": "BAAI/bge-m3", "object": "model", "owned_by": "bge"},
         {"id": "BAAI/bge-large-en-v1.5", "object": "model", "owned_by": "bge"},
         {"id": "BAAI/bge-reranker-v2-m3", "object": "model", "owned_by": "bge"},
+        # ── vLLM 本地推理模型（仅在 VLLM_BASE_URL 配置时可用）──────────
+        # 命名约定：vllm-<hf-model-id>，调用时 model 字段传 vllm-Qwen/Qwen2.5-7B-Instruct
+        # 实际可用模型由 vLLM 服务加载，此处仅作注册声明
+        {"id": "vllm-Qwen/Qwen2.5-7B-Instruct", "object": "model", "owned_by": "vllm"},
+        {"id": "vllm-Qwen/Qwen2.5-14B-Instruct", "object": "model", "owned_by": "vllm"},
+        {"id": "vllm-meta-llama/Meta-Llama-3-8B-Instruct", "object": "model", "owned_by": "vllm"},
+        {"id": "vllm-meta-llama/Meta-Llama-3-70B-Instruct", "object": "model", "owned_by": "vllm"},
+        {"id": "vllm-microsoft/Phi-3-medium-4k-instruct", "object": "model", "owned_by": "vllm"},
     ]
     return {"object": "list", "data": models}
 

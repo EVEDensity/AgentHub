@@ -8,6 +8,7 @@ interface AdminSidebarProps {
   onMenuClick: (item: MenuItem) => void;
   onToggle: () => void;
   isMobile?: boolean;
+  onUserClick?: () => void;
 }
 
 /**
@@ -26,6 +27,7 @@ function AdminSidebarInner({
   onMenuClick,
   onToggle,
   isMobile = false,
+  onUserClick,
 }: AdminSidebarProps): JSX.Element {
   const handleClick = useCallback(
     (item: MenuItem) => {
@@ -70,7 +72,7 @@ function AdminSidebarInner({
       {/* ── Navigation ── */}
       <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-5 admin-sb-scroll">
         {MENU_GROUPS.map((group) => {
-          const groupItems = MENU_META.filter((m) => m.group === group.key);
+          const groupItems = MENU_META.filter((m) => m.group === group.key && m.key !== '用户管理');
           if (groupItems.length === 0) return null;
           return (
             <div key={group.key}>
@@ -112,7 +114,11 @@ function AdminSidebarInner({
       </nav>
 
       {/* ── User footer ── */}
-      <div className="shrink-0 border-t border-warm-200/20 px-4 py-3.5">
+      <div
+        className={`shrink-0 border-t border-warm-200/20 px-4 py-3.5 ${onUserClick ? 'cursor-pointer hover:bg-warm-100/50 transition-colors' : ''}`}
+        onClick={onUserClick}
+        title={onUserClick ? '用户管理' : undefined}
+      >
         {collapsed ? (
           <div className="flex justify-center">
             <UserAvatar name={user?.name || ''} />

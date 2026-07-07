@@ -166,15 +166,17 @@ const ChatHeader = memo(function ChatHeader({
               )}
             </div>
 
-            {/* WS status + PM state detail */}
+            {/* Phase + PM state detail */}
             <div className="text-caption text-warm-500 mt-0.5 flex items-center gap-2 flex-wrap">
-              <span>WebSocket: {connected ? (
-                streamPhase === 'thinking' ? 'AI 思考中...'
-                : streamPhase === 'executing' ? (activeTools.length > 0 ? `执行: ${activeTools.join(', ')}` : '工具执行中...')
-                : streamPhase === 'generating' ? '生成回复中...'
-                : isStreaming ? 'AI streaming...'
-                : 'Connected'
-              ) : 'Reconnecting'}</span>
+              {streamPhase !== 'idle' && streamPhase !== 'done' && (
+                <span>{connected ? (
+                  streamPhase === 'thinking' ? 'AI 思考中...'
+                  : streamPhase === 'executing' ? (activeTools.length > 0 ? `执行: ${activeTools.join(', ')}` : '工具执行中...')
+                  : streamPhase === 'generating' ? '生成回复中...'
+                  : isStreaming ? 'AI 生成中...'
+                  : ''
+                ) : ''}</span>
+              )}
               {pmState === 'WAITING_USER' && (
                 <span className="text-warning-600 font-medium">· 等待你的决策</span>
               )}

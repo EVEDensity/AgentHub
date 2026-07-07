@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import MEMORY_DIR
+from app.services.tools.sandbox_executor import sandbox_executor
 from app.utils.async_file import (
     aexists,
     aisfile,
@@ -1147,6 +1148,46 @@ async def code_execute_handler(
     if lang not in ("python", "bash"):
         return {"success": False, "error": f"不支持的语言: {language}。支持: python, bash"}
 
+    # ── Remote sandbox execution (P0.1-B) ──────────────────────────────
+    # When SANDBOX_MODE is "remote" or "auto", try the Go sandbox-service
+    # first. Remote mode runs code in an isolated Docker container without
+    # workspace access. Auto mode falls back to subprocess on failure.
+    if sandbox_executor.mode in ("remote", "auto"):
+        try:
+            remote_result = await sandbox_executor._execute_remote(
+                code, lang, min(timeout, CODE_EXECUTE_TIMEOUT)
+            )
+            stdout = sandbox_executor.sanitize_output(remote_result.stdout)[:MAX_CODE_OUTPUT_CHARS]
+            stderr = sandbox_executor.sanitize_output(remote_result.stderr)[:MAX_CODE_OUTPUT_CHARS]
+
+            result_parts: list[str] = []
+            if stdout:
+                result_parts.append(f"[标准输出]\n{stdout}")
+            if stderr:
+                result_parts.append(f"[标准错误]\n{stderr}")
+            if remote_result.exit_code != 0:
+                result_parts.append(f"[退出码: {remote_result.exit_code}]")
+            if not result_parts:
+                result_parts.append("[无输出]")
+
+            return {
+                "success": remote_result.success,
+                "result": "\n\n".join(result_parts),
+                "metadata": {
+                    "language": lang,
+                    "exit_code": remote_result.exit_code,
+                    "stdout_length": len(stdout),
+                    "stderr_length": len(stderr),
+                    "duration_ms": remote_result.duration_ms,
+                    "sandbox_mode": "remote",
+                },
+            }
+        except Exception as exc:
+            if sandbox_executor.mode == "remote":
+                return {"success": False, "error": f"远程沙盒执行失败: {exc}"}
+            # auto: fall through to subprocess
+            logger.warning("code_execute: remote sandbox failed, using subprocess: %s", exc)
+
     # ── Resolve working directory ─────────────────────────────────────
     ws_root = get_workspace_root()
     if cwd and cwd.strip() and cwd.strip() != ".":
@@ -1198,8 +1239,8 @@ async def code_execute_handler(
 
         proc = await _run_subprocess(cmd, effective_timeout, cwd=work_dir)
 
-        stdout = proc.get("stdout", "")[:MAX_CODE_OUTPUT_CHARS]
-        stderr = proc.get("stderr", "")[:MAX_CODE_OUTPUT_CHARS]
+        stdout = sandbox_executor.sanitize_output(proc.get("stdout", ""))[:MAX_CODE_OUTPUT_CHARS]
+        stderr = sandbox_executor.sanitize_output(proc.get("stderr", ""))[:MAX_CODE_OUTPUT_CHARS]
         exit_code = proc.get("exit_code", -1)
 
         result_parts: list[str] = []

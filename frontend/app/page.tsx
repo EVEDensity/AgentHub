@@ -1,3 +1,5 @@
+﻿'use client';
+
 import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
@@ -2540,10 +2542,16 @@ export default function AgentHubIM(): JSX.Element {
     );
   }
 
-  // ── Main workspace layout: 2-column (Unified Sidebar | Main+AgentPanel) ──
+  // ── Main workspace layout: Sidebar | Main | AgentPanel | PreviewPanel(optional) ──
+  const sidebarW = sidebarWidthLive ?? sidebarWidth;
+  const previewW = previewWidthLive ?? previewWidth;
+  const agentPanelW = agentPanelCollapsed ? 44 : 280;
+  const gridCols = previewPanelOpen
+    ? `var(--sidebar-w, 320px) 8px 1fr 8px ${agentPanelW}px 8px ${previewW}px`
+    : `var(--sidebar-w, 320px) 8px 1fr 8px ${agentPanelW}px`;
   return (
     <ToastProvider>
-    <div className="workspace-layout">
+    <div className="workspace-layout" style={{ '--sidebar-w': `${sidebarW}px`, gridTemplateColumns: gridCols } as React.CSSProperties}>
       {/* ═══════════════════════════════════════════════════════
           Column 1: Unified Workspace Sidebar (GlobalNav + SessionSidebar merged)
           ════════════════════════════════════════════════════ */}
@@ -2576,28 +2584,31 @@ export default function AgentHubIM(): JSX.Element {
         currentRole={currentSession?.myRole}
         currentVisibility={currentSession?.visibility || sessionVisibility}
         authHeaders={authHeaders()}
-        width={sidebarWidthLive ?? sidebarWidth}
+        width={sidebarW}
       />
 
       {/* ═══════════════════════════════════════════════════════
-          Column 2: Resizable divider between sidebar and main content
+          Column 2: Divider column — resize handle
+          Tight to sidebar edge, no gap, min 240px / max 480px
           ════════════════════════════════════════════════════ */}
-      <ResizableDivider
-        orientation="horizontal"
-        size={sidebarWidthLive ?? sidebarWidth}
-        onPreview={setSidebarWidthLive}
-        onCommit={(v) => {
-          setSidebarWidthLive(null);
-          setSidebarWidth(v);
-        }}
-        min={240}
-        max={480}
-        defaultValue={320}
-        onReset={resetSidebarWidth}
-        ariaLabel="左侧会话栏宽度"
-        title="拖动调整会话栏宽度 · 右键输入数值 · 双击重置"
-        bubbleSide="left"
-      />
+      <div className="workspace-divider-col">
+        <ResizableDivider
+          orientation="horizontal"
+          size={sidebarW}
+          onPreview={setSidebarWidthLive}
+          onCommit={(v) => {
+            setSidebarWidthLive(null);
+            setSidebarWidth(v);
+          }}
+          min={240}
+          max={480}
+          defaultValue={320}
+          onReset={resetSidebarWidth}
+          ariaLabel="左侧会话栏宽度"
+          title="拖动调整会话栏宽度 · 右键输入数值 · 双击重置"
+          bubbleSide="left"
+        />
+      </div>
 
       {/* ═══════════════════════════════════════════════════════
           Column 3: Main Content + Agent Panel
@@ -2642,7 +2653,7 @@ export default function AgentHubIM(): JSX.Element {
           />
         </header>
 
-        {/* Content area: Messages + Agent Panel */}
+        {/* Content area: Messages */}
         <div className="workspace-content">
           {/* Messages */}
           <MessageList
@@ -2657,17 +2668,6 @@ export default function AgentHubIM(): JSX.Element {
             agents={agents}
             sessionId={sessionId}
             isStreaming={isStreaming}
-          />
-
-          {/* Agent Collaboration Panel (right side) */}
-          <AgentCollaborationPanel
-            agents={agents}
-            sessionId={sessionId}
-            collapsed={agentPanelCollapsed}
-            onToggleCollapse={() => setAgentPanelCollapsed((v) => !v)}
-            onAskAgent={(agentId) => {
-              setInput(`@${agentId} `);
-            }}
           />
         </div>
 
@@ -2718,7 +2718,155 @@ export default function AgentHubIM(): JSX.Element {
           memberCount={currentSession?.memberCount}
         />
       </div>
+
+      {/* ═══════════════════════════════════════════════════════
+          Agent Collaboration Panel (right side, grid cols 4-5)
+          Always visible, collapsible to 44px
+          ════════════════════════════════════════════════════ */}
+      <div className="agent-panel-divider-col">
+        <ResizableDivider
+          orientation="horizontal"
+          size={agentPanelW}
+          onPreview={(v) => {
+            if (v < 80) setAgentPanelCollapsed(true);
+            else if (agentPanelCollapsed && v >= 80) setAgentPanelCollapsed(false);
+          }}
+          onCommit={(v) => {
+            if (v < 80) setAgentPanelCollapsed(true);
+            else setAgentPanelCollapsed(false);
+          }}
+          min={44}
+          max={480}
+          defaultValue={280}
+          ariaLabel="智能体面板宽度"
+          title="拖动调整智能体面板宽度 · 右键输入数值 · 双击重置"
+          bubbleSide="left"
+        />
+      </div>
+      <AgentCollaborationPanel
+        agents={agents}
+        sessionId={sessionId}
+        collapsed={agentPanelCollapsed}
+        onToggleCollapse={() => setAgentPanelCollapsed((v) => !v)}
+        onAskAgent={(agentId) => {
+          setInput(`@${agentId} `);
+        }}
+      />
+
+      {/* ═══════════════════════════════════════════════════════
+          File Preview Panel (right side, grid cols 6-7)
+          Conditional: shown when previewPanelOpen is true
+          ════════════════════════════════════════════════════ */}
+      {previewPanelOpen && (
+        <>
+          <ResizableDivider
+            orientation="horizontal"
+            size={previewW}
+            onPreview={setPreviewWidthLive}
+            onCommit={(v) => {
+              setPreviewWidthLive(null);
+              setPreviewWidth(v);
+            }}
+            min={360}
+            max={960}
+            defaultValue={540}
+            onReset={resetPreviewWidth}
+            ariaLabel="右侧预览面板宽度"
+            title="拖动调整预览面板宽度 · 右键输入数值 · 双击重置"
+            reversed
+            bubbleSide="right"
+          />
+          <aside
+            className="border-l flex flex-col h-full shrink-0"
+            style={{
+              width: `${previewW}px`,
+              background: '#191C22',
+              borderColor: '#2C3038',
+            }}
+          >
+            <FilePreviewPanel
+              tabs={previewTabs}
+              activeTabId={activePreviewTabId}
+              onSelectTab={handleSelectPreviewTab}
+              onCloseTab={handleClosePreviewTab}
+              onAddReference={handleAddReference}
+              onOpenWorkspaceFile={handleOpenWorkspaceFile}
+              sessionId={sessionId}
+              references={fileReferences}
+              pendingScrollRef={pendingScrollRef}
+              workspaceVersion={workspaceVersion}
+            />
+          </aside>
+        </>
+      )}
     </div>
+
+    {/* ── Task DAG Modal ──────────────────────────────────── */}
+    {taskOpen && (
+      <DagModal dag={dag} onClose={handleTaskClose} />
+    )}
+
+    {/* ── URL Preview Sidebar (fixed overlay) ──────────────── */}
+    <PreviewSidebar open={previewOpen} onClose={handlePreviewClose} previewUrl={previewUrl} />
+
+    {/* ── Delete Session Confirmation Dialog ──────────────── */}
+    <ConfirmDialog
+      open={!!confirmDelete}
+      title="删除对话记录"
+      message={
+        confirmDelete ? (
+          <span>
+            确认要删除对话 <b className="text-warm-800">「{confirmDelete.name}」</b> 吗？此操作不可撤销。
+          </span>
+        ) : null
+      }
+      details={
+        <div>
+          <div className="mb-1 font-medium text-warm-700">⚠️ 该操作将同时清理以下内容：</div>
+          <ul className="ml-4 list-disc space-y-0.5">
+            <li>PostgreSQL 中该会话的所有对话消息</li>
+            <li>该会话关联的任务记录</li>
+            <li>.claude/memory/ 下的会话总结文件</li>
+            <li>项目记忆页面中以该会话名命名的所有记忆文件</li>
+            <li>记忆提取状态（cursor）</li>
+          </ul>
+          <div className="mt-2 text-warm-500">删除后无法恢复，请确认是否继续。</div>
+        </div>
+      }
+      confirmText={deleting ? '删除中...' : '确认删除'}
+      cancelText="取消"
+      variant="danger"
+      onConfirm={performDeleteSession}
+      onCancel={cancelDeleteSession}
+    />
+
+    {/* ── Session Sharing Dialog ──────────────────────────── */}
+    <ShareDialog
+      open={shareOpen}
+      sessionId={sessionId}
+      sessionName={sessionName}
+      userRole={currentSession?.myRole || 'viewer'}
+      visibility={currentSession?.visibility || sessionVisibility}
+      authHeaders={authHeaders()}
+      onClose={handleCloseShare}
+      onVisibilityChange={handleVisibilityChange}
+    />
+
+    {/* ── One-click Deploy Modal ──────────────────────────── */}
+    <OneClickDeployModal
+      open={deployOpen}
+      sessionId={sessionId}
+      sessionName={sessionName}
+      onClose={handleCloseDeploy}
+    />
+
+    {/* ── File Attachment Preview Modal ───────────────────── */}
+    <FilePreviewModal
+      file={previewFile}
+      onClose={() => setPreviewFile(null)}
+      authToken={token}
+    />
+
     </ToastProvider>
   );
 }

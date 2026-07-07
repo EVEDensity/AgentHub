@@ -576,6 +576,15 @@ html.reduce-motion *::after {
   user-select: none;
   transition: width 250ms var(--ease-spring, cubic-bezier(0.16, 1, 0.3, 1));
 }
+
+/* ResizableDivider wrapper — overlays the sidebar's right border edge */
+.admin-sidebar-resize-wrap {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  z-index: 10;
+}
 @media (min-width: 1024px) {
   .admin-desktop-sidebar { display: flex; }
 }
@@ -2096,7 +2105,7 @@ html.reduce-motion *::after {
   display: flex;
   align-items: center;
   gap: 20px;
-  padding: 6px 24px;
+  padding: 6px 20px;
   border-bottom: 1px solid rgb(var(--warm-200));
   background: rgb(var(--warm-100));
   font-size: 11px;
@@ -2158,21 +2167,74 @@ html.reduce-motion *::after {
   transform: scale(0.95);
 }
 
+/* ── Console Expand Trigger ────────────────────────────────────────── */
+.admin-console-expand-trigger {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 80px;
+  background: #191C22;
+  border: 1px solid rgb(var(--warm-200));
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  z-index: 10;
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  color: rgb(var(--warm-500));
+  transition: color 0.15s, background-color 0.15s;
+}
+.admin-console-expand-trigger:hover {
+  color: rgb(var(--primary-500));
+  background: rgb(var(--surface-elevated));
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    Workspace Layout — 2-column (Unified Sidebar | Main+AgentPanel)
+   The divider column is 0px — ResizableDivider overlays the boundary
    ═══════════════════════════════════════════════════════════════════════ */
 
 .workspace-layout {
   display: grid;
-  grid-template-columns: var(--sidebar-w, 320px) 4px 1fr;
+  grid-template-columns: var(--sidebar-w, 320px) 8px 1fr;
   height: 100vh;
   overflow: hidden;
   background: #121418;
 }
 
+/* Divider column: houses resize handle, flush with sidebar */
+.workspace-divider-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #191C22;
+  z-index: 5;
+  overflow: visible;
+}
+
+
 .workspace-divider {
   background: #2C3038;
   cursor: default;
+}
+
+/* Agent panel divider column — same visual as sidebar divider */
+.agent-panel-divider-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #191C22;
+  z-index: 5;
+  overflow: visible;
 }
 
 .workspace-main {
@@ -2205,7 +2267,6 @@ html.reduce-motion *::after {
   flex-direction: column;
   height: 100vh;
   background: #191C22;
-  border-right: 1px solid #2C3038;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -2339,9 +2400,8 @@ html.reduce-motion *::after {
 }
 
 .ws-nav-icon {
-  font-size: 18px;
   width: 20px;
-  text-align: center;
+  height: 20px;
   flex-shrink: 0;
 }
 
@@ -3657,16 +3717,12 @@ html.reduce-motion *::after {
 .agent-panel {
   display: flex;
   flex-direction: column;
-  width: 280px;
-  flex-shrink: 0;
   background: #1a1d23;
-  border-left: 1px solid #2C3038;
-  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
 .agent-panel.collapsed {
-  width: 44px;
   align-items: center;
 }
 

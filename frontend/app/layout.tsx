@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import type { JSX, ReactNode } from 'react';
 import '../styles/globals.css';
 import { PageTransitionProvider } from '../lib/animations/pageTransitionProvider';
@@ -6,7 +6,13 @@ import { PageTransitionProvider } from '../lib/animations/pageTransitionProvider
 export const metadata: Metadata = {
   title: 'AgentHub — Collaborative AI Development Platform',
   description: 'AgentHub is a collaborative AI development platform powered by multi-agent orchestration.',
-  viewport: 'width=device-width, initial-scale=1, maximum-scale=1',
+};
+
+// Next.js 14: viewport must be a separate export (not inside metadata).
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default function RootLayout({ children }: { children: ReactNode }): JSX.Element {
@@ -16,6 +22,26 @@ export default function RootLayout({ children }: { children: ReactNode }): JSX.E
         <link
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=block"
+        />
+        {/* Theme FOUC prevention: read stored theme from localStorage and apply
+            data-theme to <html> BEFORE first paint. Must run synchronously
+            (inlined, not via useEffect) to prevent flash of unstyled content.
+            Migrated from pages/_document.tsx during App Router migration. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                try {
+                  var t = localStorage.getItem('agenthub_theme');
+                  if (!t) t = localStorage.getItem('agenthub_theme_legacy');
+                  if (t === 'dark' || t === 'light' || t === 'warm') {
+                    document.documentElement.setAttribute('data-theme', t);
+                    document.documentElement.style.colorScheme = t === 'dark' ? 'dark' : 'light';
+                  }
+                } catch(e) {}
+              })();
+            `,
+          }}
         />
         {/* Reduced motion: respect OS-level accessibility preference */}
         <script

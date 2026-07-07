@@ -9,6 +9,7 @@ import { WorkspaceSelector } from '../../components/admin/WorkspaceSelector';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import CommandPalette from '../../components/admin/CommandPalette';
 import AIChatDialog from '../../components/chat/AIChatDialog';
+import ResizableDivider from '../../components/common/ResizableDivider';
 
 /**
  * AdminLayout — AgentHub Warm Dark IDE Layout
@@ -29,13 +30,32 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [consoleCollapsed, setConsoleCollapsed] = useState(false);
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const lastClosed = localStorage.getItem('agenthub_chat_closed_at');
+      if (lastClosed) {
+        const elapsed = Date.now() - parseInt(lastClosed, 10);
+        if (elapsed < 24 * 60 * 60 * 1000) return false;
+      }
+    } catch { /* localStorage unavailable */ }
+    return true;
+  });
   const [consoleTab, setConsoleTab] = useState<'logs' | 'state' | 'tools'>('logs');
   const [consoleLogs, setConsoleLogs] = useState<Array<{ time: string; tag: string; msg: string; tagClass?: string }>>([
     { time: '--:--:--', tag: 'SYS', msg: 'AgentHub 控制台已就绪 · 等待管理操作', tagClass: 'info' },
   ]);
 
-  const sidebarWidth = sidebarCollapsed ? '64px' : '240px';
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window === 'undefined') return 240;
+    try {
+      const stored = localStorage.getItem('agenthub_sidebar_w');
+      if (stored) { const n = parseInt(stored, 10); if (n >= 240 && n <= 480) return n; }
+    } catch { /* ignore */ }
+    return 240;
+  });
+  const [sidebarWidthLive, setSidebarWidthLive] = useState<number | null>(null);
+  const sidebarW = sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`;
   const consoleWidth = consoleCollapsed ? '0px' : '380px';
 
   // Auto-collapse on small screens
@@ -110,23 +130,13 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
     setMobileDrawerOpen(false);
   }, []);
 
-  // ── Resize handles ─────────────────────────────────────────────────
-  const sidebarResizeRef = useRef<HTMLDivElement>(null);
+  // ── Console resize handle ───────────────────────────────────────────
   const consoleResizeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const sidebarHandle = sidebarResizeRef.current;
     const consoleHandle = consoleResizeRef.current;
-    let isResizingS = false;
     let isResizingC = false;
 
-    const onMouseDownS = (e: MouseEvent) => {
-      isResizingS = true;
-      sidebarHandle?.classList.add('active');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      e.preventDefault();
-    };
     const onMouseDownC = (e: MouseEvent) => {
       isResizingC = true;
       consoleHandle?.classList.add('active');
@@ -135,33 +145,25 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
       e.preventDefault();
     };
     const onMouseMove = (e: MouseEvent) => {
-      if (isResizingS) {
-        const w = Math.max(160, Math.min(320, e.clientX));
-        document.documentElement.style.setProperty('--sidebar-w', w + 'px');
-      }
       if (isResizingC) {
         const w = Math.max(260, Math.min(600, window.innerWidth - e.clientX));
         document.documentElement.style.setProperty('--console-w', w + 'px');
       }
     };
     const onMouseUp = () => {
-      if (isResizingS || isResizingC) {
-        isResizingS = false;
+      if (isResizingC) {
         isResizingC = false;
-        sidebarHandle?.classList.remove('active');
         consoleHandle?.classList.remove('active');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
       }
     };
 
-    sidebarHandle?.addEventListener('mousedown', onMouseDownS);
     consoleHandle?.addEventListener('mousedown', onMouseDownC);
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
 
     return () => {
-      sidebarHandle?.removeEventListener('mousedown', onMouseDownS);
       consoleHandle?.removeEventListener('mousedown', onMouseDownC);
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
@@ -194,7 +196,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
     <div
       className="admin-layout-root"
       style={{
-        gridTemplateColumns: `${sidebarCollapsed ? '64px' : 'var(--sidebar-w, 240px)'} 4px 1fr 4px ${consoleCollapsed ? '0px' : 'var(--console-w, 380px)'}`,
+        gridTemplateColumns: `${sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`} 1fr 4px ${consoleCollapsed ? '0px' : 'var(--console-w, 380px)'}`,
       }}
     >
       {/* ═══════════════════════════════════════════════════════
@@ -211,6 +213,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
               onMenuClick={handleMenuClick}
               onToggle={handleCloseMobile}
               isMobile
+              onUserClick={() => handleMenuClick('用户管理')}
             />
           </aside>
         </>
@@ -219,18 +222,49 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
       {/* ═══════════════════════════════════════════════════════
           Column 1: Desktop Sidebar
           ════════════════════════════════════════════════════ */}
-      <aside className={`admin-desktop-sidebar ${sidebarCollapsed ? 'w-[64px]' : 'w-[240px]'}`}>
+      <aside
+        className="admin-desktop-sidebar"
+        style={{
+          width: sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`,
+          position: 'relative',
+        }}
+      >
         <AdminSidebar
           collapsed={sidebarCollapsed}
           activeMenu={activeMenu}
           user={user}
           onMenuClick={handleMenuClick}
           onToggle={handleToggleSidebar}
+          onUserClick={() => handleMenuClick('用户管理')}
         />
+        {/* Resizable divider overlay — bound to sidebar right edge */}
+        {!sidebarCollapsed && (
+          <div className="admin-sidebar-resize-wrap">
+            <ResizableDivider
+              orientation="horizontal"
+              size={sidebarWidthLive ?? sidebarWidth}
+              onPreview={(v) => setSidebarWidthLive(v)}
+              onCommit={(v) => {
+                setSidebarWidthLive(null);
+                setSidebarWidth(v);
+                try { localStorage.setItem('agenthub_sidebar_w', String(v)); } catch { /* ignore */ }
+              }}
+              onReset={() => {
+                setSidebarWidthLive(null);
+                setSidebarWidth(240);
+                try { localStorage.setItem('agenthub_sidebar_w', '240'); } catch { /* ignore */ }
+              }}
+              min={240}
+              max={480}
+              defaultValue={240}
+              ariaLabel="侧边栏宽度"
+              title="拖动调整侧边栏宽度 · 右键输入数值 · 双击重置"
+              reversed={false}
+              bubbleSide="right"
+            />
+          </div>
+        )}
       </aside>
-
-      {/* Sidebar resize handle */}
-      <div ref={sidebarResizeRef} className="admin-resize-handle" title="拖拽调整侧边栏宽度" />
 
       {/* ═══════════════════════════════════════════════════════
           Column 2: Main Panel (Status Bar + Header + Content)
@@ -253,9 +287,6 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
           </div>
           <div className="admin-status-item">
             智能体 <span className="admin-status-value">6 在线</span>
-          </div>
-          <div className="admin-status-right">
-            AGENTHUB v5.1.0 · CLAUDE WARM DARK
           </div>
         </div>
 
@@ -478,6 +509,20 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
         </aside>
       )}
 
+      {/* ── Console Expand Trigger — visible only when collapsed ── */}
+      {consoleCollapsed && (
+        <div
+          className="admin-console-expand-trigger"
+          onClick={() => setConsoleCollapsed(false)}
+          title="展开控制台"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+          <span>控制台</span>
+        </div>
+      )}
+
       {/* ── AI Chat Toggle Button ── */}
       <button
         className="admin-chat-toggle"
@@ -492,7 +537,10 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
       {/* ── AI Chat Dialog ── */}
       <AIChatDialog
         open={chatOpen}
-        onClose={() => setChatOpen(false)}
+        onClose={() => {
+          setChatOpen(false);
+          try { localStorage.setItem('agenthub_chat_closed_at', String(Date.now())); } catch { /* ignore */ }
+        }}
         addConsoleLog={addConsoleLog}
       />
 

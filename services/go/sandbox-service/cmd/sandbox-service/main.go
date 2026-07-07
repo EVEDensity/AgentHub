@@ -23,12 +23,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,6 +96,7 @@ func main() {
 	mux.HandleFunc("/containers", srv.handleContainers)
 	mux.HandleFunc("/containers/", srv.handleContainerByID)
 	mux.HandleFunc("/stats", srv.handleStats)
+	mux.HandleFunc("/v1/execute", srv.handleV1Execute)
 
 	addr := getenv("SANDBOX_ADDR", ":8097")
 	server := &http.Server{Addr: addr, Handler: mux}
@@ -358,6 +361,158 @@ func (s *sandboxServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// handleV1Execute — one-shot code execution convenience endpoint (P0.1-B).
+//
+// Creates a temporary container, starts it, executes the code, captures
+// output, and destroys the container — all in a single HTTP call. The
+// Python SandboxExecutor calls this endpoint in "remote" mode.
+//
+// POST /v1/execute
+//   {"code": "print('hi')", "language": "python", "timeout": 30, "image": ""}
+// → {"success": true, "stdout": "hi\n", "stderr": "", "exit_code": 0, "duration_ms": 150}
+func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Code     string `json:"code"`
+		Language string `json:"language"`
+		Timeout  int    `json:"timeout"`
+		Image    string `json:"image"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
+		return
+	}
+	if req.Code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code is required"})
+		return
+	}
+
+	lang := strings.ToLower(req.Language)
+	if lang == "" {
+		lang = "python"
+	}
+	if lang == "sh" || lang == "shell" {
+		lang = "bash"
+	}
+	if lang != "python" && lang != "bash" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported language: " + lang})
+		return
+	}
+
+	if req.Timeout <= 0 {
+		req.Timeout = 30
+	}
+	if req.Timeout > 300 {
+		req.Timeout = 300 // hard cap 5 min
+	}
+
+	image := req.Image
+	if image == "" {
+		image = getenv("SANDBOX_IMAGE", "agenthub/sandbox:latest")
+	}
+	cpuLimit := getenvFloat("SANDBOX_CPU_LIMIT", 1.0)
+	memMB := getenvInt("SANDBOX_MEMORY_MB", 512)
+	networkAllow := getenv("SANDBOX_NETWORK_ALLOW", "none")
+
+	// Build the exec command. Base64-encode the code to avoid all shell
+	// escaping issues (quotes, newlines, special chars).
+	encoded := base64.StdEncoding.EncodeToString([]byte(req.Code))
+	var execCmd string
+	if lang == "python" {
+		execCmd = "echo '" + encoded + "' | base64 -d | python"
+	} else {
+		execCmd = "echo '" + encoded + "' | base64 -d | bash"
+	}
+
+	// ── Create container ───────────────────────────────────────────────
+	s.mu.Lock()
+	s.noopContainerSeq++
+	containerName := fmt.Sprintf("ah-exec-%d-%d", time.Now().UnixNano(), s.noopContainerSeq)
+	s.mu.Unlock()
+
+	var networkAllowSlice []string
+	if networkAllow != "none" && networkAllow != "" {
+		networkAllowSlice = strings.Split(networkAllow, ",")
+	}
+
+	networkMode := "none"
+	if len(networkAllowSlice) > 0 {
+		networkMode = "bridge"
+	}
+
+	info, err := s.docker.Create(docker.ContainerConfig{
+		Name:         containerName,
+		Image:        image,
+		AgentID:      "v1-exec",
+		TenantID:     "default",
+		CPU:          cpuLimit,
+		MemoryMB:     memMB,
+		DiskMB:       10240,
+		Network:      networkMode,
+		NetworkAllow: networkAllowSlice,
+	})
+	if err != nil {
+		log.Printf("sandbox-service /v1/execute: create failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success": false,
+			"error":   "container creation failed: " + err.Error(),
+		})
+		return
+	}
+
+	// Cleanup: always destroy the container after exec
+	defer func() {
+		if err := s.docker.Remove(info.ID); err != nil {
+			log.Printf("sandbox-service /v1/execute: cleanup warning for %s: %v", info.ID, err)
+		}
+		s.mu.Lock()
+		delete(s.containers, info.ID)
+		delete(s.execLogs, info.ID)
+		s.mu.Unlock()
+	}()
+
+	// ── Start container ────────────────────────────────────────────────
+	if err := s.docker.Start(info.ID); err != nil {
+		log.Printf("sandbox-service /v1/execute: start failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success":   false,
+			"error":     "container start failed: " + err.Error(),
+			"container": info.ID,
+		})
+		return
+	}
+
+	// ── Exec code ──────────────────────────────────────────────────────
+	result, err := s.docker.Exec(info.ID, execCmd)
+	if err != nil {
+		log.Printf("sandbox-service /v1/execute: exec failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"success":   false,
+			"error":     "exec failed: " + err.Error(),
+			"container": info.ID,
+		})
+		return
+	}
+
+	s.mu.Lock()
+	s.totalExecs++
+	s.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success":      result.ExitCode == 0,
+		"stdout":       result.Stdout,
+		"stderr":       result.Stderr,
+		"exit_code":    result.ExitCode,
+		"duration_ms":  result.DurationMs,
+		"container_id": info.ID,
+		"mode":         "remote",
+	})
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -369,6 +524,24 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getenvFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return fallback
+}
+
+func getenvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			return i
+		}
 	}
 	return fallback
 }

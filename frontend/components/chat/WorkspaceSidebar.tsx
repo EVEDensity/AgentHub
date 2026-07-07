@@ -46,11 +46,19 @@ interface WorkspaceSidebarProps {
    ───────────────────────────────────────────── */
 
 const NAV_ITEMS = [
-  { id: 'admin', label: '管理面板', icon: 'dashboard', desc: '仪表盘、数据统计、Agent 资源' },
-  { id: 'canvas', label: '智能体画布', icon: 'account_tree', desc: '拖拽搭建多 Agent 工作流' },
-  { id: 'memory', label: '记忆管理', icon: 'psychology', desc: '全局向量库、长期记忆检索' },
-  { id: 'tasks', label: '任务中心', icon: 'assignment', desc: '批量任务调度与监控' },
+  { id: 'admin', label: '管理面板', desc: '仪表盘、数据统计、智能体资源' },
+  { id: 'canvas', label: '智能体画布', desc: '拖拽搭建多智能体工作流' },
+  { id: 'memory', label: '记忆管理', desc: '全局向量库、长期记忆检索' },
+  { id: 'tasks', label: '任务中心', desc: '批量任务调度与监控' },
 ] as const;
+
+/* Icon paths for nav items — inline SVGs avoid Material Icons font dependency */
+const NAV_ICON_PATHS: Record<string, string> = {
+  admin: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
+  canvas: 'M22 9V7h-2V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2h2v-2h-2v-2h2v-2h-2V9h2zm-4 10H4V5h14v14z',
+  memory: 'M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z',
+  tasks: 'M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14l-5-5 1.41-1.41L12 14.17l4.59-4.58L18 11l-6 6z',
+};
 
 type FilterTag = 'all' | 'recent' | 'archived' | 'multi' | 'single';
 
@@ -165,14 +173,14 @@ const WorkspaceSidebar = memo(function WorkspaceSidebar(props: WorkspaceSidebarP
                     <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" />
                   </svg>
                 ) : null}
-                <span className="session-card-name">{s.name || 'Untitled'}</span>
+                <span className="session-card-name">{s.name || '未命名会话'}</span>
                 {s.id === sessionId && isAutoNaming && (
                   <span className="session-card-naming-dot" />
                 )}
               </div>
               <div className="session-card-tags">
                 <span className={`session-card-type-tag ${multi ? 'multi' : 'single'}`}>
-                  {multi ? `${s.memberCount || 0} 智能体协同` : '单 Agent'}
+                  {multi ? `${s.memberCount || 0} 人协同` : '单人'}
                 </span>
                 {s.unreadCount ? (
                   <span className="session-card-unread">{s.unreadCount}</span>
@@ -264,7 +272,9 @@ const WorkspaceSidebar = memo(function WorkspaceSidebar(props: WorkspaceSidebarP
               onClick={() => { setActiveNav(item.id); onNavigate(item.id); }}
               title={item.desc}
             >
-              <span className="material-symbols-outlined ws-nav-icon">{item.icon}</span>
+              <svg className="ws-nav-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d={NAV_ICON_PATHS[item.id]} />
+              </svg>
               <span className="ws-nav-text">{item.label}</span>
             </button>
           ))}
@@ -285,7 +295,7 @@ const WorkspaceSidebar = memo(function WorkspaceSidebar(props: WorkspaceSidebarP
         </div>
         <div className="ws-status-item">
           <span className="ws-status-dot online" />
-          <span className="ws-status-text">在线 Agent {onlineAgents.length}</span>
+          <span className="ws-status-text">在线智能体 {onlineAgents.length}</span>
         </div>
       </div>
 
@@ -316,7 +326,7 @@ const WorkspaceSidebar = memo(function WorkspaceSidebar(props: WorkspaceSidebarP
                 </div>
                 <div className="ws-member-info">
                   <span className="ws-member-name">{agent.displayName || agent.agentId}</span>
-                  <span className="ws-member-role">{agent.domain || 'Agent'}</span>
+                  <span className="ws-member-role">{agent.domain || '智能体'}</span>
                 </div>
                 <span className="ws-member-dot" />
               </div>
@@ -415,7 +425,9 @@ const WorkspaceSidebar = memo(function WorkspaceSidebar(props: WorkspaceSidebarP
 
         {sessionsLength === 0 && (
           <div className="ws-session-empty">
-            <span className="material-symbols-outlined" style={{ fontSize: 32, opacity: 0.3 }}>chat_bubble</span>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.3 }}>
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
             <p>暂无会话</p>
             <span>点击上方按钮创建新会话</span>
           </div>

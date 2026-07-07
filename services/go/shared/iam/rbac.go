@@ -7,10 +7,11 @@ package iam
 // overrides in platform_role_permissions.
 
 const (
-	RoleSuperAdmin  = "super_admin" // cross-tenant break-glass; bypasses all checks
-	RoleTenantAdmin  = "tenant_admin" // tenant-scoped admin: manage members, roles, quotas
-	RoleMember       = "member"       // standard user: create sessions, run agents, use tools
-	RoleViewer       = "viewer"       // read-only: observe sessions and audit logs
+	RoleSuperAdmin    = "super_admin"     // cross-tenant break-glass; bypasses all checks
+	RoleTenantAdmin   = "tenant_admin"    // tenant-scoped admin: manage members, roles, quotas
+	RoleAgentOperator = "agent_operator"  // P0.3: can execute high-risk tools, cannot manage members
+	RoleMember        = "member"          // standard user: create sessions, run agents, use tools
+	RoleViewer        = "viewer"          // read-only: observe sessions and audit logs
 )
 
 // ── Scopes ─────────────────────────────────────────────────────────────
@@ -37,16 +38,49 @@ const (
 	ScopeTenantManage   = "tenant:manage"
 	ScopeRoleManage     = "role:manage"
 	ScopeBillingRead    = "billing:read"
+	// ── P0.3: workspace + model management scopes ──
+	ScopeWorkspaceAdmin = "workspace:admin" // manage workspace settings, ACL
+	ScopeWorkspaceRead  = "workspace:read"  // view workspace content
+	ScopeModelManage    = "model:manage"    // configure model providers, quotas
 )
 
 // DefaultRoleScopes maps each built-in role to the scope set it grants. These
 // are the system defaults; tenant_admin can narrow them per tenant via
 // platform_role_permissions overrides (stored in PG, merged at token issuance).
 var DefaultRoleScopes = map[string][]string{
-	RoleSuperAdmin:  {ScopeAll},
-	RoleTenantAdmin: {ScopeSessionRead, ScopeSessionWrite, ScopeSessionCreate, ScopeSessionDelete, ScopeAgentDispatch, ScopeAgentRead, ScopeToolExecute, ScopeToolApprove, ScopeMemoryRead, ScopeMemoryWrite, ScopeDocUpload, ScopeDocRead, ScopeAuditRead, ScopeTenantManage, ScopeRoleManage, ScopeBillingRead},
-	RoleMember:      {ScopeSessionRead, ScopeSessionWrite, ScopeSessionCreate, ScopeAgentDispatch, ScopeAgentRead, ScopeToolExecute, ScopeMemoryRead, ScopeMemoryWrite, ScopeDocUpload, ScopeDocRead},
-	RoleViewer:      {ScopeSessionRead, ScopeAgentRead, ScopeDocRead, ScopeAuditRead},
+	RoleSuperAdmin: {ScopeAll},
+	RoleTenantAdmin: {
+		ScopeSessionRead, ScopeSessionWrite, ScopeSessionCreate, ScopeSessionDelete,
+		ScopeAgentDispatch, ScopeAgentRead,
+		ScopeToolExecute, ScopeToolApprove,
+		ScopeMemoryRead, ScopeMemoryWrite,
+		ScopeDocUpload, ScopeDocRead,
+		ScopeAuditRead, ScopeTenantManage, ScopeRoleManage, ScopeBillingRead,
+		ScopeWorkspaceAdmin, ScopeWorkspaceRead, ScopeModelManage,
+	},
+	RoleAgentOperator: {
+		// P0.3: agent operators can run agents, execute all tools (including
+		// high-risk via tool:approve), manage workspaces and models, but
+		// CANNOT manage tenant members, roles, or billing.
+		ScopeSessionRead, ScopeSessionWrite, ScopeSessionCreate,
+		ScopeAgentDispatch, ScopeAgentRead,
+		ScopeToolExecute, ScopeToolApprove,
+		ScopeMemoryRead, ScopeMemoryWrite,
+		ScopeDocUpload, ScopeDocRead,
+		ScopeWorkspaceAdmin, ScopeWorkspaceRead, ScopeModelManage,
+	},
+	RoleMember: {
+		ScopeSessionRead, ScopeSessionWrite, ScopeSessionCreate,
+		ScopeAgentDispatch, ScopeAgentRead,
+		ScopeToolExecute,
+		ScopeMemoryRead, ScopeMemoryWrite,
+		ScopeDocUpload, ScopeDocRead,
+		ScopeWorkspaceRead,
+	},
+	RoleViewer: {
+		ScopeSessionRead, ScopeAgentRead, ScopeDocRead, ScopeAuditRead,
+		ScopeWorkspaceRead,
+	},
 }
 
 // ScopesForRoles expands a role list into the union of their default scopes.
