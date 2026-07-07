@@ -147,7 +147,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
           return (
             <div
               key={a.agentId}
-              className={`rounded-2xl border bg-warm-100 px-5 py-4 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-green-400' : 'border-warm-200'}`}
+              className={`rounded-2xl border bg-warm-100 px-5 py-4 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-success-400' : 'border-warm-200'}`}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0 flex items-start gap-3">
@@ -160,7 +160,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                   )}
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-green-500' : 'bg-warm-400'}`} />
+                      <span className={`inline-block h-2.5 w-2.5 rounded-full ${online ? 'bg-success-500' : 'bg-warm-400'}`} />
                       <span className="truncate text-2xl font-semibold text-warm-900">{a.agentId}</span>
                       {a.displayName && <span className="text-sm text-warm-500">{a.displayName}</span>}
                       {a.agentId === 'Architect' && (
@@ -173,7 +173,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                         {PLATFORM_LABELS[a.adapterType] || a.adapterType}
                       </span>
                       {a.adapterType?.startsWith('local_') && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">[laptop] 本地</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700">[laptop] 本地</span>
                       )}
                       {isDefaultAgent ? <span className="rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700">默认对话模型</span> : null}
                     </div>
@@ -205,12 +205,12 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                     <span className="material-symbols-outlined text-[14px] align-middle">history</span> 版本
                   </button>
                   {a.agentId !== 'Orchestrator' && (
-                    <button className="btn-ghost px-3 py-1 text-sm text-red-500" onClick={() => { void props.removeAgent(a.agentId); }}>删除</button>
+                    <button className="btn-ghost px-3 py-1 text-sm text-danger-500" onClick={() => { void props.removeAgent(a.agentId); }}>删除</button>
                   )}
                 </div>
               </div>
               {test ? (
-                <div className={`mt-3 rounded px-3 py-2 text-sm ${test.status === 'success' ? 'bg-green-50 text-green-700' : test.status === 'failed' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                <div className={`mt-3 rounded px-3 py-2 text-sm ${test.status === 'success' ? 'bg-success-50 text-success-700' : test.status === 'failed' ? 'bg-danger-50 text-danger-600' : 'bg-primary-50 text-primary-600'}`}>
                   {test.message}
                 </div>
               ) : null}

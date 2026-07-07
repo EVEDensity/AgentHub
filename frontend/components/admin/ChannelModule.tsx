@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type JSX, type FormEvent } from 'react';
+import { useState, useEffect, type JSX, type FormEvent } from 'react';
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ export default function ChannelModule({ authHeaders, setNotice }: {
   };
 
   // Called on mount
-  useState(() => { loadConfigs(); });
+  useEffect(() => { loadConfigs(); }, []);
 
   // Save config
   const handleSave = async (cfg: ChannelConfig) => {
@@ -122,7 +122,7 @@ export default function ChannelModule({ authHeaders, setNotice }: {
               <div>
                 <h3 className="font-semibold text-warm-900" style={{ color: info.color }}>{info.name}</h3>
                 {configs.find((c) => c.platform === key)?.enabled && (
-                  <span className="text-[10px] text-green-600">● 已连接</span>
+                  <span className="text-[10px] text-success-600">● 已连接</span>
                 )}
               </div>
             </div>
@@ -138,14 +138,14 @@ export default function ChannelModule({ authHeaders, setNotice }: {
           {configs.map((cfg) => {
             const info = PLATFORM_INFO[cfg.platform];
             return (
-              <div key={cfg.platform} className={`card flex items-center justify-between ${cfg.enabled ? 'border-l-4 border-l-green-400' : 'border-l-4 border-l-warm-200'}`}>
+              <div key={cfg.platform} className={`card flex items-center justify-between ${cfg.enabled ? 'border-l-4 border-l-success-400' : 'border-l-4 border-l-warm-200'}`}>
                 <div className="flex items-center gap-3">
                   <span className="text-[20px]">{info?.icon || '[plug]'}</span>
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-warm-800">{info?.name || cfg.platform}</span>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                        cfg.enabled ? 'bg-green-50 text-green-600' : 'bg-warm-100 text-warm-400'
+                        cfg.enabled ? 'bg-success-50 text-success-600' : 'bg-warm-100 text-warm-400'
                       }`}>
                         {cfg.enabled ? '启用' : '禁用'}
                       </span>
@@ -162,7 +162,7 @@ export default function ChannelModule({ authHeaders, setNotice }: {
                   <button className="btn-ghost text-xs px-2 py-1" onClick={() => { setEditing({ ...cfg }); setShowAdd(false); }}>
                     编辑
                   </button>
-                  <button className="btn-ghost text-xs px-2 py-1 text-red-500" onClick={() => handleDelete(cfg.platform)}>
+                  <button className="btn-ghost text-xs px-2 py-1 text-danger-500" onClick={() => handleDelete(cfg.platform)}>
                     删除
                   </button>
                 </div>
@@ -223,7 +223,7 @@ function ChannelConfigModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-modal" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <div className="flex items-center gap-3">
             <span className="text-[24px]">{info?.icon || '[plug]'}</span>

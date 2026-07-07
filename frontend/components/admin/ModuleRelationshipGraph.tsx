@@ -548,9 +548,9 @@ export default function ModuleRelationshipGraph(): JSX.Element {
             <span className="inline-block w-3 h-[2px] border-t border-dotted border-warm-400 mr-1 align-middle" /> 事件订阅
           </span>
           <span className="ml-2 flex items-center gap-1">
-            <span className="inline-block w-2 h-2 rounded-full bg-green-500" /> 正常
-            <span className="inline-block w-2 h-2 rounded-full bg-amber-500" /> 降级
-            <span className="inline-block w-2 h-2 rounded-full bg-red-500" /> 异常
+            <span className="inline-block w-2 h-2 rounded-full bg-success-500" /> 正常
+            <span className="inline-block w-2 h-2 rounded-full bg-warning-500" /> 降级
+            <span className="inline-block w-2 h-2 rounded-full bg-danger-500" /> 异常
           </span>
         </div>
       </div>

@@ -49,10 +49,10 @@ function getAuthHeaders(): Record<string, string> {
 
 function StatusPill({ status }: { status: string }): JSX.Element {
   const map: Record<string, { label: string; cls: string }> = {
-    verified: { label: '已验证', cls: 'bg-green-100 text-green-700 border-green-200' },
-    unsigned: { label: '未签名', cls: 'bg-amber-100 text-amber-700 border-amber-200' },
-    invalid: { label: '无效', cls: 'bg-red-100 text-red-700 border-red-200' },
-    active: { label: '已启用', cls: 'bg-green-100 text-green-700 border-green-200' },
+    verified: { label: '已验证', cls: 'bg-success-100 text-success-700 border-success-200' },
+    unsigned: { label: '未签名', cls: 'bg-warning-100 text-warning-700 border-warning-200' },
+    invalid: { label: '无效', cls: 'bg-danger-100 text-danger-700 border-danger-200' },
+    active: { label: '已启用', cls: 'bg-success-100 text-success-700 border-success-200' },
     disabled: { label: '未启用', cls: 'bg-warm-100 text-warm-500 border-warm-200' },
   };
   const s = map[status] || { label: status, cls: 'bg-warm-50 text-warm-500 border-warm-150' };
@@ -224,17 +224,17 @@ export default function A2ASecurityPanel(): JSX.Element {
         {/* Summary stats */}
         {sigResults.length > 0 && (
           <div className="grid grid-cols-3 gap-2 mb-4">
-            <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2 text-center">
-              <div className="text-lg font-bold text-green-700">{verifiedCount}</div>
-              <div className="text-[10px] text-green-600">已验证</div>
+            <div className="rounded-lg bg-success-50 border border-success-100 px-3 py-2 text-center">
+              <div className="text-lg font-bold text-success-700">{verifiedCount}</div>
+              <div className="text-[10px] text-success-600">已验证</div>
             </div>
-            <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-center">
-              <div className="text-lg font-bold text-amber-700">{unsignedCount}</div>
-              <div className="text-[10px] text-amber-600">未签名</div>
+            <div className="rounded-lg bg-warning-50 border border-warning-100 px-3 py-2 text-center">
+              <div className="text-lg font-bold text-warning-700">{unsignedCount}</div>
+              <div className="text-[10px] text-warning-600">未签名</div>
             </div>
-            <div className="rounded-lg bg-red-50 border border-red-100 px-3 py-2 text-center">
-              <div className="text-lg font-bold text-red-700">{invalidCount}</div>
-              <div className="text-[10px] text-red-600">无效</div>
+            <div className="rounded-lg bg-danger-50 border border-danger-100 px-3 py-2 text-center">
+              <div className="text-lg font-bold text-danger-700">{invalidCount}</div>
+              <div className="text-[10px] text-danger-600">无效</div>
             </div>
           </div>
         )}

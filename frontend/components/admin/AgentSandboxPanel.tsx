@@ -157,7 +157,7 @@ export default function AgentSandboxPanel({
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-h4">[whale] Docker 安全沙箱</h3>
-          <p className="text-xs text-gray-400 mt-1">隔离的 Agent 执行环境 · Seccomp 安全策略 · 资源配额管理</p>
+          <p className="text-xs text-warm-400 mt-1">隔离的 Agent 执行环境 · Seccomp 安全策略 · 资源配额管理</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">
           + 创建容器
@@ -184,22 +184,22 @@ export default function AgentSandboxPanel({
       {/* Create form */}
       {showCreate && (
         <div className="card p-5 border-2 border-primary-100 bg-primary-50/30">
-          <h4 className="font-semibold text-gray-800 mb-3">创建沙箱容器</h4>
+          <h4 className="font-semibold text-warm-800 mb-3">创建沙箱容器</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Agent ID *</label>
+              <label className="block text-xs text-warm-500 mb-1">Agent ID *</label>
               <input type="text" value={createForm.agent_id} onChange={(e) => setCreateForm((f) => ({ ...f, agent_id: e.target.value }))} className="input-field text-sm w-full" placeholder="coder-agent-01" />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">CPU 限制 (核)</label>
+              <label className="block text-xs text-warm-500 mb-1">CPU 限制 (核)</label>
               <input type="number" value={createForm.cpu_limit} onChange={(e) => setCreateForm((f) => ({ ...f, cpu_limit: +e.target.value }))} className="input-field text-sm w-full" step="0.5" min="0.5" max="4" />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">内存 (MB)</label>
+              <label className="block text-xs text-warm-500 mb-1">内存 (MB)</label>
               <input type="number" value={createForm.memory_mb} onChange={(e) => setCreateForm((f) => ({ ...f, memory_mb: +e.target.value }))} className="input-field text-sm w-full" step="128" min="128" max="4096" />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">磁盘 (MB)</label>
+              <label className="block text-xs text-warm-500 mb-1">磁盘 (MB)</label>
               <input type="number" value={createForm.disk_mb} onChange={(e) => setCreateForm((f) => ({ ...f, disk_mb: +e.target.value }))} className="input-field text-sm w-full" step="1024" min="1024" max="102400" />
             </div>
           </div>
@@ -219,7 +219,7 @@ export default function AgentSandboxPanel({
                 <span className="text-2xl">[whale]</span>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h4 className="font-semibold text-gray-800 font-mono text-sm">{c.id}</h4>
+                    <h4 className="font-semibold text-warm-800 font-mono text-sm">{c.id}</h4>
                     <span
                       className="text-xs px-2 py-0.5 rounded-full font-medium"
                       style={{ backgroundColor: (STATUS_COLORS[c.status] || '#9ca3af') + '20', color: STATUS_COLORS[c.status] }}
@@ -227,7 +227,7 @@ export default function AgentSandboxPanel({
                       {STATUS_LABELS[c.status] || c.status}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-400">
+                  <p className="text-xs text-warm-400">
                     Agent: {c.agent_id} · {c.cpu_limit} CPU · {c.memory_mb}MB · {c.disk_mb}MB disk
                   </p>
                 </div>
@@ -242,7 +242,7 @@ export default function AgentSandboxPanel({
                 {(c.status === 'stopped' || c.status === 'failed') && (
                   <button onClick={() => handleStart(c.id)} className="btn-ghost text-xs">[sync] 重启</button>
                 )}
-                <button onClick={() => handleDelete(c.id)} className="btn-ghost text-xs text-red-500">[delete]</button>
+                <button onClick={() => handleDelete(c.id)} className="btn-ghost text-xs text-danger-500">[delete]</button>
                 <button
                   onClick={() => {
                     const nextId = activeLogsId === c.id ? null : c.id;
@@ -258,7 +258,7 @@ export default function AgentSandboxPanel({
 
             {/* Exec bar for running containers */}
             {c.status === 'running' && (
-              <div className="border-t border-gray-100 px-4 py-2 bg-gray-50/50 flex gap-2">
+              <div className="border-t border-warm-100 px-4 py-2 bg-warm-50/50 flex gap-2">
                 <input
                   type="text"
                   value={execInput[c.id] || ''}
@@ -273,22 +273,22 @@ export default function AgentSandboxPanel({
 
             {/* Exec logs */}
             {activeLogsId === c.id && (
-              <div className="border-t border-gray-100 p-4 bg-gray-50/50 max-h-64 overflow-y-auto">
-                <h5 className="text-xs font-semibold text-gray-500 mb-2">执行日志</h5>
+              <div className="border-t border-warm-100 p-4 bg-warm-50/50 max-h-64 overflow-y-auto">
+                <h5 className="text-xs font-semibold text-warm-500 mb-2">执行日志</h5>
                 {(logs[c.id] || []).length === 0 ? (
-                  <p className="text-xs text-gray-400">暂无执行记录</p>
+                  <p className="text-xs text-warm-400">暂无执行记录</p>
                 ) : (
                   <div className="space-y-2">
                     {logs[c.id]!.map((log) => (
-                      <div key={log.id} className="bg-gray-900 text-green-400 rounded p-3 font-mono text-xs">
-                        <div className="flex items-center justify-between text-gray-500 mb-1">
+                      <div key={log.id} className="bg-warm-900 text-success-400 rounded p-3 font-mono text-xs">
+                        <div className="flex items-center justify-between text-warm-500 mb-1">
                           <span>$ {log.command}</span>
                           <span className="text-[10px]">
                             exit={log.exit_code} · {log.duration_ms}ms · {new Date(log.executed_at).toLocaleTimeString()}
                           </span>
                         </div>
-                        {log.stdout && <pre className="text-green-300 whitespace-pre-wrap">{log.stdout}</pre>}
-                        {log.stderr && <pre className="text-red-400 whitespace-pre-wrap">{log.stderr}</pre>}
+                        {log.stdout && <pre className="text-success-300 whitespace-pre-wrap">{log.stdout}</pre>}
+                        {log.stderr && <pre className="text-danger-400 whitespace-pre-wrap">{log.stderr}</pre>}
                       </div>
                     ))}
                   </div>
@@ -297,7 +297,7 @@ export default function AgentSandboxPanel({
             )}
 
             {/* Seccomp / workspace info */}
-            <div className="border-t border-gray-100 px-4 py-2 flex gap-4 text-[11px] text-gray-400">
+            <div className="border-t border-warm-100 px-4 py-2 flex gap-4 text-[11px] text-warm-400">
               <span>[lock] Seccomp: {c.seccomp_profile}</span>
               <span>[folder] Workspace: {c.workspace_path}</span>
               <span>[timer] 空闲超时: {c.idle_timeout_s}s</span>
@@ -307,7 +307,7 @@ export default function AgentSandboxPanel({
         ))}
 
         {containers.length === 0 && !showCreate && (
-          <div className="text-center py-16 text-gray-400">
+          <div className="text-center py-16 text-warm-400">
             <p className="text-5xl mb-4">[whale]</p>
             <p className="text-lg mb-1">暂无沙箱容器</p>
             <p className="text-sm">创建隔离容器后，Agent 可在安全环境中执行代码</p>
@@ -323,8 +323,8 @@ function MiniStatCard({ icon, label, value, color }: { icon: string; label: stri
     <div className="card p-3 flex items-center gap-3">
       <span className="text-xl">{icon}</span>
       <div>
-        <p className="text-[10px] text-gray-400">{label}</p>
-        <p className={`text-sm font-bold ${color === 'green' ? 'text-green-600' : 'text-gray-700'}`}>{value}</p>
+        <p className="text-[10px] text-warm-400">{label}</p>
+        <p className={`text-sm font-bold ${color === 'green' ? 'text-success-600' : 'text-warm-700'}`}>{value}</p>
       </div>
     </div>
   );

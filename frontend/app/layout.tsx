@@ -33,7 +33,7 @@ export default function RootLayout({ children }: { children: ReactNode }): JSX.E
           }}
         />
       </head>
-      <body className="bg-warm-50 text-warm-800 antialiased">
+      <body className="bg-[#121418] text-[#E4E7EC] antialiased">
         {/* Skip-to-content link for keyboard navigation (WCAG 2.4.1) */}
         <a
           href="#main-content"

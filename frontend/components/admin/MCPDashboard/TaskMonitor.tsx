@@ -177,7 +177,7 @@ export default function TaskMonitor(): JSX.Element {
               <button className="btn-secondary text-sm px-3 py-1.5" onClick={() => void fetchTasks()}>刷新</button>
               {actionMsg && <span className="text-xs text-primary-600">{actionMsg}</span>}
             </div>
-            {error && <div className="text-sm text-red-500">{error}</div>}
+            {error && <div className="text-sm text-danger-500">{error}</div>}
             {loading ? (
               <div className="text-sm text-warm-400 py-8 text-center">加载中...</div>
             ) : tasks.length === 0 ? (
@@ -208,7 +208,7 @@ export default function TaskMonitor(): JSX.Element {
                       <div className="mt-2 h-1.5 rounded-full bg-warm-100 overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all ${
-                            t.status === 'FAILED' ? 'bg-red-400' : t.status === 'COMPLETED' ? 'bg-green-400' : 'bg-primary-400'
+                            t.status === 'FAILED' ? 'bg-danger-400' : t.status === 'COMPLETED' ? 'bg-success-400' : 'bg-primary-400'
                           }`}
                           style={{ width: `${t.progressPercent}%` }}
                         />
@@ -216,7 +216,7 @@ export default function TaskMonitor(): JSX.Element {
                     </div>
                     {(t.status === 'RUNNING' || t.status === 'PENDING') && (
                       <button
-                        className="shrink-0 rounded bg-red-100 px-2 py-1 text-[11px] text-red-600 hover:bg-red-200 ml-2"
+                        className="shrink-0 rounded bg-danger-100 px-2 py-1 text-[11px] text-danger-600 hover:bg-danger-200 ml-2"
                         onClick={(e) => { e.stopPropagation(); void cancelTask(t.id); }}
                       >
                         取消
@@ -312,7 +312,7 @@ export default function TaskMonitor(): JSX.Element {
                       <StatusBadge variant={r.active ? 'online' : 'offline'} size="sm" label={r.active ? '启用' : '禁用'} />
                     </div>
                     <button
-                      className={`text-[11px] rounded px-2 py-1 ${r.active ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}
+                      className={`text-[11px] rounded px-2 py-1 ${r.active ? 'bg-danger-50 text-danger-600 hover:bg-danger-100' : 'bg-success-50 text-success-600 hover:bg-success-100'}`}
                       onClick={() => void toggleRoute(r.id)}
                     >
                       {r.active ? '禁用' : '启用'}

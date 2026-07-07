@@ -1,0 +1,69 @@
+{
+  "batchIndex": 49,
+  "nodes": [
+    {
+      "id": "file:deploy/agenthub_alerts.yml",
+      "type": "file",
+      "name": "agenthub_alerts.yml",
+      "filePath": "deploy/agenthub_alerts.yml",
+      "summary": "Alertmanager 告警路由配置：P0-P3 四级严重性路由、抑制规则、webhook 接收器",
+      "tags": ["deploy", "alertmanager", "monitoring", "prometheus"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:deploy/agenthub_rules.yml",
+      "type": "file",
+      "name": "agenthub_rules.yml",
+      "filePath": "deploy/agenthub_rules.yml",
+      "summary": "Prometheus 告警规则：IAM/AgentNet/沙箱/审计/限流/缓存/NATS 等多维度告警规则定义",
+      "tags": ["deploy", "prometheus", "alert-rules", "monitoring"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:deploy/docker-compose.platform.yml",
+      "type": "file",
+      "name": "docker-compose.platform.yml",
+      "filePath": "deploy/docker-compose.platform.yml",
+      "summary": "平台 Docker Compose 编排：基础设施、Go/Python/Rust 服务、前端、可观测性共 24+ 容器",
+      "tags": ["deploy", "docker-compose", "infrastructure", "orchestration"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:deploy/grafana-dashboards.yml",
+      "type": "file",
+      "name": "grafana-dashboards.yml",
+      "filePath": "deploy/grafana-dashboards.yml",
+      "summary": "Grafana 仪表盘自动配置：文件类型 provider，自动加载预构建仪表盘",
+      "tags": ["deploy", "grafana", "dashboard", "provisioning"],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:deploy/grafana-datasources.yml",
+      "type": "file",
+      "name": "grafana-datasources.yml",
+      "filePath": "deploy/grafana-datasources.yml",
+      "summary": "Grafana 数据源配置：Prometheus、Tempo（链路追踪）、Loki（日志）自动关联",
+      "tags": ["deploy", "grafana", "datasource", "monitoring"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:deploy/promtail.yml",
+      "type": "file",
+      "name": "promtail.yml",
+      "filePath": "deploy/promtail.yml",
+      "summary": "Promtail 日志采集配置：Docker 容器日志自动发现，标签注入 Loki",
+      "tags": ["deploy", "promtail", "loki", "logging"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:deploy/tempo.yml",
+      "type": "file",
+      "name": "tempo.yml",
+      "filePath": "deploy/tempo.yml",
+      "summary": "Tempo 链路追踪配置：OTLP/HTTP 接收，本地文件存储，开发环境最小配置",
+      "tags": ["deploy", "tempo", "tracing", "otlp"],
+      "complexity": "simple"
+    }
+  ],
+  "edges": []
+}

@@ -1,0 +1,287 @@
+{
+  "batchIndex": 23,
+  "nodes": [
+    {
+      "id": "services/go/sandbox-service/cmd/sandbox-service/main.go",
+      "type": "file",
+      "label": "main.go",
+      "filePath": "services/go/sandbox-service/cmd/sandbox-service/main.go",
+      "language": "go",
+      "batchIndex": 23,
+      "tags": [
+        "Go服务"
+      ]
+    },
+    {
+      "id": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "file",
+      "label": "client.go",
+      "filePath": "services/go/sandbox-service/internal/docker/client.go",
+      "language": "go",
+      "batchIndex": 23,
+      "tags": [
+        "Go服务",
+        "内部"
+      ]
+    },
+    {
+      "id": "services/go/sandbox-service/internal/docker/client_test.go",
+      "type": "file",
+      "label": "client_test.go",
+      "filePath": "services/go/sandbox-service/internal/docker/client_test.go",
+      "language": "go",
+      "batchIndex": 23,
+      "tags": [
+        "测试",
+        "内部"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "services/go/sandbox-service/cmd/sandbox-service/main.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go",
+      "type": "imports"
+    },
+    {
+      "source": "services/go/sandbox-service/cmd/sandbox-service/main.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "imports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Client",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::NewClient",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::IsNoop",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::ContainerConfig",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::ContainerInfo",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::ExecResult",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Stats",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Create",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Start",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Stop",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Remove",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Exec",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Inspect",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::List",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go",
+      "target": "services/go/sandbox-service/internal/docker/client.go::Ping",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestDemuxDockerStreamStdoutOnly",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestDemuxDockerStreamStderrOnly",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestDemuxDockerStreamMixed",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestDemuxDockerStreamEmpty",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestDemuxDockerStreamPartialHeader",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestDemuxDockerStreamTruncatedPayload",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestDemuxDockerStreamMultipleFrames",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNewClientNoop",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNewClientWithSocket",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNoopCreate",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNoopStartStopRemove",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNoopExec",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNoopInspect",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNoopList",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestNoopPing",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestContainerInfoRoundTrip",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client_test.go",
+      "target": "services/go/sandbox-service/internal/docker/client_test.go::TestExecResultRoundTrip",
+      "type": "contains"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Client",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::NewClient",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::IsNoop",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::ContainerConfig",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::ContainerInfo",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::ExecResult",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Stats",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Create",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Start",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Stop",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Remove",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Exec",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Inspect",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::List",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    },
+    {
+      "source": "services/go/sandbox-service/internal/docker/client.go::Ping",
+      "target": "services/go/sandbox-service/internal/docker/client.go",
+      "type": "exports"
+    }
+  ]
+}

@@ -105,11 +105,11 @@ function CodeNodeEditor({ config, onChange }: { config: NodeConfig; onChange: (c
           onChange={(e) => onChange({ ...config, code: e.target.value })}
         />
       </div>
-      <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-[10px] text-blue-700">
+      <div className="rounded-lg bg-primary-50 border border-primary-200 px-3 py-2 text-[10px] text-primary-700">
         <span className="font-medium">可用的上下文变量：</span>
-        <code className="ml-2 bg-blue-100 px-1 rounded">input_data</code> 上游节点输出 ·
-        <code className="ml-2 bg-blue-100 px-1 rounded">node_outputs</code> 所有节点输出字典 ·
-        <code className="ml-2 bg-blue-100 px-1 rounded">context</code> 工作流上下文
+        <code className="ml-2 bg-primary-100 px-1 rounded">input_data</code> 上游节点输出 ·
+        <code className="ml-2 bg-primary-100 px-1 rounded">node_outputs</code> 所有节点输出字典 ·
+        <code className="ml-2 bg-primary-100 px-1 rounded">context</code> 工作流上下文
       </div>
     </div>
   );
@@ -220,7 +220,7 @@ function KnowledgeNodeEditor({ config, onChange }: { config: NodeConfig; onChang
           />
         </div>
       </div>
-      <div className="rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-[10px] text-green-700">
+      <div className="rounded-lg bg-success-50 border border-success-200 px-3 py-2 text-[10px] text-success-700">
         <span className="font-medium">检索结果注入：</span> 匹配的文档片段将自动注入到下游 Agent 的上下文中，格式为带 citation 标签的结构化文本。
       </div>
     </div>
@@ -256,7 +256,7 @@ function ConditionEditor({ config, onChange, variables }: { config: NodeConfig; 
       {/* Branch targets */}
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2 flex-1">
-          <label className="text-xs font-medium text-green-600 w-16 shrink-0">True →</label>
+          <label className="text-xs font-medium text-success-600 w-16 shrink-0">True →</label>
           <input
             className="input-field text-xs flex-1"
             placeholder="节点ID（满足条件后执行）"
@@ -265,7 +265,7 @@ function ConditionEditor({ config, onChange, variables }: { config: NodeConfig; 
           />
         </div>
         <div className="flex items-center gap-2 flex-1">
-          <label className="text-xs font-medium text-red-500 w-16 shrink-0">False →</label>
+          <label className="text-xs font-medium text-danger-500 w-16 shrink-0">False →</label>
           <input
             className="input-field text-xs flex-1"
             placeholder="节点ID（不满足时执行）"
@@ -307,7 +307,7 @@ function ConditionEditor({ config, onChange, variables }: { config: NodeConfig; 
               onChange={(e) => updateRule(rule.id, { rightOperand: e.target.value })}
             />
             <button
-              className="text-[10px] text-red-400 hover:text-red-600 shrink-0"
+              className="text-[10px] text-danger-400 hover:text-danger-600 shrink-0"
               onClick={() => removeRule(rule.id)}
             >
               ✕
@@ -409,13 +409,13 @@ function VariableContextEditor({
             <code className="text-primary-600 font-medium min-w-[80px]">{`{{${v.name}}}`}</code>
             <span className="text-warm-400 truncate flex-1">{v.value || '(空)'}</span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-              v.source === 'input' ? 'bg-blue-50 text-blue-600' :
-              v.source === 'env' ? 'bg-purple-50 text-purple-600' :
+              v.source === 'input' ? 'bg-primary-50 text-primary-600' :
+              v.source === 'env' ? 'bg-primary-50 text-primary-600' :
               'bg-warm-100 text-warm-500'
             }`}>
               {v.source}
             </span>
-            <button className="text-[10px] text-red-400 hover:text-red-600" onClick={() => removeVariable(v.name)}>
+            <button className="text-[10px] text-danger-400 hover:text-danger-600" onClick={() => removeVariable(v.name)}>
               移除
             </button>
           </div>

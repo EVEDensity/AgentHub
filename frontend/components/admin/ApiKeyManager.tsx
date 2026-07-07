@@ -49,7 +49,7 @@ export default function ApiKeyManager(): JSX.Element {
       {/* Create modal */}
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={() => setShowCreate(false)}>
-          <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-modal" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
               <h3 className="text-lg font-semibold text-warm-900">🔑 创建 API Key</h3>
               <button className="rounded-lg px-3 py-1.5 text-sm text-warm-500 hover:bg-warm-100" onClick={() => setShowCreate(false)}>关闭</button>
@@ -58,10 +58,10 @@ export default function ApiKeyManager(): JSX.Element {
             {createdKey ? (
               /* Success state — show the key once */
               <div className="px-6 py-5 space-y-4">
-                <div className="rounded-xl bg-green-50 border border-green-200 p-4 text-center">
-                  <p className="text-sm font-medium text-green-800">✅ API Key 创建成功</p>
-                  <p className="text-xs text-green-600 mt-1">请立即复制密钥，关闭后将无法再次查看。</p>
-                  <div className="mt-3 bg-warm-100 rounded-lg border border-green-200 px-4 py-3 font-mono text-sm text-green-900 break-all select-all">
+                <div className="rounded-xl bg-success-50 border border-success-200 p-4 text-center">
+                  <p className="text-sm font-medium text-success-800">✅ API Key 创建成功</p>
+                  <p className="text-xs text-success-600 mt-1">请立即复制密钥，关闭后将无法再次查看。</p>
+                  <div className="mt-3 bg-warm-100 rounded-lg border border-success-200 px-4 py-3 font-mono text-sm text-success-900 break-all select-all">
                     {createdKey.fullKey}
                   </div>
                   <div className="mt-3 flex gap-2 justify-center">
@@ -125,9 +125,9 @@ export default function ApiKeyManager(): JSX.Element {
                     onChange={(e) => setNewRateLimit(parseInt(e.target.value) || 60)}
                   />
                 </div>
-                <div className="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
+                <div className="rounded-lg bg-primary-50 border border-primary-200 px-3 py-2 text-xs text-primary-700">
                   <strong>使用方式：</strong>
-                  <code className="ml-2 bg-blue-100 px-1 rounded text-[10px]">
+                  <code className="ml-2 bg-primary-100 px-1 rounded text-[10px]">
                     curl -H &quot;Authorization: Bearer YOUR_KEY&quot; /v1/public/chat -d &apos;{'{'}...{'}'}&apos;
                   </code>
                 </div>
@@ -160,7 +160,7 @@ export default function ApiKeyManager(): JSX.Element {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-warm-800">{key.name}</span>
                       <code className="text-[10px] bg-warm-100 px-1.5 py-0.5 rounded text-warm-500">{key.keyPrefix}...</code>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${key.enabled ? 'bg-green-50 text-green-600' : 'bg-warm-100 text-warm-400'}`}>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${key.enabled ? 'bg-success-50 text-success-600' : 'bg-warm-100 text-warm-400'}`}>
                         {key.enabled ? '启用' : '已撤销'}
                       </span>
                     </div>
@@ -181,7 +181,7 @@ export default function ApiKeyManager(): JSX.Element {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
-                    className="btn-ghost text-xs px-2 py-1 text-red-500"
+                    className="btn-ghost text-xs px-2 py-1 text-danger-500"
                     onClick={() => handleRevoke(key.id)}
                     disabled={!key.enabled}
                   >
@@ -201,7 +201,7 @@ export default function ApiKeyManager(): JSX.Element {
           <div>
             <p className="font-medium text-warm-700">POST /v1/public/chat</p>
             <p className="text-xs text-warm-500 mt-0.5">发送消息给指定 Agent，支持流式响应 (SSE)</p>
-            <pre className="mt-2 bg-warm-900 text-green-400 text-xs p-4 rounded-lg overflow-x-auto">
+            <pre className="mt-2 bg-warm-900 text-success-400 text-xs p-4 rounded-lg overflow-x-auto">
 {`curl -X POST https://your-domain/v1/public/chat \\
   -H "Authorization: Bearer ah-xxxxxxxxxxxx" \\
   -H "Content-Type: application/json" \\

@@ -78,7 +78,7 @@ export default function AgentEditModal(props: AgentEditModalProps): JSX.Element 
     >
       {/* Prevent propagation to keep modal open when clicking inside */}
       <div
-        className="w-full max-w-2xl rounded-2xl bg-warm-100 shadow-2xl"
+        className="w-full max-w-2xl rounded-2xl bg-warm-100 shadow-modal"
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── Header ────────────────────────────────────────────── */}
@@ -160,9 +160,9 @@ export default function AgentEditModal(props: AgentEditModalProps): JSX.Element 
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-warm-700">{props.selectedAdapterInfo.name}</span>
                     <span className={`rounded px-1.5 py-0.5 text-[10px] ${
-                      props.selectedAdapterInfo.category === 'mock' ? 'bg-green-100 text-green-700' :
-                      props.selectedAdapterInfo.category === 'local' ? 'bg-blue-100 text-blue-700' :
-                      props.selectedAdapterInfo.category === 'custom' ? 'bg-purple-100 text-purple-700' :
+                      props.selectedAdapterInfo.category === 'mock' ? 'bg-success-100 text-success-700' :
+                      props.selectedAdapterInfo.category === 'local' ? 'bg-primary-100 text-primary-700' :
+                      props.selectedAdapterInfo.category === 'custom' ? 'bg-primary-100 text-primary-700' :
                       'bg-warm-100 text-warm-600'
                     }`}>
                       {props.selectedAdapterInfo.category === 'mock' ? '无需网络' :

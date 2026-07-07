@@ -18,18 +18,18 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 /* ── RiskBadge 组件 ────────────────────────────────────────── */
 function RiskBadge({ level }: { level: string }): JSX.Element {
   const config = {
-    L1: { bg: 'bg-green-100', text: 'text-green-700', ring: 'ring-green-300', label: 'L1 低风险' },
-    low: { bg: 'bg-green-100', text: 'text-green-700', ring: 'ring-green-300', label: '低风险' },
-    L2: { bg: 'bg-yellow-100', text: 'text-yellow-700', ring: 'ring-yellow-300', label: 'L2 中风险' },
-    medium: { bg: 'bg-yellow-100', text: 'text-yellow-700', ring: 'ring-yellow-300', label: '中风险' },
-    L3: { bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300', label: 'L3 高风险' },
-    high: { bg: 'bg-orange-100', text: 'text-orange-700', ring: 'ring-orange-300', label: '高风险' },
-    L4: { bg: 'bg-red-100', text: 'text-red-700', ring: 'ring-red-300', label: 'L4 严重' },
+    L1: { bg: 'bg-success-100', text: 'text-success-700', ring: 'ring-success-300', label: 'L1 低风险' },
+    low: { bg: 'bg-success-100', text: 'text-success-700', ring: 'ring-success-300', label: '低风险' },
+    L2: { bg: 'bg-warning-100', text: 'text-warning-700', ring: 'ring-warning-300', label: 'L2 中风险' },
+    medium: { bg: 'bg-warning-100', text: 'text-warning-700', ring: 'ring-warning-300', label: '中风险' },
+    L3: { bg: 'bg-warning-100', text: 'text-warning-700', ring: 'ring-warning-300', label: 'L3 高风险' },
+    high: { bg: 'bg-warning-100', text: 'text-warning-700', ring: 'ring-warning-300', label: '高风险' },
+    L4: { bg: 'bg-danger-100', text: 'text-danger-700', ring: 'ring-danger-300', label: 'L4 严重' },
   };
   const c = config[level as keyof typeof config] || { bg: 'bg-warm-100', text: 'text-warm-700', ring: 'ring-warm-300', label: level };
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${c.bg} ${c.text} ${c.ring}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${level === 'L4' || level === 'high' ? 'bg-red-500 animate-pulse' : level === 'L3' ? 'bg-orange-500' : level === 'L2' || level === 'medium' ? 'bg-yellow-500' : 'bg-green-500'}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${level === 'L4' || level === 'high' ? 'bg-danger-500 animate-pulse' : level === 'L3' ? 'bg-warning-500' : level === 'L2' || level === 'medium' ? 'bg-warning-500' : 'bg-success-500'}`} />
       {c.label}
     </span>
   );
@@ -38,12 +38,12 @@ function RiskBadge({ level }: { level: string }): JSX.Element {
 /* ── DecisionBadge 组件 ────────────────────────────────────── */
 function DecisionBadge({ decision }: { decision: string }): JSX.Element {
   const config = {
-    approve: { bg: 'bg-green-100', text: 'text-green-700', icon: '✓', label: '批准' },
-    deny: { bg: 'bg-red-100', text: 'text-red-700', icon: '✗', label: '拒绝' },
-    reject: { bg: 'bg-red-100', text: 'text-red-700', icon: '✗', label: '拒绝' },
-    auto: { bg: 'bg-blue-100', text: 'text-blue-700', icon: '⚡', label: '自动' },
-    confirm: { bg: 'bg-yellow-100', text: 'text-yellow-700', icon: '⏳', label: '待确认' },
-    pending: { bg: 'bg-yellow-100', text: 'text-yellow-700', icon: '⏳', label: '待确认' },
+    approve: { bg: 'bg-success-100', text: 'text-success-700', icon: '✓', label: '批准' },
+    deny: { bg: 'bg-danger-100', text: 'text-danger-700', icon: '✗', label: '拒绝' },
+    reject: { bg: 'bg-danger-100', text: 'text-danger-700', icon: '✗', label: '拒绝' },
+    auto: { bg: 'bg-primary-100', text: 'text-primary-700', icon: '⚡', label: '自动' },
+    confirm: { bg: 'bg-warning-100', text: 'text-warning-700', icon: '⏳', label: '待确认' },
+    pending: { bg: 'bg-warning-100', text: 'text-warning-700', icon: '⏳', label: '待确认' },
   };
   const c = config[decision as keyof typeof config] || { bg: 'bg-warm-100', text: 'text-warm-700', icon: '?', label: decision };
   return (
@@ -97,10 +97,10 @@ function JsonHighlight({ json }: { json: string }): JSX.Element {
   const highlighted = formatted.replace(
     /("(?:\\.|[^"\\])*")\s*:|("(?:\\.|[^"\\])*")|(\btrue\b|\bfalse\b|\bnull\b)|(-?\d+\.?\d*)/g,
     (_, key, str, bool, num) => {
-      if (key) return `<span class="text-purple-600">${key}</span>:`;
-      if (str) return `<span class="text-green-700">${str}</span>`;
-      if (bool) return `<span class="text-blue-600 font-medium">${bool}</span>`;
-      if (num) return `<span class="text-orange-600">${num}</span>`;
+      if (key) return `<span class="text-primary-600">${key}</span>:`;
+      if (str) return `<span class="text-success-700">${str}</span>`;
+      if (bool) return `<span class="text-primary-600 font-medium">${bool}</span>`;
+      if (num) return `<span class="text-warning-600">${num}</span>`;
       return _;
     },
   );
@@ -296,23 +296,23 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
           <StatCard
             label="高风险操作"
             value={data.items.filter(l => l.riskLevel === 'L3' || l.riskLevel === 'L4' || l.riskLevel === 'high').length}
-            bg="bg-red-50 border-red-200"
-            text="text-red-700"
+            bg="bg-danger-50 border-danger-200"
+            text="text-danger-700"
             icon="[red]"
             subtitle={`共 ${data.items.filter(l => l.riskLevel === 'L3' || l.riskLevel === 'L4' || l.riskLevel === 'high').length > 0 ? data.items.filter(l => l.riskLevel === 'L3' || l.riskLevel === 'L4' || l.riskLevel === 'high').length : 0} 条高风险`}
           />
           <StatCard
             label="Agent 执行"
             value={data.items.filter(l => l.action.includes('agent_execute')).length}
-            bg="bg-blue-50 border-blue-200"
-            text="text-blue-700"
+            bg="bg-primary-50 border-primary-200"
+            text="text-primary-700"
             icon="[bot]"
           />
           <StatCard
             label="已批准操作"
             value={data.items.filter(l => l.decision === 'approve' || l.decision === 'auto').length}
-            bg="bg-green-50 border-green-200"
-            text="text-green-700"
+            bg="bg-success-50 border-success-200"
+            text="text-success-700"
             icon="[check]"
           />
         </div>
@@ -646,7 +646,7 @@ export default function AuditLogList({ authHeaders }: AuditLogListProps): JSX.El
           onClick={closeDetail}
         >
           <div
-            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-warm-100 shadow-2xl"
+            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-warm-100 shadow-modal"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal header */}

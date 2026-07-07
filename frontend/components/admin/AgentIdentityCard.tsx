@@ -5,10 +5,10 @@ import type { AgentIdentity } from '../../types';
 
 const STATUS_OPTIONS = ['pending', 'active', 'suspended', 'revoked'] as const;
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-amber-50 text-amber-600 border-amber-200',
-  active: 'bg-green-50 text-green-600 border-green-200',
-  suspended: 'bg-orange-50 text-orange-600 border-orange-200',
-  revoked: 'bg-red-50 text-red-600 border-red-200',
+  pending: 'bg-warning-50 text-warning-600 border-warning-200',
+  active: 'bg-success-50 text-success-600 border-success-200',
+  suspended: 'bg-warning-50 text-warning-600 border-warning-200',
+  revoked: 'bg-danger-50 text-danger-600 border-danger-200',
 };
 
 export default function AgentIdentityCard({
@@ -109,7 +109,7 @@ export default function AgentIdentityCard({
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-h4">[id] Agent 数字身份</h3>
-          <p className="text-xs text-gray-400 mt-1">管理 Agent 的邮箱、SSH 密钥和 OAuth2 凭证</p>
+          <p className="text-xs text-warm-400 mt-1">管理 Agent 的邮箱、SSH 密钥和 OAuth2 凭证</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="btn-primary text-sm">
           + 创建身份
@@ -119,10 +119,10 @@ export default function AgentIdentityCard({
       {/* Create form */}
       {showCreate && (
         <div className="card p-5 border-2 border-primary-100 bg-primary-50/30">
-          <h4 className="font-semibold text-gray-800 mb-3">创建 Agent 数字身份</h4>
+          <h4 className="font-semibold text-warm-800 mb-3">创建 Agent 数字身份</h4>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Agent ID *</label>
+              <label className="block text-xs text-warm-500 mb-1">Agent ID *</label>
               <input
                 type="text"
                 value={form.agent_id}
@@ -132,7 +132,7 @@ export default function AgentIdentityCard({
               />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Tenant ID</label>
+              <label className="block text-xs text-warm-500 mb-1">Tenant ID</label>
               <input
                 type="text"
                 value={form.tenant_id}
@@ -154,27 +154,27 @@ export default function AgentIdentityCard({
           <div key={ident.agent_id} className="card overflow-hidden">
             {/* Header row */}
             <div
-              className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+              className="flex items-center justify-between p-4 cursor-pointer hover:bg-warm-50 transition-colors"
               onClick={() => setExpandedId(expandedId === ident.agent_id ? null : ident.agent_id)}
             >
               <div className="flex items-center gap-3">
                 <span className="text-2xl">[id]</span>
                 <div>
-                  <h4 className="font-semibold text-gray-800 font-mono text-sm">{ident.agent_id}</h4>
-                  <p className="text-xs text-gray-400">{ident.email || '(未分配邮箱)'}</p>
+                  <h4 className="font-semibold text-warm-800 font-mono text-sm">{ident.agent_id}</h4>
+                  <p className="text-xs text-warm-400">{ident.email || '(未分配邮箱)'}</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <span className={`text-xs px-2 py-1 rounded-full border font-medium ${STATUS_COLORS[ident.status] || 'bg-gray-50 text-gray-500'}`}>
+                <span className={`text-xs px-2 py-1 rounded-full border font-medium ${STATUS_COLORS[ident.status] || 'bg-warm-50 text-warm-500'}`}>
                   {ident.status}
                 </span>
-                <span className="text-gray-300 text-xs">{expandedId === ident.agent_id ? '[up]' : '[down]'}</span>
+                <span className="text-warm-300 text-xs">{expandedId === ident.agent_id ? '[up]' : '[down]'}</span>
               </div>
             </div>
 
             {/* Expanded detail */}
             {expandedId === ident.agent_id && (
-              <div className="border-t border-gray-100 p-4 bg-gray-50/50 space-y-4">
+              <div className="border-t border-warm-100 p-4 bg-warm-50/50 space-y-4">
                 {/* Quick actions */}
                 <div className="flex flex-wrap gap-2">
                   <button onClick={() => handleAction(ident.agent_id, 'email')} className="btn-ghost text-xs">
@@ -197,7 +197,7 @@ export default function AgentIdentityCard({
                   </select>
                   <button
                     onClick={() => handleDelete(ident.agent_id)}
-                    className="btn-ghost text-xs text-red-500 hover:text-red-700"
+                    className="btn-ghost text-xs text-danger-500 hover:text-danger-700"
                   >
                     [delete] 删除
                   </button>
@@ -206,28 +206,28 @@ export default function AgentIdentityCard({
                 {/* Detail grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                   <div className="space-y-1">
-                    <span className="text-gray-400">身份 ID</span>
-                    <p className="font-mono text-gray-600">{ident.id}</p>
+                    <span className="text-warm-400">身份 ID</span>
+                    <p className="font-mono text-warm-600">{ident.id}</p>
                   </div>
                   <div className="space-y-1">
-                    <span className="text-gray-400">邮箱</span>
-                    <p className="font-mono text-blue-600">{ident.email || '-'}</p>
+                    <span className="text-warm-400">邮箱</span>
+                    <p className="font-mono text-primary-600">{ident.email || '-'}</p>
                   </div>
                   <div className="space-y-1">
-                    <span className="text-gray-400">SSH 密钥 ({ident.ssh_key_type})</span>
-                    <p className="font-mono text-gray-600 break-all text-[11px]">{ident.ssh_pubkey || '(未生成)'}</p>
+                    <span className="text-warm-400">SSH 密钥 ({ident.ssh_key_type})</span>
+                    <p className="font-mono text-warm-600 break-all text-[11px]">{ident.ssh_pubkey || '(未生成)'}</p>
                   </div>
                   <div className="space-y-1">
-                    <span className="text-gray-400">OAuth2 Provider</span>
-                    <p className="font-mono text-gray-600">{ident.oauth2_provider || '(未配置)'}</p>
+                    <span className="text-warm-400">OAuth2 Provider</span>
+                    <p className="font-mono text-warm-600">{ident.oauth2_provider || '(未配置)'}</p>
                   </div>
                   <div className="space-y-1">
-                    <span className="text-gray-400">GP G Key</span>
-                    <p className="font-mono text-gray-600">{ident.gpg_key || '(未配置)'}</p>
+                    <span className="text-warm-400">GP G Key</span>
+                    <p className="font-mono text-warm-600">{ident.gpg_key || '(未配置)'}</p>
                   </div>
                   <div className="space-y-1">
-                    <span className="text-gray-400">创建时间</span>
-                    <p className="text-gray-500">{new Date(ident.created_at).toLocaleString()}</p>
+                    <span className="text-warm-400">创建时间</span>
+                    <p className="text-warm-500">{new Date(ident.created_at).toLocaleString()}</p>
                   </div>
                 </div>
               </div>
@@ -236,7 +236,7 @@ export default function AgentIdentityCard({
         ))}
 
         {identities.length === 0 && !showCreate && (
-          <div className="text-center py-16 text-gray-400">
+          <div className="text-center py-16 text-warm-400">
             <p className="text-5xl mb-4">[id]</p>
             <p className="text-lg mb-1">暂无 Agent 数字身份</p>
             <p className="text-sm">创建身份后，Agent 将拥有邮箱、SSH 和 OAuth2 凭证</p>

@@ -574,7 +574,7 @@ export default function RAGDocViewer({ authHeaders, setNotice }: Props): JSX.Ele
           onClick={() => setSelectedImage(null)}
         >
           <div
-            className="bg-warm-100 rounded-2xl max-w-2xl w-full mx-4 overflow-hidden shadow-2xl"
+            className="bg-warm-100 rounded-2xl max-w-2xl w-full mx-4 overflow-hidden shadow-modal"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 py-3 border-b border-warm-100">

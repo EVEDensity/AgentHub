@@ -62,9 +62,9 @@ const SLO_TARGETS: SLOTarget[] = [
 
 function statusColor(status: SLOTarget['status']): string {
   switch (status) {
-    case 'ok': return 'text-emerald-600 bg-emerald-50 ring-emerald-200';
-    case 'warn': return 'text-amber-600 bg-amber-50 ring-amber-200';
-    case 'fail': return 'text-red-600 bg-red-50 ring-red-200';
+    case 'ok': return 'text-success-600 bg-success-50 ring-success-200';
+    case 'warn': return 'text-warning-600 bg-warning-50 ring-warning-200';
+    case 'fail': return 'text-danger-600 bg-danger-50 ring-danger-200';
     default: return 'text-warm-400 bg-warm-50 ring-warm-200';
   }
 }
@@ -100,9 +100,9 @@ function formatErrorBudget(slo: SLOTarget): string {
 }
 
 function gaugeColor(pct: number): string {
-  if (pct >= 100) return 'text-emerald-500 stroke-emerald-500';
-  if (pct >= 80) return 'text-amber-500 stroke-amber-500';
-  return 'text-red-500 stroke-red-500';
+  if (pct >= 100) return 'text-success-500 stroke-success-500';
+  if (pct >= 80) return 'text-warning-500 stroke-warning-500';
+  return 'text-danger-500 stroke-danger-500';
 }
 
 function GaugeRing({ pct, size = 80 }: { pct: number; size?: number }) {
@@ -252,9 +252,9 @@ export default function SloDashboard(): JSX.Element {
     : sloTargets.every((s) => s.status === 'ok') ? 'ok'
     : 'loading';
 
-  const overallColor = overallStatus === 'ok' ? 'text-emerald-600'
-    : overallStatus === 'warn' ? 'text-amber-600'
-    : overallStatus === 'fail' ? 'text-red-600'
+  const overallColor = overallStatus === 'ok' ? 'text-success-600'
+    : overallStatus === 'warn' ? 'text-warning-600'
+    : overallStatus === 'fail' ? 'text-danger-600'
     : 'text-warm-400';
 
   const overallLabel = overallStatus === 'ok' ? '[check] 全部 SLO 达标'
@@ -300,7 +300,7 @@ export default function SloDashboard(): JSX.Element {
               {loading && <span className="ml-2 inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500 align-middle" />}
             </p>
           </div>
-          {error && <span className="ml-auto text-xs text-red-500">{error}</span>}
+          {error && <span className="ml-auto text-xs text-danger-500">{error}</span>}
         </div>
       </div>
 
@@ -372,14 +372,14 @@ export default function SloDashboard(): JSX.Element {
               <div key={`burn-${slo.key}`}>
                 <div className="flex justify-between text-xs mb-1">
                   <span className="text-warm-600">{slo.icon} {slo.name}</span>
-                  <span className={`font-medium ${budget <= 0 ? 'text-red-600' : 'text-warm-600'}`}>
+                  <span className={`font-medium ${budget <= 0 ? 'text-danger-600' : 'text-warm-600'}`}>
                     {budget <= 0 ? '预算已耗尽 [warn]' : `剩余 ${slo.key === 'p99_latency' ? `${(budget * 1000).toFixed(0)}ms` : `${budget.toFixed(3)}%`}`}
                   </span>
                 </div>
                 <div className="h-2 w-full rounded-full bg-warm-100 overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all duration-700 ${
-                      burnPct >= 80 ? 'bg-red-500' : burnPct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'
+                      burnPct >= 80 ? 'bg-danger-500' : burnPct >= 50 ? 'bg-warning-500' : 'bg-success-500'
                     }`}
                     style={{ width: `${burnPct}%` }}
                   />

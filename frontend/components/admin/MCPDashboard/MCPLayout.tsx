@@ -79,7 +79,7 @@ export default function MCPLayout({ initialTab = 'overview' }: MCPLayoutProps): 
         ))}
         {/* Auto-refresh indicator */}
         <div className="ml-auto shrink-0 flex items-center gap-2 text-xs text-warm-400">
-          <span className={`h-2 w-2 rounded-full ${loading ? 'bg-amber-400 animate-pulse' : 'bg-green-500'}`} />
+          <span className={`h-2 w-2 rounded-full ${loading ? 'bg-warning-400 animate-pulse' : 'bg-success-500'}`} />
           {loading ? '刷新中...' : dashboardData ? `已更新 ${dashboardData.timestamp?.slice(11, 19) || '--'}` : '—'}
           <button className="text-primary-500 hover:text-primary-700 underline" onClick={() => void fetchDashboard()}>
             刷新
@@ -89,7 +89,7 @@ export default function MCPLayout({ initialTab = 'overview' }: MCPLayoutProps): 
 
       {/* Error banner */}
       {error && (
-        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
+        <div className="rounded-lg bg-danger-50 border border-danger-200 px-4 py-3 text-sm text-danger-600">
           {error}
           <button className="ml-2 underline" onClick={() => void fetchDashboard()}>重试</button>
         </div>

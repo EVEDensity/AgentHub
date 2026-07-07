@@ -3,11 +3,11 @@
 import { useState, useCallback } from 'react';
 
 const LEVEL_COLORS: Record<string, string> = {
-  debug: 'text-gray-400 bg-gray-50 border-gray-200',
-  info: 'text-blue-600 bg-blue-50 border-blue-200',
-  warn: 'text-amber-600 bg-amber-50 border-amber-200',
-  warning: 'text-amber-600 bg-amber-50 border-amber-200',
-  error: 'text-red-600 bg-red-50 border-red-200',
+  debug: 'text-warm-400 bg-warm-50 border-warm-200',
+  info: 'text-primary-600 bg-primary-50 border-primary-200',
+  warn: 'text-warning-600 bg-warning-50 border-warning-200',
+  warning: 'text-warning-600 bg-warning-50 border-warning-200',
+  error: 'text-danger-600 bg-danger-50 border-danger-200',
 };
 
 const LEVEL_BG: Record<string, string> = {
@@ -75,10 +75,10 @@ export default function LogsViewer({
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-h4">[clipboard] 集中日志</h3>
-          <p className="text-xs text-gray-400 mt-1">Loki 日志聚合 · 按 service / level / trace_id 检索</p>
+          <p className="text-xs text-warm-400 mt-1">Loki 日志聚合 · 按 service / level / trace_id 检索</p>
         </div>
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
+          <label className="flex items-center gap-2 text-xs text-warm-500 cursor-pointer">
             <input
               type="checkbox"
               checked={autoRefresh}
@@ -87,7 +87,7 @@ export default function LogsViewer({
             />
             自动刷新 (5s)
           </label>
-          <span className="text-xs text-gray-400">
+          <span className="text-xs text-warm-400">
             {total > 0 ? `共 ${total} 条，显示 ${logs.length} 条` : ''}
           </span>
         </div>
@@ -97,7 +97,7 @@ export default function LogsViewer({
       <form onSubmit={handleSubmit} className="card p-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div>
-            <label className="block text-[10px] text-gray-400 mb-1 uppercase">服务名</label>
+            <label className="block text-[10px] text-warm-400 mb-1 uppercase">服务名</label>
             <input
               type="text"
               value={service}
@@ -107,7 +107,7 @@ export default function LogsViewer({
             />
           </div>
           <div>
-            <label className="block text-[10px] text-gray-400 mb-1 uppercase">日志级别</label>
+            <label className="block text-[10px] text-warm-400 mb-1 uppercase">日志级别</label>
             <select value={level} onChange={(e) => setLevel(e.target.value)} className="input-field text-sm w-full">
               <option value="">全部</option>
               <option value="debug">DEBUG</option>
@@ -117,7 +117,7 @@ export default function LogsViewer({
             </select>
           </div>
           <div>
-            <label className="block text-[10px] text-gray-400 mb-1 uppercase">关键词 / Trace ID</label>
+            <label className="block text-[10px] text-warm-400 mb-1 uppercase">关键词 / Trace ID</label>
             <input
               type="text"
               value={query}
@@ -157,35 +157,35 @@ export default function LogsViewer({
               </span>
 
               {/* Timestamp */}
-              <span className="text-gray-400 shrink-0 w-[140px] text-[11px]">
+              <span className="text-warm-400 shrink-0 w-[140px] text-[11px]">
                 {ts ? new Date(ts).toLocaleTimeString() + '.' + (new Date(ts).getMilliseconds().toString().padStart(3, '0')) : '-'}
               </span>
 
               {/* Service */}
-              <span className="font-semibold text-gray-500 shrink-0 w-[140px] truncate">
+              <span className="font-semibold text-warm-500 shrink-0 w-[140px] truncate">
                 {svc}
               </span>
 
               {/* Trace ID */}
               {tid && (
-                <span className="text-purple-500 shrink-0 text-[10px] font-mono truncate w-[120px]" title={tid}>
+                <span className="text-primary-500 shrink-0 text-[10px] font-mono truncate w-[120px]" title={tid}>
                   {tid.slice(0, 12)}...
                 </span>
               )}
 
               {/* Message */}
-              <span className="text-gray-700 flex-1 truncate">{msg}</span>
+              <span className="text-warm-700 flex-1 truncate">{msg}</span>
 
               {/* Expand indicator */}
               {Object.keys(fields).length > 0 && (
-                <span className="text-gray-300 shrink-0">{selectedLog === entry ? '▲' : '▼'}</span>
+                <span className="text-warm-300 shrink-0">{selectedLog === entry ? '▲' : '▼'}</span>
               )}
             </div>
           );
         })}
 
         {logs.length === 0 && !loading && (
-          <div className="text-center py-16 text-gray-400">
+          <div className="text-center py-16 text-warm-400">
             <p className="text-5xl mb-4">[clipboard]</p>
             <p className="text-lg mb-1">暂无日志</p>
             <p className="text-sm">
@@ -205,13 +205,13 @@ export default function LogsViewer({
 
       {/* Expanded log detail */}
       {selectedLog && (
-        <div className="card p-4 bg-gray-50">
-          <h4 className="text-xs font-semibold text-gray-500 mb-3 uppercase">日志详情</h4>
+        <div className="card p-4 bg-warm-50">
+          <h4 className="text-xs font-semibold text-warm-500 mb-3 uppercase">日志详情</h4>
           <div className="grid grid-cols-2 gap-3 text-xs">
             {Object.entries(selectedLog).map(([key, value]) => (
               <div key={key} className="flex gap-2">
-                <span className="font-semibold text-gray-500 shrink-0">{key}:</span>
-                <span className="text-gray-700 break-all font-mono">
+                <span className="font-semibold text-warm-500 shrink-0">{key}:</span>
+                <span className="text-warm-700 break-all font-mono">
                   {typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value)}
                 </span>
               </div>

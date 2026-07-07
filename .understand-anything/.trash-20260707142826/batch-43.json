@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "batchIndex": 43,
+  "nodes": [
+    {
+      "id": "services/rust/crates/stream-core/Dockerfile",
+      "type": "file",
+      "name": "stream-core Dockerfile",
+      "filePath": "services/rust/crates/stream-core/Dockerfile",
+      "summary": "stream-core 的 Docker 多阶段构建文件，使用 rust:1-bookworm 构建，暴露端口 8101，用于流式数据核心服务的容器化部署",
+      "tags": ["Docker", "Rust", "流处理", "微服务", "基础设施"],
+      "complexity": 2
+    }
+  ],
+  "edges": []
+}

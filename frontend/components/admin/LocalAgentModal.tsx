@@ -126,7 +126,7 @@ export default function LocalAgentModal({
       }}
     >
       <div
-        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-warm-100 shadow-2xl"
+        className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-warm-100 shadow-modal"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -167,7 +167,7 @@ export default function LocalAgentModal({
 
           {/* Error banner */}
           {error && (
-            <div className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">
+            <div className="mb-4 rounded-lg bg-danger-50 px-4 py-3 text-sm text-danger-600">
               {error}
             </div>
           )}
@@ -177,10 +177,10 @@ export default function LocalAgentModal({
             <div
               className={`mb-4 rounded-lg px-4 py-3 text-sm ${
                 notice.startsWith('✅')
-                  ? 'bg-green-50 text-green-700'
+                  ? 'bg-success-50 text-success-700'
                   : notice.startsWith('❌')
-                  ? 'bg-red-50 text-red-600'
-                  : 'bg-blue-50 text-blue-600'
+                  ? 'bg-danger-50 text-danger-600'
+                  : 'bg-primary-50 text-primary-600'
               }`}
             >
               {notice}
@@ -218,9 +218,9 @@ export default function LocalAgentModal({
                   key={candidate.adapterType}
                   className={`rounded-xl border p-4 transition-colors ${
                     candidate.healthy
-                      ? 'border-green-200 bg-green-50/30'
+                      ? 'border-success-200 bg-success-50/30'
                       : candidate.installed
-                      ? 'border-amber-200 bg-amber-50/30'
+                      ? 'border-warning-200 bg-warning-50/30'
                       : 'border-warm-150 bg-warm-100 opacity-60'
                   }`}
                 >
@@ -237,13 +237,13 @@ export default function LocalAgentModal({
                           </h4>
                           {/* Status indicator */}
                           {candidate.healthy ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">
-                              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                            <span className="inline-flex items-center gap-1 rounded-full bg-success-100 px-2 py-0.5 text-[11px] font-medium text-success-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-success-500" />
                               在线
                             </span>
                           ) : candidate.installed ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                            <span className="inline-flex items-center gap-1 rounded-full bg-warning-100 px-2 py-0.5 text-[11px] font-medium text-warning-700">
+                              <span className="h-1.5 w-1.5 rounded-full bg-warning-500" />
                               检测异常
                             </span>
                           ) : (
@@ -253,7 +253,7 @@ export default function LocalAgentModal({
                             </span>
                           )}
                           {candidate.registered && (
-                            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                            <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[11px] font-medium text-primary-700">
                               已接入
                             </span>
                           )}
@@ -276,7 +276,7 @@ export default function LocalAgentModal({
                         )}
                         {/* Error message */}
                         {candidate.errorMessage && (
-                          <p className="mt-1 text-[12px] text-red-500 truncate">
+                          <p className="mt-1 text-[12px] text-danger-500 truncate">
                             {candidate.errorMessage}
                           </p>
                         )}
@@ -314,7 +314,7 @@ export default function LocalAgentModal({
                         </button>
                       )}
                       {candidate.registered && (
-                        <span className="rounded bg-blue-50 px-3 py-1.5 text-xs text-blue-600 font-medium">
+                        <span className="rounded bg-primary-50 px-3 py-1.5 text-xs text-primary-600 font-medium">
                           ✓ 已接入 ({candidate.registeredAgentId})
                         </span>
                       )}

@@ -18,13 +18,13 @@ function ToolCard({
 }): JSX.Element {
   const cat = TOOL_CATEGORIES[tool.category] || { label: tool.category, icon: 'build' };
   const riskColors: Record<string, string> = {
-    L1: 'bg-green-100 text-green-700',
-    L2: 'bg-yellow-100 text-yellow-700',
-    L3: 'bg-red-100 text-red-700',
+    L1: 'bg-success-100 text-success-700',
+    L2: 'bg-warning-100 text-warning-700',
+    L3: 'bg-danger-100 text-danger-700',
   };
 
   return (
-    <div className="card group relative overflow-hidden transition-all duration-200 hover:shadow-lg hover:-translate-y-0.5">
+    <div className="card group relative overflow-hidden transition-all duration-200 hover:shadow-card-hover hover:-translate-y-0.5">
       {/* Header */}
       <div className="flex items-start gap-3">
         <span
@@ -44,13 +44,13 @@ function ToolCard({
               {cat.label}
             </span>
             {tool.handlerType === 'builtin' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">内置</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary-50 text-primary-600">内置</span>
             )}
             {tool.handlerType === 'custom' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-600">自定义</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary-50 text-primary-600">自定义</span>
             )}
             {tool.handlerType === 'community' && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600">社区</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-warning-50 text-warning-600">社区</span>
             )}
           </div>
           <p className="text-xs text-warm-500 mt-1 line-clamp-2">{tool.description}</p>
@@ -79,7 +79,7 @@ function ToolCard({
         <button
           className={`text-[11px] px-2 py-1 rounded transition-colors ${
             tool.enabled
-              ? 'text-green-600 hover:bg-green-50'
+              ? 'text-success-600 hover:bg-success-50'
               : 'text-warm-400 hover:bg-warm-100'
           }`}
           onClick={onToggle}
@@ -90,16 +90,16 @@ function ToolCard({
           {tool.enabled ? ' 已启用' : ' 已禁用'}
         </button>
         {tool.handlerType !== 'builtin' && (
-          <button className="btn-ghost text-[11px] px-2 py-1 text-red-500" onClick={onDelete}>
+          <button className="btn-ghost text-[11px] px-2 py-1 text-danger-500" onClick={onDelete}>
             <span className="material-symbols-outlined text-[12px]">delete</span>
           </button>
         )}
         <div className="flex-1" />
         {tool.isConcurrencySafe && (
-          <span className="text-[10px] text-green-500" title="并发安全">∥</span>
+          <span className="text-[10px] text-success-500" title="并发安全">∥</span>
         )}
         {tool.requiresUserConfirmation && (
-          <span className="text-[10px] text-amber-500" title="需要用户确认">⚠</span>
+          <span className="text-[10px] text-warning-500" title="需要用户确认">⚠</span>
         )}
       </div>
     </div>
@@ -118,7 +118,7 @@ function ToolDetailModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-modal" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined text-[24px] text-primary-500">{cat.icon}</span>
@@ -141,7 +141,7 @@ function ToolDetailModal({
                   <div className="flex items-center gap-2">
                     <code className="text-primary-600 font-medium">{p.name}</code>
                     <span className="text-warm-400">{p.type}</span>
-                    {p.required && <span className="text-red-500">*必填</span>}
+                    {p.required && <span className="text-danger-500">*必填</span>}
                     {p.default !== undefined && <span className="text-warm-400">默认: {String(p.default)}</span>}
                   </div>
                   <p className="text-warm-500 mt-0.5">{p.description}</p>
@@ -224,7 +224,7 @@ function SwaggerImportModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-lg rounded-2xl bg-warm-100 shadow-modal" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <h3 className="text-lg font-semibold text-warm-900">[download] 导入 Swagger/OpenAPI</h3>
           <button className="rounded-lg px-3 py-1.5 text-sm text-warm-500 hover:bg-warm-100" onClick={onClose}>关闭</button>
@@ -305,7 +305,7 @@ function ToolBindingModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[5vh] pb-8 overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-2xl rounded-2xl bg-warm-100 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="w-full max-w-2xl rounded-2xl bg-warm-100 shadow-modal" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-warm-150 px-6 py-4">
           <div>
             <h3 className="text-lg font-semibold text-warm-900">[wrench] 工具绑定</h3>
@@ -339,9 +339,9 @@ function ToolBindingModal({
                       <span className="text-xs text-warm-400 ml-2">{t.description.slice(0, 40)}...</span>
                     </div>
                     <span className={`text-[10px] px-1 py-0.5 rounded ${
-                      t.riskLevel === 'L1' ? 'bg-green-50 text-green-600' :
-                      t.riskLevel === 'L2' ? 'bg-yellow-50 text-yellow-600' :
-                      'bg-red-50 text-red-600'
+                      t.riskLevel === 'L1' ? 'bg-success-50 text-success-600' :
+                      t.riskLevel === 'L2' ? 'bg-warning-50 text-warning-600' :
+                      'bg-danger-50 text-danger-600'
                     }`}>{t.riskLevel}</span>
                   </label>
                 ))}
@@ -437,9 +437,9 @@ export default function ToolMarketplace(): JSX.Element {
       <div className="grid grid-cols-4 gap-3">
         {[
           { label: '总数', value: store.tools.length, icon: 'build', color: 'text-primary-500' },
-          { label: '已启用', value: store.tools.filter((t) => t.enabled).length, icon: 'toggle_on', color: 'text-green-500' },
-          { label: '内置', value: store.tools.filter((t) => t.handlerType === 'builtin').length, icon: 'lock', color: 'text-blue-500' },
-          { label: '自定义', value: store.tools.filter((t) => t.handlerType !== 'builtin').length, icon: 'edit', color: 'text-purple-500' },
+          { label: '已启用', value: store.tools.filter((t) => t.enabled).length, icon: 'toggle_on', color: 'text-success-500' },
+          { label: '内置', value: store.tools.filter((t) => t.handlerType === 'builtin').length, icon: 'lock', color: 'text-primary-500' },
+          { label: '自定义', value: store.tools.filter((t) => t.handlerType !== 'builtin').length, icon: 'edit', color: 'text-primary-500' },
         ].map((stat) => (
           <div key={stat.label} className="card flex items-center gap-3">
             <span className={`material-symbols-outlined text-[20px] ${stat.color}`}>{stat.icon}</span>

@@ -113,7 +113,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
   return (
     <div className="grid flex-1 grid-cols-[300px_1fr] min-h-0">
       {/* ── Left sidebar ── */}
-      <aside className="border-r border-warm-150 bg-[#FBFAF8] flex flex-col overflow-hidden">
+      <aside className="border-r border-warm-150 bg-[#191C22] flex flex-col overflow-hidden">
         <div className="border-b border-warm-150 px-4 py-3 shrink-0">
           <div className="text-base font-semibold text-warm-900">项目记忆</div>
           <div className="text-xs text-warm-500">共 {props.memoryFiles.length} 个文件</div>
@@ -161,7 +161,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
 
         <div className="flex-1 overflow-auto px-3 py-3">
           {props.memoryLoading ? <div className="px-2 py-2 text-xs text-warm-500">加载中...</div> : null}
-          {props.memoryError ? <div className="px-2 py-2 text-xs text-red-500">{props.memoryError}</div> : null}
+          {props.memoryError ? <div className="px-2 py-2 text-xs text-danger-500">{props.memoryError}</div> : null}
 
           {/* Content search results */}
           {props.memorySearchResults !== null && (
@@ -227,7 +227,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
             <button className="btn-secondary px-3 py-1.5 text-sm" onClick={() => document.getElementById('memory-import-input')?.click()}>导入</button>
             <input id="memory-import-input" type="file" accept=".md,.markdown,.txt" className="hidden" onChange={(e) => { props.handleImportMemory(e); }} />
             <button
-              className="btn-secondary px-3 py-1.5 text-sm text-red-600 border-red-200 hover:bg-red-50"
+              className="btn-secondary px-3 py-1.5 text-sm text-danger-600 border-danger-200 hover:bg-danger-50"
               disabled={!props.activeMemoryFile}
               onClick={() => {
                 if (props.activeMemoryFile) {
@@ -238,7 +238,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
               }}
             >删除</button>
             <button
-              className={`px-3 py-1.5 text-sm ${props.showTrash ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'btn-secondary'}`}
+              className={`px-3 py-1.5 text-sm ${props.showTrash ? 'bg-warning-100 text-warning-800 border border-warning-300' : 'btn-secondary'}`}
               onClick={() => {
                 props.setShowTrash(!props.showTrash);
                 if (!props.showTrash) { void props.loadTrash(); }
@@ -249,13 +249,13 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
 
         {/* Trash panel */}
         {props.showTrash && (
-          <div className="border-b border-amber-200 bg-amber-50/50 px-5 py-3">
+          <div className="border-b border-warning-200 bg-warning-50/50 px-5 py-3">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <span className="text-sm font-semibold text-amber-800">🗑 暂存区</span>
-                <span className="ml-2 text-xs text-amber-600">已删除的记忆在此保留 30 天，过期后自动永久删除</span>
+                <span className="text-sm font-semibold text-warning-800">🗑 暂存区</span>
+                <span className="ml-2 text-xs text-warning-600">已删除的记忆在此保留 30 天，过期后自动永久删除</span>
               </div>
-              <button className="text-xs text-amber-600 hover:text-amber-800 underline" onClick={() => props.setShowTrash(false)}>关闭</button>
+              <button className="text-xs text-warning-600 hover:text-warning-800 underline" onClick={() => props.setShowTrash(false)}>关闭</button>
             </div>
             {props.trashLoading ? (
               <div className="text-xs text-warm-500 py-2">加载中...</div>
@@ -264,7 +264,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
             ) : (
               <div className="space-y-2 max-h-48 overflow-y-auto">
                 {props.trashItems.map((item) => (
-                  <div key={item.trash_name} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${item.expired ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-warm-100'}`}>
+                  <div key={item.trash_name} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${item.expired ? 'border-danger-200 bg-danger-50' : 'border-warning-200 bg-warm-100'}`}>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium text-warm-800">{item.original_name}</div>
                       <div className="text-xs text-warm-500">
@@ -273,9 +273,9 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
                     </div>
                     <div className="flex items-center gap-1 ml-3 shrink-0">
                       {!item.expired && (
-                        <button className="rounded px-2 py-1 text-xs text-green-700 bg-green-100 hover:bg-green-200" onClick={() => { void props.handleRecoverFromTrash(item.trash_name); }}>恢复</button>
+                        <button className="rounded px-2 py-1 text-xs text-success-700 bg-success-100 hover:bg-success-200" onClick={() => { void props.handleRecoverFromTrash(item.trash_name); }}>恢复</button>
                       )}
-                      <button className="rounded px-2 py-1 text-xs text-red-600 bg-red-100 hover:bg-red-200" onClick={() => { void props.handlePurgeFromTrash(item.trash_name); }}>永久删除</button>
+                      <button className="rounded px-2 py-1 text-xs text-danger-600 bg-danger-100 hover:bg-danger-200" onClick={() => { void props.handlePurgeFromTrash(item.trash_name); }}>永久删除</button>
                     </div>
                   </div>
                 ))}
@@ -306,7 +306,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
               <span className="text-xs font-medium tracking-wide text-warm-600">预览</span>
               <span className="text-xs text-warm-400">已渲染</span>
             </div>
-            <div className="flex-1 overflow-auto bg-[#FCFCFB] px-4 py-3">
+            <div className="flex-1 overflow-auto bg-[#121418] px-4 py-3">
               <MarkdownRenderer content={props.memoryBodyDraft || '（空内容）'} />
             </div>
           </div>
@@ -324,7 +324,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
                 <div className="text-sm text-warm-600 mt-0.5">「{props.pendingDeleteFile.name}」</div>
               </div>
             </div>
-            <div className="mb-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+            <div className="mb-2 p-3 rounded-lg bg-warning-50 border border-warning-200 text-sm text-warning-800">
               <p className="font-medium mb-1">[clipboard] 删除说明：</p>
               <ul className="list-disc list-inside space-y-1 text-xs">
                 <li>删除后文件将进入<strong>暂存区</strong>保存 <strong>30 天</strong></li>
@@ -334,7 +334,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
             </div>
             <div className="flex justify-end gap-3 mt-4">
               <button className="px-4 py-2 text-sm rounded-lg border border-warm-200 text-warm-700 hover:bg-warm-50" onClick={() => { props.setShowDeleteConfirm(false); props.setPendingDeleteFile(null); }}>取消</button>
-              <button className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700" onClick={() => { void props.handleDeleteMemory(); }}>确认删除</button>
+              <button className="px-4 py-2 text-sm rounded-lg bg-danger-600 text-white hover:bg-danger-700" onClick={() => { void props.handleDeleteMemory(); }}>确认删除</button>
             </div>
           </div>
         </div>
@@ -346,7 +346,7 @@ function FilesTab(props: MemoryModuleProps): JSX.Element {
 function SessionsTab(props: MemoryModuleProps): JSX.Element {
   return (
     <div className="grid flex-1 grid-cols-[320px_1fr] min-h-0">
-      <aside className="border-r border-warm-150 bg-[#FBFAF8] flex flex-col overflow-hidden">
+      <aside className="border-r border-warm-150 bg-[#191C22] flex flex-col overflow-hidden">
         <div className="border-b border-warm-150 px-4 py-3 shrink-0">
           <div className="text-base font-semibold text-warm-900">会话摘要</div>
           <div className="text-xs text-warm-500">共 {props.sessionList.length} 个会话</div>
@@ -401,7 +401,7 @@ function SessionsTab(props: MemoryModuleProps): JSX.Element {
           </div>
           {props.activeSessionId && (
             <button
-              className="btn-ghost px-3 py-1.5 text-xs text-red-500"
+              className="btn-ghost px-3 py-1.5 text-xs text-danger-500"
               onClick={async () => {
                 if (!window.confirm(`确认重置会话 ${props.activeSessionId} 的摘要？`)) return;
                 await fetch(`/api/memory/sessions/reset/${encodeURIComponent(props.activeSessionId!)}`, { method: 'POST', headers: props.authHeaders() });
@@ -411,7 +411,7 @@ function SessionsTab(props: MemoryModuleProps): JSX.Element {
             >重置摘要</button>
           )}
         </header>
-        <div className="flex-1 overflow-auto bg-[#FCFCFB] px-6 py-4">
+        <div className="flex-1 overflow-auto bg-[#121418] px-6 py-4">
           {!props.activeSessionId ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <span className="text-5xl text-warm-300 mb-4">[clipboard]</span>
@@ -465,7 +465,7 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
 
       <div className="flex-1 overflow-auto px-5 py-4">
         {props.consolidationError && (
-          <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 mb-4">{props.consolidationError}</div>
+          <div className="rounded-lg bg-danger-50 px-4 py-3 text-sm text-danger-600 mb-4">{props.consolidationError}</div>
         )}
 
         {!props.consolidationResult && !props.consolidationLoading && (
@@ -516,10 +516,10 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
             {/* Merged items */}
             {props.consolidationResult.merged && props.consolidationResult.merged.length > 0 && (
               <div>
-                <h4 className="text-sm font-semibold text-green-700 mb-2">[green] 待合并（{props.consolidationResult.merged.length} 项）</h4>
+                <h4 className="text-sm font-semibold text-success-700 mb-2">[green] 待合并（{props.consolidationResult.merged.length} 项）</h4>
                 <div className="space-y-2">
                   {props.consolidationResult.merged.map((m, i) => (
-                    <div key={i} className="rounded-lg border border-green-200 bg-green-50/30 px-4 py-2">
+                    <div key={i} className="rounded-lg border border-success-200 bg-success-50/30 px-4 py-2">
                       <div className="flex items-center gap-2 text-sm">
                         <span className="font-medium text-warm-800">{m.file}</span>
                         <span className="text-warm-400">←</span>
@@ -535,11 +535,11 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
             {/* Deleted items */}
             {props.consolidationResult.deleted && props.consolidationResult.deleted.length > 0 && (
               <div>
-                <h4 className="text-sm font-semibold text-red-700 mb-2">[red] 待删除（{props.consolidationResult.deleted.length} 项）</h4>
+                <h4 className="text-sm font-semibold text-danger-700 mb-2">[red] 待删除（{props.consolidationResult.deleted.length} 项）</h4>
                 <div className="space-y-2">
                   {props.consolidationResult.deleted.map((d, i) => (
-                    <div key={i} className="rounded-lg border border-red-200 bg-red-50/30 px-4 py-2">
-                      <div className="text-sm font-medium text-red-800">{d.file}</div>
+                    <div key={i} className="rounded-lg border border-danger-200 bg-danger-50/30 px-4 py-2">
+                      <div className="text-sm font-medium text-danger-800">{d.file}</div>
                       <div className="text-xs text-warm-500 mt-1">{d.reason}</div>
                     </div>
                   ))}
@@ -550,11 +550,11 @@ function ConsolidationTab(props: MemoryModuleProps): JSX.Element {
             {/* Updated items */}
             {props.consolidationResult.updated && props.consolidationResult.updated.length > 0 && (
               <div>
-                <h4 className="text-sm font-semibold text-blue-700 mb-2">[blue] 待更新（{props.consolidationResult.updated.length} 项）</h4>
+                <h4 className="text-sm font-semibold text-primary-700 mb-2">[blue] 待更新（{props.consolidationResult.updated.length} 项）</h4>
                 <div className="space-y-2">
                   {props.consolidationResult.updated.map((u, i) => (
-                    <div key={i} className="rounded-lg border border-blue-200 bg-blue-50/30 px-4 py-2">
-                      <div className="text-sm font-medium text-blue-800">{u.file}</div>
+                    <div key={i} className="rounded-lg border border-primary-200 bg-primary-50/30 px-4 py-2">
+                      <div className="text-sm font-medium text-primary-800">{u.file}</div>
                       <div className="text-xs text-warm-500 mt-1">{u.reason}</div>
                     </div>
                   ))}
@@ -590,7 +590,7 @@ function ConversationTab(props: MemoryModuleProps): JSX.Element {
   return (
     <div className="grid flex-1 grid-cols-[320px_1fr] min-h-0">
       {/* ── Left sidebar: session list ── */}
-      <aside className="border-r border-warm-150 bg-[#FBFAF8] flex flex-col overflow-hidden">
+      <aside className="border-r border-warm-150 bg-[#191C22] flex flex-col overflow-hidden">
         <div className="border-b border-warm-150 px-4 py-3 shrink-0">
           <div className="flex items-center justify-between">
             <div>
@@ -609,7 +609,7 @@ function ConversationTab(props: MemoryModuleProps): JSX.Element {
 
         {/* Create form */}
         {createForm.visible && (
-          <div className="border-b border-warm-150 px-4 py-3 bg-amber-50/50">
+          <div className="border-b border-warm-150 px-4 py-3 bg-warning-50/50">
             <div className="text-xs font-medium text-warm-700 mb-2">新建记忆会话</div>
             <input
               className="w-full mb-2 rounded-lg border border-warm-200 px-3 py-1.5 text-xs outline-none"
@@ -660,7 +660,7 @@ function ConversationTab(props: MemoryModuleProps): JSX.Element {
             >
               <div className="flex items-center gap-2">
                 <span className="truncate text-xs font-medium text-warm-800 font-mono">{s.session_name || s.session_id}</span>
-                {s.is_active && <span className="shrink-0 rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] text-green-700">活跃</span>}
+                {s.is_active && <span className="shrink-0 rounded-full bg-success-100 px-1.5 py-0.5 text-[10px] text-success-700">活跃</span>}
               </div>
               {s.topic && <div className="mt-0.5 text-[11px] text-primary-600">{s.topic}</div>}
               <div className="mt-1 flex items-center gap-2 text-[10px] text-warm-400">
@@ -704,7 +704,7 @@ function ConversationTab(props: MemoryModuleProps): JSX.Element {
         </header>
 
         {/* Conversation content */}
-        <div className="flex-1 overflow-auto bg-[#FCFCFB] px-6 py-4">
+        <div className="flex-1 overflow-auto bg-[#121418] px-6 py-4">
           {!props.activeSessionMemoryId ? (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <span className="text-5xl text-warm-300 mb-4">[chat]</span>

@@ -1,0 +1,514 @@
+{
+  "batch": 1,
+  "part": 2,
+  "totalParts": 3,
+  "nodeCount": 55,
+  "edgeCount": 0,
+  "nodes": [
+    {
+      "id": "function:app/api/memory.py:list_memories",
+      "type": "function",
+      "name": "list_memories",
+      "filePath": "app/api/memory.py",
+      "summary": "列出所有记忆文件，支持按类型过滤",
+      "tags": ["api", "memory", "list"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/memory.py:read_memory",
+      "type": "function",
+      "name": "read_memory",
+      "filePath": "app/api/memory.py",
+      "summary": "读取单个记忆文件详情",
+      "tags": ["api", "memory", "read"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/memory.py:create_memory",
+      "type": "function",
+      "name": "create_memory",
+      "filePath": "app/api/memory.py",
+      "summary": "创建新记忆文件",
+      "tags": ["api", "memory", "create"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/memory.py:update_memory",
+      "type": "function",
+      "name": "update_memory",
+      "filePath": "app/api/memory.py",
+      "summary": "更新现有记忆文件（部分更新）",
+      "tags": ["api", "memory", "update"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/memory.py:delete_memory",
+      "type": "function",
+      "name": "delete_memory",
+      "filePath": "app/api/memory.py",
+      "summary": "删除记忆文件",
+      "tags": ["api", "memory", "delete"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/api/memory.py:search_memories",
+      "type": "function",
+      "name": "search_memories",
+      "filePath": "app/api/memory.py",
+      "summary": "按关键词搜索记忆文件名、描述和内容",
+      "tags": ["api", "memory", "search"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/api/memory.py:import_memories",
+      "type": "function",
+      "name": "import_memories",
+      "filePath": "app/api/memory.py",
+      "summary": "导入 Markdown 记忆文件，支持追加模式或创建模式",
+      "tags": ["api", "memory", "import"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/api/memory.py:consolidate_memories",
+      "type": "function",
+      "name": "consolidate_memories",
+      "filePath": "app/api/memory.py",
+      "summary": "触发记忆整合分析(AutoDream)，支持 dry-run 模式",
+      "tags": ["api", "memory", "consolidation"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/memory.py:batch_merge_memories",
+      "type": "function",
+      "name": "batch_merge_memories",
+      "filePath": "app/api/memory.py",
+      "summary": "批量合并多个记忆文件为一个",
+      "tags": ["api", "memory", "batch"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/memory.py:run_extraction_now",
+      "type": "function",
+      "name": "run_extraction_now",
+      "filePath": "app/api/memory.py",
+      "summary": "立即对指定会话执行记忆提取",
+      "tags": ["api", "memory", "extraction"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/memory.py:transfer_memories",
+      "type": "function",
+      "name": "transfer_memories",
+      "filePath": "app/api/memory.py",
+      "summary": "转移记忆文件到其他目录",
+      "tags": ["api", "memory", "transfer"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/routes.py:api_router_aggregator",
+      "type": "function",
+      "name": "api_router",
+      "filePath": "app/api/routes.py",
+      "summary": "汇总所有子模块 APIRouter 到统一路由",
+      "tags": ["router", "api", "aggregator"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/api/settings.py:get_settings_api",
+      "type": "function",
+      "name": "get_settings",
+      "filePath": "app/api/settings.py",
+      "summary": "获取所有设置（合并默认值）",
+      "tags": ["api", "settings", "read"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/settings.py:update_settings",
+      "type": "function",
+      "name": "update_settings",
+      "filePath": "app/api/settings.py",
+      "summary": "更新一个或多个设置项，含输入验证",
+      "tags": ["api", "settings", "write"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/api/skills.py:_parse_frontmatter",
+      "type": "function",
+      "name": "_parse_frontmatter",
+      "filePath": "app/api/skills.py",
+      "summary": "从 Markdown 文本解析 YAML 类 frontmatter（无 PyYAML 依赖）",
+      "tags": ["util", "parse", "frontmatter"],
+      "complexity": 7
+    },
+    {
+      "id": "function:app/api/skills.py:_classify_skill",
+      "type": "function",
+      "name": "_classify_skill",
+      "filePath": "app/api/skills.py",
+      "summary": "对技能进行分类，返回(一级分类, 子分类)元组",
+      "tags": ["util", "classification"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/api/skills.py:_get_skill_dirs",
+      "type": "function",
+      "name": "_get_skill_dirs",
+      "filePath": "app/api/skills.py",
+      "summary": "获取用户级和项目级技能目录列表",
+      "tags": ["util", "scan"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/api/skills.py:scan_skills",
+      "type": "function",
+      "name": "scan_skills",
+      "filePath": "app/api/skills.py",
+      "summary": "扫描本地技能目录并返回完整的技能元数据",
+      "tags": ["api", "skills", "scan"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/api/skills.py:list_skills",
+      "type": "function",
+      "name": "list_skills",
+      "filePath": "app/api/skills.py",
+      "summary": "列出所有本地安装的技能及分类统计",
+      "tags": ["api", "skills", "list"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/skills.py:get_skill_detail",
+      "type": "function",
+      "name": "get_skill_detail",
+      "filePath": "app/api/skills.py",
+      "summary": "获取指定技能的完整 SKILL.md 内容和元数据",
+      "tags": ["api", "skills", "detail"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/api/workspace.py:get_workspace_status",
+      "type": "function",
+      "name": "get_workspace_status",
+      "filePath": "app/api/workspace.py",
+      "summary": "获取工作区状态：Git 分支、变更文件列表及 +/- 行数",
+      "tags": ["api", "workspace", "git"],
+      "complexity": 7
+    },
+    {
+      "id": "function:app/api/workspace.py:get_workspace_diff",
+      "type": "function",
+      "name": "get_workspace_diff",
+      "filePath": "app/api/workspace.py",
+      "summary": "获取单个文件的 unified diff，优先使用会话 diff",
+      "tags": ["api", "workspace", "diff"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/api/workspace.py:_get_session_file_changes",
+      "type": "function",
+      "name": "_get_session_file_changes",
+      "filePath": "app/api/workspace.py",
+      "summary": "从会话消息中提取 Write/Edit 工具调用产生的文件变更",
+      "tags": ["util", "session", "file-tracking"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/api/workspace.py:_build_synthetic_diff",
+      "type": "function",
+      "name": "_build_synthetic_diff",
+      "filePath": "app/api/workspace.py",
+      "summary": "使用 difflib 构建 unified diff 字符串",
+      "tags": ["util", "diff"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/workspace.py:_parse_git_porcelain",
+      "type": "function",
+      "name": "_parse_git_porcelain",
+      "filePath": "app/api/workspace.py",
+      "summary": "解析 git status --porcelain 输出为结构化变更列表",
+      "tags": ["util", "git"],
+      "complexity": 4
+    },
+    {
+      "id": "class:app/core/config.py:LLMKeys",
+      "type": "class",
+      "name": "LLMKeys",
+      "filePath": "app/core/config.py",
+      "summary": "LLM 提供商的 API Key 和 Base URL 配置",
+      "tags": ["config", "llm", "api-key"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:OrchestratorSettings",
+      "type": "class",
+      "name": "OrchestratorSettings",
+      "filePath": "app/core/config.py",
+      "summary": "编排器预处理与自动分解决策配置",
+      "tags": ["config", "orchestrator"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:SearchSettings",
+      "type": "class",
+      "name": "SearchSettings",
+      "filePath": "app/core/config.py",
+      "summary": "Web 搜索提供商配置",
+      "tags": ["config", "search"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:FileSettings",
+      "type": "class",
+      "name": "FileSettings",
+      "filePath": "app/core/config.py",
+      "summary": "文件操作限制与版本控制配置",
+      "tags": ["config", "file"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:OfficePreviewSettings",
+      "type": "class",
+      "name": "OfficePreviewSettings",
+      "filePath": "app/core/config.py",
+      "summary": "Office 文档预览大小限制",
+      "tags": ["config", "office"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:StreamingSettings",
+      "type": "class",
+      "name": "StreamingSettings",
+      "filePath": "app/core/config.py",
+      "summary": "流式超时配置",
+      "tags": ["config", "streaming"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:MemorySettings",
+      "type": "class",
+      "name": "MemorySettings",
+      "filePath": "app/core/config.py",
+      "summary": "自动记忆提取设置",
+      "tags": ["config", "memory"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:CommandSettings",
+      "type": "class",
+      "name": "CommandSettings",
+      "filePath": "app/core/config.py",
+      "summary": "命令执行超时与输出限制",
+      "tags": ["config", "command"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/core/config.py:Settings",
+      "type": "class",
+      "name": "Settings",
+      "filePath": "app/core/config.py",
+      "summary": "根配置类，聚合所有子配置并管理数据库/CORS/应用参数",
+      "tags": ["config", "root", "pydantic"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/core/config.py:get_settings_singleton",
+      "type": "function",
+      "name": "get_settings",
+      "filePath": "app/core/config.py",
+      "summary": "返回缓存的 Settings 单例（延迟初始化）",
+      "tags": ["config", "singleton"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/services/adapter_manager.py:BaseAdapter",
+      "type": "class",
+      "name": "BaseAdapter",
+      "filePath": "app/services/adapter_manager.py",
+      "summary": "LLM 适配器基类，定义 execute_prompt/stream_prompt/ping 接口",
+      "tags": ["llm", "adapter", "abstract"],
+      "complexity": 3
+    },
+    {
+      "id": "class:app/services/adapter_manager.py:MockAdapter",
+      "type": "class",
+      "name": "MockAdapter",
+      "filePath": "app/services/adapter_manager.py",
+      "summary": "Mock 适配器，模拟文本回复和工具调用（无真实 API Key 时开发测试用）",
+      "tags": ["llm", "adapter", "mock"],
+      "complexity": 4
+    },
+    {
+      "id": "class:app/services/adapter_manager.py:OpenAICompatibleAdapter",
+      "type": "class",
+      "name": "OpenAICompatibleAdapter",
+      "filePath": "app/services/adapter_manager.py",
+      "summary": "OpenAI 兼容 API 适配器基类，支持流式与非流式调用",
+      "tags": ["llm", "adapter", "openai"],
+      "complexity": 4
+    },
+    {
+      "id": "class:app/services/adapter_manager.py:AdapterManager",
+      "type": "class",
+      "name": "AdapterManager",
+      "filePath": "app/services/adapter_manager.py",
+      "summary": "适配器管理器：根据模型名称选择适配器，管理启动/关闭",
+      "tags": ["llm", "adapter", "manager"],
+      "complexity": 5
+    },
+    {
+      "id": "class:app/services/memory/models.py:MemoryType",
+      "type": "class",
+      "name": "MemoryType",
+      "filePath": "app/services/memory/models.py",
+      "summary": "四种严格定义的记忆类型枚举：user/feedback/project/reference",
+      "tags": ["memory", "enum"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/services/memory/models.py:MemoryMeta",
+      "type": "class",
+      "name": "MemoryMeta",
+      "filePath": "app/services/memory/models.py",
+      "summary": "记忆文件 YAML frontmatter 数据类",
+      "tags": ["memory", "dataclass"],
+      "complexity": 2
+    },
+    {
+      "id": "class:app/services/memory/models.py:MemoryDocument",
+      "type": "class",
+      "name": "MemoryDocument",
+      "filePath": "app/services/memory/models.py",
+      "summary": "完整记忆文档：frontmatter + 正文",
+      "tags": ["memory", "dataclass"],
+      "complexity": 2
+    },
+    {
+      "id": "class:app/services/memory/models.py:MemoryHeader",
+      "type": "class",
+      "name": "MemoryHeader",
+      "filePath": "app/services/memory/models.py",
+      "summary": "记忆文件扫描轻量级头部信息",
+      "tags": ["memory", "dataclass"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/services/memory/storage.py:MemoryStorage",
+      "type": "class",
+      "name": "MemoryStorage",
+      "filePath": "app/services/memory/storage.py",
+      "summary": "基于文件的记忆存储 CRUD 操作",
+      "tags": ["memory", "storage", "CRUD"],
+      "complexity": 7
+    },
+    {
+      "id": "class:app/services/memory/scanner.py:MemoryScanner",
+      "type": "class",
+      "name": "MemoryScanner",
+      "filePath": "app/services/memory/scanner.py",
+      "summary": "记忆扫描和新鲜度追踪",
+      "tags": ["memory", "scan"],
+      "complexity": 3
+    },
+    {
+      "id": "class:app/services/memory/extractor.py:MemoryExtractor",
+      "type": "class",
+      "name": "MemoryExtractor",
+      "filePath": "app/services/memory/extractor.py",
+      "summary": "从会话消息自动提取持久化信息并保存为记忆文件",
+      "tags": ["memory", "extraction"],
+      "complexity": 8
+    },
+    {
+      "id": "class:app/services/memory/consolidator.py:MemoryConsolidator",
+      "type": "class",
+      "name": "MemoryConsolidator",
+      "filePath": "app/services/memory/consolidator.py",
+      "summary": "记忆整合器，LLM 驱动的去重/合并/删除分析",
+      "tags": ["memory", "consolidation"],
+      "complexity": 6
+    },
+    {
+      "id": "class:app/services/memory/session_memory.py:SessionMemoryManager",
+      "type": "class",
+      "name": "SessionMemoryManager",
+      "filePath": "app/services/memory/session_memory.py",
+      "summary": "会话记忆管理器：摘要缓存、全局聚合、LLM 摘要生成",
+      "tags": ["memory", "session", "summary"],
+      "complexity": 7
+    },
+    {
+      "id": "class:app/services/memory/session_store.py:SessionMemoryStore",
+      "type": "class",
+      "name": "SessionMemoryStore",
+      "filePath": "app/services/memory/session_store.py",
+      "summary": "会话级追加式记忆存储管理",
+      "tags": ["memory", "session", "store"],
+      "complexity": 7
+    },
+    {
+      "id": "class:app/services/memory/session_store.py:SessionMemoryInfo",
+      "type": "class",
+      "name": "SessionMemoryInfo",
+      "filePath": "app/services/memory/session_store.py",
+      "summary": "会话记忆元数据数据类",
+      "tags": ["memory", "session", "dataclass"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/orchestrator_preprocessor.py:should_decompose",
+      "type": "function",
+      "name": "should_decompose",
+      "filePath": "app/services/orchestrator_preprocessor.py",
+      "summary": "判断用户输入是否需要任务分解",
+      "tags": ["orchestrator", "decision"],
+      "complexity": 3
+    },
+    {
+      "id": "class:app/services/orchestrator_preprocessor.py:OrchestratorPreprocessor",
+      "type": "class",
+      "name": "OrchestratorPreprocessor",
+      "filePath": "app/services/orchestrator_preprocessor.py",
+      "summary": "编排器预处理器，执行意图分析和任务分解",
+      "tags": ["orchestrator", "preprocess"],
+      "complexity": 8
+    },
+    {
+      "id": "class:app/services/tool_executor.py:ToolExecutionError",
+      "type": "class",
+      "name": "ToolExecutionError",
+      "filePath": "app/services/tool_executor.py",
+      "summary": "工具调用验证或执行失败异常",
+      "tags": ["tool", "error"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/services/tool_executor.py:ToolExecutor",
+      "type": "class",
+      "name": "ToolExecutor",
+      "filePath": "app/services/tool_executor.py",
+      "summary": "工具执行器，完整的工具调用生命周期管理",
+      "tags": ["tool", "executor"],
+      "complexity": 7
+    },
+    {
+      "id": "class:app/services/tool_registry.py:ToolDefinition",
+      "type": "class",
+      "name": "ToolDefinition",
+      "filePath": "app/services/tool_registry.py",
+      "summary": "完整工具元数据定义",
+      "tags": ["tool", "definition"],
+      "complexity": 2
+    },
+    {
+      "id": "class:app/services/tool_registry.py:ToolRegistry",
+      "type": "class",
+      "name": "ToolRegistry",
+      "filePath": "app/services/tool_registry.py",
+      "summary": "工具注册中心，管理工具定义和查询",
+      "tags": ["tool", "registry"],
+      "complexity": 4
+    }
+  ],
+  "edges": []
+}

@@ -1,0 +1,241 @@
+{
+  "scriptCompleted": true,
+  "filesAnalyzed": 2,
+  "filesSkipped": [],
+  "results": [
+    {
+      "path": "frontend/lib/i18n/index.tsx",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 178,
+      "nonEmptyLines": 150,
+      "functions": [
+        {
+          "name": "I18nProvider",
+          "startLine": 50,
+          "endLine": 109,
+          "params": [
+            "{ children, defaultLocale = 'zh-CN' }"
+          ]
+        },
+        {
+          "name": "useI18n",
+          "startLine": 113,
+          "endLine": 125,
+          "params": []
+        },
+        {
+          "name": "formatDate",
+          "startLine": 129,
+          "endLine": 138,
+          "params": [
+            "date",
+            "locale"
+          ]
+        },
+        {
+          "name": "formatRelativeTime",
+          "startLine": 140,
+          "endLine": 160,
+          "params": [
+            "date",
+            "locale"
+          ]
+        },
+        {
+          "name": "LocaleSwitcher",
+          "startLine": 164,
+          "endLine": 178,
+          "params": [
+            "{ className = '' }"
+          ]
+        }
+      ],
+      "exports": [
+        {
+          "name": "I18nProvider",
+          "line": 50,
+          "isDefault": false
+        },
+        {
+          "name": "useI18n",
+          "line": 113,
+          "isDefault": false
+        },
+        {
+          "name": "formatDate",
+          "line": 129,
+          "isDefault": false
+        },
+        {
+          "name": "formatRelativeTime",
+          "line": 140,
+          "isDefault": false
+        },
+        {
+          "name": "LocaleSwitcher",
+          "line": 164,
+          "isDefault": false
+        }
+      ],
+      "callGraph": [
+        {
+          "caller": "I18nProvider",
+          "callee": "useState",
+          "lineNumber": 54
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "localStorage.getItem",
+          "lineNumber": 56
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "useState",
+          "lineNumber": 62
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "useEffect",
+          "lineNumber": 64
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "bundles[locale]().then",
+          "lineNumber": 66
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "bundles[locale]",
+          "lineNumber": 66
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "setMessages",
+          "lineNumber": 67
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "useCallback",
+          "lineNumber": 72
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "setLocaleState",
+          "lineNumber": 73
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "localStorage.setItem",
+          "lineNumber": 75
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "useCallback",
+          "lineNumber": 80
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "key.split",
+          "lineNumber": 81
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "result.replace",
+          "lineNumber": 95
+        },
+        {
+          "caller": "I18nProvider",
+          "callee": "String",
+          "lineNumber": 96
+        },
+        {
+          "caller": "useI18n",
+          "callee": "useContext",
+          "lineNumber": 114
+        },
+        {
+          "caller": "formatDate",
+          "callee": "new Intl.DateTimeFormat(locale === 'zh-CN' ? 'zh-CN' : 'en-US', {\r\n    year: 'numeric',\r\n    month: 'short',\r\n    day: 'numeric',\r\n    hour: '2-digit',\r\n    minute: '2-digit',\r\n  }).format",
+          "lineNumber": 131
+        },
+        {
+          "caller": "formatRelativeTime",
+          "callee": "Date.now",
+          "lineNumber": 142
+        },
+        {
+          "caller": "formatRelativeTime",
+          "callee": "d.getTime",
+          "lineNumber": 143
+        },
+        {
+          "caller": "formatRelativeTime",
+          "callee": "Math.floor",
+          "lineNumber": 144
+        },
+        {
+          "caller": "formatRelativeTime",
+          "callee": "Math.floor",
+          "lineNumber": 145
+        },
+        {
+          "caller": "formatRelativeTime",
+          "callee": "Math.floor",
+          "lineNumber": 146
+        },
+        {
+          "caller": "formatRelativeTime",
+          "callee": "formatDate",
+          "lineNumber": 159
+        },
+        {
+          "caller": "LocaleSwitcher",
+          "callee": "useI18n",
+          "lineNumber": 165
+        },
+        {
+          "caller": "LocaleSwitcher",
+          "callee": "setLocale",
+          "lineNumber": 169
+        }
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 5,
+        "functionCount": 5,
+        "classCount": 0
+      }
+    },
+    {
+      "path": "frontend/types/index.ts",
+      "language": "typescript",
+      "fileCategory": "code",
+      "totalLines": 1917,
+      "nonEmptyLines": 1706,
+      "exports": [
+        {
+          "name": "PLATFORM_LABELS",
+          "line": 162,
+          "isDefault": false
+        },
+        {
+          "name": "PLATFORM_COLORS",
+          "line": 180,
+          "isDefault": false
+        },
+        {
+          "name": "PM_STATE_LABELS",
+          "line": 852,
+          "isDefault": false
+        }
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 3,
+        "functionCount": 0,
+        "classCount": 0
+      }
+    }
+  ]
+}

@@ -246,7 +246,7 @@ export default function WorkflowVariablePicker({
         {showPicker && (
           <div
             ref={pickerRef}
-            className="absolute left-0 right-0 top-full mt-1 z-50 max-h-[260px] overflow-hidden rounded-xl border border-warm-200 bg-warm-100 shadow-lg shadow-black/5"
+            className="absolute left-0 right-0 top-full mt-1 z-50 max-h-[260px] overflow-hidden rounded-xl border border-warm-200 bg-warm-100 shadow-card-hover shadow-black/5"
           >
             {/* Search */}
             <div className="border-b border-warm-100 px-2 py-1.5">

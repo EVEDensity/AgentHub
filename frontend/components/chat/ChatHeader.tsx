@@ -29,20 +29,20 @@ interface ChatHeaderProps {
 
 const PM_STATE_COLORS: Record<PMState, string> = {
   IDLE: 'bg-warm-100 text-warm-500 border border-warm-150',
-  DECOMPOSING: 'bg-purple-50 text-purple-600 border border-purple-100',
+  DECOMPOSING: 'bg-primary-50 text-primary-600 border border-primary-100',
   DISPATCHING: 'bg-primary-50 text-primary-600 border border-primary-100',
   WAITING_USER: 'bg-accent-50 text-accent-600 border border-accent-100',
-  EXECUTING: 'bg-emerald-50 text-emerald-600 border border-emerald-100',
-  SUMMARIZING: 'bg-indigo-50 text-indigo-600 border border-indigo-100',
+  EXECUTING: 'bg-success-50 text-success-600 border border-success-100',
+  SUMMARIZING: 'bg-primary-50 text-primary-600 border border-primary-100',
 };
 
 const PM_STATE_DOTS: Record<PMState, string> = {
   IDLE: 'bg-warm-400',
-  DECOMPOSING: 'bg-purple-400 animate-pulse',
-  DISPATCHING: 'bg-blue-400 animate-pulse',
-  WAITING_USER: 'bg-amber-500 animate-bounce',
-  EXECUTING: 'bg-emerald-400 animate-pulse',
-  SUMMARIZING: 'bg-indigo-400 animate-pulse',
+  DECOMPOSING: 'bg-primary-400 animate-pulse',
+  DISPATCHING: 'bg-primary-400 animate-pulse',
+  WAITING_USER: 'bg-warning-500 animate-bounce',
+  EXECUTING: 'bg-success-400 animate-pulse',
+  SUMMARIZING: 'bg-primary-400 animate-pulse',
 };
 
 const ChatHeader = memo(function ChatHeader({
@@ -176,7 +176,7 @@ const ChatHeader = memo(function ChatHeader({
                 : 'Connected'
               ) : 'Reconnecting'}</span>
               {pmState === 'WAITING_USER' && (
-                <span className="text-amber-600 font-medium">· 等待你的决策</span>
+                <span className="text-warning-600 font-medium">· 等待你的决策</span>
               )}
               {currentAgentName && streamPhase !== 'idle' && streamPhase !== 'done' && (
                 <span className="text-primary-500">· {currentAgentName}</span>
@@ -195,10 +195,10 @@ const ChatHeader = memo(function ChatHeader({
                   : streamPhase === 'done' ? 100
                   : 0;
                 const displayPercent = percent > 0 ? percent : phasePercent;
-                const barColor = streamPhase === 'thinking' ? 'bg-purple-500'
-                  : streamPhase === 'executing' ? 'bg-blue-500 animate-pulse'
+                const barColor = streamPhase === 'thinking' ? 'bg-primary-500'
+                  : streamPhase === 'executing' ? 'bg-primary-500 animate-pulse'
                   : streamPhase === 'generating' ? 'bg-primary-500'
-                  : streamPhase === 'done' ? 'bg-emerald-500'
+                  : streamPhase === 'done' ? 'bg-success-500'
                   : percent > 0 ? 'bg-primary-500'
                   : 'bg-warm-200';
                 return (

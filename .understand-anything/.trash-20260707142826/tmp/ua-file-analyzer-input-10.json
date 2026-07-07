@@ -1,0 +1,15 @@
+{
+  "projectRoot": "D:\\Users\\xyn\\Desktop\\agenthub\\AgenthubV1.2",
+  "batchIndex": 10,
+  "totalBatches": 66,
+  "batchFiles": [
+    {"path": "frontend/lib/i18n/index.tsx", "language": "typescript", "sizeLines": 178, "fileCategory": "code"},
+    {"path": "frontend/types/index.ts", "language": "typescript", "sizeLines": 1917, "fileCategory": "code"}
+  ],
+  "batchImportData": {
+    "frontend/lib/i18n/index.tsx": ["frontend/lib/i18n/zh-CN", "frontend/lib/i18n/en"],
+    "frontend/types/index.ts": []
+  },
+  "neighborMap": {},
+  "language": "chinese"
+}

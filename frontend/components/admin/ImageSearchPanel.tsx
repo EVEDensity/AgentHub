@@ -249,8 +249,8 @@ export default function ImageSearchPanel({ authHeaders, setNotice }: ImageSearch
 
       {/* Warning Banner */}
       {warning && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
-          <p className="text-xs text-amber-700 flex items-center gap-1">
+        <div className="rounded-lg border border-warning-200 bg-warning-50 px-3 py-2">
+          <p className="text-xs text-warning-700 flex items-center gap-1">
             <span className="material-symbols-outlined text-[14px]">warning</span>
             {warning}
           </p>

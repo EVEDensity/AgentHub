@@ -1,0 +1,60 @@
+{
+  "batchIndex": 51,
+  "nodes": [
+    {
+      "id": "file:docs/zh/api/agent.md",
+      "type": "file",
+      "name": "agent.md",
+      "filePath": "docs/zh/api/agent.md",
+      "summary": "Agent API 参考：CRUD 操作、查询过滤、配置字段说明、请求/响应示例",
+      "tags": ["docs", "api", "agent", "reference"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:docs/zh/api/authentication.md",
+      "type": "file",
+      "name": "authentication.md",
+      "filePath": "docs/zh/api/authentication.md",
+      "summary": "API 认证文档：API Key、OAuth2/OIDC、JWT Token、Scopes 权限范围、安全特性",
+      "tags": ["docs", "api", "authentication", "oauth2", "security"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:docs/zh/api/knowledge.md",
+      "type": "file",
+      "name": "knowledge.md",
+      "filePath": "docs/zh/api/knowledge.md",
+      "summary": "知识库 API 参考：RAG 混合检索、文档上传/管理、集合管理、知识源列表",
+      "tags": ["docs", "api", "knowledge", "rag", "reference"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:docs/zh/api/overview.md",
+      "type": "file",
+      "name": "overview.md",
+      "filePath": "docs/zh/api/overview.md",
+      "summary": "API 概述：Base URL、API 分组总览（Agent/聊天/工作流/知识库/AgentNet/MCP/A2A/IAM）、WebSocket 事件、错误码",
+      "tags": ["docs", "api", "overview", "reference"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:docs/zh/api/websocket.md",
+      "type": "file",
+      "name": "websocket.md",
+      "filePath": "docs/zh/api/websocket.md",
+      "summary": "WebSocket 事件文档：连接方式、事件频道、Agent/AgentNet 事件格式、重连策略、降级方案",
+      "tags": ["docs", "api", "websocket", "realtime", "reference"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:docs/zh/api/workflow.md",
+      "type": "file",
+      "name": "workflow.md",
+      "filePath": "docs/zh/api/workflow.md",
+      "summary": "工作流 API 参考：CRUD、执行、节点类型说明（9 种）、流式响应",
+      "tags": ["docs", "api", "workflow", "reference"],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": []
+}

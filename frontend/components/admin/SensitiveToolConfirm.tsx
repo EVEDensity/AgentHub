@@ -16,23 +16,23 @@ interface SensitiveToolConfirmProps {
 const RISK_CONFIG = {
   high: {
     bg: 'bg-danger-50',
-    border: 'border-orange-300',
+    border: 'border-warning-300',
     icon: '[warn]',
-    iconBg: 'bg-orange-100',
+    iconBg: 'bg-warning-100',
     label: '高风险操作',
     desc: '此工具可能修改系统状态或访问外部资源，需要您确认后执行。',
-    btnBg: 'bg-orange-500 hover:bg-orange-600',
-    badge: 'bg-orange-100 text-orange-700 ring-orange-300',
+    btnBg: 'bg-warning-500 hover:bg-warning-600',
+    badge: 'bg-warning-100 text-warning-700 ring-warning-300',
   },
   critical: {
-    bg: 'from-red-50 to-rose-100',
-    border: 'border-red-400',
+    bg: 'from-danger-50 to-danger-100',
+    border: 'border-danger-400',
     icon: '[forbidden]',
-    iconBg: 'bg-red-100',
+    iconBg: 'bg-danger-100',
     label: '严重风险操作',
     desc: '此工具具有破坏性，可能导致数据丢失或系统不可用。请仔细评估后再确认。',
-    btnBg: 'bg-red-600 hover:bg-red-700',
-    badge: 'bg-red-100 text-red-700 ring-red-400',
+    btnBg: 'bg-danger-600 hover:bg-danger-700',
+    badge: 'bg-danger-100 text-danger-700 ring-danger-400',
   },
 };
 
@@ -104,7 +104,7 @@ export default function SensitiveToolConfirm({
       onClick={onClose}
     >
       <div
-        className={`w-full max-w-lg overflow-hidden rounded-2xl border-2 ${config.border} bg-gradient-to-b ${config.bg} shadow-2xl`}
+        className={`w-full max-w-lg overflow-hidden rounded-2xl border-2 ${config.border} bg-gradient-to-b ${config.bg} shadow-modal`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -113,11 +113,11 @@ export default function SensitiveToolConfirm({
             {config.icon}
           </div>
           <div className="min-w-0">
-            <h2 className="text-xl font-bold text-gray-900">{config.label}</h2>
-            <p className="mt-0.5 text-sm text-gray-600">{config.desc}</p>
+            <h2 className="text-xl font-bold text-warm-900">{config.label}</h2>
+            <p className="mt-0.5 text-sm text-warm-600">{config.desc}</p>
           </div>
           <button
-            className="btn-ghost ml-auto shrink-0 rounded-lg p-2 text-gray-400 hover:text-gray-600"
+            className="btn-ghost ml-auto shrink-0 rounded-lg p-2 text-warm-400 hover:text-warm-600"
             onClick={onClose}
           >
             <span className="material-symbols-outlined text-[20px]">close</span>
@@ -127,9 +127,9 @@ export default function SensitiveToolConfirm({
         {/* Body */}
         <div className="space-y-4 px-6 pb-2">
           {/* Tool info */}
-          <div className="rounded-xl bg-white/80 p-4 shadow-sm ring-1 ring-black/5">
+          <div className="rounded-xl bg-warm-100/80 p-4 shadow-sm ring-1 ring-warm-900/10">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-700">工具详情</h3>
+              <h3 className="text-sm font-semibold text-warm-700">工具详情</h3>
               <span
                 className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${config.badge}`}
               >
@@ -140,16 +140,16 @@ export default function SensitiveToolConfirm({
 
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-400 w-16 shrink-0">工具名称</span>
-                <code className="flex-1 rounded bg-gray-100 px-2.5 py-1.5 text-sm font-mono text-gray-800 truncate">
+                <span className="text-xs text-warm-400 w-16 shrink-0">工具名称</span>
+                <code className="flex-1 rounded bg-warm-100 px-2.5 py-1.5 text-sm font-mono text-warm-800 truncate">
                   {toolName}
                 </code>
               </div>
 
               {command && (
                 <div className="flex items-start gap-2">
-                  <span className="text-xs text-gray-400 w-16 shrink-0 mt-1">命令</span>
-                  <code className="flex-1 rounded bg-gray-900 px-3 py-2 text-xs font-mono text-green-400 break-all">
+                  <span className="text-xs text-warm-400 w-16 shrink-0 mt-1">命令</span>
+                  <code className="flex-1 rounded bg-warm-900 px-3 py-2 text-xs font-mono text-success-400 break-all">
                     {command}
                   </code>
                 </div>
@@ -157,32 +157,32 @@ export default function SensitiveToolConfirm({
 
               {agentId && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-400 w-16 shrink-0">Agent</span>
-                  <span className="text-sm text-gray-700 font-medium">{agentId}</span>
+                  <span className="text-xs text-warm-400 w-16 shrink-0">Agent</span>
+                  <span className="text-sm text-warm-700 font-medium">{agentId}</span>
                 </div>
               )}
 
               {sessionId && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-gray-400 w-16 shrink-0">会话</span>
-                  <span className="text-xs text-gray-500 font-mono">{sessionId}</span>
+                  <span className="text-xs text-warm-400 w-16 shrink-0">会话</span>
+                  <span className="text-xs text-warm-500 font-mono">{sessionId}</span>
                 </div>
               )}
             </div>
           </div>
 
           {/* Safety checklist */}
-          <div className="rounded-xl bg-white/80 p-4 shadow-sm ring-1 ring-black/5">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">安全检查清单</h3>
+          <div className="rounded-xl bg-warm-100/80 p-4 shadow-sm ring-1 ring-warm-900/10">
+            <h3 className="text-sm font-semibold text-warm-700 mb-3">安全检查清单</h3>
             <div className="space-y-2">
               <label className="flex items-start gap-3 cursor-pointer group">
                 <input
                   type="checkbox"
                   checked={confirmed}
                   onChange={(e) => setConfirmed(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-500 focus:ring-primary-400"
+                  className="mt-0.5 h-4 w-4 rounded border-warm-300 text-primary-500 focus:ring-primary-400"
                 />
-                <span className="text-sm text-gray-600 group-hover:text-gray-800 transition-colors">
+                <span className="text-sm text-warm-600 group-hover:text-warm-800 transition-colors">
                   我了解此操作的{riskLevel === 'critical' ? '破坏性' : '风险'}，并确认允许 Agent 执行此工具
                 </span>
               </label>
@@ -190,25 +190,25 @@ export default function SensitiveToolConfirm({
           </div>
 
           {/* Reason input */}
-          <div className="rounded-xl bg-white/80 p-4 shadow-sm ring-1 ring-black/5">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">
-              确认原因 <span className="text-gray-400 font-normal">（可选）</span>
+          <div className="rounded-xl bg-warm-100/80 p-4 shadow-sm ring-1 ring-warm-900/10">
+            <h3 className="text-sm font-semibold text-warm-700 mb-2">
+              确认原因 <span className="text-warm-400 font-normal">（可选）</span>
             </h3>
             <textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="简述确认此操作的原因，便于审计追溯..."
               rows={3}
-              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 outline-none focus:border-primary-300 focus:ring-2 focus:ring-primary-100 resize-none transition-all"
+              className="w-full rounded-lg border border-warm-200 bg-warm-50 px-3 py-2 text-sm text-warm-800 placeholder:text-warm-400 outline-none focus:border-primary-300 focus:ring-2 focus:ring-primary-100 resize-none transition-all"
             />
-            <p className="mt-1 text-[11px] text-gray-400">
+            <p className="mt-1 text-[11px] text-warm-400">
               此信息将记录在审计日志中，用于后续安全审查。
             </p>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-black/5 mt-2">
+        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-warm-200 mt-2">
           <button
             className="btn-secondary text-sm"
             onClick={handleDeny}
@@ -220,7 +220,7 @@ export default function SensitiveToolConfirm({
             className={`inline-flex items-center gap-2 rounded-xl px-6 py-2.5 text-sm font-semibold text-white shadow-sm transition-all ${
               confirmed && !submitting
                 ? `${config.btnBg} shadow-md`
-                : 'bg-gray-300 cursor-not-allowed'
+                : 'bg-warm-300 cursor-not-allowed'
             }`}
             onClick={handleConfirm}
             disabled={!confirmed || submitting}

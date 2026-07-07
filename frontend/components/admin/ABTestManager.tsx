@@ -21,9 +21,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 const STATUS_COLORS: Record<string, string> = {
   draft: 'bg-warm-100 text-warm-600',
-  running: 'bg-green-100 text-green-700',
-  paused: 'bg-amber-100 text-amber-700',
-  completed: 'bg-blue-100 text-blue-700',
+  running: 'bg-success-100 text-success-700',
+  paused: 'bg-warning-100 text-warning-700',
+  completed: 'bg-primary-100 text-primary-700',
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -35,9 +35,9 @@ function formatPValue(p: number): string {
 }
 
 function confidenceLabel(level: number): { text: string; color: string } {
-  if (level >= 99) return { text: '99%+ 极显著', color: 'bg-green-100 text-green-700' };
-  if (level >= 95) return { text: '95% 显著', color: 'bg-green-100 text-green-700' };
-  if (level >= 90) return { text: '90% 趋势', color: 'bg-amber-100 text-amber-700' };
+  if (level >= 99) return { text: '99%+ 极显著', color: 'bg-success-100 text-success-700' };
+  if (level >= 95) return { text: '95% 显著', color: 'bg-success-100 text-success-700' };
+  if (level >= 90) return { text: '90% 趋势', color: 'bg-warning-100 text-warning-700' };
   if (level >= 50) return { text: `${level.toFixed(0)}% 收集`, color: 'bg-warm-100 text-warm-600' };
   return { text: '数据不足', color: 'bg-warm-100 text-warm-600' };
 }
@@ -77,7 +77,7 @@ function SignificanceBadge({ significance }: { significance: number }) {
 
 function WinnerBadge({ variantId, confidence }: { variantId: string; confidence: number }) {
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold border border-green-200">
+    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-success-100 text-success-700 font-semibold border border-success-200">
       <span className="text-[14px]">[trophy]</span>
       Variant {variantId} 胜出 ({confidence.toFixed(0)}%)
     </span>
@@ -128,10 +128,10 @@ function VariantMetricsCard({
 }) {
   if (!metrics) return null;
   return (
-    <div className={`rounded-xl border p-4 ${isWinner ? 'border-green-300 bg-green-50/50' : 'border-warm-200 bg-warm-100'}`}>
+    <div className={`rounded-xl border p-4 ${isWinner ? 'border-success-300 bg-success-50/50' : 'border-warm-200 bg-warm-100'}`}>
       <div className="flex items-center gap-2 mb-3">
         <h4 className="text-sm font-semibold text-warm-800">Variant {label}</h4>
-        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">[trophy] 胜出</span>}
+        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success-100 text-success-700 font-medium">[trophy] 胜出</span>}
       </div>
       <div className="space-y-2.5">
         <MetricRow label="请求数" value={metrics.requests.toLocaleString()} />
@@ -147,7 +147,7 @@ function VariantMetricsCard({
             <span className="text-warm-500">满意度</span>
             <span className="font-mono font-medium text-warm-700">{metrics.userSatisfaction.toFixed(1)}/10</span>
           </div>
-          <MiniBar value={metrics.userSatisfaction} max={10} color="bg-amber-400" />
+          <MiniBar value={metrics.userSatisfaction} max={10} color="bg-warning-400" />
         </div>
         <MetricRow label="平均延迟" value={`${metrics.avgLatencyMs.toFixed(0)}ms`} />
         <MetricRow label="平均 Token" value={metrics.avgTokenUsage.toLocaleString()} />
@@ -156,7 +156,7 @@ function VariantMetricsCard({
             <span className="text-warm-500">成功率</span>
             <span className="font-mono font-medium text-warm-700">{(metrics.successRate * 100).toFixed(1)}%</span>
           </div>
-          <MiniBar value={metrics.successRate * 100} max={100} color="bg-green-400" />
+          <MiniBar value={metrics.successRate * 100} max={100} color="bg-success-400" />
         </div>
       </div>
     </div>
@@ -174,10 +174,10 @@ function BackendVariantCard({
   isWinner?: boolean;
 }) {
   return (
-    <div className={`rounded-xl border p-4 ${isWinner ? 'border-green-300 bg-green-50/50' : 'border-warm-200 bg-warm-100'}`}>
+    <div className={`rounded-xl border p-4 ${isWinner ? 'border-success-300 bg-success-50/50' : 'border-warm-200 bg-warm-100'}`}>
       <div className="flex items-center gap-2 mb-3">
         <h4 className="text-sm font-semibold text-warm-800">Variant {variantId}</h4>
-        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">[trophy] 胜出</span>}
+        {isWinner && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success-100 text-success-700 font-medium">[trophy] 胜出</span>}
       </div>
       <div className="space-y-2.5">
         <MetricRow label="样本量" value={stats.count.toLocaleString()} />
@@ -193,7 +193,7 @@ function BackendVariantCard({
             <span className="text-warm-500">平均满意度</span>
             <span className="font-mono font-medium text-warm-700">{stats.mean_satisfaction.toFixed(2)}</span>
           </div>
-          <MiniBar value={stats.mean_satisfaction} max={10} color="bg-amber-400" />
+          <MiniBar value={stats.mean_satisfaction} max={10} color="bg-warning-400" />
         </div>
         <MetricRow label="平均延迟" value={`${stats.mean_latency_ms.toFixed(0)}ms`} />
         <MetricRow label="平均 Token" value={stats.mean_tokens.toLocaleString()} />
@@ -202,7 +202,7 @@ function BackendVariantCard({
             <span className="text-warm-500">成功率</span>
             <span className="font-mono font-medium text-warm-700">{(stats.success_rate * 100).toFixed(1)}%</span>
           </div>
-          <MiniBar value={stats.success_rate * 100} max={100} color="bg-green-400" />
+          <MiniBar value={stats.success_rate * 100} max={100} color="bg-success-400" />
         </div>
       </div>
     </div>
@@ -384,7 +384,7 @@ export default function ABTestManager(): JSX.Element {
                       {computingId === selectedTest.id ? '计算中...' : '[sync] 重新计算'}
                     </button>
                   )}
-                  <button onClick={() => deleteTest(selectedTest.id)} className="btn-ghost text-xs text-red-500 px-2 py-1">[delete]</button>
+                  <button onClick={() => deleteTest(selectedTest.id)} className="btn-ghost text-xs text-danger-500 px-2 py-1">[delete]</button>
                 </div>
               </div>
 
@@ -400,7 +400,7 @@ export default function ABTestManager(): JSX.Element {
                       A ({100 - (selectedTest.traffic_split ?? 50)}%)
                     </div>
                     <div
-                      className="h-full bg-amber-200 flex items-center justify-center text-xs font-medium text-amber-700 transition-all"
+                      className="h-full bg-warning-200 flex items-center justify-center text-xs font-medium text-warning-700 transition-all"
                       style={{ width: `${selectedTest.traffic_split ?? 50}%` }}
                     >
                       B ({selectedTest.traffic_split ?? 50}%)
@@ -453,28 +453,28 @@ export default function ABTestManager(): JSX.Element {
                               labelA={v0[0]} valueA={s0.mean_satisfaction}
                               labelB={v1[0]} valueB={s1.mean_satisfaction}
                               maxValue={maxSat} unit=""
-                              colorA="bg-amber-400" colorB="bg-amber-400"
+                              colorA="bg-warning-400" colorB="bg-warning-400"
                             />
                             <SideBySideBarChart
                               title="平均延迟"
                               labelA={v0[0]} valueA={s0.mean_latency_ms}
                               labelB={v1[0]} valueB={s1.mean_latency_ms}
                               maxValue={maxLat} unit="ms"
-                              colorA="bg-red-300" colorB="bg-red-300"
+                              colorA="bg-danger-300" colorB="bg-danger-300"
                             />
                             <SideBySideBarChart
                               title="平均 Token"
                               labelA={v0[0]} valueA={s0.mean_tokens}
                               labelB={v1[0]} valueB={s1.mean_tokens}
                               maxValue={maxTok} unit=""
-                              colorA="bg-purple-300" colorB="bg-purple-300"
+                              colorA="bg-primary-300" colorB="bg-primary-300"
                             />
                             <SideBySideBarChart
                               title="成功率"
                               labelA={v0[0]} valueA={s0.success_rate * 100}
                               labelB={v1[0]} valueB={s1.success_rate * 100}
                               maxValue={maxSR * 100} unit="%"
-                              colorA="bg-green-400" colorB="bg-green-400"
+                              colorA="bg-success-400" colorB="bg-success-400"
                             />
                           </>
                         );
@@ -507,19 +507,19 @@ export default function ABTestManager(): JSX.Element {
                         <div className="text-[10px] text-warm-500">总样本量</div>
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-amber-600">
+                        <div className="text-2xl font-bold text-warning-600">
                           {backendResult.confidence_level.toFixed(1)}%
                         </div>
                         <div className="text-[10px] text-warm-500">置信度</div>
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-green-600">
+                        <div className="text-2xl font-bold text-success-600">
                           {backendResult.winner_variant_id || '—'}
                         </div>
                         <div className="text-[10px] text-warm-500">领先变体</div>
                       </div>
                       <div>
-                        <div className="text-2xl font-bold text-purple-600">
+                        <div className="text-2xl font-bold text-primary-600">
                           {Math.abs(backendResult.effect_size).toFixed(3)}
                         </div>
                         <div className="text-[10px] text-warm-500">效应量 (Cohen's d)</div>
@@ -562,11 +562,11 @@ export default function ABTestManager(): JSX.Element {
                       <div className="text-[10px] text-warm-500">总样本量</div>
                     </div>
                     <div>
-                      <div className="text-2xl font-bold text-amber-600">{selectedTest.metrics?.significance ?? 0}%</div>
+                      <div className="text-2xl font-bold text-warning-600">{selectedTest.metrics?.significance ?? 0}%</div>
                       <div className="text-[10px] text-warm-500">置信度</div>
                     </div>
                     <div>
-                      <div className="text-2xl font-bold text-green-600">
+                      <div className="text-2xl font-bold text-success-600">
                         {winner || '—'}
                       </div>
                       <div className="text-[10px] text-warm-500">领先变体</div>
@@ -598,7 +598,7 @@ export default function ABTestManager(): JSX.Element {
       {showCreate && (
         <>
           <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setShowCreate(false)} />
-          <div className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-warm-100 rounded-2xl shadow-xl p-6">
+          <div className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-warm-100 rounded-2xl shadow-card-elevated p-6">
             <h4 className="text-lg font-semibold text-warm-900 mb-4">新建 A/B 测试</h4>
             <div className="space-y-3">
               <div>

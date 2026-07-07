@@ -28,10 +28,10 @@ function usagePercent(used: number, limit: number): number {
 }
 
 function barColor(pct: number): string {
-  if (pct >= 90) return 'bg-red-500';
-  if (pct >= 70) return 'bg-amber-500';
-  if (pct >= 50) return 'bg-blue-500';
-  return 'bg-emerald-500';
+  if (pct >= 90) return 'bg-danger-500';
+  if (pct >= 70) return 'bg-warning-500';
+  if (pct >= 50) return 'bg-primary-500';
+  return 'bg-success-500';
 }
 
 // ── Simple bar chart (no external libs) ───────────────────────────────────
@@ -67,14 +67,14 @@ function AnomalyBadge({ days }: { days: UsageDay[] }) {
 
   if (spike > 200) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700 ring-1 ring-red-200">
+      <span className="inline-flex items-center gap-1 rounded-full bg-danger-100 px-2 py-0.5 text-[11px] font-semibold text-danger-700 ring-1 ring-danger-200">
         [alert] 异常增长 +{spike.toFixed(0)}%
       </span>
     );
   }
   if (spike > 100) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-200">
+      <span className="inline-flex items-center gap-1 rounded-full bg-warning-100 px-2 py-0.5 text-[11px] font-semibold text-warning-700 ring-1 ring-warning-200">
         [warn] 大幅增长 +{spike.toFixed(0)}%
       </span>
     );
@@ -121,7 +121,7 @@ export default function CostAnalytics(): JSX.Element {
           </p>
         </div>
         {costError && (
-          <span className="text-xs text-red-500 bg-red-50 px-2 py-1 rounded">{costError}</span>
+          <span className="text-xs text-danger-500 bg-danger-50 px-2 py-1 rounded">{costError}</span>
         )}
       </div>
 
@@ -132,7 +132,7 @@ export default function CostAnalytics(): JSX.Element {
           <p className="mt-1 text-2xl font-bold text-warm-900">
             {costLoading ? <span className="h-7 w-16 animate-pulse rounded bg-warm-200 inline-block" /> : formatTokens(todayTokens)}
           </p>
-          <p className={`mt-0.5 text-xs font-medium ${dailyTrend >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+          <p className={`mt-0.5 text-xs font-medium ${dailyTrend >= 0 ? 'text-success-600' : 'text-danger-500'}`}>
             {dailyTrend >= 0 ? '↑' : '↓'} {Math.abs(dailyTrend).toFixed(1)}% vs 昨日
           </p>
         </div>
@@ -147,7 +147,7 @@ export default function CostAnalytics(): JSX.Element {
 
         <div className="card p-4">
           <p className="text-xs font-medium uppercase tracking-wide text-warm-500">估算成本</p>
-          <p className="mt-1 text-2xl font-bold text-emerald-700">
+          <p className="mt-1 text-2xl font-bold text-success-700">
             {costEstimate ? formatCost(costEstimate.total) : '—'}
           </p>
           <p className="mt-0.5 text-xs text-warm-400">基于模型定价估算</p>
@@ -199,15 +199,15 @@ export default function CostAnalytics(): JSX.Element {
               <div className="flex items-center gap-3">
                 <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ring-1 ${
                   activeTenant.plan === 'enterprise'
-                    ? 'bg-purple-50 text-purple-700 ring-purple-200'
+                    ? 'bg-primary-50 text-primary-700 ring-primary-200'
                     : activeTenant.plan === 'pro'
-                    ? 'bg-blue-50 text-blue-700 ring-blue-200'
+                    ? 'bg-primary-50 text-primary-700 ring-primary-200'
                     : 'bg-warm-100 text-warm-600 ring-warm-200'
                 }`}>
                   {activeTenant.plan.toUpperCase()}
                 </span>
                 <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${
-                  activeTenant.status === 'open' ? 'bg-green-50 text-green-600 ring-green-200' : 'bg-warm-100 text-warm-500 ring-warm-200'
+                  activeTenant.status === 'open' ? 'bg-success-50 text-success-600 ring-success-200' : 'bg-warm-100 text-warm-500 ring-warm-200'
                 }`}>
                   {activeTenant.status === 'open' ? '● 进行中' : '○ 已关闭'}
                 </span>
@@ -272,14 +272,14 @@ export default function CostAnalytics(): JSX.Element {
                 <tr key={m.model} className="border-b border-warm-50 last:border-0">
                   <td className="py-2 font-medium text-warm-700">{m.model}</td>
                   <td className="py-2 text-right text-warm-600 font-mono text-xs">{formatTokens(m.tokens)}</td>
-                  <td className="py-2 text-right font-mono text-xs text-emerald-700">{formatCost(m.cost)}</td>
+                  <td className="py-2 text-right font-mono text-xs text-success-700">{formatCost(m.cost)}</td>
                   <td className="py-2 text-right text-warm-500">{formatPct(m.cost, costEstimate.total)}</td>
                 </tr>
               ))}
               <tr className="font-semibold">
                 <td className="pt-2 text-warm-800">合计</td>
                 <td className="pt-2 text-right text-warm-800 font-mono text-xs">{formatTokens(costEstimate.byModel.reduce((s, m) => s + m.tokens, 0))}</td>
-                <td className="pt-2 text-right font-mono text-xs text-emerald-700">{formatCost(costEstimate.total)}</td>
+                <td className="pt-2 text-right font-mono text-xs text-success-700">{formatCost(costEstimate.total)}</td>
                 <td className="pt-2 text-right text-warm-800">100%</td>
               </tr>
             </tbody>

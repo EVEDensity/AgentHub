@@ -14,7 +14,7 @@ function TransportBadge({ transport }: { transport: MCPServerConfig['transport']
   const isSSE = transport === 'sse';
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-      isSSE ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+      isSSE ? 'bg-primary-100 text-primary-700' : 'bg-primary-100 text-primary-700'
     }`}>
       <span className="material-symbols-outlined text-[12px]">{isSSE ? 'cloud_sync' : 'terminal'}</span>
       {transport.toUpperCase()}
@@ -26,10 +26,10 @@ function TransportBadge({ transport }: { transport: MCPServerConfig['transport']
 
 function StatusBadge({ status, errorMessage }: { status: MCPServerConfig['status']; errorMessage?: string }): JSX.Element {
   const config: Record<string, { icon: string; label: string; cls: string }> = {
-    connected: { icon: 'check_circle', label: '已连接', cls: 'bg-green-100 text-green-700' },
+    connected: { icon: 'check_circle', label: '已连接', cls: 'bg-success-100 text-success-700' },
     disconnected: { icon: 'cancel', label: '已断开', cls: 'bg-warm-100 text-warm-600' },
-    error: { icon: 'error', label: '错误', cls: 'bg-red-100 text-red-700' },
-    unknown: { icon: 'help', label: '未知', cls: 'bg-gray-100 text-gray-500' },
+    error: { icon: 'error', label: '错误', cls: 'bg-danger-100 text-danger-700' },
+    unknown: { icon: 'help', label: '未知', cls: 'bg-warm-100 text-warm-500' },
   };
   const info = config[status] || config.unknown;
   return (
@@ -76,7 +76,7 @@ function ServerCard({ server, isSelected, onSelect, onRemove, onTest }: {
           <button className="btn-ghost px-2 py-1 text-xs" onClick={onTest} title="测试连接">
             <span className="material-symbols-outlined text-[14px]">network_ping</span>
           </button>
-          <button className="btn-ghost px-2 py-1 text-xs text-red-500" onClick={onRemove} title="移除">
+          <button className="btn-ghost px-2 py-1 text-xs text-danger-500" onClick={onRemove} title="移除">
             <span className="material-symbols-outlined text-[14px]">delete</span>
           </button>
         </div>
@@ -179,7 +179,7 @@ function AddServerModal({ visible, onClose, onAdd }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-warm-100 rounded-2xl shadow-xl p-6 w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-warm-100 rounded-2xl shadow-card-elevated p-6 w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-warm-900">添加 MCP 服务器</h3>
         <form onSubmit={handleSubmit} className="mt-4 space-y-3">
           <div>
@@ -239,10 +239,10 @@ function AddServerModal({ visible, onClose, onAdd }: {
 function CallResultViewer({ result, isExecuting }: { result: typeof useMCPStore.prototype.callResult; isExecuting: boolean }): JSX.Element | null {
   if (isExecuting) {
     return (
-      <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+      <div className="rounded-lg border border-primary-200 bg-primary-50 px-4 py-3">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-blue-500 animate-spin text-sm">progress_activity</span>
-          <span className="text-sm text-blue-700">执行中...</span>
+          <span className="material-symbols-outlined text-primary-500 animate-spin text-sm">progress_activity</span>
+          <span className="text-sm text-primary-700">执行中...</span>
         </div>
       </div>
     );
@@ -251,7 +251,7 @@ function CallResultViewer({ result, isExecuting }: { result: typeof useMCPStore.
   return (
     <div className="rounded-lg border border-warm-200 bg-warm-50 px-4 py-3">
       <div className="flex items-center gap-2 mb-2">
-        <span className={`material-symbols-outlined text-sm ${result.isError ? 'text-red-500' : 'text-green-500'}`}>
+        <span className={`material-symbols-outlined text-sm ${result.isError ? 'text-danger-500' : 'text-success-500'}`}>
           {result.isError ? 'error' : 'check_circle'}
         </span>
         <span className="text-sm font-medium text-warm-700">执行结果</span>
@@ -297,7 +297,7 @@ export default function MCPServerManager(): JSX.Element {
           <h2 className="text-[34px] font-semibold leading-tight text-warm-900">MCP Gateway</h2>
           <p className="mt-1 text-sm text-warm-500">管理 Model Context Protocol 服务器连接，发现和测试工具。</p>
           {demoMode && (
-            <p className="mt-1 text-xs text-amber-600 flex items-center gap-1">
+            <p className="mt-1 text-xs text-warning-600 flex items-center gap-1">
               <span className="material-symbols-outlined text-[12px]">info</span>
               Demo 模式 — 显示示例数据，连接后端获取实际 MCP 工具
             </p>
@@ -309,12 +309,12 @@ export default function MCPServerManager(): JSX.Element {
       </div>
 
       {/* MCP Protocol Info Banner */}
-      <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+      <div className="rounded-xl border border-primary-200 bg-primary-50 px-4 py-3">
         <div className="flex items-start gap-2">
-          <span className="material-symbols-outlined text-indigo-500 mt-0.5 text-lg">info</span>
+          <span className="material-symbols-outlined text-primary-500 mt-0.5 text-lg">info</span>
           <div>
-            <p className="text-sm font-medium text-indigo-800">关于 MCP (Model Context Protocol)</p>
-            <p className="mt-0.5 text-sm text-indigo-600">
+            <p className="text-sm font-medium text-primary-800">关于 MCP (Model Context Protocol)</p>
+            <p className="mt-0.5 text-sm text-primary-600">
               MCP 是 Anthropic 发布的开放协议，允许 AI 应用安全地访问本地和远程工具、资源和提示模板。
               AgentHub MCP Gateway 支持 <strong>STDIO</strong>（本地进程）和 <strong>SSE</strong>（HTTP 流）两种传输方式，
               将平台的知识搜索、Agent 调用、工作流管理等能力暴露为 MCP 工具。

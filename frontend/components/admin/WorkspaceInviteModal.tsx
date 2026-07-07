@@ -24,7 +24,7 @@ export function WorkspaceInviteModal({ workspaceId, onClose }: Props): JSX.Eleme
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div className="card w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="card w-full max-w-sm shadow-modal" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-warm-700">邀请成员</h3>
           <button className="text-warm-400 hover:text-warm-600" onClick={onClose}>

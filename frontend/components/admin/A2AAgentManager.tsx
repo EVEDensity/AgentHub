@@ -13,9 +13,9 @@ import A2ASecurityPanel from './A2ASecurityPanel';
 
 function StatusBadge({ status }: { status?: string }): JSX.Element {
   const map: Record<string, { label: string; cls: string }> = {
-    active: { label: '活跃', cls: 'bg-green-100 text-green-700 border-green-200' },
+    active: { label: '活跃', cls: 'bg-success-100 text-success-700 border-success-200' },
     inactive: { label: '离线', cls: 'bg-warm-100 text-warm-500 border-warm-200' },
-    error: { label: '异常', cls: 'bg-red-100 text-red-700 border-red-200' },
+    error: { label: '异常', cls: 'bg-danger-100 text-danger-700 border-danger-200' },
   };
   const s = map[status || ''] || { label: status || '未知', cls: 'bg-warm-50 text-warm-500 border-warm-150' };
   return <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${s.cls}`}>{s.label}</span>;
@@ -25,7 +25,7 @@ function SourceBadge({ source }: { source?: string }): JSX.Element {
   const isInternal = source === 'internal';
   return (
     <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
-      isInternal ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-purple-50 text-purple-600 border-purple-200'
+      isInternal ? 'bg-primary-50 text-primary-600 border-primary-200' : 'bg-primary-50 text-primary-600 border-primary-200'
     }`}>
       {isInternal ? '内部' : '外部'}
     </span>
@@ -107,7 +107,7 @@ function AgentDetail({ agent }: { agent: A2AAgentCard }): JSX.Element {
         <div className="flex flex-wrap gap-1.5">
           {Object.entries(agent.capabilities).map(([key, val]) => (
             <span key={key} className={`text-[10px] px-2 py-0.5 rounded-full border ${
-              val ? 'bg-green-50 text-green-600 border-green-200' : 'bg-warm-50 text-warm-400 border-warm-100'
+              val ? 'bg-success-50 text-success-600 border-success-200' : 'bg-warm-50 text-warm-400 border-warm-100'
             }`}>
               {key}
             </span>
@@ -172,7 +172,7 @@ function AgentDetail({ agent }: { agent: A2AAgentCard }): JSX.Element {
           <h5 className="text-xs font-semibold text-warm-500 uppercase tracking-wider mb-2">Auth</h5>
           {agent.authSchemes.map((scheme, i) => (
             <div key={i} className="flex items-center gap-2 text-xs text-warm-600">
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-warning-100 text-warning-700">
                 {scheme.type}
               </span>
               {scheme.description && <span>{scheme.description}</span>}
@@ -243,13 +243,13 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
       </div>
 
       {/* Info Banner */}
-      <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-        <p className="text-xs text-blue-700 flex items-start gap-2">
+      <div className="rounded-lg border border-primary-200 bg-primary-50 px-4 py-3">
+        <p className="text-xs text-primary-700 flex items-start gap-2">
           <span className="material-symbols-outlined text-[14px] shrink-0 mt-0.5">info</span>
           <span>
             <strong>A2A (Agent-to-Agent)</strong> 是 Google 发布的 Agent 互操作开放标准。
-            AgentHub 自带的 Agent Card 发布于 <code className="text-blue-800 bg-blue-100 px-1 rounded">/.well-known/agent-card.json</code>，
-            可通过 <code className="text-blue-800 bg-blue-100 px-1 rounded">/platform/a2a/</code> 端点管理外部 A2A Agent。
+            AgentHub 自带的 Agent Card 发布于 <code className="text-primary-800 bg-primary-100 px-1 rounded">/.well-known/agent-card.json</code>，
+            可通过 <code className="text-primary-800 bg-primary-100 px-1 rounded">/platform/a2a/</code> 端点管理外部 A2A Agent。
           </span>
         </p>
       </div>

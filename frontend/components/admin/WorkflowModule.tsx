@@ -384,12 +384,12 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
                             <span className="material-symbols-outlined text-[16px]">edit</span>
                           </button>
                           {!wf.isDefault && (
-                            <button className="btn-ghost text-xs text-amber-600" onClick={() => handleSetDefault(wf.id)} title="设为默认">
+                            <button className="btn-ghost text-xs text-warning-600" onClick={() => handleSetDefault(wf.id)} title="设为默认">
                               <span className="material-symbols-outlined text-[16px]">star</span>
                             </button>
                           )}
                           <button
-                            className={`btn-ghost text-xs ${wf.active ? 'text-warm-500' : 'text-green-600'}`}
+                            className={`btn-ghost text-xs ${wf.active ? 'text-warm-500' : 'text-success-600'}`}
                             onClick={() => handleToggleActive(wf.id, wf.active)}
                             title={wf.active ? '禁用' : '启用'}
                           >
@@ -461,10 +461,10 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
                               </span>
                               <span className="flex-1 text-warm-700 truncate">{nr.nodeName}</span>
                               <span className={`shrink-0 inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[9px] font-medium ${
-                                nr.status === 'completed' ? 'bg-green-100 text-green-700' :
-                                nr.status === 'failed' ? 'bg-red-100 text-red-700' :
+                                nr.status === 'completed' ? 'bg-success-100 text-success-700' :
+                                nr.status === 'failed' ? 'bg-danger-100 text-danger-700' :
                                 nr.status === 'running' ? 'bg-primary-100 text-primary-700' :
-                                nr.status === 'awaiting_human' ? 'bg-amber-100 text-amber-700' :
+                                nr.status === 'awaiting_human' ? 'bg-warning-100 text-warning-700' :
                                 'bg-warm-100 text-warm-500'
                               }`}>
                                 {nr.status === 'completed' ? '✓' : nr.status === 'failed' ? '✗' : nr.status === 'running' ? '⟳' : '…'}
@@ -536,10 +536,10 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
           <div className="grid grid-cols-5 gap-3">
             {[
               { label: '总执行次数', value: analytics.total, color: 'text-warm-800' },
-              { label: '成功', value: analytics.completed, color: 'text-green-600' },
-              { label: '失败', value: analytics.failed, color: 'text-red-600' },
+              { label: '成功', value: analytics.completed, color: 'text-success-600' },
+              { label: '失败', value: analytics.failed, color: 'text-danger-600' },
               { label: '运行中', value: analytics.running, color: 'text-primary-600' },
-              { label: '等待审批', value: analytics.awaiting, color: 'text-amber-600' },
+              { label: '等待审批', value: analytics.awaiting, color: 'text-warning-600' },
             ].map((item) => (
               <div key={item.label} className="card p-3 text-center">
                 <div className={`text-xl font-bold ${item.color}`}>{item.value}</div>
@@ -620,7 +620,7 @@ export default function WorkflowModule({ setNotice }: Props): JSX.Element {
       {/* Delete Confirmation Dialog */}
       {deleteConfirmId !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="card w-full max-w-md p-6 shadow-xl">
+          <div className="card w-full max-w-md p-6 shadow-card-elevated">
             <h3 className="text-lg font-semibold text-warm-800">确认删除</h3>
             <p className="mt-2 text-sm text-warm-600">
               确定要删除工作流 <span className="font-semibold text-warm-800">"{deleteConfirmName}"</span> 吗？此操作不可撤销。

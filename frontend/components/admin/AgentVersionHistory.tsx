@@ -57,9 +57,9 @@ function formatValue(val: unknown): string {
 
 function diffColor(type: string): string {
   switch (type) {
-    case 'added':    return 'text-emerald-600 bg-emerald-50 border-emerald-200';
-    case 'removed':  return 'text-red-600 bg-red-50 border-red-200';
-    case 'modified': return 'text-amber-600 bg-amber-50 border-amber-200';
+    case 'added':    return 'text-success-600 bg-success-50 border-success-200';
+    case 'removed':  return 'text-danger-600 bg-danger-50 border-danger-200';
+    case 'modified': return 'text-warning-600 bg-warning-50 border-warning-200';
     default:         return 'text-warm-500 bg-warm-50 border-warm-200';
   }
 }
@@ -123,9 +123,9 @@ function VersionTimeline({
               ${isSelected
                 ? 'border-primary-300 bg-primary-50/50 shadow-sm'
                 : isBase
-                  ? 'border-amber-300 bg-amber-50/30'
+                  ? 'border-warning-300 bg-warning-50/30'
                   : isTarget
-                    ? 'border-sky-300 bg-sky-50/30'
+                    ? 'border-primary-300 bg-primary-50/30'
                     : 'border-transparent hover:bg-warm-50 hover:border-warm-200'
               }
             `}
@@ -197,8 +197,8 @@ function VersionTimeline({
                 className={`
                   text-[10px] px-2 py-1 rounded-lg font-medium transition-colors
                   ${isBase
-                    ? 'bg-amber-200 text-amber-800'
-                    : 'bg-warm-100 text-warm-500 hover:bg-amber-100 hover:text-amber-700'
+                    ? 'bg-warning-200 text-warning-800'
+                    : 'bg-warm-100 text-warm-500 hover:bg-warning-100 hover:text-warning-700'
                   }
                 `}
                 title="选择为对比基准 (A)"
@@ -210,8 +210,8 @@ function VersionTimeline({
                 className={`
                   text-[10px] px-2 py-1 rounded-lg font-medium transition-colors
                   ${isTarget
-                    ? 'bg-sky-200 text-sky-800'
-                    : 'bg-warm-100 text-warm-500 hover:bg-sky-100 hover:text-sky-700'
+                    ? 'bg-primary-200 text-primary-800'
+                    : 'bg-warm-100 text-warm-500 hover:bg-primary-100 hover:text-primary-700'
                   }
                 `}
                 title="选择为对比目标 (B)"
@@ -225,7 +225,7 @@ function VersionTimeline({
                 confirmRollback === v.version ? (
                   <div className="flex items-center gap-1">
                     <button
-                      className="text-[10px] px-2 py-1 rounded-lg bg-red-500 text-white font-medium hover:bg-red-600 transition-colors"
+                      className="text-[10px] px-2 py-1 rounded-lg bg-danger-500 text-white font-medium hover:bg-danger-600 transition-colors"
                       disabled={rollingBack}
                       onClick={() => onRollback(v.version)}
                     >
@@ -240,7 +240,7 @@ function VersionTimeline({
                   </div>
                 ) : (
                   <button
-                    className="text-[10px] px-2 py-1 rounded-lg bg-warm-100 text-warm-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+                    className="text-[10px] px-2 py-1 rounded-lg bg-warm-100 text-warm-500 hover:bg-danger-50 hover:text-danger-600 transition-colors"
                     title="回滚到此版本"
                     onClick={() => setConfirmRollback(v.version)}
                   >
@@ -299,15 +299,15 @@ function DiffPanel({
       {/* Footer */}
       <div className="flex items-center gap-3 px-4 py-2.5 bg-warm-50 border-t border-warm-200 text-[10px] text-warm-400">
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded bg-emerald-100 text-emerald-700 text-center leading-3">+</span>
+          <span className="inline-block w-3 h-3 rounded bg-success-100 text-success-700 text-center leading-3">+</span>
           新增
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded bg-red-100 text-red-700 text-center leading-3">−</span>
+          <span className="inline-block w-3 h-3 rounded bg-danger-100 text-danger-700 text-center leading-3">−</span>
           删除
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 rounded bg-amber-100 text-amber-700 text-center leading-3">~</span>
+          <span className="inline-block w-3 h-3 rounded bg-warning-100 text-warning-700 text-center leading-3">~</span>
           修改
         </span>
         <span className="ml-auto">
@@ -335,9 +335,9 @@ function FieldDiffRow({ diff: fd }: { diff: AgentFieldDiff }): JSX.Element {
         {/* Type badge */}
         <span className={`
           shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold
-          ${fd.type === 'added' ? 'bg-emerald-200 text-emerald-800' : ''}
-          ${fd.type === 'removed' ? 'bg-red-200 text-red-800' : ''}
-          ${fd.type === 'modified' ? 'bg-amber-200 text-amber-800' : ''}
+          ${fd.type === 'added' ? 'bg-success-200 text-success-800' : ''}
+          ${fd.type === 'removed' ? 'bg-danger-200 text-danger-800' : ''}
+          ${fd.type === 'modified' ? 'bg-warning-200 text-warning-800' : ''}
         `}>
           {diffBadge(fd.type)}
         </span>
@@ -358,16 +358,16 @@ function FieldDiffRow({ diff: fd }: { diff: AgentFieldDiff }): JSX.Element {
           <div className="mt-1 space-y-1">
             {fd.type !== 'added' && (
               <div className="flex items-start gap-2">
-                <span className="text-[10px] text-red-500 font-medium shrink-0 mt-0.5">旧值:</span>
-                <span className={`text-xs font-mono text-red-700 ${!expanded && isLong ? 'line-clamp-1' : 'whitespace-pre-wrap'}`}>
+                <span className="text-[10px] text-danger-500 font-medium shrink-0 mt-0.5">旧值:</span>
+                <span className={`text-xs font-mono text-danger-700 ${!expanded && isLong ? 'line-clamp-1' : 'whitespace-pre-wrap'}`}>
                   {formatValue(fd.oldValue)}
                 </span>
               </div>
             )}
             {fd.type !== 'removed' && (
               <div className="flex items-start gap-2">
-                <span className="text-[10px] text-emerald-500 font-medium shrink-0 mt-0.5">新值:</span>
-                <span className={`text-xs font-mono text-emerald-700 ${!expanded && isLong ? 'line-clamp-1' : 'whitespace-pre-wrap'}`}>
+                <span className="text-[10px] text-success-500 font-medium shrink-0 mt-0.5">新值:</span>
+                <span className={`text-xs font-mono text-success-700 ${!expanded && isLong ? 'line-clamp-1' : 'whitespace-pre-wrap'}`}>
                   {formatValue(fd.newValue)}
                 </span>
               </div>
@@ -419,7 +419,7 @@ function VersionDetail({
             confirming ? (
               <div className="flex items-center gap-1">
                 <button
-                  className="text-[10px] px-2 py-1 rounded-lg bg-red-500 text-white font-medium hover:bg-red-600 transition-colors"
+                  className="text-[10px] px-2 py-1 rounded-lg bg-danger-500 text-white font-medium hover:bg-danger-600 transition-colors"
                   disabled={rollingBack}
                   onClick={() => onRollback(version.version)}
                 >
@@ -434,7 +434,7 @@ function VersionDetail({
               </div>
             ) : (
               <button
-                className="text-[11px] px-2.5 py-1 rounded-lg bg-warm-100 text-warm-600 hover:bg-red-50 hover:text-red-600 transition-colors flex items-center gap-1"
+                className="text-[11px] px-2.5 py-1 rounded-lg bg-warm-100 text-warm-600 hover:bg-danger-50 hover:text-danger-600 transition-colors flex items-center gap-1"
                 onClick={() => setConfirming(true)}
               >
                 <span className="material-symbols-outlined text-[12px]">history</span>
@@ -597,7 +597,7 @@ export default function AgentVersionHistory({ agentId, onClose }: Props): JSX.El
 
       {/* ── Diff selection hint ────────────────────────────────── */}
       {versions.length >= 2 && mode === 'timeline' && (
-        <div className="px-5 py-2 bg-amber-50/50 border-b border-amber-100 flex items-center gap-2 text-[10px] text-amber-700">
+        <div className="px-5 py-2 bg-warning-50/50 border-b border-warning-100 flex items-center gap-2 text-[10px] text-warning-700">
           <span className="material-symbols-outlined text-[12px]">info</span>
           点击版本行上的 <strong>A</strong> 和 <strong>B</strong> 按钮选择两个版本进行对比
           {(diffBaseVersionId || diffTargetVersionId) && (

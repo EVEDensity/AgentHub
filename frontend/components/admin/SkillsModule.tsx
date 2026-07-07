@@ -160,7 +160,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
     return (
       <section className="card p-6">
         <h2 className="text-h3">技能</h2>
-        <p className="mt-3 text-sm text-red-500">{skillError}</p>
+        <p className="mt-3 text-sm text-danger-500">{skillError}</p>
         <button className="btn-secondary mt-3" onClick={() => { void loadSkills(); }}>重试</button>
       </section>
     );
@@ -183,7 +183,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
     <section className="overflow-hidden rounded-2xl border border-warm-200 bg-warm-100 h-[calc(100vh-165px)]">
       <div className="grid h-full grid-cols-[360px_1fr] overflow-hidden">
         {/* ── Left sidebar: stats, search, skill list ─────────────── */}
-        <aside className="border-r border-warm-150 bg-[#FBFAF8] flex flex-col overflow-hidden">
+        <aside className="border-r border-warm-150 bg-[#191C22] flex flex-col overflow-hidden">
           {/* Stats bar */}
           <div className="border-b border-warm-150 px-4 py-3">
             <div className="flex items-stretch gap-0">
@@ -495,7 +495,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" />
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-auto bg-[#FCFCFB] px-5 py-4">
+                  <div className="flex-1 overflow-auto bg-[#121418] px-5 py-4">
                     {skillDetail.raw ? (
                       <MarkdownRenderer content={skillDetail.raw} />
                     ) : (

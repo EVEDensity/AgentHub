@@ -1,0 +1,85 @@
+{
+    "projectRoot":  "D:\\Users\\xyn\\Desktop\\agenthub\\AgenthubV1.2",
+    "batchFiles": [
+        { "path": "frontend/components/admin/ABTestManager.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/A2AAgentManager.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/A2ASecurityPanel.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/ApiKeyManager.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/ChannelModule.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/AgentEditModal.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/KnowledgeBaseModule.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/KBDocumentUploader.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/KBChunkPreview.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/KBCollectionManager.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/KBRetrievalTester.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/GeneralSettingsModule.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/StatCard.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/TagInput.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/TemplateCard.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/WorkspaceManager.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/ParticleTopologyCanvas.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/PerformanceMonitor.tsx", "language": "typescript" },
+        { "path": "frontend/components/admin/MemoryDashboard.tsx", "language": "typescript" }
+    ],
+    "batchImportData": {
+        "frontend/components/admin/ABTestManager.tsx": [
+            "frontend/stores/abTestStore.ts"
+        ],
+        "frontend/components/admin/A2AAgentManager.tsx": [
+            "frontend/components/admin/A2ASecurityPanel.tsx",
+            "frontend/stores/a2aStore.ts",
+            "frontend/types/index.ts"
+        ],
+        "frontend/components/admin/A2ASecurityPanel.tsx": [
+            "frontend/stores/a2aStore.ts"
+        ],
+        "frontend/components/admin/ApiKeyManager.tsx": [
+            "frontend/stores/toolStore.ts"
+        ],
+        "frontend/components/admin/ChannelModule.tsx": [],
+        "frontend/components/admin/AgentEditModal.tsx": [
+            "frontend/components/admin/PromptEditor.tsx",
+            "frontend/components/admin/TagInput.tsx",
+            "frontend/types/index.ts"
+        ],
+        "frontend/components/admin/KnowledgeBaseModule.tsx": [
+            "frontend/components/admin/KBChunkPreview.tsx",
+            "frontend/components/admin/KBCollectionManager.tsx",
+            "frontend/components/admin/KBDocumentUploader.tsx",
+            "frontend/components/admin/KBRetrievalTester.tsx",
+            "frontend/stores/knowledgeStore.ts"
+        ],
+        "frontend/components/admin/KBDocumentUploader.tsx": [
+            "frontend/stores/knowledgeStore.ts"
+        ],
+        "frontend/components/admin/KBChunkPreview.tsx": [
+            "frontend/stores/knowledgeStore.ts"
+        ],
+        "frontend/components/admin/KBCollectionManager.tsx": [
+            "frontend/stores/knowledgeStore.ts"
+        ],
+        "frontend/components/admin/KBRetrievalTester.tsx": [
+            "frontend/stores/knowledgeStore.ts"
+        ],
+        "frontend/components/admin/GeneralSettingsModule.tsx": [],
+        "frontend/components/admin/StatCard.tsx": [],
+        "frontend/components/admin/TagInput.tsx": [],
+        "frontend/components/admin/TemplateCard.tsx": [
+            "frontend/stores/templateStore.ts",
+            "frontend/types/index.ts"
+        ],
+        "frontend/components/admin/WorkspaceManager.tsx": [
+            "frontend/components/admin/WorkspaceInviteModal.tsx",
+            "frontend/stores/workspaceStore.ts"
+        ],
+        "frontend/components/admin/ParticleTopologyCanvas.tsx": [
+            "frontend/components/admin/PerformanceMonitor.tsx",
+            "frontend/lib/performance/adaptiveQuality.ts",
+            "frontend/types/index.ts"
+        ],
+        "frontend/components/admin/PerformanceMonitor.tsx": [
+            "frontend/lib/performance/adaptiveQuality.ts"
+        ],
+        "frontend/components/admin/MemoryDashboard.tsx": []
+    }
+}

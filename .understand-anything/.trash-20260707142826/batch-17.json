@@ -1,0 +1,1203 @@
+{
+  "nodes": [
+    {
+      "id": "file:services/rust/crates/fanout-core/src/core.rs",
+      "type": "file",
+      "name": "core.rs",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "FanoutCore扇出引擎：管理订阅者注册/路由/分区，支持按哈希分区分发、健康检查和统计",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/core.rs:SubscriberHandle",
+      "type": "class",
+      "name": "SubscriberHandle",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "SubscriberHandle",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/core.rs:FanoutCore",
+      "type": "class",
+      "name": "FanoutCore",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "FanoutCore",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:config",
+      "type": "function",
+      "name": "config",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "config",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:subscribe",
+      "type": "function",
+      "name": "subscribe",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "subscribe",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:unsubscribe",
+      "type": "function",
+      "name": "unsubscribe",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "unsubscribe",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:route",
+      "type": "function",
+      "name": "route",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "route",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:stats",
+      "type": "function",
+      "name": "stats",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "stats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:subscriber_stats",
+      "type": "function",
+      "name": "subscriber_stats",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "subscriber_stats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:channel_stats",
+      "type": "function",
+      "name": "channel_stats",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "channel_stats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:partition_count",
+      "type": "function",
+      "name": "partition_count",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "partition_count",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/core.rs:health",
+      "type": "function",
+      "name": "health",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "health",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/core.rs:FanoutCoreHealth",
+      "type": "class",
+      "name": "FanoutCoreHealth",
+      "filePath": "services/rust/crates/fanout-core/src/core.rs",
+      "summary": "FanoutCoreHealth",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/fanout-core/src/lib.rs",
+      "type": "file",
+      "name": "lib.rs",
+      "filePath": "services/rust/crates/fanout-core/src/lib.rs",
+      "summary": "fanout-core crate根模块：re-export扇出核心类型",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "type": "file",
+      "name": "nats.rs",
+      "filePath": "services/rust/crates/fanout-core/src/nats.rs",
+      "summary": "NATS适配器：连接NATS并spawn订阅循环，接收fanout事件进行路由分发",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/nats.rs:NatsAdapter",
+      "type": "class",
+      "name": "NatsAdapter",
+      "filePath": "services/rust/crates/fanout-core/src/nats.rs",
+      "summary": "NatsAdapter",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/nats.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/fanout-core/src/nats.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/nats.rs:connect",
+      "type": "function",
+      "name": "connect",
+      "filePath": "services/rust/crates/fanout-core/src/nats.rs",
+      "summary": "connect",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/nats.rs:is_connected",
+      "type": "function",
+      "name": "is_connected",
+      "filePath": "services/rust/crates/fanout-core/src/nats.rs",
+      "summary": "is_connected",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/nats.rs:spawn_subscription",
+      "type": "function",
+      "name": "spawn_subscription",
+      "filePath": "services/rust/crates/fanout-core/src/nats.rs",
+      "summary": "spawn_subscription",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/nats.rs:close",
+      "type": "function",
+      "name": "close",
+      "filePath": "services/rust/crates/fanout-core/src/nats.rs",
+      "summary": "close",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "type": "file",
+      "name": "partitioner.rs",
+      "filePath": "services/rust/crates/fanout-core/src/partitioner.rs",
+      "summary": "哈希分区器：一致性哈希分区算法，支持动态resize和推荐分区数计算",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/partitioner.rs:HashPartitioner",
+      "type": "class",
+      "name": "HashPartitioner",
+      "filePath": "services/rust/crates/fanout-core/src/partitioner.rs",
+      "summary": "HashPartitioner",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/partitioner.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/fanout-core/src/partitioner.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/partitioner.rs:partition",
+      "type": "function",
+      "name": "partition",
+      "filePath": "services/rust/crates/fanout-core/src/partitioner.rs",
+      "summary": "partition",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/partitioner.rs:partitions",
+      "type": "function",
+      "name": "partitions",
+      "filePath": "services/rust/crates/fanout-core/src/partitioner.rs",
+      "summary": "partitions",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/partitioner.rs:resize",
+      "type": "function",
+      "name": "resize",
+      "filePath": "services/rust/crates/fanout-core/src/partitioner.rs",
+      "summary": "resize",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/partitioner.rs:recommended_partition_count",
+      "type": "function",
+      "name": "recommended_partition_count",
+      "filePath": "services/rust/crates/fanout-core/src/partitioner.rs",
+      "summary": "recommended_partition_count",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/fanout-core/src/server.rs",
+      "type": "file",
+      "name": "server.rs",
+      "filePath": "services/rust/crates/fanout-core/src/server.rs",
+      "summary": "HTTP服务端点：健康检查/指标/统计/订阅管理API",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/server.rs:FanoutHttpServer",
+      "type": "class",
+      "name": "FanoutHttpServer",
+      "filePath": "services/rust/crates/fanout-core/src/server.rs",
+      "summary": "FanoutHttpServer",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/server.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/fanout-core/src/server.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/server.rs:serve",
+      "type": "function",
+      "name": "serve",
+      "filePath": "services/rust/crates/fanout-core/src/server.rs",
+      "summary": "serve",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/fanout-core/src/types.rs",
+      "type": "file",
+      "name": "types.rs",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "扇出数据模型：FanoutConfig/FanoutEvent/DeliveryReceipt/SubscriberStats/ChannelStats及慢订阅者策略",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/types.rs:SlowSubscriberPolicy",
+      "type": "class",
+      "name": "SlowSubscriberPolicy",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "SlowSubscriberPolicy",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/fanout-core/src/types.rs:as_str",
+      "type": "function",
+      "name": "as_str",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "as_str",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/types.rs:FanoutConfig",
+      "type": "class",
+      "name": "FanoutConfig",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "FanoutConfig",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/types.rs:FanoutEvent",
+      "type": "class",
+      "name": "FanoutEvent",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "FanoutEvent",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/types.rs:DeliveryReceipt",
+      "type": "class",
+      "name": "DeliveryReceipt",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "DeliveryReceipt",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/types.rs:FanoutStats",
+      "type": "class",
+      "name": "FanoutStats",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "FanoutStats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/types.rs:SubscriberStats",
+      "type": "class",
+      "name": "SubscriberStats",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "SubscriberStats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/fanout-core/src/types.rs:ChannelStats",
+      "type": "class",
+      "name": "ChannelStats",
+      "filePath": "services/rust/crates/fanout-core/src/types.rs",
+      "summary": "ChannelStats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "class:services/rust/crates/fanout-core/src/core.rs:SubscriberHandle",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "class:services/rust/crates/fanout-core/src/core.rs:SubscriberHandle",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "class:services/rust/crates/fanout-core/src/core.rs:FanoutCore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "class:services/rust/crates/fanout-core/src/core.rs:FanoutCore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:config",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:config",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:subscribe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:subscribe",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:unsubscribe",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:unsubscribe",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:route",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:route",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:stats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:stats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:subscriber_stats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:subscriber_stats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:channel_stats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:channel_stats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:partition_count",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:partition_count",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:health",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "function:services/rust/crates/fanout-core/src/core.rs:health",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "class:services/rust/crates/fanout-core/src/core.rs:FanoutCoreHealth",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "class:services/rust/crates/fanout-core/src/core.rs:FanoutCoreHealth",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "class:services/rust/crates/fanout-core/src/nats.rs:NatsAdapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "class:services/rust/crates/fanout-core/src/nats.rs:NatsAdapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:connect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:connect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:is_connected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:is_connected",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:spawn_subscription",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:spawn_subscription",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:close",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "function:services/rust/crates/fanout-core/src/nats.rs:close",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "class:services/rust/crates/fanout-core/src/partitioner.rs:HashPartitioner",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "class:services/rust/crates/fanout-core/src/partitioner.rs:HashPartitioner",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:partition",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:partition",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:partitions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:partitions",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:resize",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:resize",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:recommended_partition_count",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "target": "function:services/rust/crates/fanout-core/src/partitioner.rs:recommended_partition_count",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "class:services/rust/crates/fanout-core/src/server.rs:FanoutHttpServer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "class:services/rust/crates/fanout-core/src/server.rs:FanoutHttpServer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "function:services/rust/crates/fanout-core/src/server.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "function:services/rust/crates/fanout-core/src/server.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "function:services/rust/crates/fanout-core/src/server.rs:serve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "function:services/rust/crates/fanout-core/src/server.rs:serve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:SlowSubscriberPolicy",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:SlowSubscriberPolicy",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "function:services/rust/crates/fanout-core/src/types.rs:as_str",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "function:services/rust/crates/fanout-core/src/types.rs:as_str",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:FanoutConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:FanoutConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:FanoutEvent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:FanoutEvent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:DeliveryReceipt",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:DeliveryReceipt",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:FanoutStats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:FanoutStats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:SubscriberStats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:SubscriberStats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:ChannelStats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/types.rs",
+      "target": "class:services/rust/crates/fanout-core/src/types.rs:ChannelStats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/core.rs",
+      "target": "file:services/rust/crates/fanout-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/lib.rs",
+      "target": "file:services/rust/crates/fanout-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/lib.rs",
+      "target": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/lib.rs",
+      "target": "file:services/rust/crates/fanout-core/src/partitioner.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/lib.rs",
+      "target": "file:services/rust/crates/fanout-core/src/server.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/lib.rs",
+      "target": "file:services/rust/crates/fanout-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "file:services/rust/crates/fanout-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/nats.rs",
+      "target": "file:services/rust/crates/fanout-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "file:services/rust/crates/fanout-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/fanout-core/src/server.rs",
+      "target": "file:services/rust/crates/fanout-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

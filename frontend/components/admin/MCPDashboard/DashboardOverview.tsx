@@ -22,7 +22,7 @@ export default function DashboardOverview({ data, loading, onRefresh }: Dashboar
       <div className="space-y-6">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="rounded-xl border bg-slate-50 px-5 py-4 animate-pulse">
+            <div key={i} className="rounded-xl border bg-warm-50 px-5 py-4 animate-pulse">
               <div className="h-3 w-16 rounded bg-warm-200 mb-2" />
               <div className="h-8 w-20 rounded bg-warm-200" />
             </div>
@@ -61,17 +61,17 @@ export default function DashboardOverview({ data, loading, onRefresh }: Dashboar
     <div className="space-y-6">
       {/* Health banner */}
       <div className={`rounded-xl border px-5 py-3 flex items-center gap-3 ${
-        health?.status === 'healthy' ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'
+        health?.status === 'healthy' ? 'bg-success-50 border-success-200' : 'bg-warning-50 border-warning-200'
       }`}>
         <span className="text-2xl">{health?.status === 'healthy' ? '[check]' : '[warn]'}</span>
         <div>
-          <span className={`text-sm font-semibold ${health?.status === 'healthy' ? 'text-green-700' : 'text-amber-700'}`}>
+          <span className={`text-sm font-semibold ${health?.status === 'healthy' ? 'text-success-700' : 'text-warning-700'}`}>
             系统状态：{health?.status === 'healthy' ? '健康' : '降级'}
           </span>
           {health?.issues && health.issues.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
               {health.issues.map((issue, i) => (
-                <span key={i} className="inline-block rounded bg-red-100 px-2 py-0.5 text-xs text-red-600">{issue}</span>
+                <span key={i} className="inline-block rounded bg-danger-100 px-2 py-0.5 text-xs text-danger-600">{issue}</span>
               ))}
             </div>
           )}
@@ -244,8 +244,8 @@ export default function DashboardOverview({ data, loading, onRefresh }: Dashboar
                   <span className="text-warm-600 font-medium">{event.action}</span>
                   <span className="text-warm-400">{event.agentId}</span>
                   <span className={`ml-auto font-mono text-[10px] ${
-                    event.riskLevel === 'L3' ? 'text-red-500' :
-                    event.riskLevel === 'L2' ? 'text-amber-500' : 'text-warm-400'
+                    event.riskLevel === 'L3' ? 'text-danger-500' :
+                    event.riskLevel === 'L2' ? 'text-warning-500' : 'text-warm-400'
                   }`}>
                     {event.riskLevel}
                   </span>

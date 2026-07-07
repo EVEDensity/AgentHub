@@ -192,6 +192,14 @@ const EvalDashboard = dynamic(() => import('../../components/admin/EvalDashboard
   ),
 });
 
+const Terminal = dynamic(() => import('../../components/admin/Terminal'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
+
 export default function AdminPage(): JSX.Element {
   // ── Read from stores ────────────────────────────────────────────
   const user = useAuthStore((s) => s.user);
@@ -529,6 +537,8 @@ export default function AdminPage(): JSX.Element {
         return <SloDashboard />;
       case '离线评估':
         return <EvalDashboard />;
+      case '终端':
+        return <Terminal />;
       default:
         return (
           <section className="card p-6">

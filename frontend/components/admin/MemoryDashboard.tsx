@@ -279,7 +279,7 @@ export default function MemoryDashboard({
               <div key={key} className="card" style={{ borderTop: `3px solid ${LAYER_COLORS[key]}` }}>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-semibold text-warm-500">{key.replace('_', ' ')}</span>
-                  <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded">● Active</span>
+                  <span className="text-[10px] text-success-600 bg-success-50 px-1.5 py-0.5 rounded">● Active</span>
                 </div>
                 {key === 'L0_working' && (
                   <>
@@ -342,7 +342,7 @@ export default function MemoryDashboard({
                 <p className="text-xs text-warm-500">总运行次数</p>
               </div>
               <div className="text-center">
-                <p className="text-2xl font-bold text-green-600">{stats.compression.avg_token_saving_pct}%</p>
+                <p className="text-2xl font-bold text-success-600">{stats.compression.avg_token_saving_pct}%</p>
                 <p className="text-xs text-warm-500">平均 Token 节省率</p>
               </div>
               {stats.compression.last_run && (
@@ -482,7 +482,7 @@ export default function MemoryDashboard({
             {/* New entity modal */}
             {showNewEntity && (
               <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 px-4 pt-[10vh]" onClick={() => setShowNewEntity(false)}>
-                <form className="w-full max-w-md rounded-2xl bg-warm-100 shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()} onSubmit={handleCreateEntity}>
+                <form className="w-full max-w-md rounded-2xl bg-warm-100 shadow-modal p-6 space-y-4" onClick={(e) => e.stopPropagation()} onSubmit={handleCreateEntity}>
                   <h4 className="text-lg font-semibold">新建实体</h4>
                   <input name="name" className="input-field w-full" placeholder="实体名称" required />
                   <select name="type" className="input-field w-full" defaultValue="concept">
@@ -620,13 +620,13 @@ export default function MemoryDashboard({
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
                         <span className={`w-2 h-2 rounded-full ${
-                          run.status === 'completed' ? 'bg-green-500' : run.status === 'running' ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'
+                          run.status === 'completed' ? 'bg-success-500' : run.status === 'running' ? 'bg-warning-500 animate-pulse' : 'bg-danger-500'
                         }`} />
                         <span className="text-sm font-medium text-warm-800">
                           {new Date(run.started_at).toLocaleString('zh-CN')}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                          run.status === 'completed' ? 'bg-green-50 text-green-600' : 'bg-yellow-50 text-yellow-600'
+                          run.status === 'completed' ? 'bg-success-50 text-success-600' : 'bg-warning-50 text-warning-600'
                         }`}>
                           {run.status === 'completed' ? '完成' : run.status === 'running' ? '进行中' : '失败'}
                         </span>
@@ -651,7 +651,7 @@ export default function MemoryDashboard({
                         <p className="text-warm-400">压缩前 Tokens</p>
                       </div>
                       <div>
-                        <p className="font-semibold text-green-600">{saving}%</p>
+                        <p className="font-semibold text-success-600">{saving}%</p>
                         <p className="text-warm-400">Token 节省率</p>
                       </div>
                     </div>
@@ -703,7 +703,7 @@ export default function MemoryDashboard({
                         <span className="text-[10px] text-warm-400">实体: {dec.entity_id}</span>
                       )}
                       {dec.conflict_detected && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600">冲突</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-danger-50 text-danger-600">冲突</span>
                       )}
                     </div>
                     <span className="text-[10px] text-warm-400">

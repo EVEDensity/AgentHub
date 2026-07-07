@@ -315,7 +315,7 @@ export default function RetrievalEvalPanel({ authHeaders, setNotice }: Props): J
                 key={r.id}
                 className={`rounded-lg border px-3 py-2.5 flex items-start gap-3 transition-colors ${
                   r.relevant
-                    ? 'border-green-200 bg-green-50/50'
+                    ? 'border-success-200 bg-success-50/50'
                     : 'border-warm-100 bg-warm-100'
                 }`}
               >
@@ -328,7 +328,7 @@ export default function RetrievalEvalPanel({ authHeaders, setNotice }: Props): J
                 <span
                   className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold shrink-0 mt-0.5 ${
                     r.relevant
-                      ? 'bg-green-100 text-green-700'
+                      ? 'bg-success-100 text-success-700'
                       : 'bg-warm-100 text-warm-500'
                   }`}
                 >

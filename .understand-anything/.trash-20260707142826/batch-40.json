@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "batchIndex": 40,
+  "nodes": [
+    {
+      "id": "services/rust/crates/memory-segment-core/Dockerfile",
+      "type": "file",
+      "name": "memory-segment-core Dockerfile",
+      "filePath": "services/rust/crates/memory-segment-core/Dockerfile",
+      "summary": "memory-segment-core 的 Docker 多阶段构建文件，使用 rust:1-bookworm 构建，BuildKit 缓存优化，暴露端口 8105，用于内存分段压缩核心服务的容器化部署",
+      "tags": ["Docker", "Rust", "内存管理", "微服务", "基础设施"],
+      "complexity": 2
+    }
+  ],
+  "edges": []
+}

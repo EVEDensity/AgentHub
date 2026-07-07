@@ -7,12 +7,12 @@ import { useEvalStore, type GoldenDataset, type GoldenItem, type EvalRun, type I
 
 function statusBadge(status: string): { bg: string; text: string; label: string } {
   switch (status) {
-    case 'pending': return { bg: 'bg-gray-100', text: 'text-gray-700', label: '等待中' };
-    case 'running': return { bg: 'bg-blue-100', text: 'text-blue-700', label: '运行中' };
-    case 'completed': return { bg: 'bg-emerald-100', text: 'text-emerald-700', label: '已完成' };
-    case 'failed': return { bg: 'bg-red-100', text: 'text-red-700', label: '失败' };
-    case 'cancelled': return { bg: 'bg-amber-100', text: 'text-amber-700', label: '已取消' };
-    default: return { bg: 'bg-gray-100', text: 'text-gray-700', label: status };
+    case 'pending': return { bg: 'bg-warm-100', text: 'text-warm-700', label: '等待中' };
+    case 'running': return { bg: 'bg-primary-100', text: 'text-primary-700', label: '运行中' };
+    case 'completed': return { bg: 'bg-success-100', text: 'text-success-700', label: '已完成' };
+    case 'failed': return { bg: 'bg-danger-100', text: 'text-danger-700', label: '失败' };
+    case 'cancelled': return { bg: 'bg-warning-100', text: 'text-warning-700', label: '已取消' };
+    default: return { bg: 'bg-warm-100', text: 'text-warm-700', label: status };
   }
 }
 
@@ -21,14 +21,14 @@ function statusBadge(status: string): { bg: string; text: string; label: string 
 function RegressionBanner({ details }: { details: RegrDetail[] }) {
   if (!details || details.length === 0) return null;
   return (
-    <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 mb-4">
-      <div className="flex items-center gap-2 text-sm font-semibold text-red-700 mb-2">
+    <div className="rounded-lg bg-danger-50 border border-danger-200 px-4 py-3 mb-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-danger-700 mb-2">
         <span className="material-symbols-outlined text-[18px]">warning</span>
         回归检测 — {details.length} 项指标退化
       </div>
       <div className="space-y-1">
         {details.map((d, i) => (
-          <div key={i} className="text-xs text-red-600 flex items-center gap-2">
+          <div key={i} className="text-xs text-danger-600 flex items-center gap-2">
             <span className="font-mono">{d.metric}</span>
             <span>{d.baseline.toFixed(3)} → {d.current.toFixed(3)}</span>
             <span className="font-semibold">({d.change_pct.toFixed(1)}%)</span>
@@ -334,7 +334,7 @@ export default function EvalDashboard(): JSX.Element {
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteDataset(ds.id); }}
-                      className="text-warm-400 hover:text-red-500 text-sm"
+                      className="text-warm-400 hover:text-danger-500 text-sm"
                     >
                       <span className="material-symbols-outlined text-[16px]">delete</span>
                     </button>
@@ -392,7 +392,7 @@ export default function EvalDashboard(): JSX.Element {
                     <p className="text-xs flex-1 line-clamp-2">{item.query}</p>
                     <button
                       onClick={() => deleteItem(currentDataset.dataset.id, item.id)}
-                      className="text-warm-400 hover:text-red-500 shrink-0"
+                      className="text-warm-400 hover:text-danger-500 shrink-0"
                     >
                       <span className="material-symbols-outlined text-[14px]">close</span>
                     </button>
@@ -401,7 +401,7 @@ export default function EvalDashboard(): JSX.Element {
               </div>
 
               {importResult && (
-                <div className="text-xs text-emerald-600 bg-emerald-50 rounded px-3 py-1">
+                <div className="text-xs text-success-600 bg-success-50 rounded px-3 py-1">
                   导入完成：{importResult.imported}/{importResult.total} 条
                 </div>
               )}
@@ -418,9 +418,9 @@ export default function EvalDashboard(): JSX.Element {
                     <div className="flex justify-between">
                       <span className="font-medium">#{String(r.item_index)} {String(r.query || '').slice(0, 60)}</span>
                       {r.error ? (
-                        <span className="text-red-500">{String(r.error)}</span>
+                        <span className="text-danger-500">{String(r.error)}</span>
                       ) : (
-                        <span className={r.exact_match === 1.0 ? 'text-emerald-600' : 'text-amber-600'}>
+                        <span className={r.exact_match === 1.0 ? 'text-success-600' : 'text-warning-600'}>
                           匹配: {String(r.exact_match)} | {Number(r.latency_ms).toFixed(0)}ms
                         </span>
                       )}
@@ -515,7 +515,7 @@ export default function EvalDashboard(): JSX.Element {
                           {dataset?.name || run.dataset_id?.slice(0, 8)}
                         </span>
                         {run.status === 'running' && (
-                          <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-blue-400" />
+                          <span className="inline-block h-3 w-3 animate-pulse rounded-full bg-primary-400" />
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-warm-400">
@@ -523,7 +523,7 @@ export default function EvalDashboard(): JSX.Element {
                         {run.status === 'running' && (
                           <button
                             onClick={(e) => { e.stopPropagation(); cancelRun(run.id); }}
-                            className="text-red-500 hover:text-red-700"
+                            className="text-danger-500 hover:text-danger-700"
                           >
                             取消
                           </button>
@@ -585,10 +585,10 @@ export default function EvalDashboard(): JSX.Element {
                         <div key={i} className="flex items-center gap-2 p-1.5 rounded bg-warm-50 text-xs">
                           <span className="text-warm-400 w-6">#{Number(item.item_index || i)}</span>
                           <span className="flex-1 truncate">{String(item.query || '').slice(0, 50)}</span>
-                          <span className={em >= 1 ? 'text-emerald-600' : em > 0 ? 'text-amber-600' : 'text-red-500'}>
+                          <span className={em >= 1 ? 'text-success-600' : em > 0 ? 'text-warning-600' : 'text-danger-500'}>
                             EM:{em.toFixed(2)}
                           </span>
-                          <span className={fm >= 0.8 ? 'text-emerald-600' : fm > 0.3 ? 'text-amber-600' : 'text-red-500'}>
+                          <span className={fm >= 0.8 ? 'text-success-600' : fm > 0.3 ? 'text-warning-600' : 'text-danger-500'}>
                             FM:{fm.toFixed(2)}
                           </span>
                         </div>
@@ -664,10 +664,10 @@ export default function EvalDashboard(): JSX.Element {
                   const details = (res.regression_details || []) as RegrDetail[];
                   const dataset = datasets.find((d) => d.id === run.dataset_id);
                   return (
-                    <div key={run.id} className="card p-4 border-l-4 border-l-red-400">
+                    <div key={run.id} className="card p-4 border-l-4 border-l-danger-400">
                       <div className="flex items-center justify-between mb-2">
                         <div>
-                          <span className="text-sm font-semibold text-red-700">
+                          <span className="text-sm font-semibold text-danger-700">
                             回归告警
                           </span>
                           <span className="text-xs text-warm-400 ml-2">
@@ -681,7 +681,7 @@ export default function EvalDashboard(): JSX.Element {
                       <div className="space-y-1">
                         {details.map((d, i) => {
                           const severity = Math.abs(d.change_pct) > 20 ? '高' : Math.abs(d.change_pct) > 10 ? '中' : '低';
-                          const sevColor = severity === '高' ? 'bg-red-100 text-red-700' : severity === '中' ? 'bg-amber-100 text-amber-700' : 'bg-yellow-100 text-yellow-700';
+                          const sevColor = severity === '高' ? 'bg-danger-100 text-danger-700' : severity === '中' ? 'bg-warning-100 text-warning-700' : 'bg-warning-100 text-warning-700';
                           return (
                             <div key={i} className="flex items-center gap-2 text-xs">
                               <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${sevColor}`}>
@@ -689,7 +689,7 @@ export default function EvalDashboard(): JSX.Element {
                               </span>
                               <span className="font-mono text-warm-600">{d.metric}</span>
                               <span className="text-warm-400">{d.baseline.toFixed(3)} → {d.current.toFixed(3)}</span>
-                              <span className={`font-semibold ${d.change_pct < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                              <span className={`font-semibold ${d.change_pct < 0 ? 'text-danger-600' : 'text-success-600'}`}>
                                 {d.change_pct.toFixed(1)}%
                               </span>
                             </div>
@@ -703,7 +703,7 @@ export default function EvalDashboard(): JSX.Element {
                 const res = (r.results || {}) as Record<string, unknown>;
                 return r.status === 'completed' && res.regression_detected;
               }).length === 0 && (
-                <p className="text-center text-sm text-emerald-600 py-8">
+                <p className="text-center text-sm text-success-600 py-8">
                   未检测到回归。所有指标稳定或提升。
                 </p>
               )}

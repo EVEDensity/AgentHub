@@ -141,7 +141,7 @@ export default function AgentMonitor(): JSX.Element {
         {actionMsg && <span className="text-xs text-primary-600">{actionMsg}</span>}
       </div>
 
-      {error && <div className="text-sm text-red-500">{error}</div>}
+      {error && <div className="text-sm text-danger-500">{error}</div>}
 
       {/* Agent list + detail split */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-4">
@@ -177,16 +177,16 @@ export default function AgentMonitor(): JSX.Element {
                   </div>
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     {a.status !== 'online' && (
-                      <button className="rounded bg-green-100 px-2 py-1 text-[11px] text-green-700 hover:bg-green-200" onClick={() => void setStatus(a.agentId, 'online')}>
+                      <button className="rounded bg-success-100 px-2 py-1 text-[11px] text-success-700 hover:bg-success-200" onClick={() => void setStatus(a.agentId, 'online')}>
                         上线
                       </button>
                     )}
                     {a.status === 'online' && (
-                      <button className="rounded bg-amber-100 px-2 py-1 text-[11px] text-amber-700 hover:bg-amber-200" onClick={() => void setStatus(a.agentId, 'offline')}>
+                      <button className="rounded bg-warning-100 px-2 py-1 text-[11px] text-warning-700 hover:bg-warning-200" onClick={() => void setStatus(a.agentId, 'offline')}>
                         下线
                       </button>
                     )}
-                    <button className="rounded bg-red-100 px-2 py-1 text-[11px] text-red-600 hover:bg-red-200" onClick={() => void cancelAgent(a.agentId)}>
+                    <button className="rounded bg-danger-100 px-2 py-1 text-[11px] text-danger-600 hover:bg-danger-200" onClick={() => void cancelAgent(a.agentId)}>
                       终止
                     </button>
                   </div>
@@ -209,17 +209,17 @@ export default function AgentMonitor(): JSX.Element {
             <div className="space-y-4">
               <h3 className="text-sm font-semibold text-warm-800">{agentStats.agentId} 统计</h3>
               <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-lg bg-blue-50 px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-blue-700">{agentStats.todayCalls}</div>
-                  <div className="text-[10px] text-blue-500">今日调用</div>
+                <div className="rounded-lg bg-primary-50 px-3 py-2 text-center">
+                  <div className="text-lg font-bold text-primary-700">{agentStats.todayCalls}</div>
+                  <div className="text-[10px] text-primary-500">今日调用</div>
                 </div>
-                <div className="rounded-lg bg-amber-50 px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-amber-700">{agentStats.weekCalls}</div>
-                  <div className="text-[10px] text-amber-500">本周调用</div>
+                <div className="rounded-lg bg-warning-50 px-3 py-2 text-center">
+                  <div className="text-lg font-bold text-warning-700">{agentStats.weekCalls}</div>
+                  <div className="text-[10px] text-warning-500">本周调用</div>
                 </div>
-                <div className="rounded-lg bg-green-50 px-3 py-2 text-center">
-                  <div className="text-lg font-bold text-green-700">{(agentStats.todayTokens / 1000).toFixed(1)}K</div>
-                  <div className="text-[10px] text-green-500">今日 Token</div>
+                <div className="rounded-lg bg-success-50 px-3 py-2 text-center">
+                  <div className="text-lg font-bold text-success-700">{(agentStats.todayTokens / 1000).toFixed(1)}K</div>
+                  <div className="text-[10px] text-success-500">今日 Token</div>
                 </div>
               </div>
               {agentStats.toolStats.length > 0 && (

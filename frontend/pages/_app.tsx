@@ -29,14 +29,14 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
         <div style={{
           padding: 40,
           fontFamily: 'monospace',
-          background: '#1C1A18',
+          background: '#121418',
           minHeight: '100vh',
-          color: '#C4675A',
+          color: '#F87272',
         }}>
-          <h1 style={{ fontSize: 24, marginBottom: 16, color: '#EBE8E3' }}>Client Error Caught</h1>
+          <h1 style={{ fontSize: 24, marginBottom: 16, color: '#E4E7EC' }}>Client Error Caught</h1>
           <div style={{
-            background: '#24221F',
-            border: '1px solid #C4675A',
+            background: '#191C22',
+            border: '1px solid #F87272',
             padding: 20,
             marginBottom: 16,
           }}>
@@ -45,10 +45,10 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
           <div style={{ marginBottom: 16 }}>
             <strong>Stack:</strong>
             <pre style={{
-              background: '#1a1a2e',
-              color: '#eee',
+              background: '#191C22',
+              color: '#E4E7EC',
               padding: 16,
-              borderRadius: 8,
+              borderRadius: 6,
               overflow: 'auto',
               maxHeight: 400,
               fontSize: 12,
@@ -61,10 +61,10 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
             <div>
               <strong>Component Stack:</strong>
               <pre style={{
-                background: '#1a1a2e',
-                color: '#eee',
+                background: '#191C22',
+                color: '#E4E7EC',
                 padding: 16,
-                borderRadius: 8,
+                borderRadius: 6,
                 overflow: 'auto',
                 maxHeight: 300,
                 fontSize: 12,

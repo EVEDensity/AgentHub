@@ -135,7 +135,7 @@ export default function SessionManager(): JSX.Element {
         <span className="text-xs text-warm-400 ml-auto">共 {total} 个会话</span>
       </div>
 
-      {error && <div className="text-sm text-red-500">{error}</div>}
+      {error && <div className="text-sm text-danger-500">{error}</div>}
 
       {/* Session list + detail split */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-4">
@@ -164,7 +164,7 @@ export default function SessionManager(): JSX.Element {
                         label={s.active ? '活跃' : '关闭'}
                       />
                       {s.visibility === 'public' && (
-                        <span className="text-[10px] bg-blue-100 text-blue-600 rounded px-1.5">公开</span>
+                        <span className="text-[10px] bg-primary-100 text-primary-600 rounded px-1.5">公开</span>
                       )}
                     </div>
                     <div className="text-xs text-warm-500 mt-0.5">
@@ -172,7 +172,7 @@ export default function SessionManager(): JSX.Element {
                     </div>
                   </div>
                   <button
-                    className="shrink-0 rounded bg-red-100 px-2 py-1 text-[11px] text-red-600 hover:bg-red-200"
+                    className="shrink-0 rounded bg-danger-100 px-2 py-1 text-[11px] text-danger-600 hover:bg-danger-200"
                     onClick={(e) => { e.stopPropagation(); void closeSession(s.id); }}
                   >
                     关闭
@@ -235,7 +235,7 @@ export default function SessionManager(): JSX.Element {
                   </div>
                 )}
                 <button
-                  className="w-full rounded bg-red-100 px-3 py-2 text-xs text-red-600 hover:bg-red-200"
+                  className="w-full rounded bg-danger-100 px-3 py-2 text-xs text-danger-600 hover:bg-danger-200"
                   onClick={() => void closeSession(detail.id)}
                 >
                   强制关闭此会话
@@ -247,8 +247,8 @@ export default function SessionManager(): JSX.Element {
           </div>
 
           {/* Cleanup tool */}
-          <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
-            <h3 className="text-sm font-semibold text-amber-800 mb-3">[trash] 批量清理</h3>
+          <div className="rounded-xl border border-warning-200 bg-warning-50/50 p-4">
+            <h3 className="text-sm font-semibold text-warning-800 mb-3">[trash] 批量清理</h3>
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <label className="text-xs text-warm-600 w-24">超过天数</label>
@@ -269,14 +269,14 @@ export default function SessionManager(): JSX.Element {
                 仅分析（dry run）
               </label>
               <button
-                className="w-full rounded bg-amber-200 px-3 py-2 text-xs text-amber-700 hover:bg-amber-300 disabled:opacity-50"
+                className="w-full rounded bg-warning-200 px-3 py-2 text-xs text-warning-700 hover:bg-warning-300 disabled:opacity-50"
                 disabled={cleanupLoading}
                 onClick={() => void runCleanup()}
               >
                 {cleanupLoading ? '处理中...' : cleanupDryRun ? '分析匹配会话' : '确认清理'}
               </button>
               {cleanupResult && (
-                <div className="text-xs text-amber-700 mt-2">
+                <div className="text-xs text-warning-700 mt-2">
                   匹配 {cleanupResult.matchedSessions} 个会话
                 </div>
               )}

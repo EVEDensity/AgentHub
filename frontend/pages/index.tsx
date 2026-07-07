@@ -16,7 +16,8 @@ const MessageList = dynamic(() => import('../components/chat/MessageList'), {
   loading: () => null,
 });
 import { type ExecPermission } from '../components/chat/PermissionModePopover';
-import SessionSidebar from '../components/chat/SessionSidebar';
+import WorkspaceSidebar from '../components/chat/WorkspaceSidebar';
+import AgentCollaborationPanel from '../components/chat/AgentCollaborationPanel';
 import PreviewSidebar from '../components/shared/PreviewSidebar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ResizableDivider from '../components/common/ResizableDivider';
@@ -143,6 +144,7 @@ export default function AgentHubIM(): JSX.Element {
   const [workspaceVersion, setWorkspaceVersion] = useState(0);
   const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
   const [previewPanelOpen, setPreviewPanelOpen] = useState<boolean>(false);
+  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState<boolean>(false);
   /**
    * 触发预览面板跳转到某条引用对应的行号。
    * 写一个递增 counter，让 FilePreviewPanel 用 effect 监听变化并执行滚动。
@@ -2282,6 +2284,24 @@ export default function AgentHubIM(): JSX.Element {
     setFileReferences([]);
   }, []);
 
+  // Global nav navigation handler
+  const handleGlobalNavigate = useCallback((target: string) => {
+    switch (target) {
+      case 'admin':
+        window.location.href = '/admin';
+        break;
+      case 'canvas':
+        window.location.href = '/canvas';
+        break;
+      case 'memory':
+        window.location.href = '/admin?menu=%E8%AE%B0%E5%BF%86';
+        break;
+      case 'tasks':
+        handleTaskClick();
+        break;
+    }
+  }, []);
+
   // Toggle preview panel
   const handleTogglePreviewPanel = useCallback(() => {
     setPreviewPanelOpen((prev) => !prev);
@@ -2520,12 +2540,19 @@ export default function AgentHubIM(): JSX.Element {
     );
   }
 
-  // TEST: Bisect JSX — Group A + ChatHeader
+  // ── Main workspace layout: 2-column (Unified Sidebar | Main+AgentPanel) ──
   return (
     <ToastProvider>
-    <div className="grid h-screen text-warm-800 overflow-hidden" style={{gridTemplateColumns: 'var(--sidebar-w, 220px) 4px 1fr'}}>
-      <SessionSidebar
+    <div className="workspace-layout">
+      {/* ═══════════════════════════════════════════════════════
+          Column 1: Unified Workspace Sidebar (GlobalNav + SessionSidebar merged)
+          ════════════════════════════════════════════════════ */}
+      <WorkspaceSidebar
         user={user}
+        connected={connected}
+        agents={agents}
+        onNavigate={handleGlobalNavigate}
+        onLogout={handleLogout}
         filteredSessions={filteredSessions}
         sessionId={sessionId}
         sessionQuery={sessionQuery}
@@ -2545,13 +2572,16 @@ export default function AgentHubIM(): JSX.Element {
         onEditNameChange={handleEditNameChange}
         onEditNameKeyDown={handleEditNameKeyDown}
         onEditNameBlur={handleEditNameBlur}
-        onLogout={handleLogout}
         onOpenShare={handleOpenShare}
         currentRole={currentSession?.myRole}
         currentVisibility={currentSession?.visibility || sessionVisibility}
         authHeaders={authHeaders()}
         width={sidebarWidthLive ?? sidebarWidth}
       />
+
+      {/* ═══════════════════════════════════════════════════════
+          Column 2: Resizable divider between sidebar and main content
+          ════════════════════════════════════════════════════ */}
       <ResizableDivider
         orientation="horizontal"
         size={sidebarWidthLive ?? sidebarWidth}
@@ -2568,62 +2598,126 @@ export default function AgentHubIM(): JSX.Element {
         title="拖动调整会话栏宽度 · 右键输入数值 · 双击重置"
         bubbleSide="left"
       />
-      <main className="flex flex-1 flex-col min-h-0 min-w-0">
-        <header className="border-b border-warm-200 shrink-0">
-          <div className="flex items-stretch">
-            <div className="flex-1 min-w-0">
-              <ChatHeader
-                sessionName={sessionName}
-                sessionId={sessionId}
-                connected={connected}
-                isStreaming={isStreaming}
-                isAutoNaming={isAutoNaming}
-                percent={percent}
-                onTaskClick={handleTaskClick}
-                onRenameSession={handleChatHeaderRename}
-                onRegenerateName={() => handleRegenerateName()}
-                onTogglePreview={handleTogglePreviewPanel}
-                previewOpen={previewPanelOpen}
-                onResetLayout={() => {
-                  resetSidebarWidth();
-                  resetPreviewWidth();
-                  try {
-                    window.localStorage.removeItem('agenthub.layout.previewTreeWidth');
-                    window.location.reload();
-                  } catch {
-                    /* ignore */
-                  }
-                }}
-                pmState={pmState}
-                degradationStatus={degradationStatus}
-                streamPhase={streamPhase}
-                activeTools={activeTools}
-                currentAgentName={currentAgentName}
-                onInterruptStream={() => {
-                  const ws = wsRef.current.get(activeSessionIdRef.current);
-                  if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ event: 'interrupt_stream' }));
-                    addToast({ type: 'info', title: '已发送中断请求', duration: 3000 });
-                  }
-                }}
-              />
-            </div>
-          </div>
+
+      {/* ═══════════════════════════════════════════════════════
+          Column 3: Main Content + Agent Panel
+          ════════════════════════════════════════════════════ */}
+      <div className="workspace-main">
+        {/* Header */}
+        <header className="workspace-header">
+          <ChatHeader
+            sessionName={sessionName}
+            sessionId={sessionId}
+            connected={connected}
+            isStreaming={isStreaming}
+            isAutoNaming={isAutoNaming}
+            percent={percent}
+            onTaskClick={handleTaskClick}
+            onRenameSession={handleChatHeaderRename}
+            onRegenerateName={() => handleRegenerateName()}
+            onTogglePreview={handleTogglePreviewPanel}
+            previewOpen={previewPanelOpen}
+            onResetLayout={() => {
+              resetSidebarWidth();
+              resetPreviewWidth();
+              try {
+                window.localStorage.removeItem('agenthub.layout.previewTreeWidth');
+                window.location.reload();
+              } catch {
+                /* ignore */
+              }
+            }}
+            pmState={pmState}
+            degradationStatus={degradationStatus}
+            streamPhase={streamPhase}
+            activeTools={activeTools}
+            currentAgentName={currentAgentName}
+            onInterruptStream={() => {
+              const ws = wsRef.current.get(activeSessionIdRef.current);
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ event: 'interrupt_stream' }));
+                addToast({ type: 'info', title: '已发送中断请求', duration: 3000 });
+              }
+            }}
+          />
         </header>
-        <MessageList
-          messages={messages}
-          user={user}
-          generated={generated}
-          onCommit={handleCommit}
-          messagesContainerRef={messagesContainerRef}
-          bottomRef={bottomRef}
-          onQuoteMessage={handleQuoteMessage}
-          onSendPMEvent={handleSendPMEvent}
-          agents={agents}
-          sessionId={sessionId}
+
+        {/* Content area: Messages + Agent Panel */}
+        <div className="workspace-content">
+          {/* Messages */}
+          <MessageList
+            messages={messages}
+            user={user}
+            generated={generated}
+            onCommit={handleCommit}
+            messagesContainerRef={messagesContainerRef}
+            bottomRef={bottomRef}
+            onQuoteMessage={handleQuoteMessage}
+            onSendPMEvent={handleSendPMEvent}
+            agents={agents}
+            sessionId={sessionId}
+            isStreaming={isStreaming}
+          />
+
+          {/* Agent Collaboration Panel (right side) */}
+          <AgentCollaborationPanel
+            agents={agents}
+            sessionId={sessionId}
+            collapsed={agentPanelCollapsed}
+            onToggleCollapse={() => setAgentPanelCollapsed((v) => !v)}
+            onAskAgent={(agentId) => {
+              setInput(`@${agentId} `);
+            }}
+          />
+        </div>
+
+        {/* Sticky bottom chat input */}
+        <ChatInput
+          input={input}
           isStreaming={isStreaming}
+          attachedFiles={attachedFiles}
+          mentionOpen={mentionOpen}
+          mentionTrigger={mentionTrigger}
+          mentionSearch={mentionSearch}
+          mentionActiveIndex={mentionActiveIndex}
+          selectedRiskLevel={selectedRiskLevel}
+          filteredAgents={filteredAgents}
+          filteredWorkflows={filteredWorkflows}
+          filteredSkills={filteredSkills}
+          textareaRef={textareaRef}
+          mentionPanelRef={mentionPanelRef}
+          fileInputRef={fileInputRef}
+          onInputChange={handleInputChange}
+          onBlur={handleBlur}
+          onKeyDown={handleKeyDown}
+          onSend={handleSend}
+          onFileChange={handleFileChange}
+          onRemoveFile={handleRemoveFile}
+          onClearAllFiles={handleClearAllFiles}
+          onPasteFiles={handlePasteFiles}
+          onPreviewFile={handlePreviewFile}
+          fileReferences={fileReferences}
+          onRemoveReference={handleRemoveReference}
+          onClearAllReferences={handleClearAllReferences}
+          onJumpToReference={handleJumpToReference}
+          quoteReferences={quoteReferences}
+          onRemoveQuoteReference={handleRemoveQuoteReference}
+          onClearAllQuoteReferences={handleClearAllQuoteReferences}
+          onInsertMention={handleInsertMention}
+          onInsertAllMentions={handleInsertAllMentions}
+          onInsertWorkflow={handleInsertWorkflow}
+          onInsertSkill={handleInsertSkill}
+          onMentionSearchChange={handleMentionSearchChange}
+          onMentionActiveIndexChange={handleMentionActiveIndexChange}
+          onRiskLevelChange={handleRiskLevelChange}
+          execPermission={execPermission}
+          onExecPermissionChange={setExecPermission}
+          autoReply={autoReply}
+          onAutoReplyChange={setAutoReply}
+          userRole={currentSession?.myRole}
+          memberCount={currentSession?.memberCount}
         />
-      </main>
+      </div>
     </div>
     </ToastProvider>
   );

@@ -84,11 +84,11 @@ export default function AgentWorkspace({
       {/* Header */}
       <div>
         <h3 className="text-h4">[target] Agent 多模态工作区</h3>
-        <p className="text-xs text-gray-400 mt-1">代码 · 文档 · 画布 · 数据 · 协作 — Agent 与人类共同工作的统一界面</p>
+        <p className="text-xs text-warm-400 mt-1">代码 · 文档 · 画布 · 数据 · 协作 — Agent 与人类共同工作的统一界面</p>
       </div>
 
       {/* Tab bar */}
-      <div className="flex flex-wrap gap-1 border-b border-gray-200 pb-2">
+      <div className="flex flex-wrap gap-1 border-b border-warm-200 pb-2">
         {TAB_DEFS.map((tab) => (
           <button
             key={tab.key}
@@ -96,7 +96,7 @@ export default function AgentWorkspace({
             className={`inline-flex items-center gap-2 rounded-t-lg px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-[9px] ${
               activeTab === tab.key
                 ? 'border-primary-500 text-primary-700 bg-primary-50/50'
-                : 'border-transparent text-gray-400 hover:text-gray-600'
+                : 'border-transparent text-warm-400 hover:text-warm-600'
             }`}
           >
             <span>{tab.icon}</span>
@@ -110,7 +110,7 @@ export default function AgentWorkspace({
         <div className="grid grid-cols-[220px_1fr] gap-4" style={{ minHeight: '400px' }}>
           {/* File tree */}
           <div className="card p-3 space-y-1">
-            <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">[folder] 工作区文件</h4>
+            <h4 className="text-xs font-semibold text-warm-500 mb-2 uppercase tracking-wide">[folder] 工作区文件</h4>
             {MOCK_TABS.filter((t) => t.type === 'code').map((tab) => (
               <button
                 key={tab.id}
@@ -118,28 +118,28 @@ export default function AgentWorkspace({
                 className={`w-full text-left text-xs px-2 py-1.5 rounded flex items-center gap-2 transition-colors ${
                   selectedFile?.id === tab.id
                     ? 'bg-primary-50 text-primary-700 font-medium'
-                    : 'text-gray-600 hover:bg-gray-50'
+                    : 'text-warm-600 hover:bg-warm-50'
                 }`}
               >
                 <span className="text-xs">{tab.language === 'python' ? '[snake]' : tab.language === 'typescript' ? '[book]' : '[doc]'}</span>
                 <span className="truncate font-mono">{tab.label}</span>
-                {tab.isDirty && <span className="text-amber-500 text-[10px]">●</span>}
+                {tab.isDirty && <span className="text-warning-500 text-[10px]">●</span>}
               </button>
             ))}
 
-            <div className="pt-3 mt-3 border-t border-gray-100">
-              <h5 className="text-[10px] font-semibold text-gray-400 mb-1 uppercase">快捷操作</h5>
+            <div className="pt-3 mt-3 border-t border-warm-100">
+              <h5 className="text-[10px] font-semibold text-warm-400 mb-1 uppercase">快捷操作</h5>
               <button
                 onClick={() => {
                   _setNotice('Agent 已收到指令，开始编写代码...');
                 }}
-                className="w-full text-left text-xs px-2 py-1.5 rounded text-gray-500 hover:bg-gray-50"
+                className="w-full text-left text-xs px-2 py-1.5 rounded text-warm-500 hover:bg-warm-50"
               >
                 [bot] 让 Agent 生成代码
               </button>
               <button
                 onClick={() => handleSelectFile(MOCK_TABS[0])}
-                className="w-full text-left text-xs px-2 py-1.5 rounded text-gray-500 hover:bg-gray-50"
+                className="w-full text-left text-xs px-2 py-1.5 rounded text-warm-500 hover:bg-warm-50"
               >
                 [inbox] 查看当前文件
               </button>
@@ -150,11 +150,11 @@ export default function AgentWorkspace({
           <div className="card overflow-hidden flex flex-col">
             {selectedFile ? (
               <>
-                <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-100">
+                <div className="flex items-center justify-between px-4 py-2 bg-warm-50 border-b border-warm-100">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-gray-600">{selectedFile.path}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 uppercase">{selectedFile.language}</span>
-                    {selectedFile.isDirty && <span className="text-[10px] text-amber-500">已修改</span>}
+                    <span className="text-xs font-mono text-warm-600">{selectedFile.path}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-warm-200 text-warm-500 uppercase">{selectedFile.language}</span>
+                    {selectedFile.isDirty && <span className="text-[10px] text-warning-500">已修改</span>}
                   </div>
                   <div className="flex items-center gap-2">
                     {!isEditing ? (
@@ -174,18 +174,18 @@ export default function AgentWorkspace({
                     <textarea
                       value={editContent}
                       onChange={(e) => setEditContent(e.target.value)}
-                      className="w-full h-full min-h-[300px] p-3 border rounded bg-gray-900 text-green-400 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary-300"
+                      className="w-full h-full min-h-[300px] p-3 border rounded bg-warm-900 text-success-400 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary-300"
                       spellCheck={false}
                     />
                   ) : (
-                    <pre className="text-gray-700 whitespace-pre-wrap bg-gray-50 p-4 rounded min-h-[300px] overflow-auto">
+                    <pre className="text-warm-700 whitespace-pre-wrap bg-warm-50 p-4 rounded min-h-[300px] overflow-auto">
                       <code>{selectedFile.content || '(空文件)'}</code>
                     </pre>
                   )}
                 </div>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-gray-400">
+              <div className="flex-1 flex items-center justify-center text-warm-400">
                 <div className="text-center">
                   <p className="text-4xl mb-3">[laptop]</p>
                   <p>从左侧选择文件查看或编辑</p>
@@ -204,8 +204,8 @@ export default function AgentWorkspace({
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <span className="text-lg">{tab.type === 'document' ? '[doc]' : '[chart]'}</span>
-                  <h4 className="font-semibold text-gray-800 font-mono text-sm">{tab.label}</h4>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">{tab.type}</span>
+                  <h4 className="font-semibold text-warm-800 font-mono text-sm">{tab.label}</h4>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-warm-100 text-warm-500">{tab.type}</span>
                 </div>
                 <div className="flex gap-2">
                   <button className="btn-ghost text-xs" onClick={() => handleSelectFile(tab)}>
@@ -216,14 +216,14 @@ export default function AgentWorkspace({
                   </button>
                 </div>
               </div>
-              <pre className="text-sm text-gray-600 bg-gray-50 rounded p-3 overflow-auto max-h-48 whitespace-pre-wrap font-mono">
+              <pre className="text-sm text-warm-600 bg-warm-50 rounded p-3 overflow-auto max-h-48 whitespace-pre-wrap font-mono">
                 {tab.content || '(空文档)'}
               </pre>
             </div>
           ))}
 
-          <div className="card p-4 border-2 border-dashed border-gray-200 flex items-center justify-center py-8">
-            <button className="text-gray-400 hover:text-gray-600 transition-colors" onClick={() => _setNotice('Agent 开始生成新文档...')}>
+          <div className="card p-4 border-2 border-dashed border-warm-200 flex items-center justify-center py-8">
+            <button className="text-warm-400 hover:text-warm-600 transition-colors" onClick={() => _setNotice('Agent 开始生成新文档...')}>
               <span className="text-3xl block mb-2">[memo]</span>
               <span className="text-sm">+ Agent 生成新文档</span>
             </button>
@@ -235,7 +235,7 @@ export default function AgentWorkspace({
       {activeTab === 'canvas' && (
         <div className="card p-6" style={{ minHeight: '400px' }}>
           <div className="flex items-center justify-between mb-4">
-            <h4 className="font-semibold text-gray-700">[palette] 可视化画布</h4>
+            <h4 className="font-semibold text-warm-700">[palette] 可视化画布</h4>
             <div className="flex gap-2">
               <button className="btn-ghost text-xs">[chart] 架构图</button>
               <button className="btn-ghost text-xs">[sync] 流程图</button>
@@ -243,10 +243,10 @@ export default function AgentWorkspace({
               <button className="btn-primary text-xs" onClick={() => _setNotice('Agent 正在生成可视化图表...')}>[bot] 自动生成</button>
             </div>
           </div>
-          <div className="bg-gray-50 rounded-lg flex items-center justify-center" style={{ minHeight: '350px' }}>
+          <div className="bg-warm-50 rounded-lg flex items-center justify-center" style={{ minHeight: '350px' }}>
             <div className="text-center">
               {/* Simple text-based architecture diagram */}
-              <pre className="text-xs text-gray-500 font-mono leading-relaxed mb-4">
+              <pre className="text-xs text-warm-500 font-mono leading-relaxed mb-4">
 {`┌─────────────────────────────────────┐
 │           [build] AgentHub Platform  │
 ├──────────┬──────────┬────────────────┤
@@ -260,7 +260,7 @@ export default function AgentWorkspace({
 │   [doc] Multimodal Workspace (J3)    │
 └─────────────────────────────────────┘`}
               </pre>
-              <p className="text-xs text-gray-400">Agent 可自动生成架构图、流程图和时序图</p>
+              <p className="text-xs text-warm-400">Agent 可自动生成架构图、流程图和时序图</p>
             </div>
           </div>
         </div>
@@ -269,22 +269,22 @@ export default function AgentWorkspace({
       {/* ── Data Tab ──────────────────────────────────────────────── */}
       {activeTab === 'data' && (
         <div className="card p-4">
-          <h4 className="font-semibold text-gray-700 mb-4">[chart] 数据探索</h4>
+          <h4 className="font-semibold text-warm-700 mb-4">[chart] 数据探索</h4>
           <div className="overflow-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500">name</th>
-                  <th className="text-right py-2 px-3 text-xs font-semibold text-gray-500">value</th>
-                  <th className="text-left py-2 px-3 text-xs font-semibold text-gray-500">timestamp</th>
+                <tr className="border-b border-warm-200">
+                  <th className="text-left py-2 px-3 text-xs font-semibold text-warm-500">name</th>
+                  <th className="text-right py-2 px-3 text-xs font-semibold text-warm-500">value</th>
+                  <th className="text-left py-2 px-3 text-xs font-semibold text-warm-500">timestamp</th>
                 </tr>
               </thead>
               <tbody>
                 {['alpha', 'beta', 'gamma'].map((name, i) => (
-                  <tr key={name} className="border-b border-gray-50 hover:bg-gray-50">
-                    <td className="py-2 px-3 font-mono text-gray-700">{name}</td>
-                    <td className="py-2 px-3 text-right font-mono text-gray-700">{[42, 87, 156][i]}</td>
-                    <td className="py-2 px-3 text-xs text-gray-400">
+                  <tr key={name} className="border-b border-warm-50 hover:bg-warm-50">
+                    <td className="py-2 px-3 font-mono text-warm-700">{name}</td>
+                    <td className="py-2 px-3 text-right font-mono text-warm-700">{[42, 87, 156][i]}</td>
+                    <td className="py-2 px-3 text-xs text-warm-400">
                       {new Date(`2026-07-0${i + 1}T${10 + i}:00:00Z`).toLocaleString()}
                     </td>
                   </tr>
@@ -292,7 +292,7 @@ export default function AgentWorkspace({
               </tbody>
             </table>
           </div>
-          <div className="flex gap-2 mt-4 pt-4 border-t border-gray-100">
+          <div className="flex gap-2 mt-4 pt-4 border-t border-warm-100">
             <button className="btn-ghost text-xs" onClick={() => _setNotice('Agent 开始分析数据...')}>[trend] 可视化</button>
             <button className="btn-ghost text-xs" onClick={() => _setNotice('Agent 正在执行统计分析...')}>[chart] 统计分析</button>
             <button className="btn-ghost text-xs">[inbox] 导出 CSV</button>
@@ -305,8 +305,8 @@ export default function AgentWorkspace({
         <div className="grid grid-cols-1 gap-4">
           {/* Timeline toggle */}
           <div className="flex items-center justify-between">
-            <h4 className="font-semibold text-gray-700">[people] 操作时间线</h4>
-            <label className="flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
+            <h4 className="font-semibold text-warm-700">[people] 操作时间线</h4>
+            <label className="flex items-center gap-2 text-xs text-warm-500 cursor-pointer">
               <input
                 type="checkbox"
                 checked={showTimeline}
@@ -318,11 +318,11 @@ export default function AgentWorkspace({
           </div>
 
           {/* Lock/unlock notice */}
-          <div className="card p-4 bg-amber-50/50 border border-amber-200 flex items-center gap-3">
+          <div className="card p-4 bg-warning-50/50 border border-warning-200 flex items-center gap-3">
             <span className="text-2xl">[lock]</span>
             <div>
-              <p className="text-sm font-medium text-amber-700">Agent 锁定模式</p>
-              <p className="text-xs text-amber-600">
+              <p className="text-sm font-medium text-warning-700">Agent 锁定模式</p>
+              <p className="text-xs text-warning-600">
                 当前文件由 Agent 持有锁。点击"人工接管"可解锁并修改，Agent 将等待并接受变更。
               </p>
             </div>
@@ -339,7 +339,7 @@ export default function AgentWorkspace({
                   <div key={op.id} className="flex gap-3 pb-3 relative">
                     {/* Timeline line */}
                     {i < MOCK_OPS.length - 1 && (
-                      <div className="absolute left-[11px] top-8 bottom-0 w-px bg-gray-200" />
+                      <div className="absolute left-[11px] top-8 bottom-0 w-px bg-warm-200" />
                     )}
                     {/* Dot */}
                     <div
@@ -356,11 +356,11 @@ export default function AgentWorkspace({
                         >
                           {op.agent_id}
                         </span>
-                        <span className="text-xs text-gray-500">{op.operation}</span>
-                        <span className="text-xs font-mono text-gray-400">{op.target}</span>
+                        <span className="text-xs text-warm-500">{op.operation}</span>
+                        <span className="text-xs font-mono text-warm-400">{op.target}</span>
                       </div>
-                      <p className="text-xs text-gray-600 mt-0.5">{op.detail}</p>
-                      <p className="text-[10px] text-gray-300 mt-0.5">{new Date(op.timestamp).toLocaleTimeString()}</p>
+                      <p className="text-xs text-warm-600 mt-0.5">{op.detail}</p>
+                      <p className="text-[10px] text-warm-300 mt-0.5">{new Date(op.timestamp).toLocaleTimeString()}</p>
                     </div>
                   </div>
                 ))}
