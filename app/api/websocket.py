@@ -18,6 +18,7 @@ from app.services.message_router import route_message, stream_message
 
 from app.schemas.dag import DAGConfig
 from app.services.guardrails import scan_input as _guardrails_scan
+from app.services.guardrails import scan_output as _guardrails_scan_output
 from app.services.websocket_manager import manager
 
 logger = logging.getLogger("agenthub.websocket")
@@ -2336,6 +2337,29 @@ async def _broadcast_final_message(session_id: str, message_id: str, response: d
         "SELECT id,session_id AS \"sessionId\",sender,content,type,fidelity_score AS \"fidelityScore\",symbolic_json,created_at AS timestamp FROM messages WHERE session_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1",
         session_id,
     )
+
+    async def _scan_and_broadcast(msg: dict) -> None:
+        """Run output guardrail scan on content before broadcasting to frontend."""
+        content = msg.get("content", "")
+        if content and isinstance(content, str):
+            guard_result = _guardrails_scan_output(content)
+            if guard_result.blocked:
+                logger.warning(
+                    "ws output guardrail blocked session=%s flags=%s",
+                    session_id,
+                    [f"{f.rule}:{f.message[:60]}" for f in guard_result.flags],
+                )
+                msg["content"] = (
+                    "⚠️ _Agent 输出已被安全过滤器拦截。_ 输出中包含敏感信息。\n\n"
+                    + "---\n"
+                    + "\n".join(
+                        f"- **{f.rule}**: {f.message}" for f in guard_result.flags
+                    )
+                )
+                msg["guardrailResult"] = guard_result.to_dict()
+                msg["type"] = "system"
+        await manager.broadcast(session_id, msg)
+
     if rows:
         final = rows[0]
         final["event"] = "message"
@@ -2344,7 +2368,7 @@ async def _broadcast_final_message(session_id: str, message_id: str, response: d
             final["symbolic"] = json.loads(final.pop("symbolic_json", "{}") or "{}")
         except (json.JSONDecodeError, TypeError):
             final["symbolic"] = {}
-        await manager.broadcast(session_id, final)
+        await _scan_and_broadcast(final)
 
         # ── Auto-generate deploy_card when Deploy agent completes ──
         sender = final.get("sender", "")
@@ -2353,7 +2377,7 @@ async def _broadcast_final_message(session_id: str, message_id: str, response: d
             await _maybe_broadcast_deploy_card(session_id, message_id, content, sender)
     else:
         response["messageId"] = message_id
-        await manager.broadcast(session_id, response)
+        await _scan_and_broadcast(response)
 
         # ── Auto-generate deploy_card for response path too ──
         sender = response.get("sender", "")
@@ -2375,6 +2399,27 @@ async def _broadcast_final_db_message(session_id: str, message_id: str) -> None:
             final["symbolic"] = json.loads(final.pop("symbolic_json", "{}") or "{}")
         except (json.JSONDecodeError, TypeError):
             final["symbolic"] = {}
+
+        # ── Output guardrail scan ───────────────────────────────────
+        content = final.get("content", "")
+        if content and isinstance(content, str):
+            guard_result = _guardrails_scan_output(content)
+            if guard_result.blocked:
+                logger.warning(
+                    "ws output guardrail blocked (streaming) session=%s flags=%s",
+                    session_id,
+                    [f"{f.rule}:{f.message[:60]}" for f in guard_result.flags],
+                )
+                final["content"] = (
+                    "⚠️ _Agent 输出已被安全过滤器拦截。_ 输出中包含敏感信息。\n\n"
+                    + "---\n"
+                    + "\n".join(
+                        f"- **{f.rule}**: {f.message}" for f in guard_result.flags
+                    )
+                )
+                final["guardrailResult"] = guard_result.to_dict()
+                final["type"] = "system"
+
         await manager.broadcast(session_id, final)
 
         # ── Auto-generate deploy_card when Deploy agent completes (streaming path) ──

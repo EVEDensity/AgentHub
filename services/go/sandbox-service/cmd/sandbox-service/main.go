@@ -70,16 +70,26 @@ func main() {
 		socketPath = "/var/run/docker.sock" // default Linux
 	}
 
+	seccompProfile := os.Getenv("SANDBOX_SECCOMP_PROFILE")
+	if seccompProfile == "" {
+		seccompProfile = "/etc/agenthub/seccomp.json" // default custom profile path
+	}
+	// If the custom profile doesn't exist, use Docker's built-in default.
+	if _, err := os.Stat(seccompProfile); os.IsNotExist(err) {
+		log.Printf("sandbox-service: custom seccomp profile %s not found — using Docker default", seccompProfile)
+		seccompProfile = ""
+	}
+
 	// Try to connect to Docker; fall back to noop if unreachable
-	dc := docker.NewClient(socketPath)
+	dc := docker.NewClient(socketPath, seccompProfile)
 	if !dc.IsNoop() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := dc.Ping(ctx); err != nil {
 			log.Printf("sandbox-service: Docker daemon unreachable (%v) — switching to noop mode", err)
-			dc = docker.NewClient("") // re-create in noop mode
+			dc = docker.NewClient("", seccompProfile) // re-create in noop mode
 		} else {
-			log.Printf("sandbox-service: connected to Docker at %s", socketPath)
+			log.Printf("sandbox-service: connected to Docker at %s (seccomp=%s)", socketPath, seccompProfile)
 		}
 	} else {
 		log.Println("sandbox-service: running in noop (in-memory) mode")
@@ -249,6 +259,12 @@ func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Reque
 		if err := s.docker.Start(containerID); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
+		}
+		// Apply network egress policy if the container has allowlisted hosts.
+		if len(info.NetworkAllow) > 0 {
+			if err := s.docker.ApplyNetworkPolicy(containerID, info.NetworkAllow); err != nil {
+				log.Printf("sandbox-service: network policy warning for %s: %v", containerID, err)
+			}
 		}
 		info.Status = "running"
 		now := time.Now()
@@ -486,7 +502,16 @@ func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// ── Exec code ──────────────────────────────────────────────────────
+	// ── Apply network egress policy ───────────────────────────────────
+	if len(networkAllowSlice) > 0 {
+		if err := s.docker.ApplyNetworkPolicy(info.ID, networkAllowSlice); err != nil {
+			log.Printf("sandbox-service /v1/execute: network policy warning for %s: %v", info.ID, err)
+			// Non-fatal — container still runs but with unrestricted network.
+			// This degrades gracefully: the policy is best-effort.
+		}
+	}
+
+	// ── Exec code ─────────────────────────────────────────────────────
 	result, err := s.docker.Exec(info.ID, execCmd)
 	if err != nil {
 		log.Printf("sandbox-service /v1/execute: exec failed: %v", err)

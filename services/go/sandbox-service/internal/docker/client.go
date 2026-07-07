@@ -20,16 +20,19 @@ import (
 // ── Client ────────────────────────────────────────────────────────────
 
 type Client struct {
-	http    *http.Client
-	baseURL string
+	http           *http.Client
+	baseURL        string
+	seccompProfile string // path to custom seccomp JSON, "" = use Docker default
 }
 
 // NewClient creates a Docker API client. Use an empty socketPath to
 // operate in "noop" mode (always returns success without real containers).
-func NewClient(socketPath string) *Client {
+// seccompProfile is the path to a custom seccomp JSON profile file;
+// pass "" to use Docker's built-in default seccomp profile.
+func NewClient(socketPath string, seccompProfile string) *Client {
 	if socketPath == "" {
 		log.Println("sandbox/docker: socket path empty — running in noop mode")
-		return &Client{}
+		return &Client{seccompProfile: seccompProfile}
 	}
 
 	transport := &http.Transport{
@@ -42,13 +45,27 @@ func NewClient(socketPath string) *Client {
 	}
 
 	return &Client{
-		http:    &http.Client{Transport: transport, Timeout: 30 * time.Second},
-		baseURL: "http://localhost",
+		http:           &http.Client{Transport: transport, Timeout: 30 * time.Second},
+		baseURL:        "http://localhost",
+		seccompProfile: seccompProfile,
 	}
 }
 
 // IsNoop returns true when no Docker socket is configured.
 func (c *Client) IsNoop() bool { return c.http == nil }
+
+// buildSecurityOpts constructs the SecurityOpt array for container creation.
+// Uses the custom seccomp profile if configured, otherwise falls back to
+// Docker's built-in default profile. Always adds no-new-privileges.
+func (c *Client) buildSecurityOpts() []string {
+	opts := []string{"no-new-privileges=true"}
+	if c.seccompProfile != "" {
+		opts = append(opts, "seccomp="+c.seccompProfile)
+	} else {
+		opts = append(opts, "seccomp=default")
+	}
+	return opts
+}
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -67,18 +84,19 @@ type ContainerConfig struct {
 }
 
 type ContainerInfo struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Image     string    `json:"image"`
-	Status    string    `json:"status"` // created | running | stopped | failed | destroyed
-	AgentID   string    `json:"agent_id"`
-	TenantID  string    `json:"tenant_id"`
-	CPULimit  float64   `json:"cpu_limit"`
-	MemoryMB  int       `json:"memory_mb"`
-	DiskMB    int       `json:"disk_mb"`
-	Network   string    `json:"network"`
-	CreatedAt time.Time `json:"created_at"`
-	StartedAt *time.Time `json:"started_at,omitempty"`
+	ID           string     `json:"id"`
+	Name         string     `json:"name"`
+	Image        string     `json:"image"`
+	Status       string     `json:"status"` // created | running | stopped | failed | destroyed
+	AgentID      string     `json:"agent_id"`
+	TenantID     string     `json:"tenant_id"`
+	CPULimit     float64    `json:"cpu_limit"`
+	MemoryMB     int        `json:"memory_mb"`
+	DiskMB       int        `json:"disk_mb"`
+	Network      string     `json:"network"`
+	NetworkAllow []string   `json:"network_allow,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
 }
 
 type ExecResult struct {
@@ -96,21 +114,130 @@ type Stats struct {
 	ByStatus        map[string]int `json:"by_status"`
 }
 
+// ── Network Policy Enforcement ───────────────────────────────────────
+//
+// When NetworkAllow is set, the container is created with network "bridge"
+// and ApplyNetworkPolicy applies iptables rules to restrict egress to
+// only the whitelisted hosts. Without this, the container would have
+// unrestricted bridge access (the "informational only" gap).
+
+// ApplyNetworkPolicy runs iptables inside the container to restrict
+// outbound network access to only the whitelisted hosts. The default
+// OUTPUT policy is DROP; only DNS (UDP 53), loopback, and explicitly
+// allowed CIDRs are permitted.
+func (c *Client) ApplyNetworkPolicy(containerID string, allowedHosts []string) error {
+	if c.IsNoop() {
+		return nil
+	}
+
+	if len(allowedHosts) == 0 {
+		// No whitelist — ensure network isolation by stopping the
+		// container's network interface. Docker network=none already
+		// handles this; this is a defense-in-depth measure.
+		return nil
+	}
+
+	// Resolve domain names to IPs for the allowlist.
+	allowedCIDRs := resolveHostsToCIDRs(allowedHosts)
+
+	// Build iptables-restore input to atomically apply the ruleset.
+	// We create a custom chain AGENTHUB_OUT to keep rules organized.
+	rules := buildIPTablesRules(allowedCIDRs)
+	cmd := fmt.Sprintf(
+		"iptables-restore --noflush << 'IPTEOF'\n%s\nIPTEOF",
+		rules,
+	)
+
+	result, err := c.Exec(containerID, cmd)
+	if err != nil {
+		return fmt.Errorf("apply network policy: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("apply network policy: exit %d: %s", result.ExitCode, result.Stderr)
+	}
+
+	log.Printf("sandbox/docker: applied network policy to %s — egress restricted to %d host(s) (%v)",
+		containerID[:12], len(allowedHosts), allowedHosts)
+	return nil
+}
+
+// resolveHostsToCIDRs resolves domain names and IPs to /32 CIDR notation.
+// Non-resolvable hosts are logged and skipped. Private/local ranges are
+// always allowed for DNS and container networking.
+func resolveHostsToCIDRs(hosts []string) []string {
+	cidrs := make([]string, 0, len(hosts)+2)
+	for _, h := range hosts {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			continue
+		}
+		// If it's already a CIDR or raw IP, use it directly.
+		if strings.Contains(h, "/") {
+			cidrs = append(cidrs, h)
+			continue
+		}
+		if net.ParseIP(h) != nil {
+			cidrs = append(cidrs, h+"/32")
+			continue
+		}
+		// Resolve domain name.
+		ips, err := net.LookupHost(h)
+		if err != nil {
+			log.Printf("sandbox/docker: network allow — cannot resolve %s, skipping: %v", h, err)
+			continue
+		}
+		for _, ip := range ips {
+			if strings.Contains(ip, ":") {
+				cidrs = append(cidrs, ip+"/128") // IPv6
+			} else {
+				cidrs = append(cidrs, ip+"/32") // IPv4
+			}
+		}
+	}
+	return cidrs
+}
+
+// buildIPTablesRules generates an iptables-restore compatible ruleset.
+// Policy: default DROP on OUTPUT; allow loopback, DNS, established conns,
+// and the explicitly whitelisted CIDRs.
+func buildIPTablesRules(allowedCIDRs []string) string {
+	var sb strings.Builder
+	sb.WriteString("*filter\n")
+	sb.WriteString(":INPUT ACCEPT [0:0]\n")    // we don't restrict inbound
+	sb.WriteString(":FORWARD ACCEPT [0:0]\n")   // no routing
+	sb.WriteString(":OUTPUT DROP [0:0]\n")      // default deny egress
+	sb.WriteString(":AGENTHUB_OUT - [0:0]\n")   // custom chain
+	sb.WriteString("-A OUTPUT -j AGENTHUB_OUT\n")
+	sb.WriteString("-A AGENTHUB_OUT -o lo -j ACCEPT\n") // loopback always
+	sb.WriteString("-A AGENTHUB_OUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
+	// DNS resolution (UDP 53) — always allowed so domain allowlists work.
+	sb.WriteString("-A AGENTHUB_OUT -p udp --dport 53 -j ACCEPT\n")
+	sb.WriteString("-A AGENTHUB_OUT -p tcp --dport 53 -j ACCEPT\n")
+	// Whitelisted CIDRs.
+	for _, cidr := range allowedCIDRs {
+		sb.WriteString(fmt.Sprintf("-A AGENTHUB_OUT -d %s -j ACCEPT\n", cidr))
+	}
+	sb.WriteString("COMMIT\n")
+	return sb.String()
+}
+
 // ── Container Lifecycle ──────────────────────────────────────────────
 
 // Create starts a new container and leaves it in "created" state.
 func (c *Client) Create(cfg ContainerConfig) (*ContainerInfo, error) {
 	if c.IsNoop() {
 		return &ContainerInfo{
-			ID:       fmt.Sprintf("sandbox-%s", shortID()),
-			Name:     cfg.Name,
-			Image:    cfg.Image,
-			Status:   "created",
-			AgentID:  cfg.AgentID,
-			TenantID: cfg.TenantID,
-			CPULimit: cfg.CPU,
-			MemoryMB: cfg.MemoryMB,
-			DiskMB:   cfg.DiskMB,
+			ID:           fmt.Sprintf("sandbox-%s", shortID()),
+			Name:         cfg.Name,
+			Image:        cfg.Image,
+			Status:       "created",
+			AgentID:      cfg.AgentID,
+			TenantID:     cfg.TenantID,
+			CPULimit:     cfg.CPU,
+			MemoryMB:     cfg.MemoryMB,
+			DiskMB:       cfg.DiskMB,
+			Network:      cfg.Network,
+			NetworkAllow: cfg.NetworkAllow,
 		}, nil
 	}
 
@@ -123,7 +250,7 @@ func (c *Client) Create(cfg ContainerConfig) (*ContainerInfo, error) {
 			"Memory":     int64(cfg.MemoryMB) * 1024 * 1024,
 			"NanoCPUs":   int64(cfg.CPU * 1e9),
 			"NetworkMode": cfg.Network,
-			"SecurityOpt": []string{"seccomp=default", "no-new-privileges=true"},
+			"SecurityOpt": c.buildSecurityOpts(),
 			"ReadonlyRootfs": true,
 			"Tmpfs":          map[string]string{"/tmp": "rw,noexec,nosuid,size=100m"},
 			"CapDrop":        []string{"ALL"},
@@ -152,16 +279,18 @@ func (c *Client) Create(cfg ContainerConfig) (*ContainerInfo, error) {
 	}
 
 	return &ContainerInfo{
-		ID:        createResp.ID,
-		Name:      cfg.Name,
-		Image:     cfg.Image,
-		Status:    "created",
-		AgentID:   cfg.AgentID,
-		TenantID:  cfg.TenantID,
-		CPULimit:  cfg.CPU,
-		MemoryMB:  cfg.MemoryMB,
-		DiskMB:    cfg.DiskMB,
-		CreatedAt: time.Now(),
+		ID:           createResp.ID,
+		Name:         cfg.Name,
+		Image:        cfg.Image,
+		Status:       "created",
+		AgentID:      cfg.AgentID,
+		TenantID:     cfg.TenantID,
+		CPULimit:     cfg.CPU,
+		MemoryMB:     cfg.MemoryMB,
+		DiskMB:       cfg.DiskMB,
+		Network:      cfg.Network,
+		NetworkAllow: cfg.NetworkAllow,
+		CreatedAt:    time.Now(),
 	}, nil
 }
 

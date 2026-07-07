@@ -124,14 +124,14 @@ func TestDemuxDockerStreamMultipleFrames(t *testing.T) {
 // ── Noop Client Behavior ──────────────────────────────────────────────
 
 func TestNewClientNoop(t *testing.T) {
-	c := NewClient("")
+	c := NewClient("", "")
 	if !c.IsNoop() {
 		t.Fatal("empty socket path should create noop client")
 	}
 }
 
 func TestNewClientWithSocket(t *testing.T) {
-	c := NewClient("/var/run/docker.sock")
+	c := NewClient("/var/run/docker.sock", "")
 	if c.IsNoop() {
 		t.Fatal("socket path should create real client")
 	}
@@ -141,7 +141,7 @@ func TestNewClientWithSocket(t *testing.T) {
 }
 
 func TestNoopCreate(t *testing.T) {
-	c := NewClient("")
+	c := NewClient("", "")
 	info, err := c.Create(ContainerConfig{
 		Name:     "test-sandbox",
 		Image:    "agenthub/sandbox:latest",
@@ -171,7 +171,7 @@ func TestNoopCreate(t *testing.T) {
 }
 
 func TestNoopStartStopRemove(t *testing.T) {
-	c := NewClient("")
+	c := NewClient("", "")
 	info, _ := c.Create(ContainerConfig{Name: "test", Image: "img", AgentID: "a1", TenantID: "t1"})
 	id := info.ID
 
@@ -190,7 +190,7 @@ func TestNoopStartStopRemove(t *testing.T) {
 }
 
 func TestNoopExec(t *testing.T) {
-	c := NewClient("")
+	c := NewClient("", "")
 	result, err := c.Exec("sandbox-1", "echo hello")
 	if err != nil {
 		t.Fatalf("noop exec: %v", err)
@@ -207,7 +207,7 @@ func TestNoopExec(t *testing.T) {
 }
 
 func TestNoopInspect(t *testing.T) {
-	c := NewClient("")
+	c := NewClient("", "")
 	status, err := c.Inspect("sandbox-1")
 	if err != nil {
 		t.Fatalf("noop inspect: %v", err)
@@ -218,7 +218,7 @@ func TestNoopInspect(t *testing.T) {
 }
 
 func TestNoopList(t *testing.T) {
-	c := NewClient("")
+	c := NewClient("", "")
 	containers, err := c.List()
 	if err != nil {
 		t.Fatalf("noop list: %v", err)
@@ -229,7 +229,7 @@ func TestNoopList(t *testing.T) {
 }
 
 func TestNoopPing(t *testing.T) {
-	c := NewClient("")
+	c := NewClient("", "")
 	err := c.Ping(nil)
 	if err == nil {
 		t.Fatal("noop ping should return an error")

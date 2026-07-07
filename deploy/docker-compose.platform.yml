@@ -255,8 +255,10 @@ services:
       SANDBOX_MEMORY_MB: "${SANDBOX_MEMORY_MB:-512}"
       SANDBOX_NETWORK_ALLOW: "${SANDBOX_NETWORK_ALLOW:-none}"
       SANDBOX_OUTPUT_SANITIZE_LEVEL: "${SANDBOX_OUTPUT_SANITIZE_LEVEL:-basic}"
+      SANDBOX_SECCOMP_PROFILE: "${SANDBOX_SECCOMP_PROFILE:-/etc/agenthub/seccomp.json}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./sandbox-image/seccomp.json:/etc/agenthub/seccomp.json:ro
     depends_on: [tempo]
     ports: ["8097:8097"]
 
