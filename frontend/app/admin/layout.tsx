@@ -330,7 +330,8 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
                 </svg>
               </button>
 
-              {/* Title */}
+              {/* Logo + Title */}
+              <img src="/logo.png" alt="AH" className="w-5 h-5 rounded-[4px] shrink-0 object-contain" />
               <h1 className="admin-header-title">AgentHub</h1>
               <span className="admin-header-subtitle">管理控制台</span>
 

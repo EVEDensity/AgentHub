@@ -6,6 +6,11 @@ import { PageTransitionProvider } from '../lib/animations/pageTransitionProvider
 export const metadata: Metadata = {
   title: 'AgentHub — Collaborative AI Development Platform',
   description: 'AgentHub is a collaborative AI development platform powered by multi-agent orchestration.',
+  icons: {
+    icon: '/logo.png',
+    shortcut: '/logo.png',
+    apple: '/logo.png',
+  },
 };
 
 // Next.js 14: viewport must be a separate export (not inside metadata).

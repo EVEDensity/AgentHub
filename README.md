@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="AgentHub" src="frontend/public/logo.svg" width="96">
+  <img alt="AgentHub" src="assets/logo/AH-logo.png" width="96">
 </p>
 
 <h3 align="center">AgentHub</h3>
@@ -101,9 +101,21 @@ cd frontend && npm install && npm run dev
 
 Bug reports, docs, new model providers — all count. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the details.
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EVEDensity/AgentHub&type=Date)](https://star-history.com/#EVEDensity/AgentHub&Date)
+
+## Contributors
+
+Thanks to everyone who's contributed to AgentHub — code, docs, bug reports, ideas. It all matters.
+
+<a href="https://github.com/EVEDensity/AgentHub/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EVEDensity/AgentHub" />
+</a>
+
 ## License
 
-Apache 2.0. Use it for anything.
+Apache 2.0. 
 
 ---
 

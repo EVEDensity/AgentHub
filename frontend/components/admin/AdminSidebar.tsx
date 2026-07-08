@@ -46,10 +46,12 @@ function AdminSidebarInner({
           collapsed ? 'justify-center h-[56px] px-2' : 'gap-2.5 h-[56px] px-5'
         }`}
       >
-        {/* Logo mark — gold square (AgentHub warm dark) */}
-        <div className="w-6 h-6 rounded-[6px] bg-[rgb(var(--primary-500))] flex items-center justify-center text-[#121418] font-bold text-xs shrink-0">
-          AH
-        </div>
+        {/* Logo mark — AH white on black */}
+        <img
+          src="/logo.png"
+          alt="AgentHub"
+          className="w-6 h-6 rounded-[6px] shrink-0 object-contain"
+        />
         {!collapsed && (
           <span className="text-[16px] font-bold text-warm-900 tracking-tight leading-none whitespace-nowrap">
             Agent<span className="text-primary-500">Hub</span>

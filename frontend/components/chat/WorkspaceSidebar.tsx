@@ -246,7 +246,9 @@ const WorkspaceSidebar = memo(function WorkspaceSidebar(props: WorkspaceSidebarP
           Section 1: Brand Header
           ═══════════════════════════════════════ */}
       <div className="ws-brand">
-        <div className="ws-brand-logo"><span>AH</span></div>
+        <div className="ws-brand-logo">
+          <img src="/logo.png" alt="AgentHub" className="w-full h-full object-contain" />
+        </div>
         <div className="ws-brand-info">
           <span className="ws-brand-name">AgentHub</span>
           <span className="ws-brand-user">{user?.name || 'admin'} · {user?.role || 'admin'}</span>

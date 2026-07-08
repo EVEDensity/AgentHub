@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="AgentHub" src="frontend/public/logo.svg" width="96">
+  <img alt="AgentHub" src="assets/logo/AH-logo.png" width="96">
 </p>
 
 <h3 align="center">AgentHub</h3>
@@ -101,9 +101,22 @@ cd frontend && npm install && npm run dev
 
 提 bug、改文档、加模型提供商 — 都是贡献。详见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
+## ⭐ Star 趋势
+
+[![Star History Chart](https://api.star-history.com/svg?repos=EVEDensity/AgentHub&type=Date)](https://star-history.com/#EVEDensity/AgentHub&Date)
+
+## 贡献者
+
+感谢每一位为 AgentHub 付出过的人 — 代码、文档、Bug 报告、想法建议，都很珍贵。
+
+<a href="https://github.com/EVEDensity/AgentHub/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EVEDensity/AgentHub" />
+</a>
+
+
 ## 协议
 
-Apache 2.0。随便用，商用也行。
+Apache 2.0。
 
 ---
 
