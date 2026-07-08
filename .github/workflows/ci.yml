@@ -50,8 +50,16 @@ jobs:
           go-version: '1.22'
           cache-dependency-path: services/go/go.sum
       - run: go work sync
-      # vet all modules in the workspace
-      - run: go vet ./...
+      # vet all modules in the workspace (GOWORK=off per-module to avoid
+      # "directory prefix . does not contain modules listed in go.work")
+      - name: go vet (all modules)
+        run: |
+          set -e
+          for mod in $(find . -name go.mod -not -path '*/testdata/*' | sed 's|/go.mod||'); do
+            echo "::group::go vet $mod"
+            (cd "$mod" && go vet ./...)
+            echo "::endgroup::"
+          done
       # test all modules (skip integration tests that need infra)
       - run: go test -short -race -count=1 ./... 2>&1 | tee /tmp/go-test.out
         continue-on-error: true

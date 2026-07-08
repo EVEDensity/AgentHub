@@ -95,7 +95,7 @@ export default function AgentHubIM(): JSX.Element {
   const [sessionId, setSessionId] = useState<string>('');
   const messages = useSessionMessages(sessionId);
   const isStreaming = useSessionStreaming(sessionId);
-  const addToast = useAddToast();
+  const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
   const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
@@ -2734,6 +2734,9 @@ export default function AgentHubIM(): JSX.Element {
           onCommit={(v) => {
             if (v < 80) setAgentPanelCollapsed(true);
             else setAgentPanelCollapsed(false);
+          }}
+          onReset={() => {
+            setAgentPanelCollapsed(false);
           }}
           min={44}
           max={480}

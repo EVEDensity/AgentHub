@@ -319,13 +319,16 @@ export interface ChatSession {
   name: string;
   type?: string;
   active?: number;
+  archived?: boolean;
   createdAt?: string;
   isPinned?: number;
   lastMessageAt?: string;
+  lastMessage?: string;
   ownerId?: string;
   visibility?: string;
   myRole?: string;
   memberCount?: number;
+  unreadCount?: number;
 }
 
 export interface DagState {
