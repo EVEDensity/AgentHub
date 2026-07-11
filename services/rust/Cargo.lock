@@ -3,6 +3,23 @@
 version = 4
 
 [[package]]
+name = "agentnet-core"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "chrono",
+ "futures",
+ "hyper",
+ "platform-events",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

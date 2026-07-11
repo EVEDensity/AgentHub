@@ -1,22 +1,19 @@
 from __future__ import annotations
 
-"""Database session layer — Neon PostgreSQL via HTTP SQL protocol.
+"""Database session layer — auto-detects Neon cloud vs local PostgreSQL.
 
-Neon's native PostgreSQL wire protocol (TCP :5432) can be blocked by
-certain firewalls / VPNs.  The HTTP SQL endpoint (POST /sql over HTTPS)
-uses the same protocol as the official ``@neondatabase/serverless`` JS
-driver and the VS Code / PyCharm IDE plugins — it tunnels PostgreSQL
-queries over standard HTTPS, bypassing TCP-level issues.
+- ``DATABASE_URL`` containing ``neon.tech`` → Neon HTTP SQL (firewall bypass)
+- ``DATABASE_URL`` containing ``127.0.0.1`` / ``localhost`` → asyncpg (direct TCP)
 
-API surface (unchanged from asyncpg days):
-  aget_pool()                → NeonHttpPool
+API surface (unchanged):
+  aget_pool()                → NeonHttpPool | AsyncPgPool
   aclose_pool()              → None (graceful shutdown)
   afetch_all(sql, *args)     → list[dict]
   afetch_one(sql, *args)     → dict | None
   aexecute(sql, *args)       → None
   aexecute_insert(sql, *args)→ str (new row id — SQL must include RETURNING)
   aexecute_many(sql, list)   → None
-  atransaction()             → async context manager → NeonHttpConnection
+  atransaction()             → async context manager → connection
 """
 
 import asyncio
@@ -26,25 +23,55 @@ from typing import Any
 
 from app.config import DATABASE_URL
 from app.db.neon_http import (
-    NeonHttpConnection,
     NeonHttpPool,
     get_neon_http_pool,
-    close_neon_http_pool,
+)
+from app.db.asyncpg_pool import (
+    AsyncPgPool,
+    get_asyncpg_pool,
 )
 
 logger = logging.getLogger("agenthub.db")
+
+# Union type for the pool
+PoolType = NeonHttpPool | AsyncPgPool
+
+# ═══════════════════════════════════════════════════════════════════════
+# Auto-detection
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _is_local_db(url: str) -> bool:
+    """Return True if the DATABASE_URL points to a local PostgreSQL instance."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    return (
+        "127.0.0.1" in url_lower
+        or "localhost" in url_lower
+        or "::1" in url_lower
+    )
+
+
+def _is_neon_cloud(url: str) -> bool:
+    """Return True if the DATABASE_URL points to a Neon cloud instance."""
+    if not url:
+        return False
+    return "neon.tech" in url.lower()
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Connection pool
 # ═══════════════════════════════════════════════════════════════════════
 
-_pool: NeonHttpPool | None = None
+_pool: PoolType | None = None
 _pool_lock = asyncio.Lock()
 
 
-async def aget_pool() -> NeonHttpPool:
-    """Return the Neon HTTP pool (lazy-init, thread-safe).
+async def aget_pool() -> PoolType:
+    """Return the database pool (lazy-init, thread-safe).
 
+    Auto-detects local vs Neon cloud based on DATABASE_URL.
     Raises RuntimeError if DATABASE_URL is not configured.
     """
     global _pool
@@ -62,27 +89,34 @@ async def aget_pool() -> NeonHttpPool:
         if _pool is not None:
             return _pool
 
-        _pool = await get_neon_http_pool(DATABASE_URL)
-        logger.info("db: Neon HTTP pool ready")
+        if _is_local_db(DATABASE_URL):
+            logger.info("db: detected local PostgreSQL → using asyncpg")
+            _pool = await get_asyncpg_pool(DATABASE_URL)
+        elif _is_neon_cloud(DATABASE_URL):
+            logger.info("db: detected Neon cloud → using HTTP SQL")
+            _pool = await get_neon_http_pool(DATABASE_URL)
+        else:
+            # Default to asyncpg for non-Neon remote hosts
+            logger.info("db: remote PostgreSQL → using asyncpg")
+            _pool = await get_asyncpg_pool(DATABASE_URL)
+
         return _pool
 
 
 async def aclose_pool() -> None:
-    """Close the HTTP pool gracefully (call during app shutdown)."""
+    """Close the database pool gracefully (call during app shutdown)."""
     global _pool
     if _pool is not None:
-        logger.info("db: closing Neon HTTP pool...")
-        await close_neon_http_pool()
+        logger.info("db: closing pool...")
+        await _pool.close()
         _pool = None
-        logger.info("db: Neon HTTP pool closed.")
+        logger.info("db: pool closed.")
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Async query API
 #
-# Each call acquires a fresh logical "connection" (stateless HTTP
-# request under the hood).  There are no stale-conn issues — every
-# request is independent.
+# Each call acquires a fresh connection from the pool.
 # ═══════════════════════════════════════════════════════════════════════
 
 

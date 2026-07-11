@@ -51,6 +51,10 @@ async def lifespan(app: FastAPI):
         "enabled" if _cfg.orchestrator.preprocess_enabled else "disabled",
     )
 
+    # ── Secret validation ────────────────────────────────────────────
+    from app.services.secret_service import validate_secret
+    validate_secret()
+
     # ── Database init ────────────────────────────────────────────────
     _log.info("startup: initializing PostgreSQL...")
     try:

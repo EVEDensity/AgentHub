@@ -1,0 +1,35 @@
+{
+  "nodes": [
+    {"id": "file:frontend/__tests__/mocks/next-navigation.ts", "type": "file", "name": "next-navigation.ts", "filePath": "frontend/__tests__/mocks/next-navigation.ts", "summary": "Next.js navigation 模块测试 Mock", "tags": ["test", "mock", "frontend"], "complexity": "simple"},
+    {"id": "file:frontend/__tests__/mocks/next-router.ts", "type": "file", "name": "next-router.ts", "filePath": "frontend/__tests__/mocks/next-router.ts", "summary": "Next.js router 模块测试 Mock", "tags": ["test", "mock", "frontend"], "complexity": "simple"},
+    {"id": "file:frontend/__tests__/mocks/zustand.ts", "type": "file", "name": "zustand.ts", "filePath": "frontend/__tests__/mocks/zustand.ts", "summary": "Zustand store 测试 Mock", "tags": ["test", "mock", "state"], "complexity": "simple"},
+    {"id": "file:frontend/__tests__/pages/BotPage.test.tsx", "type": "file", "name": "BotPage.test.tsx", "filePath": "frontend/__tests__/pages/BotPage.test.tsx", "summary": "Bot 发布页集成测试", "tags": ["test", "frontend", "page"], "complexity": "moderate"},
+    {"id": "file:frontend/__tests__/stores/agentStore.test.ts", "type": "file", "name": "agentStore.test.ts", "filePath": "frontend/__tests__/stores/agentStore.test.ts", "summary": "Agent Store 单元测试", "tags": ["test", "store", "frontend"], "complexity": "moderate"},
+    {"id": "file:frontend/__tests__/stores/authStore.test.ts", "type": "file", "name": "authStore.test.ts", "filePath": "frontend/__tests__/stores/authStore.test.ts", "summary": "Auth Store 单元测试", "tags": ["test", "store", "auth"], "complexity": "moderate"},
+    {"id": "file:frontend/__tests__/vitest.setup.ts", "type": "file", "name": "vitest.setup.ts", "filePath": "frontend/__tests__/vitest.setup.ts", "summary": "Vitest 测试环境初始化配置", "tags": ["test", "config", "setup"], "complexity": "simple"},
+    {"id": "file:frontend/app/admin/error.tsx", "type": "file", "name": "error.tsx", "filePath": "frontend/app/admin/error.tsx", "summary": "管理后台错误页面组件", "tags": ["frontend", "admin", "error"], "complexity": "simple"},
+    {"id": "file:frontend/app/admin/loading.tsx", "type": "file", "name": "loading.tsx", "filePath": "frontend/app/admin/loading.tsx", "summary": "管理后台加载状态页面", "tags": ["frontend", "admin", "loading"], "complexity": "simple"},
+    {"id": "file:frontend/app/api/agent/registry/[botId]/route.ts", "type": "file", "name": "route.ts", "filePath": "frontend/app/api/agent/registry/[botId]/route.ts", "summary": "Bot 注册 API 路由处理器", "tags": ["api", "route", "agent"], "complexity": "moderate"},
+    {"id": "file:frontend/app/api/chat/send/route.ts", "type": "file", "name": "route.ts", "filePath": "frontend/app/api/chat/send/route.ts", "summary": "聊天消息发送 API 路由处理器", "tags": ["api", "route", "chat"], "complexity": "moderate"},
+    {"id": "file:frontend/app/app/[botId]/page.tsx", "type": "file", "name": "page.tsx", "filePath": "frontend/app/app/[botId]/page.tsx", "summary": "Bot 发布页（公开分享页）", "tags": ["frontend", "page", "bot", "publish"], "complexity": "complex"},
+    {"id": "file:frontend/app/canvas/page.tsx", "type": "file", "name": "page.tsx", "filePath": "frontend/app/canvas/page.tsx", "summary": "画板页面入口", "tags": ["frontend", "page", "canvas"], "complexity": "moderate"},
+    {"id": "file:frontend/app/chat/page.tsx", "type": "file", "name": "page.tsx", "filePath": "frontend/app/chat/page.tsx", "summary": "聊天页面入口", "tags": ["frontend", "page", "chat"], "complexity": "moderate"},
+    {"id": "file:frontend/app/layout.tsx", "type": "file", "name": "layout.tsx", "filePath": "frontend/app/layout.tsx", "summary": "根布局组件（元数据、全局样式）", "tags": ["frontend", "layout", "root"], "complexity": "moderate"},
+    {"id": "file:frontend/components/admin/ChannelModule.tsx", "type": "file", "name": "ChannelModule.tsx", "filePath": "frontend/components/admin/ChannelModule.tsx", "summary": "管理后台渠道模块（IM 渠道配置）", "tags": ["frontend", "admin", "channel"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/EvalDashboard.tsx", "type": "file", "name": "EvalDashboard.tsx", "filePath": "frontend/components/admin/EvalDashboard.tsx", "summary": "评估仪表盘组件", "tags": ["frontend", "admin", "eval", "dashboard"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/GeneralSettingsModule.tsx", "type": "file", "name": "GeneralSettingsModule.tsx", "filePath": "frontend/components/admin/GeneralSettingsModule.tsx", "summary": "通用设置模块组件", "tags": ["frontend", "admin", "settings"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/LogsViewer.tsx", "type": "file", "name": "LogsViewer.tsx", "filePath": "frontend/components/admin/LogsViewer.tsx", "summary": "日志查看器组件", "tags": ["frontend", "admin", "logs"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/MemoryDashboard.tsx", "type": "file", "name": "MemoryDashboard.tsx", "filePath": "frontend/components/admin/MemoryDashboard.tsx", "summary": "记忆仪表盘组件", "tags": ["frontend", "admin", "memory", "dashboard"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/ModuleRelationshipGraph.tsx", "type": "file", "name": "ModuleRelationshipGraph.tsx", "filePath": "frontend/components/admin/ModuleRelationshipGraph.tsx", "summary": "模块关系图可视化组件", "tags": ["frontend", "admin", "graph", "visualization"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/RetrievalEvalPanel.tsx", "type": "file", "name": "RetrievalEvalPanel.tsx", "filePath": "frontend/components/admin/RetrievalEvalPanel.tsx", "summary": "检索评估面板组件", "tags": ["frontend", "admin", "retrieval", "eval"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/SensitiveToolConfirm.tsx", "type": "file", "name": "SensitiveToolConfirm.tsx", "filePath": "frontend/components/admin/SensitiveToolConfirm.tsx", "summary": "敏感工具确认对话框组件", "tags": ["frontend", "admin", "safety", "dialog"], "complexity": "moderate"},
+    {"id": "file:frontend/components/admin/SloDashboard.tsx", "type": "file", "name": "SloDashboard.tsx", "filePath": "frontend/components/admin/SloDashboard.tsx", "summary": "SLO 仪表盘组件", "tags": ["frontend", "admin", "slo", "monitoring"], "complexity": "complex"},
+    {"id": "file:frontend/components/admin/WorkflowNodeEditor.tsx", "type": "file", "name": "WorkflowNodeEditor.tsx", "filePath": "frontend/components/admin/WorkflowNodeEditor.tsx", "summary": "工作流节点编辑器组件", "tags": ["frontend", "admin", "workflow", "editor"], "complexity": "complex"}
+  ],
+  "edges": [
+    {"source": "file:frontend/__tests__/pages/BotPage.test.tsx", "target": "file:frontend/app/app/[botId]/page.tsx", "type": "imports", "direction": "forward", "weight": 0.7},
+    {"source": "file:frontend/app/layout.tsx", "target": "file:frontend/lib/animations/pageTransitionProvider.tsx", "type": "imports", "direction": "forward", "weight": 0.7},
+    {"source": "file:frontend/app/layout.tsx", "target": "file:frontend/styles/globals.css", "type": "imports", "direction": "forward", "weight": 0.7},
+    {"source": "file:frontend/components/admin/EvalDashboard.tsx", "target": "file:frontend/stores/evalStore.ts", "type": "imports", "direction": "forward", "weight": 0.7}
+  ]
+}

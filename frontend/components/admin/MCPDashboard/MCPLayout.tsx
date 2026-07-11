@@ -8,14 +8,14 @@ const SessionManager = dynamic(() => import('./SessionManager'), { ssr: false, l
 const TaskMonitor = dynamic(() => import('./TaskMonitor'), { ssr: false, loading: () => <div className="p-8 text-sm text-warm-400">加载中...</div> });
 
 const MCP_SUB_TABS = [
-  { key: 'overview', label: '📊 仪表盘' },
-  { key: 'agents', label: '🤖 Agents' },
-  { key: 'sessions', label: '💬 会话' },
-  { key: 'tasks', label: '📋 任务' },
-  { key: 'tools', label: '🔧 工具' },
-  { key: 'alerts', label: '🔔 告警' },
-  { key: 'config', label: '⚙️ 配置' },
-  { key: 'database', label: '🗄️ 数据库' },
+  { key: 'overview', label: '[chart] 仪表盘' },
+  { key: 'agents', label: '[bot] Agents' },
+  { key: 'sessions', label: '[chat] 会话' },
+  { key: 'tasks', label: '[clipboard] 任务' },
+  { key: 'tools', label: '[wrench] 工具' },
+  { key: 'alerts', label: '[bell] 告警' },
+  { key: 'config', label: '[gear] 配置' },
+  { key: 'database', label: '[database] 数据库' },
 ] as const;
 
 type SubTab = (typeof MCP_SUB_TABS)[number]['key'];
@@ -79,7 +79,7 @@ export default function MCPLayout({ initialTab = 'overview' }: MCPLayoutProps): 
         ))}
         {/* Auto-refresh indicator */}
         <div className="ml-auto shrink-0 flex items-center gap-2 text-xs text-warm-400">
-          <span className={`h-2 w-2 rounded-full ${loading ? 'bg-amber-400 animate-pulse' : 'bg-green-500'}`} />
+          <span className={`h-2 w-2 rounded-full ${loading ? 'bg-warning-400 animate-pulse' : 'bg-success-500'}`} />
           {loading ? '刷新中...' : dashboardData ? `已更新 ${dashboardData.timestamp?.slice(11, 19) || '--'}` : '—'}
           <button className="text-primary-500 hover:text-primary-700 underline" onClick={() => void fetchDashboard()}>
             刷新
@@ -89,7 +89,7 @@ export default function MCPLayout({ initialTab = 'overview' }: MCPLayoutProps): 
 
       {/* Error banner */}
       {error && (
-        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
+        <div className="rounded-lg bg-danger-50 border border-danger-200 px-4 py-3 text-sm text-danger-600">
           {error}
           <button className="ml-2 underline" onClick={() => void fetchDashboard()}>重试</button>
         </div>
@@ -102,22 +102,22 @@ export default function MCPLayout({ initialTab = 'overview' }: MCPLayoutProps): 
       {activeTab === 'tasks' && <TaskMonitor />}
       {activeTab === 'tools' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          🔧 工具分析 — 开发中，敬请期待
+          [wrench] 工具分析 — 开发中，敬请期待
         </div>
       )}
       {activeTab === 'alerts' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          🔔 告警管理 — 开发中，敬请期待
+          [bell] 告警管理 — 开发中，敬请期待
         </div>
       )}
       {activeTab === 'config' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          ⚙️ 配置管理 — 开发中，敬请期待
+          [gear] 配置管理 — 开发中，敬请期待
         </div>
       )}
       {activeTab === 'database' && (
         <div className="flex items-center justify-center py-20 text-sm text-warm-400">
-          🗄️ 数据库管理 — 开发中，敬请期待
+          [database] 数据库管理 — 开发中，敬请期待
         </div>
       )}
     </section>

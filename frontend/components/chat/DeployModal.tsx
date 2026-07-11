@@ -202,10 +202,10 @@ const DeployModal = memo(function DeployModal({
     <div
       ref={overlayRef}
       onClick={handleOverlayClick}
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
     >
       <div
-        className="w-full max-w-2xl bg-white rounded-2xl shadow-modal border border-warm-200 overflow-hidden animate-in zoom-in-95 duration-150"
+        className="w-full max-w-2xl bg-warm-100 rounded-2xl shadow-modal border border-warm-200 overflow-hidden animate-in zoom-in-95 duration-150"
         role="dialog"
         aria-modal="true"
         aria-label="部署配置"
@@ -254,7 +254,7 @@ const DeployModal = memo(function DeployModal({
               onChange={(e) => {
                 setProjectId(e.target.value);
               }}
-              className="w-full rounded-lg border border-warm-200 bg-white px-3 py-2.5 text-sm text-warm-800 focus:outline-none focus:ring-2 focus:ring-indigo-400/60 focus:border-indigo-400 transition-shadow appearance-none bg-[image:url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23999%22%20stroke-width%3D%222%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:16px] bg-[right_8px_center] bg-no-repeat pr-8"
+              className="w-full rounded-lg border border-warm-200 bg-warm-100 px-3 py-2.5 text-sm text-warm-800 focus:outline-none focus:ring-2 focus:ring-indigo-400/60 focus:border-indigo-400 transition-shadow appearance-none bg-[image:url('data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23999%22%20stroke-width%3D%222%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:16px] bg-[right_8px_center] bg-no-repeat pr-8"
               aria-label="选择部署项目"
             >
               <option value="" disabled>
@@ -373,7 +373,7 @@ const DeployModal = memo(function DeployModal({
                     className={`flex flex-col items-center gap-1 rounded-xl border-2 px-3 py-3 text-center transition-all ${
                       isActive
                         ? 'border-indigo-400 bg-indigo-50 shadow-sm'
-                        : 'border-warm-150 bg-white hover:border-warm-250 hover:bg-warm-50'
+                        : 'border-warm-150 bg-warm-100 hover:border-warm-250 hover:bg-warm-50'
                     }`}
                     aria-pressed={isActive}
                     aria-label={dt.label}
@@ -414,7 +414,7 @@ const DeployModal = memo(function DeployModal({
                     className={`flex flex-col items-center gap-1 rounded-xl border-2 px-3 py-3 text-center transition-all ${
                       isActive
                         ? 'border-indigo-400 bg-indigo-50 shadow-sm'
-                        : 'border-warm-150 bg-white hover:border-warm-250 hover:bg-warm-50'
+                        : 'border-warm-150 bg-warm-100 hover:border-warm-250 hover:bg-warm-50'
                     }`}
                     aria-pressed={isActive}
                   >
@@ -451,7 +451,7 @@ const DeployModal = memo(function DeployModal({
                     className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-all ${
                       checked
                         ? 'border-indigo-300 bg-indigo-50/50'
-                        : 'border-warm-150 bg-white hover:border-warm-250'
+                        : 'border-warm-150 bg-warm-100 hover:border-warm-250'
                     }`}
                   >
                     <input
@@ -670,7 +670,7 @@ const DeployModal = memo(function DeployModal({
             type="button"
             onClick={onCancel}
             disabled={submitting}
-            className="rounded-lg border border-warm-200 bg-white px-4 py-2 text-sm font-medium text-warm-600 hover:bg-warm-100 disabled:opacity-50 transition-all focus:ring-2 focus:ring-indigo-400/60"
+            className="rounded-lg border border-warm-200 bg-warm-100 px-4 py-2 text-sm font-medium text-warm-600 hover:bg-warm-100 disabled:opacity-50 transition-all focus:ring-2 focus:ring-indigo-400/60"
           >
             取消
           </button>

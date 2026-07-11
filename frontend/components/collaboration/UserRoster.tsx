@@ -55,7 +55,7 @@ const UserRoster = memo(function UserRoster({ sessionId }: UserRosterProps) {
 
       {/* Expanded list */}
       {expanded && (
-        <div className="absolute top-full right-0 mt-2 w-56 rounded-xl bg-white border border-warm-150 shadow-modal z-30 py-1.5">
+        <div className="absolute top-full right-0 mt-2 w-56 rounded-xl bg-warm-100 border border-warm-150 shadow-modal z-30 py-1.5">
           <div className="px-3 py-1.5 text-[11px] font-semibold text-warm-400 uppercase tracking-wide">
             Online — {count}
           </div>

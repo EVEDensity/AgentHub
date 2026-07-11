@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "batchIndex": 44,
+  "nodes": [
+    {
+      "id": ".github/workflows/ci.yml",
+      "type": "file",
+      "name": "CI Workflow",
+      "filePath": ".github/workflows/ci.yml",
+      "summary": "GitHub Actions CI 工作流配置，在 main 分支的 push/PR 时触发，并行执行前端 TypeScript 检查（ESLint、tsc、vitest）、Go 服务检查（go vet、go test）、Rust 检查（fmt、clippy、test）、Python 检查（ruff、mypy、pytest）和 Docker 构建验证（11 个关键镜像）",
+      "tags": ["CI/CD", "GitHub Actions", "自动化测试", "基础设施"],
+      "complexity": 3
+    },
+    {
+      "id": ".github/workflows/star-chart.yml",
+      "type": "file",
+      "name": "Star Chart Workflow",
+      "filePath": ".github/workflows/star-chart.yml",
+      "summary": "GitHub Actions 定时工作流，每周生成 Star 历史图表 SVG，自动提交到仓库",
+      "tags": ["CI/CD", "GitHub Actions", "自动化", "基础设施"],
+      "complexity": 1
+    }
+  ],
+  "edges": []
+}

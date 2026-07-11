@@ -118,38 +118,47 @@ func ClassifyTool(tenantID, toolName string, tenantRules []SensitiveToolRule) (s
 	return BuiltinToolRisk(toolName)
 }
 
-// builtinSensitiveTools is the default risk classification applied when a
-// tenant has no explicit rule. Keys are lower-cased tool/pattern fragments;
-// a tool matches if its name contains the fragment (e.g. "rm -rf" matches
-// "rm -rf /"). This mirrors the keyword set the legacy orchestrator matched.
-var builtinSensitiveTools = map[string]string{
-	"rm -rf":      RiskCritical,
-	"rm -fr":      RiskCritical,
-	"rmdir /":     RiskCritical,
-	"mkfs":        RiskCritical,
-	"dd if=":      RiskCritical,
-	":(){ :|:& };": RiskCritical,
-	"shutdown":    RiskCritical,
-	"reboot":      RiskHigh,
-	"docker":      RiskHigh,
-	"kubectl":     RiskHigh,
-	"helm":        RiskHigh,
-	"git push":    RiskHigh,
-	"git push --force": RiskCritical,
-	"curl ":       RiskNormal,
-	"wget ":       RiskNormal,
-	"scp ":        RiskNormal,
-	"chmod":       RiskNormal,
-	"chown":       RiskNormal,
+// builtinSensitiveToolPattern is a risk-classified tool-name fragment. Longer
+// fragments are checked first so that more-specific patterns (e.g.
+// "git push --force") take priority over shorter ones (e.g. "git push").
+type builtinSensitiveToolPattern struct {
+	frag string
+	risk string
+}
+
+// builtinSensitiveTools lists tool-name fragments in descending length order so
+// that the most-specific match wins. Order matters — do not re-sort without
+// understanding the matching logic in BuiltinToolRisk.
+var builtinSensitiveTools = []builtinSensitiveToolPattern{
+	// ── longer / compound patterns first ──
+	{":(){ :|:& };", RiskCritical},
+	{"git push --force", RiskCritical},
+	// ── single-command / shorter patterns ──
+	{"rm -rf", RiskCritical},
+	{"rm -fr", RiskCritical},
+	{"rmdir /", RiskCritical},
+	{"mkfs", RiskCritical},
+	{"dd if=", RiskCritical},
+	{"shutdown", RiskCritical},
+	{"reboot", RiskHigh},
+	{"docker", RiskHigh},
+	{"kubectl", RiskHigh},
+	{"helm", RiskHigh},
+	{"git push", RiskHigh},
+	{"curl ", RiskNormal},
+	{"wget ", RiskNormal},
+	{"scp ", RiskNormal},
+	{"chmod", RiskNormal},
+	{"chown", RiskNormal},
 }
 
 // BuiltinToolRisk returns the built-in risk for a tool invocation. A tool that
 // matches no pattern is "normal" and does not require confirmation.
 func BuiltinToolRisk(toolName string) (string, bool) {
 	lower := strings.ToLower(toolName)
-	for frag, risk := range builtinSensitiveTools {
-		if strings.Contains(lower, frag) {
-			return risk, risk == RiskHigh || risk == RiskCritical
+	for _, p := range builtinSensitiveTools {
+		if strings.Contains(lower, p.frag) {
+			return p.risk, p.risk == RiskHigh || p.risk == RiskCritical
 		}
 	}
 	return RiskNormal, false

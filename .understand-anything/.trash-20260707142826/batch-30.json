@@ -1,0 +1,17 @@
+{
+  "batchIndex": 30,
+  "nodes": [
+    {
+      "id": "services/go/session-service/Dockerfile",
+      "type": "service",
+      "label": "Dockerfile",
+      "filePath": "services/go/session-service/Dockerfile",
+      "language": "dockerfile",
+      "batchIndex": 30,
+      "tags": [
+        "Docker镜像构建"
+      ]
+    }
+  ],
+  "edges": []
+}

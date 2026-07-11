@@ -139,9 +139,9 @@ const DeployCard = memo(function DeployCard({ data }: DeployCardProps): JSX.Elem
   return (
     <>
       <div className="mb-4 flex justify-start">
-        <div className="max-w-[90%] min-w-[380px] rounded-2xl overflow-hidden bg-white border border-warm-200 shadow-md">
+        <div className="max-w-[90%] min-w-[380px] rounded-2xl overflow-hidden bg-warm-100 border border-warm-200 shadow-md">
           {/* ── Header: version + time ──────────────────────────── */}
-          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 px-5 py-3.5">
+          <div className="bg-primary-500 px-5 py-3.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Rocket className="h-5 w-5 text-white" />
@@ -196,7 +196,7 @@ const DeployCard = memo(function DeployCard({ data }: DeployCardProps): JSX.Elem
                   {data.affectedFiles.slice(0, 8).map((f, i) => (
                     <code
                       key={i}
-                      className="rounded bg-white border border-warm-150 px-1.5 py-0.5 text-[10px] font-mono text-warm-600 max-w-[200px] truncate"
+                      className="rounded bg-warm-100 border border-warm-150 px-1.5 py-0.5 text-[10px] font-mono text-warm-600 max-w-[200px] truncate"
                       title={f}
                     >
                       {f}
@@ -234,7 +234,7 @@ const DeployCard = memo(function DeployCard({ data }: DeployCardProps): JSX.Elem
                   className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-all active:scale-[0.97] ${
                     rollbackConfirm
                       ? 'border-red-400 bg-red-50 text-red-700 hover:bg-red-100'
-                      : 'border-warm-200 bg-white text-warm-600 hover:bg-warm-50'
+                      : 'border-warm-200 bg-warm-100 text-warm-600 hover:bg-warm-50'
                   }`}
                 >
                   <RotateCcw className={`h-4 w-4 ${rollbackConfirm ? 'text-red-500' : ''}`} />
@@ -245,7 +245,7 @@ const DeployCard = memo(function DeployCard({ data }: DeployCardProps): JSX.Elem
                 <button
                   type="button"
                   onClick={handleViewHistory}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-warm-200 bg-white px-3 py-2 text-sm font-medium text-warm-600 hover:bg-warm-50 active:scale-[0.97] transition-all"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-warm-200 bg-warm-100 px-3 py-2 text-sm font-medium text-warm-600 hover:bg-warm-50 active:scale-[0.97] transition-all"
                 >
                   <History className="h-4 w-4" />
                   查看修改记录

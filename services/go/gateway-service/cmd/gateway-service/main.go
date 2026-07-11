@@ -6,9 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
+	"github.com/agenthub/platform/shared/db"
 	"github.com/agenthub/platform/shared/eventbus"
 	"github.com/agenthub/platform/shared/events"
 	"github.com/agenthub/platform/shared/iam"
@@ -24,8 +27,30 @@ var authDenied = prometheus.NewCounterVec(
 	[]string{"reason"},
 )
 
+// Sprint K1: Additional gateway metrics for observability completeness.
+var (
+	// rateLimitHits counts requests rejected at each rate-limiting layer.
+	rateLimitHits = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "gateway_rate_limit_hits_total", Help: "Requests rejected by rate limiter, per layer."},
+		[]string{"layer"},
+	)
+	// sensitiveConfirm counts sensitive-tool confirm/deny decisions.
+	sensitiveConfirm = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "gateway_sensitive_confirm_total", Help: "Sensitive tool confirmation decisions."},
+		[]string{"risk_level", "decision"},
+	)
+	// sandboxLifecycle counts sandbox container state transitions.
+	sandboxLifecycle = prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "gateway_sandbox_lifecycle_total", Help: "Sandbox container lifecycle state transitions."},
+		[]string{"status"},
+	)
+)
+
 func init() {
 	obs.MustRegister(authDenied)
+	obs.MustRegister(rateLimitHits)
+	obs.MustRegister(sensitiveConfirm)
+	obs.MustRegister(sandboxLifecycle)
 }
 
 type ServiceProfile struct {
@@ -74,30 +99,40 @@ func main() {
 	}
 	defer bus.Close()
 
+	// ── Database pool (for templates, workspaces, etc.) ──────────────
+	dbDSN := getenv("DATABASE_DSN", getenv("DATABASE_URL", "postgres://agenthub:agenthub@127.0.0.1:5434/agenthub?sslmode=disable"))
+	pool, err := db.Connect(context.Background(), dbDSN)
+	if err != nil {
+		log.Printf("WARNING: database connection failed (templates/workspaces will use fallback): %v", err)
+		pool = nil // gateway starts without DB; frontend presets serve as fallback
+	}
+	if pool != nil {
+		defer pool.Close()
+		if err := pool.Migrate(context.Background()); err != nil {
+			log.Printf("WARNING: db migration failed (continuing): %v", err)
+		}
+	}
+
 	shutdown, err := obs.InitTracer(context.Background(), getenv("OTEL_EXPORTER_OTLP_ENDPOINT", ""), "gateway-service")
 	if err != nil {
 		log.Fatalf("init tracer: %v", err)
 	}
 	defer shutdown(context.Background())
 
+	// ── Knowledge proxy ───────────────────────────────────────────
+	knowledgeURL := parseKnowledgeServiceURL()
+	docPipelineURL := parseDocPipelineURL()
+	knowledgeHandler := newKnowledgeProxy(knowledgeURL)
+	log.Printf("knowledge proxy: %s (doc pipeline: %s)", knowledgeURL, docPipelineURL)
+
 	// WebSocket hub: per-instance connection registry. The broadcast consumer
 	// fans stream events out to connected clients by session_id.
 	hub := NewHub()
 	instance := getenv("HOSTNAME", "local")
 
-	// Redis connection registry (optional — works without Redis in dev mode).
-	// When REDIS_ADDR is set, the hub writes per-connection route entries so
-	// multi-instance deployments can discover which gateway holds a session.
+	// Redis will be connected after rate limiter creation (for WithDistributed).
 	redisAddr := getenv("REDIS_ADDR", "")
-	if redisAddr != "" {
-		store := state.Connect(redisAddr)
-		defer store.Close()
-		rr := newRouteRegistry(store, instance)
-		hub.WithRouteRegistry(rr)
-		log.Printf("gateway route registry enabled: redis=%s instance=%s", redisAddr, instance)
-	} else {
-		log.Printf("gateway route registry disabled (REDIS_ADDR not set) — running with in-memory hub only")
-	}
+	var redisStore *state.Store
 
 	jwtSecret := []byte(getenv("JWT_SECRET", ""))
 	// TokenIssuer is shared by the HTTP auth middleware and the WebSocket
@@ -151,10 +186,66 @@ func main() {
 		LayerTool:   {Capacity: getenvFloat("RATE_LIMIT_TOOL_CAPACITY", 20), Rate: getenvFloat("RATE_LIMIT_TOOL_RATE", 5)},
 	})
 
+	// ── Redis (Sprint M6: distributed rate limiting + cache + routes) ──
+	if redisAddr != "" {
+		redisStore = state.Connect(redisAddr)
+		defer redisStore.Close()
+		rr := newRouteRegistry(redisStore, instance)
+		hub.WithRouteRegistry(rr)
+		rl.WithDistributed(redisStore)
+		log.Printf("gateway: redis enabled addr=%s instance=%s (routes+ratelimit+cache)", redisAddr, instance)
+	} else {
+		log.Printf("gateway: redis disabled (REDIS_ADDR not set) — single-instance mode")
+	}
+
+	// ── Cache Manager (Sprint M3) ────────────────────────────────────
+	cacheMgr := NewCacheManager(redisStore)
+	_ = cacheMgr
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+	// Sprint K6: Enhanced health check — reports PG and NATS dependency status.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		pgOK := true
+		if pool != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := pool.Ping(ctx); err != nil {
+				pgOK = false
+			}
+		}
+		natsOK := bus.Conn().IsConnected()
+		status := http.StatusOK
+		health := map[string]any{"status": "ok", "pg": pgOK, "nats": natsOK}
+		if !pgOK || !natsOK {
+			status = http.StatusServiceUnavailable
+			health["status"] = "degraded"
+		}
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(health)
+	})
+	mux.HandleFunc("/healthz/readiness", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		ready := map[string]any{"status": "ready", "pg": "connected", "nats": bus.Conn().IsConnected()}
+		code := http.StatusOK
+		if pool != nil {
+			if err := pool.Ping(ctx); err != nil {
+				ready["pg"] = err.Error()
+				ready["status"] = "not_ready"
+				code = http.StatusServiceUnavailable
+			}
+		} else {
+			ready["pg"] = "disabled"
+		}
+		if !bus.Conn().IsConnected() {
+			ready["nats"] = false
+			ready["status"] = "not_ready"
+			code = http.StatusServiceUnavailable
+		}
+		w.WriteHeader(code)
+		json.NewEncoder(w).Encode(ready)
 	})
 	mux.HandleFunc("/profile", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -170,6 +261,8 @@ func main() {
 				"connections":       hub.clientCount(),
 				"jwt_enforced":      len(jwtSecret) > 0,
 				"rate_limit_buckets": rl.ActiveBuckets(),
+				"rate_limit_stats":   rl.Stats(),
+				"redis_connected":    redisStore != nil,
 			})
 		})
 		mux.HandleFunc("/routes", func(w http.ResponseWriter, r *http.Request) {
@@ -324,6 +417,104 @@ func main() {
 		obs.MetricsHandler().ServeHTTP(w, r)
 	})
 
+	// ── Knowledge CRUD + retrieval ────────────────────────────────
+	mux.Handle("/platform/knowledge/upload", handleKnowledgeUpload(docPipelineURL))
+	mux.Handle("/platform/knowledge/", knowledgeHandler)
+
+	// ── Template marketplace ───────────────────────────────────────
+	templates := newTemplateHandler(pool)
+	mux.Handle("/platform/templates", templates)
+	mux.Handle("/platform/templates/", templates)
+
+	// ── Tool marketplace (G1) ──────────────────────────────────────
+	tools := newToolHandler()
+	mux.Handle("/api/admin/tools", tools)
+	mux.Handle("/api/admin/tools/", tools)
+
+	// ── Workspaces ─────────────────────────────────────────────────
+	workspaces := newWorkspaceHandler(pool)
+	mux.Handle("/platform/workspaces", workspaces)
+	mux.Handle("/platform/workspaces/", workspaces)
+
+	// ── Agent Versions (P1-6) ───────────────────────────────────────
+	agentVersions := newAgentVersionHandler()
+	mux.Handle("/platform/agent-versions/", agentVersions)
+
+	// ── MCP Gateway Proxy (P1-2) ────────────────────────────────────
+	mcpProxy := newMCPProxy(getenv("MCP_GATEWAY_URL", "http://127.0.0.1:8099"))
+	mux.Handle("/platform/mcp/", mcpProxy)
+	mux.Handle("/platform/mcp", mcpProxy)
+
+	// ── A2A Protocol (P2-2) ─────────────────────────────────────────
+	a2aBaseURL := getenv("PUBLIC_BASE_URL", "http://localhost:8081")
+	a2aTLS := a2aTLSConfigFromEnv()
+	if a2aTLS.Enabled {
+		log.Printf("a2a: TLS enabled (cert=%s, key=%s, ca=%s, strict=%v)",
+			a2aTLS.CertFile, a2aTLS.KeyFile, a2aTLS.CAFile, a2aTLS.StrictVerify)
+	}
+	a2a := newA2AHandler(a2aBaseURL, pool, a2aTLS)
+	mux.Handle("/platform/a2a/", http.StripPrefix("/platform/a2a", a2a))
+
+	// ── API Keys + Public API ─────────────────────────────────────
+	apiKeys := newAPIKeyHandler()
+	mux.Handle("/platform/api-keys", apiKeys)
+	mux.Handle("/platform/api-keys/", apiKeys)
+	mux.HandleFunc("/v1/public/chat", func(w http.ResponseWriter, r *http.Request) {
+		handlePublicChat(bus, apiKeys, w, r)
+	})
+
+	// ── Image Preprocessing (Sprint L1) ───────────────────────────
+		imagePreproc := newImagePreprocHandler()
+		mux.Handle("/platform/utils/image-preprocess", imagePreproc)
+
+	// ── Video Frame Extraction (Sprint L1) ───────────────────────────
+		videoH := newVideoHandler(bus)
+		mux.Handle("/platform/utils/video-frames", videoH)
+		mux.Handle("/platform/utils/video-frames/", videoH)
+
+		// ── Public Bot Endpoint (Web App route) ──────────────────────
+		globalAgentVersionHandler = agentVersions
+		mux.HandleFunc("/api/public/bots/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodOptions {
+				handlePublicBotOptions(w, r)
+				return
+			}
+			handlePublicBotConfig(w, r, pool)
+		})
+
+	// ── Channel Connector (Feishu/WeCom) ──────────────────────────
+	channels := newChannelConnector(bus)
+	mux.Handle("/platform/channels", channels)
+	mux.Handle("/platform/channels/", channels)
+
+	// ── ContextOS — Unified Context Engine ───────────────────────
+	ctxEngine := newContextEngine(bus, pool)
+	mux.Handle("/context/", ctxEngine)
+	mux.Handle("/context", ctxEngine)
+	// Initialize decay config with defaults
+	cfg := ctxEngine.getDecayConfig()
+	log.Printf("context-engine: decay config initialized lambda=%.4f half_life=%.1f days", cfg.Lambda, cfg.HalfLife)
+
+	// ── AgentNet — Decentralized Multi-Agent Collaboration ──────────
+	agentNet := newAgentNetHandler(bus, pool)
+	mux.Handle("/agentnet/", agentNet)
+	mux.Handle("/agentnet", agentNet)
+
+	// ── Digital Identity + Sandbox (Sprint J) ──────────────────────
+	digitalID := newDigitalIdentityHandler(bus, pool)
+	mux.Handle("/digital/", digitalID)
+	mux.Handle("/digital", digitalID)
+
+		// ── Audit log (Sprint J4) ─────────────────────────────────────
+		auditH := newAuditHandler(pool)
+		mux.Handle("/audit/", auditH)
+		mux.Handle("/audit", auditH)
+
+	// ── Logs proxy (Sprint J4) ────────────────────────────────────
+	logs := newLogsHandler()
+	mux.Handle("/logs/", logs)
+	mux.Handle("/logs", logs)
+
 	addr := getenv("GATEWAY_ADDR", ":8081")
 	log.Printf("gateway-service listening on %s (dev_mode=%v jwt_enforced=%v rate limit: user=%.0f/%.0f tenant=%.0f/%.0f agent=%.0f/%.0f tool=%.0f/%.0f)",
 		addr,
@@ -332,15 +523,86 @@ func main() {
 		getenvFloat("RATE_LIMIT_TENANT_CAPACITY", 200), getenvFloat("RATE_LIMIT_TENANT_RATE", 100),
 		getenvFloat("RATE_LIMIT_AGENT_CAPACITY", 50), getenvFloat("RATE_LIMIT_AGENT_RATE", 20),
 		getenvFloat("RATE_LIMIT_TOOL_CAPACITY", 20), getenvFloat("RATE_LIMIT_TOOL_RATE", 5))
+
 	// Auth middleware sits inside rate limiting (so rejected auth still counts
 	// against the caller's bucket) and outside the route mux. Public endpoints
 	// (/healthz, /metrics, /profile, /ws) bypass auth; /ws runs its own JWT
 	// check during the WebSocket upgrade.
-	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws"}, func(r *http.Request, reason string) {
+	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/api/public/bots/", "/v1/public/"}, func(r *http.Request, reason string) {
 		authDenied.WithLabelValues("unauthorized").Inc()
 	})
 	handler := obs.Middleware("gateway-service", rateLimitMiddleware(rl, authMW(mux)))
-	log.Fatal(http.ListenAndServe(addr, handler))
+
+	// ── Optional Chaos Middleware (Sprint M6) ────────────────────────
+	chaosCfg := ChaosConfigFromEnv()
+	if chaosCfg.LatencyMs > 0 || chaosCfg.ErrorRate > 0 {
+		handler = ChaosMiddleware(chaosCfg, handler)
+	}
+
+	// ── Security Middleware (Sprint N6) ─────────────────────────────
+	// Order (outer→inner): body limit → CORS → security headers → trace → obs metrics → chaos → rate limit → auth → mux
+	handler = bodyLimitMiddleware(handler)
+	handler = corsMiddleware(handler)
+	handler = securityHeadersMiddleware(handler)
+	handler = noSensitiveHeaders(handler)
+
+	// ── Tracing Middleware (Sprint N1) ──────────────────────────────
+	// Creates OTel spans for every request; slow requests (>500ms) emit span events.
+	handler = obs.TraceMiddleware("gateway-service", handler)
+
+	// ── Graceful Shutdown (Sprint M6) ───────────────────────────────
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// Channel to capture server errors
+	errCh := make(chan error, 1)
+
+	// Start server in a goroutine
+	go func() {
+		log.Printf("gateway-service: http server starting on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
+
+	// ── Wait for shutdown signal ────────────────────────────────────
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case sig := <-quit:
+		log.Printf("gateway-service: received signal %v, initiating graceful shutdown...", sig)
+	case err := <-errCh:
+		log.Printf("gateway-service: server error: %v, shutting down...", err)
+	}
+
+	// Mark as shutting down (health/readiness probes will fail)
+	shutdownCtx := NewShutdownContext(DefaultShutdownConfig())
+	shutdownCtx.Initiate()
+
+	// Give load balancer time to detect the failing readiness probe
+	log.Printf("gateway-service: draining for %v before stopping...", shutdownCtx.config.HealthFailDelay)
+	time.Sleep(shutdownCtx.config.HealthFailDelay)
+
+	// Create a deadline for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownCtx.config.DrainTimeout)
+	defer cancel()
+
+	// Shutdown HTTP server (stops accepting new connections, waits for active)
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("gateway-service: forced shutdown after timeout: %v", err)
+	} else {
+		log.Printf("gateway-service: http server gracefully stopped")
+	}
+
+	// Close WebSocket hub
+	hub.Shutdown()
+
+	log.Printf("gateway-service: shutdown complete")
 }
 
 func getenv(key, fallback string) string {
@@ -371,4 +633,13 @@ func fallbackInt(primary, secondary int) int {
 		return primary
 	}
 	return secondary
+}
+
+func getenvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }

@@ -88,7 +88,7 @@ const ProgressBubble = memo(function ProgressBubble({ data, isStreaming }: Progr
         {/* Done state */}
         {isDone && (
           <div className="mt-1 text-xs text-emerald-600 font-medium">
-            ✅ 全部步骤已完成
+            [ok] 全部步骤已完成
           </div>
         )}
       </div>

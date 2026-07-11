@@ -7,6 +7,7 @@ require (
 	github.com/agenthub/platform/shared/eventbus v0.0.0
 	github.com/agenthub/platform/shared/events v0.0.0
 	github.com/agenthub/platform/shared/obs v0.0.0
+	github.com/prometheus/client_golang v1.19.1
 )
 
 require (
@@ -25,7 +26,6 @@ require (
 	github.com/nats-io/nats.go v1.37.0 // indirect
 	github.com/nats-io/nkeys v0.4.7 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
-	github.com/prometheus/client_golang v1.19.1 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
 	github.com/prometheus/procfs v0.12.0 // indirect

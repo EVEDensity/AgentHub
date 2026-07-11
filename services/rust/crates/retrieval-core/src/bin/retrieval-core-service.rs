@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use retrieval_core::core::{RetrievalCore, RetrievalCoreConfig};
-use retrieval_core::fusion::{FusionConfig, FusionWeights};
+use retrieval_core::fusion::{DynamicWeights, FusionConfig};
 use retrieval_core::model_adapter::ModelAdapterClient;
 use retrieval_core::nats::NatsAdapter;
 use retrieval_core::opensearch::OpenSearchClient;
@@ -72,9 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opensearch = OpenSearchClient::new(&opensearch_url, http_timeout);
     let model_adapter = ModelAdapterClient::new(&model_adapter_url, &embedding_model, http_timeout);
 
-    // 2. 构建 RetrievalCore。
-    let config = build_config_from_env();
-    let core = RetrievalCore::new(config, qdrant, opensearch, model_adapter);
+    // 2. 构建 RetrievalCore（含动态权重）。
+    let (config, weights) = build_config_from_env();
+    let core = RetrievalCore::new(config, qdrant, opensearch, model_adapter, weights);
 
     // 3. 先 spawn HTTP 服务（独立 task，RetrievalHttpServer 满足 Send），确保 /healthz
     //    立即可用——这对 K8s liveness/readiness 探针至关重要：若 NATS 短暂不可用，
@@ -151,21 +151,22 @@ fn init_tracing() {
     let _ = fmt().with_env_filter(filter).with_target(false).try_init();
 }
 
-fn build_config_from_env() -> RetrievalCoreConfig {
+fn build_config_from_env() -> (RetrievalCoreConfig, Arc<DynamicWeights>) {
+    let weights = Arc::new(DynamicWeights::from_env_or_default());
     let fusion = FusionConfig {
-        weights: FusionWeights::default(),
         rrf_k: getenv_u32("RC_FUSION_RRF_K", 60),
         freshness_half_life_days: getenv_f64("RC_FUSION_FRESHNESS_HALF_LIFE_DAYS", 30.0),
         per_source_limit: getenv_usize("RC_FUSION_PER_SOURCE_LIMIT", 50),
     };
-    RetrievalCoreConfig {
+    let config = RetrievalCoreConfig {
         fusion,
         source_timeout: Duration::from_millis(getenv_u64("RC_SOURCE_TIMEOUT_MS", 500)),
         embedding_timeout: Duration::from_millis(getenv_u64("RC_EMBEDDING_TIMEOUT_MS", 300)),
         rerank_timeout: Duration::from_millis(getenv_u64("RC_RERANK_TIMEOUT_MS", 400)),
         rerank_top_n: getenv_usize("RC_RERANK_TOP_N", 20),
         rerank_enabled: parse_bool(&getenv_or("RC_RERANK_ENABLED", "true")),
-    }
+    };
+    (config, weights)
 }
 
 fn parse_bool(s: &str) -> bool {

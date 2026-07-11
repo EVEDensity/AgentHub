@@ -252,6 +252,35 @@ class StreamingToolExecutor:
                         item.name,
                     )
 
+            # ── 1.5 Tool risk guardrail (safety check on arguments) ──
+            try:
+                from app.services.guardrails import classify_tool_risk as _ctr
+
+                risk_result = _ctr(item.name, item.arguments)
+                if risk_result.blocked:
+                    item.status = ToolState.ERROR
+                    item.error = f"安全策略阻止: {risk_result.flags[0].message if risk_result.flags else '此操作包含危险模式'}"
+                    item.error_type = "safety_block"
+                    item.duration_ms = (time.time() - start_time) * 1000
+                    await self._notify_state_change(item)
+                    return
+                if risk_result.requires_confirmation:
+                    logger.warning(
+                        "streaming_executor: tool '%s' requires safety confirmation: %s",
+                        item.name,
+                        [f"{f.rule}:{f.message}" for f in risk_result.flags],
+                    )
+                    # Note: caller should handle CONFIRM-level operations before
+                    # enqueueing. Log and continue — PermissionPlugin/permission.py
+                    # will also flag this in step 1.
+            except ImportError:
+                pass  # guardrails module unavailable — skip
+            except Exception as exc:
+                logger.warning(
+                    "streaming_executor: tool risk guardrail for '%s' failed: %s",
+                    item.name, exc,
+                )
+
             # ── 2. Pre hooks ───────────────────────────────────────
             effective_args = dict(item.arguments)
             if self._hook_manager is not None:

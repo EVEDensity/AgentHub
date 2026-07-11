@@ -1,0 +1,17 @@
+# ─────────────────────────────────────────────────────────────────────
+# AgentHub Grafana Dashboard Provisioning (Sprint K1b)
+# Auto-loads pre-built dashboards from ./grafana/dashboards/
+# ─────────────────────────────────────────────────────────────────────
+apiVersion: 1
+
+providers:
+  - name: "AgentHub"
+    orgId: 1
+    folder: "AgentHub"
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: true

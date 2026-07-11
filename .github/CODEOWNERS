@@ -1,0 +1,15 @@
+# AgentHub Code Owners
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Core platform
+/services/go/gateway-service/        @EVEDensity
+/services/go/shared/                 @EVEDensity
+/frontend/                           @EVEDensity
+/deploy/                             @EVEDensity
+
+# Documentation
+/docs/                               @EVEDensity
+*.md                                 @EVEDensity
+
+# CI/CD
+/.github/workflows/                  @EVEDensity

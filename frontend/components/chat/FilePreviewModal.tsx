@@ -299,7 +299,7 @@ function PdfBody({ content, pageCount, fileName }: {
   return (
     <div className="bg-warm-100/50">
       {/* Toolbar */}
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-4 py-2 bg-white/95 border-b border-warm-200 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-4 py-2 bg-warm-100 border-b border-warm-200">
         <div className="text-[11px] text-warm-500 truncate">
           {fileName} · {pageCount ? `${pageCount} 页` : ''}
         </div>
@@ -307,7 +307,7 @@ function PdfBody({ content, pageCount, fileName }: {
           <button
             type="button"
             onClick={() => setScale((s) => Math.max(0.5, s - 0.25))}
-            className="inline-flex h-6 w-6 items-center justify-center rounded border border-warm-200 bg-white text-warm-600 hover:border-primary-300 hover:text-primary-600 text-xs"
+            className="inline-flex h-6 w-6 items-center justify-center rounded border border-warm-200 bg-warm-100 text-warm-600 hover:border-primary-300 hover:text-primary-600 text-xs"
             title="缩小"
             disabled={scale <= 0.5}
           >
@@ -319,7 +319,7 @@ function PdfBody({ content, pageCount, fileName }: {
           <button
             type="button"
             onClick={() => setScale((s) => Math.min(3, s + 0.25))}
-            className="inline-flex h-6 w-6 items-center justify-center rounded border border-warm-200 bg-white text-warm-600 hover:border-primary-300 hover:text-primary-600 text-xs"
+            className="inline-flex h-6 w-6 items-center justify-center rounded border border-warm-200 bg-warm-100 text-warm-600 hover:border-primary-300 hover:text-primary-600 text-xs"
             title="放大"
             disabled={scale >= 3}
           >
@@ -342,7 +342,7 @@ function PdfBody({ content, pageCount, fileName }: {
           {pages.map((p) => (
             <div
               key={p.pageNumber}
-              className="rounded-md overflow-hidden border border-warm-200 shadow-sm bg-white"
+              className="rounded-md overflow-hidden border border-warm-200 shadow-sm bg-warm-100"
             >
               <div className="px-3 py-1 text-[10px] text-warm-400 bg-warm-50 border-b border-warm-200 text-center">
                 第 {p.pageNumber} / {pages.length} 页
@@ -400,7 +400,7 @@ function DocxHtmlBody({ content, fileName }: {
   fileName: string;
 }): JSX.Element {
   return (
-    <div className="bg-white" style={{ minHeight: '300px' }}>
+    <div className="bg-warm-100" style={{ minHeight: '300px' }}>
       <iframe
         srcDoc={content}
         title={`预览: ${fileName}`}
@@ -474,7 +474,7 @@ function PptBody({ content, fileName, slideCount }: {
   return (
     <div className="bg-[#f0f2f5]" style={{ minHeight: '300px' }}>
       {/* Toolbar */}
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-4 py-2 bg-white/95 border-b border-warm-200 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 px-4 py-2 bg-warm-100 border-b border-warm-200">
         <div className="text-[11px] text-warm-500 truncate">
           {fileName}{slideCount ? ` · ${slideCount} 页` : ''}
         </div>
@@ -539,7 +539,7 @@ function ErrorBody({ title, message, onRetry }: {
         <button
           type="button"
           onClick={onRetry}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-warm-200 bg-white px-3 py-1.5 text-xs font-medium text-warm-700 hover:border-primary-300 hover:text-primary-600 transition-colors"
+          className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-warm-200 bg-warm-100 px-3 py-1.5 text-xs font-medium text-warm-700 hover:border-primary-300 hover:text-primary-600 transition-colors"
         >
           重试
         </button>
@@ -802,7 +802,7 @@ const FilePreviewModal = memo(function FilePreviewModal({
       }}
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/55 backdrop-blur-sm" aria-hidden="true" />
+      <div className="absolute inset-0 bg-black/60" aria-hidden="true" />
 
       {/* Dialog wrapper - 保证高度不超过视口, 内容多时整体上下滚动 */}
       <div
@@ -811,7 +811,7 @@ const FilePreviewModal = memo(function FilePreviewModal({
       >
       <div
         ref={dialogRef}
-        className="relative w-full max-w-5xl max-h-[90vh] flex flex-col rounded-xl bg-white shadow-2xl border border-warm-200 overflow-hidden"
+        className="relative w-full max-w-5xl max-h-[90vh] flex flex-col rounded-xl bg-warm-100 shadow-2xl border border-warm-200 overflow-hidden"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -838,7 +838,7 @@ const FilePreviewModal = memo(function FilePreviewModal({
             <button
               type="button"
               onClick={handleDownload}
-              className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-warm-200 bg-white px-2.5 py-1.5 text-xs font-medium text-warm-700 hover:border-primary-300 hover:text-primary-600 transition-colors"
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-warm-200 bg-warm-100 px-2.5 py-1.5 text-xs font-medium text-warm-700 hover:border-primary-300 hover:text-primary-600 transition-colors"
               title="下载原文件"
             >
               <Download className="h-3.5 w-3.5" />
@@ -860,7 +860,7 @@ const FilePreviewModal = memo(function FilePreviewModal({
         {/* Body */}
         <div
           ref={bodyRef}
-          className="flex-1 min-h-0 overflow-y-auto bg-white"
+          className="flex-1 min-h-0 overflow-y-auto bg-warm-100"
           style={{
             scrollbarWidth: 'thin',
             scrollbarColor: 'rgba(0,0,0,0.25) transparent',

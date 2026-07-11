@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
 import time as _time_module
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -79,8 +80,16 @@ def _get_client(timeout: httpx.Timeout | None = None) -> httpx.AsyncClient:
             # Windows Python 3.13 + httpx 0.28 has a TLS certificate
             # verification issue where even certifi's CA bundle fails
             # (raw sockets work, but httpx's SSLConfig chain does not).
-            # verify=False is acceptable for a local-dev / LAN deployment.
-            verify=False,
+            # verify is disabled only on affected platforms; override via
+            # AGENTHUB_SSL_VERIFY=true/false env var.
+            verify=(
+                os.environ.get("AGENTHUB_SSL_VERIFY", "").lower() != "false"
+                if "AGENTHUB_SSL_VERIFY" in os.environ
+                else not (
+                    sys.platform == "win32"
+                    and sys.version_info[:2] == (3, 13)
+                )
+            ),
         )
     return _SHARED_CLIENT
 

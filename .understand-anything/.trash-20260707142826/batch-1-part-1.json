@@ -1,0 +1,523 @@
+{
+  "batch": 1,
+  "part": 1,
+  "totalParts": 3,
+  "nodeCount": 55,
+  "edgeCount": 0,
+  "nodes": [
+    {
+      "id": "file:app/api/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/api/__init__.py",
+      "summary": "API 包初始化文件，空模块",
+      "tags": ["api", "package", "init"],
+      "complexity": 0
+    },
+    {
+      "id": "file:app/api/admin/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/api/admin/__init__.py",
+      "summary": "Admin API 包入口，从 router 模块导入并导出路由",
+      "tags": ["api", "admin", "package"],
+      "complexity": 1
+    },
+    {
+      "id": "file:app/api/canvas.py",
+      "type": "file",
+      "name": "canvas.py",
+      "filePath": "app/api/canvas.py",
+      "summary": "画布 CRUD 与导出 API - 支持画布保存、读取、导出为 PNG 或 JSON",
+      "tags": ["api", "canvas", "CRUD", "export"],
+      "complexity": 4
+    },
+    {
+      "id": "file:app/api/files.py",
+      "type": "file",
+      "name": "files.py",
+      "filePath": "app/api/files.py",
+      "summary": "文件服务 API - 分片上传/下载/预览(Office/PDF/图片/代码)、工作区文件管理",
+      "tags": ["api", "file", "upload", "preview", "workspace", "docx", "pptx"],
+      "complexity": 10
+    },
+    {
+      "id": "file:app/api/im.py",
+      "type": "file",
+      "name": "im.py",
+      "filePath": "app/api/im.py",
+      "summary": "即时通讯 Web UI - 飞书风格群聊页面，HTML/CSS/JS 全量内联",
+      "tags": ["api", "im", "ui", "chat"],
+      "complexity": 2
+    },
+    {
+      "id": "file:app/api/im_assets.py",
+      "type": "file",
+      "name": "im_assets.py",
+      "filePath": "app/api/im_assets.py",
+      "summary": "IM 前端 JS 资产 - WebSocket 通信、消息渲染、会话管理、@提及面板",
+      "tags": ["im", "javascript", "websocket", "ui"],
+      "complexity": 3
+    },
+    {
+      "id": "file:app/api/memory.py",
+      "type": "file",
+      "name": "memory.py",
+      "filePath": "app/api/memory.py",
+      "summary": "记忆系统 REST API - CRUD、检索、回收站、会话记忆提取/整合/搜索",
+      "tags": ["api", "memory", "CRUD", "search", "consolidation", "session"],
+      "complexity": 10
+    },
+    {
+      "id": "file:app/api/routes.py",
+      "type": "file",
+      "name": "routes.py",
+      "filePath": "app/api/routes.py",
+      "summary": "API 路由聚合器 - 汇总所有子模块路由到统一 api_router",
+      "tags": ["api", "router", "aggregator"],
+      "complexity": 1
+    },
+    {
+      "id": "file:app/api/settings.py",
+      "type": "file",
+      "name": "settings.py",
+      "filePath": "app/api/settings.py",
+      "summary": "用户设置 API - 读取/更新主题、语言、推理参数、通知等偏好",
+      "tags": ["api", "settings", "config"],
+      "complexity": 3
+    },
+    {
+      "id": "file:app/api/skills.py",
+      "type": "file",
+      "name": "skills.py",
+      "filePath": "app/api/skills.py",
+      "summary": "技能管理 API - 扫描技能目录、解析 YAML frontmatter、分类、获取详情",
+      "tags": ["api", "skills", "classification", "scan"],
+      "complexity": 8
+    },
+    {
+      "id": "file:app/api/workspace.py",
+      "type": "file",
+      "name": "workspace.py",
+      "filePath": "app/api/workspace.py",
+      "summary": "工作区状态与差异 API - Git 状态/差异、会话文件变更追踪、路径安全校验",
+      "tags": ["api", "workspace", "git", "diff"],
+      "complexity": 8
+    },
+    {
+      "id": "file:app/config.py",
+      "type": "file",
+      "name": "config.py",
+      "filePath": "app/config.py",
+      "summary": "配置向后兼容桥接层，从 app.core.config 重新导出所有配置项",
+      "tags": ["config", "backward-compat", "bridge"],
+      "complexity": 1
+    },
+    {
+      "id": "file:app/core/config.py",
+      "type": "file",
+      "name": "config.py",
+      "filePath": "app/core/config.py",
+      "summary": "统一配置系统 - Pydantic Settings，管理 LLM/搜索/编排/流媒体/记忆/命令等七个子系统",
+      "tags": ["config", "pydantic", "settings", "env", "singleton"],
+      "complexity": 6
+    },
+    {
+      "id": "file:app/services/adapter_manager.py",
+      "type": "file",
+      "name": "adapter_manager.py",
+      "filePath": "app/services/adapter_manager.py",
+      "summary": "LLM 适配器管理器 - HTTP 连接池、重试逻辑、Mock/OpenAI/Anthropic/Ollama 等多厂商适配器",
+      "tags": ["llm", "adapter", "http", "retry", "openai", "anthropic", "ollama"],
+      "complexity": 10
+    },
+    {
+      "id": "file:app/services/memory/__init__.py",
+      "type": "file",
+      "name": "__init__.py",
+      "filePath": "app/services/memory/__init__.py",
+      "summary": "记忆子系统包入口，导出所有记忆模块",
+      "tags": ["memory", "package"],
+      "complexity": 0
+    },
+    {
+      "id": "file:app/services/memory/consolidator.py",
+      "type": "file",
+      "name": "consolidator.py",
+      "filePath": "app/services/memory/consolidator.py",
+      "summary": "记忆整合器 - LLM 驱动的去重/合并/清理分析(AutoDream)",
+      "tags": ["memory", "consolidation", "llm", "dedup"],
+      "complexity": 7
+    },
+    {
+      "id": "file:app/services/memory/extractor.py",
+      "type": "file",
+      "name": "extractor.py",
+      "filePath": "app/services/memory/extractor.py",
+      "summary": "记忆提取器 - 从会话消息自动提取用户/反馈/项目/参考四类记忆",
+      "tags": ["memory", "extraction", "llm", "session"],
+      "complexity": 8
+    },
+    {
+      "id": "file:app/services/memory/models.py",
+      "type": "file",
+      "name": "models.py",
+      "filePath": "app/services/memory/models.py",
+      "summary": "记忆数据模型 - MemoryType 枚举、MemoryMeta/MemoryDocument/MemoryHeader 数据类",
+      "tags": ["memory", "models", "dataclass", "enum"],
+      "complexity": 3
+    },
+    {
+      "id": "file:app/services/memory/scanner.py",
+      "type": "file",
+      "name": "scanner.py",
+      "filePath": "app/services/memory/scanner.py",
+      "summary": "记忆扫描器 - 扫描记忆文件、类型过滤、新鲜度检查",
+      "tags": ["memory", "scan", "freshness"],
+      "complexity": 2
+    },
+    {
+      "id": "file:app/services/memory/session_memory.py",
+      "type": "file",
+      "name": "session_memory.py",
+      "filePath": "app/services/memory/session_memory.py",
+      "summary": "会话记忆管理器 - 每个会话的摘要缓存读写、全局聚合摘要、LLM摘要生成",
+      "tags": ["memory", "session", "summary", "llm"],
+      "complexity": 8
+    },
+    {
+      "id": "file:app/services/memory/session_store.py",
+      "type": "file",
+      "name": "session_store.py",
+      "filePath": "app/services/memory/session_store.py",
+      "summary": "会话级追加式记忆存储 - 持久化对话数据、自动整合、新话题检测",
+      "tags": ["memory", "session", "store", "append-only"],
+      "complexity": 8
+    },
+    {
+      "id": "file:app/services/memory/storage.py",
+      "type": "file",
+      "name": "storage.py",
+      "filePath": "app/services/memory/storage.py",
+      "summary": "基于文件的记忆存储 CRUD - 索引管理、回收站、垃圾清理、异步 I/O",
+      "tags": ["memory", "storage", "CRUD", "trash"],
+      "complexity": 8
+    },
+    {
+      "id": "file:app/services/orchestrator_preprocessor.py",
+      "type": "file",
+      "name": "orchestrator_preprocessor.py",
+      "filePath": "app/services/orchestrator_preprocessor.py",
+      "summary": "编排器预处理器 - 意图识别、任务分解决策、多步骤工作流生成",
+      "tags": ["orchestrator", "preprocess", "intent", "decompose"],
+      "complexity": 9
+    },
+    {
+      "id": "file:app/services/tool_executor.py",
+      "type": "file",
+      "name": "tool_executor.py",
+      "filePath": "app/services/tool_executor.py",
+      "summary": "工具执行器 - 解析工具调用 JSON、验证参数、执行处理函数、返回结构化结果",
+      "tags": ["tool", "executor", "validation"],
+      "complexity": 7
+    },
+    {
+      "id": "file:app/services/tool_registry.py",
+      "type": "file",
+      "name": "tool_registry.py",
+      "filePath": "app/services/tool_registry.py",
+      "summary": "工具注册中心 - 管理工具定义、参数模式、示例、风险等级",
+      "tags": ["tool", "registry", "definition"],
+      "complexity": 6
+    },
+    {
+      "id": "file:app/services/tools/agent_tools.py",
+      "type": "file",
+      "name": "agent_tools.py",
+      "filePath": "app/services/tools/agent_tools.py",
+      "summary": "Agent 工具 - 调用其他 Agent、并行 Agent 调用、任务管理",
+      "tags": ["tool", "agent", "invocation"],
+      "complexity": 7
+    },
+    {
+      "id": "file:app/services/tools/browser_tools.py",
+      "type": "file",
+      "name": "browser_tools.py",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "浏览器自动化工具 - Playwright 导航/提取/截图/点击/输入",
+      "tags": ["tool", "browser", "playwright"],
+      "complexity": 5
+    },
+    {
+      "id": "file:app/services/tools/builtin_tools.py",
+      "type": "file",
+      "name": "builtin_tools.py",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "内置工具集 - Web搜索(多引擎)、文件读写/编辑/搜索/补丁、代码执行、Git 自动提交",
+      "tags": ["tool", "builtin", "web-search", "file", "exec", "git"],
+      "complexity": 10
+    },
+    {
+      "id": "file:app/services/tools/definitions.py",
+      "type": "file",
+      "name": "definitions.py",
+      "filePath": "app/services/tools/definitions.py",
+      "summary": "工具定义聚合器 - 注册所有内置工具的定义到 ToolRegistry",
+      "tags": ["tool", "registry", "definition"],
+      "complexity": 3
+    },
+    {
+      "id": "file:app/services/tools/network_tools.py",
+      "type": "file",
+      "name": "network_tools.py",
+      "filePath": "app/services/tools/network_tools.py",
+      "summary": "网络工具 - HTTP 请求发送、主机白名单检查",
+      "tags": ["tool", "network", "http"],
+      "complexity": 3
+    },
+    {
+      "id": "file:app/services/tools/session_tools.py",
+      "type": "file",
+      "name": "session_tools.py",
+      "filePath": "app/services/tools/session_tools.py",
+      "summary": "会话工具 - Artifact 列表/读取、对话搜索、会话工具上下文",
+      "tags": ["tool", "session", "artifact"],
+      "complexity": 4
+    },
+    {
+      "id": "file:app/services/tools/skill_tools.py",
+      "type": "file",
+      "name": "skill_tools.py",
+      "filePath": "app/services/tools/skill_tools.py",
+      "summary": "技能工具 - 本地技能列表/加载/调用、命令执行",
+      "tags": ["tool", "skill", "command"],
+      "complexity": 6
+    },
+    {
+      "id": "file:app/services/workspace_context.py",
+      "type": "file",
+      "name": "workspace_context.py",
+      "filePath": "app/services/workspace_context.py",
+      "summary": "工作区上下文 - 路径解析、用户/会话目录隔离、安全路径校验、ContextVar 管道",
+      "tags": ["workspace", "path", "security"],
+      "complexity": 4
+    },
+    {
+      "id": "file:app/utils/async_file.py",
+      "type": "file",
+      "name": "async_file.py",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步文件 I/O 工具集 - 封装 asyncio.to_thread + pathlib 的读写/搜索/元数据操作",
+      "tags": ["util", "async", "file-io"],
+      "complexity": 3
+    },
+    {
+      "id": "file:main.py",
+      "type": "file",
+      "name": "main.py",
+      "filePath": "main.py",
+      "summary": "应用入口 - FastAPI 初始化、CORS/静态文件/中间件注册、生命周期管理",
+      "tags": ["entrypoint", "fastapi", "app"],
+      "complexity": 5
+    },
+    {
+      "id": "class:app/api/canvas.py:CanvasSaveRequest",
+      "type": "class",
+      "name": "CanvasSaveRequest",
+      "filePath": "app/api/canvas.py",
+      "summary": "画布保存请求模型：ID、名称、数据字段",
+      "tags": ["pydantic", "request-model"],
+      "complexity": 1
+    },
+    {
+      "id": "class:app/api/canvas.py:CanvasExportRequest",
+      "type": "class",
+      "name": "CanvasExportRequest",
+      "filePath": "app/api/canvas.py",
+      "summary": "画布导出请求模型：ID、图片 base64、JSON 数据",
+      "tags": ["pydantic", "request-model"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/api/canvas.py:get_canvas",
+      "type": "function",
+      "name": "get_canvas",
+      "filePath": "app/api/canvas.py",
+      "summary": "获取指定画布数据，不存在则返回默认空画布",
+      "tags": ["api", "read"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/canvas.py:save_canvas",
+      "type": "function",
+      "name": "save_canvas",
+      "filePath": "app/api/canvas.py",
+      "summary": "保存画布数据到 JSON 文件",
+      "tags": ["api", "write"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/canvas.py:export_canvas",
+      "type": "function",
+      "name": "export_canvas",
+      "filePath": "app/api/canvas.py",
+      "summary": "导出画布为 PNG 图片或 JSON 文件",
+      "tags": ["api", "export"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/files.py:_category_for",
+      "type": "function",
+      "name": "_category_for",
+      "filePath": "app/api/files.py",
+      "summary": "根据文件扩展名返回文件类别(code/document/image/archive等)",
+      "tags": ["util", "classification"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/files.py:_validate_filename",
+      "type": "function",
+      "name": "_validate_filename",
+      "filePath": "app/api/files.py",
+      "summary": "校验文件名安全性（防路径遍历）和扩展名白名单",
+      "tags": ["util", "security"],
+      "complexity": 2
+    },
+    {
+      "id": "class:app/api/files.py:ChunkCompleteRequest",
+      "type": "class",
+      "name": "ChunkCompleteRequest",
+      "filePath": "app/api/files.py",
+      "summary": "分片上传完成请求：upload_id, file_name, total_chunks",
+      "tags": ["pydantic", "request-model"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/api/files.py:init_upload",
+      "type": "function",
+      "name": "init_upload",
+      "filePath": "app/api/files.py",
+      "summary": "初始化分片上传会话，返回 upload_id",
+      "tags": ["api", "upload"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/files.py:upload_chunk",
+      "type": "function",
+      "name": "upload_chunk",
+      "filePath": "app/api/files.py",
+      "summary": "上传单个文件分片，校验大小限制",
+      "tags": ["api", "upload"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/files.py:complete_upload",
+      "type": "function",
+      "name": "complete_upload",
+      "filePath": "app/api/files.py",
+      "summary": "完成分片上传，组装文件并清理临时分片",
+      "tags": ["api", "upload"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/api/files.py:download_file",
+      "type": "function",
+      "name": "download_file",
+      "filePath": "app/api/files.py",
+      "summary": "下载已上传文件，返回元数据和内容(文本或 base64)",
+      "tags": ["api", "download"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/files.py:_detect_preview_kind",
+      "type": "function",
+      "name": "_detect_preview_kind",
+      "filePath": "app/api/files.py",
+      "summary": "根据扩展名检测预览类型(text/markdown/docx/pdf/image/binary)",
+      "tags": ["util", "preview"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/api/files.py:_extract_docx_html",
+      "type": "function",
+      "name": "_extract_docx_html",
+      "filePath": "app/api/files.py",
+      "summary": "解析 .docx 文件为 HTML，含嵌入式图片 base64 内联",
+      "tags": ["util", "docx", "html"],
+      "complexity": 9
+    },
+    {
+      "id": "function:app/api/files.py:_extract_pptx_html",
+      "type": "function",
+      "name": "_extract_pptx_html",
+      "filePath": "app/api/files.py",
+      "summary": "解析 .pptx 文件为 HTML 幻灯片卡片，含图片优化和文字布局",
+      "tags": ["util", "pptx", "html"],
+      "complexity": 9
+    },
+    {
+      "id": "function:app/api/files.py:preview_uploaded_file",
+      "type": "function",
+      "name": "preview_uploaded_file",
+      "filePath": "app/api/files.py",
+      "summary": "统一文件预览端点：按类型(text/markdown/docx/pdf/image/binary)返回预览内容",
+      "tags": ["api", "preview"],
+      "complexity": 8
+    },
+    {
+      "id": "function:app/api/files.py:list_workspace_files",
+      "type": "function",
+      "name": "list_workspace_files",
+      "filePath": "app/api/files.py",
+      "summary": "列出工作区目录文件树（用户+会话隔离）",
+      "tags": ["api", "workspace", "file-tree"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/api/files.py:read_workspace_file",
+      "type": "function",
+      "name": "read_workspace_file",
+      "filePath": "app/api/files.py",
+      "summary": "读取工作区文件内容，支持 Office 文档预览和代码语法高亮",
+      "tags": ["api", "workspace", "read"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/api/files.py:_ext_to_language",
+      "type": "function",
+      "name": "_ext_to_language",
+      "filePath": "app/api/files.py",
+      "summary": "将文件扩展名映射为编程语言标识符",
+      "tags": ["util", "language"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/api/im.py:im_page",
+      "type": "function",
+      "name": "im_page",
+      "filePath": "app/api/im.py",
+      "summary": "返回即时通讯 HTML 页面（飞书风格群聊界面）",
+      "tags": ["api", "ui", "html"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/api/im.py:im_css",
+      "type": "function",
+      "name": "im_css",
+      "filePath": "app/api/im.py",
+      "summary": "返回 IM 页面 CSS 样式",
+      "tags": ["api", "css"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/api/im.py:im_js",
+      "type": "function",
+      "name": "im_js",
+      "filePath": "app/api/im.py",
+      "summary": "返回 IM 页面 JavaScript 逻辑",
+      "tags": ["api", "javascript"],
+      "complexity": 1
+    }
+  ],
+  "edges": []
+}

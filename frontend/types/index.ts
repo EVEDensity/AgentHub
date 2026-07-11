@@ -138,6 +138,23 @@ export interface Agent {
   localStatus?: 'online' | 'offline' | 'unknown';
   installPath?: string;
   version?: string;
+  /** Prompt template fields (Sprint F3) */
+  systemPrompt?: string;
+  userPrompt?: string;
+  assistantPrompt?: string;
+  promptVariables?: Record<string, string>;
+  /** Public bot sharing config (stored in agent_registry.config column) */
+  publicConfig?: PublicConfig;
+}
+
+/** Public bot sharing configuration — branding for the /app/[botId] page */
+export interface PublicConfig {
+  enabled: boolean;
+  welcomeMessage: string;
+  placeholder: string;
+  themeColor: string;
+  logoUrl: string;
+  suggestedQuestions: string[];
 }
 
 // ── Platform labels & colors for agent adapter types ──────────────
@@ -302,13 +319,16 @@ export interface ChatSession {
   name: string;
   type?: string;
   active?: number;
+  archived?: boolean;
   createdAt?: string;
   isPinned?: number;
   lastMessageAt?: string;
+  lastMessage?: string;
   ownerId?: string;
   visibility?: string;
   myRole?: string;
   memberCount?: number;
+  unreadCount?: number;
 }
 
 export interface DagState {
@@ -334,6 +354,107 @@ export interface WorkflowSummary {
   name: string;
   description: string;
   triggerKeywords: string[];
+}
+
+// ── Workflow Enhancement Types (P1-4) ──────────────────────────────
+
+/** Extended node types beyond the original 5 */
+export type WorkflowNodeType = 'start' | 'agent' | 'tool' | 'ifelse' | 'end' | 'code' | 'http' | 'knowledge' | 'human';
+
+/** Code execution config for 'code' nodes */
+export interface CodeNodeConfig {
+  language: 'python' | 'javascript' | 'bash' | 'sql';
+  code: string;
+  timeout?: number; // ms, default 30000
+  env?: Record<string, string>;
+}
+
+/** HTTP call config for 'http' nodes */
+export interface HttpNodeConfig {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  url: string;
+  headers?: Record<string, string>;
+  body?: string;        // supports {{variable}} interpolation
+  timeout?: number;
+  retry?: number;
+}
+
+/** Knowledge retrieval config for 'knowledge' nodes */
+export interface KnowledgeNodeConfig {
+  collectionId: string;
+  query: string;         // supports {{variable}} interpolation
+  topK?: number;
+  scoreThreshold?: number;
+  fusion?: 'hybrid' | 'semantic' | 'keyword';
+}
+
+/** Human approval config for 'human' nodes */
+export interface HumanNodeConfig {
+  prompt: string;        // shown to the human reviewer
+  options?: string[];    // predefined response options
+  timeout?: number;      // auto-approve/reject after timeout (seconds)
+  assignee?: string;     // specific user/role to assign
+}
+
+/** Variable reference in prompts/configs: {{node_id.output}} or {{node_id.field}} */
+export interface VariableReference {
+  raw: string;           // original {{...}} text
+  nodeId: string;
+  field: string;         // e.g., "output", "status", "result.code"
+  isResolved: boolean;
+  resolvedValue?: string;
+}
+
+/** Condition rule for ifelse branches */
+export type ConditionOperator = 'eq' | 'neq' | 'contains' | 'not_contains' | 'gt' | 'gte' | 'lt' | 'lte' | 'regex' | 'exists' | 'empty';
+
+export interface ConditionRule {
+  id: string;
+  left: string;          // variable reference or literal
+  operator: ConditionOperator;
+  right: string;         // comparison value
+  label?: string;        // human-readable label for the edge
+}
+
+export interface BranchCondition {
+  id: string;
+  label: string;         // shown on the branch edge
+  rules: ConditionRule[];
+  logic: 'AND' | 'OR';   // how to combine multiple rules
+}
+
+/** Execution record for a workflow run */
+export interface WorkflowExecution {
+  id: string;
+  workflowId: number;
+  workflowName: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'awaiting_human';
+  triggeredBy: string;   // user message or manual trigger
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  nodeResults: NodeExecutionResult[];
+  error?: string;
+}
+
+export interface NodeExecutionResult {
+  nodeId: string;
+  nodeName: string;
+  nodeType: WorkflowNodeType;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'awaiting_human';
+  input?: Record<string, unknown>;
+  output?: unknown;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+}
+
+/** Variable scope for the {{node_id.output}} engine */
+export interface WorkflowVariableScope {
+  nodeOutputs: Record<string, unknown>;  // nodeId → output value
+  triggerInput?: string;                 // original user input
+  workflowParams?: Record<string, string>;
 }
 
 export interface AttachedFile {
@@ -1181,6 +1302,561 @@ export interface LocalAgentStatus {
 export interface LocalAgentStatusResponse {
   agents: LocalAgentStatus[];
   total: number;
+}
+
+// ── Knowledge Base Types (Sprint F1) ─────────────────────────────────
+
+export interface KnowledgeDocument {
+  source_id: string;
+  collection: string;
+  tenant_id: string;
+  chunk_count: number;
+  file_type?: string;
+  size_bytes?: number;
+  created_at?: string;
+}
+
+export interface CollectionInfo {
+  name: string;
+  points_count: number;
+}
+
+export interface ChunkDetail {
+  id: string;
+  index: number;
+  total: number;
+  content: string;
+  start_offset: number;
+  end_offset: number;
+}
+
+export interface RetrievalResult {
+  id: string;
+  score: number;
+  content: string;
+  source_id: string;
+  collection: string;
+  chunk_index: number;
+}
+
+// ── Agent Version Management Types (P1-6) ────────────────────────────
+
+export interface AgentVersion {
+  id: string;
+  agentId: string;
+  version: number;
+  snapshot: Record<string, unknown>;    // full agent config at this version
+  changeSummary: string;                 // human-readable summary of what changed
+  changedFields: string[];               // list of field keys that changed
+  createdBy: string;                     // user who triggered the save
+  createdAt: string;
+}
+
+export interface AgentVersionDiff {
+  versionA: number;
+  versionB: number;
+  fieldDiffs: AgentFieldDiff[];
+  createdAtA: string;
+  createdAtB: string;
+}
+
+export interface AgentFieldDiff {
+  field: string;
+  label: string;                         // human-readable field name
+  oldValue: unknown;
+  newValue: unknown;
+  type: 'added' | 'removed' | 'modified' | 'unchanged';
+}
+
+export interface AgentVersionListResponse {
+  agentId: string;
+  versions: AgentVersion[];
+  total: number;
+}
+
+export interface AgentRollbackRequest {
+  agentId: string;
+  targetVersion: number;
+}
+
+// ── MCP Gateway Types (P1-2) ───────────────────────────────────────────
+
+export interface MCPServerConfig {
+  id: string;
+  name: string;
+  description: string;
+  transport: 'stdio' | 'sse';
+  // STDIO transport
+  command?: string;          // e.g. "node", "python", "uvx"
+  args?: string[];           // e.g. ["server.js"]
+  env?: Record<string, string>;
+  // SSE transport
+  url?: string;              // e.g. "http://localhost:8099/mcp"
+  // Status
+  status: 'connected' | 'disconnected' | 'error' | 'unknown';
+  lastConnectedAt?: string;
+  errorMessage?: string;
+  // Metadata
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MCPToolInfo {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: string;
+    properties?: Record<string, {
+      type: string;
+      description?: string;
+      enum?: unknown[];
+      default?: unknown;
+    }>;
+    required?: string[];
+  };
+  serverId: string;
+  serverName: string;
+}
+
+export interface MCPResourceInfo {
+  uri: string;
+  name: string;
+  description: string;
+  mimeType?: string;
+  serverId: string;
+  serverName: string;
+}
+
+export interface MCPPromptInfo {
+  name: string;
+  description: string;
+  arguments?: Array<{
+    name: string;
+    description?: string;
+    required?: boolean;
+  }>;
+  serverId: string;
+  serverName: string;
+}
+
+export interface MCPToolCallResult {
+  content: Array<{
+    type: 'text' | 'image' | 'resource';
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  isError?: boolean;
+}
+
+export interface MCPServerListResponse {
+  servers: MCPServerConfig[];
+}
+
+// JSON-RPC 2.0 types used by MCP protocol
+export interface JSONRPCRequest {
+  jsonrpc: '2.0';
+  id?: number;
+  method: string;
+  params?: Record<string, unknown>;
+}
+
+export interface JSONRPCResponse {
+  jsonrpc: '2.0';
+  id: number;
+  result?: unknown;
+  error?: {
+    code: number;
+    message: string;
+    data?: unknown;
+  };
+}
+
+// ── A2A Protocol Types (P2-2) ──────────────────────────────────────────
+
+export interface A2AAgentCard {
+  protocolVersion: string;
+  name: string;
+  description: string;
+  url: string;
+  provider?: {
+    name?: string;
+    url?: string;
+    organization?: string;
+  };
+  capabilities: {
+    streaming: boolean;
+    pushNotifications: boolean;
+    stateTransitionHistory: boolean;
+    multimodal?: boolean;
+    codeExecution?: boolean;
+  };
+  skills: A2ASkill[];
+  endpoints: {
+    taskApi: string;
+    streaming?: string;
+    webhookUrl?: string;
+  };
+  authSchemes?: A2AAuthScheme[];
+  version?: string;
+  documentation?: string;
+  iconUrl?: string;
+  tenantId?: string;
+  source?: 'internal' | 'external';
+  status?: 'active' | 'inactive' | 'error';
+  lastSeenAt?: string;
+  createdAt?: string;
+  tags?: string[];
+}
+
+export interface A2ASkill {
+  id: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  examples?: string[];
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+}
+
+export interface A2AAuthScheme {
+  type: 'bearer' | 'oauth2' | 'apiKey';
+  description?: string;
+  tokenUrl?: string;
+  scopes?: string[];
+}
+
+export interface A2ATask {
+  id: string;
+  sessionId?: string;
+  status: 'pending' | 'working' | 'completed' | 'failed' | 'cancelled';
+  message?: {
+    role: string;
+    parts: Array<{
+      type: 'text' | 'file' | 'data';
+      text?: string;
+      file?: { name?: string; mimeType?: string; bytes?: string; url?: string };
+      data?: Record<string, unknown>;
+    }>;
+  };
+  artifacts?: A2AArtifact[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface A2AArtifact {
+  artifactId: string;
+  name: string;
+  parts: Array<{
+    type: string;
+    text?: string;
+    data?: Record<string, unknown>;
+  }>;
+}
+
+export interface A2ADiscoveryQuery {
+  capabilities?: string[];
+}
+
+export interface A2ADiscoveryResponse {
+  agents: A2AAgentCard[];
+  count: number;
+}
+
+// ── RAG Document Search Types (P1-1) ──────────────────────────────────
+
+export type RAGSourceType = 'project_docs' | 'api_docs' | 'uploaded_docs' | 'code_repos' | 'sessions' | 'artifacts';
+
+export interface RAGSearchResult {
+  source_id: string;
+  chunk_id: string;
+  text: string;
+  score: number;
+  source_type: RAGSourceType;
+  metadata: Record<string, string | undefined>;
+  highlights: string[];
+}
+
+export interface ImageResult {
+  id: string;
+  url: string;
+  caption: string;
+  score: number;
+  source_id: string;
+  source_type: RAGSourceType;
+  width?: number;
+  height?: number;
+}
+
+export interface RAGSearchResponse {
+  query: string;
+  rewrites: string[];
+  results: RAGSearchResult[];
+  images: ImageResult[];
+  fusion: string;
+  latency_ms: number;
+}
+
+export interface RAGSourceItem {
+  key: RAGSourceType;
+  label: string;
+  icon: string;
+  description: string;
+}
+
+// ── Template Types (Sprint F2) ───────────────────────────────────────
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  icon: string;
+  tags: string[];
+  source: 'builtin' | 'user';
+  version: string;
+  author: string;
+  agent_config: Record<string, unknown>;
+  workflow_json: string;
+  prompt_json: string;
+  tools_json: string[];
+  knowledge_json: string;
+  usage_count: number;
+  rating: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptBlock {
+  type: 'system' | 'user' | 'assistant';
+  content: string;
+  variables: string[];
+}
+
+// ── Workspace Types (Sprint F4) ──────────────────────────────────────
+
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  owner_id: string;
+  member_count: number;
+  created_at: string;
+}
+
+export interface WorkspaceMember {
+  user_id: string;
+  display_name: string;
+  email: string;
+  role: 'admin' | 'editor' | 'viewer';
+  joined_at: string;
+}
+
+// ── AgentNet Types (Sprint I) ─────────────────────────────────────────
+
+export interface AgentCapability {
+  agent_id: string;
+  display_name: string;
+  capabilities: string[];
+  preferred_tools: string[];
+  quality_score: number;
+  current_load: number;
+  max_concurrent: number;
+  cost_per_task: number;
+  status: 'idle' | 'busy' | 'overloaded' | 'offline';
+  last_heartbeat: string;
+  registered_at: string;
+}
+
+export interface AgentNetTask {
+  task_id: string;
+  parent_task_id?: string;
+  dag_id?: string;
+  correlation_id: string;
+  category: string;
+  description: string;
+  required_capability: string;
+  assigned_agent?: string;
+  status: 'pending' | 'assigned' | 'running' | 'completed' | 'failed';
+  input?: unknown;
+  result?: unknown;
+  error?: string;
+  created_at: string;
+  assigned_at?: string;
+  completed_at?: string;
+}
+
+export interface AgentNetDAGNode {
+  id: string;
+  task_id?: string;
+  agent_id?: string;
+  description: string;
+  required_capability: string;
+  dependencies: string[];
+  status: 'pending' | 'ready' | 'running' | 'completed' | 'failed';
+  priority: number;
+  estimated_seconds: number;
+  result?: unknown;
+  error?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface AgentNetDAGEdge {
+  from: string;
+  to: string;
+  label?: string;
+  weight: number;
+}
+
+export interface AgentNetDAG {
+  dag_id: string;
+  name: string;
+  tenant_id: string;
+  session_id: string;
+  nodes: AgentNetDAGNode[];
+  edges: AgentNetDAGEdge[];
+  status: 'created' | 'running' | 'completed' | 'failed' | 'cancelled';
+  strategy: 'round-robin' | 'least-loaded' | 'capability-match' | 'cost-optimized';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentSpawn {
+  spawn_id: string;
+  parent_id: string;
+  child_id: string;
+  child_name: string;
+  reason: string;
+  capabilities: string[];
+  status: 'created' | 'running' | 'completed' | 'destroyed';
+  created_at: string;
+  completed_at?: string;
+  ttl_seconds: number;
+}
+
+export interface SharedMemoryEntry {
+  id: string;
+  agent_id: string;
+  content: string;
+  intent?: string;
+  target?: string;
+  timestamp: string;
+}
+
+export interface AgentNetStats {
+  total_agents: number;
+  active_agents: number;
+  agents_by_status: Record<string, number>;
+  total_tasks: number;
+  tasks_by_status: Record<string, number>;
+  active_dags: number;
+  active_spawns: number;
+  memory_entries: number;
+  avg_quality_score: number;
+}
+
+export interface TopologyNode {
+  id: string;
+  label: string;
+  type: 'agent' | 'task' | 'spawn';
+  status: string;
+  quality?: number;
+  load?: number;
+  max_load?: number;
+  description?: string;
+}
+
+export interface TopologyEdge {
+  from: string;
+  to: string;
+  label: string;
+  status: string;
+}
+
+export interface TopologyResponse {
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+  updated_at: string;
+}
+
+// ── Sprint J: Digital Identity + Sandbox + Workspace Types ────────────
+
+export interface AgentIdentity {
+  id: string;
+  agent_id: string;
+  tenant_id: string;
+  email: string;
+  ssh_pubkey: string;
+  ssh_key_type: string;
+  gpg_key: string;
+  oauth2_provider: string;
+  oauth2_creds: string;
+  status: 'pending' | 'active' | 'suspended' | 'revoked';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SandboxContainer {
+  id: string;
+  agent_id: string;
+  tenant_id: string;
+  container_name: string;
+  image: string;
+  status: 'created' | 'starting' | 'running' | 'stopped' | 'failed' | 'destroyed';
+  cpu_limit: number;
+  memory_mb: number;
+  disk_mb: number;
+  network_allow: string[];
+  workspace_path: string;
+  seccomp_profile: string;
+  started_at?: string;
+  stopped_at?: string;
+  idle_timeout_s: number;
+  max_runtime_s: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SandboxExecLog {
+  id: string;
+  container_id: string;
+  agent_id: string;
+  tenant_id: string;
+  command: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  executed_at: string;
+}
+
+export interface SandboxStats {
+  total_containers: number;
+  active_containers: number;
+  by_status: Record<string, number>;
+  total_execs: number;
+  avg_duration_ms: number;
+}
+
+export interface WorkspaceTab {
+  id: string;
+  type: 'code' | 'document' | 'canvas' | 'data' | 'collaboration';
+  label: string;
+  path?: string;
+  content?: string;
+  language?: string;
+  isDirty?: boolean;
+}
+
+export interface WorkspaceOpEvent {
+  id: string;
+  agent_id: string;
+  operation: string;
+  target: string;
+  detail: string;
+  timestamp: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════

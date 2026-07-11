@@ -10,13 +10,134 @@
 //!    若 rerank 不可用：`final(d) = boosted(d)`。
 //! 5. **去重**：按 `content_hash` 去重，保留分数最高者。
 //! 6. **排序 + top-k**：按 `final` 降序，取前 k 条。
+//!
+//! 权重可通过环境变量 `RETRIEVAL_WEIGHT_BM25` / `_DENSE` / `_RERANK` / `_FRESHNESS`
+//! 配置；未设置时使用默认值。运行时也可通过 `POST /weights` 动态调整。
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 
 use crate::types::{FusedCandidate, RetrievalCandidate};
 
-/// 融合权重（与 lib.rs 的 FusionWeights 对齐）。
-#[derive(Debug, Clone)]
+// ── AtomicF64：用 AtomicU64 存储 f64 位模式的简单原子包装 ────────────
+
+/// 原子 f64 值，线程安全读写。
+#[derive(Debug)]
+pub struct AtomicF64(AtomicU64);
+
+impl AtomicF64 {
+    pub fn new(v: f64) -> Self {
+        Self(AtomicU64::new(v.to_bits()))
+    }
+
+    pub fn load(&self, order: AtomicOrdering) -> f64 {
+        f64::from_bits(self.0.load(order))
+    }
+
+    pub fn store(&self, v: f64, order: AtomicOrdering) {
+        self.0.store(v.to_bits(), order)
+    }
+
+    pub fn swap(&self, v: f64, order: AtomicOrdering) -> f64 {
+        f64::from_bits(self.0.swap(v.to_bits(), order))
+    }
+}
+
+// ── 动态权重（运行时可通过 HTTP 修改）────────────────────────────────
+
+/// 可动态更新的融合权重集。四个权重值各自为原子变量。
+#[derive(Debug)]
+pub struct DynamicWeights {
+    pub bm25: AtomicF64,
+    pub dense: AtomicF64,
+    pub rerank: AtomicF64,
+    pub freshness: AtomicF64,
+}
+
+impl DynamicWeights {
+    /// 从显式值创建（若任一值非正，回退到默认值）。
+    pub fn new(bm25: f64, dense: f64, rerank: f64, freshness: f64) -> Self {
+        let total = bm25 + dense + rerank + freshness;
+        let (bm25, dense, rerank, freshness) = if total <= 0.0 {
+            (0.30, 0.35, 0.25, 0.10)
+        } else {
+            (bm25, dense, rerank, freshness)
+        };
+        Self {
+            bm25: AtomicF64::new(bm25),
+            dense: AtomicF64::new(dense),
+            rerank: AtomicF64::new(rerank),
+            freshness: AtomicF64::new(freshness),
+        }
+    }
+
+    /// 从环境变量加载（未设置时使用默认值）。
+    pub fn from_env_or_default() -> Self {
+        let bm25 = env_f64("RETRIEVAL_WEIGHT_BM25", 0.30);
+        let dense = env_f64("RETRIEVAL_WEIGHT_DENSE", 0.35);
+        let rerank = env_f64("RETRIEVAL_WEIGHT_RERANK", 0.25);
+        let freshness = env_f64("RETRIEVAL_WEIGHT_FRESHNESS", 0.10);
+        // 归一化：确保总和为 1.0。
+        let total = bm25 + dense + rerank + freshness;
+        if total > 0.0 {
+            Self {
+                bm25: AtomicF64::new(bm25 / total),
+                dense: AtomicF64::new(dense / total),
+                rerank: AtomicF64::new(rerank / total),
+                freshness: AtomicF64::new(freshness / total),
+            }
+        } else {
+            Self::new(0.30, 0.35, 0.25, 0.10)
+        }
+    }
+
+    /// 读取当前权重快照。
+    pub fn snapshot(&self) -> FusionWeights {
+        FusionWeights {
+            bm25: self.bm25.load(AtomicOrdering::Relaxed) as f32,
+            dense: self.dense.load(AtomicOrdering::Relaxed) as f32,
+            rerank: self.rerank.load(AtomicOrdering::Relaxed) as f32,
+            freshness: self.freshness.load(AtomicOrdering::Relaxed) as f32,
+        }
+    }
+
+    /// 写入新权重（自动归一化到总和 1.0）。
+    pub fn set(&self, bm25: f32, dense: f32, rerank: f32, freshness: f32) {
+        let total = bm25 as f64 + dense as f64 + rerank as f64 + freshness as f64;
+        if total > 0.0 {
+            self.bm25.store(bm25 as f64 / total, AtomicOrdering::Relaxed);
+            self.dense.store(dense as f64 / total, AtomicOrdering::Relaxed);
+            self.rerank.store(rerank as f64 / total, AtomicOrdering::Relaxed);
+            self.freshness.store(freshness as f64 / total, AtomicOrdering::Relaxed);
+        }
+    }
+
+    /// 序列化为 JSON 值。
+    pub fn to_json(&self) -> serde_json::Value {
+        let s = self.snapshot();
+        serde_json::json!({
+            "bm25": s.bm25,
+            "dense": s.dense,
+            "rerank": s.rerank,
+            "freshness": s.freshness,
+            "sum": (s.bm25 + s.dense + s.rerank + s.freshness),
+        })
+    }
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+// ── FusionWeights（只读快照 / 初始构造用）─────────────────────────────
+
+/// 融合权重快照（用于序列化与配置）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FusionWeights {
     pub bm25: f32,
     pub dense: f32,
@@ -35,10 +156,11 @@ impl Default for FusionWeights {
     }
 }
 
+// ── 融合引擎配置 ──────────────────────────────────────────────────────
+
 /// 融合引擎配置。
 #[derive(Debug, Clone)]
 pub struct FusionConfig {
-    pub weights: FusionWeights,
     /// RRF 常数 k（标准值 60）。
     pub rrf_k: u32,
     /// Freshness 半衰期（天）。
@@ -50,7 +172,6 @@ pub struct FusionConfig {
 impl Default for FusionConfig {
     fn default() -> Self {
         Self {
-            weights: FusionWeights::default(),
             rrf_k: 60,
             freshness_half_life_days: 30.0,
             per_source_limit: 50,
@@ -58,18 +179,26 @@ impl Default for FusionConfig {
     }
 }
 
-/// 融合引擎：无状态，线程安全。
+// ── 融合引擎 ──────────────────────────────────────────────────────────
+
+/// 融合引擎：持有动态权重 + 静态配置，线程安全。
 pub struct FusionEngine {
     config: FusionConfig,
+    weights: Arc<DynamicWeights>,
 }
 
 impl FusionEngine {
-    pub fn new(config: FusionConfig) -> Self {
-        Self { config }
+    pub fn new(config: FusionConfig, weights: Arc<DynamicWeights>) -> Self {
+        Self { config, weights }
     }
 
     pub fn config(&self) -> &FusionConfig {
         &self.config
+    }
+
+    /// 获取动态权重的 Arc 引用（供 HTTP 端点读写）。
+    pub fn weights_arc(&self) -> Arc<DynamicWeights> {
+        Arc::clone(&self.weights)
     }
 
     /// 执行融合。
@@ -85,7 +214,7 @@ impl FusionEngine {
         rerank_scores: Option<&HashMap<String, f32>>,
         top_k: usize,
     ) -> Vec<FusedCandidate> {
-        let w = &self.config.weights;
+        let w = self.weights.snapshot();
         let k = self.config.rrf_k as f32;
 
         // 1. 为每个来源构建 source_id → (rank, score, candidate) 索引。
@@ -221,6 +350,14 @@ mod tests {
     use crate::types::{content_hash, SourceType};
     use chrono::Utc;
 
+    fn test_weights() -> Arc<DynamicWeights> {
+        Arc::new(DynamicWeights::new(0.30, 0.35, 0.25, 0.10))
+    }
+
+    fn test_engine() -> FusionEngine {
+        FusionEngine::new(FusionConfig::default(), test_weights())
+    }
+
     fn candidate(
         source_id: &str,
         content: &str,
@@ -243,7 +380,7 @@ mod tests {
 
     #[test]
     fn fuse_merges_bm25_and_dense() {
-        let engine = FusionEngine::new(FusionConfig::default());
+        let engine = test_engine();
         let bm25 = vec![
             candidate("d1", "alpha", 0.9, SourceType::OpenSearch, 1),
             candidate("d2", "beta", 0.8, SourceType::OpenSearch, 2),
@@ -263,7 +400,7 @@ mod tests {
 
     #[test]
     fn fuse_dedup_by_content_hash() {
-        let engine = FusionEngine::new(FusionConfig::default());
+        let engine = test_engine();
         // 两条不同 source_id 但内容相同 → 应去重。
         let bm25 = vec![candidate("d1", "same content", 0.9, SourceType::OpenSearch, 1)];
         let dense = vec![candidate("d2", "same content", 0.95, SourceType::Qdrant, 1)];
@@ -273,7 +410,7 @@ mod tests {
 
     #[test]
     fn fuse_respects_top_k() {
-        let engine = FusionEngine::new(FusionConfig::default());
+        let engine = test_engine();
         let bm25: Vec<_> = (0..10)
             .map(|i| candidate(&format!("b{}", i), &format!("content{}", i), 0.9 - i as f32 * 0.05, SourceType::OpenSearch, i + 1))
             .collect();
@@ -286,7 +423,7 @@ mod tests {
 
     #[test]
     fn fuse_with_rerank_blends_scores() {
-        let engine = FusionEngine::new(FusionConfig::default());
+        let engine = test_engine();
         let bm25 = vec![
             candidate("d1", "alpha", 0.9, SourceType::OpenSearch, 1),
             candidate("d2", "beta", 0.8, SourceType::OpenSearch, 2),
@@ -303,7 +440,7 @@ mod tests {
 
     #[test]
     fn freshness_decays_with_age() {
-        let engine = FusionEngine::new(FusionConfig::default());
+        let engine = test_engine();
         let old = chrono::Utc::now() - chrono::Duration::days(60);
         let bm25_old = vec![RetrievalCandidate {
             source_id: "old".into(),
@@ -332,5 +469,21 @@ mod tests {
         // 新文档 freshness 更高 → 最终分数更高。
         assert!(r_new[0].score > r_old[0].score);
         assert!(r_old[0].freshness_score < r_new[0].freshness_score);
+    }
+
+    #[test]
+    fn dynamic_weights_normalize_on_set() {
+        let dw = DynamicWeights::new(1.0, 1.0, 1.0, 1.0);
+        let s = dw.snapshot();
+        let sum = s.bm25 + s.dense + s.rerank + s.freshness;
+        assert!((sum - 1.0).abs() < 0.001, "sum should be 1.0, got {}", sum);
+    }
+
+    #[test]
+    fn atomic_f64_roundtrip() {
+        let a = AtomicF64::new(0.42);
+        assert!((a.load(AtomicOrdering::Relaxed) - 0.42).abs() < 1e-9);
+        a.store(0.99, AtomicOrdering::Relaxed);
+        assert!((a.load(AtomicOrdering::Relaxed) - 0.99).abs() < 1e-9);
     }
 }

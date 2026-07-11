@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Agent } from '../types';
+import type { Agent, PublicConfig } from '../types';
 import { useAuthStore } from './authStore';
 import { useAdminStore } from './adminStore';
 
@@ -13,12 +13,25 @@ interface AgentFormState {
   agentId: string; domain: string; adapterType: string; baseModelName: string;
   rankLevel: string; dutyNote: string; displayName: string; avatarUrl: string;
   capabilityTags: string[]; baseUrl: string; apiKey: string;
+  systemPrompt: string; userPrompt: string; assistantPrompt: string;
+  promptVariables: Record<string, string>;
+  publicConfig: PublicConfig;
 }
 
 const EMPTY_AGENT_FORM: AgentFormState = {
   agentId: '', domain: '', adapterType: 'deepseek', baseModelName: '',
   rankLevel: 'L1', dutyNote: '', displayName: '', avatarUrl: '',
   capabilityTags: [], baseUrl: '', apiKey: '',
+  systemPrompt: '', userPrompt: '', assistantPrompt: '',
+  promptVariables: {},
+  publicConfig: {
+    enabled: false,
+    welcomeMessage: '',
+    placeholder: '',
+    themeColor: '#6366f1',
+    logoUrl: '',
+    suggestedQuestions: [],
+  },
 };
 
 interface AgentState {
@@ -227,6 +240,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
 
   startEditAgent: (agent) => {
     const adapter = get().adapterOptions.find((a) => a.id === agent.adapterType) || null;
+    const existingConfig = agent.publicConfig || ({} as Partial<PublicConfig>);
     set({
       editingAgentId: agent.agentId,
       editSelectedAdapterInfo: adapter,
@@ -236,6 +250,18 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
         rankLevel: agent.rankLevel || 'L1', dutyNote: agent.dutyNote || '',
         displayName: agent.displayName || '', avatarUrl: agent.avatarUrl || '',
         capabilityTags: agent.capabilityTags || [], baseUrl: agent.baseUrl || '', apiKey: '',
+        systemPrompt: (agent as any).systemPrompt || '',
+        userPrompt: (agent as any).userPrompt || '',
+        assistantPrompt: (agent as any).assistantPrompt || '',
+        promptVariables: (agent as any).promptVariables || {},
+        publicConfig: {
+          enabled: existingConfig.enabled === true,
+          welcomeMessage: existingConfig.welcomeMessage || '',
+          placeholder: existingConfig.placeholder || '',
+          themeColor: existingConfig.themeColor || '#6366f1',
+          logoUrl: existingConfig.logoUrl || '',
+          suggestedQuestions: existingConfig.suggestedQuestions || [],
+        },
       },
     });
   },

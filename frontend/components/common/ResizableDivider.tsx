@@ -367,7 +367,7 @@ export default function ResizableDivider({
             role="presentation"
           />
           <div
-            className="fixed z-50 w-60 rounded-lg border border-warm-200 bg-white p-3 shadow-modal"
+            className="fixed z-50 w-60 rounded-lg border border-warm-200 bg-warm-100 p-3 shadow-modal"
             style={{
               left: Math.min(Math.max(popoverPos.x - 120, 8), window.innerWidth - 248),
               top: Math.min(Math.max(popoverPos.y, 8), window.innerHeight - 180),
@@ -419,7 +419,7 @@ export default function ResizableDivider({
                 }}
                 className="text-xs text-warm-500 hover:text-primary-500"
               >
-                ↺ 重置（{Math.round(defaultValue)}
+                [reset] 重置（{Math.round(defaultValue)}
                 {isPercentage ? '%' : 'px'}）
               </button>
               <div className="flex gap-1.5">

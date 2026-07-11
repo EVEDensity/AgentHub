@@ -1,0 +1,17 @@
+{
+  "batchIndex": 24,
+  "nodes": [
+    {
+      "id": "frontend/Dockerfile",
+      "type": "service",
+      "label": "Dockerfile",
+      "filePath": "frontend/Dockerfile",
+      "language": "dockerfile",
+      "batchIndex": 24,
+      "tags": [
+        "Docker镜像构建"
+      ]
+    }
+  ],
+  "edges": []
+}

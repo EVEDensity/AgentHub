@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "batchIndex": 38,
+  "nodes": [
+    {
+      "id": "services/rust/crates/agentnet-core/Dockerfile",
+      "type": "file",
+      "name": "agentnet-core Dockerfile",
+      "filePath": "services/rust/crates/agentnet-core/Dockerfile",
+      "summary": "agentnet-core 的 Docker 多阶段构建文件，builder 阶段使用 rust:1.78-slim-bookworm 编译，runtime 阶段使用 debian:bookworm-slim，暴露端口 8107，用于 AgentNet 去中心化多智能体协作网络核心服务",
+      "tags": ["Docker", "Rust", "AgentNet", "多智能体", "微服务", "基础设施"],
+      "complexity": 2
+    }
+  ],
+  "edges": []
+}

@@ -273,7 +273,7 @@ const MessageRow = memo(function MessageRow({
     return (
       <div key={msgKey} className="mb-4 flex justify-start">
         <SenderAvatar name={msg.sender || 'AI'} avatarUrl={getAvatarUrl(msg.sender || '')} size="sm" />
-        <div className="ml-2 max-w-[85%] rounded-2xl px-4 py-3 bg-white border border-blue-200 shadow-sm">
+        <div className="ml-2 max-w-[85%] rounded-2xl px-4 py-3 bg-warm-100 border border-blue-200 shadow-sm">
           <div className="mb-1 flex items-center gap-2 text-xs opacity-80">
             <span className="font-semibold text-warm-700">{msg.sender || 'agent'}</span>
             <span className="rounded px-2 py-0.5 bg-blue-50 text-blue-600 text-xs font-medium">AI</span>
@@ -473,7 +473,7 @@ const MessageRow = memo(function MessageRow({
   // ── Default text bubble ──
   return (
     <div key={msgKey} className={`mb-4 flex ${isUser ? 'justify-end' : 'justify-start'} group relative`}>
-      <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-white text-warm-800 border border-warm-150'} ${!isUser ? 'relative' : ''}`}>
+      <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? 'bg-primary-500 text-white' : 'bg-warm-100 text-warm-800 border border-warm-150'} ${!isUser ? 'relative' : ''}`}>
         {onQuoteMessage && !isUser && (
           <button
             type="button"
@@ -589,7 +589,7 @@ function SkeletonBubble({ align, width, delay }: { align: 'left' | 'right'; widt
   return (
     <div className={`mb-4 flex ${align === 'right' ? 'justify-end' : 'justify-start'}`}>
       <div
-        className="rounded-2xl px-4 py-3 bg-white border border-warm-150 shadow-sm animate-pulse"
+        className="rounded-2xl px-4 py-3 bg-warm-100 border border-warm-150 shadow-sm animate-pulse"
         style={{ width, animationDelay: delay }}
       >
         <div className="flex items-center gap-2 mb-2">

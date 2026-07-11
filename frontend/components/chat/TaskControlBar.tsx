@@ -26,7 +26,7 @@ const TaskControlBar = memo(function TaskControlBar({
   onResetLayout,
 }: TaskControlBarProps) {
   return (
-    <div className="border-b border-warm-150 bg-white">
+    <div className="border-b border-warm-150 bg-warm-100">
       <div className="px-4 py-2">
         <div className="mb-1.5 flex items-center justify-between text-caption text-warm-500">
           <div className="flex items-center gap-3">

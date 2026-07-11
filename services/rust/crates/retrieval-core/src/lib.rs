@@ -32,7 +32,7 @@ pub mod types;
 
 // ── 顶层 re-export（常用类型直接可 `use retrieval_core::X`）────────────
 pub use core::{RetrievalCore, RetrievalCoreConfig, RetrievalCoreHealth, RetrievalCoreStats};
-pub use fusion::{FusionConfig, FusionEngine, FusionWeights};
+pub use fusion::{AtomicF64, DynamicWeights, FusionConfig, FusionEngine, FusionWeights};
 pub use model_adapter::ModelAdapterClient;
 pub use opensearch::OpenSearchClient;
 pub use qdrant::QdrantClient;

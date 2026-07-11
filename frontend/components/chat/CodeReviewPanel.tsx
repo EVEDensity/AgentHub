@@ -276,7 +276,7 @@ export default function CodeReviewPanel({ content }: CodeReviewPanelProps): JSX.
 
   if (files.length === 0) {
     return (
-      <div className="rounded-xl border border-warm-200 bg-white p-6 text-center text-sm text-warm-500">
+      <div className="rounded-xl border border-warm-200 bg-warm-100 p-6 text-center text-sm text-warm-500">
         未检测到有效的 diff 内容
       </div>
     );
@@ -307,7 +307,7 @@ export default function CodeReviewPanel({ content }: CodeReviewPanelProps): JSX.
   }
 
   return (
-    <div className="my-3 overflow-hidden rounded-2xl border border-warm-200 bg-white shadow-card">
+    <div className="my-3 overflow-hidden rounded-2xl border border-warm-200 bg-warm-100 shadow-card">
       {/* ── Summary header ───────────────────────────────────────── */}
       <div className="border-b border-warm-150 bg-[#FBFAF8] px-5 py-3">
         <div className="flex items-center justify-between gap-3">
@@ -372,11 +372,11 @@ export default function CodeReviewPanel({ content }: CodeReviewPanelProps): JSX.
                     <DeletedIcon />{file.deleted}
                   </span>
                   <span
-                    className="rounded border border-warm-200 bg-white px-1.5 py-0.5 text-[10px] text-warm-400 hover:text-warm-600 transition-colors"
+                    className="rounded border border-warm-200 bg-warm-100 px-1.5 py-0.5 text-[10px] text-warm-400 hover:text-warm-600 transition-colors"
                     onClick={(e) => { e.stopPropagation(); copyPath(file.path); }}
                     title="复制路径"
                   >
-                    {copiedPath === file.path ? '已复制 ✓' : '复制'}
+                    {copiedPath === file.path ? '已复制 [ok]' : '复制'}
                   </span>
                 </span>
               </button>
@@ -386,7 +386,7 @@ export default function CodeReviewPanel({ content }: CodeReviewPanelProps): JSX.
                 <div className="border-t border-warm-100 bg-[#FBFBF9]">
                   {file.hunks.length === 0 ? (
                     <div className="px-6 py-4 text-xs text-warm-400">
-                      ⚠ 无法解析 diff 内容 — 请检查格式
+                      [warn] 无法解析 diff 内容 — 请检查格式
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -459,7 +459,7 @@ export default function CodeReviewPanel({ content }: CodeReviewPanelProps): JSX.
             变更统计：<span className="font-medium text-green-600">+{totalAdded}</span> <span className="font-medium text-red-600">-{totalDeleted}</span> 行 · {files.length} 个文件
           </span>
           <span className="text-warm-300">
-            💡 输入 <kbd className="rounded border border-warm-200 bg-white px-1 text-[10px]">展开</kbd> / <kbd className="rounded border border-warm-200 bg-white px-1 text-[10px]">折叠</kbd> 切换 · <kbd className="rounded border border-warm-200 bg-white px-1 text-[10px]">汇总</kbd> 查看摘要
+            [idea] 输入 <kbd className="rounded border border-warm-200 bg-warm-100 px-1 text-[10px]">展开</kbd> / <kbd className="rounded border border-warm-200 bg-warm-100 px-1 text-[10px]">折叠</kbd> 切换 · <kbd className="rounded border border-warm-200 bg-warm-100 px-1 text-[10px]">汇总</kbd> 查看摘要
           </span>
         </div>
       </div>

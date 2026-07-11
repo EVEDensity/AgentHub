@@ -1,0 +1,369 @@
+{
+  "batchIndex": 6,
+  "nodes": [
+    {
+      "path": "frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "exports": ["DashboardOverview"],
+      "totalLines": 260,
+      "nonEmptyLines": 246,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "formatTokens", "startLine": 13, "endLine": 17, "params": ["n"] },
+        { "name": "DashboardOverview", "startLine": 19, "endLine": 260, "params": ["{ data, loading, onRefresh }"] }
+      ],
+      "callGraph": [
+        { "caller": "DashboardOverview", "callee": "MetricCard", "lineNumber": 26 },
+        { "caller": "DashboardOverview", "callee": "StatusBadge", "lineNumber": 72 },
+        { "caller": "DashboardOverview", "callee": "SimpleChart", "lineNumber": 48 },
+        { "caller": "DashboardOverview", "callee": "formatTokens", "lineNumber": 106 }
+      ],
+      "importCount": 4,
+      "exportCount": 1,
+      "functionCount": 2,
+      "summary": "MCP仪表盘概览组件，展示系统健康状态、Agent统计、WebSocket会话数、消息量、Token消耗、工具调用统计、CPU/内存使用、数据库状态等实时监控指标，包含Agent状态分布环形图和最常用工具TOP5条形图。"
+    },
+    {
+      "path": "frontend/components/admin/MCPDashboard/MCPLayout.tsx",
+      "exports": ["MCPLayout"],
+      "totalLines": 125,
+      "nonEmptyLines": 114,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "authHeaders", "startLine": 23, "endLine": 27, "params": [] },
+        { "name": "MCPLayout", "startLine": 34, "endLine": 125, "params": ["{ initialTab = 'overview' }"] }
+      ],
+      "callGraph": [
+        { "caller": "MCPLayout", "callee": "DashboardOverview", "lineNumber": 94 },
+        { "caller": "MCPLayout", "callee": "SessionManager", "lineNumber": 97 },
+        { "caller": "MCPLayout", "callee": "TaskMonitor", "lineNumber": 99 },
+        { "caller": "authHeaders", "callee": "localStorage.getItem", "lineNumber": 25 },
+        { "caller": "MCPLayout", "callee": "fetchDashboard", "lineNumber": 57 }
+      ],
+      "importCount": 5,
+      "exportCount": 1,
+      "functionCount": 2,
+      "summary": "MCP仪表盘布局组件，包含仪表盘、Agents、会话、任务、工具、告警、配置、数据库等子标签页导航，实现15秒轮询自动刷新仪表盘数据。"
+    },
+    {
+      "path": "frontend/components/admin/MCPDashboard/SessionManager.tsx",
+      "exports": ["SessionManager"],
+      "totalLines": 289,
+      "nonEmptyLines": 274,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "authHeaders", "startLine": 24, "endLine": 28, "params": [] },
+        { "name": "SessionManager", "startLine": 30, "endLine": 289, "params": [] }
+      ],
+      "callGraph": [
+        { "caller": "SessionManager", "callee": "StatusBadge", "lineNumber": 149 },
+        { "caller": "SessionManager", "callee": "fetchSessions", "lineNumber": 121 },
+        { "caller": "SessionManager", "callee": "fetchDetail", "lineNumber": 155 },
+        { "caller": "SessionManager", "callee": "closeSession", "lineNumber": 176 },
+        { "caller": "SessionManager", "callee": "runCleanup", "lineNumber": 274 }
+      ],
+      "importCount": 1,
+      "exportCount": 1,
+      "functionCount": 2,
+      "summary": "会话管理组件，支持搜索、分页查看会话列表，显示会话详情（名称、消息数、活跃连接、成员），提供强制关闭会话和批量清理过期会话功能。"
+    },
+    {
+      "path": "frontend/components/admin/MCPDashboard/TaskMonitor.tsx",
+      "exports": ["TaskMonitor"],
+      "totalLines": 338,
+      "nonEmptyLines": 319,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "authHeaders", "startLine": 46, "endLine": 50, "params": [] },
+        { "name": "TaskMonitor", "startLine": 52, "endLine": 338, "params": [] }
+      ],
+      "callGraph": [
+        { "caller": "TaskMonitor", "callee": "StatusBadge", "lineNumber": 186 },
+        { "caller": "TaskMonitor", "callee": "fetchTasks", "lineNumber": 137 },
+        { "caller": "TaskMonitor", "callee": "fetchDetail", "lineNumber": 192 },
+        { "caller": "TaskMonitor", "callee": "cancelTask", "lineNumber": 220 },
+        { "caller": "TaskMonitor", "callee": "fetchTemplates", "lineNumber": 139 },
+        { "caller": "TaskMonitor", "callee": "fetchRoutes", "lineNumber": 140 },
+        { "caller": "TaskMonitor", "callee": "toggleRoute", "lineNumber": 316 }
+      ],
+      "importCount": 1,
+      "exportCount": 1,
+      "functionCount": 2,
+      "summary": "任务监控组件，包含运行中任务、历史记录、DAG模板和Agent路由四个子视图，支持按状态筛选任务、查看任务详情和执行历史、取消任务、切换路由启用状态。"
+    },
+    {
+      "path": "frontend/components/admin/MCPDashboard/shared/MetricCard.tsx",
+      "exports": ["MetricCard"],
+      "totalLines": 62,
+      "nonEmptyLines": 58,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "MetricCard", "startLine": 22, "endLine": 62, "params": ["{ title, value, subtitle, icon, trend, color = 'slate', loading = false, onClick }"] }
+      ],
+      "callGraph": [],
+      "importCount": 0,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "指标卡片组件，用于展示关键数值指标，支持自定义标题、数值、副标题、图标、趋势变化和颜色主题（绿/红/琥珀/蓝/灰）。"
+    },
+    {
+      "path": "frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx",
+      "exports": ["SimpleChart"],
+      "totalLines": 149,
+      "nonEmptyLines": 133,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "SimpleChart", "startLine": 16, "endLine": 32, "params": ["{ data, type = 'bar', maxValue, height = 160, showLabels = true }"] },
+        { "name": "BarChart", "startLine": 34, "endLine": 79, "params": ["{ data, maxValue, height, showLabels }"] },
+        { "name": "DonutChart", "startLine": 81, "endLine": 149, "params": ["{ data, height, showLabels }"] }
+      ],
+      "callGraph": [
+        { "caller": "SimpleChart", "callee": "BarChart", "lineNumber": 28 },
+        { "caller": "SimpleChart", "callee": "DonutChart", "lineNumber": 30 }
+      ],
+      "importCount": 0,
+      "exportCount": 1,
+      "functionCount": 3,
+      "summary": "简易图表组件，支持条形图和环形图两种类型，使用纯SVG渲染，内置颜色调色板，适用于数据量较小的可视化展示。"
+    },
+    {
+      "path": "frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "exports": ["StatusBadge"],
+      "totalLines": 51,
+      "nonEmptyLines": 45,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "StatusBadge", "startLine": 30, "endLine": 51, "params": ["{ variant, label, size = 'md', pulse = false }"] }
+      ],
+      "callGraph": [],
+      "importCount": 0,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "状态徽章组件，支持在线、离线、休眠、警告、严重、信息、成功、等待中、运行中等多种状态样式，可选脉冲动画效果。"
+    },
+    {
+      "path": "frontend/components/admin/PromptEditor.tsx",
+      "exports": ["PromptEditor"],
+      "totalLines": 178,
+      "nonEmptyLines": 163,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "PromptEditor", "startLine": 35, "endLine": 178, "params": ["{ blocks, onChange, variables, onVariablesChange }"] }
+      ],
+      "callGraph": [
+        { "caller": "PromptEditor", "callee": "PromptVariablePicker", "lineNumber": 110 },
+        { "caller": "PromptEditor", "callee": "PromptLivePreview", "lineNumber": 119 },
+        { "caller": "PromptEditor", "callee": "renderHighlighted", "lineNumber": 135 },
+        { "caller": "PromptEditor", "callee": "updateBlock", "lineNumber": 127 }
+      ],
+      "importCount": 2,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "提示词编辑器组件，支持System/User/Assistant三段式Prompt编辑，包含变量高亮渲染、变量检测和自动添加功能，集成变量选择器和实时预览切换。"
+    },
+    {
+      "path": "frontend/components/admin/PromptLivePreview.tsx",
+      "exports": ["PromptLivePreview"],
+      "totalLines": 102,
+      "nonEmptyLines": 91,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "PromptLivePreview", "startLine": 21, "endLine": 102, "params": ["{ blocks, variables }"] }
+      ],
+      "callGraph": [
+        { "caller": "PromptLivePreview", "callee": "substitute", "lineNumber": 53 }
+      ],
+      "importCount": 1,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "Prompt实时预览组件，将模板中的{{variable}}替换为模拟数据或自定义样本数据进行渲染展示，支持自定义样本数据编辑。"
+    },
+    {
+      "path": "frontend/components/admin/PromptVariablePicker.tsx",
+      "exports": ["PromptVariablePicker"],
+      "totalLines": 118,
+      "nonEmptyLines": 109,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "PromptVariablePicker", "startLine": 18, "endLine": 118, "params": ["{ onInsert, builtinVars, customVars, onCustomVarAdd, onCustomVarRemove }"] }
+      ],
+      "callGraph": [
+        { "caller": "PromptVariablePicker", "callee": "handleAddCustom", "lineNumber": 97 }
+      ],
+      "importCount": 0,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "Prompt变量选择器组件，列出内置变量（用户名、会话上下文等）和自定义变量，支持点击插入、添加新自定义变量和删除变量功能。"
+    },
+    {
+      "path": "frontend/components/admin/ServiceProviderModule.tsx",
+      "exports": ["ServiceProviderModule"],
+      "totalLines": 238,
+      "nonEmptyLines": 228,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "ServiceProviderModule", "startLine": 75, "endLine": 238, "params": ["props"] }
+      ],
+      "callGraph": [
+        { "caller": "ServiceProviderModule", "callee": "props.handleAdapterChange", "lineNumber": 116 },
+        { "caller": "ServiceProviderModule", "callee": "props.createAgent", "lineNumber": 118 },
+        { "caller": "ServiceProviderModule", "callee": "props.startEditAgent", "lineNumber": 198 },
+        { "caller": "ServiceProviderModule", "callee": "props.testAgent", "lineNumber": 199 },
+        { "caller": "ServiceProviderModule", "callee": "props.removeAgent", "lineNumber": 208 },
+        { "caller": "ServiceProviderModule", "callee": "props.refresh", "lineNumber": 233 },
+        { "caller": "ServiceProviderModule", "callee": "props.handleSetDefaultChatAgent", "lineNumber": 193 }
+      ],
+      "importCount": 4,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "服务商管理模块组件，展示和管理API服务商列表，包括添加/编辑/测试/删除Agent、设置默认对话模型、查看版本历史、接入本地Agent等功能。"
+    },
+    {
+      "path": "frontend/components/admin/SkillsModule.tsx",
+      "exports": ["SkillsModule"],
+      "totalLines": 513,
+      "nonEmptyLines": 484,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "SkillsModule", "startLine": 19, "endLine": 513, "params": ["{ authHeaders, setNotice }"] }
+      ],
+      "callGraph": [
+        { "caller": "SkillsModule", "callee": "loadSkills", "lineNumber": 91 },
+        { "caller": "SkillsModule", "callee": "loadSkillDetail", "lineNumber": 300 },
+        { "caller": "SkillsModule", "callee": "MarkdownRenderer", "lineNumber": 398 }
+      ],
+      "importCount": 2,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "技能管理模块组件，展示按来源（用户/项目/插件/MCP）分组的技能列表，支持搜索、分类筛选、查看技能详情和导出SKILL.md文件。"
+    },
+    {
+      "path": "frontend/components/admin/TemplateCreateModal.tsx",
+      "exports": ["TemplateCreateModal"],
+      "totalLines": 112,
+      "nonEmptyLines": 100,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "TemplateCreateModal", "startLine": 12, "endLine": 112, "params": ["{ template, onClose }"] }
+      ],
+      "callGraph": [
+        { "caller": "TemplateCreateModal", "callee": "useTemplateStore", "lineNumber": 13 },
+        { "caller": "TemplateCreateModal", "callee": "handleSubmit", "lineNumber": 19 },
+        { "caller": "handleSubmit", "callee": "createAgentFromTemplate", "lineNumber": 22 }
+      ],
+      "importCount": 2,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "从模板创建Agent的模态框组件，展示模板预览信息，允许用户输入Agent ID和领域标签，确认后调用store创建新Agent。"
+    },
+    {
+      "path": "frontend/components/admin/TemplateImportModal.tsx",
+      "exports": ["TemplateImportModal"],
+      "totalLines": 107,
+      "nonEmptyLines": 96,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "TemplateImportModal", "startLine": 10, "endLine": 107, "params": ["{ onClose }"] }
+      ],
+      "callGraph": [
+        { "caller": "TemplateImportModal", "callee": "useTemplateStore", "lineNumber": 11 },
+        { "caller": "handleImport", "callee": "importTemplate", "lineNumber": 22 },
+        { "caller": "handleFileUpload", "callee": "reader.readAsText", "lineNumber": 36 }
+      ],
+      "importCount": 1,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "模板导入模态框组件，支持通过上传JSON文件或直接粘贴JSON文本两种方式导入Agent模板。"
+    },
+    {
+      "path": "frontend/components/admin/TemplateMarketplace.tsx",
+      "exports": ["TemplateMarketplace"],
+      "totalLines": 129,
+      "nonEmptyLines": 117,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "TemplateMarketplace", "startLine": 15, "endLine": 129, "params": ["{ authHeaders: _authHeaders, setNotice: _setNotice }"] }
+      ],
+      "callGraph": [
+        { "caller": "TemplateMarketplace", "callee": "useTemplateStore", "lineNumber": 16 },
+        { "caller": "TemplateMarketplace", "callee": "loadTemplates", "lineNumber": 35 },
+        { "caller": "TemplateMarketplace", "callee": "getFilteredTemplates", "lineNumber": 44 },
+        { "caller": "TemplateMarketplace", "callee": "TemplateCard", "lineNumber": 105 },
+        { "caller": "TemplateMarketplace", "callee": "TemplateCreateModal", "lineNumber": 119 },
+        { "caller": "TemplateMarketplace", "callee": "TemplateImportModal", "lineNumber": 124 }
+      ],
+      "importCount": 5,
+      "exportCount": 1,
+      "functionCount": 1,
+      "summary": "模板市场组件，展示Agent模板的网格视图，支持按分类筛选、搜索模板、导入模板和从模板创建Agent，区分内置模板和自定义模板。"
+    },
+    {
+      "path": "frontend/components/admin/WorkflowVariablePicker.tsx",
+      "exports": ["WorkflowVariablePicker", "extractVariables"],
+      "totalLines": 348,
+      "nonEmptyLines": 312,
+      "language": "typescript",
+      "fileCategory": "code",
+      "functions": [
+        { "name": "getNodeColor", "startLine": 36, "endLine": 42, "params": ["nodeId"] },
+        { "name": "WorkflowVariablePicker", "startLine": 46, "endLine": 346, "params": ["{ template, onChange, availableVariables, nodeLabels = {}, placeholder, label, multiline = false, rows = 3, className = '' }"] }
+      ],
+      "callGraph": [
+        { "caller": "WorkflowVariablePicker", "callee": "extractVariables", "lineNumber": 64 },
+        { "caller": "WorkflowVariablePicker", "callee": "insertVariable", "lineNumber": 291 },
+        { "caller": "WorkflowVariablePicker", "callee": "renderHighlightedPreview", "lineNumber": 311 },
+        { "caller": "WorkflowVariablePicker", "callee": "handleKeyDown", "lineNumber": 128 },
+        { "caller": "WorkflowVariablePicker", "callee": "getNodeColor", "lineNumber": 272 }
+      ],
+      "importCount": 2,
+      "exportCount": 2,
+      "functionCount": 2,
+      "summary": "工作流变量选择器组件，支持从模板文本中自动提取变量引用，提供可搜索的分组变量下拉选择器，支持Ctrl+Space快捷键和彩色变量标签高亮渲染。"
+    }
+  ],
+  "edges": [
+    { "from": "frontend/components/admin/MCPDashboard/DashboardOverview.tsx", "to": "frontend/components/admin/MCPDashboard/shared/MetricCard.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/MCPDashboard/DashboardOverview.tsx", "to": "frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/MCPDashboard/DashboardOverview.tsx", "to": "frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/MCPDashboard/MCPLayout.tsx", "to": "frontend/components/admin/MCPDashboard/DashboardOverview.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/MCPDashboard/MCPLayout.tsx", "to": "frontend/components/admin/MCPDashboard/SessionManager.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/MCPDashboard/MCPLayout.tsx", "to": "frontend/components/admin/MCPDashboard/TaskMonitor.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/MCPDashboard/SessionManager.tsx", "to": "frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/MCPDashboard/TaskMonitor.tsx", "to": "frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/PromptEditor.tsx", "to": "frontend/components/admin/PromptVariablePicker.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/PromptEditor.tsx", "to": "frontend/components/admin/PromptLivePreview.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/TemplateMarketplace.tsx", "to": "frontend/components/admin/TemplateCreateModal.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/TemplateMarketplace.tsx", "to": "frontend/components/admin/TemplateImportModal.tsx", "type": "imports" },
+    { "from": "frontend/components/admin/WorkflowVariablePicker.tsx", "to": "frontend/lib/workflow/variableEngine.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/DashboardOverview.tsx", "to": "frontend/types/index.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/MCPLayout.tsx", "to": "frontend/types/index.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/ServiceProviderModule.tsx", "to": "frontend/types/index.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/SkillsModule.tsx", "to": "frontend/types/index.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/TemplateCreateModal.tsx", "to": "frontend/stores/templateStore.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/TemplateImportModal.tsx", "to": "frontend/stores/templateStore.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/TemplateMarketplace.tsx", "to": "frontend/stores/templateStore.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/MCPDashboard/MCPLayout.tsx", "to": "frontend/components/admin/MCPDashboard/AgentMonitor.tsx", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/ServiceProviderModule.tsx", "to": "frontend/components/admin/LocalAgentModal.tsx", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/ServiceProviderModule.tsx", "to": "frontend/components/admin/AgentEditModal.tsx", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/ServiceProviderModule.tsx", "to": "frontend/components/admin/AgentVersionHistory.tsx", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/SkillsModule.tsx", "to": "frontend/components/chat/MarkdownRenderer.tsx", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/TemplateCreateModal.tsx", "to": "frontend/types/index.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/WorkflowVariablePicker.tsx", "to": "frontend/types/index.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/TemplateMarketplace.tsx", "to": "frontend/data/presetTemplates.ts", "type": "imports", "targetBatchIndex": 7 },
+    { "from": "frontend/components/admin/TemplateMarketplace.tsx", "to": "frontend/components/admin/TemplateCard.tsx", "type": "imports", "targetBatchIndex": 7 }
+  ]
+}

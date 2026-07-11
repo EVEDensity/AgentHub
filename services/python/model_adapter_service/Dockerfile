@@ -1,7 +1,9 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY services/python/pyproject.toml /app/pyproject.toml
-RUN pip install --no-cache-dir fastapi uvicorn[standard] pydantic pydantic-settings httpx prometheus_client
+RUN pip install --no-cache-dir fastapi uvicorn[standard] pydantic pydantic-settings httpx prometheus_client \
+    -i https://mirrors.aliyun.com/pypi/simple \
+    --trusted-host mirrors.aliyun.com
 COPY services/python/model_adapter_service /app/model_adapter_service
 COPY services/python/shared /app/shared
 EXPOSE 8091

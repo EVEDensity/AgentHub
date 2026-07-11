@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────
+# AgentHub Alertmanager Configuration (Sprint K3)
+# Centralized alert routing with P0-P3 severity levels.
+# ─────────────────────────────────────────────────────────────────────
+
+global:
+  resolve_timeout: 5m
+
+# ── Routing tree ─────────────────────────────────────────────────────
+route:
+  receiver: "default"
+  group_by: ["alertname", "severity"]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+  routes:
+    # P0: Critical — page immediately (firefighting)
+    - match:
+        severity: critical
+      receiver: "p0-critical"
+      repeat_interval: 5m
+
+    # P1: High — respond within 5 minutes
+    - match:
+        severity: warning
+      receiver: "p1-warning"
+      repeat_interval: 15m
+
+    # P2: Medium — acknowledge within 30 minutes
+    - match:
+        severity: info
+      receiver: "p2-info"
+
+# ── Receivers ────────────────────────────────────────────────────────
+# In production, replace webhook URLs with actual notification channels
+# (Slack, PagerDuty, DingTalk, Feishu, etc.).
+
+receivers:
+  - name: "default"
+    webhook_configs:
+      - url: "http://localhost:8081/audit/entries"
+        send_resolved: true
+
+  - name: "p0-critical"
+    webhook_configs:
+      - url: "http://localhost:8081/audit/entries"
+        send_resolved: true
+        max_alerts: 1
+
+  - name: "p1-warning"
+    webhook_configs:
+      - url: "http://localhost:8081/audit/entries"
+        send_resolved: true
+
+  - name: "p2-info"
+    webhook_configs:
+      - url: "http://localhost:8081/audit/entries"
+        send_resolved: false
+
+# ── Inhibition rules ─────────────────────────────────────────────────
+# Suppress lower-severity alerts when a higher-severity alert is firing
+# for the same service.
+inhibit_rules:
+  - source_match:
+      severity: "critical"
+    target_match:
+      severity: "warning"
+    equal: ["service"]

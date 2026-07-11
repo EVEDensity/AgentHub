@@ -209,24 +209,24 @@ export default function AgentFlowCanvas({
   return (
     <div className="flex h-[calc(100vh-73px)] flex-col">
       {/* Toolbar */}
-      <div className="border-b border-warm-150 bg-white px-4 py-3">
+      <div className="border-b border-warm-150 bg-warm-100 px-4 py-3">
         <div className="flex flex-wrap items-center gap-3 xl:flex-nowrap xl:justify-between">
           {/* ① 左侧：功能模式标签区 */}
           <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-warm-150 bg-warm-50/60 px-2 py-2">
             <input
-              className="h-10 min-w-[150px] flex-1 rounded-lg border border-warm-200 bg-white px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              className="h-10 min-w-[150px] flex-1 rounded-lg border border-warm-200 bg-warm-100 px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
               placeholder="工作流名称"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
             <input
-              className="h-10 min-w-[210px] flex-[1.2] rounded-lg border border-warm-200 bg-white px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              className="h-10 min-w-[210px] flex-[1.2] rounded-lg border border-warm-200 bg-warm-100 px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
               placeholder="描述"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
             <input
-              className="h-10 min-w-[200px] flex-1 rounded-lg border border-warm-200 bg-white px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              className="h-10 min-w-[200px] flex-1 rounded-lg border border-warm-200 bg-warm-100 px-3 text-sm leading-none text-warm-700 placeholder:text-warm-400 focus:border-primary-300 focus:outline-none focus:ring-2 focus:ring-primary-100"
               placeholder="触发关键词（逗号分隔）"
               value={triggerKeywords}
               onChange={(e) => setTriggerKeywords(e.target.value)}
@@ -238,7 +238,7 @@ export default function AgentFlowCanvas({
             <button className="btn-secondary h-10 min-w-[76px] whitespace-nowrap rounded-lg px-4 text-sm" onClick={() => setScale((s) => Math.max(0.3, s - 0.1))}>
               缩小
             </button>
-            <span className="inline-flex h-10 min-w-[64px] items-center justify-center rounded-lg border border-warm-200 bg-white px-2 text-xs font-medium text-warm-600">
+            <span className="inline-flex h-10 min-w-[64px] items-center justify-center rounded-lg border border-warm-200 bg-warm-100 px-2 text-xs font-medium text-warm-600">
               {Math.round(scale * 100)}%
             </span>
             <button className="btn-secondary h-10 min-w-[76px] whitespace-nowrap rounded-lg px-4 text-sm" onClick={() => setScale((s) => Math.min(2, s + 0.1))}>
@@ -250,7 +250,7 @@ export default function AgentFlowCanvas({
           </div>
 
           {/* ③ 右侧：操作按钮区 */}
-          <div className="ml-auto flex items-center gap-2 rounded-xl border border-warm-150 bg-white px-2 py-2">
+          <div className="ml-auto flex items-center gap-2 rounded-xl border border-warm-150 bg-warm-100 px-2 py-2">
             {initialData?.id && (
               <button
                 className="h-10 min-w-[98px] whitespace-nowrap rounded-lg border border-danger-200 bg-danger-50 px-4 text-sm font-medium text-danger-600 transition hover:bg-danger-100 active:translate-y-px"
@@ -274,7 +274,7 @@ export default function AgentFlowCanvas({
             {NODE_TYPES.map((t) => (
               <button
                 key={t.type}
-                className="flex w-full items-center gap-2 rounded-lg bg-white px-3 py-2 text-left text-sm text-warm-700 shadow-sm hover:bg-warm-100"
+                className="flex w-full items-center gap-2 rounded-lg bg-warm-100 px-3 py-2 text-left text-sm text-warm-700 shadow-sm hover:bg-warm-100"
                 onClick={() => addNode(t.type)}
               >
                 <span className="h-3 w-3 rounded-full" style={{ background: t.color }} />
@@ -358,7 +358,7 @@ export default function AgentFlowCanvas({
             {nodes.map((node) => (
               <div
                 key={node.id}
-                className={`flow-node absolute cursor-pointer rounded-xl border-2 bg-white px-4 py-3 shadow-sm transition-all ${
+                className={`flow-node absolute cursor-pointer rounded-xl border-2 bg-warm-100 px-4 py-3 shadow-sm transition-all ${
                   selectedNodeId === node.id ? 'border-primary-500 ring-2 ring-primary-100' : 'border-warm-200'
                 } ${dragNodeId === node.id ? 'cursor-grabbing' : 'cursor-grab'}`}
                 style={{
@@ -389,7 +389,7 @@ export default function AgentFlowCanvas({
 
                 {/* Connection handle */}
                 <button
-                  className="absolute -right-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-warm-300 bg-white text-[8px] text-warm-500 hover:bg-primary-500 hover:text-white"
+                  className="absolute -right-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-warm-300 bg-warm-100 text-[8px] text-warm-500 hover:bg-primary-500 hover:text-white"
                   onMouseDown={(e) => {
                     e.stopPropagation();
                     startConnect(node.id);
@@ -403,7 +403,7 @@ export default function AgentFlowCanvas({
         </div>
 
         {/* Right Sidebar - Properties */}
-        <div className="w-64 flex-none border-l border-warm-150 bg-white p-4">
+        <div className="w-64 flex-none border-l border-warm-150 bg-warm-100 p-4">
           <div className="mb-3 text-xs font-medium text-warm-500">属性面板</div>
           {selectedNode ? (
             <div className="space-y-3">

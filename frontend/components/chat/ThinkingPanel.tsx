@@ -38,7 +38,7 @@ export default function ThinkingPanel({ content, isStreaming, isComplete }: Thin
       >
         {(isStreaming && !isComplete) ? (
           <span className="flex items-center gap-1.5 text-warm-400">
-            <span aria-hidden="true">💭</span>
+            <span aria-hidden="true">[think]</span>
             <span className="flex h-2 w-2 items-center justify-center">
               <span className="absolute h-2 w-2 animate-ping rounded-full bg-primary-400/60" />
               <span className="relative h-1.5 w-1.5 rounded-full bg-primary-400" />

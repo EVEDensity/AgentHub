@@ -1,0 +1,17 @@
+{
+  "batchIndex": 34,
+  "nodes": [
+    {
+      "id": "services/python/evaluation_batch_service/Dockerfile",
+      "type": "service",
+      "label": "Dockerfile",
+      "filePath": "services/python/evaluation_batch_service/Dockerfile",
+      "language": "dockerfile",
+      "batchIndex": 34,
+      "tags": [
+        "Docker镜像构建"
+      ]
+    }
+  ],
+  "edges": []
+}

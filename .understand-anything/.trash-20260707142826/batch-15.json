@@ -1,0 +1,335 @@
+{
+  "nodes": [
+    {
+      "id": "file:frontend/components/admin/MCPDashboard/AgentMonitor.tsx",
+      "type": "file",
+      "name": "AgentMonitor.tsx",
+      "filePath": "frontend/components/admin/MCPDashboard/AgentMonitor.tsx",
+      "summary": "MCP Agent监控面板：实时显示agent状态、运行数、健康度与异常告警的仪表盘组件",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:frontend/components/admin/MCPDashboard/AgentMonitor.tsx:AgentMonitor",
+      "type": "class",
+      "name": "AgentMonitor",
+      "filePath": "frontend/components/admin/MCPDashboard/AgentMonitor.tsx",
+      "summary": "AgentMonitor",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "type": "file",
+      "name": "DashboardOverview.tsx",
+      "filePath": "frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "summary": "MCP运维总览面板：展示系统整体健康度、吞吐量、延迟等关键指标的顶层仪表盘",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:frontend/components/admin/MCPDashboard/DashboardOverview.tsx:DashboardOverview",
+      "type": "class",
+      "name": "DashboardOverview",
+      "filePath": "frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "summary": "DashboardOverview",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/admin/MCPDashboard/SessionManager.tsx",
+      "type": "file",
+      "name": "SessionManager.tsx",
+      "filePath": "frontend/components/admin/MCPDashboard/SessionManager.tsx",
+      "summary": "MCP会话管理器：列举活跃会话、查看详情、强制关闭及批量清理操作的UI组件",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:frontend/components/admin/MCPDashboard/SessionManager.tsx:SessionManager",
+      "type": "class",
+      "name": "SessionManager",
+      "filePath": "frontend/components/admin/MCPDashboard/SessionManager.tsx",
+      "summary": "SessionManager",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/admin/MCPDashboard/TaskMonitor.tsx",
+      "type": "file",
+      "name": "TaskMonitor.tsx",
+      "filePath": "frontend/components/admin/MCPDashboard/TaskMonitor.tsx",
+      "summary": "MCP任务监控面板：实时跟踪运行中任务、历史记录、任务详情及取消操作的监控仪表盘",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:frontend/components/admin/MCPDashboard/TaskMonitor.tsx:TaskMonitor",
+      "type": "class",
+      "name": "TaskMonitor",
+      "filePath": "frontend/components/admin/MCPDashboard/TaskMonitor.tsx",
+      "summary": "TaskMonitor",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/admin/MCPDashboard/shared/MetricCard.tsx",
+      "type": "file",
+      "name": "MetricCard.tsx",
+      "filePath": "frontend/components/admin/MCPDashboard/shared/MetricCard.tsx",
+      "summary": "指标卡片通用组件：显示单一KPI数值、趋势和状态的卡片式UI组件",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:frontend/components/admin/MCPDashboard/shared/MetricCard.tsx:MetricCard",
+      "type": "class",
+      "name": "MetricCard",
+      "filePath": "frontend/components/admin/MCPDashboard/shared/MetricCard.tsx",
+      "summary": "MetricCard",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx",
+      "type": "file",
+      "name": "SimpleChart.tsx",
+      "filePath": "frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx",
+      "summary": "简易图表组件：渲染折线图/柱状图等轻量数据可视化，用于MCP仪表盘指标展示",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx:SimpleChart",
+      "type": "class",
+      "name": "SimpleChart",
+      "filePath": "frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx",
+      "summary": "SimpleChart",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "type": "file",
+      "name": "StatusBadge.tsx",
+      "filePath": "frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "summary": "状态徽章组件：显示健康/警告/错误等语义化状态的彩色标签组件",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "class:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx:StatusBadge",
+      "type": "class",
+      "name": "StatusBadge",
+      "filePath": "frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "summary": "StatusBadge",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/AgentMonitor.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/AgentMonitor.tsx:AgentMonitor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/AgentMonitor.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/AgentMonitor.tsx:AgentMonitor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/DashboardOverview.tsx:DashboardOverview",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/DashboardOverview.tsx:DashboardOverview",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/SessionManager.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/SessionManager.tsx:SessionManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/SessionManager.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/SessionManager.tsx:SessionManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/TaskMonitor.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/TaskMonitor.tsx:TaskMonitor",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/TaskMonitor.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/TaskMonitor.tsx:TaskMonitor",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/shared/MetricCard.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/shared/MetricCard.tsx:MetricCard",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/shared/MetricCard.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/shared/MetricCard.tsx:MetricCard",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx:SimpleChart",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx:SimpleChart",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx:StatusBadge",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "target": "class:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx:StatusBadge",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/AgentMonitor.tsx",
+      "target": "file:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "target": "file:frontend/components/admin/MCPDashboard/shared/MetricCard.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "target": "file:frontend/components/admin/MCPDashboard/shared/SimpleChart.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "target": "file:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/DashboardOverview.tsx",
+      "target": "file:frontend/types/index.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/SessionManager.tsx",
+      "target": "file:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/admin/MCPDashboard/TaskMonitor.tsx",
+      "target": "file:frontend/components/admin/MCPDashboard/shared/StatusBadge.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

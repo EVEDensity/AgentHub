@@ -1,0 +1,194 @@
+{
+  "nodes": [
+    {
+      "id": "file:frontend/__tests__/components/ui/Modal.test.tsx",
+      "type": "file",
+      "name": "Modal.test.tsx",
+      "filePath": "frontend/__tests__/components/ui/Modal.test.tsx",
+      "summary": "Modal组件测试用例：验证弹窗打开/关闭/键盘导航/焦点管理等交互行为",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/ui/Modal.tsx",
+      "type": "file",
+      "name": "Modal.tsx",
+      "filePath": "frontend/components/ui/Modal.tsx",
+      "summary": "Modal通用弹窗组件：支持多种尺寸、关闭方式、动画效果的模态对话框UI组件",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:frontend/components/ui/Modal.tsx:Modal",
+      "type": "class",
+      "name": "Modal",
+      "filePath": "frontend/components/ui/Modal.tsx",
+      "summary": "Modal",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/lib/accessibility/focusTrap.ts",
+      "type": "file",
+      "name": "focusTrap.ts",
+      "filePath": "frontend/lib/accessibility/focusTrap.ts",
+      "summary": "焦点陷阱与键盘导航：useFocusTrap/useListKeyboardNav/useTabKeyboardNav/useSkipToContent等无障碍React hooks",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/lib/accessibility/focusTrap.ts:useFocusTrap",
+      "type": "function",
+      "name": "useFocusTrap",
+      "filePath": "frontend/lib/accessibility/focusTrap.ts",
+      "summary": "useFocusTrap",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/lib/accessibility/focusTrap.ts:useListKeyboardNav",
+      "type": "function",
+      "name": "useListKeyboardNav",
+      "filePath": "frontend/lib/accessibility/focusTrap.ts",
+      "summary": "useListKeyboardNav",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/lib/accessibility/focusTrap.ts:useTabKeyboardNav",
+      "type": "function",
+      "name": "useTabKeyboardNav",
+      "filePath": "frontend/lib/accessibility/focusTrap.ts",
+      "summary": "useTabKeyboardNav",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/lib/accessibility/focusTrap.ts:useSkipToContent",
+      "type": "function",
+      "name": "useSkipToContent",
+      "filePath": "frontend/lib/accessibility/focusTrap.ts",
+      "summary": "useSkipToContent",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:frontend/components/ui/Modal.tsx",
+      "target": "class:frontend/components/ui/Modal.tsx:Modal",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/ui/Modal.tsx",
+      "target": "class:frontend/components/ui/Modal.tsx:Modal",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useFocusTrap",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useFocusTrap",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useListKeyboardNav",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useListKeyboardNav",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useTabKeyboardNav",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useTabKeyboardNav",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useSkipToContent",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/lib/accessibility/focusTrap.ts",
+      "target": "function:frontend/lib/accessibility/focusTrap.ts:useSkipToContent",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/__tests__/components/ui/Modal.test.tsx",
+      "target": "file:frontend/components/ui/Modal.tsx",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/ui/Modal.tsx",
+      "target": "file:frontend/lib/accessibility/focusTrap.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

@@ -126,6 +126,26 @@ func (h *Hub) clientCount() int {
 	return n
 }
 
+// Shutdown closes all WebSocket connections gracefully and cleans up routes.
+func (h *Hub) Shutdown() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	log.Printf("hub: shutting down %d sessions with %d total connections", len(h.clients), h.clientCount())
+	for sessionID, set := range h.clients {
+		for c := range set {
+			close(c.send)
+			_ = c.conn.Close()
+		}
+		// Clean up Redis route entries
+		if h.routes != nil {
+			for c := range set {
+				h.routes.unregister(context.Background(), "", sessionID, c.connID)
+			}
+		}
+	}
+	h.clients = make(map[string]map[*Client]struct{})
+}
+
 // ── readPump / writePump ──────────────────────────────────────────────
 
 func (c *Client) readPump() {

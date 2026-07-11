@@ -33,6 +33,32 @@ const (
 	EventFanoutDelivered       EventType = "fanout.event.delivered"
 	EventPatchMergeCompleted   EventType = "patch.merge.completed"
 	EventMemoryCompactCompleted EventType = "memory.compact.completed"
+
+	// Sprint H: ContextOS — unified context engine events.
+	EventContextSegmentCreated    EventType = "context.segment.created"
+	EventContextMemoryRetrieved   EventType = "context.memory.retrieved"
+	EventContextEntityUpdated     EventType = "context.entity.updated"
+	EventContextCompressStarted   EventType = "context.compress.started"
+	EventContextCompressCompleted EventType = "context.compress.completed"
+	EventContextDecisionLogged    EventType = "context.decision.logged"
+
+	// Sprint I: AgentNet — decentralized multi-agent collaboration events.
+	EventAgentCapabilityAnnounced EventType = "agentnet.capability.announced"
+	EventAgentTaskPublished       EventType = "agentnet.task.published"
+	EventAgentTaskCompleted       EventType = "agentnet.task.completed"
+	EventAgentSpawnRequested      EventType = "agentnet.spawn.requested"
+	EventAgentSpawnCompleted      EventType = "agentnet.spawn.completed"
+	EventAgentMemoryShared        EventType = "agentnet.memory.shared"
+	EventAgentHeartbeat           EventType = "agentnet.heartbeat"
+
+	// Sprint J: Digital Identity + Sandbox + Workspace events.
+	EventAgentIdentityCreated    EventType = "agent.identity.created"
+	EventAgentIdentityUpdated    EventType = "agent.identity.updated"
+	EventSandboxContainerStarted EventType = "sandbox.container.started"
+	EventSandboxContainerStopped EventType = "sandbox.container.stopped"
+	EventSandboxExecCompleted    EventType = "sandbox.exec.completed"
+	EventWorkspaceFileChanged    EventType = "workspace.file.changed"
+	EventWorkspaceTabOpened      EventType = "workspace.tab.opened"
 )
 
 type Producer struct {

@@ -35,9 +35,9 @@ const DagModal = memo(function DagModal({ dag, onClose }: DagModalProps) {
   const hasFailed = dag.nodes.some((n) => n.status === 'FAILED');
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-warm-900/30 backdrop-blur-sm p-6" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
       <div
-        className="w-[600px] max-h-[82vh] flex flex-col rounded-2xl bg-white shadow-modal border border-warm-150"
+        className="w-[600px] max-h-[82vh] flex flex-col rounded-2xl bg-warm-100 shadow-modal border border-warm-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -99,7 +99,7 @@ const DagModal = memo(function DagModal({ dag, onClose }: DagModalProps) {
                   className={`relative flex items-center gap-4 rounded-xl border px-4 py-3.5 transition-all duration-300 ${
                     isFailed ? 'border-red-200 bg-red-50/40' :
                     isRunning ? 'border-primary-200 bg-primary-50/30 shadow-sm shadow-primary-100/50' :
-                    'border-warm-150 bg-white'
+                    'border-warm-150 bg-warm-100'
                   }`}
                 >
                   {/* Status indicator */}
@@ -164,7 +164,7 @@ const DagModal = memo(function DagModal({ dag, onClose }: DagModalProps) {
 
                   {/* Dependency connectors */}
                   {(n.dependencies && n.dependencies.length > 0) && (
-                    <div className="absolute -top-1.5 left-6 text-[9px] text-warm-400 bg-white px-1.5 rounded-full border border-warm-100">
+                    <div className="absolute -top-1.5 left-6 text-[9px] text-warm-400 bg-warm-100 px-1.5 rounded-full border border-warm-100">
                       ← {n.dependencies.map((d) => d.replace(/^node_/, '')).join(', ')}
                     </div>
                   )}

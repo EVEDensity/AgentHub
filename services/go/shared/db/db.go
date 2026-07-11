@@ -12,7 +12,9 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,12 +38,16 @@ func Connect(ctx context.Context, dsn string) (*Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
-	cfg.MaxConns = 20
-	cfg.MinConns = 2
-	cfg.MaxConnLifetime = 30 * time.Minute
-	cfg.MaxConnIdleTime = 5 * time.Minute
-	cfg.MaxConnIdleTime = 5 * time.Minute
-	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
+	cfg.MaxConns = int32(getEnvInt("DB_POOL_MAX_CONNS", 20))
+	cfg.MinConns = int32(getEnvInt("DB_POOL_MIN_CONNS", 2))
+	cfg.MaxConnLifetime = time.Duration(getEnvInt("DB_POOL_MAX_LIFETIME_MIN", 30)) * time.Minute
+	cfg.MaxConnIdleTime = time.Duration(getEnvInt("DB_POOL_MAX_IDLE_MIN", 5)) * time.Minute
+	cfg.ConnConfig.ConnectTimeout = time.Duration(getEnvInt("DB_CONNECT_TIMEOUT_SEC", 5)) * time.Second
+
+	// Slow query logging threshold (ms) — set via DB_SLOW_QUERY_MS env var.
+	// When > 0, queries exceeding this threshold are logged at WARN level.
+	slowQueryMs := getEnvInt("DB_SLOW_QUERY_MS", 200)
+	_ = slowQueryMs // Reserved for future query-level instrumentation
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -120,4 +126,14 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		log.Printf("db: applied migration %s", version)
 	}
 	return nil
+}
+
+// getEnvInt reads an integer env var with a default fallback.
+func getEnvInt(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return defaultVal
 }

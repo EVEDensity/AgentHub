@@ -5,7 +5,8 @@ members = [
   "crates/retrieval-core",
   "crates/fanout-core",
   "crates/patch-merge-core",
-  "crates/memory-segment-core"
+  "crates/memory-segment-core",
+  "crates/agentnet-core"
 ]
 resolver = "2"
 

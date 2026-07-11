@@ -197,7 +197,10 @@ async def database_vacuum(body: dict | None = None, user: dict = Depends(get_cur
     """Trigger VACUUM ANALYZE on the database (admin only, DANGER)."""
     require_admin(user)
 
-    table_name = (body or {}).get("table", "").strip()
+    table_name = (body or {}).get("table", "").strip().lower()
+    _allowed_tables = {"messages", "audit_log", "tool_call_log", "agent_registry", "sessions", "users"}
+    if table_name and table_name not in _allowed_tables:
+        raise HTTPException(status_code=400, detail=f"table must be one of: {', '.join(sorted(_allowed_tables))}")
     try:
         if table_name:
             await aexecute(f"VACUUM ANALYZE {table_name}")

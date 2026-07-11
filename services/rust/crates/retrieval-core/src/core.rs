@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
-use crate::fusion::{FusionConfig, FusionEngine};
+use crate::fusion::{DynamicWeights, FusionConfig, FusionEngine};
 use crate::model_adapter::ModelAdapterClient;
 use crate::opensearch::OpenSearchClient;
 use crate::qdrant::QdrantClient;
@@ -95,6 +95,7 @@ pub struct RetrievalCore {
     opensearch: Arc<OpenSearchClient>,
     model_adapter: Arc<ModelAdapterClient>,
     fusion: Arc<FusionEngine>,
+    weights: Arc<DynamicWeights>,
     stats: Arc<Mutex<RetrievalCoreStats>>,
 }
 
@@ -104,12 +105,14 @@ impl RetrievalCore {
         qdrant: QdrantClient,
         opensearch: OpenSearchClient,
         model_adapter: ModelAdapterClient,
+        weights: Arc<DynamicWeights>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            fusion: Arc::new(FusionEngine::new(config.fusion.clone())),
+            fusion: Arc::new(FusionEngine::new(config.fusion.clone(), Arc::clone(&weights))),
             qdrant: Arc::new(qdrant),
             opensearch: Arc::new(opensearch),
             model_adapter: Arc::new(model_adapter),
+            weights,
             config,
             stats: Arc::new(Mutex::new(RetrievalCoreStats::default())),
         })
@@ -117,6 +120,11 @@ impl RetrievalCore {
 
     pub fn config(&self) -> &RetrievalCoreConfig {
         &self.config
+    }
+
+    /// 获取动态权重的 Arc 引用（供 HTTP 端点读写）。
+    pub fn weights(&self) -> Arc<DynamicWeights> {
+        Arc::clone(&self.weights)
     }
 
     /// 执行一次完整检索。
@@ -350,7 +358,7 @@ impl RetrievalCoreHealth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fusion::FusionConfig;
+    use crate::fusion::{DynamicWeights, FusionConfig};
 
     #[test]
     fn config_defaults_are_sane() {
@@ -358,5 +366,13 @@ mod tests {
         assert!(cfg.source_timeout.as_millis() <= 1000);
         assert!(cfg.rerank_top_n >= 10);
         assert!(cfg.fusion.per_source_limit >= 20);
+    }
+
+    #[test]
+    fn dynamic_weights_integration() {
+        let dw = DynamicWeights::new(0.25, 0.25, 0.25, 0.25);
+        let s = dw.snapshot();
+        let sum = s.bm25 + s.dense + s.rerank + s.freshness;
+        assert!((sum - 1.0).abs() < 0.001, "normalized sum={}", sum);
     }
 }

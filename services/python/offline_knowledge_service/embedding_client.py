@@ -99,6 +99,14 @@ def cached_dimension() -> int | None:
     return _probed_dim
 
 
+async def get_embedding(text: str) -> list[float]:
+    """单文本 embedding 快捷方法。用于检索测试等场景。"""
+    vectors = await embed([text])
+    if not vectors:
+        raise EmbeddingError("embedding returned empty result")
+    return vectors[0]
+
+
 def _parse_response(body: Any, expect: int) -> list[list[float]]:
     """解析 OpenAI 兼容响应，返回按 index 排序的向量列表。"""
     data = body.get("data") if isinstance(body, dict) else None

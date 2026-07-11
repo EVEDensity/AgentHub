@@ -1,0 +1,507 @@
+{
+  "batch": 1,
+  "part": 4,
+  "totalParts": 6,
+  "nodeCount": 0,
+  "edgeCount": 71,
+  "nodes": [],
+  "edges": [
+    {
+      "id": "edge:import:app/api/canvas.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/api/canvas.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "canvas.py 依赖 async_file.py 进行异步文件读写"
+    },
+    {
+      "id": "edge:import:app/api/files.py->app/config.py",
+      "type": "import",
+      "source": "file:app/api/files.py",
+      "target": "file:app/config.py",
+      "summary": "files.py 依赖 config.py 获取文件大小限制等配置"
+    },
+    {
+      "id": "edge:import:app/api/files.py->app/services/workspace_context.py",
+      "type": "import",
+      "source": "file:app/api/files.py",
+      "target": "file:app/services/workspace_context.py",
+      "summary": "files.py 依赖 workspace_context.py 解析工作区路径"
+    },
+    {
+      "id": "edge:import:app/api/files.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/api/files.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "files.py 依赖 async_file.py 进行异步文件操作"
+    },
+    {
+      "id": "edge:import:app/api/im.py->app/api/im_assets.py",
+      "type": "import",
+      "source": "file:app/api/im.py",
+      "target": "file:app/api/im_assets.py",
+      "summary": "im.py 依赖 im_assets.py 提供前端 JS/CSS 资产"
+    },
+    {
+      "id": "edge:import:app/api/memory.py->app/config.py",
+      "type": "import",
+      "source": "file:app/api/memory.py",
+      "target": "file:app/config.py",
+      "summary": "memory.py 依赖 config.py 获取记忆相关配置"
+    },
+    {
+      "id": "edge:import:app/api/memory.py->app/services/memory/__init__.py",
+      "type": "import",
+      "source": "file:app/api/memory.py",
+      "target": "file:app/services/memory/__init__.py",
+      "summary": "memory.py 依赖 memory 包入口导入各记忆模块"
+    },
+    {
+      "id": "edge:import:app/api/memory.py->app/services/memory/consolidator.py",
+      "type": "import",
+      "source": "file:app/api/memory.py",
+      "target": "file:app/services/memory/consolidator.py",
+      "summary": "memory.py 直接使用 MemoryConsolidator"
+    },
+    {
+      "id": "edge:import:app/api/memory.py->app/services/memory/extractor.py",
+      "type": "import",
+      "source": "file:app/api/memory.py",
+      "target": "file:app/services/memory/extractor.py",
+      "summary": "memory.py 直接使用 MemoryExtractor"
+    },
+    {
+      "id": "edge:import:app/api/memory.py->app/services/memory/session_memory.py",
+      "type": "import",
+      "source": "file:app/api/memory.py",
+      "target": "file:app/services/memory/session_memory.py",
+      "summary": "memory.py 直接使用 SessionMemoryManager"
+    },
+    {
+      "id": "edge:import:app/api/memory.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/api/memory.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "memory.py 依赖 async_file.py 进行异步文件操作"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/__init__.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/__init__.py",
+      "summary": "routes.py 聚合 API 包内各模块路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/admin/__init__.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/admin/__init__.py",
+      "summary": "routes.py 聚合 admin 子模块路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/canvas.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/canvas.py",
+      "summary": "routes.py 导入 canvas 路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/files.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/files.py",
+      "summary": "routes.py 导入 files 路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/im.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/im.py",
+      "summary": "routes.py 导入 im 路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/memory.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/memory.py",
+      "summary": "routes.py 导入 memory 路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/settings.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/settings.py",
+      "summary": "routes.py 导入 settings 路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/skills.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/skills.py",
+      "summary": "routes.py 导入 skills 路由"
+    },
+    {
+      "id": "edge:import:app/api/routes.py->app/api/workspace.py",
+      "type": "import",
+      "source": "file:app/api/routes.py",
+      "target": "file:app/api/workspace.py",
+      "summary": "routes.py 导入 workspace 路由"
+    },
+    {
+      "id": "edge:import:app/api/settings.py->app/config.py",
+      "type": "import",
+      "source": "file:app/api/settings.py",
+      "target": "file:app/config.py",
+      "summary": "settings.py 依赖 config.py 获取默认值"
+    },
+    {
+      "id": "edge:import:app/api/settings.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/api/settings.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "settings.py 使用 async_file.py 读写用户设置 JSON"
+    },
+    {
+      "id": "edge:import:app/api/skills.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/api/skills.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "skills.py 使用 async_file.py 读取 SKILL.md 文件"
+    },
+    {
+      "id": "edge:import:app/api/workspace.py->app/config.py",
+      "type": "import",
+      "source": "file:app/api/workspace.py",
+      "target": "file:app/config.py",
+      "summary": "workspace.py 依赖 config.py 获取工作区配置"
+    },
+    {
+      "id": "edge:import:app/api/workspace.py->app/services/workspace_context.py",
+      "type": "import",
+      "source": "file:app/api/workspace.py",
+      "target": "file:app/services/workspace_context.py",
+      "summary": "workspace.py 使用 workspace_context.py 进行路径解析"
+    },
+    {
+      "id": "edge:import:app/api/workspace.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/api/workspace.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "workspace.py 使用 async_file.py 异步读取文件"
+    },
+    {
+      "id": "edge:import:app/config.py->app/core/config.py",
+      "type": "import",
+      "source": "file:app/config.py",
+      "target": "file:app/core/config.py",
+      "summary": "config.py 桥接层从 core/config.py 重新导出所有配置类"
+    },
+    {
+      "id": "edge:import:app/services/adapter_manager.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/adapter_manager.py",
+      "target": "file:app/config.py",
+      "summary": "adapter_manager.py 依赖 config.py 获取 LLM 密钥和端点配置"
+    },
+    {
+      "id": "edge:import:app/services/memory/__init__.py->app/services/memory/consolidator.py",
+      "type": "import",
+      "source": "file:app/services/memory/__init__.py",
+      "target": "file:app/services/memory/consolidator.py",
+      "summary": "memory 包统一导出 MemoryConsolidator"
+    },
+    {
+      "id": "edge:import:app/services/memory/__init__.py->app/services/memory/extractor.py",
+      "type": "import",
+      "source": "file:app/services/memory/__init__.py",
+      "target": "file:app/services/memory/extractor.py",
+      "summary": "memory 包统一导出 MemoryExtractor"
+    },
+    {
+      "id": "edge:import:app/services/memory/__init__.py->app/services/memory/models.py",
+      "type": "import",
+      "source": "file:app/services/memory/__init__.py",
+      "target": "file:app/services/memory/models.py",
+      "summary": "memory 包统一导出内存数据模型"
+    },
+    {
+      "id": "edge:import:app/services/memory/__init__.py->app/services/memory/scanner.py",
+      "type": "import",
+      "source": "file:app/services/memory/__init__.py",
+      "target": "file:app/services/memory/scanner.py",
+      "summary": "memory 包统一导出 MemoryScanner"
+    },
+    {
+      "id": "edge:import:app/services/memory/__init__.py->app/services/memory/session_memory.py",
+      "type": "import",
+      "source": "file:app/services/memory/__init__.py",
+      "target": "file:app/services/memory/session_memory.py",
+      "summary": "memory 包统一导出 SessionMemoryManager"
+    },
+    {
+      "id": "edge:import:app/services/memory/__init__.py->app/services/memory/session_store.py",
+      "type": "import",
+      "source": "file:app/services/memory/__init__.py",
+      "target": "file:app/services/memory/session_store.py",
+      "summary": "memory 包统一导出 SessionMemoryStore"
+    },
+    {
+      "id": "edge:import:app/services/memory/__init__.py->app/services/memory/storage.py",
+      "type": "import",
+      "source": "file:app/services/memory/__init__.py",
+      "target": "file:app/services/memory/storage.py",
+      "summary": "memory 包统一导出 MemoryStorage"
+    },
+    {
+      "id": "edge:import:app/services/memory/consolidator.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/memory/consolidator.py",
+      "target": "file:app/config.py",
+      "summary": "consolidator.py 依赖 config.py 获取 LLM 配置"
+    },
+    {
+      "id": "edge:import:app/services/memory/consolidator.py->app/services/adapter_manager.py",
+      "type": "import",
+      "source": "file:app/services/memory/consolidator.py",
+      "target": "file:app/services/adapter_manager.py",
+      "summary": "consolidator.py 使用 AdapterManager 调用 LLM"
+    },
+    {
+      "id": "edge:import:app/services/memory/consolidator.py->app/services/memory/models.py",
+      "type": "import",
+      "source": "file:app/services/memory/consolidator.py",
+      "target": "file:app/services/memory/models.py",
+      "summary": "consolidator.py 使用 MemoryDocument 等数据模型"
+    },
+    {
+      "id": "edge:import:app/services/memory/consolidator.py->app/services/memory/scanner.py",
+      "type": "import",
+      "source": "file:app/services/memory/consolidator.py",
+      "target": "file:app/services/memory/scanner.py",
+      "summary": "consolidator.py 使用 MemoryScanner 扫描待整合文件"
+    },
+    {
+      "id": "edge:import:app/services/memory/consolidator.py->app/services/memory/storage.py",
+      "type": "import",
+      "source": "file:app/services/memory/consolidator.py",
+      "target": "file:app/services/memory/storage.py",
+      "summary": "consolidator.py 使用 MemoryStorage 执行 CRUD"
+    },
+    {
+      "id": "edge:import:app/services/memory/extractor.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/memory/extractor.py",
+      "target": "file:app/config.py",
+      "summary": "extractor.py 依赖 config.py 获取 LLM 配置"
+    },
+    {
+      "id": "edge:import:app/services/memory/extractor.py->app/services/adapter_manager.py",
+      "type": "import",
+      "source": "file:app/services/memory/extractor.py",
+      "target": "file:app/services/adapter_manager.py",
+      "summary": "extractor.py 使用 AdapterManager 调用 LLM 提取记忆"
+    },
+    {
+      "id": "edge:import:app/services/memory/extractor.py->app/services/memory/models.py",
+      "type": "import",
+      "source": "file:app/services/memory/extractor.py",
+      "target": "file:app/services/memory/models.py",
+      "summary": "extractor.py 使用 MemoryDocument 等模型"
+    },
+    {
+      "id": "edge:import:app/services/memory/extractor.py->app/services/memory/storage.py",
+      "type": "import",
+      "source": "file:app/services/memory/extractor.py",
+      "target": "file:app/services/memory/storage.py",
+      "summary": "extractor.py 使用 MemoryStorage 保存提取结果"
+    },
+    {
+      "id": "edge:import:app/services/memory/scanner.py->app/services/memory/models.py",
+      "type": "import",
+      "source": "file:app/services/memory/scanner.py",
+      "target": "file:app/services/memory/models.py",
+      "summary": "scanner.py 使用 MemoryHeader 等轻量级模型"
+    },
+    {
+      "id": "edge:import:app/services/memory/scanner.py->app/services/memory/storage.py",
+      "type": "import",
+      "source": "file:app/services/memory/scanner.py",
+      "target": "file:app/services/memory/storage.py",
+      "summary": "scanner.py 使用 MemoryStorage 获取文件列表"
+    },
+    {
+      "id": "edge:import:app/services/memory/session_memory.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/memory/session_memory.py",
+      "target": "file:app/config.py",
+      "summary": "session_memory.py 依赖 config.py 获取 LLM 配置"
+    },
+    {
+      "id": "edge:import:app/services/memory/session_memory.py->app/services/adapter_manager.py",
+      "type": "import",
+      "source": "file:app/services/memory/session_memory.py",
+      "target": "file:app/services/adapter_manager.py",
+      "summary": "session_memory.py 使用 AdapterManager 生成摘要"
+    },
+    {
+      "id": "edge:import:app/services/memory/session_memory.py->app/services/memory/models.py",
+      "type": "import",
+      "source": "file:app/services/memory/session_memory.py",
+      "target": "file:app/services/memory/models.py",
+      "summary": "session_memory.py 使用 MemoryDocument 等模型"
+    },
+    {
+      "id": "edge:import:app/services/memory/session_memory.py->app/services/memory/storage.py",
+      "type": "import",
+      "source": "file:app/services/memory/session_memory.py",
+      "target": "file:app/services/memory/storage.py",
+      "summary": "session_memory.py 使用 MemoryStorage 读写摘要"
+    },
+    {
+      "id": "edge:import:app/services/memory/session_memory.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/services/memory/session_memory.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "session_memory.py 使用 async_file.py 进行异步 I/O"
+    },
+    {
+      "id": "edge:import:app/services/memory/session_store.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/services/memory/session_store.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "session_store.py 使用 async_file.py 持久化会话数据"
+    },
+    {
+      "id": "edge:import:app/services/memory/storage.py->app/services/memory/models.py",
+      "type": "import",
+      "source": "file:app/services/memory/storage.py",
+      "target": "file:app/services/memory/models.py",
+      "summary": "storage.py 使用 MemoryMeta/MemoryDocument 等模型"
+    },
+    {
+      "id": "edge:import:app/services/memory/storage.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/services/memory/storage.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "storage.py 使用 async_file.py 进行异步文件 CRUD"
+    },
+    {
+      "id": "edge:import:app/services/orchestrator_preprocessor.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/orchestrator_preprocessor.py",
+      "target": "file:app/config.py",
+      "summary": "orchestrator_preprocessor.py 依赖 config.py 获取编排器设置"
+    },
+    {
+      "id": "edge:import:app/services/orchestrator_preprocessor.py->app/services/adapter_manager.py",
+      "type": "import",
+      "source": "file:app/services/orchestrator_preprocessor.py",
+      "target": "file:app/services/adapter_manager.py",
+      "summary": "orchestrator_preprocessor.py 使用 LLM 进行意图分析"
+    },
+    {
+      "id": "edge:import:app/services/tool_executor.py->app/services/tool_registry.py",
+      "type": "import",
+      "source": "file:app/services/tool_executor.py",
+      "target": "file:app/services/tool_registry.py",
+      "summary": "tool_executor.py 依赖 ToolRegistry 查找工具定义"
+    },
+    {
+      "id": "edge:import:app/services/tools/builtin_tools.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/tools/builtin_tools.py",
+      "target": "file:app/config.py",
+      "summary": "builtin_tools.py 依赖 config.py 获取搜索/执行等配置"
+    },
+    {
+      "id": "edge:import:app/services/tools/builtin_tools.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/services/tools/builtin_tools.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "builtin_tools.py 使用 async_file.py 进行文件操作"
+    },
+    {
+      "id": "edge:import:app/services/tools/definitions.py->app/services/tool_registry.py",
+      "type": "import",
+      "source": "file:app/services/tools/definitions.py",
+      "target": "file:app/services/tool_registry.py",
+      "summary": "definitions.py 使用 ToolRegistry 注册工具定义"
+    },
+    {
+      "id": "edge:import:app/services/tools/definitions.py->app/services/tools/agent_tools.py",
+      "type": "import",
+      "source": "file:app/services/tools/definitions.py",
+      "target": "file:app/services/tools/agent_tools.py",
+      "summary": "definitions.py 注册 agent 工具"
+    },
+    {
+      "id": "edge:import:app/services/tools/definitions.py->app/services/tools/browser_tools.py",
+      "type": "import",
+      "source": "file:app/services/tools/definitions.py",
+      "target": "file:app/services/tools/browser_tools.py",
+      "summary": "definitions.py 注册 browser 工具"
+    },
+    {
+      "id": "edge:import:app/services/tools/definitions.py->app/services/tools/builtin_tools.py",
+      "type": "import",
+      "source": "file:app/services/tools/definitions.py",
+      "target": "file:app/services/tools/builtin_tools.py",
+      "summary": "definitions.py 注册 builtin 工具"
+    },
+    {
+      "id": "edge:import:app/services/tools/definitions.py->app/services/tools/network_tools.py",
+      "type": "import",
+      "source": "file:app/services/tools/definitions.py",
+      "target": "file:app/services/tools/network_tools.py",
+      "summary": "definitions.py 注册 network 工具"
+    },
+    {
+      "id": "edge:import:app/services/tools/definitions.py->app/services/tools/session_tools.py",
+      "type": "import",
+      "source": "file:app/services/tools/definitions.py",
+      "target": "file:app/services/tools/session_tools.py",
+      "summary": "definitions.py 注册 session 工具"
+    },
+    {
+      "id": "edge:import:app/services/tools/definitions.py->app/services/tools/skill_tools.py",
+      "type": "import",
+      "source": "file:app/services/tools/definitions.py",
+      "target": "file:app/services/tools/skill_tools.py",
+      "summary": "definitions.py 注册 skill 工具"
+    },
+    {
+      "id": "edge:import:app/services/tools/skill_tools.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/tools/skill_tools.py",
+      "target": "file:app/config.py",
+      "summary": "skill_tools.py 依赖 config.py 获取技能目录配置"
+    },
+    {
+      "id": "edge:import:app/services/tools/skill_tools.py->app/utils/async_file.py",
+      "type": "import",
+      "source": "file:app/services/tools/skill_tools.py",
+      "target": "file:app/utils/async_file.py",
+      "summary": "skill_tools.py 使用 async_file.py 读取 SKILL.md"
+    },
+    {
+      "id": "edge:import:app/services/workspace_context.py->app/config.py",
+      "type": "import",
+      "source": "file:app/services/workspace_context.py",
+      "target": "file:app/config.py",
+      "summary": "workspace_context.py 依赖 config.py 获取工作区根路径"
+    },
+    {
+      "id": "edge:import:main.py->app/api/routes.py",
+      "type": "import",
+      "source": "file:main.py",
+      "target": "file:app/api/routes.py",
+      "summary": "main.py 导入 api_router 注册路由"
+    },
+    {
+      "id": "edge:import:main.py->app/core/config.py",
+      "type": "import",
+      "source": "file:main.py",
+      "target": "file:app/core/config.py",
+      "summary": "main.py 依赖 Settings 初始化应用配置"
+    }
+  ]
+}

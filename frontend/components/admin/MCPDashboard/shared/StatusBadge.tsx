@@ -10,15 +10,15 @@ interface StatusBadgeProps {
 }
 
 const VARIANT_MAP: Record<BadgeVariant, { dot: string; text: string; bg: string }> = {
-  online: { dot: 'bg-green-500', text: 'text-green-700', bg: 'bg-green-100' },
-  offline: { dot: 'bg-red-500', text: 'text-red-700', bg: 'bg-red-100' },
-  sleeping: { dot: 'bg-amber-400', text: 'text-amber-700', bg: 'bg-amber-100' },
-  warning: { dot: 'bg-amber-500', text: 'text-amber-700', bg: 'bg-amber-100' },
-  critical: { dot: 'bg-red-600', text: 'text-red-800', bg: 'bg-red-100' },
-  info: { dot: 'bg-blue-500', text: 'text-blue-700', bg: 'bg-blue-100' },
-  success: { dot: 'bg-green-500', text: 'text-green-700', bg: 'bg-green-100' },
-  pending: { dot: 'bg-slate-400', text: 'text-slate-600', bg: 'bg-slate-100' },
-  running: { dot: 'bg-blue-400', text: 'text-blue-700', bg: 'bg-blue-100' },
+  online: { dot: 'bg-success-500', text: 'text-success-700', bg: 'bg-success-100' },
+  offline: { dot: 'bg-danger-500', text: 'text-danger-700', bg: 'bg-danger-100' },
+  sleeping: { dot: 'bg-warning-400', text: 'text-warning-700', bg: 'bg-warning-100' },
+  warning: { dot: 'bg-warning-500', text: 'text-warning-700', bg: 'bg-warning-100' },
+  critical: { dot: 'bg-danger-600', text: 'text-danger-800', bg: 'bg-danger-100' },
+  info: { dot: 'bg-primary-500', text: 'text-primary-700', bg: 'bg-primary-100' },
+  success: { dot: 'bg-success-500', text: 'text-success-700', bg: 'bg-success-100' },
+  pending: { dot: 'bg-warm-400', text: 'text-warm-600', bg: 'bg-warm-100' },
+  running: { dot: 'bg-primary-400', text: 'text-primary-700', bg: 'bg-primary-100' },
 };
 
 const LABEL_MAP: Record<BadgeVariant, string> = {

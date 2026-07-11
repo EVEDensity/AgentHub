@@ -63,7 +63,7 @@ const AgentTodoBubble = memo(function AgentTodoBubble({ data, isStreaming, onSen
 
   return (
     <div className="mb-4 flex justify-start">
-      <div className={`max-w-[85%] rounded-2xl px-4 py-3 bg-white border shadow-sm border-l-4 ${pc.border}`}>
+      <div className={`max-w-[85%] rounded-2xl px-4 py-3 bg-warm-100 border shadow-sm border-l-4 ${pc.border}`}>
         {/* Header */}
         <div className="mb-2 flex items-center gap-2 text-xs opacity-90">
           <ClipboardList className="h-3.5 w-3.5 text-warm-500" />

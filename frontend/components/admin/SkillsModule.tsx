@@ -160,7 +160,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
     return (
       <section className="card p-6">
         <h2 className="text-h3">技能</h2>
-        <p className="mt-3 text-sm text-red-500">{skillError}</p>
+        <p className="mt-3 text-sm text-danger-500">{skillError}</p>
         <button className="btn-secondary mt-3" onClick={() => { void loadSkills(); }}>重试</button>
       </section>
     );
@@ -169,7 +169,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
   // Empty state
   if (!skillLoading && !skillList.length) {
     return (
-      <section className="rounded-2xl border border-dashed border-warm-200 bg-white p-12 text-center">
+      <section className="rounded-2xl border border-dashed border-warm-200 bg-warm-100 p-12 text-center">
         <span className="material-symbols-outlined text-[48px] text-warm-400 mb-3 block">auto_awesome</span>
         <p className="text-sm text-warm-500">暂无本地技能</p>
         <p className="text-xs text-warm-400 mt-1">
@@ -180,10 +180,10 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-warm-200 bg-white h-[calc(100vh-165px)]">
+    <section className="overflow-hidden rounded-2xl border border-warm-200 bg-warm-100 h-[calc(100vh-165px)]">
       <div className="grid h-full grid-cols-[360px_1fr] overflow-hidden">
         {/* ── Left sidebar: stats, search, skill list ─────────────── */}
-        <aside className="border-r border-warm-150 bg-[#FBFAF8] flex flex-col overflow-hidden">
+        <aside className="border-r border-warm-150 bg-[#191C22] flex flex-col overflow-hidden">
           {/* Stats bar */}
           <div className="border-b border-warm-150 px-4 py-3">
             <div className="flex items-stretch gap-0">
@@ -206,7 +206,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
 
           {/* Search + filters */}
           <div className="border-b border-warm-150 px-4 py-3 space-y-2">
-            <div className="flex items-center gap-2 rounded-lg border border-warm-200 bg-white px-3 py-2 transition-colors focus-within:border-warm-400 focus-within:ring-2 focus-within:ring-warm-300/20">
+            <div className="flex items-center gap-2 rounded-lg border border-warm-200 bg-warm-100 px-3 py-2 transition-colors focus-within:border-warm-400 focus-within:ring-2 focus-within:ring-warm-300/20">
               <span className="material-symbols-outlined text-[18px] text-warm-400 shrink-0">search</span>
               <input
                 className="min-w-0 flex-1 bg-transparent text-sm text-warm-800 outline-none placeholder:text-warm-400"
@@ -227,7 +227,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
             <div className="flex items-center gap-2">
               {skillCategories.length > 1 && (
                 <select
-                  className="flex-1 min-h-9 rounded-lg border border-warm-200 bg-white px-3 text-sm text-warm-700 outline-none"
+                  className="flex-1 min-h-9 rounded-lg border border-warm-200 bg-warm-100 px-3 text-sm text-warm-700 outline-none"
                   value={skillCategoryFilter}
                   onChange={(e) => setSkillCategoryFilter(e.target.value)}
                 >
@@ -409,7 +409,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
                 const hasExtra = credentials.length > 0 || tags.length > 0;
 
                 return (
-                  <div className="border-b border-warm-100 bg-white">
+                  <div className="border-b border-warm-100 bg-warm-100">
                     <div className="flex items-center gap-3 px-4 py-1.5 flex-wrap">
                       {description && (
                         <span className="text-[12px] text-warm-600 truncate max-w-[360px]">{description}</span>
@@ -495,7 +495,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
                     <div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" />
                   </div>
                 ) : (
-                  <div className="flex-1 overflow-auto bg-[#FCFCFB] px-5 py-4">
+                  <div className="flex-1 overflow-auto bg-[#121418] px-5 py-4">
                     {skillDetail.raw ? (
                       <MarkdownRenderer content={skillDetail.raw} />
                     ) : (

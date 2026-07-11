@@ -60,7 +60,7 @@ const MemberList = memo(function MemberList({
 
   if (loading && members.length === 0) {
     return (
-      <div className="px-3 py-2 text-[11px] text-warm-400">Loading...</div>
+      <div className="px-3 py-2 text-[11px] text-warm-400">加载中...</div>
     );
   }
 

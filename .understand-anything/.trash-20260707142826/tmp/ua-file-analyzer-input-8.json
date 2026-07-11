@@ -1,0 +1,79 @@
+{
+  "projectRoot": "D:\\Users\\xyn\\Desktop\\agenthub\\AgenthubV1.2",
+  "batchFiles": [
+    {"path": "services/python/document_pipeline_service/config.py", "language": "python", "sizeLines": 31, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/extractors/__init__.py", "language": "python", "sizeLines": 93, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/extractors/docx.py", "language": "python", "sizeLines": 68, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/extractors/image.py", "language": "python", "sizeLines": 69, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/extractors/pdf.py", "language": "python", "sizeLines": 64, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/extractors/pptx.py", "language": "python", "sizeLines": 68, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/extractors/text.py", "language": "python", "sizeLines": 40, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/main.py", "language": "python", "sizeLines": 213, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/minio_client.py", "language": "python", "sizeLines": 93, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/models.py", "language": "python", "sizeLines": 52, "fileCategory": "code"},
+    {"path": "services/python/document_pipeline_service/processor.py", "language": "python", "sizeLines": 188, "fileCategory": "code"},
+    {"path": "services/python/evaluation_batch_service/main.py", "language": "python", "sizeLines": 630, "fileCategory": "code"},
+    {"path": "services/python/shared/events.py", "language": "python", "sizeLines": 70, "fileCategory": "code"},
+    {"path": "services/python/shared/nats_client.py", "language": "python", "sizeLines": 150, "fileCategory": "code"},
+    {"path": "services/python/summarization_service/main.py", "language": "python", "sizeLines": 267, "fileCategory": "code"}
+  ],
+  "batchImportData": {
+    "services/python/document_pipeline_service/config.py": [],
+    "services/python/document_pipeline_service/extractors/__init__.py": [
+      "services/python/document_pipeline_service/extractors/docx.py",
+      "services/python/document_pipeline_service/extractors/image.py",
+      "services/python/document_pipeline_service/extractors/pdf.py",
+      "services/python/document_pipeline_service/extractors/pptx.py",
+      "services/python/document_pipeline_service/extractors/text.py",
+      "services/python/document_pipeline_service/models.py"
+    ],
+    "services/python/document_pipeline_service/extractors/docx.py": [
+      "services/python/document_pipeline_service/models.py"
+    ],
+    "services/python/document_pipeline_service/extractors/image.py": [
+      "services/python/document_pipeline_service/models.py"
+    ],
+    "services/python/document_pipeline_service/extractors/pdf.py": [
+      "services/python/document_pipeline_service/models.py"
+    ],
+    "services/python/document_pipeline_service/extractors/pptx.py": [
+      "services/python/document_pipeline_service/models.py"
+    ],
+    "services/python/document_pipeline_service/extractors/text.py": [
+      "services/python/document_pipeline_service/models.py"
+    ],
+    "services/python/document_pipeline_service/main.py": [
+      "services/python/document_pipeline_service/config.py",
+      "services/python/document_pipeline_service/extractors/__init__.py",
+      "services/python/document_pipeline_service/minio_client.py",
+      "services/python/document_pipeline_service/models.py",
+      "services/python/document_pipeline_service/processor.py",
+      "services/python/shared/events.py",
+      "services/python/shared/nats_client.py"
+    ],
+    "services/python/document_pipeline_service/minio_client.py": [
+      "services/python/document_pipeline_service/config.py"
+    ],
+    "services/python/document_pipeline_service/models.py": [],
+    "services/python/document_pipeline_service/processor.py": [
+      "services/python/document_pipeline_service/config.py",
+      "services/python/document_pipeline_service/extractors/__init__.py",
+      "services/python/document_pipeline_service/minio_client.py",
+      "services/python/document_pipeline_service/models.py",
+      "services/python/shared/events.py",
+      "services/python/shared/nats_client.py"
+    ],
+    "services/python/evaluation_batch_service/main.py": [
+      "services/python/shared/events.py",
+      "services/python/shared/nats_client.py"
+    ],
+    "services/python/shared/events.py": [],
+    "services/python/shared/nats_client.py": [
+      "services/python/shared/events.py"
+    ],
+    "services/python/summarization_service/main.py": [
+      "services/python/shared/events.py",
+      "services/python/shared/nats_client.py"
+    ]
+  }
+}

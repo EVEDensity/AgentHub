@@ -1,34 +1,19 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/agenthub/platform/main/frontend/public/logo.svg">
-    <img alt="AgentHub" src="frontend/public/logo.svg" width="120">
-  </picture>
+  <img alt="AgentHub" src="assets/logo/AH-logo.png" width="96">
 </p>
 
-<h1 align="center">AgentHub</h1>
+<h3 align="center">AgentHub</h3>
 
 <p align="center">
-  <b>Build AI Agent Teams, Not Just Chatbots</b><br>
-  A self-hosted multi-agent orchestration platform. Compose, deploy, and observe<br>
-  collaborative AI agents — with a single Docker command.
+  Build AI agent <b>teams</b>, not chatbots.<br>
+  Self-hosted. Multi-agent. Observable.
 </p>
 
 <p align="center">
-  <a href="https://github.com/agenthub/platform/stargazers">
-    <img src="https://img.shields.io/github/stars/agenthub/platform?style=flat-square&color=yellow" alt="Stars">
-  </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0">
-  </a>
-  <a href="https://github.com/agenthub/platform/releases">
-    <img src="https://img.shields.io/github/v/release/agenthub/platform?style=flat-square&color=purple" alt="Release">
-  </a>
-  <a href="CONTRIBUTING.md">
-    <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome">
-  </a>
-  <a href="https://github.com/agenthub/platform/issues">
-    <img src="https://img.shields.io/github/issues/agenthub/platform?style=flat-square&color=red" alt="Issues">
-  </a>
+  <a href="https://github.com/EVEDensity/AgentHub/stargazers"><img src="https://img.shields.io/github/stars/EVEDensity/AgentHub?style=flat-square&color=yellow" alt="Stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
+  <a href="https://github.com/EVEDensity/AgentHub/releases"><img src="https://img.shields.io/github/v/release/EVEDensity/AgentHub?style=flat-square&color=purple" alt="Release"></a>
+  <a href="https://github.com/EVEDensity/AgentHub/issues"><img src="https://img.shields.io/github/issues/EVEDensity/AgentHub?style=flat-square&color=red" alt="Issues"></a>
 </p>
 
 <p align="center">
@@ -36,148 +21,76 @@
   <a href="README_CN.md">中文</a>
 </p>
 
-<p align="center">
-  <a href="#-quick-start">Quick Start</a> ·
-  <a href="#-features">Features</a> ·
-  <a href="#-why-agenthub">Why AgentHub</a> ·
-  <a href="#-contributing">Contributing</a> ·
-  <a href="#-license">License</a>
-</p>
-
 ---
 
-## ✨ Why AgentHub?
+## What is this?
 
-Most AI platforms treat agents as **glorified chatbots with tool access**. AgentHub takes a different approach:
+AgentHub lets you spin up a team of AI agents that actually work together — Router figures out what needs doing, Executor does it, Critic checks the work, Summarizer ties it all up. Not a single-agent-with-tools trick. A real team.
 
-| ❌ Typical Platform | ✅ AgentHub |
-|---|---|
-| Single-agent prompt chains | **Multi-agent teams** with defined roles |
-| Opaque execution | **Observable** ReAct state machine (11 states) |
-| Vendor lock-in | **Bring your own model** — any OpenAI-compatible endpoint |
-| No safety guardrails | **Built-in IAM** — RBAC + ABAC + sensitive tool gating |
-| Cloud-only | **Self-hosted** — your data stays on your infrastructure |
+Each agent runs through an 11-state ReAct loop that you can watch in real time. Everything streams. Everything logs. Everything's on your hardware.
 
-> **AgentHub doesn't call LLMs. It orchestrates agent teams.** — Router plans, Executor acts, Critic reviews, Summarizer synthesizes. The platform owns the loop.
+## Why?
 
----
+Most AI platforms wrap an LLM in a chat box and call it an agent. Then you spend weeks wiring together "multi-agent" flows that break the moment something unexpected happens.
 
-## 🚀 Quick Start
+AgentHub gives you the full loop out of the box — orchestration, IAM, sandbox execution, search, observability. You bring a model key. It brings the rest.
+
+## Quick start
 
 ```bash
-# Clone and start everything — one command
-git clone https://github.com/agenthub/platform.git
-cd platform/deploy
-docker compose -f docker-compose.platform.yml up -d
+git clone https://github.com/EVEDensity/AgentHub.git
+cd AgentHub
+start.bat
 ```
 
-| Service | URL |
-|---------|-----|
-| 🖥️ Web UI | `http://localhost:3000` |
-| 🔌 API Gateway | `http://localhost:8081` |
-| 📊 Grafana | `http://localhost:3001` (admin / admin) |
-| 📈 Prometheus | `http://localhost:9090` |
+That's it. PostgreSQL spins up via Docker, the backend starts, the frontend opens. No API key needed — the built-in mock provider lets you kick the tires offline.
 
-> 💡 **No API key needed for local dev** — a built-in mock provider lets you test everything offline.
-
-### Want to use your own model?
+Want your own model?
 
 ```bash
-# OpenAI
 export OPENAI_API_KEY=sk-...
-# Anthropic Claude
+# or
 export ANTHROPIC_API_KEY=sk-ant-...
-# Or any OpenAI-compatible (Ollama, LiteLLM, vLLM)
+# or any OpenAI-compatible endpoint
 export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 ```
 
-See [`.env.example`](.env.example) for all available options.
-
----
-
-## 🎯 Features
-
-<table>
-<tr>
-<td width="50%">
-
-### 🧠 Agent Orchestration
-- **ReAct state machine** — 11-state loop with budget-aware execution
-- **6 built-in roles** — Router, Planner, Executor, Critic, Summarizer, Search
-- **Redis-persisted state** — agents survive restarts
-- **Streaming by default** — WebSocket + SSE with replay
-
-### 🔍 Deep Search
-- **BM25 + Dense + Rerank** fusion pipeline
-- **Graceful degradation** when vector stores are unavailable
-- **Pluggable embeddings** — OpenAI, BGE, TEI-compatible
-
-</td>
-<td width="50%">
-
-### 🔐 Security & Multi-Tenancy
-- **JWT authentication** with HS256
-- **RBAC** (4 roles) + **ABAC** policy engine
-- **Sensitive tool gating** — server-side confirmation for risky operations
-- **Tenant isolation** — data scoping at the database level
-
-### 📡 Platform
-- **Multi-provider** — OpenAI, Anthropic, BGE, Ollama, vLLM
-- **Document pipeline** — PDF, DOCX, PPTX → chunk → embed → search
-- **Observability** — Prometheus + Grafana + OTLP tracing
-- **27+ containers** via a single Docker Compose file
-
-</td>
-</tr>
-</table>
-
----
-
-## 🏗️ Architecture
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────────┐
-│  Next.js UI │────▶│ Go Gateway   │────▶│ Go Orchestration    │
-│  (port 3000)│     │ (port 8081)  │     │ (8 microservices)   │
-└─────────────┘     │ WebSocket+JWT│     │ NATS JetStream      │
-                    └──────┬───────┘     └──────────┬──────────┘
-                           │                        │
-                           ▼                        ▼
-                    ┌──────────────┐     ┌─────────────────────┐
-                    │ Rust Cores   │     │ Python Offline      │
-                    │ stream       │     │ model-adapter       │
-                    │ retrieval    │     │ knowledge-pipeline  │
-                    │ fanout       │     │ document-pipeline   │
-                    │ patch-merge  │     │ summarization       │
-                    │ memory-seg   │     │ evaluation-batch    │
-                    └──────────────┘     └─────────────────────┘
-```
-
-> **Tech Stack:** Go · Rust · Python · Next.js · NATS JetStream · PostgreSQL · Redis · Qdrant · MinIO · OpenSearch
-
----
-
-## 🤝 Contributing
-
-AgentHub is a community-driven project — **your contributions make it better**. Whether you're fixing a typo, adding a model provider, or improving documentation, we'd love your help!
-
-### Ways to Contribute
-
-| 🐛 [Report Bugs](https://github.com/agenthub/platform/issues/new) | 💡 [Suggest Features](https://github.com/agenthub/platform/issues/new) | 📝 [Improve Docs](https://github.com/agenthub/platform) | 🔌 [Add Providers](CONTRIBUTING.md) | ⭐ [Star the Repo](https://github.com/agenthub/platform) |
-|---|---|---|---|---|
-
-### Getting Started as a Contributor
-
-1. **Read** [`CONTRIBUTING.md`](CONTRIBUTING.md) — issue-first policy, commit conventions, dev setup
-2. **Find an issue** tagged [`good first issue`](https://github.com/agenthub/platform/issues?q=label%3A%22good+first+issue%22)
-3. **Comment** on the issue to let others know you're working on it
-4. **Open a PR** — keep it focused, reference the issue, and we'll review!
+Then:
 
 ```bash
-# Development setup
-git clone https://github.com/agenthub/platform.git
-cd platform
-docker compose -f deploy/docker-compose.platform.yml up -d nats postgres redis
+docker compose -f deploy/docker-compose.platform.yml up --build
+```
+
+| Service | URL |
+|----------|-----|
+| Web UI | `http://localhost:3000` |
+| API Gateway | `http://localhost:8081` |
+| Grafana | `http://localhost:3001` |
+
+## What's inside
+
+**Agent orchestration** — 6 roles (Router, Planner, Executor, Critic, Summarizer, Search) running a budget-aware ReAct loop with Redis-backed state that survives restarts. Streaming by default via WebSocket + SSE.
+
+**Security** — JWT auth, RBAC + ABAC, sensitive-tool gating, per-tenant data isolation. Built for production, not just demos.
+
+**Search** — BM25 + dense vectors + reranking in one pipeline. Graceful fallback when vector stores are down. Pluggable embeddings.
+
+**Sandbox** — Code execution in isolated containers. Configurable CPU/memory limits, network policies, output sanitization.
+
+**Observability** — Prometheus + Grafana + OTLP tracing. See what every agent is doing in real time.
+
+## Stack
+
+Go services over NATS JetStream. Rust for performance-critical paths (stream processing, retrieval, fanout). Python for offline/async tasks (model adaptation, document pipelines, evaluation). Next.js frontend. PostgreSQL, Redis, Qdrant, MinIO underneath.
+
+## Contributing
+
+PRs welcome. Check [`good first issues`](https://github.com/EVEDensity/AgentHub/issues?q=label%3A%22good+first+issue%22) for a place to start.
+
+```bash
+# Dev setup — infra only
+cd deploy
+docker compose -f docker-compose.platform.yml up -d nats postgres redis
 
 # Go services
 cd services/go && go work sync
@@ -186,60 +99,26 @@ cd services/go && go work sync
 cd frontend && npm install && npm run dev
 ```
 
-> 🏅 **All contributors are recognized** — from code to docs to bug reports. See our [contributors](#-contributors) section below.
+Bug reports, docs, new model providers — all count. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the details.
 
----
+## ⭐ Star History
 
-## 🌟 Support the Project
+[![Star History Chart](https://api.star-history.com/svg?repos=EVEDensity/AgentHub&type=Date)](https://star-history.com/#EVEDensity/AgentHub&Date)
 
-If AgentHub helps you, consider:
+## Contributors
 
-- ⭐ **Starring the repo** — it helps others discover the project
-- 🐦 **Sharing** your use case in [Discussions](https://github.com/agenthub/platform/discussions)
-- 🔧 **Contributing** code, docs, or feedback
-- 📣 **Telling** your friends and colleagues
-
----
-
-## 📄 License
-
-AgentHub is licensed under the [Apache License 2.0](LICENSE) — free for personal and commercial use.
-
----
-
-## 🙏 Acknowledgments
-
-AgentHub stands on the shoulders of giants:
-
-- [NATS](https://nats.io/) — Cloud-native messaging
-- [Qdrant](https://qdrant.tech/) — Vector search engine
-- [OpenSearch](https://opensearch.org/) — Full-text search
-- And every open-source contributor who makes this ecosystem possible ❤️
-
----
-
-<p align="center">
-  <sub>Built with ❤️ by <a href="https://github.com/EVEDensity">Density</a> and the AgentHub community</sub>
-</p>
-
-## 🌟 Contributors
-
-Thanks to every amazing contributor who has helped build AgentHub:
+Thanks to everyone who's contributed to AgentHub — code, docs, bug reports, ideas. It all matters.
 
 <a href="https://github.com/EVEDensity/AgentHub/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=EVEDensity/AgentHub" />
 </a>
 
+## License
+
+Apache 2.0. 
+
 ---
 
-## ⭐ Star History
-
-If you find AgentHub useful, **please give it a star** — it really helps others discover the project!
-
-<a href="https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left" />
- </picture>
-</a>
+<p align="center">
+  <sub>Built by <a href="https://github.com/EVEDensity">Density</a> and contributors.</sub>
+</p>

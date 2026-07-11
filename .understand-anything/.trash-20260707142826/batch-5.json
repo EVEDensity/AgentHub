@@ -1,0 +1,991 @@
+{
+  "batchIndex": 5,
+  "nodes": [
+    {
+      "id": "frontend/app/charts/page.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 90,
+      "summary": "图表展示页面，通过 fetch 加载 Mermaid 图表定义文件，解析出多个图表并渲染展示。支持加载状态和错误处理。",
+      "tags": [
+        "frontend/app/charts",
+        "ChartsPage"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "ChartsPage"
+      ],
+      "functions": [
+        "ChartsPage"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/AgentIdentityCard.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 248,
+      "summary": "Agent 身份信息卡片组件，显示 Agent 的认证头信息（authHeaders）并支持复制，提供通知回调用于状态反馈。",
+      "tags": [
+        "frontend/components/admin",
+        "AgentIdentityCard"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "AgentIdentityCard"
+      ],
+      "functions": [
+        "AgentIdentityCard"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/AgentNetTopology.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 766,
+      "summary": "Agent 网络拓扑图组件，使用 PixiJS 实现粒子动画效果，展示 Agent 节点间的网络连接关系。支持缩放、平移交互，动态维护节点和连线状态。",
+      "tags": [
+        "frontend/components/admin",
+        "AgentNetTopology",
+        "StatCard"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 2,
+        "classCount": 0
+      },
+      "exports": [
+        "AgentNetTopology"
+      ],
+      "functions": [
+        "AgentNetTopology",
+        "StatCard"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/AgentSandboxPanel.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 331,
+      "summary": "Agent 沙箱管理面板，提供沙箱环境的创建、启动、停止和监控功能，管理沙箱实例的生命周期和配置参数。",
+      "tags": [
+        "frontend/components/admin",
+        "AgentSandboxPanel",
+        "MiniStatCard"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 2,
+        "classCount": 0
+      },
+      "exports": [
+        "AgentSandboxPanel"
+      ],
+      "functions": [
+        "AgentSandboxPanel",
+        "MiniStatCard"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/AgentWorkspace.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 374,
+      "summary": "Agent 工作区组件，模拟终端工作环境，展示文件系统树和文件内容编辑区域，支持命令执行和结果展示。",
+      "tags": [
+        "frontend/components/admin",
+        "AgentWorkspace"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "AgentWorkspace"
+      ],
+      "functions": [
+        "AgentWorkspace"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/AuditLogList.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 742,
+      "summary": "审计日志列表组件，支持按时间范围、操作类型、用户等条件筛选和搜索审计日志。提供分页加载、日志详情展开、操作回滚等管理功能。",
+      "tags": [
+        "frontend/components/admin",
+        "AuditLogList",
+        "RiskBadge",
+        "DecisionBadge",
+        "StatCard",
+        "formatTimestamp",
+        "truncate",
+        "JsonHighlight"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 7,
+        "classCount": 0
+      },
+      "exports": [
+        "AuditLogList"
+      ],
+      "functions": [
+        "RiskBadge",
+        "DecisionBadge",
+        "StatCard",
+        "formatTimestamp",
+        "truncate",
+        "JsonHighlight",
+        "AuditLogList"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/ImageSearchPanel.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 302,
+      "summary": "图像搜索面板组件，支持通过文本描述搜索图像，提供搜索结果网格展示、筛选和图像预览功能。",
+      "tags": [
+        "frontend/components/admin",
+        "ImageSearchPanel",
+        "ImageResultCard",
+        "ImageUploadZone"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 3,
+        "classCount": 0
+      },
+      "exports": [
+        "ImageSearchPanel"
+      ],
+      "functions": [
+        "ImageResultCard",
+        "ImageUploadZone",
+        "ImageSearchPanel"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/LocalAgentModal.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 370,
+      "summary": "本地 Agent 发现与注册弹窗组件，扫描本地网络中的 Agent 实例，展示发现列表并支持一键注册或配置连接参数。",
+      "tags": [
+        "frontend/components/admin",
+        "LocalAgentModal"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "LocalAgentModal"
+      ],
+      "functions": [
+        "LocalAgentModal"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/MCPDashboard/MCPLayout.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 125,
+      "summary": "MCP 仪表盘布局组件，提供多标签页切换的仪表盘框架，集成概览、服务器管理、数据面板等子视图。",
+      "tags": [
+        "frontend/components/admin/MCPDashboard",
+        "MCPLayout",
+        "authHeaders"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 2,
+        "classCount": 0
+      },
+      "exports": [
+        "MCPLayout"
+      ],
+      "functions": [
+        "authHeaders",
+        "MCPLayout"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/MCPServerManager.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 480,
+      "summary": "MCP 服务器管理组件，支持 MCP 服务器的添加、编辑、删除和启停管理。展示服务器运行状态、配置详情和连接日志。",
+      "tags": [
+        "frontend/components/admin",
+        "MCPServerManager",
+        "TransportBadge",
+        "StatusBadge",
+        "ServerCard",
+        "ToolCard",
+        "AddServerModal",
+        "CallResultViewer"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 7,
+        "classCount": 0
+      },
+      "exports": [
+        "MCPServerManager"
+      ],
+      "functions": [
+        "TransportBadge",
+        "StatusBadge",
+        "ServerCard",
+        "ToolCard",
+        "AddServerModal",
+        "CallResultViewer",
+        "MCPServerManager"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/MemoryModule.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 732,
+      "summary": "记忆管理模块组件，支持 Agent 记忆条目的查看、搜索、编辑和删除。按时间线或分类组织记忆片段，提供标签筛选和全文搜索功能。",
+      "tags": [
+        "frontend/components/admin",
+        "MemoryModule",
+        "FilesTab",
+        "SessionsTab",
+        "ConsolidationTab",
+        "ConversationTab"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 5,
+        "classCount": 0
+      },
+      "exports": [
+        "MemoryModule"
+      ],
+      "functions": [
+        "MemoryModule",
+        "FilesTab",
+        "SessionsTab",
+        "ConsolidationTab",
+        "ConversationTab"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/ParticleTopologyCanvas.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 774,
+      "summary": "PixiJS 粒子拓扑画布组件，高性能渲染 Agent 网络拓扑节点和连线。支持粒子动画、节点拖拽、缩放平移，集成自适应质量调节和 FPS 监视。",
+      "tags": [
+        "frontend/components/admin",
+        "ParticleTopologyCanvas",
+        "hexToNumber",
+        "mainThreadPhysicsStep"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 3,
+        "classCount": 0
+      },
+      "exports": [
+        "ParticleTopologyCanvas"
+      ],
+      "functions": [
+        "hexToNumber",
+        "ParticleTopologyCanvas",
+        "mainThreadPhysicsStep"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/PerformanceMonitor.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 214,
+      "summary": "FPS 性能监视器组件，实时显示当前渲染帧率，提供性能统计图表。支持阈值告警和自适应质量调节联动。",
+      "tags": [
+        "frontend/components/admin",
+        "PerformanceMonitor",
+        "usePerformanceMonitorToggle"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 2,
+        "functionCount": 2,
+        "classCount": 0
+      },
+      "exports": [
+        "PerformanceMonitor",
+        "usePerformanceMonitorToggle"
+      ],
+      "functions": [
+        "PerformanceMonitor",
+        "usePerformanceMonitorToggle"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/ServiceProviderModule.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 238,
+      "summary": "服务提供商 / Agent 注册管理模块，展示已注册的服务列表，支持服务启用/禁用、配置编辑和健康状态监控。",
+      "tags": [
+        "frontend/components/admin",
+        "ServiceProviderModule"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "ServiceProviderModule"
+      ],
+      "functions": [
+        "ServiceProviderModule"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/SkillsModule.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 513,
+      "summary": "技能管理模块组件，展示和管理 Agent 可用技能库。支持技能的启用/禁用、版本管理和配置参数调整，提供技能搜索和分类筛选。",
+      "tags": [
+        "frontend/components/admin",
+        "SkillsModule"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "SkillsModule"
+      ],
+      "functions": [
+        "SkillsModule"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/StatCard.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 28,
+      "summary": "统计卡片组件，包含 StatCard 和 MiniStatBox 两个子组件，用于展示数值型统计信息的卡片式布局，支持图标、变化趋势和辅助说明。",
+      "tags": [
+        "frontend/components/admin",
+        "StatCard",
+        "MiniStatBox"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 2,
+        "functionCount": 2,
+        "classCount": 0
+      },
+      "exports": [
+        "StatCard",
+        "MiniStatBox"
+      ],
+      "functions": [
+        "StatCard",
+        "MiniStatBox"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/TemplateCard.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 91,
+      "summary": "模板卡片组件，展示 Agent 模板的缩略图、名称和简要描述，支持点击选中和悬停预览效果。",
+      "tags": [
+        "frontend/components/admin",
+        "TemplateCard"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "TemplateCard"
+      ],
+      "functions": [
+        "TemplateCard"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/TemplateCreateModal.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 112,
+      "summary": "从模板创建 Agent 的弹窗组件，选择模板后配置 Agent 名称和初始参数，触发创建流程。",
+      "tags": [
+        "frontend/components/admin",
+        "TemplateCreateModal"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "TemplateCreateModal"
+      ],
+      "functions": [
+        "TemplateCreateModal"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/TemplateImportModal.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 107,
+      "summary": "模板导入弹窗组件，支持从本地文件或 URL 导入 Agent 模板配置文件，提供导入预览和格式校验。",
+      "tags": [
+        "frontend/components/admin",
+        "TemplateImportModal"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "TemplateImportModal"
+      ],
+      "functions": [
+        "TemplateImportModal"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/TemplateMarketplace.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 129,
+      "summary": "模板市场页面组件，聚合展示可用的 Agent 模板库，集成模板卡片、创建、导入等子组件，提供模板分类浏览和搜索功能。",
+      "tags": [
+        "frontend/components/admin",
+        "TemplateMarketplace"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "exports": [
+        "TemplateMarketplace"
+      ],
+      "functions": [
+        "TemplateMarketplace"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/UserManagementModule.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 371,
+      "summary": "用户管理模块组件，支持用户列表展示、角色分配、状态管理和权限配置。集成统计卡片展示用户总量和活跃度概览。",
+      "tags": [
+        "frontend/components/admin",
+        "UserManagementModule",
+        "buildWeeks",
+        "getLevel",
+        "DetailItem"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 4,
+        "classCount": 0
+      },
+      "exports": [
+        "UserManagementModule"
+      ],
+      "functions": [
+        "buildWeeks",
+        "getLevel",
+        "UserManagementModule",
+        "DetailItem"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/WorkflowConditionEditor.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 357,
+      "summary": "工作流分支条件编辑器组件，支持可视化配置条件分支逻辑（AND/OR），管理条件组和条件规则，用于工作流节点的分支路由。",
+      "tags": [
+        "frontend/components/admin",
+        "WorkflowConditionEditor",
+        "newRule",
+        "newBranch",
+        "RuleRow",
+        "BranchPanel"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 1,
+        "functionCount": 5,
+        "classCount": 0
+      },
+      "exports": [
+        "WorkflowConditionEditor"
+      ],
+      "functions": [
+        "newRule",
+        "newBranch",
+        "RuleRow",
+        "BranchPanel",
+        "WorkflowConditionEditor"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/admin/WorkflowVariablePicker.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 348,
+      "summary": "工作流变量引用选择器组件，支持从变量引擎中浏览和选择可用变量，插入变量引用到表达式编辑器中。",
+      "tags": [
+        "frontend/components/admin",
+        "WorkflowVariablePicker",
+        "extractVariables",
+        "getNodeColor"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 2,
+        "functionCount": 2,
+        "classCount": 0
+      },
+      "exports": [
+        "WorkflowVariablePicker",
+        "extractVariables"
+      ],
+      "functions": [
+        "getNodeColor",
+        "WorkflowVariablePicker"
+      ],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/chat/AgentQuestionBubble.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 140,
+      "summary": "Agent 提问气泡组件，用于聊天界面中 Agent 向用户发起提问的场景，包含问题文本和输入区域，支持表单式交互。",
+      "tags": [
+        "frontend/components/chat"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "exports": [],
+      "functions": [],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/chat/AgentTodoBubble.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 156,
+      "summary": "Agent 待办气泡组件，用于聊天界面中 Agent 展示待办事项列表，支持完成状态切换和项目操作。",
+      "tags": [
+        "frontend/components/chat"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "exports": [],
+      "functions": [],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/chat/AuthForm.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 46,
+      "summary": "登录/注册表单组件，提供用户身份验证界面，包含用户名、密码输入和提交功能。",
+      "tags": [
+        "frontend/components/chat"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "exports": [],
+      "functions": [],
+      "classes": []
+    },
+    {
+      "id": "frontend/components/chat/ChatHeader.tsx",
+      "type": "file",
+      "fileCategory": "code",
+      "language": "typescript",
+      "sizeLines": 290,
+      "summary": "聊天头部组件，显示会话标题、在线状态和参与者信息，提供会话设置、搜索和更多操作入口。",
+      "tags": [
+        "frontend/components/chat"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 0,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "exports": [],
+      "functions": [],
+      "classes": []
+    }
+  ],
+  "edges": [
+    {
+      "source": "frontend/app/charts/page.tsx",
+      "target": "frontend/components/chat/MermaidChart.tsx",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/AgentIdentityCard.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/AgentNetTopology.tsx",
+      "target": "frontend/components/admin/ParticleTopologyCanvas.tsx",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/AgentNetTopology.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/AgentSandboxPanel.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/AgentWorkspace.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/AuditLogList.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/ImageSearchPanel.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/LocalAgentModal.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/MCPDashboard/MCPLayout.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/MCPServerManager.tsx",
+      "target": "frontend/stores/mcpStore.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/MCPServerManager.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/MemoryModule.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/ParticleTopologyCanvas.tsx",
+      "target": "frontend/components/admin/PerformanceMonitor.tsx",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/ParticleTopologyCanvas.tsx",
+      "target": "frontend/lib/performance/adaptiveQuality.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/ParticleTopologyCanvas.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/PerformanceMonitor.tsx",
+      "target": "frontend/lib/performance/adaptiveQuality.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/ServiceProviderModule.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/SkillsModule.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateCard.tsx",
+      "target": "frontend/stores/templateStore.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateCard.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateCreateModal.tsx",
+      "target": "frontend/stores/templateStore.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateCreateModal.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateImportModal.tsx",
+      "target": "frontend/stores/templateStore.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateMarketplace.tsx",
+      "target": "frontend/components/admin/TemplateCard.tsx",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateMarketplace.tsx",
+      "target": "frontend/components/admin/TemplateCreateModal.tsx",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateMarketplace.tsx",
+      "target": "frontend/components/admin/TemplateImportModal.tsx",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/TemplateMarketplace.tsx",
+      "target": "frontend/stores/templateStore.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/UserManagementModule.tsx",
+      "target": "frontend/components/admin/StatCard.tsx",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/UserManagementModule.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/WorkflowConditionEditor.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/WorkflowVariablePicker.tsx",
+      "target": "frontend/lib/workflow/variableEngine.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/admin/WorkflowVariablePicker.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/chat/AgentQuestionBubble.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/chat/AgentTodoBubble.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/chat/AuthForm.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    },
+    {
+      "source": "frontend/components/chat/ChatHeader.tsx",
+      "target": "frontend/types/index.ts",
+      "type": "import",
+      "batchIndex": 5,
+      "symbols": []
+    }
+  ]
+}

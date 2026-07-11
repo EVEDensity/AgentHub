@@ -17,7 +17,7 @@ services:
   redis:
     image: redis:7.2
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6379:6379"]
+    ports: ["6389:6379"]
 
   nats:
     image: nats:2.10
@@ -30,7 +30,7 @@ services:
       POSTGRES_USER: agenthub
       POSTGRES_PASSWORD: agenthub
       POSTGRES_DB: agenthub
-    ports: ["5432:5432"]
+    ports: ["5435:5432"]
 
   minio:
     image: minio/minio:latest
@@ -43,6 +43,47 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     ports: ["6333:6333"]
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  Milvus — 分布式向量数据库（可选，默认不启用）
+  #  ─────────────────────────────────────────────────────────────────
+  #  启用方式：docker compose -f deploy/docker-compose.platform.yml --profile milvus up
+  #  适用场景：向量规模 > 1000 万条、需要分布式部署、多索引类型
+  #  当前推荐：保留 Qdrant（轻量、Rust 实现、单机友好、API 简洁）
+  #  迁移评估点：见 docs/vector-db-migration-checklist.md
+  # ═══════════════════════════════════════════════════════════════════
+  # milvus-etcd:
+  #   profiles: ["milvus"]
+  #   image: quay.io/coreos/etcd:v3.5.5
+  #   environment:
+  #     ETCD_AUTO_COMPACTION_MODE: revision
+  #     ETCD_AUTO_COMPACTION_RETENTION: "1000"
+  #     ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+  #   volumes:
+  #     - milvus-etcd-data:/etcd
+  #   command: etcd -advertise-client-urls=http://milvus-etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+  #
+  # milvus-minio:
+  #   profiles: ["milvus"]
+  #   image: minio/minio:latest
+  #   environment:
+  #     MINIO_ACCESS_KEY: minioadmin
+  #     MINIO_SECRET_KEY: minioadmin
+  #   volumes:
+  #     - milvus-minio-data:/minio_data
+  #   command: minio server /minio_data
+  #
+  # milvus:
+  #   profiles: ["milvus"]
+  #   image: milvusdb/milvus:v2.4.0
+  #   command: ["milvus", "run", "standalone"]
+  #   environment:
+  #     ETCD_ENDPOINTS: milvus-etcd:2379
+  #     MINIO_ADDRESS: milvus-minio:9000
+  #   depends_on: [milvus-etcd, milvus-minio]
+  #   ports: ["19530:19530", "9091:9091"]
+  #   volumes:
+  #     - milvus-data:/var/lib/milvus
 
   opensearch:
     image: opensearchproject/opensearch:2.15.0
@@ -59,6 +100,7 @@ services:
     image: prom/prometheus:latest
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./agenthub_rules.yml:/etc/prometheus/agenthub_rules.yml:ro
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
@@ -78,8 +120,38 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
     volumes:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
     ports: ["3001:3000"]
-    depends_on: [prometheus, tempo]
+    depends_on: [prometheus, tempo, loki]
+
+  # Sprint J4: Loki centralized logging — log aggregation.
+  loki:
+    image: grafana/loki:latest
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["3100:3100"]
+    volumes:
+      - loki-data:/loki
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log:ro
+    command: ["-config.file=/etc/promtail/config.yml"]
+    depends_on: [loki]
+
+  # Sprint K3: Alertmanager — centralized alert routing with P0-P3 severity.
+  alertmanager:
+    image: prom/alertmanager:latest
+    volumes:
+      - ./agenthub_alerts.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--web.external-url=http://localhost:9093"
+    ports: ["9093:9093"]
+    depends_on: [prometheus]
 
   # ═══════════════════════════════════════════════════════════════════
   #  GO ONLINE TIER
@@ -171,6 +243,25 @@ services:
     depends_on: [postgres, tempo]
     ports: ["8088:8088"]
 
+  sandbox-service:
+    build:
+      context: ..
+      dockerfile: services/go/sandbox-service/Dockerfile
+    environment:
+      <<: *go-env
+      SANDBOX_ADDR: ":8097"
+      SANDBOX_IMAGE: "${SANDBOX_IMAGE:-agenthub/sandbox:latest}"
+      SANDBOX_CPU_LIMIT: "${SANDBOX_CPU_LIMIT:-1.0}"
+      SANDBOX_MEMORY_MB: "${SANDBOX_MEMORY_MB:-512}"
+      SANDBOX_NETWORK_ALLOW: "${SANDBOX_NETWORK_ALLOW:-none}"
+      SANDBOX_OUTPUT_SANITIZE_LEVEL: "${SANDBOX_OUTPUT_SANITIZE_LEVEL:-basic}"
+      SANDBOX_SECCOMP_PROFILE: "${SANDBOX_SECCOMP_PROFILE:-/etc/agenthub/seccomp.json}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./sandbox-image/seccomp.json:/etc/agenthub/seccomp.json:ro
+    depends_on: [tempo]
+    ports: ["8097:8097"]
+
   # ═══════════════════════════════════════════════════════════════════
   #  FRONTEND
   # ═══════════════════════════════════════════════════════════════════
@@ -180,8 +271,11 @@ services:
       dockerfile: frontend/Dockerfile
     environment:
       GO_GATEWAY_URL: "http://gateway-service:8081"
-      API_BACKEND: "go"
+      API_BACKEND: "legacy"
+      API_BACKEND_URL: "http://host.docker.internal:8000"
     depends_on: [gateway-service]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports: ["3000:3000"]
 
   # ═══════════════════════════════════════════════════════════════════
@@ -353,3 +447,58 @@ services:
       MSC_CHARS_PER_TOKEN: "4.0"
     depends_on: [nats, tempo]
     ports: ["8105:8105"]
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  vLLM — 本地推理服务（可选，默认不启用）
+  #  ─────────────────────────────────────────────────────────────────
+  #  启用方式：docker compose -f deploy/docker-compose.platform.yml --profile vllm up
+  #  GPU 要求：8GB+ VRAM（推荐 T4/A10/A100），CPU 模式仅用于功能验证
+  #  部署文档：见 docs/vllm-deployment.md
+  #  调用方式：model 字段传 vllm-<hf-model-id>，如 vllm-Qwen/Qwen2.5-7B-Instruct
+  # ═══════════════════════════════════════════════════════════════════
+  vllm:
+    profiles: ["vllm"]  # 默认不启动，需显式 --profile vllm
+    image: vllm/vllm-openai:latest
+    # ── GPU 模式（生产推荐）──────────────────────────────────────────
+    # 取消下方 deploy 段注释以启用 GPU（需 Docker with NVIDIA Container Toolkit）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # ── CPU 模式（仅功能验证，性能差）────────────────────────────────
+    # 不配置 deploy 段即 CPU 模式
+    environment:
+      # 模型 HF ID 或本地路径
+      VLLM_MODEL: "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}"
+      # HuggingFace Hub Token（拉取私有/gated 模型时需要）
+      HUGGING_FACE_HUB_TOKEN: "${HF_TOKEN:-}"
+      # vLLM 服务 API Key（model-adapter 通过 VLLM_API_KEY 传入）
+      VLLM_API_KEY: "${VLLM_API_KEY:-not-needed}"
+      # 张量并行度（GPU 数）
+      VLLM_TENSOR_PARALLEL_SIZE: "${VLLM_TENSOR_PARALLEL_SIZE:-1}"
+      # 最大序列长度
+      VLLM_MAX_MODEL_LEN: "${VLLM_MAX_MODEL_LEN:-8192}"
+      # GPU 内存利用率（0.0-1.0）
+      VLLM_GPU_MEMORY_UTILIZATION: "${VLLM_GPU_MEMORY_UTILIZATION:-0.9}"
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      --host 0.0.0.0
+      --port 8000
+      --tensor-parallel-size ${VLLM_TENSOR_PARALLEL_SIZE:-1}
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-8192}
+      --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.9}
+      --trust-remote-code
+    ports: ["8106:8000"]   # 8106 是预留端口，vLLM 内部固定 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # 模型加载慢，给 2 分钟缓冲
+
+# ── Named volumes ──────────────────────────────────────────────────────
+volumes:
+  loki-data:

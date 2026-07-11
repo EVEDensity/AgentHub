@@ -3,7 +3,7 @@
  *
  * Opens as a modal overlay. The session owner can:
  *   - Invite users by name
- *   - Change member roles (member ↔ viewer)
+ *   - Change member roles (member [sync] viewer)
  *   - Remove members
  *   - Toggle public/private visibility
  */
@@ -162,10 +162,10 @@ const ShareDialog = memo(function ShareDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-warm-900/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-warm-900/40" onClick={onClose} />
 
       {/* Dialog */}
-      <div className="relative w-full max-w-md rounded-2xl bg-white shadow-modal border border-warm-150 overflow-hidden">
+      <div className="relative w-full max-w-md rounded-2xl bg-warm-100 shadow-modal border border-warm-150 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-warm-100">
           <div>
@@ -215,7 +215,7 @@ const ShareDialog = memo(function ShareDialog({
                 }`}
               >
                 <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                  className={`inline-block h-4 w-4 transform rounded-full bg-warm-100 shadow-sm transition-transform ${
                     currentVisibility === 'public' ? 'translate-x-6' : 'translate-x-1'
                   }`}
                 />
@@ -243,7 +243,7 @@ const ShareDialog = memo(function ShareDialog({
                   value={inviteRole}
                   onChange={(e) => setInviteRole(e.target.value)}
                   disabled={inviting}
-                  className="rounded-lg border border-warm-200 px-2 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary-300 disabled:opacity-50"
+                  className="rounded-lg border border-warm-200 px-2 py-2 text-sm bg-warm-100 focus:outline-none focus:ring-2 focus:ring-primary-300 disabled:opacity-50"
                 >
                   <option value="member">成员</option>
                   <option value="viewer">观察者</option>
@@ -305,7 +305,7 @@ const ShareDialog = memo(function ShareDialog({
                           value={m.role}
                           onChange={(e) => handleRoleChange(m.userId, e.target.value)}
                           disabled={changingRole === m.userId}
-                          className="rounded border border-warm-200 px-1.5 py-1 text-[11px] bg-white focus:outline-none focus:ring-1 focus:ring-primary-300 disabled:opacity-50"
+                          className="rounded border border-warm-200 px-1.5 py-1 text-[11px] bg-warm-100 focus:outline-none focus:ring-1 focus:ring-primary-300 disabled:opacity-50"
                         >
                           <option value="member">成员</option>
                           <option value="viewer">观察者</option>

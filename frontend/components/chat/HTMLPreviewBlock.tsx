@@ -188,7 +188,7 @@ export default function HTMLPreviewBlock({
 
   return (
     <div
-      className={`my-4 overflow-hidden rounded-xl border border-warm-200 bg-white shadow-sm transition-shadow hover:shadow-md ${
+      className={`my-4 overflow-hidden rounded-xl border border-warm-200 bg-warm-100 shadow-sm transition-shadow hover:shadow-md ${
         isFullscreen ? 'fixed inset-4 z-50 flex flex-col' : ''
       } ${className}`}
       style={isFullscreen ? { margin: 0 } : undefined}
@@ -202,7 +202,7 @@ export default function HTMLPreviewBlock({
             onClick={() => setActiveTab('code')}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
               activeTab === 'code'
-                ? 'bg-white text-warm-800 shadow-sm ring-1 ring-warm-200'
+                ? 'bg-warm-100 text-warm-800 shadow-sm ring-1 ring-warm-200'
                 : 'text-warm-500 hover:text-warm-700 hover:bg-warm-100'
             }`}
           >
@@ -214,7 +214,7 @@ export default function HTMLPreviewBlock({
             onClick={() => setActiveTab('preview')}
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
               activeTab === 'preview'
-                ? 'bg-white text-warm-800 shadow-sm ring-1 ring-warm-200'
+                ? 'bg-warm-100 text-warm-800 shadow-sm ring-1 ring-warm-200'
                 : 'text-warm-500 hover:text-warm-700 hover:bg-warm-100'
             }`}
           >
@@ -326,7 +326,7 @@ export default function HTMLPreviewBlock({
             {isFullscreen ? (
               <>
                 <div className="flex-1 min-h-0 p-4 pb-2">
-                  <div className="h-full flex flex-col overflow-hidden rounded-xl bg-white shadow-md">
+                  <div className="h-full flex flex-col overflow-hidden rounded-xl bg-warm-100 shadow-md">
                     <iframe
                       key={contentKey}
                       ref={iframeRef}
@@ -348,7 +348,7 @@ export default function HTMLPreviewBlock({
             ) : (
               <>
                 <div className="p-4">
-                  <div className="overflow-hidden rounded-xl bg-white shadow-md">
+                  <div className="overflow-hidden rounded-xl bg-warm-100 shadow-md">
                     <iframe
                       key={contentKey}
                       ref={iframeRef}

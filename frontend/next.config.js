@@ -20,6 +20,17 @@ const nextConfig = {
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
   compress: true,
+  // Transpile ESM packages that ship untranspiled source (required by App Router
+  // for proper server/client boundary handling). Without this, Next.js 14 may
+  // emit "Module not found" or style-flash warnings for these packages.
+  transpilePackages: [
+    '@monaco-editor/react',
+    'react-konva',
+    'konva',
+    'framer-motion',
+    'react-syntax-highlighter',
+    'react-diff-viewer-continued',
+  ],
   // Pre-existing TS 6.0 strict ref issues — fix separately
   typescript: { ignoreBuildErrors: true },
   images: {

@@ -3,7 +3,7 @@ import type { User } from '../../types';
 import { StatCard, MiniStatBox } from './StatCard';
 
 const ROLE_LABELS: Record<string, string> = { admin: '管理员', developer: '开发者', viewer: '观察者' };
-const ROLE_COLORS: Record<string, string> = { admin: 'text-red-600 bg-red-50', developer: 'text-teal-600 bg-teal-50', viewer: 'text-warm-600 bg-warm-50' };
+const ROLE_COLORS: Record<string, string> = { admin: 'text-danger-600 bg-danger-50', developer: 'text-primary-600 bg-primary-50', viewer: 'text-warm-600 bg-warm-50' };
 
 interface TokenData {
   range: { start: string; end: string };
@@ -73,7 +73,7 @@ function getLevel(tokens: number, max: number): number {
   if (r <= 0.15) return 1; if (r <= 0.35) return 2; if (r <= 0.55) return 3; if (r <= 0.75) return 4; return 5;
 }
 
-const HEAT = ['bg-[#e8e6e1]', 'bg-[#d4cfc6]', 'bg-[#b0a89a]', 'bg-[#8c8170]', 'bg-[#6b5f4f]', 'bg-[#403a32]'];
+const HEAT = ['bg-[#c8d6e0]', 'bg-[#a2b8c8]', 'bg-[#7a98ae]', 'bg-[#5a7d94]', 'bg-[#3f6078]', 'bg-[#243e52]'];
 
 export default function UserManagementModule(props: UserManagementModuleProps): JSX.Element {
   const maxTokens = props.tokenData?.days.length
@@ -86,8 +86,8 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
       {/* ══════ Hero: Profile Card (left) + Token Stats (right) ══════ */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* ── Left: User Profile Card ── */}
-        <div className="lg:col-span-2 rounded-2xl border border-warm-200 bg-white overflow-hidden shadow-sm">
-          <div className="h-20 bg-gradient-to-r from-teal-500 to-cyan-600" />
+        <div className="lg:col-span-2 rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden shadow-sm">
+          <div className="h-20 bg-gradient-to-r from-primary-500 to-primary-600" />
           <div className="px-6 pb-6 relative">
             <div className="flex items-end -mt-10 mb-3">
               <div className="relative group">
@@ -115,7 +115,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
 
             <div className="mb-1">
               <h2 className="text-xl font-bold text-warm-900 leading-tight">{props.user?.name || '用户'}</h2>
-              <span className={`inline-block mt-0.5 text-xs font-semibold px-2 py-0.5 rounded-full ${props.user?.role === 'admin' ? 'bg-red-100 text-red-700' : props.user?.role === 'developer' ? 'bg-blue-100 text-blue-700' : 'bg-warm-100 text-warm-600'}`}>
+              <span className={`inline-block mt-0.5 text-xs font-semibold px-2 py-0.5 rounded-full ${props.user?.role === 'admin' ? 'bg-danger-100 text-danger-700' : props.user?.role === 'developer' ? 'bg-primary-100 text-primary-700' : 'bg-warm-100 text-warm-600'}`}>
                 {ROLE_LABELS[props.user?.role || ''] || props.user?.role || '开发者'}
               </span>
             </div>
@@ -124,16 +124,16 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
             <div className="mt-3 mb-4">
               {props.profileEditingField === 'bio' ? (
                 <div className="space-y-2">
-                  <textarea className="w-full resize-none rounded-lg border border-teal-300 bg-teal-50/30 px-3 py-2 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-teal-200" rows={2} value={props.profileFieldDraft} onChange={(e) => props.setProfileFieldDraft(e.target.value)} autoFocus />
+                  <textarea className="w-full resize-none rounded-lg border border-primary-300 bg-primary-50/30 px-3 py-2 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-primary-200" rows={2} value={props.profileFieldDraft} onChange={(e) => props.setProfileFieldDraft(e.target.value)} autoFocus />
                   <div className="flex gap-2">
-                    <button className="text-xs px-3 py-1 rounded-md bg-teal-600 text-white hover:bg-teal-700 transition-colors" onClick={() => { void props.handleSaveField(); }}>保存</button>
+                    <button className="text-xs px-3 py-1 rounded-md bg-primary-600 text-white hover:bg-primary-700 transition-colors" onClick={() => { void props.handleSaveField(); }}>保存</button>
                     <button className="text-xs px-3 py-1 rounded-md border border-warm-200 text-warm-500 hover:bg-warm-50 transition-colors" onClick={props.handleCancelEditField}>取消</button>
                   </div>
                 </div>
               ) : (
                 <div className="group relative">
                   <p className="text-sm text-warm-600 leading-relaxed">{props.profileBio || '暂无简介 — 介绍一下自己吧'}</p>
-                  <button className="absolute -right-1 -top-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity text-warm-400 hover:text-teal-600 hover:bg-teal-50" onClick={() => props.handleStartEditField('bio', props.profileBio)} title="编辑简介">
+                  <button className="absolute -right-1 -top-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity text-warm-400 hover:text-primary-600 hover:bg-primary-50" onClick={() => props.handleStartEditField('bio', props.profileBio)} title="编辑简介">
                     <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                   </button>
                 </div>
@@ -159,7 +159,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
           {props.tokenLoading ? (
             <div className="grid grid-cols-3 gap-3">
               {[0, 1, 2].map((i) => (
-                <div key={i} className="rounded-xl border border-warm-150 bg-white p-4 animate-pulse">
+                <div key={i} className="rounded-xl border border-warm-150 bg-warm-100 p-4 animate-pulse">
                   <div className="h-3 w-12 bg-warm-150 rounded mb-2" />
                   <div className="h-6 w-24 bg-warm-100 rounded" />
                 </div>
@@ -174,7 +174,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
               </div>
 
               {/* Token heatmap */}
-              <div className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+              <div className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
                 <div className="border-b border-warm-100 px-5 py-3 flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-semibold text-warm-900">Token 用量热力图</h3>
@@ -211,7 +211,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
               </div>
             </>
           ) : props.tokenError ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-600">
+            <div className="rounded-xl border border-danger-200 bg-danger-50 p-4 text-sm text-danger-600">
               {props.tokenError}
               <button className="ml-2 underline" onClick={() => { void props.loadTokenUsage(); }}>重试</button>
             </div>
@@ -221,7 +221,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
 
       {/* ══════ User Management Table ══════ */}
       {props.user?.role === 'admin' && (
-        <section className="rounded-2xl border border-warm-200 bg-white overflow-hidden">
+        <section className="rounded-2xl border border-warm-200 bg-warm-100 overflow-hidden">
           <div className="border-b border-warm-100 px-5 py-3 flex items-center justify-between">
             <div>
               <h3 className="text-base font-semibold text-warm-900">用户管理</h3>
@@ -259,7 +259,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
             {props.userListLoading ? (
               <div className="flex justify-center py-8"><div className="h-5 w-5 animate-spin rounded-full border-2 border-warm-400 border-t-transparent" /></div>
             ) : props.userListError ? (
-              <div className="px-5 py-4 text-sm text-red-500">{props.userListError}</div>
+              <div className="px-5 py-4 text-sm text-danger-500">{props.userListError}</div>
             ) : (
               <table className="w-full text-sm">
                 <thead>
@@ -275,7 +275,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
                     <tr key={u.id} className="border-b border-warm-50 hover:bg-warm-50 transition-colors">
                       <td className="px-5 py-2.5 font-medium text-warm-800">
                         {u.name}
-                        {u.id === props.user?.id && <span className="ml-1.5 text-[10px] text-teal-500 font-normal">(你)</span>}
+                        {u.id === props.user?.id && <span className="ml-1.5 text-[10px] text-primary-500 font-normal">(你)</span>}
                       </td>
                       <td className="px-5 py-2.5">
                         {props.user?.role === 'admin' && u.id !== props.user?.id ? (
@@ -297,7 +297,7 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
                       <td className="px-5 py-2.5 text-warm-400">{u.created_at ? new Date(u.created_at).toLocaleString('zh-CN') : '-'}</td>
                       <td className="px-5 py-2.5 text-right">
                         {props.user?.role === 'admin' && u.id !== props.user?.id && (
-                          <button className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 rounded px-2 py-1 transition-colors" onClick={() => { void props.handleDeleteUser(u.id, u.name); }}>
+                          <button className="text-xs text-danger-500 hover:text-danger-700 hover:bg-danger-50 rounded px-2 py-1 transition-colors" onClick={() => { void props.handleDeleteUser(u.id, u.name); }}>
                             删除
                           </button>
                         )}
@@ -316,17 +316,17 @@ export default function UserManagementModule(props: UserManagementModuleProps): 
 
 // ── Inline SVG icon components ──
 const LocationIcon = (
-  <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-teal-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-primary-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" />
   </svg>
 );
 const EmailIcon = (
-  <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-teal-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-primary-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>
   </svg>
 );
 const OrgIcon = (
-  <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-teal-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+  <svg className="h-4 w-4 shrink-0 text-warm-400 group-hover:text-primary-500 transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
   </svg>
 );
@@ -349,13 +349,13 @@ function DetailItem(
       <div className="flex items-center gap-2 mt-2.5">
         {props.icon}
         <input
-          className="flex-1 rounded border border-teal-300 bg-teal-50/30 px-2 py-1 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-teal-200"
+          className="flex-1 rounded border border-primary-300 bg-primary-50/30 px-2 py-1 text-sm text-warm-800 outline-none focus:ring-2 focus:ring-primary-200"
           value={props.profileFieldDraft}
           onChange={(e) => props.setProfileFieldDraft(e.target.value)}
           placeholder={`输入${props.label}...`}
           autoFocus
         />
-        <button className="text-xs px-2 py-1 rounded bg-teal-600 text-white hover:bg-teal-700 transition-colors" onClick={() => { void props.handleSaveField(); }}>保存</button>
+        <button className="text-xs px-2 py-1 rounded bg-primary-600 text-white hover:bg-primary-700 transition-colors" onClick={() => { void props.handleSaveField(); }}>保存</button>
         <button className="text-xs px-2 py-1 rounded border border-warm-200 text-warm-500 hover:bg-warm-50 transition-colors" onClick={props.handleCancelEditField}>取消</button>
       </div>
     );
@@ -364,7 +364,7 @@ function DetailItem(
   return (
     <div className="group flex items-center gap-2.5 text-sm text-warm-600 mt-2.5 cursor-pointer" onClick={() => props.handleStartEditField(props.field, props.value)} title={`点击编辑${props.label}`}>
       {props.icon}
-      <span className="group-hover:text-teal-600 transition-colors">{props.value || props.placeholder}</span>
+      <span className="group-hover:text-primary-600 transition-colors">{props.value || props.placeholder}</span>
       {EditIcon}
     </div>
   );

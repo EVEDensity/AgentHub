@@ -22,6 +22,7 @@ node_modules/
 
 # ─── Data ─────────────────────────────────────────────────────────
 data/
+!frontend/data/
 *.sqlite3
 *.db
 
@@ -65,10 +66,10 @@ deploy/grafana/
 frontend/public/charts/
 
 # ─── Strategic Planning Docs (竞品分析/产品路线图/内部架构文档) ─────────
-AgentHub V5.0*.md
+AgentHub V[0-9]*.md
+AgentHub-*.md
 重构*.md
-重构进度清单*.md
 *重构进度清单*.md
-AgentHub AI 辅助*.md
-AgentHub 多智能体协作*.md
+docs/AgentHub-*.md
 docs/AI_COLLABORATION*.md
+架构对比分析与修改计划.md

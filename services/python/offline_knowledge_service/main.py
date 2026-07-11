@@ -23,6 +23,7 @@ from shared.nats_client import NatsClient
 from . import embedding_client, ingestor, qdrant_repo
 from .config import settings
 from .models import IngestRequest, IngestResult
+from .api_v2 import router as api_v2_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -90,7 +91,8 @@ async def lifespan(app: FastAPI):
         await repo.close()
 
 
-app = FastAPI(title="offline-knowledge-service", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="offline-knowledge-service", version="0.3.0", lifespan=lifespan)
+app.include_router(api_v2_router)
 app.mount("/metrics", make_asgi_app())
 
 

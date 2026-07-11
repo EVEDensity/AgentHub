@@ -12,11 +12,11 @@ interface MetricCardProps {
 }
 
 const COLOR_MAP: Record<string, { bg: string; text: string; iconBg: string }> = {
-  green: { bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700', iconBg: 'bg-emerald-100 text-emerald-600' },
-  red: { bg: 'bg-red-50 border-red-200', text: 'text-red-700', iconBg: 'bg-red-100 text-red-600' },
-  amber: { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', iconBg: 'bg-amber-100 text-amber-600' },
-  blue: { bg: 'bg-blue-50 border-blue-200', text: 'text-blue-700', iconBg: 'bg-blue-100 text-blue-600' },
-  slate: { bg: 'bg-slate-50 border-slate-200', text: 'text-slate-700', iconBg: 'bg-slate-100 text-slate-600' },
+  green: { bg: 'bg-success-50 border-success-200', text: 'text-success-700', iconBg: 'bg-success-100 text-success-600' },
+  red: { bg: 'bg-danger-50 border-danger-200', text: 'text-danger-700', iconBg: 'bg-danger-100 text-danger-600' },
+  amber: { bg: 'bg-warning-50 border-warning-200', text: 'text-warning-700', iconBg: 'bg-warning-100 text-warning-600' },
+  blue: { bg: 'bg-primary-50 border-primary-200', text: 'text-primary-700', iconBg: 'bg-primary-100 text-primary-600' },
+  slate: { bg: 'bg-warm-50 border-warm-200', text: 'text-warm-700', iconBg: 'bg-warm-100 text-warm-600' },
 };
 
 export default function MetricCard({
@@ -46,7 +46,7 @@ export default function MetricCard({
           )}
           {subtitle && <p className="mt-0.5 text-xs text-warm-400">{subtitle}</p>}
           {trend && (
-            <p className={`mt-1 text-xs font-medium ${trend.value >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+            <p className={`mt-1 text-xs font-medium ${trend.value >= 0 ? 'text-success-600' : 'text-danger-500'}`}>
               {trend.value >= 0 ? '↑' : '↓'} {Math.abs(trend.value)}% {trend.label}
             </p>
           )}

@@ -1,0 +1,36 @@
+{
+  "issues": [
+    "77 files from scan inventory are missing corresponding file: nodes in graph (e.g. app/core/container.py, app/services/event_mapper.py, 31 frontend chat components, 11 frontend helpers/stores, 8 Go Dockerfiles, 3 Python microservice Dockefiles)",
+    "85 file nodes lack 'filePath' field (all 85 are old-style file nodes without label/description; 31 of these are __nofilepath__ placeholders for TypeScript default/named exports)",
+    "14 nodes missing 'summary' field (all are nofilepath function nodes for TypeScript re-exports from stores/adminStore.ts and index.tsx)",
+    "611 of 645 file nodes use old-style format (no label, description, language, metrics, or fileCategory fields) while 34 use new-style format - inconsistent schema across file nodes",
+    "Merge script reported 1523 edges but actual graph contains 1847 edges (+324 from importMap recovery seems to have been applied but the report's final count was not updated accordingly)"
+  ],
+  "warnings": [
+    "31 functions with __nofilepath__ placeholders indicate these TypeScript exports had no resolved source file path during scanning",
+    "No edge consistency issues found (0 orphan references, all edges have valid source/target/types)",
+    "All 77 missing files are valid source files; none are false/ garbage paths (those were correctly excluded during scanning)",
+    "Edge count discrepancy suggests the merge stats were computed before the importMap recovery was fully applied to the edge tally",
+    "Service-type nodes (11 total) appear to be an artifact from the language-scanner batch data"
+  ],
+  "stats": {
+    "totalNodes": 1490,
+    "totalEdges": 1847,
+    "nodeTypes": {
+      "file": 645,
+      "function": 590,
+      "class": 244,
+      "service": 11
+    },
+    "edgeTypes": {
+      "contains": 801,
+      "imports": 510,
+      "exports": 418,
+      "import": 116,
+      "tested_by": 2
+    },
+    "scanTotalFiles": 722,
+    "filesMissingFromGraph": 77,
+    "nofilepathPlaceholders": 31
+  }
+}

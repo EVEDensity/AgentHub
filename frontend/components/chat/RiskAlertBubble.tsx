@@ -13,28 +13,28 @@ interface RiskAlertBubbleProps {
 const RISK_COLORS: Record<string, { border: string; bg: string; text: string; badge: string; icon: string }> = {
   critical: {
     border: 'border-red-300',
-    bg: 'bg-gradient-to-br from-red-50 to-orange-50',
+    bg: 'bg-danger-50',
     text: 'text-red-800',
     badge: 'bg-red-200 text-red-700',
     icon: 'text-red-500',
   },
   high: {
     border: 'border-orange-300',
-    bg: 'bg-gradient-to-br from-orange-50 to-amber-50',
+    bg: 'bg-warning-50',
     text: 'text-orange-800',
     badge: 'bg-orange-200 text-orange-700',
     icon: 'text-orange-500',
   },
   medium: {
     border: 'border-yellow-300',
-    bg: 'bg-gradient-to-br from-yellow-50 to-amber-50',
+    bg: 'bg-warning-50',
     text: 'text-yellow-800',
     badge: 'bg-yellow-200 text-yellow-700',
     icon: 'text-yellow-500',
   },
   low: {
     border: 'border-blue-200',
-    bg: 'bg-gradient-to-br from-blue-50 to-slate-50',
+    bg: 'bg-blue-50',
     text: 'text-blue-800',
     badge: 'bg-blue-100 text-blue-600',
     icon: 'text-blue-400',
@@ -109,10 +109,10 @@ const RiskAlertBubble = memo(function RiskAlertBubble({ data, isStreaming, onSen
                   : submitted
                     ? 'bg-warm-100 text-warm-400 cursor-not-allowed'
                     : action.intent === 'cancel'
-                      ? 'bg-white border border-red-300 text-red-600 hover:bg-red-50 active:scale-[0.97]'
+                      ? 'bg-warm-100 border border-red-300 text-red-600 hover:bg-red-50 active:scale-[0.97]'
                       : action.intent === 'mitigate'
-                        ? 'bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 active:scale-[0.97]'
-                        : 'bg-white border border-warm-200 text-warm-700 hover:bg-warm-50 active:scale-[0.97]'
+                        ? 'bg-warm-100 border border-amber-300 text-amber-700 hover:bg-amber-50 active:scale-[0.97]'
+                        : 'bg-warm-100 border border-warm-200 text-warm-700 hover:bg-warm-50 active:scale-[0.97]'
               }`}
               title={action.description}
             >

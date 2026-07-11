@@ -163,7 +163,7 @@ export default function TaskMonitor(): JSX.Element {
           <div className="space-y-2">
             <div className="flex items-center gap-3">
               <select
-                className="rounded-lg border border-warm-200 bg-white px-3 py-1.5 text-sm"
+                className="rounded-lg border border-warm-200 bg-warm-100 px-3 py-1.5 text-sm"
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
               >
@@ -177,7 +177,7 @@ export default function TaskMonitor(): JSX.Element {
               <button className="btn-secondary text-sm px-3 py-1.5" onClick={() => void fetchTasks()}>刷新</button>
               {actionMsg && <span className="text-xs text-primary-600">{actionMsg}</span>}
             </div>
-            {error && <div className="text-sm text-red-500">{error}</div>}
+            {error && <div className="text-sm text-danger-500">{error}</div>}
             {loading ? (
               <div className="text-sm text-warm-400 py-8 text-center">加载中...</div>
             ) : tasks.length === 0 ? (
@@ -186,7 +186,7 @@ export default function TaskMonitor(): JSX.Element {
               tasks.map((t) => (
                 <div
                   key={t.id}
-                  className={`rounded-xl border bg-white px-4 py-3 cursor-pointer ${
+                  className={`rounded-xl border bg-warm-100 px-4 py-3 cursor-pointer ${
                     selectedId === t.id ? 'border-primary-400 ring-1 ring-primary-200' : 'border-warm-200 hover:border-warm-300'
                   }`}
                   onClick={() => { setSelectedId(t.id); void fetchDetail(t.id); }}
@@ -208,7 +208,7 @@ export default function TaskMonitor(): JSX.Element {
                       <div className="mt-2 h-1.5 rounded-full bg-warm-100 overflow-hidden">
                         <div
                           className={`h-full rounded-full transition-all ${
-                            t.status === 'FAILED' ? 'bg-red-400' : t.status === 'COMPLETED' ? 'bg-green-400' : 'bg-primary-400'
+                            t.status === 'FAILED' ? 'bg-danger-400' : t.status === 'COMPLETED' ? 'bg-success-400' : 'bg-primary-400'
                           }`}
                           style={{ width: `${t.progressPercent}%` }}
                         />
@@ -216,7 +216,7 @@ export default function TaskMonitor(): JSX.Element {
                     </div>
                     {(t.status === 'RUNNING' || t.status === 'PENDING') && (
                       <button
-                        className="shrink-0 rounded bg-red-100 px-2 py-1 text-[11px] text-red-600 hover:bg-red-200 ml-2"
+                        className="shrink-0 rounded bg-danger-100 px-2 py-1 text-[11px] text-danger-600 hover:bg-danger-200 ml-2"
                         onClick={(e) => { e.stopPropagation(); void cancelTask(t.id); }}
                       >
                         取消
@@ -228,10 +228,10 @@ export default function TaskMonitor(): JSX.Element {
             )}
           </div>
           {/* Task detail panel */}
-          <div className="rounded-xl border border-warm-200 bg-white p-4 min-h-48">
+          <div className="rounded-xl border border-warm-200 bg-warm-100 p-4 min-h-48">
             {!selectedId ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-8">
-                <span className="text-3xl mb-2">👈</span>
+                <span className="text-3xl mb-2">[left]</span>
                 <p className="text-sm text-warm-400">选择任务查看详情</p>
               </div>
             ) : detailLoading ? (
@@ -250,7 +250,7 @@ export default function TaskMonitor(): JSX.Element {
                     <div className="max-h-40 overflow-auto space-y-1">
                       {detail.executionHistory.map((h: Record<string, unknown>, i: number) => (
                         <div key={i} className="text-xs text-warm-600 bg-warm-50 rounded px-2 py-1">
-                          {h.taskType as string} · {(h.success as boolean) ? '✅' : '❌'} · {(h.durationMs as number) || 0}ms
+                          {h.taskType as string} · {(h.success as boolean) ? '[check]' : '[cross]'} · {(h.durationMs as number) || 0}ms
                         </div>
                       ))}
                     </div>
@@ -274,7 +274,7 @@ export default function TaskMonitor(): JSX.Element {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {templates.map((t) => (
-                <div key={t.id} className="rounded-xl border border-warm-200 bg-white px-4 py-3">
+                <div key={t.id} className="rounded-xl border border-warm-200 bg-warm-100 px-4 py-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold text-warm-800">{t.name}</span>
                     <span className="text-[10px] bg-warm-100 text-warm-500 rounded px-2">{t.category}</span>
@@ -304,7 +304,7 @@ export default function TaskMonitor(): JSX.Element {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {routes.map((r) => (
-                <div key={r.id} className={`rounded-xl border bg-white px-4 py-3 ${r.isDefault ? 'border-primary-300 ring-1 ring-primary-100' : 'border-warm-200'}`}>
+                <div key={r.id} className={`rounded-xl border bg-warm-100 px-4 py-3 ${r.isDefault ? 'border-primary-300 ring-1 ring-primary-100' : 'border-warm-200'}`}>
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="text-sm font-semibold text-warm-800">{r.name}</span>
@@ -312,7 +312,7 @@ export default function TaskMonitor(): JSX.Element {
                       <StatusBadge variant={r.active ? 'online' : 'offline'} size="sm" label={r.active ? '启用' : '禁用'} />
                     </div>
                     <button
-                      className={`text-[11px] rounded px-2 py-1 ${r.active ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'}`}
+                      className={`text-[11px] rounded px-2 py-1 ${r.active ? 'bg-danger-50 text-danger-600 hover:bg-danger-100' : 'bg-success-50 text-success-600 hover:bg-success-100'}`}
                       onClick={() => void toggleRoute(r.id)}
                     >
                       {r.active ? '禁用' : '启用'}

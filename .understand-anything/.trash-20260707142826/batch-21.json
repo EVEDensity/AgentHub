@@ -1,0 +1,167 @@
+{
+  "nodes": [
+    {
+      "id": "file:frontend/components/admin/ApiKeyManager.tsx",
+      "type": "file",
+      "name": "ApiKeyManager.tsx",
+      "filePath": "frontend/components/admin/ApiKeyManager.tsx",
+      "summary": "API密钥管理面板：创建/删除/轮换API密钥，展示密钥使用统计和权限管理",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:frontend/components/admin/ApiKeyManager.tsx:ApiKeyManager",
+      "type": "class",
+      "name": "ApiKeyManager",
+      "filePath": "frontend/components/admin/ApiKeyManager.tsx",
+      "summary": "ApiKeyManager",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/components/admin/ToolMarketplace.tsx",
+      "type": "file",
+      "name": "ToolMarketplace.tsx",
+      "filePath": "frontend/components/admin/ToolMarketplace.tsx",
+      "summary": "工具市场面板：浏览/搜索/安装/卸载工具，管理工具版本和配置的市场式UI",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:frontend/components/admin/ToolMarketplace.tsx:ToolMarketplace",
+      "type": "class",
+      "name": "ToolMarketplace",
+      "filePath": "frontend/components/admin/ToolMarketplace.tsx",
+      "summary": "ToolMarketplace",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:frontend/stores/toolStore.ts",
+      "type": "file",
+      "name": "toolStore.ts",
+      "filePath": "frontend/stores/toolStore.ts",
+      "summary": "工具状态管理：Zustand store管理工具列表、分类、搜索过滤和安装状态",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:frontend/stores/toolStore.ts:TOOL_CATEGORIES",
+      "type": "class",
+      "name": "TOOL_CATEGORIES",
+      "filePath": "frontend/stores/toolStore.ts",
+      "summary": "TOOL_CATEGORIES",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:frontend/stores/toolStore.ts:useToolStore",
+      "type": "function",
+      "name": "useToolStore",
+      "filePath": "frontend/stores/toolStore.ts",
+      "summary": "useToolStore",
+      "tags": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:frontend/components/admin/ApiKeyManager.tsx",
+      "target": "class:frontend/components/admin/ApiKeyManager.tsx:ApiKeyManager",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/ApiKeyManager.tsx",
+      "target": "class:frontend/components/admin/ApiKeyManager.tsx:ApiKeyManager",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/ToolMarketplace.tsx",
+      "target": "class:frontend/components/admin/ToolMarketplace.tsx:ToolMarketplace",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/components/admin/ToolMarketplace.tsx",
+      "target": "class:frontend/components/admin/ToolMarketplace.tsx:ToolMarketplace",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/stores/toolStore.ts",
+      "target": "class:frontend/stores/toolStore.ts:TOOL_CATEGORIES",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/stores/toolStore.ts",
+      "target": "class:frontend/stores/toolStore.ts:TOOL_CATEGORIES",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/stores/toolStore.ts",
+      "target": "function:frontend/stores/toolStore.ts:useToolStore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:frontend/stores/toolStore.ts",
+      "target": "function:frontend/stores/toolStore.ts:useToolStore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:frontend/components/admin/ApiKeyManager.tsx",
+      "target": "file:frontend/stores/toolStore.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:frontend/components/admin/ToolMarketplace.tsx",
+      "target": "file:frontend/stores/toolStore.ts",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}
