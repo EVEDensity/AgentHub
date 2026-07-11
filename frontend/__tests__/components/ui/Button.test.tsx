@@ -13,9 +13,9 @@ describe('Button', () => {
 
   it('renders with an icon (left by default)', () => {
     render(<Button icon="send">Send</Button>);
-    const iconSpan = document.querySelector('.material-symbols-outlined');
-    expect(iconSpan).toBeInTheDocument();
-    expect(iconSpan?.textContent).toBe('send');
+    // Icon renders as a plain span (no material-symbols-outlined since Lucide migration)
+    const icon = screen.getByText('send', { selector: 'span' });
+    expect(icon).toBeInTheDocument();
   });
 
   it('renders icon on the right when iconPosition="right"', () => {
@@ -65,8 +65,8 @@ describe('Button', () => {
     const btn = screen.getByRole('button');
     const spinner = btn.querySelector('.animate-spin');
     expect(spinner).toBeInTheDocument();
-    // Icon should not be rendered
-    expect(btn.querySelector('.material-symbols-outlined')).toBeNull();
+    // Icon should not be rendered (spinner takes precedence)
+    expect(screen.queryByText('send')).toBeNull();
   });
 
   // ── Interaction ─────────────────────────────────────────────────

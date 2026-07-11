@@ -8,6 +8,7 @@
     "start": "next start -p 3000",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "npx playwright test",
     "postinstall": "node -e \"const fs=require('fs');const path=require('path');const copies=[['node_modules/pdfjs-dist/build/pdf.min.mjs','public/pdf.min.mjs'],['node_modules/pdfjs-dist/build/pdf.worker.min.mjs','public/pdf.worker.min.mjs']];try{fs.mkdirSync('public',{recursive:true});for(const [src,dst] of copies){fs.copyFileSync(path.join(...src.split('/')),path.join(...dst.split('/')));}console.log('copied pdfjs runtime to public/');}catch(e){console.warn('pdfjs runtime copy skipped:',e.message);}\""
   },
   "dependencies": {
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@next/bundle-analyzer": "^14.2.15",
+    "@playwright/test": "^1.52.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

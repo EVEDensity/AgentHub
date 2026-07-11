@@ -35,10 +35,10 @@ describe('Input', () => {
   });
 
   it('renders an icon on the left', () => {
-    const { container } = render(<Input icon="mail" />);
-    const icon = container.querySelector('.material-symbols-outlined');
+    render(<Input icon="mail" />);
+    // Icon renders as a plain span (no material-symbols-outlined since Lucide migration)
+    const icon = screen.getByText('mail', { selector: 'span' });
     expect(icon).toBeInTheDocument();
-    expect(icon?.textContent).toBe('mail');
   });
 
   it('calls onChange when typing', async () => {
