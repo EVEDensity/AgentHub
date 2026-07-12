@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  # Frontend
+  # ═══════════════════════════════════════════════════════════════════
+  frontend:
+    name: 'Frontend · TS'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx eslint . --ext .ts,.tsx --max-warnings 50
+        continue-on-error: true
+      - run: npx tsc --noEmit
+      - run: npx vitest run --reporter=verbose
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Go — all services + shared libraries
+  # ═══════════════════════════════════════════════════════════════════
+  go:
+    name: 'Go · All'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: services/go/go.sum
+      - run: go work sync
+      # vet all modules in the workspace (GOWORK=off per-module to avoid
+      # "directory prefix . does not contain modules listed in go.work")
+      - name: go vet (all modules)
+        run: |
+          set -e
+          for mod in $(find . -name go.mod -not -path '*/testdata/*' | sed 's|/go.mod||'); do
+            echo "::group::go vet $mod"
+            (cd "$mod" && go vet ./...)
+            echo "::endgroup::"
+          done
+      # test all modules (skip integration tests that need infra)
+      - run: go test -short -race -count=1 ./...
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Rust — all crates
+  # ═══════════════════════════════════════════════════════════════════
+  rust:
+    name: 'Rust · All'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/rust
+      - run: cargo fmt --all --check
+        continue-on-error: true
+      - run: cargo clippy --all-targets -- -D warnings
+        continue-on-error: true
+      - run: cargo test --workspace
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Python — offline services
+  # ═══════════════════════════════════════════════════════════════════
+  python:
+    name: 'Python · All'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install ruff mypy pytest
+      - run: ruff check .
+        continue-on-error: true
+      - run: mypy --ignore-missing-imports --check-untyped-defs .
+        continue-on-error: true
+      - run: pytest --tb=short -q
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Docker — build verification (key images only, parallel)
+  # ═══════════════════════════════════════════════════════════════════
+  docker-build:
+    name: 'Docker · Build'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - { name: gateway,       file: services/go/gateway-service/Dockerfile }
+          - { name: orchestrator,  file: services/go/realtime-orchestrator/Dockerfile }
+          - { name: session,       file: services/go/session-service/Dockerfile }
+          - { name: stream-delivery, file: services/go/stream-delivery-service/Dockerfile }
+          - { name: sandbox,       file: services/go/sandbox-service/Dockerfile }
+          - { name: mcp-gateway,   file: services/go/mcp-gateway/Dockerfile }
+          - { name: iam,           file: services/go/iam-service/Dockerfile }
+          - { name: audit-log,     file: services/go/audit-log-service/Dockerfile }
+          - { name: model-adapter, file: services/python/model_adapter_service/Dockerfile }
+          - { name: frontend,      file: frontend/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.image.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.image.file }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Smoke test — starts minimal infra + key services, verifies health
+  # ═══════════════════════════════════════════════════════════════════
+  smoke-test:
+    name: 'Smoke · Docker Compose'
+    runs-on: ubuntu-latest
+    needs: [frontend, go, rust, python, docker-build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Run smoke test
+        run: bash scripts/ci-smoke-test.sh
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f deploy/docker-compose.ci.yml logs --tail=200 2>/dev/null || true
+
+  # ═══════════════════════════════════════════════════════════════════
+  # Frontend E2E smoke test — Playwright
+  # ═══════════════════════════════════════════════════════════════════
+  frontend-e2e:
+    name: 'Frontend · E2E'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
+      - run: npm run build
+        env:
+          API_BACKEND: go
+          GO_GATEWAY_URL: http://localhost:8081
+      - run: npx playwright test --reporter=list
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: frontend/test-results/

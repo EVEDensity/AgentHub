@@ -1,0 +1,1651 @@
+{
+  "nodes": [
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "type": "file",
+      "name": "core.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "PatchMergeCore顶层编排器：串联diff/patch/merge三路操作，带文本大小防护与运行时统计",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/core.rs:PatchMergeCore",
+      "type": "class",
+      "name": "PatchMergeCore",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "PatchMergeCore",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/core.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/core.rs:config",
+      "type": "function",
+      "name": "config",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "config",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/core.rs:diff",
+      "type": "function",
+      "name": "diff",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "diff",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/core.rs:apply_patch",
+      "type": "function",
+      "name": "apply_patch",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "apply_patch",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/core.rs:merge",
+      "type": "function",
+      "name": "merge",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "merge",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/core.rs:stats",
+      "type": "function",
+      "name": "stats",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "stats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/core.rs:health",
+      "type": "function",
+      "name": "health",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "health",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/core.rs:PatchMergeCoreHealth",
+      "type": "class",
+      "name": "PatchMergeCoreHealth",
+      "filePath": "services/rust/crates/patch-merge-core/src/core.rs",
+      "summary": "PatchMergeCoreHealth",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "type": "file",
+      "name": "diff.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "LCS最长公共子序列行级diff算法：DP求差异→回溯生成Equal/Delete/Insert操作序列→聚合为Change区段",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_lines",
+      "type": "function",
+      "name": "diff_lines",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "diff_lines",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_lines_slices",
+      "type": "function",
+      "name": "diff_lines_slices",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "diff_lines_slices",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/diff.rs:lcs_matching_blocks",
+      "type": "function",
+      "name": "lcs_matching_blocks",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "lcs_matching_blocks",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/diff.rs:lcs_matching_blocks_slices",
+      "type": "function",
+      "name": "lcs_matching_blocks_slices",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "lcs_matching_blocks_slices",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_to_changes",
+      "type": "function",
+      "name": "diff_to_changes",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "diff_to_changes",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_to_changes_slices",
+      "type": "function",
+      "name": "diff_to_changes_slices",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "diff_to_changes_slices",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_result",
+      "type": "function",
+      "name": "diff_result",
+      "filePath": "services/rust/crates/patch-merge-core/src/diff.rs",
+      "summary": "diff_result",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "type": "file",
+      "name": "lib.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/lib.rs",
+      "summary": "patch-merge-core crate根模块：re-export行级diff/patch/merge核心类型",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/lib.rs:supports_three_way_merge",
+      "type": "function",
+      "name": "supports_three_way_merge",
+      "filePath": "services/rust/crates/patch-merge-core/src/lib.rs",
+      "summary": "supports_three_way_merge",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "simple"
+    },
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "type": "file",
+      "name": "merge.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/merge.rs",
+      "summary": "三路合并算法：diff3风格，按base位置游走双方案变更列表，不重叠双取/重叠相同取一次/重叠不同冲突标记+冲突率计算",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/merge.rs:MergeOutcome",
+      "type": "class",
+      "name": "MergeOutcome",
+      "filePath": "services/rust/crates/patch-merge-core/src/merge.rs",
+      "summary": "MergeOutcome",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/merge.rs:into_result",
+      "type": "function",
+      "name": "into_result",
+      "filePath": "services/rust/crates/patch-merge-core/src/merge.rs",
+      "summary": "into_result",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/merge.rs:has_conflicts",
+      "type": "function",
+      "name": "has_conflicts",
+      "filePath": "services/rust/crates/patch-merge-core/src/merge.rs",
+      "summary": "has_conflicts",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/merge.rs:three_way_merge",
+      "type": "function",
+      "name": "three_way_merge",
+      "filePath": "services/rust/crates/patch-merge-core/src/merge.rs",
+      "summary": "three_way_merge",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/merge.rs:three_way_merge_request",
+      "type": "function",
+      "name": "three_way_merge_request",
+      "filePath": "services/rust/crates/patch-merge-core/src/merge.rs",
+      "summary": "three_way_merge_request",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "type": "file",
+      "name": "nats.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/nats.rs",
+      "summary": "NATS适配器：订阅patch.merge.requested事件，调用core.merge处理后发布patch.merge.completed审计事件",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/nats.rs:NatsAdapter",
+      "type": "class",
+      "name": "NatsAdapter",
+      "filePath": "services/rust/crates/patch-merge-core/src/nats.rs",
+      "summary": "NatsAdapter",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/nats.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/patch-merge-core/src/nats.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/nats.rs:connect",
+      "type": "function",
+      "name": "connect",
+      "filePath": "services/rust/crates/patch-merge-core/src/nats.rs",
+      "summary": "connect",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/nats.rs:is_connected",
+      "type": "function",
+      "name": "is_connected",
+      "filePath": "services/rust/crates/patch-merge-core/src/nats.rs",
+      "summary": "is_connected",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/nats.rs:spawn_subscription",
+      "type": "function",
+      "name": "spawn_subscription",
+      "filePath": "services/rust/crates/patch-merge-core/src/nats.rs",
+      "summary": "spawn_subscription",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/nats.rs:close",
+      "type": "function",
+      "name": "close",
+      "filePath": "services/rust/crates/patch-merge-core/src/nats.rs",
+      "summary": "close",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/patch.rs",
+      "type": "file",
+      "name": "patch.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/patch.rs",
+      "summary": "Patch应用引擎：在base上重放DiffOp序列重建修订文本，base_hash校验防脏基误用，逐op上下文校验",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/patch.rs:apply_patch",
+      "type": "function",
+      "name": "apply_patch",
+      "filePath": "services/rust/crates/patch-merge-core/src/patch.rs",
+      "summary": "apply_patch",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "type": "file",
+      "name": "server.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/server.rs",
+      "summary": "HTTP服务端点：健康检查/指标/统计/同步diff/patch/merge操作，超长文本拒绝防护",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/server.rs:PatchMergeHttpServer",
+      "type": "class",
+      "name": "PatchMergeHttpServer",
+      "filePath": "services/rust/crates/patch-merge-core/src/server.rs",
+      "summary": "PatchMergeHttpServer",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/server.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/patch-merge-core/src/server.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/server.rs:serve",
+      "type": "function",
+      "name": "serve",
+      "filePath": "services/rust/crates/patch-merge-core/src/server.rs",
+      "summary": "serve",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "file",
+      "name": "types.rs",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "patch-merge数据模型：DiffOp/Change/Patch/DiffResult/MergeRequest/ConflictRegion/MergeResult及FNV-1a哈希",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffConfig",
+      "type": "class",
+      "name": "DiffConfig",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "DiffConfig",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffOp",
+      "type": "class",
+      "name": "DiffOp",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "DiffOp",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:consumes_base",
+      "type": "function",
+      "name": "consumes_base",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "consumes_base",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:emits",
+      "type": "function",
+      "name": "emits",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "emits",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:as_str",
+      "type": "function",
+      "name": "as_str",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "as_str",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffResult",
+      "type": "class",
+      "name": "DiffResult",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "DiffResult",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:Change",
+      "type": "class",
+      "name": "Change",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "Change",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:overlaps",
+      "type": "function",
+      "name": "overlaps",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "overlaps",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:is_pure_delete",
+      "type": "function",
+      "name": "is_pure_delete",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "is_pure_delete",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:is_pure_insert",
+      "type": "function",
+      "name": "is_pure_insert",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "is_pure_insert",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:Patch",
+      "type": "class",
+      "name": "Patch",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "Patch",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:PatchResult",
+      "type": "class",
+      "name": "PatchResult",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "PatchResult",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:MergeRequest",
+      "type": "class",
+      "name": "MergeRequest",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "MergeRequest",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:ConflictRegion",
+      "type": "class",
+      "name": "ConflictRegion",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "ConflictRegion",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:MergeResult",
+      "type": "class",
+      "name": "MergeResult",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "MergeResult",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/patch-merge-core/src/types.rs:PatchMergeStats",
+      "type": "class",
+      "name": "PatchMergeStats",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "PatchMergeStats",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:content_hash",
+      "type": "function",
+      "name": "content_hash",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "content_hash",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/patch-merge-core/src/types.rs:split_lines",
+      "type": "function",
+      "name": "split_lines",
+      "filePath": "services/rust/crates/patch-merge-core/src/types.rs",
+      "summary": "split_lines",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/core.rs:PatchMergeCore",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/core.rs:PatchMergeCore",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:config",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:config",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:diff",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:diff",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:apply_patch",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:apply_patch",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:merge",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:merge",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:stats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:stats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:health",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/core.rs:health",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/core.rs:PatchMergeCoreHealth",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/core.rs:PatchMergeCoreHealth",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_lines",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_lines",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_lines_slices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_lines_slices",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:lcs_matching_blocks",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:lcs_matching_blocks",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:lcs_matching_blocks_slices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:lcs_matching_blocks_slices",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_to_changes",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_to_changes",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_to_changes_slices",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_to_changes_slices",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_result",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/diff.rs:diff_result",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/lib.rs:supports_three_way_merge",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/lib.rs:supports_three_way_merge",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/merge.rs:MergeOutcome",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/merge.rs:MergeOutcome",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:into_result",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:into_result",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:has_conflicts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:has_conflicts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:three_way_merge",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:three_way_merge",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:three_way_merge_request",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/merge.rs:three_way_merge_request",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/nats.rs:NatsAdapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/nats.rs:NatsAdapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:connect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:connect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:is_connected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:is_connected",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:spawn_subscription",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:spawn_subscription",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:close",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/nats.rs:close",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/patch.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/patch.rs:apply_patch",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/patch.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/patch.rs:apply_patch",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/server.rs:PatchMergeHttpServer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/server.rs:PatchMergeHttpServer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/server.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/server.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/server.rs:serve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/server.rs:serve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffConfig",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffConfig",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffOp",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffOp",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:consumes_base",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:consumes_base",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:emits",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:emits",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:as_str",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:as_str",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:DiffResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:Change",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:Change",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:overlaps",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:overlaps",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:is_pure_delete",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:is_pure_delete",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:is_pure_insert",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:is_pure_insert",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:Patch",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:Patch",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:PatchResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:PatchResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:MergeRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:MergeRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:ConflictRegion",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:ConflictRegion",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:MergeResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:MergeResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:PatchMergeStats",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "class:services/rust/crates/patch-merge-core/src/types.rs:PatchMergeStats",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:content_hash",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:content_hash",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:split_lines",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "target": "function:services/rust/crates/patch-merge-core/src/types.rs:split_lines",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/patch.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/patch.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/lib.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/diff.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/merge.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/nats.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/patch.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/patch-merge-core/src/server.rs",
+      "target": "file:services/rust/crates/patch-merge-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

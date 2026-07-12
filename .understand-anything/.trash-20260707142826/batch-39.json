@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "batchIndex": 39,
+  "nodes": [
+    {
+      "id": "services/rust/crates/fanout-core/Dockerfile",
+      "type": "file",
+      "name": "fanout-core Dockerfile",
+      "filePath": "services/rust/crates/fanout-core/Dockerfile",
+      "summary": "fanout-core 的 Docker 多阶段构建文件，使用 rust:1-bookworm 构建，BuildKit 缓存优化，暴露端口 8103，用于消息扇出分发核心服务的容器化部署",
+      "tags": ["Docker", "Rust", "消息扇出", "微服务", "基础设施"],
+      "complexity": 2
+    }
+  ],
+  "edges": []
+}

@@ -1,0 +1,78 @@
+{
+  "batchIndex": 48,
+  "nodes": [
+    {
+      "id": "file:UI-design/UI优化方向.md",
+      "type": "file",
+      "name": "UI优化方向.md",
+      "filePath": "UI-design/UI优化方向.md",
+      "summary": "AgentHub 与竞品 UI 差距分析：对比 Codex/Dify/Coze，提出 P0-P3 优先级优化建议",
+      "tags": ["ui", "design", "competitive-analysis", "ux"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:UI-design/UI设计.md",
+      "type": "file",
+      "name": "UI设计.md",
+      "filePath": "UI-design/UI设计.md",
+      "summary": "AgentHub 设计系统完整规范：全局 CSS 变量、三栏布局、组件模式、交互规范、避坑清单",
+      "tags": ["ui", "design-system", "css-variables", "components"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:UI-design/agent-orchestration.html",
+      "type": "file",
+      "name": "agent-orchestration.html",
+      "filePath": "UI-design/agent-orchestration.html",
+      "summary": "智能体团队编排交互原型：六角色 DAG 编排画布、SVG 流程连线、可拖拽面板、终端控制台",
+      "tags": ["ui", "prototype", "agent-orchestration", "html", "interactive"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:UI-design/index.html",
+      "type": "file",
+      "name": "index.html",
+      "filePath": "UI-design/index.html",
+      "summary": "AgentHub 首页工作台：状态栏、功能卡片网格、键盘导航 1-5 快捷键",
+      "tags": ["ui", "prototype", "landing-page", "html"],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:UI-design/monitoring.html",
+      "type": "file",
+      "name": "monitoring.html",
+      "filePath": "UI-design/monitoring.html",
+      "summary": "观测监控交互原型：指标卡片、SVG 趋势图、日志终端、事件流、时间范围选择器",
+      "tags": ["ui", "prototype", "monitoring", "html", "metrics"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:UI-design/rag-retrieval.html",
+      "type": "file",
+      "name": "rag-retrieval.html",
+      "filePath": "UI-design/rag-retrieval.html",
+      "summary": "RAG 检索交互原型：知识库多选芯片、流水线步骤、检索结果卡片、向量嵌入日志",
+      "tags": ["ui", "prototype", "rag", "html", "search"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:UI-design/react-state-machine.html",
+      "type": "file",
+      "name": "react-state-machine.html",
+      "filePath": "UI-design/react-state-machine.html",
+      "summary": "ReAct 状态机交互原型：11 状态管线可视化、步进调试、进度条、键盘快捷键",
+      "tags": ["ui", "prototype", "react", "state-machine", "html"],
+      "complexity": "complex"
+    },
+    {
+      "id": "file:UI-design/settings.html",
+      "type": "file",
+      "name": "settings.html",
+      "filePath": "UI-design/settings.html",
+      "summary": "系统配置交互原型：多模型配置、RBAC/ABAC 开关、预设卡片、危险操作二次确认",
+      "tags": ["ui", "prototype", "settings", "html", "rbac"],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": []
+}

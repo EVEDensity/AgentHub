@@ -1,0 +1,541 @@
+{
+  "batch": 1,
+  "part": 3,
+  "totalParts": 5,
+  "nodeCount": 55,
+  "edgeCount": 0,
+  "nodes": [
+    {
+      "id": "function:app/services/tools/agent_tools.py:set_tool_context",
+      "type": "function",
+      "name": "set_tool_context",
+      "filePath": "app/services/tools/agent_tools.py",
+      "summary": "设置当前 Agent 工具上下文（user_id, session_id, workspace_root）",
+      "tags": ["tool", "context", "agent"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/tools/agent_tools.py:get_tool_context",
+      "type": "function",
+      "name": "get_tool_context",
+      "filePath": "app/services/tools/agent_tools.py",
+      "summary": "获取当前 Agent 工具上下文字典",
+      "tags": ["tool", "context", "agent"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/tools/agent_tools.py:invoke_agent_handler",
+      "type": "function",
+      "name": "invoke_agent_handler",
+      "filePath": "app/services/tools/agent_tools.py",
+      "summary": "调用另一个 Agent 并返回回复文本",
+      "tags": ["tool", "agent", "invoke"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/services/tools/agent_tools.py:invoke_agents_parallel_handler",
+      "type": "function",
+      "name": "invoke_agents_parallel_handler",
+      "filePath": "app/services/tools/agent_tools.py",
+      "summary": "并行调用多个 Agent 并汇总结果",
+      "tags": ["tool", "agent", "parallel"],
+      "complexity": 5
+    },
+    {
+      "id": "function:app/services/tools/agent_tools.py:task_handler",
+      "type": "function",
+      "name": "task_handler",
+      "filePath": "app/services/tools/agent_tools.py",
+      "summary": "创建并等待一个任务完成",
+      "tags": ["tool", "task", "async"],
+      "complexity": 5
+    },
+    {
+      "id": "function:app/services/tools/browser_tools.py:_get_browser",
+      "type": "function",
+      "name": "_get_browser",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "获取或创建全局 Playwright 浏览器实例",
+      "tags": ["browser", "playwright", "singleton"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/services/tools/browser_tools.py:_ensure_browser",
+      "type": "function",
+      "name": "_ensure_browser",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "确保浏览器已启动，未启动则创建新实例",
+      "tags": ["browser", "playwright"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/services/tools/browser_tools.py:browser_navigate_handler",
+      "type": "function",
+      "name": "browser_navigate_handler",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "导航到指定 URL 并返回页面标题和内容",
+      "tags": ["tool", "browser", "navigate"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/browser_tools.py:browser_extract_handler",
+      "type": "function",
+      "name": "browser_extract_handler",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "从当前页面提取结构化文本内容",
+      "tags": ["tool", "browser", "extract"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/browser_tools.py:browser_screenshot_handler",
+      "type": "function",
+      "name": "browser_screenshot_handler",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "对当前页面截图并返回 base64 数据",
+      "tags": ["tool", "browser", "screenshot"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/browser_tools.py:browser_click_handler",
+      "type": "function",
+      "name": "browser_click_handler",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "点击页面指定元素",
+      "tags": ["tool", "browser", "click"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/browser_tools.py:browser_type_handler",
+      "type": "function",
+      "name": "browser_type_handler",
+      "filePath": "app/services/tools/browser_tools.py",
+      "summary": "在页面输入框中输入文本",
+      "tags": ["tool", "browser", "input"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:_safe_path",
+      "type": "function",
+      "name": "_safe_path",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "验证并解析工作区内安全路径，防路径遍历",
+      "tags": ["util", "path", "security"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:_compute_unified_diff",
+      "type": "function",
+      "name": "_compute_unified_diff",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "计算两个文本的 unified diff",
+      "tags": ["util", "diff"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:_auto_git_commit",
+      "type": "function",
+      "name": "_auto_git_commit",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "文件写操作后自动 Git 提交（配置启用时）",
+      "tags": ["git", "auto-commit"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:_resolve_search_providers",
+      "type": "function",
+      "name": "_resolve_search_providers",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "解析启用的搜索提供商列表",
+      "tags": ["util", "search", "provider"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:web_search_handler",
+      "type": "function",
+      "name": "web_search_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "Web 搜索工具入口，多引擎并行搜索并聚合结果",
+      "tags": ["tool", "search", "web"],
+      "complexity": 8
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_read_handler",
+      "type": "function",
+      "name": "file_read_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "读取工作区文件内容",
+      "tags": ["tool", "file", "read"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_write_handler",
+      "type": "function",
+      "name": "file_write_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "写入文件到工作区，含自动 Git 提交和版本追踪",
+      "tags": ["tool", "file", "write"],
+      "complexity": 6
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_write_batch_handler",
+      "type": "function",
+      "name": "file_write_batch_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "批量写入多个文件",
+      "tags": ["tool", "file", "batch"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:code_execute_handler",
+      "type": "function",
+      "name": "code_execute_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "执行 Bash/Python 命令并返回输出",
+      "tags": ["tool", "exec", "command"],
+      "complexity": 7
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_search_handler",
+      "type": "function",
+      "name": "file_search_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "在工作区中搜索文件名（递归 glob）",
+      "tags": ["tool", "file", "search"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_patch_handler",
+      "type": "function",
+      "name": "file_patch_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "对文件应用 unified diff patch",
+      "tags": ["tool", "file", "patch"],
+      "complexity": 5
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:memory_save_handler",
+      "type": "function",
+      "name": "memory_save_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "保存信息到记忆系统",
+      "tags": ["tool", "memory", "save"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:memory_search_handler",
+      "type": "function",
+      "name": "memory_search_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "搜索记忆系统中的信息",
+      "tags": ["tool", "memory", "search"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_edit_handler",
+      "type": "function",
+      "name": "file_edit_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "对文件执行字符串替换编辑",
+      "tags": ["tool", "file", "edit"],
+      "complexity": 5
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_glob_handler",
+      "type": "function",
+      "name": "file_glob_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "使用 glob 模式在工作区中搜索文件",
+      "tags": ["tool", "file", "glob"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:mkdir_handler",
+      "type": "function",
+      "name": "mkdir_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "创建工作区目录",
+      "tags": ["tool", "file", "mkdir"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/services/tools/builtin_tools.py:file_glob_handler",
+      "type": "function",
+      "name": "file_glob_handler",
+      "filePath": "app/services/tools/builtin_tools.py",
+      "summary": "使用 glob 模式在工作区中搜索文件",
+      "tags": ["tool", "file", "glob"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/network_tools.py:_is_host_allowed",
+      "type": "function",
+      "name": "_is_host_allowed",
+      "filePath": "app/services/tools/network_tools.py",
+      "summary": "检查主机是否在白名单中，支持 glob 通配",
+      "tags": ["util", "network", "security"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/network_tools.py:http_request_handler",
+      "type": "function",
+      "name": "http_request_handler",
+      "filePath": "app/services/tools/network_tools.py",
+      "summary": "发送 HTTP 请求并返回响应（支持 GET/POST/PUT/DELETE）",
+      "tags": ["tool", "network", "http"],
+      "complexity": 5
+    },
+    {
+      "id": "function:app/services/tools/session_tools.py:set_session_tool_context",
+      "type": "function",
+      "name": "set_session_tool_context",
+      "filePath": "app/services/tools/session_tools.py",
+      "summary": "设置会话工具上下文（session_id 等）",
+      "tags": ["tool", "session", "context"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/tools/session_tools.py:get_session_tool_context",
+      "type": "function",
+      "name": "get_session_tool_context",
+      "filePath": "app/services/tools/session_tools.py",
+      "summary": "获取会话工具上下文字典",
+      "tags": ["tool", "session", "context"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/tools/session_tools.py:artifact_list_handler",
+      "type": "function",
+      "name": "artifact_list_handler",
+      "filePath": "app/services/tools/session_tools.py",
+      "summary": "列出当前会话的 Artifact 列表",
+      "tags": ["tool", "artifact", "list"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/session_tools.py:artifact_read_handler",
+      "type": "function",
+      "name": "artifact_read_handler",
+      "filePath": "app/services/tools/session_tools.py",
+      "summary": "读取指定 Artifact 的内容",
+      "tags": ["tool", "artifact", "read"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/services/tools/session_tools.py:conversation_search_handler",
+      "type": "function",
+      "name": "conversation_search_handler",
+      "filePath": "app/services/tools/session_tools.py",
+      "summary": "搜索当前会话的历史消息",
+      "tags": ["tool", "session", "search"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/skill_tools.py:_parse_skill_md",
+      "type": "function",
+      "name": "_parse_skill_md",
+      "filePath": "app/services/tools/skill_tools.py",
+      "summary": "解析 SKILL.md 文件提取元数据和指令",
+      "tags": ["util", "skill", "parse"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/services/tools/skill_tools.py:_discover_skill_dirs",
+      "type": "function",
+      "name": "_discover_skill_dirs",
+      "filePath": "app/services/tools/skill_tools.py",
+      "summary": "发现用户级和项目级的所有技能目录",
+      "tags": ["util", "skill", "discovery"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/skill_tools.py:skill_list_handler",
+      "type": "function",
+      "name": "skill_list_handler",
+      "filePath": "app/services/tools/skill_tools.py",
+      "summary": "列出所有可用技能及其描述",
+      "tags": ["tool", "skill", "list"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/services/tools/skill_tools.py:skill_load_handler",
+      "type": "function",
+      "name": "skill_load_handler",
+      "filePath": "app/services/tools/skill_tools.py",
+      "summary": "加载指定技能的完整指令内容",
+      "tags": ["tool", "skill", "load"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/services/tools/skill_tools.py:command_execute_handler",
+      "type": "function",
+      "name": "command_execute_handler",
+      "filePath": "app/services/tools/skill_tools.py",
+      "summary": "执行自定义命令并返回结果",
+      "tags": ["tool", "command", "exec"],
+      "complexity": 4
+    },
+    {
+      "id": "function:app/services/workspace_context.py:slugify_user_dir",
+      "type": "function",
+      "name": "slugify_user_dir",
+      "filePath": "app/services/workspace_context.py",
+      "summary": "将 user_id 转换为安全的目录名",
+      "tags": ["workspace", "path", "slug"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/workspace_context.py:slugify_session_dir",
+      "type": "function",
+      "name": "slugify_session_dir",
+      "filePath": "app/services/workspace_context.py",
+      "summary": "将 session_id 转换为安全的目录名",
+      "tags": ["workspace", "path", "slug"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/workspace_context.py:build_workspace_root",
+      "type": "function",
+      "name": "build_workspace_root",
+      "filePath": "app/services/workspace_context.py",
+      "summary": "构建用户+会话的完整工作区根目录路径",
+      "tags": ["workspace", "path"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/services/workspace_context.py:set_workspace_context",
+      "type": "function",
+      "name": "set_workspace_context",
+      "filePath": "app/services/workspace_context.py",
+      "summary": "设置当前请求的工作区上下文（ContextVar）",
+      "tags": ["workspace", "context"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/workspace_context.py:get_workspace_root",
+      "type": "function",
+      "name": "get_workspace_root",
+      "filePath": "app/services/workspace_context.py",
+      "summary": "获取当前工作区根目录路径",
+      "tags": ["workspace", "path"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/services/workspace_context.py:resolve_workspace_path",
+      "type": "function",
+      "name": "resolve_workspace_path",
+      "filePath": "app/services/workspace_context.py",
+      "summary": "解析工作区内的相对路径，确保不超出边界",
+      "tags": ["workspace", "path", "security"],
+      "complexity": 3
+    },
+    {
+      "id": "function:app/utils/async_file.py:aexists",
+      "type": "function",
+      "name": "aexists",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步检查路径是否存在",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/utils/async_file.py:aisfile",
+      "type": "function",
+      "name": "aisfile",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步检查路径是否为文件",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/utils/async_file.py:aisdir",
+      "type": "function",
+      "name": "aisdir",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步检查路径是否为目录",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/utils/async_file.py:aread_text",
+      "type": "function",
+      "name": "aread_text",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步读取文本文件",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/utils/async_file.py:awrite_text",
+      "type": "function",
+      "name": "awrite_text",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步写入文本文件",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/utils/async_file.py:aread_bytes",
+      "type": "function",
+      "name": "aread_bytes",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步读取二进制文件",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/utils/async_file.py:awrite_bytes",
+      "type": "function",
+      "name": "awrite_bytes",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步写入二进制文件",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "function:app/utils/async_file.py:aglob",
+      "type": "function",
+      "name": "aglob",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步 glob 文件搜索",
+      "tags": ["util", "async", "fs"],
+      "complexity": 2
+    },
+    {
+      "id": "function:app/utils/async_file.py:armtree",
+      "type": "function",
+      "name": "armtree",
+      "filePath": "app/utils/async_file.py",
+      "summary": "异步递归删除目录树",
+      "tags": ["util", "async", "fs"],
+      "complexity": 1
+    },
+    {
+      "id": "class:main.py:_BodySizeLimitMiddleware",
+      "type": "class",
+      "name": "_BodySizeLimitMiddleware",
+      "filePath": "main.py",
+      "summary": "Starlette 中间件，限制请求体大小",
+      "tags": ["middleware", "security"],
+      "complexity": 2
+    },
+    {
+      "id": "function:main.py:lifespan",
+      "type": "function",
+      "name": "lifespan",
+      "filePath": "main.py",
+      "summary": "FastAPI 生命周期管理器（启动/关闭事件）",
+      "tags": ["app", "lifecycle"],
+      "complexity": 4
+    },
+    {
+      "id": "function:main.py:root_endpoint",
+      "type": "function",
+      "name": "root",
+      "filePath": "main.py",
+      "summary": "根路径重定向到 /chat",
+      "tags": ["api", "redirect"],
+      "complexity": 1
+    }
+  ],
+  "edges": []
+}

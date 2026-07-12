@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "batchIndex": 35,
+  "nodes": [
+    {
+      "id": "services/python/model_adapter_service/Dockerfile",
+      "type": "file",
+      "name": "model_adapter_service Dockerfile",
+      "filePath": "services/python/model_adapter_service/Dockerfile",
+      "summary": "model_adapter_service 的 Docker 构建文件，基于 python:3.11-slim，安装 FastAPI、uvicorn、httpx、prometheus_client 等依赖，暴露端口 8091，作为 AI 模型适配器的 HTTP 服务容器",
+      "tags": ["Docker", "Python", "模型适配", "微服务", "基础设施"],
+      "complexity": 1
+    }
+  ],
+  "edges": []
+}

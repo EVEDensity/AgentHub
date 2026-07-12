@@ -1,0 +1,17 @@
+{
+  "batchIndex": 26,
+  "nodes": [
+    {
+      "id": "services/go/audit-log-service/Dockerfile",
+      "type": "service",
+      "label": "Dockerfile",
+      "filePath": "services/go/audit-log-service/Dockerfile",
+      "language": "dockerfile",
+      "batchIndex": 26,
+      "tags": [
+        "Docker镜像构建"
+      ]
+    }
+  ],
+  "edges": []
+}

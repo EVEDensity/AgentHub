@@ -1,0 +1,82 @@
+# ── CI Smoke Test Compose ───────────────────────────────────────────────
+# Starts minimal infra + 2 services, then curl /healthz to verify they
+# actually run. Designed for GHA free tier (7 GB RAM, 4 cores, 14 GB SSD).
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.ci.yml up -d --build --wait
+#   bash scripts/ci-smoke-test.sh
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════
+  #  INFRASTRUCTURE
+  # ═══════════════════════════════════════════════════════════════════════
+
+  nats:
+    image: nats:2.10
+    command: ["-js"]
+    healthcheck:
+      test: ["CMD", "nats", "server", "check", "-s", "nats://localhost:4222"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agenthub
+      POSTGRES_PASSWORD: agenthub
+      POSTGRES_DB: agenthub
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agenthub"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7.2
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  GO SERVICE — API entry point
+  # ═══════════════════════════════════════════════════════════════════════
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: services/go/gateway-service/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+      REDIS_ADDR: "redis:6379"
+      DATABASE_DSN: "postgres://agenthub:agenthub@postgres:5432/agenthub?sslmode=disable"
+      GATEWAY_ADDR: ":8081"
+      JWT_SECRET: "ci-test-secret-do-not-use-in-production"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    depends_on:
+      nats:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  #  PYTHON SERVICE — lightest Python service, NATS-only
+  # ═══════════════════════════════════════════════════════════════════════
+
+  summarization:
+    build:
+      context: ..
+      dockerfile: services/python/summarization_service/Dockerfile
+    environment:
+      NATS_URL: "nats://nats:4222"
+    depends_on:
+      nats:
+        condition: service_healthy
+    ports:
+      - "8093:8093"

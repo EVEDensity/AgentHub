@@ -1,0 +1,75 @@
+# ─── Python ───────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ─── Frontend ─────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+
+# ─── Root node_modules (accidental commits) ─────────────────────────
+node_modules/
+
+# ─── Environment & Secrets ────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Data ─────────────────────────────────────────────────────────
+data/
+!frontend/data/
+*.sqlite3
+*.db
+
+# ─── Compiled Binaries ────────────────────────────────────────────
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ─── Backup & Temp Files ──────────────────────────────────────────
+*.bak
+*.tmp
+*.swp
+*~
+
+# ─── Logs ─────────────────────────────────────────────────────────
+*.log
+
+# ─── IDE / Editor ─────────────────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*Thumbs.db
+
+# ─── Claude AI (项目记忆/计划包含架构策略) ──────────────────────────
+.claude/
+
+# ─── K8s Deployment (生产部署拓扑 — 个人开发者不宜公开) ─────────────
+k8s/
+
+# ─── Platform Internal (内部契约/架构/容量/迁移 — 架构设计 IP) ─────────
+platform/contracts/
+platform/*.json
+
+# ─── Monitoring Configs (暴露服务拓扑和端口) ────────────────────────
+deploy/prometheus.yml
+deploy/grafana/
+
+# ─── Frontend Internal Charts (架构可视化 — 暴露内部设计) ─────────────
+frontend/public/charts/
+
+# ─── Strategic Planning Docs (竞品分析/产品路线图/内部架构文档) ─────────
+AgentHub V[0-9]*.md
+AgentHub-*.md
+重构*.md
+*重构进度清单*.md
+docs/AgentHub-*.md
+docs/AI_COLLABORATION*.md
+架构对比分析与修改计划.md

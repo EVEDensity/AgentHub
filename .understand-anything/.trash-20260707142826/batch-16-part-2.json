@@ -1,0 +1,832 @@
+{
+  "nodes": [
+    {
+      "id": "class:services/go/mcp-gateway/internal/protocol/types.go:PromptMessage",
+      "type": "class",
+      "name": "PromptMessage",
+      "filePath": "services/go/mcp-gateway/internal/protocol/types.go",
+      "summary": "PromptMessage",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/protocol/types.go:PromptContent",
+      "type": "class",
+      "name": "PromptContent",
+      "filePath": "services/go/mcp-gateway/internal/protocol/types.go",
+      "summary": "PromptContent",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/protocol/types.go:LogMessage",
+      "type": "class",
+      "name": "LogMessage",
+      "filePath": "services/go/mcp-gateway/internal/protocol/types.go",
+      "summary": "LogMessage",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/protocol/types.go:NewResult",
+      "type": "class",
+      "name": "NewResult",
+      "filePath": "services/go/mcp-gateway/internal/protocol/types.go",
+      "summary": "NewResult",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/protocol/types.go:NewError",
+      "type": "class",
+      "name": "NewError",
+      "filePath": "services/go/mcp-gateway/internal/protocol/types.go",
+      "summary": "NewError",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/protocol/types.go:NewNotification",
+      "type": "class",
+      "name": "NewNotification",
+      "filePath": "services/go/mcp-gateway/internal/protocol/types.go",
+      "summary": "NewNotification",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/protocol/types.go:MarshalResponse",
+      "type": "class",
+      "name": "MarshalResponse",
+      "filePath": "services/go/mcp-gateway/internal/protocol/types.go",
+      "summary": "MarshalResponse",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "type": "file",
+      "name": "tools.go",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "MCP工具注册表：管理已注册的工具/资源/提示，支持ListTools/CallTool/ListResources/ReadResource等MCP方法",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "complex"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:RegisteredTool",
+      "type": "class",
+      "name": "RegisteredTool",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "RegisteredTool",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:Registry",
+      "type": "class",
+      "name": "Registry",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "Registry",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:New",
+      "type": "class",
+      "name": "New",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "New",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:ListTools",
+      "type": "class",
+      "name": "ListTools",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "ListTools",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:CallTool",
+      "type": "class",
+      "name": "CallTool",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "CallTool",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:ListResources",
+      "type": "class",
+      "name": "ListResources",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "ListResources",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:ReadResource",
+      "type": "class",
+      "name": "ReadResource",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "ReadResource",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:ListPrompts",
+      "type": "class",
+      "name": "ListPrompts",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "ListPrompts",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/registry/tools.go:GetPrompt",
+      "type": "class",
+      "name": "GetPrompt",
+      "filePath": "services/go/mcp-gateway/internal/registry/tools.go",
+      "summary": "GetPrompt",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "type": "file",
+      "name": "sse.go",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "SSE传输层：基于Server-Sent Events的MCP客户端连接管理，支持会话生命周期和消息帧编解码",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:SSETransport",
+      "type": "class",
+      "name": "SSETransport",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "SSETransport",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:NewSSETransport",
+      "type": "class",
+      "name": "NewSSETransport",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "NewSSETransport",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:ServeHTTP",
+      "type": "class",
+      "name": "ServeHTTP",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "ServeHTTP",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:SessionCount",
+      "type": "class",
+      "name": "SessionCount",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "SessionCount",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:PruneSessions",
+      "type": "class",
+      "name": "PruneSessions",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "PruneSessions",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:SSEHandler",
+      "type": "class",
+      "name": "SSEHandler",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "SSEHandler",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:NewSSEHandler",
+      "type": "class",
+      "name": "NewSSEHandler",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "NewSSEHandler",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:ServeHTTP",
+      "type": "class",
+      "name": "ServeHTTP",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "ServeHTTP",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:SessionCount",
+      "type": "class",
+      "name": "SessionCount",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "SessionCount",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:Transport",
+      "type": "class",
+      "name": "Transport",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "Transport",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:FrameMessage",
+      "type": "class",
+      "name": "FrameMessage",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "FrameMessage",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/sse.go:ReadMessages",
+      "type": "class",
+      "name": "ReadMessages",
+      "filePath": "services/go/mcp-gateway/internal/transport/sse.go",
+      "summary": "ReadMessages",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/go/mcp-gateway/internal/transport/stdio.go",
+      "type": "file",
+      "name": "stdio.go",
+      "filePath": "services/go/mcp-gateway/internal/transport/stdio.go",
+      "summary": "STDIO传输层：通过标准输入输出实现MCP协议的本地子进程通信传输",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/stdio.go:STDIOTransport",
+      "type": "class",
+      "name": "STDIOTransport",
+      "filePath": "services/go/mcp-gateway/internal/transport/stdio.go",
+      "summary": "STDIOTransport",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/stdio.go:NewSTDIOTransport",
+      "type": "class",
+      "name": "NewSTDIOTransport",
+      "filePath": "services/go/mcp-gateway/internal/transport/stdio.go",
+      "summary": "NewSTDIOTransport",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/go/mcp-gateway/internal/transport/stdio.go:Serve",
+      "type": "class",
+      "name": "Serve",
+      "filePath": "services/go/mcp-gateway/internal/transport/stdio.go",
+      "summary": "Serve",
+      "tags": [
+        "service",
+        "go",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:RegisteredTool",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:RegisteredTool",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:Registry",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:Registry",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:New",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:New",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ListTools",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ListTools",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:CallTool",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:CallTool",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ListResources",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ListResources",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ReadResource",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ReadResource",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ListPrompts",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:ListPrompts",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:GetPrompt",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "class:services/go/mcp-gateway/internal/registry/tools.go:GetPrompt",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SSETransport",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SSETransport",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:NewSSETransport",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:NewSSETransport",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:ServeHTTP",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:ServeHTTP",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SessionCount",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SessionCount",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:PruneSessions",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:PruneSessions",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SSEHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SSEHandler",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:NewSSEHandler",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:NewSSEHandler",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:ServeHTTP",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:ServeHTTP",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SessionCount",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:SessionCount",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:Transport",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:Transport",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:FrameMessage",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:FrameMessage",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:ReadMessages",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/sse.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/sse.go:ReadMessages",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/stdio.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/stdio.go:STDIOTransport",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/stdio.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/stdio.go:STDIOTransport",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/stdio.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/stdio.go:NewSTDIOTransport",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/stdio.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/stdio.go:NewSTDIOTransport",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/stdio.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/stdio.go:Serve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/transport/stdio.go",
+      "target": "class:services/go/mcp-gateway/internal/transport/stdio.go:Serve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "file:services/go/mcp-gateway/internal/protocol/handler.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/go/mcp-gateway/internal/registry/tools.go",
+      "target": "file:services/go/mcp-gateway/internal/protocol/types.go",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}

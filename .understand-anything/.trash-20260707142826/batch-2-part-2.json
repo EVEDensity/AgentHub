@@ -1,0 +1,630 @@
+{
+  "nodes": [
+    {
+      "id": "file:frontend/stores/a2aStore.ts",
+      "type": "file",
+      "label": "frontend/stores/a2aStore.ts",
+      "filePath": "frontend/stores/a2aStore.ts",
+      "language": "typescript",
+      "description": "A2A 代理状态管理（zustand），含代理 CRUD/注册/发现/任务操作",
+      "summary": "A2A 代理状态管理（zustand），含代理 CRUD/注册/发现/任务操作",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "totalLines": 224
+    },
+    {
+      "id": "file:frontend/stores/abTestStore.ts",
+      "type": "file",
+      "label": "frontend/stores/abTestStore.ts",
+      "filePath": "frontend/stores/abTestStore.ts",
+      "language": "typescript",
+      "description": "A/B 测试状态管理（zustand），含测试 CRUD/结果计算/统计操作",
+      "summary": "A/B 测试状态管理（zustand），含测试 CRUD/结果计算/统计操作",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 1,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "totalLines": 499
+    },
+    {
+      "id": "file:frontend/stores/adminStore.ts",
+      "type": "file",
+      "label": "frontend/stores/adminStore.ts",
+      "filePath": "frontend/stores/adminStore.ts",
+      "language": "typescript",
+      "description": "管理员全局状态（zustand），含菜单配置/活跃菜单/全局通知",
+      "summary": "管理员全局状态（zustand），含菜单配置/活跃菜单/全局通知",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 0,
+        "exportCount": 4,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "totalLines": 72
+    },
+    {
+      "id": "file:frontend/stores/agentStore.ts",
+      "type": "file",
+      "label": "frontend/stores/agentStore.ts",
+      "filePath": "frontend/stores/agentStore.ts",
+      "language": "typescript",
+      "description": "Agent 状态管理（zustand），含适配器/模型/技能/配置管理",
+      "summary": "Agent 状态管理（zustand），含适配器/模型/技能/配置管理",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 1,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "totalLines": 289
+    },
+    {
+      "id": "file:frontend/stores/agentVersionStore.ts",
+      "type": "file",
+      "label": "frontend/stores/agentVersionStore.ts",
+      "filePath": "frontend/stores/agentVersionStore.ts",
+      "language": "typescript",
+      "description": "Agent 版本状态管理（zustand），含版本历史/差异对比/回滚",
+      "summary": "Agent 版本状态管理（zustand），含版本历史/差异对比/回滚",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 1,
+        "functionCount": 4,
+        "classCount": 0
+      },
+      "totalLines": 313
+    },
+    {
+      "id": "file:frontend/stores/authStore.ts",
+      "type": "file",
+      "label": "frontend/stores/authStore.ts",
+      "filePath": "frontend/stores/authStore.ts",
+      "language": "typescript",
+      "description": "认证状态管理（zustand），含用户/Token/authHeaders",
+      "summary": "认证状态管理（zustand），含用户/Token/authHeaders",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 1,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "totalLines": 37
+    },
+    {
+      "id": "file:frontend/stores/costStore.ts",
+      "type": "file",
+      "label": "frontend/stores/costStore.ts",
+      "filePath": "frontend/stores/costStore.ts",
+      "language": "typescript",
+      "description": "成本状态管理（zustand），含用量/账单/趋势/异常检测",
+      "summary": "成本状态管理（zustand），含用量/账单/趋势/异常检测",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 1,
+        "exportCount": 1,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "totalLines": 151
+    },
+    {
+      "id": "file:frontend/stores/knowledgeStore.ts",
+      "type": "file",
+      "label": "frontend/stores/knowledgeStore.ts",
+      "filePath": "frontend/stores/knowledgeStore.ts",
+      "language": "typescript",
+      "description": "知识库状态管理（zustand），含集合/文档/分块/检索操作",
+      "summary": "知识库状态管理（zustand），含集合/文档/分块/检索操作",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "totalLines": 316
+    },
+    {
+      "id": "file:frontend/stores/memoryStore.ts",
+      "type": "file",
+      "label": "frontend/stores/memoryStore.ts",
+      "filePath": "frontend/stores/memoryStore.ts",
+      "language": "typescript",
+      "description": "记忆状态管理（zustand），含文件/会话/消息 CRUD",
+      "summary": "记忆状态管理（zustand），含文件/会话/消息 CRUD",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 1,
+        "functionCount": 0,
+        "classCount": 0
+      },
+      "totalLines": 627
+    },
+    {
+      "id": "file:frontend/stores/userManagementStore.ts",
+      "type": "file",
+      "label": "frontend/stores/userManagementStore.ts",
+      "filePath": "frontend/stores/userManagementStore.ts",
+      "language": "typescript",
+      "description": "用户管理状态（zustand），含用户列表/邀请/设置操作",
+      "summary": "用户管理状态（zustand），含用户列表/邀请/设置操作",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "totalLines": 281
+    },
+    {
+      "id": "file:frontend/stores/workflowStore.ts",
+      "type": "file",
+      "label": "frontend/stores/workflowStore.ts",
+      "filePath": "frontend/stores/workflowStore.ts",
+      "language": "typescript",
+      "description": "工作流状态管理（zustand），含工作流 CRUD/执行/统计分析",
+      "summary": "工作流状态管理（zustand），含工作流 CRUD/执行/统计分析",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 2,
+        "exportCount": 1,
+        "functionCount": 2,
+        "classCount": 0
+      },
+      "totalLines": 273
+    },
+    {
+      "id": "file:frontend/stores/workspaceStore.ts",
+      "type": "file",
+      "label": "frontend/stores/workspaceStore.ts",
+      "filePath": "frontend/stores/workspaceStore.ts",
+      "language": "typescript",
+      "description": "工作空间状态管理（zustand），含 CRUD/成员/邀请操作",
+      "summary": "工作空间状态管理（zustand），含 CRUD/成员/邀请操作",
+      "tags": [
+        "file",
+        "ts"
+      ],
+      "metrics": {
+        "importCount": 3,
+        "exportCount": 1,
+        "functionCount": 1,
+        "classCount": 0
+      },
+      "totalLines": 157
+    },
+    {
+      "id": "frontend/stores/a2aStore.ts#named:useA2AStore",
+      "type": "function",
+      "label": "useA2AStore",
+      "description": "frontend/stores/a2aStore.ts 的具名导出: useA2AStore",
+      "summary": "frontend/stores/a2aStore.ts 的具名导出: useA2AStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/abTestStore.ts#named:useABTestStore",
+      "type": "function",
+      "label": "useABTestStore",
+      "description": "frontend/stores/abTestStore.ts 的具名导出: useABTestStore",
+      "summary": "frontend/stores/abTestStore.ts 的具名导出: useABTestStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/adminStore.ts#named:SETTINGS_MENU",
+      "type": "function",
+      "label": "SETTINGS_MENU",
+      "description": "frontend/stores/adminStore.ts 的具名导出: SETTINGS_MENU",
+      "summary": "frontend/stores/adminStore.ts 的具名导出: SETTINGS_MENU",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/adminStore.ts#named:MENU_GROUPS",
+      "type": "function",
+      "label": "MENU_GROUPS",
+      "description": "frontend/stores/adminStore.ts 的具名导出: MENU_GROUPS",
+      "summary": "frontend/stores/adminStore.ts 的具名导出: MENU_GROUPS",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/adminStore.ts#named:MENU_META",
+      "type": "function",
+      "label": "MENU_META",
+      "description": "frontend/stores/adminStore.ts 的具名导出: MENU_META",
+      "summary": "frontend/stores/adminStore.ts 的具名导出: MENU_META",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/adminStore.ts#named:useAdminStore",
+      "type": "function",
+      "label": "useAdminStore",
+      "description": "frontend/stores/adminStore.ts 的具名导出: useAdminStore",
+      "summary": "frontend/stores/adminStore.ts 的具名导出: useAdminStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/agentStore.ts#named:useAgentStore",
+      "type": "function",
+      "label": "useAgentStore",
+      "description": "frontend/stores/agentStore.ts 的具名导出: useAgentStore",
+      "summary": "frontend/stores/agentStore.ts 的具名导出: useAgentStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/agentVersionStore.ts#named:useAgentVersionStore",
+      "type": "function",
+      "label": "useAgentVersionStore",
+      "description": "frontend/stores/agentVersionStore.ts 的具名导出: useAgentVersionStore",
+      "summary": "frontend/stores/agentVersionStore.ts 的具名导出: useAgentVersionStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/authStore.ts#named:useAuthStore",
+      "type": "function",
+      "label": "useAuthStore",
+      "description": "frontend/stores/authStore.ts 的具名导出: useAuthStore",
+      "summary": "frontend/stores/authStore.ts 的具名导出: useAuthStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/costStore.ts#named:useCostStore",
+      "type": "function",
+      "label": "useCostStore",
+      "description": "frontend/stores/costStore.ts 的具名导出: useCostStore",
+      "summary": "frontend/stores/costStore.ts 的具名导出: useCostStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/knowledgeStore.ts#named:useKnowledgeStore",
+      "type": "function",
+      "label": "useKnowledgeStore",
+      "description": "frontend/stores/knowledgeStore.ts 的具名导出: useKnowledgeStore",
+      "summary": "frontend/stores/knowledgeStore.ts 的具名导出: useKnowledgeStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/memoryStore.ts#named:useMemoryStore",
+      "type": "function",
+      "label": "useMemoryStore",
+      "description": "frontend/stores/memoryStore.ts 的具名导出: useMemoryStore",
+      "summary": "frontend/stores/memoryStore.ts 的具名导出: useMemoryStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/userManagementStore.ts#named:useUserManagementStore",
+      "type": "function",
+      "label": "useUserManagementStore",
+      "description": "frontend/stores/userManagementStore.ts 的具名导出: useUserManagementStore",
+      "summary": "frontend/stores/userManagementStore.ts 的具名导出: useUserManagementStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/workflowStore.ts#named:useWorkflowStore",
+      "type": "function",
+      "label": "useWorkflowStore",
+      "description": "frontend/stores/workflowStore.ts 的具名导出: useWorkflowStore",
+      "summary": "frontend/stores/workflowStore.ts 的具名导出: useWorkflowStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    },
+    {
+      "id": "frontend/stores/workspaceStore.ts#named:useWorkspaceStore",
+      "type": "function",
+      "label": "useWorkspaceStore",
+      "description": "frontend/stores/workspaceStore.ts 的具名导出: useWorkspaceStore",
+      "summary": "frontend/stores/workspaceStore.ts 的具名导出: useWorkspaceStore",
+      "tags": [
+        "function",
+        "export",
+        "named"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:frontend/stores/a2aStore.ts",
+      "target": "frontend/stores/a2aStore.ts#named:useA2AStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/abTestStore.ts",
+      "target": "frontend/stores/abTestStore.ts#named:useABTestStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/adminStore.ts",
+      "target": "frontend/stores/adminStore.ts#named:SETTINGS_MENU",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/adminStore.ts",
+      "target": "frontend/stores/adminStore.ts#named:MENU_GROUPS",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/adminStore.ts",
+      "target": "frontend/stores/adminStore.ts#named:MENU_META",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/adminStore.ts",
+      "target": "frontend/stores/adminStore.ts#named:useAdminStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/agentStore.ts",
+      "target": "frontend/stores/agentStore.ts#named:useAgentStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/agentVersionStore.ts",
+      "target": "frontend/stores/agentVersionStore.ts#named:useAgentVersionStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/authStore.ts",
+      "target": "frontend/stores/authStore.ts#named:useAuthStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/costStore.ts",
+      "target": "frontend/stores/costStore.ts#named:useCostStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/knowledgeStore.ts",
+      "target": "frontend/stores/knowledgeStore.ts#named:useKnowledgeStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/memoryStore.ts",
+      "target": "frontend/stores/memoryStore.ts#named:useMemoryStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/userManagementStore.ts",
+      "target": "frontend/stores/userManagementStore.ts#named:useUserManagementStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/workflowStore.ts",
+      "target": "frontend/stores/workflowStore.ts#named:useWorkflowStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/workspaceStore.ts",
+      "target": "frontend/stores/workspaceStore.ts#named:useWorkspaceStore",
+      "type": "contains",
+      "label": "包含"
+    },
+    {
+      "source": "file:frontend/stores/a2aStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/a2aStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/abTestStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/abTestStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/agentStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/agentStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/agentVersionStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/agentVersionStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/costStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/knowledgeStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/knowledgeStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/memoryStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/memoryStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/userManagementStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/userManagementStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/workflowStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/workflowStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/workspaceStore.ts",
+      "target": "file:frontend/stores/adminStore.ts",
+      "type": "imports",
+      "label": "导入"
+    },
+    {
+      "source": "file:frontend/stores/workspaceStore.ts",
+      "target": "file:frontend/stores/authStore.ts",
+      "type": "imports",
+      "label": "导入"
+    }
+  ]
+}

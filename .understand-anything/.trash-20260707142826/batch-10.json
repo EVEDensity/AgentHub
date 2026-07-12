@@ -1,0 +1,35 @@
+{
+  "batchIndex": 10,
+  "nodes": [
+    {"id": "file:app/services/adapters/cloudcode_adapter.py", "type": "file", "name": "cloudcode_adapter.py", "filePath": "app/services/adapters/cloudcode_adapter.py", "summary": "CloudCode 适配器基类：CLI 子进程管理、Windows shim 解析、交互式/一次性流式通信", "tags": ["adapter", "subprocess", "cli", "cloudcode"], "complexity": "high"},
+    {"id": "file:app/services/adapters/local_claude_adapter.py", "type": "file", "name": "local_claude_adapter.py", "filePath": "app/services/adapters/local_claude_adapter.py", "summary": "Claude Code CLI 适配器，支持交互式 JSON Lines 协议", "tags": ["adapter", "claude", "cli", "interactive"], "complexity": "low"},
+    {"id": "file:app/services/adapters/local_codex_adapter.py", "type": "file", "name": "local_codex_adapter.py", "filePath": "app/services/adapters/local_codex_adapter.py", "summary": "Codex CLI 适配器，一次性 exec 模式执行", "tags": ["adapter", "codex", "cli", "one-shot"], "complexity": "low"},
+    {"id": "file:app/services/adapters/local_openclaw_adapter.py", "type": "file", "name": "local_openclaw_adapter.py", "filePath": "app/services/adapters/local_openclaw_adapter.py", "summary": "OpenClaw CLI 适配器，一次性 --json 模式执行", "tags": ["adapter", "openclaw", "cli", "one-shot"], "complexity": "low"},
+    {"id": "file:app/services/protocols/__init__.py", "type": "file", "name": "__init__.py", "filePath": "app/services/protocols/__init__.py", "summary": "子进程协议模块入口，导出所有协议类", "tags": ["protocol", "re-export"], "complexity": "low"},
+    {"id": "file:app/services/protocols/base.py", "type": "file", "name": "base.py", "filePath": "app/services/protocols/base.py", "summary": "子进程消息协议抽象基类，定义消息编码/交互模式/会话管理接口", "tags": ["protocol", "abstract", "base-class"], "complexity": "low"},
+    {"id": "file:app/services/protocols/claude_code.py", "type": "file", "name": "claude_code.py", "filePath": "app/services/protocols/claude_code.py", "summary": "Claude Code JSON-RPC 协议实现：交互式用户消息和工具结果编码", "tags": ["protocol", "claude", "json-rpc", "interactive"], "complexity": "low"},
+    {"id": "file:app/services/protocols/codex.py", "type": "file", "name": "codex.py", "filePath": "app/services/protocols/codex.py", "summary": "Codex CLI 协议实现：仅支持一次性模式", "tags": ["protocol", "codex", "one-shot"], "complexity": "low"},
+    {"id": "file:app/services/protocols/openclaw.py", "type": "file", "name": "openclaw.py", "filePath": "app/services/protocols/openclaw.py", "summary": "OpenClaw CLI 协议实现：仅支持一次性模式", "tags": ["protocol", "openclaw", "one-shot"], "complexity": "low"}
+  ],
+  "edges": [
+    {"sourceId": "file:app/services/adapters/cloudcode_adapter.py", "targetId": "file:app/config.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/cloudcode_adapter.py", "targetId": "file:app/services/adapter_manager.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/local_claude_adapter.py", "targetId": "file:app/services/adapters/cloudcode_adapter.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/local_claude_adapter.py", "targetId": "file:app/services/protocols/claude_code.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/local_codex_adapter.py", "targetId": "file:app/services/adapters/cloudcode_adapter.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/local_codex_adapter.py", "targetId": "file:app/services/protocols/codex.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/local_openclaw_adapter.py", "targetId": "file:app/services/adapters/cloudcode_adapter.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/local_openclaw_adapter.py", "targetId": "file:app/services/protocols/openclaw.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/protocols/__init__.py", "targetId": "file:app/services/protocols/base.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/protocols/__init__.py", "targetId": "file:app/services/protocols/claude_code.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/protocols/__init__.py", "targetId": "file:app/services/protocols/codex.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/protocols/__init__.py", "targetId": "file:app/services/protocols/openclaw.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/protocols/claude_code.py", "targetId": "file:app/services/protocols/base.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/protocols/codex.py", "targetId": "file:app/services/protocols/base.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/protocols/openclaw.py", "targetId": "file:app/services/protocols/base.py", "type": "import", "label": "imports", "direction": "forward", "weight": 1.0},
+    {"sourceId": "file:app/services/adapters/local_claude_adapter.py", "targetId": "file:app/services/adapters/cloudcode_adapter.py", "type": "inherits", "label": "extends CloudCodeAdapter", "direction": "forward", "weight": 0.9},
+    {"sourceId": "file:app/services/adapters/local_codex_adapter.py", "targetId": "file:app/services/adapters/cloudcode_adapter.py", "type": "inherits", "label": "extends CloudCodeAdapter", "direction": "forward", "weight": 0.9},
+    {"sourceId": "file:app/services/adapters/local_openclaw_adapter.py", "targetId": "file:app/services/adapters/cloudcode_adapter.py", "type": "inherits", "label": "extends CloudCodeAdapter", "direction": "forward", "weight": 0.9},
+    {"sourceId": "file:app/services/adapters/cloudcode_adapter.py", "targetId": "file:app/services/protocols/base.py", "type": "uses", "label": "uses SubprocessProtocol", "direction": "forward", "weight": 0.7}
+  ]
+}

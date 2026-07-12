@@ -1,0 +1,31 @@
+# AgentHub API tests
+
+GET http://127.0.0.1:8000/api/health
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/api/agent/registry
+Accept: application/json
+
+###
+
+POST http://127.0.0.1:8000/api/chat/tasks
+Content-Type: application/json
+
+{
+  "sessionId": "session-1",
+  "message": "@Orchestrator 开发一个用户管理页面，支持CRUD"
+}
+
+###
+
+POST http://127.0.0.1:8000/api/admin/model-config
+Content-Type: application/json
+
+{
+  "provider": "openai",
+  "modelName": "gpt-4o-mini",
+  "apiKey": "demo-key",
+  "baseUrl": ""
+}

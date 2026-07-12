@@ -1,0 +1,19 @@
+# Minimal Tempo config: receive OTLP/HTTP traces on :4318, store in-memory
+# (suitable for dev; use S3/MinIO backend in production).
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: "0.0.0.0:4318"
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/blocks
+    wal:
+      path: /var/tempo/wal

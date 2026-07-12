@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "batchIndex": 41,
+  "nodes": [
+    {
+      "id": "services/rust/crates/patch-merge-core/Dockerfile",
+      "type": "file",
+      "name": "patch-merge-core Dockerfile",
+      "filePath": "services/rust/crates/patch-merge-core/Dockerfile",
+      "summary": "patch-merge-core 的 Docker 多阶段构建文件，使用 rust:1-bookworm 构建，BuildKit 缓存优化，暴露端口 8104，用于补丁合并核心服务的容器化部署",
+      "tags": ["Docker", "Rust", "补丁合并", "微服务", "基础设施"],
+      "complexity": 2
+    }
+  ],
+  "edges": []
+}

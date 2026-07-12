@@ -1,0 +1,283 @@
+# ─────────────────────────────────────────────────────────────────────
+# AgentHub Prometheus Alert Rules (Sprint K3)
+# P0-P3 severity classification aligned with SLO definitions.
+# ─────────────────────────────────────────────────────────────────────
+
+groups:
+  # ═══════════════════════════════════════════════════════════════════
+  # P0 — CRITICAL: immediate response required
+  # ═══════════════════════════════════════════════════════════════════
+  - name: agenthub_p0_critical
+    rules:
+      # IAM: token verification failure rate > 5% for 3 minutes
+      - alert: IAMTokenVerificationFailureRate
+        expr: |
+          (
+            sum(rate(iam_token_verifies_total{result="invalid"}[3m]))
+            /
+            sum(rate(iam_token_verifies_total[3m]))
+          ) > 0.05
+        for: 3m
+        labels:
+          severity: critical
+          service: iam-service
+          pager: "true"
+        annotations:
+          summary: "IAM token verification failure rate > 5%"
+          description: "Token verification failure rate is {{ $value | humanizePercentage }} over the last 3 minutes. Possible key compromise or misconfiguration."
+          runbook: "Check IAM service logs, verify JWT_SECRET across all services, check for expired tokens."
+
+      # IAM: authorization deny rate > 20% (possible attack)
+      - alert: IAMAuthorizationDenySpike
+        expr: |
+          (
+            sum(rate(iam_authz_decisions_total{decision="deny"}[5m]))
+            /
+            sum(rate(iam_authz_decisions_total[5m]))
+          ) > 0.20
+        for: 5m
+        labels:
+          severity: critical
+          service: iam-service
+          pager: "true"
+        annotations:
+          summary: "IAM authorization deny rate > 20%"
+          description: "{{ $value | humanizePercentage }} of authorization decisions are denying. Possible permission misconfiguration or attack."
+          runbook: "Check IAM audit logs for denied actions, verify role assignments, check for privilege escalation attempts."
+
+      # AgentNet DAG deadlock detection: no events for 10 minutes
+      - alert: AgentNetDAGDeadlock
+        expr: |
+          rate(eventbus_received_total{service="agent-runtime-control-plane"}[10m]) == 0
+          and
+          rate(eventbus_published_total{service="gateway-service"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: agent-runtime-control-plane
+          pager: "true"
+        annotations:
+          summary: "AgentNet DAG deadlock detected"
+          description: "Gateway is publishing events but agent-runtime-control-plane has not received any for 10 minutes. DAG may be deadlocked."
+          runbook: "Check agent-runtime-control-plane logs, verify NATS connectivity, check for stuck workflow executions."
+
+      # Sandbox: container start failure rate > 10% for 5 minutes
+      - alert: SandboxContainerStartFailureRate
+        expr: |
+          (
+            sum(rate(gateway_sandbox_lifecycle_total{status="failed"}[5m]))
+            /
+            sum(rate(gateway_sandbox_lifecycle_total[5m]))
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: critical
+          service: gateway-service
+          pager: "true"
+        annotations:
+          summary: "Sandbox container start failure rate > 10%"
+          description: "{{ $value | humanizePercentage }} of sandbox container starts are failing. Check Docker daemon and resource availability."
+          runbook: "Check Docker daemon health, disk space (sandbox images), CPU/memory resources on sandbox hosts."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # P1 — WARNING: respond within 5 minutes
+  # ═══════════════════════════════════════════════════════════════════
+  - name: agenthub_p1_warning
+    rules:
+      # Audit log write latency > 1s
+      - alert: AuditLogWriteLatencyHigh
+        expr: |
+          histogram_quantile(0.99, rate(audit_batch_latency_seconds_bucket[5m])) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          service: audit-log-service
+        annotations:
+          summary: "Audit log write latency p99 > 1s"
+          description: "Audit log batch write p99 latency is {{ $value }}s. PostgreSQL may be under load."
+          runbook: "Check PostgreSQL connection pool, disk I/O, and audit_log table size."
+
+      # Sensitive tool confirmation rate > 50% (unusual activity)
+      - alert: SensitiveToolHighConfirmationRate
+        expr: |
+          (
+            sum(rate(gateway_sensitive_confirm_total{risk_level="critical"}[10m]))
+            /
+            sum(rate(gateway_sensitive_confirm_total[10m]))
+          ) > 0.50
+        for: 10m
+        labels:
+          severity: warning
+          service: gateway-service
+        annotations:
+          summary: "High rate of critical tool confirmations"
+          description: "{{ $value | humanizePercentage }} of sensitive tool confirmations are critical-risk. Review recent agent activity."
+          runbook: "Check audit log for recent tool.confirm entries with risk_level=critical, verify agent behavior."
+
+      # Rate limit hits increasing (possible abuse)
+      - alert: RateLimitHitsIncreasing
+        expr: |
+          rate(gateway_rate_limit_hits_total[15m]) > 10
+        for: 15m
+        labels:
+          severity: warning
+          service: gateway-service
+        annotations:
+          summary: "High rate limit hit frequency"
+          description: "Rate limit is rejecting {{ $value | humanize }} requests/second. Check for abusive clients or misconfigured limits."
+          runbook: "Check /stats endpoint for active bucket count, review per-user rate limit headers, adjust capacity if needed."
+
+      # Go service down (any service missing for 2 minutes)
+      - alert: GoServiceDown
+        expr: up{job="go-services"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: "{{ $labels.instance }}"
+        annotations:
+          summary: "Go service {{ $labels.instance }} is down"
+          description: "Service {{ $labels.instance }} has been unreachable for 2 minutes."
+          runbook: "Check service logs, restart if necessary, verify Docker health."
+
+      # Quota exceeded — tenant hitting limits
+      - alert: QuotaExceeded
+        expr: rate(quota_exceeded_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: iam-service
+        annotations:
+          summary: "Tenant quota exceeded"
+          description: "Quota enforcement is rejecting requests. Check which tenants are hitting limits."
+          runbook: "Review quota usage per tenant via /iam/quotas/{tenant_id}, adjust plan or notify tenant."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # P2 — INFO: acknowledge within 30 minutes
+  # ═══════════════════════════════════════════════════════════════════
+  - name: agenthub_p2_info
+    rules:
+      # Rust core degraded mode
+      - alert: RustCoreDegraded
+        expr: |
+          rate(stream_core_degraded_total[10m]) > 0
+          or
+          rate(fanout_core_degraded_total[10m]) > 0
+          or
+          rate(retrieval_core_degraded_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: info
+          service: rust-cores
+        annotations:
+          summary: "Rust core running in degraded mode"
+          description: "One or more Rust cores are degrading operations. Check for downstream dependency issues."
+          runbook: "Check Rust core logs, verify NATS/downstream connectivity, check backpressure metrics."
+
+      # SSE connection count dropping (possible client disconnect wave)
+      - alert: SSEConnectionDrop
+        expr: |
+          delta(sse_connections[10m]) < -10
+        for: 5m
+        labels:
+          severity: info
+          service: stream-delivery-service
+        annotations:
+          summary: "SSE connections dropping rapidly"
+          description: "{{ $value }} SSE connections dropped in 10 minutes. Check for client network issues."
+          runbook: "Check stream-delivery-service logs, verify WebSocket/SSE endpoint availability."
+
+      # Audit buffer depth growing
+      - alert: AuditBufferDepthHigh
+        expr: audit_buffer_depth > 500
+        for: 5m
+        labels:
+          severity: info
+          service: audit-log-service
+        annotations:
+          summary: "Audit log buffer depth > 500"
+          description: "Audit log buffer has {{ $value }} pending events. Batch writes may be falling behind."
+          runbook: "Check PostgreSQL write throughput, consider increasing batch size."
+
+      # Sprint M: Circuit breaker open (any breaker in open state)
+      - alert: CircuitBreakerOpen
+        expr: gateway_circuit_breaker_state{state="open"} == 1
+        for: 2m
+        labels:
+          severity: warning
+          service: gateway-service
+        annotations:
+          summary: "Circuit breaker {{ $labels.breaker }} is OPEN"
+          description: "Circuit breaker '{{ $labels.breaker }}' has been open for 2 minutes. Requests to this downstream are being fast-failed."
+          runbook: "Check downstream service health (/healthz), review recent error logs, verify connectivity. Breaker auto-transitions to half-open after cooldown."
+
+      # Sprint M: Cache hit rate critically low (< 20%)
+      - alert: CacheHitRateLow
+        expr: |
+          (
+            sum(rate(gateway_cache_hits_total[10m]))
+            /
+            (sum(rate(gateway_cache_hits_total[10m])) + sum(rate(gateway_cache_misses_total[10m])))
+          ) < 0.20
+        for: 10m
+        labels:
+          severity: info
+          service: gateway-service
+        annotations:
+          summary: "Cache hit rate below 20%"
+          description: "Gateway cache hit rate is {{ $value | humanizePercentage }}. Backend may be under unnecessary load."
+          runbook: "Check Redis connectivity, review cache TTL configuration, verify cache warming behavior."
+
+      # Sprint M: NATS slow consumer detected
+      - alert: NATSSlowConsumer
+        expr: rate(eventbus_slow_consumer_warnings_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway-service
+        annotations:
+          summary: "NATS slow consumer detected"
+          description: "One or more NATS consumers are falling behind (backlog building up). Messages may be dropped."
+          runbook: "Check consumer handler latency, scale consumer instances, review JetStream consumer configuration."
+
+      # Sprint M: Distributed rate limiting fallback (Redis unavailable)
+      - alert: RateLimitDistributedFallback
+        expr: gateway_rate_limit_hits_total{layer="redis_fallback"} > 0
+        for: 5m
+        labels:
+          severity: info
+          service: gateway-service
+        annotations:
+          summary: "Rate limiting falling back to single-instance mode"
+          description: "Redis-backed distributed rate limiting is unavailable. Using in-memory token buckets only."
+          runbook: "Check Redis connectivity, verify REDIS_ADDR env var, review Redis memory usage."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # P3 — DAILY SUMMARY: informational only
+  # ═══════════════════════════════════════════════════════════════════
+  - name: agenthub_p3_daily
+    rules:
+      # Daily token usage approaching limit (80% of monthly quota)
+      - alert: TokenUsageApproachingLimit
+        expr: |
+          sum(rate(quota_usage_events_total{event_type="token_consumed"}[30d])) > 0.8 * 3000000
+        for: 1h
+        labels:
+          severity: info
+          service: iam-service
+        annotations:
+          summary: "Tenant token usage approaching monthly limit"
+          description: "Token usage is at 80%+ of monthly quota. Notify tenant to upgrade plan."
+          runbook: "Review billing cycle, notify tenant admin, consider plan upgrade."
+
+      # Billing cycle approaching end (reminder to close)
+      - alert: BillingCycleApproachingEnd
+        expr: |
+          time() - max(billing_cycles_created_total) > 0
+        for: 24h
+        labels:
+          severity: info
+          service: iam-service
+        annotations:
+          summary: "Monthly billing cycle may need closing"
+          description: "Check if billing cycles need to be closed for end-of-month processing."
+          runbook: "Run POST /iam/billing/{tenant_id}/close for each active tenant."

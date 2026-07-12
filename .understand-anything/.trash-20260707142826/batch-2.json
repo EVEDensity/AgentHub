@@ -1,0 +1,20 @@
+{
+  "batchIndex": 2,
+  "totalFiles": 31,
+  "parts": [
+    {
+      "part": 1,
+      "file": "batch-2-part1.json",
+      "nodeCount": 35,
+      "edgeCount": 25,
+      "description": "Admin UI 组件 + 国际化 + 测试"
+    },
+    {
+      "part": 2,
+      "file": "batch-2-part2.json",
+      "nodeCount": 27,
+      "edgeCount": 34,
+      "description": "Zustand 全局状态管理 Stores"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "crates/platform-events",
+  "crates/stream-core",
+  "crates/retrieval-core",
+  "crates/fanout-core",
+  "crates/patch-merge-core",
+  "crates/memory-segment-core",
+  "crates/agentnet-core"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+authors = ["AgentHub Platform Team"]

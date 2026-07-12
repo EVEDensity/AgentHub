@@ -1,0 +1,1403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgentHub Design System v2 — Warm Studio</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   AgentHub Design System v2 — "Warm Studio" (温润工坊)
+   日本民艺美学 × 开发者工具精准性
+
+   A comprehensive design system reference for the AgentHub platform.
+   All tokens, components, and patterns documented in a single source.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Design Tokens ─────────────────────────────────────────────────────── */
+:root {
+  /* Warm gray — clay/stone progression */
+  --warm-50:  #FAF9F7;
+  --warm-100: #F5F4F0;
+  --warm-150: #EEE9E4;
+  --warm-200: #E6E5DF;
+  --warm-300: #CDCBB8;
+  --warm-400: #ADABA3;
+  --warm-500: #8D8B84;
+  --warm-600: #6D6B65;
+  --warm-700: #4D4C47;
+  --warm-800: #32312E;
+  --warm-900: #1C1B19;
+
+  /* Primary — indigo blue (ai-iro 藍色) */
+  --primary-50:  #EFF3FF;
+  --primary-100: #DEE7FE;
+  --primary-200: #C3D7FE;
+  --primary-300: #9FBDFD;
+  --primary-400: #7B9EFB;
+  --primary-500: #4C6AF5;
+  --primary-600: #405CDF;
+  --primary-700: #324BC4;
+
+  /* Accent — warm amber/gold */
+  --accent-50:  #FDF8EE;
+  --accent-100: #FAF0D9;
+  --accent-200: #F5E3B4;
+  --accent-300: #EECE78;
+  --accent-400: #E0B840;
+  --accent-500: #C49E2C;
+  --accent-600: #A88420;
+  --accent-700: #8A6A16;
+
+  /* Semantic colors */
+  --success-500: #5B8C5A;
+  --success-600: #4D7A4C;
+  --warning-500: #C4A35A;
+  --warning-600: #B08F48;
+  --danger-500:  #C4675A;
+  --danger-600:  #B05548;
+
+  /* Surface */
+  --surface-glass: rgba(255,255,255,0.72);
+  --surface-elevated: #FCFBF9;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-card: 0 1px 2px rgba(28,27,25,0.04), 0 1px 3px rgba(28,27,25,0.03);
+  --shadow-card-hover: 0 2px 4px rgba(28,27,25,0.06), 0 4px 8px rgba(28,27,25,0.04);
+  --shadow-elevated: 0 4px 8px rgba(28,27,25,0.06), 0 8px 16px rgba(28,27,25,0.04);
+  --shadow-modal: 0 4px 16px rgba(28,27,25,0.08), 0 12px 32px rgba(28,27,25,0.06);
+  --shadow-button-primary: 0 2px 4px rgba(76,106,245,0.2), 0 4px 8px rgba(76,106,245,0.1);
+
+  /* Typography */
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'IBM Plex Mono', monospace;
+
+  /* Transitions */
+  --ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+}
+
+/* ── Reset & Base ──────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-sans);
+  background: #F7F6F3;
+  color: var(--warm-800);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E");
+}
+
+::selection { background: rgba(76,106,245,0.15); color: var(--warm-900); }
+:focus-visible { outline: 2px solid var(--primary-500); outline-offset: 2px; border-radius: 4px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANIMATION KEYFRAMES
+   ═══════════════════════════════════════════════════════════════════════════ */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeInScale { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+@keyframes slideInLeft { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes breathe { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+@keyframes pulseRing { 0% { box-shadow: 0 0 0 0 rgba(76,106,245,0.4); } 70% { box-shadow: 0 0 0 8px rgba(76,106,245,0); } 100% { box-shadow: 0 0 0 0 rgba(76,106,245,0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LAYOUT PRIMITIVES
+   ═══════════════════════════════════════════════════════════════════════════ */
+.page-wrap { max-width: 1280px; margin: 0 auto; padding: 0 40px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HERO — editorial magazine style
+   ═══════════════════════════════════════════════════════════════════════════ */
+.hero {
+  background: linear-gradient(170deg, #1C1B19 0%, #282621 35%, #3A3630 100%);
+  color: #F0EFEA;
+  padding: 88px 0 72px;
+  position: relative;
+  overflow: hidden;
+}
+.hero::before {
+  content: ''; position: absolute;
+  top: -180px; right: -180px;
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(76,106,245,0.10) 0%, transparent 70%);
+  border-radius: 50%; pointer-events: none;
+}
+.hero::after {
+  content: ''; position: absolute;
+  bottom: -120px; left: 8%;
+  width: 480px; height: 480px;
+  background: radial-gradient(circle, rgba(196,158,44,0.07) 0%, transparent 70%);
+  border-radius: 50%; pointer-events: none;
+}
+.hero-inner { position: relative; z-index: 1; }
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 100px; padding: 5px 16px;
+  font-size: 12px; font-weight: 500; color: rgba(255,255,255,0.65);
+  margin-bottom: 28px; backdrop-filter: blur(12px);
+  animation: fadeInDown 0.6s var(--ease-out);
+}
+.hero-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--primary-400); box-shadow: 0 0 8px rgba(76,106,245,0.6);
+  animation: breathe 2s ease-in-out infinite;
+}
+.hero h1 {
+  font-size: 52px; font-weight: 700; letter-spacing: -0.03em;
+  line-height: 1.08; margin-bottom: 18px;
+  animation: fadeInUp 0.7s 0.1s var(--ease-out) both;
+}
+.hero h1 em {
+  font-style: normal;
+  background: linear-gradient(135deg, #7B9EFB 0%, #9FBDFD 40%, #E0B840 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.hero-subtitle {
+  font-size: 17px; color: rgba(255,255,255,0.55);
+  max-width: 540px; line-height: 1.7;
+  animation: fadeInUp 0.7s 0.2s var(--ease-out) both;
+}
+.hero-subtitle strong { color: rgba(255,255,255,0.75); font-weight: 600; }
+
+/* ── Section ────────────────────────────────────────────────────────────── */
+.section { padding: 72px 0; }
+.section-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--primary-600);
+  background: var(--primary-50); border: 1px solid var(--primary-100);
+  padding: 4px 12px; border-radius: 100px; margin-bottom: 14px;
+}
+.section-label::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--primary-500);
+}
+.section-header { margin-bottom: 44px; }
+.section-header h2 {
+  font-size: 30px; font-weight: 700; letter-spacing: -0.02em;
+  color: var(--warm-900); margin-bottom: 6px;
+}
+.section-header p { font-size: 15px; color: var(--warm-500); max-width: 540px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   COLOR PALETTE
+   ═══════════════════════════════════════════════════════════════════════════ */
+.palette-row { display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.palette-row:last-child { margin-bottom: 0; }
+.swatch {
+  flex: 1; min-width: 90px; aspect-ratio: 5/7;
+  border-radius: var(--radius-lg);
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  padding: 10px 6px; font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  cursor: default; transition: transform 0.25s var(--ease-out), box-shadow 0.25s var(--ease-out);
+  position: relative; overflow: hidden;
+}
+.swatch:hover { transform: translateY(-4px); box-shadow: var(--shadow-elevated); z-index: 2; }
+.swatch-val { font-size: 10px; margin-top: 2px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TYPOGRAPHY
+   ═══════════════════════════════════════════════════════════════════════════ */
+.type-specimen { margin-bottom: 24px; }
+.type-label { font-size: 11px; font-weight: 600; color: var(--warm-400); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+.type-h1 { font-size: 36px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.15; color: var(--warm-900); }
+.type-h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; color: var(--warm-900); }
+.type-h3 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; color: var(--warm-900); }
+.type-body { font-size: 15px; line-height: 1.65; color: var(--warm-700); max-width: 520px; }
+.type-caption { font-size: 12px; color: var(--warm-500); }
+.type-mono { font-family: var(--font-mono); font-size: 13px; color: var(--warm-700); background: var(--warm-50); border: 1px solid var(--warm-150); border-radius: 6px; padding: 2px 8px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CARD COMPONENTS
+   ═══════════════════════════════════════════════════════════════════════════ */
+.card {
+  background: #fff; border: 1px solid var(--warm-150);
+  border-radius: var(--radius-xl); padding: 24px;
+  box-shadow: var(--shadow-card); transition: all 0.25s var(--ease-out);
+}
+.card:hover { border-color: var(--warm-200); box-shadow: var(--shadow-card-hover); transform: translateY(-1px); }
+
+.card-elevated {
+  background: var(--surface-elevated); border: 1px solid var(--warm-150);
+  border-radius: 14px; padding: 28px;
+  box-shadow: var(--shadow-elevated);
+}
+
+.card-glass {
+  background: var(--surface-glass); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(198,195,184,0.4); border-radius: 14px; padding: 24px;
+  box-shadow: var(--shadow-elevated);
+}
+
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BUTTONS
+   ═══════════════════════════════════════════════════════════════════════════ */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 8px; padding: 8px 18px;
+  font-size: 14px; font-weight: 500; line-height: 1.4;
+  cursor: pointer; border: none;
+  transition: all 0.2s var(--ease-out);
+  position: relative; overflow: hidden;
+  font-family: inherit; text-decoration: none;
+}
+.btn:active { transform: scale(0.97); }
+
+.btn-primary {
+  background: var(--primary-500); color: #fff;
+  box-shadow: var(--shadow-button-primary);
+}
+.btn-primary::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 50%);
+  pointer-events: none;
+}
+.btn-primary:hover { background: var(--primary-600); transform: translateY(-1px); }
+.btn-primary:active { transform: translateY(0) scale(0.97); }
+
+.btn-secondary {
+  background: var(--warm-50); color: var(--warm-700);
+  border: 1px solid var(--warm-200);
+}
+.btn-secondary:hover { background: var(--warm-100); border-color: var(--warm-300); transform: translateY(-1px); }
+
+.btn-ghost {
+  background: transparent; color: var(--warm-700);
+}
+.btn-ghost:hover { background: var(--warm-100); }
+
+.btn-accent {
+  background: var(--accent-500); color: #fff;
+}
+.btn-accent:hover { background: var(--accent-600); box-shadow: 0 2px 4px rgba(196,158,44,0.3); transform: translateY(-1px); }
+
+.btn-danger {
+  background: var(--danger-500); color: #fff;
+}
+.btn-danger:hover { background: var(--danger-600); box-shadow: 0 2px 4px rgba(196,103,90,0.3); transform: translateY(-1px); }
+
+/* Button sizes */
+.btn-sm { padding: 4px 12px; font-size: 12px; border-radius: 6px; }
+.btn-lg { padding: 12px 28px; font-size: 16px; border-radius: 10px; }
+.btn-xl { padding: 14px 36px; font-size: 18px; border-radius: 12px; }
+
+/* Icon button */
+.btn-icon {
+  width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 8px; border: none; background: transparent; color: var(--warm-500);
+  cursor: pointer; transition: all 0.2s var(--ease-out);
+}
+.btn-icon:hover { background: var(--warm-100); color: var(--warm-700); }
+.btn-icon:active { transform: scale(0.93); }
+
+.btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 20px; }
+.btn-row-label { font-size: 12px; font-weight: 600; color: var(--warm-400); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TAGS & BADGES
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 10px; border-radius: 5px;
+  font-size: 12px; font-weight: 500; line-height: 1.5;
+  white-space: nowrap; transition: all 0.2s ease;
+}
+.tag-warm { background: var(--warm-100); color: var(--warm-600); border: 1px solid var(--warm-150); }
+.tag-blue { background: var(--primary-50); color: var(--primary-600); border: 1px solid var(--primary-100); }
+.tag-accent { background: var(--accent-50); color: var(--accent-600); border: 1px solid var(--accent-100); }
+.tag-green { background: #F2F8F2; color: var(--success-600); border: 1px solid #E0F0E0; }
+.tag-red { background: #FBF0EE; color: var(--danger-600); border: 1px solid #F5DDD8; }
+.tag-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.7; }
+
+.tag-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   INPUT FIELDS
+   ═══════════════════════════════════════════════════════════════════════════ */
+.input-field {
+  width: 100%; padding: 8px 12px;
+  border: 1px solid var(--warm-200); border-radius: 8px;
+  font-size: 14px; color: var(--warm-800); background: var(--warm-50);
+  outline: none; font-family: var(--font-sans);
+  transition: all 0.2s var(--ease-out);
+}
+.input-field:focus {
+  border-color: var(--primary-500);
+  box-shadow: 0 0 0 3px rgba(76,106,245,0.1), 0 1px 2px rgba(28,27,25,0.04);
+}
+.input-field::placeholder { color: var(--warm-400); }
+.input-field:hover:not(:focus) { border-color: var(--warm-300); }
+.input-sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+.input-lg { padding: 10px 16px; font-size: 16px; border-radius: 10px; }
+
+.input-row { display: flex; flex-direction: column; gap: 12px; max-width: 360px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STATUS INDICATORS
+   ═══════════════════════════════════════════════════════════════════════════ */
+.status-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.status-active { background: var(--success-500); box-shadow: 0 0 0 3px rgba(91,140,90,0.2); }
+.status-idle { background: var(--warm-400); }
+.status-busy { background: var(--accent-500); animation: breathe 1.5s ease-in-out infinite; }
+.status-error { background: var(--danger-500); animation: breathe 1s ease-in-out infinite; }
+.status-pulse { animation: pulseRing 2s ease-out infinite; }
+
+.status-row { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.status-item { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--warm-600); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SKELETON LOADING
+   ═══════════════════════════════════════════════════════════════════════════ */
+.skeleton {
+  background: linear-gradient(90deg, var(--warm-100) 25%, var(--warm-150) 50%, var(--warm-100) 75%);
+  background-size: 200% 100%; animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: 6px;
+}
+.skeleton-text { height: 14px; margin-bottom: 8px; }
+.skeleton-text:last-child { width: 60%; }
+.skeleton-avatar { width: 40px; height: 40px; border-radius: 50%; }
+.skeleton-card { height: 120px; border-radius: 12px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEPLOY BUTTON — 一键部署入口
+   ═══════════════════════════════════════════════════════════════════════════ */
+.deploy-btn-demo {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(196,158,44,0.3);
+  background: linear-gradient(135deg, rgba(224,184,64,0.08), rgba(196,158,44,0.04));
+  color: var(--accent-600);
+  font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all 0.25s var(--ease-out);
+  position: relative; overflow: hidden;
+}
+.deploy-btn-demo::before {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(224,184,64,0.15), transparent 60%);
+  opacity: 0; transition: opacity 0.25s var(--ease-out);
+}
+.deploy-btn-demo:hover {
+  border-color: rgba(196,158,44,0.5);
+  box-shadow: 0 2px 8px rgba(196,158,44,0.15);
+  transform: translateY(-1px);
+}
+.deploy-btn-demo:hover::before { opacity: 1; }
+.deploy-btn-demo:active { transform: scale(0.96); }
+.deploy-btn-demo svg { width: 15px; height: 15px; opacity: 0.85; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEPLOY MODAL — 部署弹窗
+   ═══════════════════════════════════════════════════════════════════════════ */
+.deploy-modal-demo {
+  background: #fff; border: 1px solid var(--warm-150);
+  border-radius: 16px; box-shadow: var(--shadow-modal);
+  max-width: 520px; overflow: hidden;
+}
+.deploy-modal-header {
+  padding: 20px 24px; border-bottom: 1px solid var(--warm-100);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.deploy-modal-title { font-size: 16px; font-weight: 600; color: var(--warm-900); display: flex; align-items: center; gap: 8px; }
+.deploy-modal-close {
+  width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent;
+  color: var(--warm-400); cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s ease; font-size: 16px;
+}
+.deploy-modal-close:hover { background: var(--warm-100); color: var(--warm-600); }
+.deploy-modal-body { padding: 24px; }
+.deploy-modal-footer { padding: 16px 24px; border-top: 1px solid var(--warm-100); display: flex; gap: 10px; justify-content: flex-end; }
+
+/* Deploy option cards */
+.deploy-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.deploy-option {
+  padding: 16px; border: 1px solid var(--warm-150); border-radius: 12px;
+  cursor: pointer; transition: all 0.2s var(--ease-out);
+  position: relative; background: var(--warm-50);
+}
+.deploy-option:hover { border-color: var(--primary-300); background: #fff; box-shadow: var(--shadow-card-hover); }
+.deploy-option.selected {
+  border-color: var(--primary-500); background: var(--primary-50);
+  box-shadow: 0 0 0 3px rgba(76,106,245,0.08);
+}
+.deploy-option-icon {
+  width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+  margin-bottom: 10px; font-size: 18px;
+}
+.deploy-option-icon.webapp { background: rgba(76,106,245,0.1); color: var(--primary-500); }
+.deploy-option-icon.api { background: rgba(91,140,90,0.1); color: var(--success-500); }
+.deploy-option-icon.embed { background: rgba(196,158,44,0.1); color: var(--accent-500); }
+.deploy-option-icon.package { background: rgba(196,103,90,0.1); color: var(--danger-500); }
+.deploy-option-name { font-size: 14px; font-weight: 600; color: var(--warm-800); margin-bottom: 2px; }
+.deploy-option-desc { font-size: 11px; color: var(--warm-500); line-height: 1.4; }
+.deploy-option-check {
+  position: absolute; top: 12px; right: 12px;
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--warm-200);
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s ease;
+}
+.deploy-option.selected .deploy-option-check {
+  background: var(--primary-500); border-color: var(--primary-500);
+}
+.deploy-option.selected .deploy-option-check::after {
+  content: '✓'; color: #fff; font-size: 10px; font-weight: 700;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOAST
+   ═══════════════════════════════════════════════════════════════════════════ */
+.toast-demo {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 18px; border-radius: 10px;
+  font-size: 13px; font-weight: 500;
+  box-shadow: var(--shadow-elevated);
+  animation: slideInRight 0.3s var(--ease-out);
+}
+.toast-success { background: #F2F8F2; color: var(--success-600); border: 1px solid #D4E8D4; }
+.toast-error { background: #FBF0EE; color: var(--danger-600); border: 1px solid #F5DDD8; }
+.toast-info { background: var(--primary-50); color: var(--primary-600); border: 1px solid var(--primary-100); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DIVIDER
+   ═══════════════════════════════════════════════════════════════════════════ */
+.divider { border: none; border-top: 1px solid var(--warm-150); margin: 20px 0; }
+.divider-accent {
+  border: none; height: 2px; margin: 24px 0;
+  background: linear-gradient(90deg, transparent 0%, var(--accent-300) 20%, var(--accent-300) 80%, transparent 100%);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHAT HEADER DEMO
+   ═══════════════════════════════════════════════════════════════════════════ */
+.chat-header-demo {
+  background: rgba(255,255,255,0.8); backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--warm-150);
+  padding: 14px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+}
+.chat-header-left { min-width: 0; flex: 1; }
+.chat-header-title {
+  font-size: 16px; font-weight: 600; color: var(--warm-900);
+  cursor: pointer; transition: color 0.2s ease;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-header-title:hover { color: var(--primary-600); }
+.chat-header-meta { font-size: 12px; color: var(--warm-500); margin-top: 1px; display: flex; align-items: center; gap: 8px; }
+.chat-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.chat-header-divider { width: 1px; height: 20px; background: var(--warm-150); }
+
+/* Progress bar */
+.progress-bar {
+  width: 60px; height: 4px; background: var(--warm-100); border-radius: 2px; overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%; background: var(--primary-500); border-radius: 2px;
+  transition: width 0.5s var(--ease-out);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHAT INPUT DEMO
+   ═══════════════════════════════════════════════════════════════════════════ */
+.chat-input-demo {
+  display: flex; align-items: flex-end; gap: 10px;
+  padding: 14px 18px;
+  background: #fff; border: 1px solid var(--warm-150);
+  border-radius: 14px;
+  box-shadow: var(--shadow-card);
+}
+.chat-input-demo textarea {
+  flex: 1; border: none; outline: none; resize: none;
+  font-size: 14px; font-family: var(--font-sans); color: var(--warm-800);
+  line-height: 1.5; min-height: 24px; max-height: 120px;
+  background: transparent;
+}
+.chat-input-demo textarea::placeholder { color: var(--warm-400); }
+.chat-input-actions { display: flex; align-items: center; gap: 4px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MESSAGE BUBBLE DEMO
+   ═══════════════════════════════════════════════════════════════════════════ */
+.msg-bubble {
+  max-width: 85%; padding: 12px 16px;
+  border-radius: 14px; font-size: 14px; line-height: 1.55;
+  animation: fadeInUp 0.35s var(--ease-out);
+}
+.msg-user { background: var(--primary-500); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+.msg-agent { background: #fff; color: var(--warm-800); border: 1px solid var(--warm-150); align-self: flex-start; border-bottom-left-radius: 4px; }
+.msg-flex { display: flex; flex-direction: column; gap: 12px; padding: 16px 0; max-width: 460px; }
+.msg-agent-name { font-size: 11px; font-weight: 600; color: var(--primary-600); margin-bottom: 2px; margin-left: 2px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DEPLOY CARD DEMO
+   ═══════════════════════════════════════════════════════════════════════════ */
+.deploy-card-demo {
+  max-width: 420px; border-radius: 14px; overflow: hidden;
+  background: #fff; border: 1px solid var(--warm-150);
+  box-shadow: var(--shadow-card);
+}
+.deploy-card-header {
+  background: linear-gradient(135deg, var(--primary-600), #5B4FCF);
+  padding: 14px 18px; display: flex; align-items: center; justify-content: space-between;
+}
+.deploy-card-header-left { display: flex; align-items: center; gap: 8px; color: #fff; }
+.deploy-card-header-left span { font-size: 13px; font-weight: 600; }
+.deploy-card-body { padding: 16px 18px; }
+.deploy-card-body p { font-size: 13px; color: var(--warm-700); line-height: 1.5; margin-bottom: 10px; }
+.deploy-card-meta { font-size: 11px; color: var(--warm-500); display: flex; gap: 12px; }
+.deploy-card-files { margin-top: 10px; background: var(--warm-50); border-radius: 8px; padding: 10px 12px; }
+.deploy-card-files-title { font-size: 11px; font-weight: 600; color: var(--warm-500); margin-bottom: 6px; }
+.deploy-card-files-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.deploy-card-file {
+  font-family: var(--font-mono); font-size: 10px; color: var(--warm-600);
+  background: #fff; border: 1px solid var(--warm-150); border-radius: 4px; padding: 2px 6px;
+}
+.deploy-card-actions {
+  padding: 12px 18px; border-top: 1px solid var(--warm-100);
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADMIN SIDEBAR DEMO
+   ═══════════════════════════════════════════════════════════════════════════ */
+.admin-side-demo {
+  width: 220px; background: var(--warm-900); color: var(--warm-300);
+  border-radius: 16px; overflow: hidden; padding: 20px 0;
+}
+.admin-side-section { padding: 6px 16px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--warm-500); margin-top: 8px; }
+.admin-side-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px; font-size: 13px; color: var(--warm-400);
+  cursor: pointer; transition: all 0.15s ease;
+  margin: 1px 8px; border-radius: 8px;
+}
+.admin-side-item:hover { background: rgba(255,255,255,0.06); color: var(--warm-200); }
+.admin-side-item.active { background: rgba(76,106,245,0.15); color: var(--primary-300); font-weight: 500; }
+.admin-side-logo { padding: 0 16px 16px; font-size: 15px; font-weight: 700; color: #fff; letter-spacing: -0.01em; }
+.admin-side-logo span { color: var(--primary-400); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ANIMATION SHOWCASE
+   ═══════════════════════════════════════════════════════════════════════════ */
+.anim-demo-box {
+  width: 60px; height: 60px; border-radius: 12px;
+  background: var(--primary-500); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600;
+  cursor: pointer; transition: all 0.2s ease;
+}
+.anim-fade-in { animation: fadeIn 0.6s var(--ease-out) both; }
+.anim-fade-up { animation: fadeInUp 0.5s var(--ease-out) both; }
+.anim-slide-left { animation: slideInLeft 0.5s var(--ease-out) both; }
+.anim-scale { animation: fadeInScale 0.4s var(--ease-out) both; }
+.anim-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   IMPROVEMENT ROADMAP
+   ═══════════════════════════════════════════════════════════════════════════ */
+.roadmap { display: flex; flex-direction: column; gap: 0; }
+.roadmap-item {
+  display: flex; gap: 16px; padding: 18px 0; border-bottom: 1px solid var(--warm-100);
+  align-items: flex-start; transition: all 0.2s ease;
+}
+.roadmap-item:last-child { border-bottom: none; }
+.roadmap-prio {
+  flex-shrink: 0; width: 36px; height: 36px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+}
+.roadmap-prio.p0 { background: var(--success-500); color: #fff; }
+.roadmap-prio.p1 { background: var(--accent-500); color: #fff; }
+.roadmap-prio.p2 { background: var(--primary-500); color: #fff; }
+.roadmap-prio.p3 { background: var(--warm-200); color: var(--warm-600); }
+.roadmap-content h4 { font-size: 15px; font-weight: 600; color: var(--warm-900); margin-bottom: 2px; }
+.roadmap-content p { font-size: 13px; color: var(--warm-500); line-height: 1.5; }
+.roadmap-status {
+  flex-shrink: 0; font-size: 11px; font-weight: 600;
+  padding: 3px 10px; border-radius: 100px;
+}
+.roadmap-status.done { background: var(--success-50); color: var(--success-600); }
+.roadmap-status.soon { background: var(--accent-50); color: var(--accent-600); }
+.roadmap-status.planned { background: var(--warm-100); color: var(--warm-500); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PAGE ARCHITECTURE TREE
+   ═══════════════════════════════════════════════════════════════════════════ */
+.tree { font-family: var(--font-mono); font-size: 13px; line-height: 2; color: var(--warm-700); }
+.tree-comment { color: var(--warm-400); font-style: italic; }
+.tree-highlight { color: var(--primary-600); font-weight: 600; }
+.status-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 600; padding: 1px 8px; border-radius: 100px;
+  margin-left: 8px; font-family: var(--font-sans);
+}
+.status-pass { background: #E6F7EE; color: #009950; }
+.status-block { background: #FEE; color: #D93030; }
+.status-confirm { background: #FFF7E6; color: #FF9800; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FOOTER
+   ═══════════════════════════════════════════════════════════════════════════ */
+.footer {
+  border-top: 1px solid var(--warm-150);
+  padding: 32px 0;
+  text-align: center;
+  font-size: 13px; color: var(--warm-500);
+}
+.footer a { color: var(--primary-600); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .hero h1 { font-size: 36px; }
+  .page-wrap { padding: 0 20px; }
+  .section { padding: 48px 0; }
+  .deploy-options { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     HERO
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<header class="hero">
+  <div class="hero-inner page-wrap">
+    <div class="hero-badge">
+      <span class="hero-badge-dot"></span> Design System v2.0
+    </div>
+    <h1>AgentHub <em>Warm Studio</em><br>温润工坊设计系统</h1>
+    <p class="hero-subtitle">
+      以<strong>日本民艺美学</strong>为灵感，融合<strong>开发者工具的精准性</strong>。
+      温暖陶土色系 · 靛蓝主色调 · 手工纸质感 · 精密网格系统。
+    </p>
+  </div>
+</header>
+
+<main class="page-wrap">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     1. COLOR SYSTEM
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">01 · 色彩系统</div>
+    <h2>Color Palette · 色板</h2>
+    <p>基于 RGB 通道值的 CSS 变量系统，支持 Warm / Light / Dark 三主题实时切换。新增 Accent 暖金色强调色系。</p>
+  </div>
+
+  <div style="margin-bottom:32px">
+    <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">Warm Gray · 温润灰</h4>
+    <div class="palette-row">
+      <div class="swatch" style="background:#FAF9F7;color:var(--warm-600)"><span>50</span><span class="swatch-val">#FAF9F7</span></div>
+      <div class="swatch" style="background:#F5F4F0;color:var(--warm-600)"><span>100</span><span class="swatch-val">#F5F4F0</span></div>
+      <div class="swatch" style="background:#EEE9E4;color:var(--warm-600)"><span>150</span><span class="swatch-val">#EEE9E4</span></div>
+      <div class="swatch" style="background:#E6E5DF;color:var(--warm-600)"><span>200</span><span class="swatch-val">#E6E5DF</span></div>
+      <div class="swatch" style="background:#CDCBB8;color:var(--warm-700)"><span>300</span><span class="swatch-val">#CDCBB8</span></div>
+      <div class="swatch" style="background:#ADABA3;color:var(--warm-700)"><span>400</span><span class="swatch-val">#ADABA3</span></div>
+      <div class="swatch" style="background:#8D8B84;color:#fff"><span>500</span><span class="swatch-val">#8D8B84</span></div>
+      <div class="swatch" style="background:#6D6B65;color:#fff"><span>600</span><span class="swatch-val">#6D6B65</span></div>
+      <div class="swatch" style="background:#4D4C47;color:#fff"><span>700</span><span class="swatch-val">#4D4C47</span></div>
+      <div class="swatch" style="background:#32312E;color:#fff"><span>800</span><span class="swatch-val">#32312E</span></div>
+      <div class="swatch" style="background:#1C1B19;color:#fff"><span>900</span><span class="swatch-val">#1C1B19</span></div>
+    </div>
+  </div>
+
+  <div style="margin-bottom:32px">
+    <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">Primary · 靛蓝 (ai-iro)</h4>
+    <div class="palette-row">
+      <div class="swatch" style="background:#EFF3FF;color:var(--primary-600)"><span>50</span></div>
+      <div class="swatch" style="background:#DEE7FE;color:var(--primary-600)"><span>100</span></div>
+      <div class="swatch" style="background:#C3D7FE;color:var(--primary-600)"><span>200</span></div>
+      <div class="swatch" style="background:#9FBDFD;color:var(--primary-700)"><span>300</span></div>
+      <div class="swatch" style="background:#7B9EFB;color:var(--primary-700)"><span>400</span></div>
+      <div class="swatch" style="background:#4C6AF5;color:#fff"><span>500</span></div>
+      <div class="swatch" style="background:#405CDF;color:#fff"><span>600</span></div>
+      <div class="swatch" style="background:#324BC4;color:#fff"><span>700</span></div>
+    </div>
+  </div>
+
+  <div style="margin-bottom:32px">
+    <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">Accent · 暖金 (NEW!)</h4>
+    <div class="palette-row">
+      <div class="swatch" style="background:#FDF8EE;color:var(--accent-600)"><span>50</span></div>
+      <div class="swatch" style="background:#FAF0D9;color:var(--accent-600)"><span>100</span></div>
+      <div class="swatch" style="background:#F5E3B4;color:var(--accent-600)"><span>200</span></div>
+      <div class="swatch" style="background:#EECE78;color:var(--accent-700)"><span>300</span></div>
+      <div class="swatch" style="background:#E0B840;color:var(--accent-700)"><span>400</span></div>
+      <div class="swatch" style="background:#C49E2C;color:#fff"><span>500</span></div>
+      <div class="swatch" style="background:#A88420;color:#fff"><span>600</span></div>
+      <div class="swatch" style="background:#8A6A16;color:#fff"><span>700</span></div>
+    </div>
+  </div>
+
+  <div style="margin-bottom:32px">
+    <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em">Semantic · 语义色</h4>
+    <div class="palette-row">
+      <div class="swatch" style="background:#5B8C5A;color:#fff"><span>Success</span><span class="swatch-val">#5B8C5A</span></div>
+      <div class="swatch" style="background:#C4A35A;color:#fff"><span>Warning</span><span class="swatch-val">#C4A35A</span></div>
+      <div class="swatch" style="background:#C4675A;color:#fff"><span>Danger</span><span class="swatch-val">#C4675A</span></div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     2. TYPOGRAPHY
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">02 · 字体系统</div>
+    <h2>Typography · 字体层级</h2>
+    <p>系统字体栈作为主体，等宽字体用于数据/代码。字号覆盖 11px–36px，行高严格匹配栅格。</p>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:48px">
+    <div>
+      <div class="type-specimen">
+        <div class="type-label">Heading 1 / H1</div>
+        <div class="type-h1">温润工坊设计系统</div>
+      </div>
+      <div class="type-specimen">
+        <div class="type-label">Heading 2 / H2</div>
+        <div class="type-h2">AgentHub Warm Studio</div>
+      </div>
+      <div class="type-specimen">
+        <div class="type-label">Heading 3 / H3</div>
+        <div class="type-h3">Component Architecture</div>
+      </div>
+      <div class="type-specimen">
+        <div class="type-label">Body</div>
+        <p class="type-body">以日本民艺美学为灵感，融合开发者工具的精准性。温暖陶土色系搭配靛蓝主色调，手工纸质感叠加精密网格系统，创造出既有人文温度又保持技术理性的设计语言。</p>
+      </div>
+      <div class="type-specimen">
+        <div class="type-label">Caption</div>
+        <p class="type-caption">WebSocket: Connected · Agent: Orchestrator · 12:34 PM</p>
+      </div>
+    </div>
+    <div>
+      <div class="type-specimen">
+        <div class="type-label">Monospace</div>
+        <p style="font-family:var(--font-mono);font-size:13px;color:var(--warm-700);line-height:1.6">
+          <span style="color:var(--primary-500)">const</span> <span style="color:var(--accent-600)">deploy</span> <span style="color:var(--warm-400)">=</span> <span style="color:var(--success-500)">await</span> <span style="color:var(--warm-800)">createDeployment</span>({<br>
+          &nbsp;&nbsp;target: <span style="color:var(--success-500)">'webapp'</span>,<br>
+          &nbsp;&nbsp;branch: <span style="color:var(--success-500)">'main'</span>,<br>
+          &nbsp;&nbsp;domain: <span style="color:var(--success-500)">'app.agenthub.dev'</span><br>
+          });
+        </p>
+      </div>
+      <div class="type-specimen" style="margin-top:20px">
+        <div class="type-label">Inline Code</div>
+        <p style="font-size:14px;color:var(--warm-700)">使用 <code class="type-mono">deploy.request()</code> 方法发起部署，返回 <code class="type-mono">DeployResult</code> 对象。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     3. COMPONENT LIBRARY
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">03 · 组件体系</div>
+    <h2>Component Library · 组件库</h2>
+    <p>从卡片到按钮，从标签到输入框——统一的组件语言，一致的交互模式。</p>
+  </div>
+
+  <!-- Cards -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin-bottom:14px;text-transform:uppercase;letter-spacing:0.05em">Cards · 卡片</h4>
+  <div class="card-grid" style="margin-bottom:36px">
+    <div class="card">
+      <div style="font-size:14px;font-weight:600;color:var(--warm-900);margin-bottom:4px">Default Card</div>
+      <p style="font-size:13px;color:var(--warm-500)">标准卡片 — 白色背景、微妙阴影、悬停上浮效果。适用于内容区块。</p>
+    </div>
+    <div class="card-elevated">
+      <div style="font-size:14px;font-weight:600;color:var(--warm-900);margin-bottom:4px">Elevated Card</div>
+      <p style="font-size:13px;color:var(--warm-500)">抬升卡片 — 更高阴影层级，用于重点突出模块。</p>
+    </div>
+    <div class="card-glass">
+      <div style="font-size:14px;font-weight:600;color:var(--warm-900);margin-bottom:4px">Glass Card</div>
+      <p style="font-size:13px;color:var(--warm-500)">玻璃卡片 — 毛玻璃效果，用于覆盖层和浮动面板。</p>
+    </div>
+  </div>
+
+  <!-- Buttons -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin-bottom:14px;text-transform:uppercase;letter-spacing:0.05em">Buttons · 按钮</h4>
+  <div class="btn-row-label">Variants</div>
+  <div class="btn-row" style="margin-bottom:12px">
+    <button class="btn btn-primary">Primary Action</button>
+    <button class="btn btn-secondary">Secondary</button>
+    <button class="btn btn-ghost">Ghost</button>
+    <button class="btn btn-accent">Accent</button>
+    <button class="btn btn-danger">Danger</button>
+  </div>
+
+  <div class="btn-row-label">Sizes</div>
+  <div class="btn-row" style="margin-bottom:12px">
+    <button class="btn btn-primary btn-sm">Small</button>
+    <button class="btn btn-primary">Default</button>
+    <button class="btn btn-primary btn-lg">Large</button>
+    <button class="btn btn-primary btn-xl">X-Large</button>
+  </div>
+
+  <div class="btn-row-label">Icon Buttons</div>
+  <div class="btn-row" style="margin-bottom:12px">
+    <button class="btn-icon" title="Edit">✏️</button>
+    <button class="btn-icon" title="Settings">⚙️</button>
+    <button class="btn-icon" title="Share">🔗</button>
+    <button class="btn-icon" title="Delete">🗑️</button>
+    <button class="btn-icon" title="Close">✕</button>
+  </div>
+
+  <!-- Tags -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin:24px 0 14px;text-transform:uppercase;letter-spacing:0.05em">Tags & Badges · 标签</h4>
+  <div class="tag-row">
+    <span class="tag tag-warm"><span class="tag-dot"></span> Default</span>
+    <span class="tag tag-blue"><span class="tag-dot"></span> Active</span>
+    <span class="tag tag-accent"><span class="tag-dot"></span> Highlight</span>
+    <span class="tag tag-green"><span class="tag-dot"></span> Success</span>
+    <span class="tag tag-red"><span class="tag-dot"></span> Error</span>
+  </div>
+  <div class="tag-row">
+    <span class="tag tag-blue">L1 · 低风险</span>
+    <span class="tag tag-accent">L2 · 中风险</span>
+    <span class="tag tag-red">L3 · 高风险</span>
+    <span class="tag tag-green">✓ 已完成</span>
+  </div>
+
+  <!-- Inputs -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin:24px 0 14px;text-transform:uppercase;letter-spacing:0.05em">Input Fields · 输入框</h4>
+  <div class="input-row" style="margin-bottom:12px">
+    <input class="input-field" type="text" placeholder="默认输入框 — 输入项目名称..." />
+    <input class="input-field input-sm" type="text" placeholder="Small input" />
+    <input class="input-field input-lg" type="text" placeholder="Large input — 大号输入框" />
+    <input class="input-field" type="text" value="已填充的内容" />
+  </div>
+
+  <!-- Status -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin:24px 0 14px;text-transform:uppercase;letter-spacing:0.05em">Status Indicators · 状态指示器</h4>
+  <div class="status-row" style="margin-bottom:20px">
+    <div class="status-item"><span class="status-dot status-active"></span> Active · Connected</div>
+    <div class="status-item"><span class="status-dot status-idle"></span> Idle · Sleeping</div>
+    <div class="status-item"><span class="status-dot status-busy"></span> Busy · Processing</div>
+    <div class="status-item"><span class="status-dot status-error"></span> Error · Disconnected</div>
+    <div class="status-item"><span class="status-dot status-active status-pulse"></span> Pulse · Streaming</div>
+  </div>
+
+  <!-- Skeleton -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin:24px 0 14px;text-transform:uppercase;letter-spacing:0.05em">Skeleton Loading · 骨架屏</h4>
+  <div class="card" style="max-width:360px">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px">
+      <div class="skeleton skeleton-avatar"></div>
+      <div style="flex:1">
+        <div class="skeleton skeleton-text"></div>
+        <div class="skeleton skeleton-text"></div>
+      </div>
+    </div>
+    <div class="skeleton skeleton-text"></div>
+    <div class="skeleton skeleton-text"></div>
+    <div class="skeleton skeleton-card" style="margin-top:12px;height:80px"></div>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     4. KEY FEATURES
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">04 · 核心功能</div>
+    <h2>Key Features · 关键界面</h2>
+    <p>ChatHeader、ChatInput、Message Bubble、Deploy Card 的实际渲染效果。</p>
+  </div>
+
+  <!-- ChatHeader -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin-bottom:14px;text-transform:uppercase;letter-spacing:0.05em">Chat Header · 聊天头部</h4>
+  <div class="chat-header-demo" style="border-radius:14px;margin-bottom:12px">
+    <div class="chat-header-left">
+      <div class="chat-header-title">前端重构任务</div>
+      <div class="chat-header-meta">
+        <span>WebSocket: Connected</span>
+        <span>·</span>
+        <span style="color:var(--primary-500)">Orchestrator</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;background:var(--accent-50);padding:1px 8px;border-radius:100px;font-size:11px;font-weight:500;color:var(--accent-600)"><span class="status-dot status-busy"></span>PM: EXECUTING</span>
+      </div>
+    </div>
+    <div class="chat-header-right">
+      <div class="progress-bar"><div class="progress-bar-fill" style="width:65%"></div></div>
+      <span style="font-size:11px;font-weight:600;color:var(--primary-600);font-family:var(--font-mono)">65%</span>
+      <div class="chat-header-divider"></div>
+      <button class="btn-icon" title="Tasks">📋</button>
+      <button class="btn-icon" title="Files">📁</button>
+      <button class="btn-icon" title="Reset">🔄</button>
+      <button class="btn-icon" title="Share">🔗</button>
+      <!-- ★ 一键部署按钮 -->
+      <button class="deploy-btn-demo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+        一键部署
+      </button>
+    </div>
+  </div>
+
+  <!-- Chat Input -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin:24px 0 14px;text-transform:uppercase;letter-spacing:0.05em">Chat Input · 消息输入区</h4>
+  <div class="chat-input-demo" style="margin-bottom:24px">
+    <textarea rows="2" placeholder="输入消息... @Agent 或 /skill 或 #workflow"></textarea>
+    <div class="chat-input-actions">
+      <button class="btn-icon">📎</button>
+      <button class="btn btn-primary btn-sm">发送 ↗</button>
+    </div>
+  </div>
+
+  <!-- Message Bubbles -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin:24px 0 14px;text-transform:uppercase;letter-spacing:0.05em">Message Bubbles · 消息气泡</h4>
+  <div class="msg-flex">
+    <div class="msg-bubble msg-user">
+      帮我部署前端项目到生产环境
+    </div>
+    <div>
+      <div class="msg-agent-name">🤖 Orchestrator</div>
+      <div class="msg-bubble msg-agent">
+        好的，我来分析项目结构并执行部署。首先检查当前分支状态...
+      </div>
+    </div>
+  </div>
+
+  <!-- Deploy Card -->
+  <h4 style="font-size:13px;font-weight:600;color:var(--warm-500);margin:24px 0 14px;text-transform:uppercase;letter-spacing:0.05em">Deploy Card · 部署卡片</h4>
+  <div class="deploy-card-demo">
+    <div class="deploy-card-header">
+      <div class="deploy-card-header-left">
+        <span>🚀</span><span>部署卡片</span>
+        <span style="background:rgba(255,255,255,0.18);padding:1px 8px;border-radius:100px;font-size:10px">已部署</span>
+      </div>
+      <code style="font-family:var(--font-mono);font-size:10px;color:rgba(255,255,255,0.7)">abc123f</code>
+    </div>
+    <div class="deploy-card-body">
+      <p>前端重构完成，包含响应式布局优化和暗色模式支持</p>
+      <div class="deploy-card-meta">
+        <span>🕐 5分钟前</span>
+        <span>|</span>
+        <span>2026/06/10 14:30</span>
+      </div>
+      <div class="deploy-card-files">
+        <div class="deploy-card-files-title">📄 涉及文件 (4)</div>
+        <div class="deploy-card-files-grid">
+          <span class="deploy-card-file">globals.css</span>
+          <span class="deploy-card-file">tailwind.config.js</span>
+          <span class="deploy-card-file">ChatHeader.tsx</span>
+          <span class="deploy-card-file">pages/index.tsx</span>
+        </div>
+      </div>
+    </div>
+    <div class="deploy-card-actions">
+      <button class="btn btn-primary btn-sm">🚀 部署</button>
+      <button class="btn btn-secondary btn-sm">↩ 回到该版本</button>
+      <button class="btn btn-ghost btn-sm">📋 查看修改记录</button>
+    </div>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     5. DEPLOY MODAL
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">05 · 一键部署</div>
+    <h2>One-Click Deploy · 部署交互</h2>
+    <p>4 种部署方式卡片选择、项目配置、一键复制结果。Coze 平台风格的完整交互流程。</p>
+  </div>
+
+  <!-- Deploy Modal -->
+  <div class="deploy-modal-demo" style="margin:0 auto">
+    <div class="deploy-modal-header">
+      <div class="deploy-modal-title">
+        <span style="font-size:20px">🚀</span> 一键部署当前会话
+      </div>
+      <button class="deploy-modal-close">✕</button>
+    </div>
+    <div class="deploy-modal-body">
+      <p style="font-size:13px;color:var(--warm-500);margin-bottom:16px">选择部署方式，系统将自动构建并生成访问链接。</p>
+
+      <div class="deploy-options">
+        <div class="deploy-option selected">
+          <div class="deploy-option-check"></div>
+          <div class="deploy-option-icon webapp">🌐</div>
+          <div class="deploy-option-name">在线 Web 应用</div>
+          <div class="deploy-option-desc">部署为独立网站，获得访问 URL</div>
+        </div>
+        <div class="deploy-option">
+          <div class="deploy-option-check"></div>
+          <div class="deploy-option-icon api">⚡</div>
+          <div class="deploy-option-name">API 服务</div>
+          <div class="deploy-option-desc">部署为 REST API 端点</div>
+        </div>
+        <div class="deploy-option">
+          <div class="deploy-option-check"></div>
+          <div class="deploy-option-icon embed">📌</div>
+          <div class="deploy-option-name">嵌入组件</div>
+          <div class="deploy-option-desc">生成可嵌入的 JS 代码片段</div>
+        </div>
+        <div class="deploy-option">
+          <div class="deploy-option-check"></div>
+          <div class="deploy-option-icon package">📦</div>
+          <div class="deploy-option-name">本地下载包</div>
+          <div class="deploy-option-desc">下载完整的项目打包文件</div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;display:flex;gap:12px">
+        <div style="flex:1">
+          <label style="font-size:11px;font-weight:600;color:var(--warm-500);display:block;margin-bottom:4px">项目名称</label>
+          <input class="input-field input-sm" value="agenthub-frontend" />
+        </div>
+        <div style="flex:1">
+          <label style="font-size:11px;font-weight:600;color:var(--warm-500);display:block;margin-bottom:4px">分支</label>
+          <input class="input-field input-sm" value="main" />
+        </div>
+        <div style="flex:1">
+          <label style="font-size:11px;font-weight:600;color:var(--warm-500);display:block;margin-bottom:4px">域名</label>
+          <input class="input-field input-sm" value="app.agenthub.dev" />
+        </div>
+      </div>
+
+      <!-- Result area (mock) -->
+      <div style="margin-top:16px;padding:14px 16px;background:var(--warm-50);border:1px solid var(--warm-150);border-radius:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:12px;font-weight:600;color:var(--success-600)">✓ 部署成功</span>
+          <button class="btn btn-ghost btn-sm" style="font-size:11px">📋 复制链接</button>
+        </div>
+        <code style="font-family:var(--font-mono);font-size:12px;color:var(--primary-600)">https://app.agenthub.dev/deploy/abc123f</code>
+      </div>
+    </div>
+    <div class="deploy-modal-footer">
+      <button class="btn btn-secondary">取消</button>
+      <button class="btn btn-primary">🚀 确认部署</button>
+    </div>
+  </div>
+
+  <!-- Toast Demo -->
+  <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap">
+    <div class="toast-demo toast-success">✓ 部署成功！链接已复制到剪贴板</div>
+    <div class="toast-demo toast-error">✕ 部署失败，请检查配置</div>
+    <div class="toast-demo toast-info">ℹ 正在生成部署包，请稍候...</div>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     6. ADMIN INTERFACE
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">06 · 管理面板</div>
+    <h2>Admin Panel · 管理界面</h2>
+    <p>深色侧栏 + 浅色内容区的经典管理布局，新的导航样式和模块卡片。</p>
+  </div>
+
+  <div style="display:flex;gap:20px;align-items:flex-start">
+    <div class="admin-side-demo">
+      <div class="admin-side-logo">⚡ Agent<span>Hub</span></div>
+      <div class="admin-side-section">Platform</div>
+      <div class="admin-side-item active">📊 概览</div>
+      <div class="admin-side-item">🤖 服务商</div>
+      <div class="admin-side-item">⚙️ 工作流</div>
+      <div class="admin-side-item">🧠 技能库</div>
+      <div class="admin-side-section">Management</div>
+      <div class="admin-side-item">👥 用户管理</div>
+      <div class="admin-side-item">📋 审计日志</div>
+      <div class="admin-side-item">💾 记忆管理</div>
+      <div class="admin-side-section">Monitor</div>
+      <div class="admin-side-item">📈 MCP 仪表盘</div>
+      <div class="admin-side-item">⚙️ 通用设置</div>
+    </div>
+
+    <div style="flex:1">
+      <div class="card-grid" style="grid-template-columns:1fr 1fr">
+        <div class="card-elevated">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:24px">🤖</span>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:var(--warm-900)">7 个服务商</div>
+              <div style="font-size:12px;color:var(--warm-500)">3 活跃 · 4 休眠</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:8px">
+            <span class="tag tag-green"><span class="tag-dot"></span>3 L1</span>
+            <span class="tag tag-accent"><span class="tag-dot"></span>2 L2</span>
+            <span class="tag tag-red"><span class="tag-dot"></span>2 L3</span>
+          </div>
+        </div>
+        <div class="card-elevated">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:24px">📊</span>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:var(--warm-900)">1,247 请求</div>
+              <div style="font-size:12px;color:var(--warm-500)">今日 · 98.5% 成功率</div>
+            </div>
+          </div>
+          <div class="progress-bar" style="width:100%;margin-top:8px">
+            <div class="progress-bar-fill" style="width:98.5%;background:var(--success-500)"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     7. PAGE ARCHITECTURE
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">07 · 页面架构</div>
+    <h2>Page Architecture · 路由结构</h2>
+    <p>Next.js Pages Router + App Router 混合架构，组件命名规范。</p>
+  </div>
+
+  <div style="background:var(--warm-50);border:1px solid var(--warm-150);border-radius:14px;padding:24px">
+    <pre class="tree">
+<span class="tree-highlight">AgentHub Platform</span>
+│
+├─ <span class="tree-highlight">/ (Pages Router)</span> — 主聊天页面
+│  ├─ ChatHeader           <span class="tree-comment">← 会话名称、PM状态、进度条、工具按钮</span>
+│  ├─ SessionSidebar       <span class="tree-comment">← 会话列表、搜索、pin</span>
+│  ├─ MessageList          <span class="tree-comment">← 消息流、各类型气泡</span>
+│  │  ├─ MessageBubble     <span class="tree-comment">← 文本消息</span>
+│  │  ├─ ToolCallBubble    <span class="tree-comment">← 工具调用</span>
+│  │  ├─ DeployCard        <span class="tree-comment">← 部署卡片</span>
+│  │  ├─ DiffBubble        <span class="tree-comment">← 代码差异</span>
+│  │  └─ ProgressBubble    <span class="tree-comment">← 进度展示</span>
+│  ├─ ChatInput            <span class="tree-comment">← 输入区、附件、@/＃/ / 提及</span>
+│  ├─ ShareDialog          <span class="tree-comment">← 分享会话弹窗</span>
+│  └─ OneClickDeployModal  <span class="tree-comment">← 一键部署弹窗 ★</span>
+│
+├─ <span class="tree-highlight">/admin (App Router)</span> — 管理面板
+│  ├─ GeneralSettings      <span class="tree-comment">← 通用设置</span>
+│  ├─ ServiceProvider      <span class="tree-comment">← 服务商管理</span>
+│  ├─ WorkflowModule       <span class="tree-comment">← 工作流管理</span>
+│  ├─ SkillsModule         <span class="tree-comment">← 技能库</span>
+│  ├─ UserManagement       <span class="tree-comment">← 用户管理</span>
+│  ├─ AuditLogList         <span class="tree-comment">← 审计日志</span>
+│  ├─ MemoryModule         <span class="tree-comment">← 记忆管理</span>
+│  └─ MCPDashboard         <span class="tree-comment">← MCP仪表盘</span>
+│
+├─ <span class="tree-highlight">/charts</span> — Token 用量热力图
+│
+└─ <span class="tree-highlight">/canvas</span> — Agent 流程画布
+
+<span class="tree-comment">// 组件命名规范</span>
+<span class="tree-comment">// Page → 路由页面  |  Module → Admin 功能模块  |  Modal → 覆盖层弹窗</span>
+<span class="tree-comment">// Panel → 侧栏/底栏  |  Card → 消息卡片  |  Bubble → 消息气泡</span>
+<span class="tree-comment">// Dialog → 确认/分享对话框  |  Store → Zustand 状态</span></pre>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     8. ANIMATIONS
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">08 · 动效系统</div>
+    <h2>Animation Library · 动画库</h2>
+    <p>CSS 关键帧动画 + Tailwind animation 工具类。点击下方方块重播动画。</p>
+  </div>
+
+  <div class="anim-grid" style="margin-bottom:24px" id="animGrid">
+    <div style="text-align:center">
+      <div class="anim-demo-box anim-fade-in" onclick="replay(this,'anim-fade-in')">Fade In</div>
+      <span style="font-size:11px;color:var(--warm-400);margin-top:6px;display:block">fadeIn · 0.6s</span>
+    </div>
+    <div style="text-align:center">
+      <div class="anim-demo-box anim-fade-up" onclick="replay(this,'anim-fade-up')" style="animation-delay:0.1s">Fade Up</div>
+      <span style="font-size:11px;color:var(--warm-400);margin-top:6px;display:block">fadeInUp · 0.5s</span>
+    </div>
+    <div style="text-align:center">
+      <div class="anim-demo-box anim-slide-left" onclick="replay(this,'anim-slide-left')" style="animation-delay:0.2s">Slide L</div>
+      <span style="font-size:11px;color:var(--warm-400);margin-top:6px;display:block">slideInLeft · 0.5s</span>
+    </div>
+    <div style="text-align:center">
+      <div class="anim-demo-box anim-scale" onclick="replay(this,'anim-scale')" style="animation-delay:0.3s">Scale</div>
+      <span style="font-size:11px;color:var(--warm-400);margin-top:6px;display:block">fadeInScale · 0.4s</span>
+    </div>
+  </div>
+</section>
+
+<hr class="divider-accent">
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     9. IMPROVEMENT ROADMAP
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<section class="section">
+  <div class="section-header">
+    <div class="section-label">09 · 改进路线</div>
+    <h2>Improvement Roadmap · 迭代计划</h2>
+    <p>从 P0 到 P3 的优先级排列，标注了当前状态和改进方向。</p>
+  </div>
+
+  <div class="roadmap">
+    <div class="roadmap-item">
+      <div class="roadmap-prio p0">P0</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>设计令牌升级 — Accent 色系、阴影系统、动画库</h4>
+        <p>新增 accent 暖金色系、重构阴影变量支持暗色主题、添加 8 个 CSS 关键帧动画</p>
+      </div>
+      <div class="roadmap-status done">✅ 已完成</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p0">P0</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>一键部署功能</h4>
+        <p>ChatHeader 部署按钮、4 种部署方式选择、复制到剪贴板、Toast 反馈</p>
+      </div>
+      <div class="roadmap-status done">✅ 已完成</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p1">P1</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>导航过渡动画 & 页面切换效果</h4>
+        <p>为侧栏展开/收起、弹窗打开/关闭、Tab 切换添加平滑过渡动画</p>
+      </div>
+      <div class="roadmap-status soon">🔜 即将开始</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p1">P1</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>移动端适配 & 响应式布局</h4>
+        <p>优化 768px 以下断点的聊天界面、管理面板折叠导航、触摸友好的交互元素</p>
+      </div>
+      <div class="roadmap-status soon">🔜 即将开始</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p1">P1</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>骨架屏 & 空状态插画</h4>
+        <p>为消息列表、管理面板、文件预览等区域添加骨架屏加载态和友好的空状态提示</p>
+      </div>
+      <div class="roadmap-status planned">📋 计划中</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p2">P2</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>部署历史 & 实时状态推送</h4>
+        <p>部署历史时间线、WebSocket 实时部署状态、回滚确认流程优化</p>
+      </div>
+      <div class="roadmap-status planned">📋 计划中</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p2">P2</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>管理面板 UI 一致性增强</h4>
+        <p>统一所有 Module 的表单样式、弹窗交互、空状态和错误处理</p>
+      </div>
+      <div class="roadmap-status planned">📋 计划中</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p3">P3</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>主题构建器 & 自定义主题</h4>
+        <p>允许用户在 UI 中实时调整色相/饱和度/亮度，导出/导入自定义主题配置</p>
+      </div>
+      <div class="roadmap-status planned">📋 远期中</div>
+    </div>
+    <div class="roadmap-item">
+      <div class="roadmap-prio p3">P3</div>
+      <div class="roadmap-content" style="flex:1">
+        <h4>i18n 国际化 + a11y 无障碍审计</h4>
+        <p>多语言支持、屏幕阅读器兼容、键盘导航、ARIA 标签、色彩对比度合规</p>
+      </div>
+      <div class="roadmap-status planned">📋 远期中</div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="page-wrap">
+    AgentHub Design System v2 · "Warm Studio" 温润工坊 · 2026<br>
+    日本民艺美学 × 开发者工具精准性 · <a href="#">返回顶部 ↑</a>
+  </div>
+</footer>
+
+<script>
+// Replay animations on click
+function replay(el, cls) {
+  el.style.animation = 'none';
+  el.offsetHeight; // trigger reflow
+  el.style.animation = '';
+}
+
+// Intersection Observer for scroll-triggered reveals
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.style.opacity = '1';
+      entry.target.style.transform = 'translateY(0)';
+    }
+  });
+}, { threshold: 0.1 });
+
+document.querySelectorAll('.anim-demo-box').forEach(box => {
+  observer.observe(box);
+});
+
+// Deploy option selection demo
+document.querySelectorAll('.deploy-option').forEach(opt => {
+  opt.addEventListener('click', function() {
+    this.parentElement.querySelectorAll('.deploy-option').forEach(o => o.classList.remove('selected'));
+    this.classList.add('selected');
+  });
+});
+</script>
+</body>
+</html>

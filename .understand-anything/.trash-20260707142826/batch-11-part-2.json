@@ -1,0 +1,986 @@
+{
+  "nodes": [
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/model_adapter.rs:health",
+      "type": "function",
+      "name": "health",
+      "filePath": "services/rust/crates/retrieval-core/src/model_adapter.rs",
+      "summary": "health",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/model_adapter.rs:ModelAdapterError",
+      "type": "class",
+      "name": "ModelAdapterError",
+      "filePath": "services/rust/crates/retrieval-core/src/model_adapter.rs",
+      "summary": "ModelAdapterError",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "type": "file",
+      "name": "nats.rs",
+      "filePath": "services/rust/crates/retrieval-core/src/nats.rs",
+      "summary": "NATS适配器：订阅retrieval.query.requested事件，调用core.retrieve处理后发布fusion.completed与query.completed",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/nats.rs:NatsAdapter",
+      "type": "class",
+      "name": "NatsAdapter",
+      "filePath": "services/rust/crates/retrieval-core/src/nats.rs",
+      "summary": "NatsAdapter",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/nats.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/retrieval-core/src/nats.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/nats.rs:connect",
+      "type": "function",
+      "name": "connect",
+      "filePath": "services/rust/crates/retrieval-core/src/nats.rs",
+      "summary": "connect",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/nats.rs:is_connected",
+      "type": "function",
+      "name": "is_connected",
+      "filePath": "services/rust/crates/retrieval-core/src/nats.rs",
+      "summary": "is_connected",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/nats.rs:spawn_subscription",
+      "type": "function",
+      "name": "spawn_subscription",
+      "filePath": "services/rust/crates/retrieval-core/src/nats.rs",
+      "summary": "spawn_subscription",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/nats.rs:close",
+      "type": "function",
+      "name": "close",
+      "filePath": "services/rust/crates/retrieval-core/src/nats.rs",
+      "summary": "close",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "type": "file",
+      "name": "opensearch.rs",
+      "filePath": "services/rust/crates/retrieval-core/src/opensearch.rs",
+      "summary": "OpenSearch BM25全文检索客户端：通过REST API执行match查询，分数归一化到[0,1]，返回RetrievalCandidate列表",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/opensearch.rs:OpenSearchClient",
+      "type": "class",
+      "name": "OpenSearchClient",
+      "filePath": "services/rust/crates/retrieval-core/src/opensearch.rs",
+      "summary": "OpenSearchClient",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/opensearch.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/retrieval-core/src/opensearch.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/opensearch.rs:search",
+      "type": "function",
+      "name": "search",
+      "filePath": "services/rust/crates/retrieval-core/src/opensearch.rs",
+      "summary": "search",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/opensearch.rs:health",
+      "type": "function",
+      "name": "health",
+      "filePath": "services/rust/crates/retrieval-core/src/opensearch.rs",
+      "summary": "health",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/opensearch.rs:OpenSearchError",
+      "type": "class",
+      "name": "OpenSearchError",
+      "filePath": "services/rust/crates/retrieval-core/src/opensearch.rs",
+      "summary": "OpenSearchError",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "type": "file",
+      "name": "qdrant.rs",
+      "filePath": "services/rust/crates/retrieval-core/src/qdrant.rs",
+      "summary": "Qdrant稠密向量检索客户端：通过REST API执行向量相似度搜索，分数归一化，返回RetrievalCandidate列表",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/qdrant.rs:QdrantClient",
+      "type": "class",
+      "name": "QdrantClient",
+      "filePath": "services/rust/crates/retrieval-core/src/qdrant.rs",
+      "summary": "QdrantClient",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/qdrant.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/retrieval-core/src/qdrant.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/qdrant.rs:search",
+      "type": "function",
+      "name": "search",
+      "filePath": "services/rust/crates/retrieval-core/src/qdrant.rs",
+      "summary": "search",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/qdrant.rs:health",
+      "type": "function",
+      "name": "health",
+      "filePath": "services/rust/crates/retrieval-core/src/qdrant.rs",
+      "summary": "health",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/qdrant.rs:QdrantError",
+      "type": "class",
+      "name": "QdrantError",
+      "filePath": "services/rust/crates/retrieval-core/src/qdrant.rs",
+      "summary": "QdrantError",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "type": "file",
+      "name": "server.rs",
+      "filePath": "services/rust/crates/retrieval-core/src/server.rs",
+      "summary": "HTTP服务端点：健康检查/指标/统计/同步检索debug/融合权重读写，Prometheus文本格式暴露指标",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/server.rs:RetrievalHttpServer",
+      "type": "class",
+      "name": "RetrievalHttpServer",
+      "filePath": "services/rust/crates/retrieval-core/src/server.rs",
+      "summary": "RetrievalHttpServer",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/server.rs:new",
+      "type": "function",
+      "name": "new",
+      "filePath": "services/rust/crates/retrieval-core/src/server.rs",
+      "summary": "new",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/server.rs:serve",
+      "type": "function",
+      "name": "serve",
+      "filePath": "services/rust/crates/retrieval-core/src/server.rs",
+      "summary": "serve",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "type": "file",
+      "name": "types.rs",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "检索核心数据模型：RetrievalRequest、FusionResult、FusedCandidate、Citation、Degradation降级标记及content_hash工具",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:SourceType",
+      "type": "class",
+      "name": "SourceType",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "SourceType",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:Degradation",
+      "type": "class",
+      "name": "Degradation",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "Degradation",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/types.rs:as_str",
+      "type": "function",
+      "name": "as_str",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "as_str",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:RetrievalRequest",
+      "type": "class",
+      "name": "RetrievalRequest",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "RetrievalRequest",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:RetrievalCandidate",
+      "type": "class",
+      "name": "RetrievalCandidate",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "RetrievalCandidate",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:FusedCandidate",
+      "type": "class",
+      "name": "FusedCandidate",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "FusedCandidate",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:Citation",
+      "type": "class",
+      "name": "Citation",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "Citation",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:FusionResult",
+      "type": "class",
+      "name": "FusionResult",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "FusionResult",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "class:services/rust/crates/retrieval-core/src/types.rs:QueryCompleted",
+      "type": "class",
+      "name": "QueryCompleted",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "QueryCompleted",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/types.rs:citations_from",
+      "type": "function",
+      "name": "citations_from",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "citations_from",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    },
+    {
+      "id": "function:services/rust/crates/retrieval-core/src/types.rs:content_hash",
+      "type": "function",
+      "name": "content_hash",
+      "filePath": "services/rust/crates/retrieval-core/src/types.rs",
+      "summary": "content_hash",
+      "tags": [
+        "service",
+        "rust",
+        "microservice",
+        "backend"
+      ],
+      "complexity": "moderate"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/nats.rs:NatsAdapter",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/nats.rs:NatsAdapter",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:connect",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:connect",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:is_connected",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:is_connected",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:spawn_subscription",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:spawn_subscription",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:close",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/nats.rs:close",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/opensearch.rs:OpenSearchClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/opensearch.rs:OpenSearchClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/opensearch.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/opensearch.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/opensearch.rs:search",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/opensearch.rs:search",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/opensearch.rs:health",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/opensearch.rs:health",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/opensearch.rs:OpenSearchError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/opensearch.rs:OpenSearchError",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/qdrant.rs:QdrantClient",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/qdrant.rs:QdrantClient",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/qdrant.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/qdrant.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/qdrant.rs:search",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/qdrant.rs:search",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/qdrant.rs:health",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/qdrant.rs:health",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/qdrant.rs:QdrantError",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/qdrant.rs:QdrantError",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/server.rs:RetrievalHttpServer",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/server.rs:RetrievalHttpServer",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/server.rs:new",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/server.rs:new",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/server.rs:serve",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/server.rs:serve",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:SourceType",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:SourceType",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:Degradation",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:Degradation",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/types.rs:as_str",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/types.rs:as_str",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:RetrievalRequest",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:RetrievalRequest",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:RetrievalCandidate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:RetrievalCandidate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:FusedCandidate",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:FusedCandidate",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:Citation",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:Citation",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:FusionResult",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:FusionResult",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:QueryCompleted",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "class:services/rust/crates/retrieval-core/src/types.rs:QueryCompleted",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/types.rs:citations_from",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/types.rs:citations_from",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/types.rs:content_hash",
+      "type": "contains",
+      "direction": "forward",
+      "weight": 1.0
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "target": "function:services/rust/crates/retrieval-core/src/types.rs:content_hash",
+      "type": "exports",
+      "direction": "forward",
+      "weight": 0.8
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "file:services/rust/crates/retrieval-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/nats.rs",
+      "target": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/opensearch.rs",
+      "target": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/qdrant.rs",
+      "target": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "file:services/rust/crates/retrieval-core/src/core.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    },
+    {
+      "source": "file:services/rust/crates/retrieval-core/src/server.rs",
+      "target": "file:services/rust/crates/retrieval-core/src/types.rs",
+      "type": "imports",
+      "direction": "forward",
+      "weight": 0.7
+    }
+  ]
+}
