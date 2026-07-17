@@ -30,30 +30,30 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [consoleCollapsed, setConsoleCollapsed] = useState(false);
-  const [chatOpen, setChatOpen] = useState(() => {
-    if (typeof window === 'undefined') return true;
+  const [chatOpen, setChatOpen] = useState(true);
+
+  useEffect(() => {
     try {
       const lastClosed = localStorage.getItem('agenthub_chat_closed_at');
       if (lastClosed) {
         const elapsed = Date.now() - parseInt(lastClosed, 10);
-        if (elapsed < 24 * 60 * 60 * 1000) return false;
+        if (elapsed < 24 * 60 * 60 * 1000) setChatOpen(false);
       }
     } catch { /* localStorage unavailable */ }
-    return true;
-  });
+  }, []);
   const [consoleTab, setConsoleTab] = useState<'logs' | 'state' | 'tools'>('logs');
   const [consoleLogs, setConsoleLogs] = useState<Array<{ time: string; tag: string; msg: string; tagClass?: string }>>([
     { time: '--:--:--', tag: 'SYS', msg: 'AgentHub 控制台已就绪 · 等待管理操作', tagClass: 'info' },
   ]);
 
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
-    if (typeof window === 'undefined') return 240;
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+
+  useEffect(() => {
     try {
       const stored = localStorage.getItem('agenthub_sidebar_w');
-      if (stored) { const n = parseInt(stored, 10); if (n >= 240 && n <= 480) return n; }
+      if (stored) { const n = parseInt(stored, 10); if (n >= 240 && n <= 480) setSidebarWidth(n); }
     } catch { /* ignore */ }
-    return 240;
-  });
+  }, []);
   const [sidebarWidthLive, setSidebarWidthLive] = useState<number | null>(null);
   const sidebarW = sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`;
   const consoleWidth = consoleCollapsed ? '0px' : '380px';

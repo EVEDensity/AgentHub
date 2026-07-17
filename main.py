@@ -60,9 +60,21 @@ async def lifespan(app: FastAPI):
     try:
         await ainit_db()
         _log.info("startup: PostgreSQL initialized")
-    except Exception:
-        _log.exception("startup: PostgreSQL init FAILED")
-        raise
+    except Exception as exc:
+        _log.error(
+            "startup: PostgreSQL init FAILED — %s: %s",
+            type(exc).__name__, exc,
+        )
+        _log.error(
+            "startup: Check that PostgreSQL is running at the URL in your .env file.\n"
+            "  - Run start.bat to auto-start PostgreSQL via Docker, or\n"
+            "  - Start manually: docker start agenthub-pg\n"
+            "  - Or use a Neon cloud free tier: https://neon.tech"
+        )
+        raise RuntimeError(
+            "PostgreSQL connection failed. "
+            "Start the database (e.g., 'docker start agenthub-pg') and retry."
+        ) from exc
 
     # Register built-in tools for the tool-calling system
     try:

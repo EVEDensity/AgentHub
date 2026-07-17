@@ -341,6 +341,7 @@ async def _ainit_postgresql() -> None:
         await _seed_agents_pg(conn)
         await _seed_templates_pg(conn)
         await _seed_agent_routes_pg(conn)
+        await _seed_model_configs_pg(conn)
 
         logger.info("init_db: PostgreSQL seed data inserted")
 
@@ -746,3 +747,32 @@ async def _seed_agent_routes_pg(conn) -> None:
             name, DEFAULT_USER_ID, description, json.dumps(keywords, ensure_ascii=False),
             json.dumps(nodes, ensure_ascii=False), is_default, 1, now(), now(),
         )
+
+
+async def _seed_model_configs_pg(conn) -> None:
+    """Seed 6 default LLM provider entries so the admin model-config panel is non-empty.
+
+    All seeded entries have empty API keys — the admin fills them in via the UI.
+    Each entry is inserted only if no row with the same (provider, model_name) exists.
+    """
+    defaults = [
+        ("openai", "GPT-4o", "https://api.openai.com/v1"),
+        ("anthropic", "Claude Opus 4.8", "https://api.anthropic.com"),
+        ("deepseek", "DeepSeek-V3", "https://api.deepseek.com"),
+        ("zhipu", "GLM-4", "https://open.bigmodel.cn/api/paas/v4"),
+        ("qwen", "Qwen-Max", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        ("doubao", "Doubao-Pro", "https://ark.cn-beijing.volces.com/api/v3"),
+    ]
+    for provider, model_name, base_url in defaults:
+        exists = await conn.fetchval(
+            "SELECT id FROM model_configs WHERE provider=$1 AND model_name=$2",
+            provider, model_name,
+        )
+        if exists:
+            continue
+        await conn.execute(
+            "INSERT INTO model_configs(provider, model_name, api_key, api_key_hash, base_url, is_active, created_at) "
+            "VALUES($1, $2, $3, $4, $5, $6, $7)",
+            provider, model_name, "", "", base_url, 1, now(),
+        )
+    logger.info("init_db: seeded %d model configs", len(defaults))
