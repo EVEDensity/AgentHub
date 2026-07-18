@@ -15,6 +15,7 @@ from app.db.session import afetch_all, afetch_one, aexecute
 from app.services.adapter_manager import adapter_manager
 from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
+from app.services import agent_prompt_context as prompt_context
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
 from app.services.text_processing import (
@@ -400,70 +401,11 @@ def _intent_from_domain(domain: str, _content: str = "") -> str:
 
 
 def _build_attachment_context(attachments: list[dict[str, Any]] | None) -> tuple[str, list[dict[str, Any]]]:
-    if not attachments:
-        return "", []
-
-    blocks: list[str] = []
-    clean: list[dict[str, Any]] = []
-    max_text_len = 12000
-
-    for idx, item in enumerate(attachments, start=1):
-        name = str(item.get("name", f"file_{idx}"))
-        file_type = str(item.get("type", "text/plain"))
-        size = int(item.get("size", 0) or 0)
-        content = str(item.get("content", ""))
-
-        is_image = file_type.startswith("image/") or name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
-        if is_image:
-            preview = content[:180]
-            blocks.append(
-                f"[附件图片 {idx}] name={name}, type={file_type}, size={size}\\n"
-                f"data_url_prefix={preview}"
-            )
-        else:
-            trimmed = content[:max_text_len]
-            ext = name.split(".")[-1] if "." in name else "text"
-            blocks.append(
-                f"[附件文件 {idx}] name={name}, type={file_type}, size={size}\\n"
-                f"```{ext}\\n{trimmed}\\n```"
-            )
-
-        clean.append({"name": name, "type": file_type, "size": size})
-
-    return "\\n\\n".join(blocks), clean
+    return prompt_context.build_attachment_context(attachments)
 
 
 def _build_quote_context(quote_references: list[dict[str, Any]] | None) -> str:
-    """Format quoted chat messages as a context block for the AI prompt.
-
-    Injects a ``[用户引用的历史消息]`` section above the current question,
-    giving the model visibility into what the user is referencing.
-    """
-    if not quote_references:
-        return ""
-
-    blocks: list[str] = []
-    for idx, qr in enumerate(quote_references, start=1):
-        original_sender = str(qr.get("originalSender", "unknown"))
-        original_timestamp = str(qr.get("originalTimestamp", ""))
-        quoted_text = str(qr.get("quotedText", ""))
-        is_full_message = bool(qr.get("isFullMessage", False))
-
-        truncation_note = ""
-        display_text = quoted_text
-        if len(quoted_text) > 2000:
-            display_text = quoted_text[:2000] + "\n… [已截断]"
-            truncation_note = " (已截断)"
-
-        msg_type = "完整消息" if is_full_message else "消息片段"
-
-        blocks.append(
-            f"[引自历史消息 {idx}] 发送者: {original_sender}, "
-            f"时间: {original_timestamp}, 类型: {msg_type}{truncation_note}\n"
-            f"---\n{display_text}\n---"
-        )
-
-    return "[用户引用的历史消息]\n\n" + "\n\n".join(blocks)
+    return prompt_context.build_quote_context(quote_references)
 
 
 async def lookup_agent(
@@ -2108,45 +2050,11 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
 
 
 def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, int]:
-    """Estimate token counts with CJK-aware heuristics.
+    return prompt_context.estimate_token_usage(user_text, model_output)
 
-    Pure ASCII text averages ~4 chars/token.  CJK characters (Chinese,
-    Japanese, Korean) are denser — roughly 1.5 chars/token — because each
-    logogram is a distinct token unit.  Mixing the two ratios gives a much
-    better estimate than the naive ``len // 4`` for bilingual content.
-    """
-    def _count_tokens(text: str) -> int:
-        cjk = sum(1 for c in text if '一' <= c <= '鿿' or '㐀' <= c <= '䶿')
-        non_cjk = len(text) - cjk
-        # CJK: ~1.5 chars/token, non-CJK: ~4 chars/token
-        return max(1, int(cjk / 1.5 + non_cjk / 4))
-
-    prompt_tokens = _count_tokens(user_text)
-    completion_tokens = _count_tokens(model_output)
-    total_tokens = prompt_tokens + completion_tokens
-    return prompt_tokens, completion_tokens, total_tokens
 
 def _format_conversation(conversation: list[dict]) -> str:
-    """Format a multi-turn conversation (including tool calls/results) for prompt injection."""
-    parts: list[str] = []
-    for turn in conversation:
-        role = turn.get("role", "")
-        if role == "user":
-            parts.append(f"【用户消息】\n{turn.get('content', '')}")
-        elif role == "assistant" and "tool_calls" in turn:
-            tcs = turn["tool_calls"]
-            for tc in tcs:
-                parts.append(
-                    f"【工具调用】\n"
-                    f"调用工具: {tc.get('name', 'unknown')}\n"
-                    f"参数: {json.dumps(tc.get('arguments', {}), ensure_ascii=False)}"
-                )
-        elif role == "tool":
-            from app.services.tool_executor import tool_executor
-            parts.append(tool_executor.build_tool_result_context(turn.get("results", [])))
-        elif role == "assistant":
-            parts.append(f"【助手回复】\n{turn.get('content', '')}")
-    return "\n\n".join(parts)
+    return prompt_context.format_conversation_for_prompt(conversation)
 
 
 async def _log_tool_call(session_id: str, agent_id: str, tool_name: str, arguments: dict, result: dict) -> None:
