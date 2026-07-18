@@ -16,6 +16,7 @@ from app.services.auth.session_guard import (
     check_session_access,
 )
 from app.services.agent_service import list_messages
+from app.services.auto_name_prompt import build_auto_name_prompt, extract_local_title
 from app.services.session_preferences import (
     PINNED_SESSIONS_SETTING_KEY,
     apply_session_pin_state,
@@ -729,7 +730,7 @@ async def auto_name_session(session_id: str, user: dict = Depends(get_current_us
     if not msgs or len(msgs) < 2:
         return {"status": "skipped", "reason": "Not enough messages", "sessionId": session_id}
 
-    prompt = _build_auto_name_prompt(msgs)
+    prompt = build_auto_name_prompt(msgs)
     if not prompt:
         return {"status": "skipped", "reason": "No message content", "sessionId": session_id}
 
@@ -739,7 +740,7 @@ async def auto_name_session(session_id: str, user: dict = Depends(get_current_us
         user_msgs = [m for m in msgs if m.get("sender") not in ("system", "agent", "orchestrator")]
         first_msg = (user_msgs[0].get("content") or "").strip() if user_msgs else ""
         if first_msg:
-            name = _extract_local_title(first_msg)
+            name = extract_local_title(first_msg)
     if not name:
         return {"status": "skipped", "reason": "LLM call failed", "sessionId": session_id}
 
@@ -764,13 +765,13 @@ async def try_auto_name_session(session_id: str) -> str | None:
         if not msgs or len(msgs) < 1:
             return None
 
-        prompt = _build_auto_name_prompt(msgs)
+        prompt = build_auto_name_prompt(msgs)
         if not prompt:
             # No prompt could be built — try local extraction directly
             user_msgs = [m for m in msgs if m.get("sender") not in ("system", "agent", "orchestrator")]
             first_msg = (user_msgs[0].get("content") or "").strip() if user_msgs else ""
             if first_msg:
-                name = _extract_local_title(first_msg)
+                name = extract_local_title(first_msg)
                 if name:
                     await aexecute("UPDATE sessions SET name=$1 WHERE id=$2", name, session_id)
                     return name
