@@ -15,6 +15,7 @@ from app.db.session import afetch_all, afetch_one, aexecute
 from app.services.adapter_manager import adapter_manager
 from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
+from app.services.conversation_history import build_conversation_history_transcript
 from app.services import agent_prompt_context as prompt_context
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
@@ -1348,7 +1349,7 @@ async def stream_agent_response(
     return stream()
 
 
-async def _build_conversation_history(session_id: str, max_chars: int = 8000) -> str:
+async def _build_conversation_history(session_id: str, max_chars: int = 5000) -> str:
     """Fetch recent messages from this session and format as a transcript.
 
     Gives every agent called in the session full awareness of what was
@@ -1377,21 +1378,7 @@ async def _build_conversation_history(session_id: str, max_chars: int = 8000) ->
         prompt_cache.set_history(session_id, "")
         return ""
 
-    # Keep DESC order (newest first), build lines until we hit max_chars,
-    # then reverse to chronological for the prompt.
-    lines: list[str] = []
-    total = 0
-    for r in rows:
-        content = _strip_think_tags(r["content"])
-        # Truncate individual messages — larger cap to preserve more meaning
-        line = f"{r['sender']}：{content[:1200]}"
-        total += len(line)
-        lines.append(line)
-        if total > max_chars:
-            break
-
-    lines.reverse()  # chronological order for readability
-    result = "【会话历史记录 — 以下是本会话中之前的对话内容，请基于此上下文理解用户的后续问题】\n" + "\n".join(lines)
+    result = build_conversation_history_transcript(rows, max_chars=max_chars)
     prompt_cache.set_history(session_id, result)
     return result
 
