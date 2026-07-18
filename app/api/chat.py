@@ -16,6 +16,12 @@ from app.services.auth.session_guard import (
     check_session_access,
 )
 from app.services.agent_service import list_messages
+from app.services.session_preferences import (
+    PINNED_SESSIONS_SETTING_KEY,
+    apply_session_pin_state,
+    parse_pinned_session_ids,
+    serialize_pinned_session_ids,
+)
 from app.services.task_state_machine import task_state_machine
 
 logger = logging.getLogger("agenthub.chat")
@@ -47,7 +53,7 @@ async def sessions(user: dict = Depends(get_current_user)) -> list[dict]:
     public sessions that are visible to all authenticated users.
     """
     user_id = user["id"]
-    return await afetch_all(
+    rows = await afetch_all(
         """SELECT s.id, s.name, s.type, s.active,
                   s.created_at AS "createdAt",
                   s.is_pinned AS "isPinned",
@@ -60,11 +66,17 @@ async def sessions(user: dict = Depends(get_current_user)) -> list[dict]:
            LEFT JOIN session_members sm ON s.id = sm.session_id AND sm.user_id = $1
            WHERE s.visibility = 'public'
               OR sm.user_id = $1
-           ORDER BY s.is_pinned DESC,
-                    CASE WHEN s.last_message_at != '' THEN s.last_message_at
+           ORDER BY CASE WHEN s.last_message_at != '' THEN s.last_message_at
                          ELSE s.created_at END DESC""",
         user_id,
     )
+    pinned_row = await afetch_one(
+        "SELECT value FROM user_settings WHERE user_id=$1 AND key=$2 LIMIT 1",
+        user_id,
+        PINNED_SESSIONS_SETTING_KEY,
+    )
+    pinned_ids = parse_pinned_session_ids((pinned_row or {}).get("value"))
+    return apply_session_pin_state([dict(row) for row in rows], pinned_ids)
 
 
 @router.post("/sessions")
@@ -264,13 +276,24 @@ async def rename_session(session_id: str, data: dict, user: dict = Depends(get_c
 @router.put("/sessions/{session_id}/pin")
 async def toggle_pin_session(session_id: str, user: dict = Depends(get_current_user)) -> dict:
     access = await check_session_access(session_id, user)
-    # Pin is per-user preference — allow any member to pin
-    row = await afetch_one("SELECT is_pinned FROM sessions WHERE id=$1", session_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Session not found")
-    new_val = 0 if row.get("is_pinned") else 1
-    await aexecute("UPDATE sessions SET is_pinned=$1 WHERE id=$2", new_val, session_id)
-    return {"status": "success", "sessionId": session_id, "isPinned": new_val}
+    pinned_row = await afetch_one(
+        "SELECT value FROM user_settings WHERE user_id=$1 AND key=$2 LIMIT 1",
+        user["id"], PINNED_SESSIONS_SETTING_KEY,
+    )
+    pinned_ids = parse_pinned_session_ids((pinned_row or {}).get("value"))
+    is_pinned = session_id not in pinned_ids
+    if is_pinned:
+        pinned_ids.add(session_id)
+    else:
+        pinned_ids.discard(session_id)
+    await aexecute(
+        "INSERT INTO user_settings (user_id, key, value, updated_at) "
+        "VALUES ($1, $2, $3, $4) "
+        "ON CONFLICT (user_id, key) DO UPDATE SET value=$3, updated_at=$4",
+        user["id"], PINNED_SESSIONS_SETTING_KEY,
+        serialize_pinned_session_ids(pinned_ids), now(),
+    )
+    return {"status": "success", "sessionId": session_id, "isPinned": 1 if is_pinned else 0}
 
 
 # ── Multi-user membership endpoints ────────────────────────────────────

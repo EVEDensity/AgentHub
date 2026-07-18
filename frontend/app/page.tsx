@@ -87,7 +87,7 @@ export default function AgentHubIM(): JSX.Element {
   const [token, setToken] = useState<string>('');
   const [user, setUser] = useState<User | null>(null);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [authForm, setAuthForm] = useState<{ name: string; password: string }>({ name: 'admin', password: 'admin123' });
+  const [authForm, setAuthForm] = useState<{ name: string; password: string }>({ name: '', password: '' });
   // ── 当前 session 的 messages / isStreaming 从 SessionStore 派生 ────────────
   // 这样切到别的 session 时，旧 session 的 messages 和流状态会保留在 Map 里，
   // 切回来时直接命中缓存，流的 chunks 不会丢。

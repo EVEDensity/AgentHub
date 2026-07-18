@@ -15,7 +15,7 @@ const AuthForm = memo(function AuthForm({ authMode, authForm, notice, onSubmit, 
     <div className="flex min-h-screen items-center justify-center">
       <form onSubmit={onSubmit} className="card w-96 p-8">
         <h1 className="text-h1 text-warm-800">AgentHub {authMode === 'login' ? 'Login' : 'Register'}</h1>
-        <p className="mt-2 text-caption text-warm-500">Default admin: admin / admin123</p>
+        <p className="mt-2 text-caption text-warm-500">Use your bootstrap admin or registered account.</p>
         {notice && <div className="mt-4 bg-warning-50 p-3 text-sm text-warning-600">{notice}</div>}
         <label className="mt-6 block text-h4 text-warm-700">
           Username
