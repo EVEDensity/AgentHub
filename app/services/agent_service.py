@@ -17,7 +17,7 @@ from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.conversation_history import build_conversation_history_transcript
 from app.services import agent_prompt_context as prompt_context
-from app.services.agent_prompt_templates import build_general_prompt
+from app.services.agent_prompt_templates import build_codegen_prompt, build_general_prompt
 from app.services import prompt_sections
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
@@ -1720,28 +1720,23 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
     )
 
     if agent_id == "CodeGen":
-        return (
-            f"{memory_context}"
-            f"{shared_context}"
-            f"{date_context}"
-            f"{workspace_context_block}"
-            f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
-            f"{actual_model_line}"
-            f"{reply_lang_instr}"
-            f"{reasoning_instr}"
-            f"{thinking_rule}"
-            f"{code_format_rules}\n"
-            f"{mermaid_rules}\n"
-            f"{output_rules}\n"
-            "# 代码生成规则\n"
-            "当且仅当用户明确请求生成代码、创建文件、修改代码、实现具体功能时，回复使用 JSON 格式：\n"
-            "{\"files\":[{\"path\":\"相对路径\",\"content\":\"文件完整内容\"}]}\n"
-            "- 路径只能是相对路径，代码必须完整可运行\n"
-            "- JSON 不要包裹在 Markdown 代码块中\n\n"
-            "# 非代码请求：直接以纯文本回复，严禁输出 JSON 格式。\n"
-            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-            + f"{collab_section}"
-            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        return build_codegen_prompt(
+            agent_id=agent_id,
+            content=content,
+            symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+            memory_context=memory_context,
+            shared_context=shared_context,
+            date_context=date_context,
+            workspace_context=workspace_context_block,
+            actual_model_line=actual_model_line,
+            reply_lang_instruction=reply_lang_instr,
+            reasoning_instruction=reasoning_instr,
+            thinking_rule=thinking_rule,
+            code_format_rules=code_format_rules,
+            mermaid_rules=mermaid_rules,
+            output_rules=output_rules,
+            tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+            collab_section=collab_section,
         )
 
     if agent_id == "Orchestrator":
