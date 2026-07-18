@@ -25,24 +25,23 @@ import { useResizableSize } from '../hooks/useResizableSize';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useSessionRecovery } from '../hooks/useSessionRecovery';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
-import { mergeFinalMessage, registerReplayMessageId } from '../lib/messageRecovery';
+import { registerReplayMessageId } from '../lib/messageRecovery';
 import { buildChatWebSocketUrl } from '../lib/websocketUrl';
 import { clearDagSession, useDagState } from '../lib/dagStore';
 import { handleSharedWebSocketEvent } from '../lib/websocketSharedEvents';
+import { flushAllPendingStreamBuffer, handleStreamWebSocketEvent } from '../lib/websocketStreamEvents';
 import {
   useSessionMessages,
   useSessionStreaming,
   updateSessionMessages,
   setSessionStreaming,
   getSessionBuffer,
-  setSessionBuffer,
   replaceSessionMessages,
   clearSession,
   pinSession,
   unpinSession,
-  type StreamBuffer,
 } from '../lib/sessionStore';
-import type { Agent, AttachedFile, ChatSession, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
+import type { Agent, AttachedFile, ChatSession, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
 import { ToastProvider, useAddToast } from '../components/ui/Toast';
 
@@ -420,97 +419,6 @@ export default function AgentHubIM(): JSX.Element {
     }
   }, [messages, sessionId]);
 
-  // ── Streaming ────────────────────────────────────────────
-
-  /**
-   * Progressive chunk release: release ONE chunk at a time, then
-   * schedule the next release via setTimeout.  This ensures text
-   * appears progressively even when chunks arrive faster than the
-   * animation frame rate (e.g., when the LLM adapter returns the
-   * entire response in one big chunk, or when chunks arrive over
-   * a very fast network connection within a single RAF window).
-   *
-   * Each chunk is ~1-5 characters (individual SSE tokens), so
-   * releasing them at ~8ms intervals gives ~125-625 chars/sec —
-   * a natural "streaming typewriter" feel.
-   */
-  const PROGRESSIVE_FLUSH_INTERVAL_MS = 8;
-
-  function flushStreamBuffer(sessionId: string): void {
-    const buf = getSessionBuffer(sessionId);
-    if (!buf) return;
-
-    // Handle final signal even when no content chunks are pending.
-    // The backend sends an empty message_chunk with isFinal=true to
-    // signal end-of-stream.  Without this branch the early return
-    // below would drop the final flag, leaving isStreaming stuck.
-    if (buf.chunks.length === 0) {
-      if (buf.isFinal) {
-        setSessionStreaming(buf.sessionId, false);
-        setSessionBuffer(buf.sessionId, null);
-      }
-      return;
-    }
-
-    // ── Release only the FIRST chunk per flush ──
-    // Remaining chunks stay in the buffer and will be flushed by
-    // subsequent timer/RAF calls, creating a visible typing effect.
-    const chunk = buf.chunks[0];
-    const remaining = buf.chunks.slice(1);
-    const isLastChunk = remaining.length === 0 && buf.isFinal;
-
-    const nextBuf: StreamBuffer = {
-      messageId: buf.messageId,
-      sessionId: buf.sessionId,
-      chunks: remaining,
-      isFinal: isLastChunk ? false : buf.isFinal,
-    };
-    setSessionBuffer(buf.sessionId, nextBuf);
-
-    const bufMessageId = buf.messageId;
-
-    updateSessionMessages(buf.sessionId, (prev) => {
-      const idx = prev.findIndex((m) => m.messageId === bufMessageId);
-      if (idx >= 0) {
-        const updated = [...prev];
-        updated[idx] = {
-          ...updated[idx],
-          content: updated[idx].content + chunk,
-          isStreaming: !isLastChunk,
-        };
-        return updated;
-      }
-      const newMsg: Message = {
-        event: 'message',
-        sessionId: buf.sessionId,
-        sender: 'agent',
-        content: chunk,
-        type: 'text',
-        timestamp: new Date().toISOString(),
-        messageId: bufMessageId,
-        isStreaming: !isLastChunk,
-      };
-      return [...prev, newMsg];
-    });
-
-    if (isLastChunk) {
-      setSessionStreaming(buf.sessionId, false);
-      setSessionBuffer(buf.sessionId, null);
-      return;
-    }
-
-    // ── Schedule next chunk release ──
-    // If there are more chunks in the buffer, release the next one
-    // after a short delay to maintain the progressive typing effect.
-    if (remaining.length > 0) {
-      const timerId = window.setTimeout(() => {
-        progressiveFlushTimersRef.current.delete(sessionId);
-        flushStreamBuffer(sessionId);
-      }, PROGRESSIVE_FLUSH_INTERVAL_MS);
-      progressiveFlushTimersRef.current.set(sessionId, timerId);
-    }
-  }
-
   // ── WebSocket ────────────────────────────────────────────
 
   function _reconnectDelay(): number {
@@ -607,9 +515,10 @@ export default function AgentHubIM(): JSX.Element {
         window.cancelAnimationFrame(raf);
         streamFlushRafRef.current.delete(sid);
       }
-      flushStreamBuffer(sid);
-      setSessionBuffer(sid, null);
-      setSessionStreaming(sid, false);
+      flushAllPendingStreamBuffer(sid, {
+        streamFlushRafRef,
+        progressiveFlushTimersRef,
+      });
       // 清理该 session 的中断标记
       streamInterruptedAtRef.current.delete(sid);
       // ★ 方案4: 重连通知
@@ -689,389 +598,21 @@ export default function AgentHubIM(): JSX.Element {
         return;
       }
 
-      if (evt === 'message_chunk') {
-        const chunk = raw as unknown as StreamChunk;
-        const cSessionId = chunk.sessionId || chunkSessionId;
-        // ★ 中断守卫：stream_interrupted 后 800ms 内的迟到的 chunk 直接丢弃，
-        //   避免旧 buffer 的残余内容被写入新会话的渲染区。
-        const interruptedAt = streamInterruptedAtRef.current.get(cSessionId);
-        if (interruptedAt && Date.now() - interruptedAt < 800) {
-          return;
-        }
-        setSessionStreaming(cSessionId, !chunk.isFinal);
-        // ★ 方案2: 第一个文本chunk到达 → 进入"生成回复"阶段
-        setStreamPhase('generating');
-
-        const existingBuf = getSessionBuffer(cSessionId);
-        if (!existingBuf || existingBuf.messageId !== chunk.messageId) {
-          // ★ 方案3: 保留最后一个 thinking 占位，更新为 "工具完成，生成回复中"
-          // 而非全部删除。这样用户始终看到阶段上下文。
-          updateSessionMessages(cSessionId, (prev) => {
-            const lastThinkingIdx = (() => {
-              for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].isStreaming && prev[i].sender !== 'user' && !prev[i].diffFilePath && prev[i].type === 'text') {
-                  return i;
-                }
-              }
-              return -1;
-            })();
-            if (lastThinkingIdx >= 0) {
-              const updated = [...prev];
-              if (!updated[lastThinkingIdx].content || updated[lastThinkingIdx].content.startsWith('🔧')) {
-                updated[lastThinkingIdx] = {
-                  ...updated[lastThinkingIdx],
-                  content: '工具执行完成，正在综合结果生成回复...',
-                };
-              }
-              // Delete OLDER thinking placeholders but keep the latest one
-              return updated.filter((m, i) => {
-                if (i === lastThinkingIdx) return true;
-                if (m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text') {
-                  return false;
-                }
-                return true;
-              });
-            }
-            // Fallback: clean up all (no thinking buffer found)
-            const cleaned = prev.filter(
-              (m) => !(m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text')
-            );
-            return cleaned.length !== prev.length ? cleaned : prev;
-          });
-
-          setSessionBuffer(cSessionId, {
-            messageId: chunk.messageId,
-            sessionId: cSessionId,
-            chunks: [],
-            isFinal: false,
-          });
-          // ★ 全新流开始了，清除该 session 的打断标记
-          streamInterruptedAtRef.current.delete(cSessionId);
-        }
-
-        // 把 chunk 追加到对应 session 的 buffer
-        const buf = getSessionBuffer(cSessionId);
-        if (buf) {
-          const nextChunks = chunk.content ? [...buf.chunks, chunk.content] : buf.chunks;
-          setSessionBuffer(cSessionId, {
-            messageId: buf.messageId,
-            sessionId: buf.sessionId,
-            chunks: nextChunks,
-            isFinal: buf.isFinal || !!chunk.isFinal,
-          });
-        }
-
-        // 调度该 session 自己的 RAF flush — only if no progressive
-        // timer is already running (which would release chunks one at a time).
-        if (
-          !streamFlushRafRef.current.has(cSessionId) &&
-          !progressiveFlushTimersRef.current.has(cSessionId)
-        ) {
-          const raf = window.requestAnimationFrame(() => {
-            streamFlushRafRef.current.delete(cSessionId);
-            flushStreamBuffer(cSessionId);
-          });
-          streamFlushRafRef.current.set(cSessionId, raf);
-        }
-      }
-
-      if (evt === 'stream_interrupted') {
-        const iSessionId = chunkSessionId;
-        // ★ 方案2+3: 重置 UX 状态
-        setStreamPhase('idle');
-        setActiveTools([]);
-        setCurrentAgentName('');
-        // ★ 强制定位：清除该 session 的所有 streaming 状态、buffer、待调度 RAF
-        //   以及流式 filter 状态。即便后续 stream_chunk 因为竞态到达，buffer
-        //   已经被清空，flush 时不会把老内容写入新消息。
-        setSessionStreaming(iSessionId, false);
-        setSessionBuffer(iSessionId, null);
-        const pendingRaf = streamFlushRafRef.current.get(iSessionId);
-        if (pendingRaf) {
-          window.cancelAnimationFrame(pendingRaf);
-          streamFlushRafRef.current.delete(iSessionId);
-        }
-        // Clear any pending progressive flush timer
-        const pendingTimer = progressiveFlushTimersRef.current.get(iSessionId);
-        if (pendingTimer) {
-          window.clearTimeout(pendingTimer);
-          progressiveFlushTimersRef.current.delete(iSessionId);
-        }
-        // 记录打断时刻；800ms 内的 agent_thinking / stream_chunk 会被忽略
-        streamInterruptedAtRef.current.set(iSessionId, Date.now());
-        updateSessionMessages(iSessionId, (prev) => {
-          const updated = [...prev];
-          let changed = false;
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].isStreaming) {
-              // thinking placeholder（空或"正在..."进度文案）整体删除
-              if (!updated[i].content || updated[i].content.startsWith('正在')) {
-                updated.splice(i, 1);
-              } else {
-                updated[i] = {
-                  ...updated[i],
-                  isStreaming: false,
-                  content: updated[i].content + '\n\n[Interrupted, processing new message...]',
-                };
-              }
-              changed = true;
-            }
-          }
-          return changed ? updated : prev;
-        });
-      }
-
-      // ── Agent thinking (shows streaming indicator during tool phase) ──
-      if (evt === 'agent_thinking') {
-        const payload = raw as {
-          messageId: string;
-          agentId: string;
-          phase?: string;
-          details?: string;
-        };
-        // ★ 中断守卫：如果该 session 在 800ms 内被 stream_interrupted，
-        //   迟到的 agent_thinking 事件不应该重新激活流式状态，否则标题
-        //   栏"AI streaming..."会卡死。 直接 return，等下一次新会话。
-        const interruptedAt = streamInterruptedAtRef.current.get(chunkSessionId);
-        if (interruptedAt && Date.now() - interruptedAt < 800) {
-          return;
-        }
-        // 过了窗口期就清掉标记，避免污染下一次正常流
-        if (interruptedAt) {
-          streamInterruptedAtRef.current.delete(chunkSessionId);
-        }
-        setSessionStreaming(chunkSessionId, true);
-        // ★ 方案2: 更新阶段进度
-        const phase = payload.phase || '';
-        if (phase === 'analyzing' || phase === 'planning') {
-          setStreamPhase('thinking');
-        } else if (phase === 'executing') {
-          setStreamPhase('executing');
-        } else if (phase === 'synthesizing') {
-          setStreamPhase('generating');
-        }
-        if (payload.agentId) setCurrentAgentName(payload.agentId);
-
-        // Insert or update the thinking placeholder with phase details.
-        // Subsequent agent_thinking events (e.g. "executing", "synthesizing")
-        // update the same placeholder in-place so the user sees live progress.
-        updateSessionMessages(chunkSessionId, (prev) => {
-          // ★ 方案1: 如果有乐观占位，替换它而非新增
-          const optimisticIdx = prev.findIndex(
-            (m) => (m as any)._optimistic && m.isStreaming
-          );
-          const existingIdx = prev.findIndex(
-            (m) => m.messageId === payload.messageId && m.isStreaming
-          );
-          if (optimisticIdx >= 0) {
-            // Replace optimistic placeholder with real agent_thinking
-            const updated = [...prev];
-            updated[optimisticIdx] = {
-              ...updated[optimisticIdx],
-              messageId: payload.messageId,
-              sender: payload.agentId || updated[optimisticIdx].sender,
-              content: payload.details || '模型正在思考中...',
-              _optimistic: undefined,
-            };
-            return updated;
-          }
-          if (existingIdx >= 0) {
-            // Update existing placeholder with new phase info
-            const updated = [...prev];
-            updated[existingIdx] = {
-              ...updated[existingIdx],
-              content: payload.details || updated[existingIdx].content,
-            };
-            return updated;
-          }
-          return [
-            ...prev,
-            {
-              event: 'message',
-              sessionId: chunkSessionId,
-              sender: payload.agentId || 'agent',
-              content: payload.details || '',
-              type: 'text' as const,
-              timestamp: new Date().toISOString(),
-              messageId: payload.messageId,
-              isStreaming: true,
-            },
-          ];
-        });
-      }
-
-      // ── Tool call events ──────────────────────────────────────────
-      if (evt === 'tool_call') {
-        const payload = raw as unknown as ToolCallEvent;
-        // ★ 方案2+3: 更新阶段和活跃工具列表
-        setStreamPhase('executing');
-        if (payload.toolCalls && payload.toolCalls.length > 0) {
-          setActiveTools(payload.toolCalls.map((c: any) => c.name || ''));
-        }
-        updateSessionMessages(chunkSessionId, (prev) => {
-          // ★ 方案3: 保留最后一个 thinking 占位，更新为 "工具执行中"
-          // 而不是全部删除。这样用户始终看到最近的上下文。
-          const lastThinkingIdx = (() => {
-            for (let i = prev.length - 1; i >= 0; i--) {
-              if (prev[i].isStreaming && prev[i].sender !== 'user' && !prev[i].diffFilePath && prev[i].type === 'text') {
-                return i;
-              }
-            }
-            return -1;
-          })();
-          let cleaned = prev;
-          if (lastThinkingIdx >= 0) {
-            cleaned = prev.map((m, i) => {
-              if (i === lastThinkingIdx) {
-                return { ...m, content: '🔧 正在执行工具...' };
-              }
-              if (m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text') {
-                return null; // Remove older thinking placeholders
-              }
-              return m;
-            }).filter(Boolean) as Message[];
-          }
-          return [
-            ...cleaned,
-            {
-              event: 'message',
-              sessionId: chunkSessionId,
-              sender: 'system',
-              content: '',
-              type: 'tool_call' as const,
-              timestamp: payload.timestamp,
-              messageId: payload.messageId,
-              toolCallData: { calls: payload.toolCalls },
-            },
-          ];
-        });
-      }
-
-      if (evt === 'tool_result') {
-        const payload = raw as unknown as ToolResultEvent;
-        // ★ 方案3: 从活跃工具列表中移除完成的工具
-        if (payload.results) {
-          setActiveTools(prev => prev.filter(
-            name => !payload.results.some((r: any) => r.tool_name === name)
-          ));
-          // ★ 方案4: 工具失败时弹出 toast 通知
-          for (const result of payload.results) {
-            if (!result.success) {
-              addToast({
-                type: 'error',
-                title: `工具执行失败: ${result.tool_name}`,
-                message: result.error || '未知错误',
-                duration: 8000,
-              });
-            }
-          }
-        }
-        updateSessionMessages(chunkSessionId, (prev) => {
-          // Find the matching tool_call message and update it
-          const updated = [...prev];
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].type === 'tool_call' && updated[i].messageId === payload.messageId) {
-              updated[i] = {
-                ...updated[i],
-                type: 'tool_result' as const,
-                toolResultData: { results: payload.results },
-              };
-              break;
-            }
-          }
-          return updated;
-        });
-
-        // ── Auto-detect file/diff content from tool results ─────
-        if (payload.results) {
-          for (const result of payload.results) {
-            if (!result.success || !result.result) continue;
-            const r = result.result as Record<string, unknown>;
-            const filePath = r.path as string | undefined;
-            if (!filePath) continue;
-
-            // File creation/write → open file preview
-            const content = r.content as string | undefined;
-            if (content && typeof content === 'string') {
-              const ext = filePath.split('.').pop()?.toLowerCase() || '';
-              // Only auto-open for code/config/doc files, skip binary
-              const isPreviewable = /^(py|js|ts|jsx|tsx|java|go|rs|c|cpp|h|hpp|swift|kt|rb|php|sql|sh|bash|vue|svelte|astro|html|css|scss|less|json|yaml|yml|xml|toml|ini|md|txt|cfg|conf|env|dockerfile|makefile|graphql|proto)$/i.test(ext);
-              if (isPreviewable && content.length < 500000) {
-                handleOpenFilePreview(filePath, content, undefined, r.status as string | undefined);
-              }
-            }
-
-            // Diff result → open diff preview
-            const diff = r.diff as string | undefined;
-            if (diff && typeof diff === 'string' && diff.length > 0) {
-              handleOpenDiffPreview(filePath, diff);
-            }
-          }
-        }
-      }
-
-      if (evt === 'message') {
-        // ★ 方案2: 消息完成，标记阶段为 done，2秒后恢复 idle
-        setStreamPhase('done');
-        setActiveTools([]);
-        setTimeout(() => setStreamPhase('idle'), 2000);
-        // Flush any pending stream buffer for THIS session before searching
-        // for the placeholder — the RAF callback may not have fired yet.
-        const cSessionId = chunkSessionId;
-        const buf = getSessionBuffer(cSessionId);
-        if (buf) {
-          const pendingRaf = streamFlushRafRef.current.get(cSessionId);
-          if (pendingRaf != null) {
-            window.cancelAnimationFrame(pendingRaf);
-            streamFlushRafRef.current.delete(cSessionId);
-          }
-          const pendingTimer = progressiveFlushTimersRef.current.get(cSessionId);
-          if (pendingTimer != null) {
-            window.clearTimeout(pendingTimer);
-            progressiveFlushTimersRef.current.delete(cSessionId);
-          }
-          // Flush ALL remaining chunks at once before the final message
-          if (buf.chunks.length > 0) {
-            const allContent = buf.chunks.join('');
-            const bufMsgId = buf.messageId;
-            updateSessionMessages(cSessionId, (prev) => {
-              const idx = prev.findIndex((m) => m.messageId === bufMsgId);
-              if (idx >= 0) {
-                const updated = [...prev];
-                updated[idx] = {
-                  ...updated[idx],
-                  content: updated[idx].content + allContent,
-                  isStreaming: false,
-                };
-                return updated;
-              }
-              return prev;
-            });
-          }
-          setSessionBuffer(cSessionId, null);
-        }
-        setSessionStreaming(cSessionId, false);
-        const msg = raw as unknown as Message;
-        const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
-        updateSessionMessages(cSessionId, (prev) => mergeFinalMessage(prev, msg));
-        if (!isSystemMsg) {
-          setSessions((prev) => sortSessions(prev.map((s) => (s.id === (msg.sessionId || cSessionId) ? { ...s, lastMessageAt: msg.timestamp || new Date().toISOString() } : s))));
-        }
-        if (msg.symbolic?.generated) {
-          setGenerated(msg.symbolic.generated as GeneratedData);
-          // Auto-open generated files in preview panel
-          const gen = msg.symbolic.generated as GeneratedData;
-          if (gen.fileDetails && gen.fileDetails.length > 0) {
-            for (const fd of gen.fileDetails) {
-              if (fd.path && fd.content && fd.content.length < 500000) {
-                handleOpenFilePreview(fd.path, fd.content);
-              }
-            }
-          }
-          if (gen.diff) {
-            handleOpenDiffPreview('changes.diff', gen.diff);
-          }
-        }
+      if (handleStreamWebSocketEvent(raw, evt, chunkSessionId, {
+        streamFlushRafRef,
+        progressiveFlushTimersRef,
+        streamInterruptedAtRef,
+        setStreamPhase,
+        setActiveTools,
+        setCurrentAgentName,
+        setSessions,
+        sortSessions,
+        addToast,
+        setGenerated,
+        handleOpenFilePreview,
+        handleOpenDiffPreview,
+      })) {
+        return;
       }
     };
   }
