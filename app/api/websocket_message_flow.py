@@ -14,58 +14,58 @@ from app.schemas.dag import DAGConfig
 logger = logging.getLogger("agenthub.websocket")
 
 _DOMAIN_LABELS = {
-    "orchestrator": "协调调度",
-    "architect": "架构设计",
-    "codegen": "代码生成",
-    "review": "代码审查",
-    "test": "测试验证",
-    "deploy": "部署发布",
+    "orchestrator": "orchestrator",
+    "architect": "architect",
+    "codegen": "codegen",
+    "review": "review",
+    "test": "test",
+    "deploy": "deploy",
 }
 
 _ESTIMATED_SECONDS = {"low": 20, "medium": 45, "high": 90}
 
-_MULTI_MENTION_GREETING_PATTERNS = [
-    r"^(大家|各位|朋友们|伙伴们|同学们|hello\s*all|hi\s*all|hey\s*all|hello\s*everyone|hi\s*everyone|hey\s*everyone)",
-    r"^(你好|hi|hello|hey|再见|谢谢|thanks?|thank\s*you|3q|ok|好的|知道了|明白)",
-    r"^(今天|最近|how\s*are\s*you|what'?s?\s*up|干嘛呢|在吗|我来了|我回来了)",
-    r"^(你是谁|你的名字|你能做什么|介绍一下你自己)",
+_GREETING_PATTERNS = [
+    "^(\u5927\u5bb6|\u5404\u4f4d|\u670b\u53cb\u4eec|\u4f19\u4f34\u4eec|\u540c\u5b66\u4eec|hello\\s*all|hi\\s*all|hey\\s*all|hello\\s*everyone|hi\\s*everyone|hey\\s*everyone)",
+    "^(\u4f60\u597d|hi|hello|hey|\u518d\u89c1|\u8c22\u8c22|thanks?|thank\\s*you|3q|ok|\u597d\u7684|\u77e5\u9053\u4e86|\u660e\u767d)",
+    "^(\u4eca\u5929|\u6700\u8fd1|how\\s*are\\s*you|what'?s?\\s*up|\u5e72\u5417\u5462|\u5728\u5417|\u6211\u6765\u4e86|\u6211\u56de\u6765\u4e86)",
+    "^(\u4f60\u662f\u8c01|\u4f60\u7684\u540d\u5b57|\u4f60\u80fd\u505a\u4ec0\u4e48|\u4ecb\u7ecd\u4e00\u4e0b\u4f60\u81ea\u5df1)",
 ]
 
-_MULTI_MENTION_TECH_KEYWORDS = [
-    "开发",
-    "实现",
-    "修改",
-    "代码",
-    "生成",
-    "创建",
-    "设计",
-    "架构",
-    "部署",
-    "发布",
-    "上线",
-    "测试",
-    "审查",
-    "修复",
+_TECH_KEYWORDS = [
+    "\u5f00\u53d1",
+    "\u5b9e\u73b0",
+    "\u4fee\u6539",
+    "\u4ee3\u7801",
+    "\u751f\u6210",
+    "\u521b\u5efa",
+    "\u8bbe\u8ba1",
+    "\u67b6\u6784",
+    "\u90e8\u7f72",
+    "\u53d1\u5e03",
+    "\u4e0a\u7ebf",
+    "\u6d4b\u8bd5",
+    "\u5ba1\u67e5",
+    "\u4fee\u590d",
     "bug",
-    "错误",
-    "优化",
-    "重构",
-    "配置",
-    "安装",
-    "集成",
-    "迁移",
-    "升级",
+    "\u9519\u8bef",
+    "\u4f18\u5316",
+    "\u91cd\u6784",
+    "\u914d\u7f6e",
+    "\u5b89\u88c5",
+    "\u96c6\u6210",
+    "\u8fc1\u79fb",
+    "\u5347\u7ea7",
     "api",
-    "接口",
-    "页面",
-    "组件",
-    "模块",
-    "功能",
-    "系统",
-    "数据库",
-    "前端",
-    "后端",
-    "全栈",
+    "\u63a5\u53e3",
+    "\u9875\u9762",
+    "\u7ec4\u4ef6",
+    "\u6a21\u5757",
+    "\u529f\u80fd",
+    "\u7cfb\u7edf",
+    "\u6570\u636e\u5e93",
+    "\u524d\u7aef",
+    "\u540e\u7aef",
+    "\u5168\u6808",
     "react",
     "vue",
     "angular",
@@ -94,11 +94,10 @@ _MULTI_MENTION_TECH_KEYWORDS = [
     "sql",
     "nosql",
     "redis",
-    "分析",
-    "检查",
-    "排查",
-    "修复",
-    "重构",
+    "\u5206\u6790",
+    "\u68c0\u67e5",
+    "\u6392\u67e5",
+    "\u91cd\u6784",
 ]
 
 
@@ -126,12 +125,12 @@ def is_multi_mention_greeting(text: str) -> bool:
     if not stripped:
         return True
 
-    stripped_lower = stripped.lower()
-    for kw in _MULTI_MENTION_TECH_KEYWORDS:
-        if kw in stripped_lower:
+    lowered = stripped.lower()
+    for keyword in _TECH_KEYWORDS:
+        if keyword in lowered:
             return False
 
-    for pattern in _MULTI_MENTION_GREETING_PATTERNS:
+    for pattern in _GREETING_PATTERNS:
         if re.match(pattern, stripped, re.IGNORECASE):
             return True
 
@@ -188,36 +187,36 @@ def build_followup_todos(target_agents: list[dict[str, Any]]) -> list[dict[str, 
         todo_items.append(
             {
                 "id": "todo_test",
-                "label": "运行测试验证代码",
+                "label": "run tests",
                 "intent": "approve",
-                "description": "建议先执行单元测试和集成测试，确认代码修改没有引入回归。",
+                "description": "Run unit tests and integration tests before the next step.",
             }
         )
     if "review" in agent_domains or "review" in agent_ids:
         todo_items.append(
             {
                 "id": "todo_fix",
-                "label": "按审查意见修正代码",
+                "label": "apply review notes",
                 "intent": "approve",
-                "description": "Review Agent 已给出反馈，请核对并继续修正。",
+                "description": "Review feedback exists; verify and continue refining the change.",
             }
         )
     if "deploy" in agent_domains or "deploy" in agent_ids:
         todo_items.append(
             {
                 "id": "todo_verify_deploy",
-                "label": "验证部署结果",
+                "label": "verify deployment",
                 "intent": "approve",
-                "description": "检查部署环境是否正常，重点关注日志和核心指标。",
+                "description": "Check deployment health, logs, and key metrics.",
             }
         )
 
     todo_items.append(
         {
             "id": "todo_feedback",
-            "label": "提供反馈或继续迭代",
+            "label": "continue iterating",
             "intent": "approve",
-            "description": "如果结果还不够理想，可以补充反馈或开启下一轮协作。",
+            "description": "Provide feedback or start the next collaboration round.",
         }
     )
     return todo_items
@@ -232,14 +231,208 @@ def _build_fallback_dag(target_agents: list[dict[str, Any]]) -> DAGConfig:
                 "id": f"n{i}",
                 "domain": a.get("domain", "general"),
                 "agent": a["agent_id"],
-                "description": f"执行 {a['agent_id']} 的任务",
+                "description": f"Execute task for {a['agent_id']}",
                 "dependencies": [f"n{j}" for j in range(i)] if i > 0 else [],
             }
             for i, a in enumerate(target_agents)
         ],
         execution_strategy="sequential",
-        analysis=f"自动拆解为 {len(target_agents)} 个节点",
+        analysis=f"Auto split into {len(target_agents)} nodes",
     )
+
+
+async def _resolve_collaborative_dag(
+    *,
+    session_id: str,
+    cleaned_content: str,
+    target_agents: list[dict[str, Any]],
+    route_dag: DAGConfig | None,
+) -> DAGConfig:
+    from app.services.task_decomposer import task_decomposer
+
+    if route_dag is not None:
+        logger.info(
+            "ws using predefined route DAG session=%s nodes=%d",
+            session_id,
+            len(route_dag.nodes),
+        )
+        return route_dag
+
+    try:
+        return await task_decomposer.decompose(
+            content=cleaned_content,
+            session_id=session_id,
+            agents=target_agents,
+        )
+    except Exception:
+        logger.exception("ws task decomposition failed session=%s", session_id)
+        return _build_fallback_dag(target_agents)
+
+
+async def _prepare_task_preview(
+    *,
+    session_id: str,
+    dag_config: DAGConfig,
+    token,
+) -> tuple[str, str, str]:
+    ws_manager = _manager()
+    preview_msg_id = str(uuid.uuid4())
+    task_items = build_dag_task_items(list(dag_config.nodes))
+    await ws_manager.broadcast_task_preview(
+        session_id,
+        preview_msg_id,
+        task_items,
+        eta_seconds=sum(item.get("estimatedSeconds", 45) for item in task_items),
+    )
+
+    if token.cancelled:
+        return preview_msg_id, "cancel", ""
+
+    decision, modifications = await ws_state.wait_for_task_confirmation(
+        session_id,
+        preview_msg_id,
+        token,
+    )
+    return preview_msg_id, decision, modifications
+
+
+async def _run_dag_execution(
+    *,
+    session_id: str,
+    cleaned_content: str,
+    target_agents: list[dict[str, Any]],
+    dag_config: DAGConfig,
+    user_id: str,
+    token,
+    attachments: list[dict],
+    quote_references: list[dict] | None,
+    invoke_agent: Callable[..., Awaitable[str]],
+) -> dict[str, str]:
+    from app.services.agent_service import CollaborationContext, lookup_agent
+    from app.services.dag_executor import DAGExecutor
+
+    ws_manager = _manager()
+    collab = CollaborationContext(cleaned_content)
+    for agent_row in target_agents:
+        collab.register(agent_row)
+
+    async def _dag_invoke(
+        sid: str,
+        agent_id: str,
+        task_content: str,
+        extra_context: str = "",
+    ) -> str:
+        agent_row = await lookup_agent(agent_id, user_id, columns="*")
+        if not agent_row:
+            return f"[error] Agent '{agent_id}' not found"
+
+        full = task_content
+        if extra_context:
+            full = f"{extra_context}\n\n{full}"
+
+        result = await invoke_agent(
+            sid,
+            full,
+            agent_row,
+            user_id,
+            token,
+            attachments or [],
+            collab_ctx="",
+            quote_references=quote_references,
+        )
+        if result:
+            collab.record(agent_id, agent_row.get("domain", ""), result)
+        return result or ""
+
+    executor = DAGExecutor(
+        session_id=session_id,
+        manager=ws_manager,
+        invoke_fn=_dag_invoke,
+        on_node_update=None,
+    )
+
+    try:
+        await executor.execute(dag_config, collab)
+    except Exception as exc:
+        logger.warning("DAG execution error: %s", exc)
+
+    return executor.node_results
+
+
+async def _run_result_synthesis(
+    *,
+    session_id: str,
+    dag_config: DAGConfig,
+    node_results: dict[str, str],
+    cleaned_content: str,
+    target_agents: list[dict[str, Any]],
+    user_id: str,
+    token,
+    attachments: list[dict],
+    invoke_agent: Callable[..., Awaitable[str]],
+) -> None:
+    from app.services.agent_service import lookup_agent, save_message
+    from app.services.result_synthesizer import result_synthesizer
+
+    if token.cancelled:
+        return
+
+    async def _synthesize_invoke(prompt: str) -> str | None:
+        architect_row = await lookup_agent("Architect", user_id, columns="*")
+        if not architect_row:
+            return None
+        return await invoke_agent(
+            session_id,
+            prompt,
+            architect_row,
+            user_id,
+            token,
+            attachments or [],
+            collab_ctx="",
+            quote_references=None,
+        )
+
+    final_response = await result_synthesizer.synthesize(
+        dag=dag_config,
+        node_results=node_results,
+        original_request=cleaned_content,
+        invoke_fn=_synthesize_invoke,
+    )
+    if final_response and not token.cancelled:
+        ws_manager = _manager()
+        await save_message(
+            session_id,
+            final_response,
+            "Architect",
+            "text",
+            None,
+            None,
+            user_id=user_id or "",
+        )
+        await ws_manager.broadcast(
+            session_id,
+            {
+                "event": "message",
+                "sessionId": session_id,
+                "content": final_response,
+                "sender": "Architect",
+                "timestamp": now(),
+                "type": "text",
+                "userId": user_id or "",
+            },
+        )
+
+    if not token.cancelled:
+        ws_manager = _manager()
+        await ws_manager.broadcast_agent_todo(
+            session_id,
+            str(uuid.uuid4()),
+            "PM",
+            "collaboration complete - next steps",
+            f"Agents finished this round: {', '.join(a['agent_id'] for a in target_agents)}.",
+            build_followup_todos(target_agents),
+            priority="medium",
+        )
 
 
 async def _broadcast_greeting(
@@ -279,196 +472,6 @@ async def _broadcast_greeting(
     )
 
 
-async def _run_collaborative_flow(
-    *,
-    session_id: str,
-    content: str,
-    cleaned_content: str,
-    sender: str,
-    user_id: str,
-    token,
-    attachments: list[dict],
-    quote_references: list[dict] | None,
-    target_agents: list[dict[str, Any]],
-    route_dag: DAGConfig | None,
-    invoke_agent: Callable[..., Awaitable[str]],
-) -> None:
-    from app.services.agent_service import CollaborationContext, lookup_agent, save_message
-    from app.services.dag_executor import DAGExecutor
-    from app.services.result_synthesizer import result_synthesizer
-    from app.services.task_decomposer import task_decomposer
-
-    ws_manager = _manager()
-
-    collab = CollaborationContext(cleaned_content)
-    for agent_row in target_agents:
-        collab.register(agent_row)
-
-    if route_dag is not None:
-        dag_config = route_dag
-        logger.info(
-            "ws using predefined route DAG session=%s nodes=%d",
-            session_id,
-            len(dag_config.nodes),
-        )
-    else:
-        try:
-            dag_config = await task_decomposer.decompose(
-                content=cleaned_content,
-                session_id=session_id,
-                agents=target_agents,
-            )
-        except Exception:
-            logger.exception("ws task decomposition failed session=%s", session_id)
-            dag_config = _build_fallback_dag(target_agents)
-
-    task_preview_msg_id = str(uuid.uuid4())
-    task_items = build_dag_task_items(list(dag_config.nodes))
-    await ws_manager.broadcast_task_preview(
-        session_id,
-        task_preview_msg_id,
-        task_items,
-        eta_seconds=sum(item.get("estimatedSeconds", 45) for item in task_items),
-    )
-
-    if token.cancelled:
-        return
-
-    decision, modifications = await ws_state.wait_for_task_confirmation(
-        session_id,
-        task_preview_msg_id,
-        token,
-    )
-    if token.cancelled:
-        return
-    if decision == "cancel":
-        await ws_manager.broadcast(
-            session_id,
-            {
-                "event": "message",
-                "sessionId": session_id,
-                "content": "协作任务已取消。",
-                "sender": "system",
-                "timestamp": now(),
-                "type": "system",
-            },
-        )
-        return
-    if decision == "modify":
-        await run_message_flow(
-            session_id=session_id,
-            content=f"[用户修改后的任务计划]\n{modifications}",
-            sender=sender,
-            user_id=user_id,
-            token=token,
-            attachments=attachments,
-            quote_references=quote_references,
-            auto_reply=True,
-            target_agents=target_agents,
-            route_dag=route_dag,
-            mentioned=[],
-            invoke_agent=invoke_agent,
-        )
-        return
-
-    async def _dag_invoke(
-        sid: str,
-        agent_id: str,
-        task_content: str,
-        extra_context: str = "",
-    ) -> str:
-        agent_row = await lookup_agent(agent_id, user_id, columns="*")
-        if not agent_row:
-            return f"[错误] Agent '{agent_id}' 未在注册表中找到"
-
-        full = task_content
-        if extra_context:
-            full = f"{extra_context}\n\n{full}"
-
-        result = await invoke_agent(
-            sid,
-            full,
-            agent_row,
-            user_id,
-            token,
-            attachments or [],
-            collab_ctx="",
-            quote_references=quote_references,
-        )
-        if result:
-            collab.record(agent_id, agent_row.get("domain", ""), result)
-        return result or ""
-
-    executor = DAGExecutor(
-        session_id=session_id,
-        manager=ws_manager,
-        invoke_fn=_dag_invoke,
-        on_node_update=None,
-    )
-
-    try:
-        node_results = await executor.execute(dag_config, collab)
-    except Exception as exc:
-        logger.warning("DAG execution error: %s", exc)
-        node_results = executor.node_results
-
-    if not token.cancelled:
-        async def _synthesize_invoke(prompt: str) -> str | None:
-            architect_row = await lookup_agent("Architect", user_id, columns="*")
-            if not architect_row:
-                return None
-            return await invoke_agent(
-                session_id,
-                prompt,
-                architect_row,
-                user_id,
-                token,
-                attachments or [],
-                collab_ctx="",
-                quote_references=None,
-            )
-
-        final_response = await result_synthesizer.synthesize(
-            dag=dag_config,
-            node_results=node_results,
-            original_request=cleaned_content,
-            invoke_fn=_synthesize_invoke,
-        )
-        if final_response and not token.cancelled:
-            await save_message(
-                session_id,
-                final_response,
-                "Architect",
-                "text",
-                None,
-                None,
-                user_id=user_id or "",
-            )
-            await ws_manager.broadcast(
-                session_id,
-                {
-                    "event": "message",
-                    "sessionId": session_id,
-                    "content": final_response,
-                    "sender": "Architect",
-                    "timestamp": now(),
-                    "type": "text",
-                    "userId": user_id or "",
-                },
-            )
-
-    if not token.cancelled:
-        await ws_manager.broadcast_agent_todo(
-            session_id,
-            str(uuid.uuid4()),
-            "PM",
-            "协作完成 - 建议后续步骤",
-            f"以下 Agent 已完成本轮协作：{', '.join(a['agent_id'] for a in target_agents)}。",
-            build_followup_todos(target_agents),
-            priority="medium",
-        )
-
-
 async def _run_single_message_flow(
     *,
     session_id: str,
@@ -506,6 +509,88 @@ async def _run_single_message_flow(
         attachments or [],
         sender_override=sender,
         quote_references=quote_references,
+    )
+
+
+async def _run_collaborative_flow(
+    *,
+    session_id: str,
+    content: str,
+    cleaned_content: str,
+    sender: str,
+    user_id: str,
+    token,
+    attachments: list[dict],
+    quote_references: list[dict] | None,
+    target_agents: list[dict[str, Any]],
+    route_dag: DAGConfig | None,
+    invoke_agent: Callable[..., Awaitable[str]],
+) -> None:
+    dag_config = await _resolve_collaborative_dag(
+        session_id=session_id,
+        cleaned_content=cleaned_content,
+        target_agents=target_agents,
+        route_dag=route_dag,
+    )
+
+    _preview_msg_id, decision, modifications = await _prepare_task_preview(
+        session_id=session_id,
+        dag_config=dag_config,
+        token=token,
+    )
+    if decision == "cancel":
+        ws_manager = _manager()
+        await ws_manager.broadcast(
+            session_id,
+            {
+                "event": "message",
+                "sessionId": session_id,
+                "content": "collaboration task cancelled.",
+                "sender": "system",
+                "timestamp": now(),
+                "type": "system",
+            },
+        )
+        return
+    if decision == "modify":
+        await run_message_flow(
+            session_id=session_id,
+            content=f"[user modified the task plan]\n{modifications}",
+            sender=sender,
+            user_id=user_id,
+            token=token,
+            attachments=attachments,
+            quote_references=quote_references,
+            auto_reply=True,
+            target_agents=target_agents,
+            route_dag=route_dag,
+            mentioned=[],
+            invoke_agent=invoke_agent,
+        )
+        return
+
+    node_results = await _run_dag_execution(
+        session_id=session_id,
+        cleaned_content=cleaned_content,
+        target_agents=target_agents,
+        dag_config=dag_config,
+        user_id=user_id,
+        token=token,
+        attachments=attachments,
+        quote_references=quote_references,
+        invoke_agent=invoke_agent,
+    )
+
+    await _run_result_synthesis(
+        session_id=session_id,
+        dag_config=dag_config,
+        node_results=node_results,
+        cleaned_content=cleaned_content,
+        target_agents=target_agents,
+        user_id=user_id,
+        token=token,
+        attachments=attachments,
+        invoke_agent=invoke_agent,
     )
 
 
