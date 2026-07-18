@@ -17,6 +17,7 @@ from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.conversation_history import build_conversation_history_transcript
 from app.services import agent_prompt_context as prompt_context
+from app.services import prompt_sections
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
 from app.services.text_processing import (
@@ -1633,27 +1634,13 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
     # of what the conversation is about regardless of domain.
-    shared_context = ""
-    if history:
-        shared_context = (
-            "【共享会话上下文 — 所有Agent的对话记忆窗口】\n"
-            "以下是你与用户及其他Agent之间的完整对话记录。请首先通读此上下文，"
-            "理解当前话题和讨论脉络，再结合你的专业角色给出回复。\n"
-            "即使话题与你的专业领域不完全匹配，也请基于上下文给出合理回答，"
-            "不要以\"我是XX专家\"为由拒绝回复。\n\n"
-            f"{history}\n"
-            "─── 以上为共享记忆，以下是你的角色指令 ───\n"
-        )
-
-    collab_section = f"\n\n{collab_ctx}" if collab_ctx else ""
+    shared_context = prompt_sections.build_shared_context(history)
+    collab_section = prompt_sections.build_collab_section(collab_ctx)
 
     # ── Current date (so the model knows what "today" is) ────────────
     # The model's training cutoff may be months ago.  Without this, the
     # model hallucinates dates or uses stale ones in search queries.
-    from datetime import datetime as _dt
-    today_str = _dt.now().strftime("%Y年%m月%d日")
-    weekday_str = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][_dt.now().weekday()]
-    date_context = f"【当前日期】{today_str} {weekday_str}。涉及\"今天\"、\"最新\"、\"最近\"等内容时，请基于此日期。\n"
+    date_context = prompt_sections.build_date_context()
 
     # ── Workspace filesystem context ─────────────────────────────────
     # Informs the agent that it has a real filesystem to work with.
@@ -1698,6 +1685,7 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         "多人协作时，系统自动检测文件冲突并发出警告。\n"
         f"{_ws_files_summary}\n"
     ) if _ws_root.exists() else ""
+    workspace_context_block = prompt_sections.build_workspace_context()
 
     # ── Load settings for reply language, reasoning, thinking ───────
     settings = await _load_settings()
