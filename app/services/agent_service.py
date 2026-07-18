@@ -17,7 +17,13 @@ from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.conversation_history import build_conversation_history_transcript
 from app.services import agent_prompt_context as prompt_context
-from app.services.agent_prompt_templates import build_codegen_prompt, build_general_prompt
+from app.services.agent_prompt_templates import (
+    build_architect_prompt,
+    build_codegen_prompt,
+    build_deploy_prompt,
+    build_general_prompt,
+    build_orchestrator_prompt,
+)
 from app.services import prompt_sections
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
@@ -1777,43 +1783,23 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         )
 
     if agent_id == "Deploy":
-        return (
-            f"{memory_context}"
-            f"{shared_context}"
-            f"{date_context}"
-            f"{workspace_context_block}"
-            f"你是 AgentHub 平台中的 Deploy（部署工程师），负责执行文件部署、Git 版本记录和生成部署状态报告。\n\n"
-            f"{actual_model_line}"
-            f"{reply_lang_instr}"
-            f"{reasoning_instr}"
-            f"{thinking_rule}"
-            f"{code_format_rules}\n"
-            f"{mermaid_rules}\n"
-            f"{output_rules}\n"
-            "# Deploy 工作原则\n\n"
-            "## 你的职责（聚焦版）\n"
-            "1. 根据用户需求，直接使用工具完成文件操作（创建/修改/删除）。\n"
-            "2. 完成后用 file_glob 确认目标文件存在，然后输出部署卡片。\n"
-            "3. 不需要检查 Review/Test 状态——用户直接 @Deploy 即表示授权你执行部署。\n\n"
-            "## 部署卡片 — 每完成文件操作必须发送部署卡片\n"
-            "当你完成部署任务后，必须在回复中输出以下格式的部署卡片标记，系统会自动将其渲染为可视化卡片：\n"
-            "```deploy-card\n"
-            "version: <git commit short hash 或 \"local\">\n"
-            "completed-at: <当前时间>\n"
-            "description: <简短描述本次部署内容>\n"
-            "files:\n"
-            "  - <涉及的文件路径>\n"
-            "```\n"
-            "请在卡片标记后紧接着写一段简短的部署汇报（≤50字）。\n\n"
-            "## 严格约束\n"
-            "- **工具调用上限**: 每轮最多 3 个工具调用，最多 3 轮，第 3 轮必须产出最终回复（含部署卡片）。\n"
-            "- **禁止无关探索**: 不要搜索记忆、不要查博客/项目背景、不要跑 code_execute。你的任务就是文件操作+部署卡片。\n"
-            "- **简单场景直接执行**: 用户指定了具体文件名时，直接创建/确认文件，输出部署卡片即可，不需要检查环境、端口、依赖。\n"
-            "- 简单问候或闲聊直接简短回复（≤20字），**严禁调用任何工具**。\n"
-            "- 不确定文件内容时向用户确认，不要自己编造内容。\n"
-            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-            + f"{collab_section}"
-            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        return build_deploy_prompt(
+            agent_id=agent_id,
+            content=content,
+            symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+            memory_context=memory_context,
+            shared_context=shared_context,
+            date_context=date_context,
+            workspace_context=workspace_context_block,
+            actual_model_line=actual_model_line,
+            reply_lang_instruction=reply_lang_instr,
+            reasoning_instruction=reasoning_instr,
+            thinking_rule=thinking_rule,
+            code_format_rules=code_format_rules,
+            mermaid_rules=mermaid_rules,
+            output_rules=output_rules,
+            tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+            collab_section=collab_section,
         )
 
     # ── General agent prompt ────────────────────────────────────────
