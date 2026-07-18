@@ -1642,49 +1642,8 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
     # model hallucinates dates or uses stale ones in search queries.
     date_context = prompt_sections.build_date_context()
 
-    # ── Workspace filesystem context ─────────────────────────────────
-    # Informs the agent that it has a real filesystem to work with.
-    # The workspace is session-scoped and git-versioned — every file
-    # write is automatically committed so the agent should feel
-    # confident persisting code and data.
-    from app.services.workspace_context import get_workspace_root as _ws_root_fn
-    _ws_root = _ws_root_fn()
-    _ws_files_summary = ""
-    try:
-        if _ws_root.exists():
-            _items = sorted(_ws_root.iterdir(), key=lambda p: (p.is_dir(), p.name.lower()))[:30]
-            _lines = [f"工作区路径: {_ws_root}"]
-            for p in _items:
-                _kind = "📁" if p.is_dir() else "📄"
-                _size = ""
-                if p.is_file():
-                    try:
-                        sz = p.stat().st_size
-                        _size = f" ({sz:,} bytes)" if sz < 1024 else f" ({sz/1024:.0f} KB)"
-                    except OSError:
-                        pass
-                _lines.append(f"  {_kind} {p.name}{_size}")
-            if len(_items) >= 30:
-                _lines.append("  ... (已截断，使用 file_read 查看完整目录)")
-            _ws_files_summary = "\n".join(_lines) + "\n"
-    except OSError:
-        pass
-    workspace_context_block = (
-        "【工作区文件系统 — 真实落盘能力】\n"
-        "你拥有真实的工作区文件系统，可以使用以下工具操作文件：\n"
-        "- file_read — 读取文件内容或列出目录\n"
-        "- file_write — 创建/覆写/追加文件到工作区（自动创建父目录）\n"
-        "- file_write_batch — 批量写入多个文件（推荐用于一次生成多文件代码）\n"
-        "- file_edit — 精确字符串替换编辑文件（新文件自动创建，无需先用 file_write）\n"
-        "- file_patch — 应用 unified diff 补丁（适合增量修改）\n"
-        "- file_search — 在文件中搜索匹配内容（支持正则）\n"
-        "- file_glob — 按通配符模式查找文件（如 **/*.py）\n"
-        "- mkdir — 创建目录（类似 mkdir -p，用于搭建项目结构）\n"
-        "- code_execute — 在工作区中执行 Python/Bash 代码\n\n"
-        "所有文件操作自动纳入 Git 版本控制，可追溯变更历史。\n"
-        "多人协作时，系统自动检测文件冲突并发出警告。\n"
-        f"{_ws_files_summary}\n"
-    ) if _ws_root.exists() else ""
+    # Workspace filesystem context is intentionally compact. Tool details live in
+    # prompt_sections so build_prompt stays focused on orchestration.
     workspace_context_block = prompt_sections.build_workspace_context()
 
     # ── Load settings for reply language, reasoning, thinking ───────
