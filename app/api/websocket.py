@@ -11,6 +11,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.db.init_db import now
 from app.db.session import afetch_all, afetch_one
+from app.api import websocket_state as ws_state
 from app.services.agent_service import extract_mentions, get_direct_chat_agent, lookup_agent, save_message
 from app.services.auth_service import websocket_user
 from app.services.auth.session_guard import check_session_access, SessionRole
@@ -105,7 +106,7 @@ async def _request_tool_permission(
     request_id = str(uuid.uuid4())
     evt = asyncio.Event()
     entry = {"event": evt, "decision": "deny"}
-    _permission_state.setdefault(session_id, {})[request_id] = entry
+    ws_state._permission_state.setdefault(session_id, {})[request_id] = entry
 
     try:
         await manager.broadcast(
@@ -130,9 +131,9 @@ async def _request_tool_permission(
             )
     finally:
         decision = entry.get("decision", "deny")
-        _permission_state.get(session_id, {}).pop(request_id, None)
-        if session_id in _permission_state and not _permission_state[session_id]:
-            del _permission_state[session_id]
+        ws_state._permission_state.get(session_id, {}).pop(request_id, None)
+        if session_id in ws_state._permission_state and not ws_state._permission_state[session_id]:
+            del ws_state._permission_state[session_id]
         return decision
 
 
@@ -141,7 +142,7 @@ def _handle_permission_response(session_id: str, request_id: str, decision: str)
 
     Returns True if the request was found and signaled.
     """
-    session_entries = _permission_state.get(session_id, {})
+    session_entries = ws_state._permission_state.get(session_id, {})
     entry = session_entries.get(request_id)
     if entry:
         entry["decision"] = decision
@@ -347,16 +348,16 @@ async def _handle_agent_question_response(session_id: str, data: dict, user_id: 
     sender_id = user_id or ""
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, question_msg_id, sender_id, sender_name):
+    if not ws_state.mark_interaction_resolved(session_id, question_msg_id, sender_id, sender_name):
         # Already resolved — notify the late responder
-        resolver = _get_resolved_by(session_id, question_msg_id)
+        resolver = ws_state.get_resolved_by(session_id, question_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, question_msg_id, resolver or {},
         )
         return
 
     # Wake up the waiting agent
-    session_qs = _pm_pending_questions.get(session_id, {})
+    session_qs = ws_state._pm_pending_questions.get(session_id, {})
     entry = session_qs.get(question_msg_id)
     if entry:
         entry["response"] = {"selectedOptionId": selected, "customAnswer": custom}
@@ -391,15 +392,15 @@ async def _handle_risk_warning_response(session_id: str, data: dict, user_id: st
     sender_id = user_id or ""
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, warning_msg_id, sender_id, sender_name):
-        resolver = _get_resolved_by(session_id, warning_msg_id)
+    if not ws_state.mark_interaction_resolved(session_id, warning_msg_id, sender_id, sender_name):
+        resolver = ws_state.get_resolved_by(session_id, warning_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, warning_msg_id, resolver or {},
         )
         return
 
     # Wake up the waiting agent
-    session_ws = _pm_pending_warnings.get(session_id, {})
+    session_ws = ws_state._pm_pending_warnings.get(session_id, {})
     entry = session_ws.get(warning_msg_id)
     if entry:
         entry["response"] = {"selectedActionId": selected}
@@ -434,15 +435,15 @@ async def _handle_agent_todo_response(session_id: str, data: dict, user_id: str 
     sender_id = user_id or ""
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, todo_msg_id, sender_id, sender_name):
-        resolver = _get_resolved_by(session_id, todo_msg_id)
+    if not ws_state.mark_interaction_resolved(session_id, todo_msg_id, sender_id, sender_name):
+        resolver = ws_state.get_resolved_by(session_id, todo_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, todo_msg_id, resolver or {},
         )
         return
 
     # Wake up the waiting agent
-    session_tds = _pm_pending_todos.get(session_id, {})
+    session_tds = ws_state._pm_pending_todos.get(session_id, {})
     entry = session_tds.get(todo_msg_id)
     if entry:
         entry["response"] = {"selectedActionId": selected, "comment": comment}
@@ -486,8 +487,8 @@ async def _handle_task_preview_response(
     user_role = await _get_user_session_role(session_id, user_id)
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, preview_msg_id, user_id, user_name):
-        resolver = _get_resolved_by(session_id, preview_msg_id)
+    if not ws_state.mark_interaction_resolved(session_id, preview_msg_id, user_id, user_name):
+        resolver = ws_state.get_resolved_by(session_id, preview_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, preview_msg_id, resolver or {},
         )
@@ -495,7 +496,7 @@ async def _handle_task_preview_response(
 
     # ── Non-owner member: record as advisory vote ─────────────────────
     if user_role != "owner":
-        entry = _pending_task_previews.get(session_id, {}).get(preview_msg_id)
+        entry = ws_state._pending_task_previews.get(session_id, {}).get(preview_msg_id)
         if entry and entry.get("member_votes") is not None:
             entry["member_votes"][user_id] = decision
         action_label = {"confirm": "赞同执行", "cancel": "建议取消", "modify": "建议修改"}.get(decision, decision)
@@ -530,7 +531,7 @@ async def _handle_task_preview_response(
 
     # ── If a _process_and_stream call is waiting on this preview,
     #     signal it so it can proceed / cancel / modify in-line ──────
-    if _resolve_pending_task_preview(session_id, preview_msg_id, decision, modifications):
+    if ws_state.resolve_pending_task_preview(session_id, preview_msg_id, decision, modifications):
         action_label = {"confirm": "确认执行", "cancel": "取消了任务执行", "modify": "修改计划"}.get(decision, decision)
         await save_message(session_id, user_name, f"[{action_label}]: {modifications or ''}", "text", user_id=user_id)
         return
@@ -565,12 +566,12 @@ async def _handle_solution_selection(
     solution_id = data.get("solutionId", "")
     auto_selected = data.get("autoSelected", False)
 
-    if session_id in _solution_selection_events:
-        _solution_selection_results[session_id] = {
+    if session_id in ws_state._solution_selection_events:
+        ws_state._solution_selection_results[session_id] = {
             "solutionId": solution_id,
             "autoSelected": auto_selected,
         }
-        _solution_selection_events[session_id].set()
+        ws_state._solution_selection_events[session_id].set()
         logger.info(
             "solution_selection: session=%s solution=%s auto=%s user=%s",
             session_id, solution_id, auto_selected, user_id,
@@ -635,7 +636,7 @@ async def _auto_name_and_broadcast(session_id: str) -> None:
         new_name = await try_auto_name_session(session_id)
         if new_name:
             # Reset attempts: we found a good name, no need to keep trying
-            _auto_name_state.pop(session_id, None)
+            ws_state._auto_name_state.pop(session_id, None)
 
             await manager.broadcast(
                 session_id,
@@ -727,9 +728,9 @@ def _should_run_memory_tasks(session_id: str) -> bool:
     """Return True if enough time has passed since last memory task run."""
     import time
     now_ts = time.monotonic()
-    last = _throttle_state.get(session_id, 0.0)
-    if now_ts - last >= _THROTTLE_SECONDS:
-        _throttle_state[session_id] = now_ts
+    last = ws_state._throttle_state.get(session_id, 0.0)
+    if now_ts - last >= ws_state._THROTTLE_SECONDS:
+        ws_state._throttle_state[session_id] = now_ts
         return True
     return False
 
@@ -842,7 +843,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
                 request_id = data.get("requestId", "")
                 decision = data.get("decision", "deny")
                 if request_id:
-                    _handle_permission_response(session_id, request_id, decision)
+                    ws_state.handle_permission_response(session_id, request_id, decision)
                 continue
 
             # ── PM/PMO interaction responses ──────────────────────────
@@ -874,7 +875,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             if data.get("event") == "set_exec_permission":
                 exec_perm = data.get("mode")
                 if isinstance(exec_perm, int) and exec_perm in (1, 2, 3):
-                    set_session_exec_permission(session_id, exec_perm)
+                    ws_state.set_session_exec_permission(session_id, exec_perm)
                     from app.services.tools.permission import set_exec_permission
                     set_exec_permission(session_id, exec_perm)
                     await manager.broadcast_permission_mode_changed(
@@ -899,7 +900,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             # ── Store exec permission mode for this session ────────
             exec_perm = data.get("exec_permission")
             if isinstance(exec_perm, int) and exec_perm in (1, 2, 3):
-                set_session_exec_permission(session_id, exec_perm)
+                ws_state.set_session_exec_permission(session_id, exec_perm)
                 # Also sync to the shared permission module store
                 from app.services.tools.permission import set_exec_permission
                 set_exec_permission(session_id, exec_perm)
@@ -1276,7 +1277,7 @@ async def _process_and_stream(
 
                 # ── Wait for user confirmation before executing DAG ──
                 if not token.cancelled:
-                    multi_decision, multi_modifications = await _wait_for_task_confirmation(
+                    multi_decision, multi_modifications = await ws_state.wait_for_task_confirmation(
                         session_id, task_preview_msg_id, token,
                     )
                     if token.cancelled:
@@ -1500,7 +1501,7 @@ async def _process_and_stream(
     # Both extraction and summarization fire in background after a message.
     # Throttled: only run once every _THROTTLE_SECONDS per session to avoid
     # firing expensive LLM calls on every single message.
-    if _should_run_memory_tasks(session_id):
+    if ws_state.should_run_memory_tasks(session_id):
         try:
             from app.config import AUTO_MEMORY_ENABLED
             if AUTO_MEMORY_ENABLED:
@@ -1518,7 +1519,7 @@ async def _process_and_stream(
     # ── Auto session naming (background, non-blocking) ────────
     # Fire after every message for sessions with generic names.
     # Runs on its own throttle separate from memory tasks.
-    if _should_auto_name(session_id):
+    if ws_state._should_auto_name(session_id):
         asyncio.create_task(_auto_name_and_broadcast(session_id))
 
 
@@ -1623,8 +1624,8 @@ async def _invoke_agent(
 
             # ── Set up async wait for user selection ──────────────────
             _sel_event = asyncio.Event()
-            _solution_selection_events[session_id] = _sel_event
-            _solution_selection_results.pop(session_id, None)
+            ws_state._solution_selection_events[session_id] = _sel_event
+            ws_state._solution_selection_results.pop(session_id, None)
 
             await manager.broadcast_solution_proposal(
                 session_id=session_id,
@@ -1642,7 +1643,7 @@ async def _invoke_agent(
             # Wait for user selection or auto-confirm timeout
             try:
                 await asyncio.wait_for(_sel_event.wait(), timeout=_auto_confirm_sec)
-                _selection = _solution_selection_results.get(session_id, {})
+                _selection = ws_state._solution_selection_results.get(session_id, {})
                 logger.info(
                     "ws orchestrator: solution selected session=%s solution=%s",
                     session_id, _selection.get("solutionId", "?"),
@@ -1655,8 +1656,8 @@ async def _invoke_agent(
                     session_id, recommended_id,
                 )
             finally:
-                _solution_selection_events.pop(session_id, None)
-                _solution_selection_results.pop(session_id, None)
+                ws_state._solution_selection_events.pop(session_id, None)
+                ws_state._solution_selection_results.pop(session_id, None)
 
             # Resolve the selected solution to its full context
             selected_id = _selection.get("solutionId", recommended_id)
@@ -2123,7 +2124,7 @@ async def _invoke_agent(
         if token.cancelled:
             return
         text = str(response.get("content", ""))
-        for piece in _chunk_text_for_streaming(text):
+        for piece in ws_state.chunk_text_for_streaming(text):
             if token.cancelled:
                 return
             await manager.stream_broadcast(session_id, message_id, piece, is_final=False)
