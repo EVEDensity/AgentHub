@@ -8,8 +8,6 @@ import ChatInput from '../components/chat/ChatInput';
 
 import UserRoster from '../components/collaboration/UserRoster';
 import TypingIndicator from '../components/collaboration/TypingIndicator';
-import { getPresenceStore } from '../lib/presenceStore';
-import { getCollaborationStore } from '../lib/collaborationStore';
 import ShareDialog from '../components/collaboration/ShareDialog';
 import OneClickDeployModal from '../components/chat/OneClickDeployModal';
 // FIX: MessageList SSR causes hydration mismatch — disable SSR
@@ -29,19 +27,8 @@ import { useSessionRecovery } from '../hooks/useSessionRecovery';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
 import { mergeFinalMessage, registerReplayMessageId } from '../lib/messageRecovery';
 import { buildChatWebSocketUrl } from '../lib/websocketUrl';
-import {
-  buildDagStateFromTaskPreview,
-  clearDagSession,
-  setDagState,
-  updateDagState,
-  useDagState,
-} from '../lib/dagStore';
-import {
-  buildAgentTodoMessage,
-  buildDeployCardMessage,
-  buildSolutionProposalMessage,
-  buildTaskPreviewMessage,
-} from '../lib/chatEventMessages';
+import { clearDagSession, useDagState } from '../lib/dagStore';
+import { handleSharedWebSocketEvent } from '../lib/websocketSharedEvents';
 import {
   useSessionMessages,
   useSessionStreaming,
@@ -687,56 +674,19 @@ export default function AgentHubIM(): JSX.Element {
       }
 
       // ── Workspace file change events ─────────────────────────────
-      if (evt === 'workspace_change') {
-        setWorkspaceVersion(v => v + 1);
-        // Preview tabs: if the changed file is open in a tab, refresh its content
-        const changePath = raw.path as string;
-        if (changePath) {
-          setPreviewTabs(prev =>
-            prev.map(t => (t.path === changePath ? { ...t, _version: (t as any)._version + 1 || 1 } : t))
-          );
-        }
-      }
-
-      if (evt === 'file_conflict') {
-        const conflictPath = raw.path as string;
-        const backupPath = raw.backupPath as string;
-        if (conflictPath) {
-          setNotice(
-            `⚠️ 文件冲突: ${conflictPath} 被其他用户修改过` +
-            (backupPath ? ` (原文件已备份为 ${backupPath})` : '')
-          );
-        }
-        // Still refresh the file tree
-        setWorkspaceVersion(v => v + 1);
-      }
-
-      if (evt === 'file_lock_change') {
-        // Increment version so lock indicators update in the file tree
-        setWorkspaceVersion(v => v + 1);
-      }
-
-      if (evt === 'task_update') {
-        // Per-node incremental update — merge into session-scoped DAG state
-        const tu = raw as {
-          nodeId: string;
-          status: string;
-          detail?: { error?: string; retries?: number };
-          progress?: { completed?: number; total?: number; failed?: number; running?: number; percent?: number };
-          durationMs?: number;
-          retries?: number;
-          sessionId: string;
-        };
-        if (tu.nodeId && tu.status) {
-          updateDagState(chunkSessionId, {
-            nodeId: tu.nodeId,
-            status: tu.status,
-            detail: tu.detail,
-            progress: tu.progress,
-            durationMs: tu.durationMs,
-            retries: tu.retries,
-          });
-        }
+      if (handleSharedWebSocketEvent(raw, evt, chunkSessionId, {
+        wsRef,
+        setWorkspaceVersion,
+        setPreviewTabs,
+        setNotice,
+        setPmState,
+        setDegradationStatus,
+        setSessions,
+        setIsAutoNaming,
+        setExecPermission,
+        sortSessions,
+      })) {
+        return;
       }
 
       if (evt === 'message_chunk') {
@@ -1058,263 +1008,6 @@ export default function AgentHubIM(): JSX.Element {
             }
           }
         }
-      }
-
-      // ── PM state & degradation events ────────────────────────────
-
-      if (evt === 'pm_state_change') {
-        const payload = raw as unknown as import('../types').PMStateChangeEvent;
-        setPmState(payload.state);
-      }
-
-      if (evt === 'degradation_change') {
-        const payload = raw as unknown as import('../types').DegradationEvent;
-        setDegradationStatus(payload.status);
-      }
-
-      // ── Multi-user collaboration events ───────────────────────────
-
-      if (evt === 'user_roster') {
-        // Initial roster of online users when connecting
-        const roster = raw as unknown as import('../types').UserRosterEvent;
-        getPresenceStore().setRoster(chunkSessionId, roster.users);
-      }
-
-      if (evt === 'user_joined') {
-        const joined = raw as unknown as import('../types').UserJoinedEvent;
-        getPresenceStore().addUser(chunkSessionId, {
-          userId: joined.userId,
-          name: joined.userName,
-          role: joined.role,
-          status: 'online',
-        });
-      }
-
-      if (evt === 'user_left') {
-        const left = raw as unknown as import('../types').UserLeftEvent;
-        getPresenceStore().removeUser(chunkSessionId, left.userId);
-        getCollaborationStore().setTyping(chunkSessionId, left.userId, left.userName, false);
-      }
-
-      if (evt === 'presence_update') {
-        const pu = raw as unknown as import('../types').PresenceUpdateEvent;
-        getPresenceStore().bulkUpdateStatus(chunkSessionId, pu.users);
-      }
-
-      if (evt === 'typing_indicator') {
-        const ti = raw as unknown as import('../types').TypingIndicatorEvent;
-        getCollaborationStore().setTyping(chunkSessionId, ti.userId, ti.userName, ti.isTyping);
-      }
-
-      // ── PM interaction state sync ─────────────────────────────────
-
-      if (evt === 'interaction_already_resolved') {
-        const iar = raw as unknown as import('../types').InteractionAlreadyResolvedEvent;
-        updateSessionMessages(chunkSessionId, (prev) => {
-          const updated = [...prev];
-          for (let i = updated.length - 1; i >= 0; i--) {
-            const m = updated[i];
-            if ((m.messageId || m.id) === iar.messageId) {
-              // Update all PM interaction data types with resolvedBy
-              const resolver = { resolvedBy: iar.resolvedBy, resolvedByName: iar.userName };
-              if (m.questionData) {
-                updated[i] = { ...m, questionData: { ...m.questionData, ...resolver } };
-              } else if (m.riskWarningData) {
-                updated[i] = { ...m, riskWarningData: { ...m.riskWarningData, ...resolver } };
-              } else if (m.todoData) {
-                updated[i] = { ...m, todoData: { ...m.todoData, ...resolver } };
-              } else if (m.taskPreviewData) {
-                updated[i] = { ...m, taskPreviewData: { ...m.taskPreviewData, ...resolver } };
-              }
-              break;
-            }
-          }
-          return updated;
-        });
-      }
-
-      if (evt === 'permission_mode_changed') {
-        const pmc = raw as unknown as import('../types').PermissionModeChangedEvent;
-        if (pmc.mode === 1 || pmc.mode === 2 || pmc.mode === 3) {
-          setExecPermission(pmc.mode as ExecPermission);
-        }
-      }
-
-      // ── PM/PMO agent interaction events ──────────────────────────
-
-      if (evt === 'agent_question') {
-        const payload = raw as unknown as import('../types').AgentQuestionEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: chunkSessionId,
-            sender: payload.agentId || 'PM',
-            content: payload.question,
-            type: 'agent_question' as const,
-            timestamp: payload.timestamp,
-            messageId: payload.messageId,
-            questionData: payload,
-          },
-        ]);
-      }
-
-      if (evt === 'progress_update') {
-        const payload = raw as unknown as import('../types').ProgressUpdateEvent;
-        // Replace existing progress message with same messageId, or append new
-        updateSessionMessages(chunkSessionId, (prev) => {
-          const existingIdx = prev.findIndex(
-            (m) => m.messageId === payload.messageId && m.type === 'progress_update'
-          );
-          if (existingIdx >= 0) {
-            const updated = [...prev];
-            updated[existingIdx] = {
-              ...updated[existingIdx],
-              content: payload.currentStep,
-              progressData: payload,
-            };
-            return updated;
-          }
-          return [
-            ...prev,
-            {
-              event: 'message',
-              sessionId: chunkSessionId,
-              sender: payload.agentId || 'PM',
-              content: payload.currentStep,
-              type: 'progress_update' as const,
-              timestamp: payload.timestamp,
-              messageId: payload.messageId,
-              progressData: payload,
-            },
-          ];
-        });
-      }
-
-      if (evt === 'risk_warning') {
-        const payload = raw as unknown as import('../types').RiskWarningEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: chunkSessionId,
-            sender: payload.agentId || 'PM',
-            content: payload.title + '\n' + payload.description,
-            type: 'risk_warning' as const,
-            timestamp: payload.timestamp,
-            messageId: payload.messageId,
-            riskWarningData: payload,
-          },
-        ]);
-      }
-
-      if (evt === 'agent_todo') {
-        const payload = raw as unknown as import('../types').AgentTodoEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildAgentTodoMessage(chunkSessionId, payload)]);
-      }
-
-      if (evt === 'task_preview') {
-        const payload = raw as unknown as import('../types').TaskPreviewEvent;
-        setDagState(chunkSessionId, buildDagStateFromTaskPreview(payload));
-        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildTaskPreviewMessage(chunkSessionId, payload)]);
-      }
-
-      // ── Solution proposal event ──────────────────────────────────────
-      if (evt === 'solution_proposal') {
-        const payload = raw as unknown as import('../types').SolutionProposalEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildSolutionProposalMessage(chunkSessionId, payload)]);
-      }
-
-      // ── Deploy card event ──────────────────────────────────────────
-      if (evt === 'deploy_card') {
-        const payload = raw as unknown as import('../types').DeployCardEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildDeployCardMessage(chunkSessionId, payload)]);
-      }
-
-      // ── CloudCode: terminal output (streaming) ────────────────────
-      if (evt === 'terminal_output') {
-        const payload = raw as unknown as import('../types').TerminalOutputEvent;
-        updateSessionMessages(chunkSessionId, (prev) => {
-          const existingIdx = prev.findIndex(
-            (m) => m.messageId === payload.messageId && m.type === 'terminal'
-          );
-          if (existingIdx >= 0) {
-            const updated = [...prev];
-            updated[existingIdx] = {
-              ...updated[existingIdx],
-              content: updated[existingIdx].content + payload.content,
-              isStreaming: true,
-            };
-            return updated;
-          }
-          return [
-            ...prev,
-            {
-              event: 'message',
-              sessionId: chunkSessionId,
-              sender: payload.sender || 'system',
-              content: payload.content,
-              type: 'terminal' as const,
-              timestamp: payload.timestamp,
-              messageId: payload.messageId,
-              isStreaming: true,
-            },
-          ];
-        });
-      }
-
-      // ── CloudCode: diff update ────────────────────────────────────
-      if (evt === 'diff_update') {
-        const payload = raw as unknown as import('../types').DiffUpdateEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: chunkSessionId,
-            sender: 'system',
-            content: payload.diff,
-            type: 'diff' as const,
-            timestamp: payload.timestamp,
-            messageId: payload.messageId,
-            diffFilePath: payload.path,
-            diffDecisionState: 'pending' as const,
-          },
-        ]);
-      }
-
-      // ── Diff decision (user clicked Accept/Reject on a diff bubble) ──
-      if (evt === 'diff_decision') {
-        const payload = raw as unknown as import('../types').DiffDecisionEvent;
-        updateSessionMessages(chunkSessionId, (prev) => {
-          const updated = [...prev];
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].messageId === payload.messageId && updated[i].type === 'diff') {
-              updated[i] = {
-                ...updated[i],
-                diffDecisionState: payload.decision === 'accept' ? 'accepted' : 'rejected',
-              };
-              // Forward decision to server
-              const targetWs = wsRef.current.get(chunkSessionId);
-              if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-                targetWs.send(JSON.stringify({
-                  event: 'diff_decision',
-                  sessionId: payload.sessionId,
-                  messageId: payload.messageId,
-                  decision: payload.decision,
-                  path: payload.path,
-                }));
-              }
-              break;
-            }
-          }
-          return updated;
-        });
-      }
-
-      if (evt === 'session_renamed') {
-        const payload = raw as { sessionId: string; name: string };
-        setSessions((prev) => prev.map((s) => (s.id === payload.sessionId ? { ...s, name: payload.name } : s)));
-        setIsAutoNaming(false);
       }
 
       if (evt === 'message') {
