@@ -53,6 +53,35 @@ describe('messageRecovery helpers', () => {
     expect(merged.map((m) => m.id)).toContain('m2');
   });
 
+  it('deduplicates reloaded messages by messageId when server id is missing', () => {
+    const prev: Message[] = [
+      {
+        event: 'message',
+        sessionId: 's1',
+        sender: 'agent',
+        content: 'cached',
+        type: 'text',
+        timestamp: '2026-07-19T00:00:00.000Z',
+        messageId: 'mid-1',
+      },
+    ];
+
+    const merged = mergeReloadedMessages(prev, [
+      {
+        event: 'message',
+        sessionId: 's1',
+        sender: 'agent',
+        content: 'cached',
+        type: 'text',
+        timestamp: '2026-07-19T00:00:00.000Z',
+        messageId: 'mid-1',
+      },
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].messageId).toBe('mid-1');
+  });
+
   it('replaces streaming placeholder with the final message payload', () => {
     const merged = mergeFinalMessage([
       {

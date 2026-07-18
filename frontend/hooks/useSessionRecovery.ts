@@ -40,12 +40,13 @@ export function useSessionRecovery({
         return;
       }
       const data: Message[] = (await res.json()) as Message[];
+      const ordered = sortMessagesByTimestamp(data);
       if (merge) {
-        updateSessionMessages(sessionId, (prev) => mergeReloadedMessages(prev, data));
+        updateSessionMessages(sessionId, (prev) => mergeReloadedMessages(prev, ordered));
       } else {
-        replaceSessionMessages(sessionId, sortMessagesByTimestamp(data));
+        replaceSessionMessages(sessionId, ordered);
       }
-      syncDagFromMessages(sessionId, data);
+      syncDagFromMessages(sessionId, ordered);
     } catch {
       /* ignore */
     }

@@ -11,6 +11,10 @@ function isSystemConnectedMessage(message: Message): boolean {
   return (message.type === 'system' || message.sender === 'system') && message.content.includes('已连接');
 }
 
+function getMessageIdentity(message: Message): string {
+  return message.id || message.messageId || '';
+}
+
 export function registerReplayMessageId(seenIds: Set<string>, messageId: string, cap = DEFAULT_REPLAY_CAP): Set<string> {
   if (!messageId) return seenIds;
   if (seenIds.has(messageId)) return seenIds;
@@ -22,8 +26,11 @@ export function registerReplayMessageId(seenIds: Set<string>, messageId: string,
 }
 
 export function mergeReloadedMessages(prev: Message[], incoming: Message[]): Message[] {
-  const existingIds = new Set(prev.filter((m) => m.id).map((m) => m.id as string));
-  const newMessages = incoming.filter((m) => !m.id || !existingIds.has(m.id));
+  const existingIds = new Set(prev.map(getMessageIdentity).filter(Boolean));
+  const newMessages = incoming.filter((message) => {
+    const identity = getMessageIdentity(message);
+    return !identity || !existingIds.has(identity);
+  });
   if (newMessages.length === 0) {
     return prev;
   }
@@ -34,6 +41,7 @@ export function mergeReloadedMessages(prev: Message[], incoming: Message[]): Mes
 export function mergeFinalMessage(prev: Message[], incoming: Message): Message[] {
   const clean = prev.filter((message) => !isStreamingThinkingMessage(message));
   const isSystemMsg = incoming.type === 'system' || incoming.sender === 'system';
+  const incomingIdentity = getMessageIdentity(incoming);
   const targetMessageId = incoming.messageId || incoming.id || '';
   const streamingIdx = targetMessageId
     ? clean.findIndex((message) => message.messageId === targetMessageId)
@@ -42,8 +50,8 @@ export function mergeFinalMessage(prev: Message[], incoming: Message): Message[]
   if (streamingIdx >= 0 && !isSystemMsg) {
     const updated = [...clean];
     updated[streamingIdx] = { ...incoming, messageId: undefined, isStreaming: false };
-    if (incoming.id) {
-      return updated.filter((message, index) => index === streamingIdx || message.id !== incoming.id);
+    if (incomingIdentity) {
+      return updated.filter((message, index) => index === streamingIdx || getMessageIdentity(message) !== incomingIdentity);
     }
     return updated;
   }
@@ -52,7 +60,7 @@ export function mergeFinalMessage(prev: Message[], incoming: Message): Message[]
     return clean;
   }
 
-  if (incoming.id && clean.some((message) => message.id === incoming.id)) {
+  if (incomingIdentity && clean.some((message) => getMessageIdentity(message) === incomingIdentity)) {
     return clean;
   }
 
