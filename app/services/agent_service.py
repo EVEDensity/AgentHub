@@ -17,6 +17,7 @@ from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
 from app.services.conversation_history import build_conversation_history_transcript
 from app.services import agent_prompt_context as prompt_context
+from app.services.agent_prompt_templates import build_general_prompt
 from app.services import prompt_sections
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
@@ -1919,24 +1920,25 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         )
 
     # ── General agent prompt ────────────────────────────────────────
-    custom_role = role_prompt.strip() if role_prompt else ""
-    prompt = (
-        f"{memory_context}"
-        f"{shared_context}"
-        f"{date_context}"
-        f"{workspace_context_block}"
-        f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
-        + (f"\n{custom_role}\n\n" if custom_role else "\n")
-        + f"{actual_model_line}"
-        + f"{reply_lang_instr}"
-        f"{reasoning_instr}"
-        f"{thinking_rule}"
-        f"{code_format_rules}\n"
-        f"{mermaid_rules}\n"
-        f"{output_rules}\n"
-        + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-        + f"{collab_section}"
-        f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+    prompt = build_general_prompt(
+        agent_id=agent_id,
+        role_desc=role_desc,
+        content=content,
+        symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+        memory_context=memory_context,
+        shared_context=shared_context,
+        date_context=date_context,
+        workspace_context=workspace_context_block,
+        role_prompt=role_prompt,
+        actual_model_line=actual_model_line,
+        reply_lang_instruction=reply_lang_instr,
+        reasoning_instruction=reasoning_instr,
+        thinking_rule=thinking_rule,
+        code_format_rules=code_format_rules,
+        mermaid_rules=mermaid_rules,
+        output_rules=output_rules,
+        tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+        collab_section=collab_section,
     )
 
     # ── Prompt size guard ──────────────────────────────────────────
