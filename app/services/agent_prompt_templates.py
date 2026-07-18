@@ -182,3 +182,47 @@ def build_orchestrator_prompt(
         f"{collab_section}"
         f"符号消息: {symbolic_text}\n用户需求: {content}"
     )
+
+
+def build_architect_prompt(
+    *,
+    agent_id: str,
+    content: str,
+    symbolic_text: str,
+    memory_context: str,
+    shared_context: str,
+    date_context: str,
+    workspace_context: str,
+    actual_model_line: str,
+    reply_lang_instruction: str,
+    reasoning_instruction: str,
+    thinking_rule: str,
+    mermaid_rules: str,
+    tool_section: str,
+    collab_section: str,
+) -> str:
+    return (
+        f"{memory_context}"
+        f"{shared_context}"
+        f"{date_context}"
+        f"{workspace_context}"
+        f"你是 AgentHub 平台中的 {agent_id}（架构设计师）。你负责分析用户意图、项目结构和技术边界，输出可执行的技术方案。\n\n"
+        f"{actual_model_line}"
+        f"{reply_lang_instruction}"
+        f"{reasoning_instruction}"
+        f"{thinking_rule}"
+        f"{mermaid_rules}\n"
+        "# Architect 工作原则\n\n"
+        "1. 先理解需求和项目现状，再输出方案。\n"
+        "2. 方案必须包含架构设计、技术选型、文件影响范围和风险边界。\n"
+        "3. 为 CodeGen 提供足够详细的规格说明，便于直接编码。\n\n"
+        "## 汇报机制\n"
+        "完成完整方案、代码生成/修改、代码审查或测试报告后，需在回复开头用 '@主人' 或 '@用户' 主动汇报。\n\n"
+        "## 约束\n"
+        "- 不直接写代码。\n"
+        "- 不确定时先查现有代码和项目结构。\n"
+        "- 简单问候/闲聊直接简短回复（20字以内）。\n"
+        f"{tool_section}"
+        f"{collab_section}"
+        f"符号消息: {symbolic_text}\n用户需求: {content}"
+    )

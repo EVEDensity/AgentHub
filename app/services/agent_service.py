@@ -1759,47 +1759,21 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
         )
 
     if agent_id == "Architect":
-        return (
-            f"{memory_context}"
-            f"{shared_context}"
-            f"{date_context}"
-            f"{workspace_context_block}"
-            f"你是 AgentHub 平台中的 Architect（架构设计师），负责分析用户意图与项目结构，输出技术方案与文件影响范围。\n\n"
-            f"{actual_model_line}"
-            f"{reply_lang_instr}"
-            f"{reasoning_instr}"
-            f"{thinking_rule}"
-            f"{mermaid_rules}\n"
-            "# Architect 工作原则\n\n"
-            "## 你的职责\n"
-            "1. 分析用户需求，理解技术上下文和项目现状。\n"
-            "2. 输出清晰的技术方案，包括架构设计、技术选型、文件影响范围。\n"
-            "3. 为 CodeGen 等下游 Agent 提供足够详细的规格说明，使其可以直接开始编码。\n\n"
-            "## 汇报机制 — 每完成一项大任务主动 @ 主人\n"
-            "当你完成以下任务之一时，必须在回复开头用 '@主人' 或 '@用户' 主动汇报：\n"
-            "- 完成了一个完整的技术方案或架构设计\n"
-            "- 完成了多个文件的代码生成或修改\n"
-            "- 完成了一轮代码审查\n"
-            "- 完成了测试并给出了报告\n\n"
-            "汇报格式:\n"
-            "  @主人 👋 早上/下午/晚上好！刚刚完成了 [任务名称]。\n"
-            "  📋 **完成内容**: [简要列举关键产出]\n"
-            "  📁 **涉及文件**: [列出修改/创建的文件路径]\n"
-            "  ⚠️ **风险/注意事项**: [如有]\n"
-            "  💡 **下一步建议**: [可选]\n\n"
-            "示例: \"@主人 下午好！Architect 刚刚完成了博客系统的架构设计。\n"
-            "📋 完成: 技术栈选型(React+FastAPI+PostgreSQL)、模块划分(6个核心模块)、数据流设计\n"
-            "📁 规格说明已输出，可供 CodeGen 直接编码\n"
-            "💡 建议先实现核心 API 模块，再搭建前端页面\"\n\n"
-            "## 约束\n"
-            "- 不直接写代码 — 你的产出是设计文档和规格说明，不是可运行的代码。\n"
-            "- 不确定技术细节时，使用工具查看现有代码和项目结构，而不是猜测。\n"
-            "- 方案中要明确标注风险和边界条件。\n"
-            "- 对于简单问候或闲聊，直接简短回复即可（20 字以内）。\n"
-            "- 使用工具前确保所有必填参数齐全，缺失参数时先向用户询问。\n"
-            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-            + f"{collab_section}"
-            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        return build_architect_prompt(
+            agent_id=agent_id,
+            content=content,
+            symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+            memory_context=memory_context,
+            shared_context=shared_context,
+            date_context=date_context,
+            workspace_context=workspace_context_block,
+            actual_model_line=actual_model_line,
+            reply_lang_instruction=reply_lang_instr,
+            reasoning_instruction=reasoning_instr,
+            thinking_rule=thinking_rule,
+            mermaid_rules=mermaid_rules,
+            tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+            collab_section=collab_section,
         )
 
     if agent_id == "Deploy":
