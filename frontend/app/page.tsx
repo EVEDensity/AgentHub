@@ -25,7 +25,8 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
 import { useFileUpload } from '../hooks/useFileUpload';
-import { normalizeReferences } from '../lib/references';
+import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
+import { mergeFinalMessage, mergeReloadedMessages, registerReplayMessageId } from '../lib/messageRecovery';
 import { buildChatWebSocketUrl } from '../lib/websocketUrl';
 import {
   clearDagSession,
@@ -47,7 +48,7 @@ import {
   unpinSession,
   type StreamBuffer,
 } from '../lib/sessionStore';
-import type { Agent, AttachedFile, AttachmentMeta, ChatSession, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
+import type { Agent, AttachedFile, ChatSession, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
 import { ToastProvider, useAddToast } from '../components/ui/Toast';
 
@@ -333,15 +334,7 @@ export default function AgentHubIM(): JSX.Element {
       }
       const data: Message[] = (await res.json()) as Message[];
       if (merge) {
-        updateSessionMessages(sid, (prev) => {
-          const existingIds = new Set(prev.filter((m) => m.id).map((m) => m.id));
-          const newMessages = data.filter((m) => !m.id || !existingIds.has(m.id));
-          if (newMessages.length === 0) return prev;
-          // Only remove actively-streaming temp messages; keep finalized ones
-          // that haven't been replaced by the DB message event yet.
-          const clean = prev.filter((m) => !m.isStreaming);
-          return [...clean, ...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-        });
+        updateSessionMessages(sid, (prev) => mergeReloadedMessages(prev, data));
       } else {
         // Always replace messages on a full (non-merge) reload.
         // 写到 SessionStore（per-session），切走再切回来时这条记录还在 Map 里。
@@ -703,12 +696,7 @@ export default function AgentHubIM(): JSX.Element {
         return; // already processed
       }
       if (msgId) {
-        dedupIdsRef.current.add(msgId);
-        // Keep dedup set from growing unbounded (cap at ~500)
-        if (dedupIdsRef.current.size > 500) {
-          const arr = [...dedupIdsRef.current];
-          dedupIdsRef.current = new Set(arr.slice(arr.length - 250));
-        }
+        dedupIdsRef.current = registerReplayMessageId(dedupIdsRef.current, msgId);
       }
 
       // Track last known message ID for reconnection sync
@@ -1450,41 +1438,7 @@ export default function AgentHubIM(): JSX.Element {
         setSessionStreaming(cSessionId, false);
         const msg = raw as unknown as Message;
         const isSystemMsg = msg.type === 'system' || msg.sender === 'system';
-        updateSessionMessages(cSessionId, (prev) => {
-          // Clean up ALL streaming thinking placeholders (from agent_thinking)
-          // before adding/replacing the final message.  The prior narrow filter
-          // (empty or "正在"-prefixed) missed the "synthesizing" phase content
-          // like "工具执行完成，正在综合结果生成回复..."
-          let cleaned = prev;
-          const hasStaleStreamers = prev.some(
-            (m) => m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text'
-          );
-          if (hasStaleStreamers) {
-            cleaned = prev.filter(
-              (m) => !(m.isStreaming && m.sender !== 'user' && !m.diffFilePath && m.type === 'text')
-            );
-          }
-
-          const targetMessageId = (raw.messageId || msg.messageId || '') as string;
-          const streamingIdx = targetMessageId
-            ? cleaned.findIndex((m) => m.messageId === targetMessageId)
-            : -1;
-          if (streamingIdx >= 0 && !isSystemMsg) {
-            const updated = [...cleaned];
-            updated[streamingIdx] = { ...msg, messageId: undefined, isStreaming: false };
-            if (msg.id) {
-              return updated.filter((m, i) => i === streamingIdx || m.id !== msg.id);
-            }
-            return updated;
-          }
-          if (isSystemMsg && msg.content && msg.content.includes('已连接')) {
-            return cleaned;
-          }
-          if (msg.id && cleaned.some((m) => m.id === msg.id)) {
-            return cleaned;
-          }
-          return [...cleaned, { ...msg, messageId: undefined, isStreaming: false }];
-        });
+        updateSessionMessages(cSessionId, (prev) => mergeFinalMessage(prev, msg));
         if (!isSystemMsg) {
           setSessions((prev) => sortSessions(prev.map((s) => (s.id === (msg.sessionId || cSessionId) ? { ...s, lastMessageAt: msg.timestamp || new Date().toISOString() } : s))));
         }
@@ -2063,49 +2017,11 @@ export default function AgentHubIM(): JSX.Element {
         : '';
     const text = rawText.trim();
     if (!text && currentFiles.length === 0) return;
-
-    const fileMetas: AttachmentMeta[] = currentFiles.map((f) => ({
-      name: f.name,
-      size: f.size,
-      type: f.type,
-      category: f.category,
-      fileId: f.fileId,
-    }));
-
-    let aiContent = text;
-    if (currentFiles.length > 0) {
-      const fileBlocks = currentFiles.map((f) => {
-        const ext = f.name.split('.').pop()?.toLowerCase() || '';
-        if (f.fileId && !f.content) {
-          return `[Attached File: ${f.name} (fileId: ${f.fileId})]`;
-        }
-        return `[Attached File: ${f.name}]\n\`\`\`${ext}\n${f.content || ''}\n\`\`\``;
-      }).join('\n\n');
-      aiContent = text ? `${text}\n\n---\n${fileBlocks}` : fileBlocks;
-    }
-
-    // Include file references (quoted text from preview panel) in the message
-    if (fileReferences.length > 0) {
-      // 规范化：截断超长 quote、补全 lineEnd
-      const normalized = normalizeReferences(fileReferences);
-      const refBlocks = normalized.map((ref) => {
-        const parts: string[] = [`[Referenced File: ${ref.path}]`];
-        if (ref.lineStart) {
-          const lineRange = ref.lineEnd && ref.lineEnd !== ref.lineStart
-            ? `Lines ${ref.lineStart}-${ref.lineEnd}`
-            : `Line ${ref.lineStart}`;
-          parts.push(`(${lineRange})`);
-        }
-        if (ref.quote) {
-          parts.push(`\n\`\`\`\n${ref.quote}\n\`\`\``);
-        }
-        return parts.join('');
-      });
-      const refContent = refBlocks.join('\n\n');
-      aiContent = aiContent ? `${aiContent}\n\n---\n${refContent}` : refContent;
-    }
-
-    const displayContent = text || (currentFiles.length > 0 ? `发送了 ${currentFiles.length} 个文件` : '');
+    const draft = buildOutgoingMessageDraft({
+      text,
+      files: currentFiles,
+      references: fileReferences,
+    });
 
     if (process.env.NODE_ENV === 'development') {
       console.log('[agenthub] handleSend', { sessionId: activeSessionId, text });
@@ -2116,17 +2032,17 @@ export default function AgentHubIM(): JSX.Element {
       id: clientId,
       event: 'message',
       sessionId: activeSessionId,
-      content: displayContent,
+      content: draft.displayContent,
       sender: user?.name || 'user',
       userId: user?.id || '',
       timestamp: new Date().toISOString(),
       type: 'text',
-      attachments: fileMetas.length > 0 ? fileMetas : undefined,
+      attachments: draft.attachments.length > 0 ? draft.attachments : undefined,
     };
 
     const wsMsg: PendingMessage = {
       sessionId: activeSessionId,
-      content: aiContent,
+      content: draft.aiContent,
       sender: user?.name || 'user',
       timestamp: new Date().toISOString(),
       type: 'text',
