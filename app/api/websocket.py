@@ -12,6 +12,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from app.db.init_db import now
 from app.db.session import afetch_all, afetch_one
 from app.api import websocket_state as ws_state
+from app.api import websocket_message_flow as message_flow
 from app.api.websocket_dispatch import dispatch_control_event, dispatch_message_flow
 from app.api.websocket_lifecycle import close_websocket_session, open_websocket_session
 from app.services.agent_service import extract_mentions, get_direct_chat_agent, lookup_agent, save_message
@@ -1176,6 +1177,7 @@ async def _process_and_stream(
             # nodes define the workflow.  @mentions in the same message
             # are treated as conversational references, not routing
             # directives.
+            mentioned: list[str] = []
             if route_dag is not None:
                 # Build target_agents from route nodes
                 target_agents: list[dict] = []
@@ -1221,6 +1223,22 @@ async def _process_and_stream(
             # When the user explicitly selects a route via #route:name,
             # the greeting guard is skipped — they clearly intended the
             # workflow to run.
+            await message_flow.run_message_flow(
+                session_id=session_id,
+                content=content,
+                sender=sender,
+                user_id=user_id,
+                token=token,
+                attachments=attachments or [],
+                quote_references=quote_references,
+                auto_reply=auto_reply,
+                target_agents=target_agents,
+                route_dag=route_dag,
+                mentioned=mentioned,
+                invoke_agent=_invoke_agent,
+            )
+            return
+
             is_greeting_broadcast = False
             if route_dag is None and len(target_agents) >= 2:
                 # Strip @mentions to inspect the real message content
