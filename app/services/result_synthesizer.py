@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from app.schemas.dag import DAGConfig
+from app.services.context_compaction import compact_text
 
 logger = logging.getLogger("agenthub.result_synthesizer")
 
@@ -116,10 +117,10 @@ class ResultSynthesizer:
             if node.id in node_results:
                 output = node_results[node.id]
                 # Truncate very long outputs
-                if len(output) > 3000:
-                    output = output[:3000] + "\n\n... (输出过长，已截断)"
+                if len(output) > 1800:
+                    output = output[:1800] + "\n\n... (输出过长，已截断)"
                 sections.append(
-                    f"### [{node.agent}] {node.description}\n"
+                    f"### [{node.agent}] {compact_text(node.description, max_chars=72)}\n"
                     f"{output}\n"
                 )
         return "\n\n".join(sections)

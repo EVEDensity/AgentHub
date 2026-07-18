@@ -52,7 +52,7 @@ def test_build_dag_task_items_supports_objects_and_dicts() -> None:
         ]
     )
 
-    assert items[0]["description"].startswith("Architect")
+    assert items[0]["description"] == "梳理方案"
     assert items[0]["estimatedSeconds"] == 90
     assert items[1]["estimatedSeconds"] == 20
 

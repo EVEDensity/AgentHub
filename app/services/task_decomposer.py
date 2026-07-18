@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 import re
 import time
 from typing import Any
 
 from app.db.session import afetch_all
 from app.schemas.dag import DAGConfig, DAGNode
+from app.services.context_compaction import build_agent_roster_summary, compact_text
 from app.services.template_engine import template_engine
 
 logger = logging.getLogger("agenthub.task_decomposer")
@@ -70,8 +72,8 @@ class ArchitectTaskDecomposer:
     DECOMPOSE_TIMEOUT = 30.0
 
     def __init__(self) -> None:
-        self._agent_capability_cache: str | None = None
-        self._cache_ts: float = 0.0
+        self._agent_capability_cache: dict[str, tuple[float, str]] = {}
+        self._historical_context_cache: dict[str, tuple[float, str | None]] = {}
         self._cache_ttl: float = 300.0  # 5 min
 
     # ── Public API ─────────────────────────────────────────────────────
@@ -158,32 +160,26 @@ class ArchitectTaskDecomposer:
 
     async def _build_capability_summary(self, agents: list[dict[str, Any]]) -> str:
         """Build a concise agent capability description for the prompt."""
-        lines: list[str] = []
-        for a in agents:
-            agent_id = a.get("agent_id", "unknown")
-            domain = a.get("domain", "unknown")
-            duty = a.get("duty_note", "")
-            risk = a.get("risk_level", "L1")
-            status = a.get("status", "sleeping")
-            tags_raw = a.get("capability_tags", "[]")
-            try:
-                tags = json.loads(tags_raw) if isinstance(tags_raw, str) else tags_raw
-            except (json.JSONDecodeError, TypeError):
-                tags = []
-            tag_str = ", ".join(tags[:6]) if tags else "无"
+        fingerprint = self._fingerprint_agents(agents)
+        cached = self._agent_capability_cache.get(fingerprint)
+        now_ts = time.monotonic()
+        if cached and (now_ts - cached[0]) < self._cache_ttl:
+            return cached[1]
 
-            status_icon = {"online": "✓", "sleeping": "~", "offline": "✗"}.get(status, "?")
-            lines.append(
-                f"- **{agent_id}** [{status_icon}] domain={domain}, risk={risk}\n"
-                f"  职责: {duty}\n  能力标签: {tag_str}"
-            )
-        return "\n".join(lines)
+        summary = build_agent_roster_summary(agents, max_agents=8, max_tags=4, max_duty_chars=64)
+        self._agent_capability_cache[fingerprint] = (now_ts, summary)
+        return summary
 
     async def _build_historical_context(self, content: str) -> str | None:
         """Query task_execution_history for relevant past performance."""
         try:
             # Simple keyword extraction for task type matching
             task_type = self._classify_task_type(content)
+            cached = self._historical_context_cache.get(task_type)
+            now_ts = time.monotonic()
+            if cached and (now_ts - cached[0]) < self._cache_ttl:
+                return cached[1]
+
             rows = await afetch_all(
                 """SELECT assigned_agent,
                           SUM(CASE WHEN success THEN 1 ELSE 0 END) * 1.0 / COUNT(*) as success_rate,
@@ -196,16 +192,41 @@ class ArchitectTaskDecomposer:
                 task_type,
             )
             if not rows:
+                self._historical_context_cache[task_type] = (now_ts, None)
                 return None
-            lines = [f"任务类型 '{task_type}' 的历史执行数据:"]
-            for r in rows[:10]:
-                lines.append(
-                    f"  {r['assigned_agent']}: 成功率={r['success_rate']:.0%}, "
-                    f"平均耗时={r['avg_duration_ms']}ms, 总次数={r['total_runs']}"
-                )
-            return "\n".join(lines)
+
+            lines = [f"【历史执行摘要】task={task_type}"]
+            for r in rows[:5]:
+                agent_name = compact_text(str(r["assigned_agent"]), max_chars=24)
+                success_rate = int(round(float(r["success_rate"]) * 100))
+                avg_duration = int(r["avg_duration_ms"] or 0)
+                total_runs = int(r["total_runs"] or 0)
+                lines.append(f"- {agent_name}: {success_rate}% / {avg_duration}ms / {total_runs}次")
+            summary = "\n".join(lines)
+            self._historical_context_cache[task_type] = (now_ts, summary)
+            return summary
         except Exception:
             return None
+
+    def _fingerprint_agents(self, agents: list[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        for agent in agents:
+            tags_raw = agent.get("capability_tags", "[]")
+            if isinstance(tags_raw, list):
+                tags_raw = json.dumps(tags_raw, ensure_ascii=False)
+            parts.append(
+                "|".join([
+                    str(agent.get("agent_id", "")),
+                    str(agent.get("domain", "")),
+                    str(agent.get("risk_level", "")),
+                    str(agent.get("status", "")),
+                    str(agent.get("duty_note", ""))[:80],
+                    str(tags_raw)[:120],
+                ])
+            )
+        if not parts:
+            return "empty"
+        return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()[:24]
 
     def _find_architect(self, agents: list[dict[str, Any]]) -> dict[str, Any] | None:
         """Find the Architect agent from the agent list."""

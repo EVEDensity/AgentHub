@@ -25,16 +25,23 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
 import { useFileUpload } from '../hooks/useFileUpload';
+import { useSessionRecovery } from '../hooks/useSessionRecovery';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
-import { mergeFinalMessage, mergeReloadedMessages, registerReplayMessageId } from '../lib/messageRecovery';
+import { mergeFinalMessage, registerReplayMessageId } from '../lib/messageRecovery';
 import { buildChatWebSocketUrl } from '../lib/websocketUrl';
 import {
+  buildDagStateFromTaskPreview,
   clearDagSession,
   setDagState,
-  syncDagFromMessages,
   updateDagState,
   useDagState,
 } from '../lib/dagStore';
+import {
+  buildAgentTodoMessage,
+  buildDeployCardMessage,
+  buildSolutionProposalMessage,
+  buildTaskPreviewMessage,
+} from '../lib/chatEventMessages';
 import {
   useSessionMessages,
   useSessionStreaming,
@@ -105,6 +112,12 @@ export default function AgentHubIM(): JSX.Element {
   const messages = useSessionMessages(sessionId);
   const isStreaming = useSessionStreaming(sessionId);
   const dag = useDagState(sessionId);
+  const { reloadMessages } = useSessionRecovery({
+    sessionId,
+    token,
+    messages,
+    onTokenExpired: handleTokenExpired,
+  });
   const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
@@ -321,32 +334,6 @@ export default function AgentHubIM(): JSX.Element {
       .catch(() => {});
   }, [token]);
 
-  async function reloadMessages(merge = false): Promise<void> {
-    const sid = currentSessionRef.current;
-    // Guard: never issue requests with an empty session id — the
-    // resulting double-slash URL (…/sessions//messages) would 404.
-    if (!sid) return;
-    try {
-      const res = await fetch(`/api/chat/sessions/${encodeURIComponent(sid)}/messages`, { headers: authHeaders() });
-      if (!res.ok) {
-        if (res.status === 401) handleTokenExpired();
-        return;
-      }
-      const data: Message[] = (await res.json()) as Message[];
-      if (merge) {
-        updateSessionMessages(sid, (prev) => mergeReloadedMessages(prev, data));
-      } else {
-        // Always replace messages on a full (non-merge) reload.
-        // 写到 SessionStore（per-session），切走再切回来时这条记录还在 Map 里。
-        replaceSessionMessages(
-          sid,
-          [...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
-        );
-      }
-      syncDagFromMessages(sid, data);
-    } catch { /* ignore */ }
-  }
-
   function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const localToken = typeof window !== 'undefined' ? localStorage.getItem('agenthub_token') : '';
     return localToken ? { ...extra, Authorization: `Bearer ${localToken}` } : extra;
@@ -397,11 +384,6 @@ export default function AgentHubIM(): JSX.Element {
       }
     };
   }, [token, sessionId]);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    syncDagFromMessages(sessionId, messages);
-  }, [sessionId, messages]);
 
   // ── Scroll-to-bottom helper refs ──────────────────────────
   const scrollRafRef = useRef<number>(0);
@@ -1228,85 +1210,25 @@ export default function AgentHubIM(): JSX.Element {
 
       if (evt === 'agent_todo') {
         const payload = raw as unknown as import('../types').AgentTodoEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: chunkSessionId,
-            sender: payload.agentId || 'PM',
-            content: payload.title + '\n' + payload.description,
-            type: 'agent_todo' as const,
-            timestamp: payload.timestamp,
-            messageId: payload.messageId,
-            todoData: payload,
-          },
-        ]);
+        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildAgentTodoMessage(chunkSessionId, payload)]);
       }
 
       if (evt === 'task_preview') {
         const payload = raw as unknown as import('../types').TaskPreviewEvent;
-        // Initialize DAG state for real-time node status tracking
-        setDagState(chunkSessionId, {
-          total: payload.tasks.length,
-          completed: 0,
-          nodes: payload.tasks.map((t) => ({
-            id: t.id,
-            agent: t.agent,
-            description: t.description,
-            dependencies: t.dependencies,
-            status: 'PENDING',
-            estimated_effort: t.estimatedSeconds != null ? `${t.estimatedSeconds}s` : undefined,
-          })),
-        });
-        updateSessionMessages(chunkSessionId, (prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: chunkSessionId,
-            sender: 'system',
-            content: '任务预览',
-            type: 'task_preview' as const,
-            timestamp: payload.timestamp,
-            messageId: payload.messageId,
-            taskPreviewData: payload,
-          },
-        ]);
+        setDagState(chunkSessionId, buildDagStateFromTaskPreview(payload));
+        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildTaskPreviewMessage(chunkSessionId, payload)]);
       }
 
       // ── Solution proposal event ──────────────────────────────────────
       if (evt === 'solution_proposal') {
         const payload = raw as unknown as import('../types').SolutionProposalEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: chunkSessionId,
-            sender: 'Orchestrator',
-            content: `方案分析 — ${payload.solutions.length} 个方案`,
-            type: 'solution_proposal' as const,
-            timestamp: payload.timestamp,
-            messageId: payload.messageId,
-            solutionProposalData: payload,
-          },
-        ]);
+        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildSolutionProposalMessage(chunkSessionId, payload)]);
       }
 
       // ── Deploy card event ──────────────────────────────────────────
       if (evt === 'deploy_card') {
         const payload = raw as unknown as import('../types').DeployCardEvent;
-        updateSessionMessages(chunkSessionId, (prev) => [
-          ...prev,
-          {
-            event: 'message',
-            sessionId: chunkSessionId,
-            sender: payload.agentId || 'Deploy',
-            content: payload.description || '部署完成',
-            type: 'deploy_card' as const,
-            timestamp: payload.timestamp,
-            messageId: payload.messageId,
-            deployCardData: payload,
-          },
-        ]);
+        updateSessionMessages(chunkSessionId, (prev) => [...prev, buildDeployCardMessage(chunkSessionId, payload)]);
       }
 
       // ── CloudCode: terminal output (streaming) ────────────────────

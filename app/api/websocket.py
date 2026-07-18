@@ -1143,22 +1143,7 @@ async def _process_and_stream(
 
                 # ── 🟡 Trigger 1: Task Preview with real DAG ────────
                 task_preview_msg_id = str(uuid.uuid4())
-                task_items = []
-                for node in dag_config.nodes:
-                    domain_label = {
-                        "orchestrator": "协调调度", "architect": "架构设计",
-                        "codegen": "代码生成", "review": "代码审查",
-                        "test": "测试验证", "deploy": "部署发布",
-                    }.get(node.domain, node.domain)
-                    task_items.append({
-                        "id": node.id,
-                        "description": f"{node.agent} ({domain_label}): {node.description}",
-                        "agent": node.agent,
-                        "dependencies": node.dependencies,
-                        "estimatedSeconds": {"low": 20, "medium": 45, "high": 90}.get(
-                            node.estimated_effort, 45
-                        ),
-                    })
+                task_items = message_flow.build_dag_task_items(list(dag_config.nodes))
                 await manager.broadcast_task_preview(
                     session_id, task_preview_msg_id, task_items,
                     eta_seconds=sum(t.get("estimatedSeconds", 45) for t in task_items),
@@ -1610,22 +1595,7 @@ async def _invoke_agent(
 
                     # ── Broadcast task preview ──────────────────────────
                     _dag_preview_id = str(uuid.uuid4())
-                    _dag_task_items = []
-                    for node in dag_config.nodes:
-                        domain_label = {
-                            "orchestrator": "协调调度", "architect": "架构设计",
-                            "codegen": "代码生成", "review": "代码审查",
-                            "test": "测试验证", "deploy": "部署发布",
-                        }.get(node.domain, node.domain)
-                        _dag_task_items.append({
-                            "id": node.id,
-                            "description": f"{node.agent} ({domain_label}): {node.description}",
-                            "agent": node.agent,
-                            "dependencies": node.dependencies,
-                            "estimatedSeconds": {"low": 20, "medium": 45, "high": 90}.get(
-                                node.estimated_effort, 45
-                            ),
-                        })
+                    _dag_task_items = message_flow.build_dag_task_items(list(dag_config.nodes))
                     await manager.broadcast_task_preview(
                         session_id, _dag_preview_id, _dag_task_items,
                         eta_seconds=sum(t.get("estimatedSeconds", 45) for t in _dag_task_items),

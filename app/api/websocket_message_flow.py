@@ -10,19 +10,9 @@ from typing import Any
 from app.api import websocket_state as ws_state
 from app.db.init_db import now
 from app.schemas.dag import DAGConfig
+from app.services.context_compaction import build_task_preview_item
 
 logger = logging.getLogger("agenthub.websocket")
-
-_DOMAIN_LABELS = {
-    "orchestrator": "orchestrator",
-    "architect": "architect",
-    "codegen": "codegen",
-    "review": "review",
-    "test": "test",
-    "deploy": "deploy",
-}
-
-_ESTIMATED_SECONDS = {"low": 20, "medium": 45, "high": 90}
 
 _GREETING_PATTERNS = [
     "^(\u5927\u5bb6|\u5404\u4f4d|\u670b\u53cb\u4eec|\u4f19\u4f34\u4eec|\u540c\u5b66\u4eec|hello\\s*all|hi\\s*all|hey\\s*all|hello\\s*everyone|hi\\s*everyone|hey\\s*everyone)",
@@ -153,29 +143,7 @@ def detect_multi_mention_greeting(
 
 
 def build_dag_task_items(dag_nodes: list[Any]) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for node in dag_nodes:
-        domain = str(_node_value(node, "domain", ""))
-        dependencies = _node_value(node, "dependencies", [])
-        if not isinstance(dependencies, list):
-            dependencies = list(dependencies) if dependencies else []
-        items.append(
-            {
-                "id": str(_node_value(node, "id", "")),
-                "description": (
-                    f"{_node_value(node, 'agent', '')} "
-                    f"({_DOMAIN_LABELS.get(domain, domain)}): "
-                    f"{_node_value(node, 'description', '')}"
-                ),
-                "agent": str(_node_value(node, "agent", "")),
-                "dependencies": dependencies,
-                "estimatedSeconds": _ESTIMATED_SECONDS.get(
-                    str(_node_value(node, "estimated_effort", "medium")),
-                    45,
-                ),
-            }
-        )
-    return items
+    return [build_task_preview_item(node) for node in dag_nodes]
 
 
 def build_followup_todos(target_agents: list[dict[str, Any]]) -> list[dict[str, Any]]:

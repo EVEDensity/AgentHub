@@ -1357,7 +1357,7 @@ async def stream_agent_response(
     return stream()
 
 
-async def _build_conversation_history(session_id: str, max_chars: int = 5000) -> str:
+async def _build_conversation_history(session_id: str, max_chars: int = 3600) -> str:
     """Fetch recent messages from this session and format as a transcript.
 
     Gives every agent called in the session full awareness of what was
@@ -1376,7 +1376,7 @@ async def _build_conversation_history(session_id: str, max_chars: int = 5000) ->
 
     try:
         rows = await afetch_all(
-            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 25",
+            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 18",
             session_id,
         )
     except Exception:
@@ -1391,7 +1391,7 @@ async def _build_conversation_history(session_id: str, max_chars: int = 5000) ->
     return result
 
 
-async def _build_memory_context(user_id: str = "", session_id: str = "", max_chars: int = 3000, force: bool = False) -> str:
+async def _build_memory_context(user_id: str = "", session_id: str = "", max_chars: int = 2200, force: bool = False) -> str:
     """Load current-session conversation memory and global summary.
 
     Only loads what is strictly needed for conversational continuity:

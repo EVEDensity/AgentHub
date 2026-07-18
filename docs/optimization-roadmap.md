@@ -1,74 +1,261 @@
 # AgentHub Optimization Roadmap
 
-## Principles
+## 0. Current Position
 
-- Keep orchestration, transport, state, and storage separate.
-- Prefer pure helpers for transforms and formatting.
-- Make per-session and per-user state explicit.
-- Reduce prompt length by compressing context before the model sees it.
+AgentHub is already past the "chat wrapper" stage. The current codebase has a usable multi-agent runtime, DAG tasking, WebSocket collaboration, memory/session persistence, and a multi-language service backbone.
 
-## Phase 1: Stabilize
+What is now true in the repository:
 
-Goal: fix user-visible correctness and security issues.
+- `frontend/app/page.tsx` is already thinner than before and now delegates message recovery, WebSocket URL building, and DAG state to helpers.
+- Prompt/token control has started through `app/services/context_compaction.py`, `app/services/conversation_history.py`, `app/services/orchestrator_preprocessor.py`, `app/services/task_decomposer.py`, and `app/services/result_synthesizer.py`.
+- `app/api/websocket_message_flow.py` and `app/api/websocket.py` now share compact task preview construction.
+- The repo already carries the architecture needed for enterprise expansion, but it still has a few oversized hot modules.
 
-- Remove hardcoded login hints from the UI.
-- Move session pinning to per-user preferences.
-- Keep legacy fields only as compatibility fallbacks.
-- Reduce broad `except Exception` usage in hot paths.
+The next step is not to add more features first. The next step is to make the core flow smaller, more explicit, and cheaper to run.
 
-Deliverables:
-- Clean login form defaults.
-- User-scoped session pin state.
-- Regression tests for pin parsing and sorting.
+## 1. Scorecard
 
-## Phase 2: Decouple
+| Dimension | Score | Why it lost points |
+|---|---:|---|
+| Architecture | 82 | Strong platform shape, but a few modules still hold transport, orchestration, persistence, and formatting together. |
+| Code quality | 72 | Hot-path functions are still too large and a lot of logic is repeated in slightly different forms. |
+| Performance / concurrency | 78 | Caching exists, but prompt assembly, history replay, and summary synthesis still do too much repeated work. |
+| Business completeness | 84 | Multi-agent, DAG, memory, IAM, observability, and deploy are present; editor, marketplace, SDK, and token management are still missing. |
+| Operations / deployment | 79 | Compose and monitoring are present, but service startup, retries, and runtime health are not uniform enough. |
+| Security | 71 | IAM and tool gating exist, but broad exception handling and in-process state remain weak points. |
+| Extensibility | 76 | The stack is right, but the extension points are not yet shaped as clean platform APIs. |
 
-Goal: shrink high-coupling modules.
+Overall: **77/100**.
 
-- Split `agent_service.py` into:
-  - agent runtime
-  - prompt/context builder
-  - memory manager
-  - tool execution adapter
-  - streaming/event emitter
-- Split `websocket.py` into:
-  - connection lifecycle
-  - collaboration events
-  - task preview events
-  - message streaming
-- Move shared session preference logic to a small service module.
+## 2. Problem List
 
-## Phase 3: Token Economy
+### 2.1 Architecture coupling
 
-Goal: cut model input size without losing task quality.
+| Problem | Scope | Risk | Root cause |
+|---|---|---:|---|
+| `app/services/agent_service.py` does too much | Prompt, history, memory, tool loop, persistence, synthesis | High | The runtime was expanded without a hard boundary between orchestration and formatting. |
+| `app/api/websocket.py` still carries lifecycle + control + task preview + collaboration | All IM traffic and replay flows | High | The WebSocket layer still owns more than transport concerns. |
+| `frontend/app/page.tsx` is still a large orchestration shell | Main IM UI, reconnect, preview, recovery, draft state | High | UI state and transport state were not separated early enough. |
+| DAG preview generation is duplicated | `websocket.py`, `websocket_message_flow.py` | Medium | Item shaping lived in two places before a shared helper existed. |
 
-- Add layered context compression:
-  - L0 recent turn cache
-  - L1 short-term conversation summary
-  - L2 retrieval snippets
-  - L3 knowledge graph references
-- Truncate auto-name and preview prompts aggressively.
-- Cache static system prompts by role and provider.
-- Reuse structured summaries instead of replaying raw histories.
+### 2.2 Code quality
 
-Target outcomes:
-- 30-60% less prompt payload in routine chat turns.
-- Lower repeated token spend on long sessions.
+| Problem | Scope | Risk | Root cause |
+|---|---|---:|---|
+| Repeated string assembly for prompt payloads | Every LLM call | High | No shared context-compaction layer existed. |
+| Broad `except Exception` blocks | Hot paths and fallback paths | High | Fail-open behavior was used too often to keep the UX moving. |
+| Overloaded helpers | History, preprocessor, synthesis, preview | Medium | Helpers were kept as convenience wrappers instead of becoming true domain units. |
 
-## Phase 4: Platform Hardening
+### 2.3 Performance and token use
 
-Goal: make the architecture enterprise-grade.
+| Problem | Scope | Risk | Root cause |
+|---|---|---:|---|
+| Conversation history was too long | Frequent turns and tool loops | High | History replay was treated as raw transcript replay. |
+| Memory context was too large | Long sessions | High | Current-session memory and global summary were both injected too freely. |
+| Preprocess output was too verbose | Orchestrator prompt | High | Structured analysis was formatted as markdown instead of compact prompt data. |
+| Result synthesis repeated long node outputs | Multi-agent DAG runs | Medium | Each result was copied into the final synthesis with too much text. |
 
-- Replace in-process session state with Redis-backed coordination.
-- Make task execution idempotent and restart-safe.
-- Add explicit retry, timeout, and cancellation semantics.
-- Standardize telemetry for Go, Rust, and Python services.
+### 2.4 Business flow gaps
 
-## Phase 5: Productization
+| Problem | Scope | Risk | Root cause |
+|---|---|---:|---|
+| Message recovery and DAG replay still need hardening | Refresh, reconnect, cross-tab continuity | High | Recovery is partly client-side and partly session-scoped, not a single source of truth. |
+| Task preview payload is still larger than needed | PM confirmation flow | Medium | Preview text includes extra labels that do not improve decision quality. |
+| Route / agent planning is not cached as a reusable artifact | DAG generation and synthesis | Medium | Pre-summaries are not yet first-class data. |
 
-Goal: improve adoption and extensibility.
+### 2.5 Operations and security
+
+| Problem | Scope | Risk | Root cause |
+|---|---|---:|---|
+| Hidden runtime failures are still possible | All service layers | High | Fallbacks absorb too many errors without enough structured telemetry. |
+| Session state lives too much in-process | WebSocket and task state | High | Restart safety and multi-instance coordination are not fully externalized yet. |
+| Audit and trace correlation are inconsistent | Python / Go / Rust | Medium | Logging and tracing conventions are not yet standardized end-to-end. |
+
+## 3. Detailed Fix Plan
+
+### 3.1 Fast fixes
+
+| Issue | Fast fix | File paths | Validation |
+|---|---|---|---|
+| Prompt bloat | Keep compact prompt helpers and use them everywhere | `app/services/context_compaction.py`, `app/services/conversation_history.py`, `app/services/orchestrator_preprocessor.py`, `app/services/task_decomposer.py`, `app/services/result_synthesizer.py` | Compare prompt length before/after and keep routine turns materially shorter. |
+| WebSocket preview duplication | Use one compact task preview builder | `app/api/websocket_message_flow.py`, `app/api/websocket.py` | Task preview output should be identical across both paths and smaller. |
+| History replay noise | Truncate and dedupe history more aggressively | `app/services/conversation_history.py` | History should stay readable while dropping repeated lines and extra whitespace. |
+| Result preview inflation | Shrink partial summaries | `app/services/tools/agent_tools.py` | Partial summaries must stay short and still preserve enough context for synthesis. |
+
+### 3.2 Structural refactor
+
+| Issue | Refactor | File paths | Validation |
+|---|---|---|---|
+| `agent_service.py` overload | Split into prompt builder, memory context, tool loop, persistence adapter | `app/services/agent_service.py` plus new helpers under `app/services/` | `build_prompt` remains orchestration-only and helper boundaries become testable. |
+| WebSocket overload | Split into lifecycle, control events, preview events, collaboration stream | `app/api/websocket.py`, `app/api/websocket_dispatch.py`, `app/api/websocket_lifecycle.py`, `app/api/websocket_message_flow.py` | Each file should own one responsibility and tests should target each lane independently. |
+| Frontend page overload | Move IM orchestration into feature hooks and stores | `frontend/app/page.tsx`, `frontend/lib/*`, `frontend/components/chat/*` | Page file should only compose state and pass callbacks. |
+| Recovery / replay complexity | Centralize recovery state and replay rules | `frontend/lib/messageRecovery.ts`, `frontend/lib/dagStore.ts`, `frontend/lib/sessionStore.ts` | Reload, refresh, and reconnect should preserve messages and DAG state. |
+
+### 3.3 Long-term refactor
+
+| Issue | Long-term direction | File / area |
+|---|---|---|
+| Session state | Move to Redis-backed and event-backed coordination | `app/services/websocket_manager.py`, `app/api/websocket_state.py`, Go session services |
+| Prompt economy | Introduce layered ContextOS | `app/services/context_compaction.py` and memory stack |
+| Replay / audit | Make server-side event log the source of truth | WebSocket events, task state machine, storage layer |
+| Product extensibility | Add DAG editor, template market, SDKs, and token management | `frontend/components/admin/*`, `app/api/tasks.py`, `app/api/agent.py`, docs |
+
+## 4. Business Closure Plan
+
+### 4.1 End-to-end flow
+
+The target closed loop should be:
+
+1. User message enters IM.
+2. Preprocessor classifies intent and compresses route / solution / task hints.
+3. Router decides whether to use direct response, collaborative DAG, or orchestration.
+4. WebSocket sends a compact task preview.
+5. User confirms or modifies the plan.
+6. DAG execution runs with per-node updates and compact result previews.
+7. Synthesizer combines node results into a final answer.
+8. Message, DAG, audit, and memory state are persisted.
+9. Frontend can replay the full state after refresh or reconnect.
+10. Observability and audit logs show the full chain.
+
+### 4.2 Short term
+
+Focus:
+
+- Continue thinning `frontend/app/page.tsx`.
+- Finish message recovery and DAG replay hardening.
+- Keep prompt payloads small by default.
+
+Success criteria:
+
+- Refresh does not lose messages.
+- DAG preview and replay remain stable.
+- Common prompts are shorter and less repetitive.
+
+### 4.3 Mid term
+
+Focus:
 
 - DAG visual editor.
-- Agent template and tool marketplace.
-- SDKs for TypeScript, Python, and Go.
-- Better docs for enterprise deployment and self-hosting.
+- Agent template market.
+- Tool market.
+- TypeScript / Python / Go SDKs.
+- Token and API key management.
+
+Success criteria:
+
+- Users can create, save, reuse, and share workflows.
+- Teams can manage tokens and permissions from the platform.
+- External developers can integrate without reading internal code first.
+
+### 4.4 Long term
+
+Focus:
+
+- CRDT multi-user editing.
+- K8s elasticity with canary and chaos testing.
+- SOC2 / compliance work.
+- AgentNet decentralized communication.
+
+Success criteria:
+
+- Platform can support many tenants and many teams without collapsing into one-process assumptions.
+
+## 5. Execution Phases
+
+### Phase A: Stabilize
+
+Priority:
+
+1. Keep transport and state recovery correct.
+2. Remove duplicated preview and recovery logic.
+3. Keep user-visible flows from breaking.
+
+Deliverables:
+
+- Message recovery helpers in `frontend/lib/messageRecovery.ts`.
+- DAG session state helpers in `frontend/lib/dagStore.ts`.
+- Compact WebSocket URL builder in `frontend/lib/websocketUrl.ts`.
+- Confirmed task preview and solution proposal flows.
+
+### Phase B: Decouple
+
+Priority:
+
+1. Thin `agent_service.py`.
+2. Thin `websocket.py`.
+3. Keep `page.tsx` as a composition shell.
+
+Deliverables:
+
+- Shared context compaction helpers.
+- Short prompt templates.
+- Smaller transport/event handlers.
+
+### Phase C: Token Economy
+
+Priority:
+
+1. Cache route / agent pre-summaries.
+2. Shorten preview payloads.
+3. Reduce repeated context assembly.
+
+Deliverables:
+
+- `app/services/context_compaction.py`.
+- Shorter history and memory context.
+- Shorter synthesis inputs.
+
+### Phase D: Platform Hardening
+
+Priority:
+
+1. Externalize session state.
+2. Make execution restart-safe.
+3. Standardize telemetry.
+
+Deliverables:
+
+- Redis/event-backed coordination.
+- Structured logs and trace IDs.
+- Retry / timeout / cancellation semantics.
+
+### Phase E: Productization
+
+Priority:
+
+1. DAG editor.
+2. Template market.
+3. SDKs and token management.
+
+Deliverables:
+
+- Workflow authoring UI.
+- Reusable templates.
+- Public integration surface.
+
+## 6. Already Landed
+
+These are the concrete foundation pieces now in the repo:
+
+- `app/services/context_compaction.py`
+- `app/services/conversation_history.py`
+- `app/services/orchestrator_preprocessor.py`
+- `app/services/task_decomposer.py`
+- `app/services/result_synthesizer.py`
+- `app/services/tools/agent_tools.py`
+- `app/api/websocket_message_flow.py`
+- `app/api/websocket.py`
+- `frontend/lib/dagStore.ts`
+- `frontend/lib/messageRecovery.ts`
+- `frontend/lib/websocketUrl.ts`
+- `frontend/lib/outgoingMessageDraft.ts`
+
+## 7. Rule of Thumb
+
+Do not expand feature surface until the core loop stays:
+
+- smaller,
+- replayable,
+- observable,
+- and cheap enough to run repeatedly.
+
