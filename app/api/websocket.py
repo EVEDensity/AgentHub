@@ -12,6 +12,8 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from app.db.init_db import now
 from app.db.session import afetch_all, afetch_one
 from app.api import websocket_state as ws_state
+from app.api.websocket_dispatch import dispatch_control_event, dispatch_message_flow
+from app.api.websocket_lifecycle import close_websocket_session, open_websocket_session
 from app.services.agent_service import extract_mentions, get_direct_chat_agent, lookup_agent, save_message
 from app.services.auth_service import websocket_user
 from app.services.auth.session_guard import check_session_access, SessionRole
@@ -767,6 +769,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
 
     # ── Session access control ─────────────────────────────────────
     access = await check_session_access(session_id, user)
+    return await websocket_endpoint_v2(websocket, session_id, user, access)
 
     conn_id = await manager.connect(session_id, websocket, user_id, access.role.value, user_name)
 
@@ -967,6 +970,69 @@ def _log_task_error(session_id: str, task: asyncio.Task) -> None:
     if exc:
         logger.error("ws background task failed session=%s: %s", session_id, exc)
 
+
+
+async def websocket_endpoint_v2(websocket: WebSocket, session_id: str, user: dict, access) -> None:
+    user_id = user["id"]
+    user_name = user["name"]
+
+    conn_id, heartbeat_task = await open_websocket_session(
+        session_id=session_id,
+        websocket=websocket,
+        user_id=user_id,
+        user_name=user_name,
+        role=access.role.value,
+    )
+
+    try:
+        while True:
+            try:
+                data = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+
+            if await dispatch_control_event(
+                session_id=session_id,
+                data=data,
+                websocket=websocket,
+                user_id=user_id,
+                user_name=user_name,
+                conn_id=conn_id,
+                on_agent_question_response=_handle_agent_question_response,
+                on_risk_warning_response=_handle_risk_warning_response,
+                on_agent_todo_response=_handle_agent_todo_response,
+                on_task_preview_response=_handle_task_preview_response,
+                on_solution_selection=_handle_solution_selection,
+                on_diff_decision=_handle_diff_decision,
+            ):
+                continue
+
+            content = str(data.get("content", "")).strip()
+            if await dispatch_message_flow(
+                session_id=session_id,
+                content=content,
+                sender=user_name,
+                user_id=user_id,
+                access_can_write=access.can_write,
+                websocket=websocket,
+                data=data,
+                attachments=data.get("attachments", []),
+                quote_references=data.get("quoteReferences", []),
+                auto_reply=data.get("auto_reply", True),
+                process_and_stream=_process_and_stream,
+                log_task_error=_log_task_error,
+            ):
+                continue
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await close_websocket_session(
+            session_id=session_id,
+            websocket=websocket,
+            user_id=user_id,
+            user_name=user_name,
+            heartbeat_task=heartbeat_task,
+        )
 
 
 def _build_safety_block_message(result) -> str:
