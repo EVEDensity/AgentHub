@@ -26,6 +26,14 @@ import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeReferences } from '../lib/references';
+import { buildChatWebSocketUrl } from '../lib/websocketUrl';
+import {
+  clearDagSession,
+  setDagState,
+  syncDagFromMessages,
+  updateDagState,
+  useDagState,
+} from '../lib/dagStore';
 import {
   useSessionMessages,
   useSessionStreaming,
@@ -39,7 +47,7 @@ import {
   unpinSession,
   type StreamBuffer,
 } from '../lib/sessionStore';
-import type { Agent, AttachedFile, AttachmentMeta, ChatSession, DagState, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
+import type { Agent, AttachedFile, AttachmentMeta, ChatSession, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, StreamChunk, ToolCallEvent, ToolResultEvent, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
 import { ToastProvider, useAddToast } from '../components/ui/Toast';
 
@@ -95,10 +103,10 @@ export default function AgentHubIM(): JSX.Element {
   const [sessionId, setSessionId] = useState<string>('');
   const messages = useSessionMessages(sessionId);
   const isStreaming = useSessionStreaming(sessionId);
+  const dag = useDagState(sessionId);
   const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
-  const [dag, setDag] = useState<DagState>({ total: 0, completed: 0, nodes: [] });
   const [taskOpen, setTaskOpen] = useState<boolean>(false);
   const [previewOpen, setPreviewOpen] = useState<boolean>(false);
   const [previewUrl, setPreviewUrl] = useState<string>('');
@@ -252,11 +260,13 @@ export default function AgentHubIM(): JSX.Element {
     // Prevent duplicate logout cascades
     if (!localStorage.getItem('agenthub_token')) return;
 
+    const sessionIds = Array.from(wsRef.current.keys());
     localStorage.removeItem('agenthub_token');
     localStorage.removeItem('agenthub_user');
     // Close every open WebSocket — the token is dead
-    Array.from(wsRef.current.keys()).forEach((sid) => closeWs(sid));
-    Array.from(wsRef.current.keys()).forEach((sid) => clearSession(sid));
+    sessionIds.forEach((sid) => closeWs(sid));
+    sessionIds.forEach((sid) => clearSession(sid));
+    sessionIds.forEach((sid) => clearDagSession(sid));
     if (reconnectRef.current) {
       clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
@@ -340,6 +350,7 @@ export default function AgentHubIM(): JSX.Element {
           [...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp)),
         );
       }
+      syncDagFromMessages(sid, data);
     } catch { /* ignore */ }
   }
 
@@ -393,6 +404,11 @@ export default function AgentHubIM(): JSX.Element {
       }
     };
   }, [token, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    syncDagFromMessages(sessionId, messages);
+  }, [sessionId, messages]);
 
   // ── Scroll-to-bottom helper refs ──────────────────────────
   const scrollRafRef = useRef<number>(0);
@@ -588,7 +604,7 @@ export default function AgentHubIM(): JSX.Element {
       reconnectRef.current = null;
     }
 
-    const ws = new WebSocket(`ws://127.0.0.1:8000/ws/${sid}?token=${encodeURIComponent(token)}`);
+    const ws = new WebSocket(buildChatWebSocketUrl(sid, token));
     wsRef.current.set(sid, ws);
 
     ws.onopen = () => {
@@ -731,18 +747,24 @@ export default function AgentHubIM(): JSX.Element {
       }
 
       if (evt === 'task_update') {
-        // Per-node incremental update — merge into existing dag state
-        const tu = raw as { nodeId: string; status: string; detail?: { error?: string; retries?: number }; sessionId: string };
+        // Per-node incremental update — merge into session-scoped DAG state
+        const tu = raw as {
+          nodeId: string;
+          status: string;
+          detail?: { error?: string; retries?: number };
+          progress?: { completed?: number; total?: number; failed?: number; running?: number; percent?: number };
+          durationMs?: number;
+          retries?: number;
+          sessionId: string;
+        };
         if (tu.nodeId && tu.status) {
-          setDag(prev => {
-            const nodes = prev.nodes.map(n =>
-              n.id === tu.nodeId ? { ...n, status: tu.status, error: tu.detail?.error } : n
-            );
-            return {
-              ...prev,
-              nodes,
-              completed: nodes.filter(n => n.status === 'SUCCESS' || n.status === 'FAILED').length,
-            };
+          updateDagState(chunkSessionId, {
+            nodeId: tu.nodeId,
+            status: tu.status,
+            detail: tu.detail,
+            progress: tu.progress,
+            durationMs: tu.durationMs,
+            retries: tu.retries,
           });
         }
       }
@@ -1236,15 +1258,16 @@ export default function AgentHubIM(): JSX.Element {
       if (evt === 'task_preview') {
         const payload = raw as unknown as import('../types').TaskPreviewEvent;
         // Initialize DAG state for real-time node status tracking
-        setDag({
+        setDagState(chunkSessionId, {
           total: payload.tasks.length,
           completed: 0,
-          nodes: payload.tasks.map(t => ({
+          nodes: payload.tasks.map((t) => ({
             id: t.id,
             agent: t.agent,
             description: t.description,
             dependencies: t.dependencies,
             status: 'PENDING',
+            estimated_effort: t.estimatedSeconds != null ? `${t.estimatedSeconds}s` : undefined,
           })),
         });
         updateSessionMessages(chunkSessionId, (prev) => [
@@ -1569,12 +1592,14 @@ export default function AgentHubIM(): JSX.Element {
   }, [authMode, authForm]);
 
   const handleLogout = useCallback(() => {
+    const sessionIds = Array.from(wsRef.current.keys());
     localStorage.removeItem('agenthub_token');
     localStorage.removeItem('agenthub_user');
     // 关闭所有 session 的 WebSocket
-    Array.from(wsRef.current.keys()).forEach((sid) => closeWs(sid));
+    sessionIds.forEach((sid) => closeWs(sid));
     // 关闭 store 里所有的 session
-    Array.from(wsRef.current.keys()).forEach((sid) => clearSession(sid));
+    sessionIds.forEach((sid) => clearSession(sid));
+    sessionIds.forEach((sid) => clearDagSession(sid));
     if (reconnectRef.current) {
       clearTimeout(reconnectRef.current);
       reconnectRef.current = null;
@@ -1657,6 +1682,7 @@ export default function AgentHubIM(): JSX.Element {
         streamFlushRafRef.current.delete(id);
       }
       clearSession(id);
+      clearDagSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (sessionId === id) {
         const next = sessions.find((s) => s.id !== id);
