@@ -40,6 +40,13 @@ const UserManagementModule = dynamic(() => import('../../components/admin/UserMa
     </div>
   ),
 });
+const PermissionModule = dynamic(() => import('../../components/admin/PermissionModule'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12">
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" />
+    </div>
+  ),
+});
 const ServiceProviderModule = dynamic(() => import('../../components/admin/ServiceProviderModule'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
@@ -463,6 +470,8 @@ export default function AdminPage(): JSX.Element {
         );
       case '技能':
         return <SkillsModule authHeaders={authHeaders} setNotice={setNotice} />;
+      case '权限':
+        return <PermissionModule authHeaders={authHeaders} setNotice={setNotice} fmtErr={fmtErr} />;
       case '通用':
         return <GeneralSettingsModule authHeaders={authHeaders} />;
       case '审计日志':

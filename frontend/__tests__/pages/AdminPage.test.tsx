@@ -2,9 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import React from 'react';
 
-// ── All mock setup uses vi.hoisted() for vitest's hoist mechanism ──────
-
-const { createMockStore, mockAuthState, mockAdminState, mockAgentState, mockMemoryStoreState, mockUserMgmtState, mockWorkflowState } = vi.hoisted(() => {
+const {
+  createMockStore,
+  mockAuthState,
+  mockAdminState,
+  mockAgentState,
+  mockMemoryStoreState,
+  mockUserMgmtState,
+  mockWorkflowState,
+} = vi.hoisted(() => {
   const createMockStore = (defaultState: Record<string, unknown>) => {
     return vi.fn((selector?: (s: unknown) => unknown) => {
       if (typeof selector === 'function') return selector(defaultState);
@@ -19,110 +25,199 @@ const { createMockStore, mockAuthState, mockAdminState, mockAgentState, mockMemo
     setUser: mockVoid,
     setToken: mockVoid,
     authHeaders: vi.fn(() => ({ Authorization: 'Bearer test' })),
-    fmtErr: vi.fn((d: unknown, f: string) => (typeof d === 'string' ? d : f)),
+    fmtErr: vi.fn((detail: unknown, fallback: string) => (typeof detail === 'string' ? detail : fallback)),
   };
 
   const mockAdminState = {
-    activeMenu: '服务商',
+    activeMenu: '\u670d\u52a1\u5546',
     notice: '',
     setActiveMenu: mockVoid,
     setNotice: mockVoid,
   };
 
+  const emptyAgent = {
+    agentId: '',
+    domain: '',
+    adapterType: 'deepseek',
+    baseModelName: '',
+    rankLevel: 'L1',
+    dutyNote: '',
+    displayName: '',
+    avatarUrl: '',
+    capabilityTags: [],
+    baseUrl: '',
+    apiKey: '',
+    systemPrompt: '',
+    userPrompt: '',
+    assistantPrompt: '',
+    promptVariables: {},
+    publicConfig: {
+      enabled: false,
+      welcomeMessage: '',
+      placeholder: '',
+      themeColor: '#6366f1',
+      logoUrl: '',
+      suggestedQuestions: [],
+    },
+  };
+
   const mockAgentState = {
-    agents: [], agentTests: {}, adapterOptions: [],
-    selectedAdapterInfo: null, editSelectedAdapterInfo: null,
-    defaultChatAgent: 'Orchestrator', isCreatingAgent: false,
-    showLocalAgentModal: false, editingAgentId: null,
-    newAgent: {
-      agentId: '', domain: '', adapterType: 'deepseek', baseModelName: '',
-      rankLevel: 'L1', dutyNote: '', displayName: '', avatarUrl: '',
-      capabilityTags: [], baseUrl: '', apiKey: '',
-      systemPrompt: '', userPrompt: '', assistantPrompt: '',
-      promptVariables: {},
-      publicConfig: { enabled: false, welcomeMessage: '', placeholder: '', themeColor: '#6366f1', logoUrl: '', suggestedQuestions: [] },
-    },
-    editAgent: {
-      agentId: '', domain: '', adapterType: 'deepseek', baseModelName: '',
-      rankLevel: 'L1', dutyNote: '', displayName: '', avatarUrl: '',
-      capabilityTags: [], baseUrl: '', apiKey: '',
-      systemPrompt: '', userPrompt: '', assistantPrompt: '',
-      promptVariables: {},
-      publicConfig: { enabled: false, welcomeMessage: '', placeholder: '', themeColor: '#6366f1', logoUrl: '', suggestedQuestions: [] },
-    },
-    fetchAdapters: mockVoid, refresh: mockVoid, createAgent: mockVoid,
-    testAgent: mockVoid, removeAgent: mockVoid, startEditAgent: mockVoid,
-    cancelEditAgent: mockVoid, saveAgentEdit: mockVoid,
-    handleSetDefaultChatAgent: mockVoid, handleAdapterChange: mockVoid,
-    setNewAgent: mockVoid, setEditAgent: mockVoid,
-    setSelectedAdapterInfo: mockVoid, setEditSelectedAdapterInfo: mockVoid,
-    setIsCreatingAgent: mockVoid, setShowLocalAgentModal: mockVoid,
+    agents: [],
+    agentTests: {},
+    adapterOptions: [],
+    selectedAdapterInfo: null,
+    editSelectedAdapterInfo: null,
+    defaultChatAgent: 'Orchestrator',
+    isCreatingAgent: false,
+    showLocalAgentModal: false,
+    editingAgentId: null,
+    newAgent: emptyAgent,
+    editAgent: emptyAgent,
+    fetchAdapters: mockVoid,
+    refresh: mockVoid,
+    createAgent: mockVoid,
+    testAgent: mockVoid,
+    removeAgent: mockVoid,
+    startEditAgent: mockVoid,
+    cancelEditAgent: mockVoid,
+    saveAgentEdit: mockVoid,
+    handleSetDefaultChatAgent: mockVoid,
+    handleAdapterChange: mockVoid,
+    setNewAgent: mockVoid,
+    setEditAgent: mockVoid,
+    setSelectedAdapterInfo: mockVoid,
+    setEditSelectedAdapterInfo: mockVoid,
+    setIsCreatingAgent: mockVoid,
+    setShowLocalAgentModal: mockVoid,
     setEditingAgentId: mockVoid,
   };
 
   const mockMemoryStoreState = {
-    init: mockVoid, loadMemoryFiles: mockVoid, loadMemoryDetail: mockVoid,
-    saveMemoryDetail: mockVoid, setMemoryKeyword: mockVoid,
-    setActiveMemoryFile: mockVoid, setMemoryBodyDraft: mockVoid,
-    setMemoryDirty: mockVoid, setMemoryPreview: mockVoid,
-    setMemorySubTab: mockVoid, setShowTrash: mockVoid,
-    setShowDeleteConfirm: mockVoid, setPendingDeleteFile: mockVoid,
-    setConsolidationDryRun: mockVoid, setMemorySearchQuery: mockVoid,
-    setMemorySearchResults: mockVoid, handleExportMemory: mockVoid,
-    handleImportMemory: mockVoid, confirmDeleteMemory: mockVoid,
-    handleDeleteMemory: mockVoid, loadTrash: mockVoid,
-    handleRecoverFromTrash: mockVoid, handlePurgeFromTrash: mockVoid,
-    loadSessionSummaries: mockVoid, loadSessionDetail: mockVoid,
-    loadGlobalSummary: mockVoid, refreshGlobalSummary: mockVoid,
-    runConsolidation: mockVoid, runMemorySearch: mockVoid,
+    init: mockVoid,
+    loadMemoryFiles: mockVoid,
+    loadMemoryDetail: mockVoid,
+    saveMemoryDetail: mockVoid,
+    setMemoryKeyword: mockVoid,
+    setActiveMemoryFile: mockVoid,
+    setMemoryBodyDraft: mockVoid,
+    setMemoryDirty: mockVoid,
+    setMemoryPreview: mockVoid,
+    setMemorySubTab: mockVoid,
+    setShowTrash: mockVoid,
+    setShowDeleteConfirm: mockVoid,
+    setPendingDeleteFile: mockVoid,
+    setConsolidationDryRun: mockVoid,
+    setMemorySearchQuery: mockVoid,
+    setMemorySearchResults: mockVoid,
+    handleExportMemory: mockVoid,
+    handleImportMemory: mockVoid,
+    confirmDeleteMemory: mockVoid,
+    handleDeleteMemory: mockVoid,
+    loadTrash: mockVoid,
+    handleRecoverFromTrash: mockVoid,
+    handlePurgeFromTrash: mockVoid,
+    loadSessionSummaries: mockVoid,
+    loadSessionDetail: mockVoid,
+    loadGlobalSummary: mockVoid,
+    refreshGlobalSummary: mockVoid,
+    runConsolidation: mockVoid,
+    runMemorySearch: mockVoid,
     getFilteredMemoryFiles: vi.fn(() => []),
-    loadSessionMemoryList: mockVoid, loadSessionMemoryConversation: mockVoid,
-    consolidateSessionMemory: mockVoid, createMemorySession: mockVoid,
+    loadSessionMemoryList: mockVoid,
+    loadSessionMemoryConversation: mockVoid,
+    consolidateSessionMemory: mockVoid,
+    createMemorySession: mockVoid,
     updateSessionTopic: mockVoid,
-    memoryLoading: false, memoryError: null, memoryKeyword: '',
-    memoryFiles: [], activeMemoryFile: null, memoryDetail: null,
-    memoryBodyDraft: '', memoryDirty: false, memoryPreview: null,
-    memorySubTab: 'files', sessionList: [], sessionsLoading: false,
-    activeSessionId: null, activeSessionSummary: null,
-    globalSummary: null, globalSummaryLoading: false,
-    consolidationLoading: false, consolidationResult: null,
-    consolidationError: null, consolidationDryRun: false,
-    memorySearchQuery: '', memorySearchResults: null,
-    memorySearchLoading: false, showTrash: false, trashItems: [],
-    trashLoading: false, showDeleteConfirm: false, pendingDeleteFile: null,
-    sessionMemoryList: [], sessionMemoryLoading: false,
-    activeSessionMemoryId: null, sessionMemoryConversation: [],
+    memoryLoading: false,
+    memoryError: null,
+    memoryKeyword: '',
+    memoryFiles: [],
+    activeMemoryFile: null,
+    memoryDetail: null,
+    memoryBodyDraft: '',
+    memoryDirty: false,
+    memoryPreview: null,
+    memorySubTab: 'files',
+    sessionList: [],
+    sessionsLoading: false,
+    activeSessionId: null,
+    activeSessionSummary: null,
+    globalSummary: null,
+    globalSummaryLoading: false,
+    consolidationLoading: false,
+    consolidationResult: null,
+    consolidationError: null,
+    consolidationDryRun: false,
+    memorySearchQuery: '',
+    memorySearchResults: null,
+    memorySearchLoading: false,
+    showTrash: false,
+    trashItems: [],
+    trashLoading: false,
+    showDeleteConfirm: false,
+    pendingDeleteFile: null,
+    sessionMemoryList: [],
+    sessionMemoryLoading: false,
+    activeSessionMemoryId: null,
+    sessionMemoryConversation: [],
     sessionMemoryConversationLoading: false,
   };
 
   const mockUserMgmtState = {
-    ...mockMemoryStoreState,
-    tokenData: null, tokenLoading: false, tokenError: null,
-    profileBio: '', profileEditingField: null, profileFieldDraft: '',
-    profileLocation: '', profileEmail: '', profileOrg: '',
-    profileAvatarUrl: '', profileUploading: false,
-    userList: [], userListLoading: false, userListError: null,
-    newUserName: '', newUserPassword: '', newUserRole: 'user',
+    tokenData: null,
+    tokenLoading: false,
+    tokenError: '',
+    profileBio: '',
+    profileEditingField: null,
+    profileFieldDraft: '',
+    profileLocation: '',
+    profileEmail: '',
+    profileOrg: '',
+    profileAvatarUrl: '',
+    profileUploading: false,
+    userList: [],
+    userListLoading: false,
+    userListError: '',
+    newUserName: '',
+    newUserPassword: '',
+    newUserRole: 'developer',
     creatingUser: false,
-    setProfileEditingField: mockVoid, setProfileFieldDraft: mockVoid,
-    setNewUserName: mockVoid, setNewUserPassword: mockVoid,
+    setProfileEditingField: mockVoid,
+    setProfileFieldDraft: mockVoid,
+    setNewUserName: mockVoid,
+    setNewUserPassword: mockVoid,
     setNewUserRole: mockVoid,
-    handleStartEditField: mockVoid, handleSaveField: mockVoid,
-    handleCancelEditField: mockVoid, handleUploadProfileAvatar: mockVoid,
-    handleCreateUser: mockVoid, handleChangeUserRole: mockVoid,
-    handleDeleteUser: mockVoid, loadTokenUsage: mockVoid,
+    handleStartEditField: mockVoid,
+    handleSaveField: mockVoid,
+    handleCancelEditField: mockVoid,
+    handleUploadProfileAvatar: mockVoid,
+    handleCreateUser: mockVoid,
+    handleChangeUserRole: mockVoid,
+    handleDeleteUser: mockVoid,
+    loadTokenUsage: mockVoid,
+    init: mockVoid,
   };
 
   const mockWorkflowState = {
-    loading: false, error: null, workflows: [],
-    loadWorkflows: mockVoid, deleteWorkflow: mockVoid,
-    setDefault: mockVoid, toggleActive: mockVoid,
+    loading: false,
+    error: null,
+    workflows: [],
+    loadWorkflows: mockVoid,
+    deleteWorkflow: mockVoid,
+    setDefault: mockVoid,
+    toggleActive: mockVoid,
   };
 
-  return { createMockStore, mockAuthState, mockAdminState, mockAgentState, mockMemoryStoreState, mockUserMgmtState, mockWorkflowState };
+  return {
+    createMockStore,
+    mockAuthState,
+    mockAdminState,
+    mockAgentState,
+    mockMemoryStoreState,
+    mockUserMgmtState,
+    mockWorkflowState,
+  };
 });
-
-// ── vi.mock calls (hoisted above imports) ──────────────────────────────
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }),
@@ -132,8 +227,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 vi.mock('next/dynamic', () => ({
-  default: (_importFn: () => Promise<unknown>, _opts?: unknown) => {
-    // Always return a simple placeholder — the real modules are too heavy for smoke tests.
+  default: () => {
     const Placeholder = () => React.createElement('div', { 'data-testid': 'dynamic-module' }, 'Module loaded');
     Placeholder.displayName = 'DynamicMock';
     return Placeholder;
@@ -146,7 +240,14 @@ vi.mock('../../stores/authStore', () => ({
 
 vi.mock('../../stores/adminStore', () => ({
   useAdminStore: createMockStore(mockAdminState),
-  SETTINGS_MENU: ['服务商', '记忆', '技能', '通用', '审计日志', '用户管理', 'IM 接入', 'MCP', '工作流', '知识库', '模板市场', '工具市场', '工作空间', '上下文引擎', 'AgentNet', 'Agent 身份', 'Docker 沙箱', '多模态工作区', '集中日志', '模块连线', 'RAG 检索', '检索评估', 'A2A 互操作', 'A/B 测试', '成本分析', 'SLO 仪表板', '离线评估'],
+  SETTINGS_MENU: [
+    '\u670d\u52a1\u5546',
+    '\u5de5\u4f5c\u6d41',
+    '\u6743\u9650',
+    '\u901a\u7528',
+    '\u8bb0\u5fc6',
+    '\u7528\u6237\u7ba1\u7406',
+  ],
 }));
 
 vi.mock('../../stores/agentStore', () => ({
@@ -165,13 +266,14 @@ vi.mock('../../stores/workflowStore', () => ({
   useWorkflowStore: createMockStore(mockWorkflowState),
 }));
 
-// Import page AFTER all mocks
 import AdminPage from '../../app/admin/page';
 
 describe('AdminPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    mockAdminState.activeMenu = '\u670d\u52a1\u5546';
+    mockAdminState.notice = '';
   });
 
   it('renders without crashing', async () => {
@@ -186,5 +288,16 @@ describe('AdminPage', () => {
       render(<AdminPage />);
     });
     expect(screen.queryByText(/warning/i)).toBeNull();
+  });
+
+  it('routes the permissions menu to a real module', async () => {
+    mockAdminState.activeMenu = '\u6743\u9650';
+
+    await act(async () => {
+      render(<AdminPage />);
+    });
+
+    expect(screen.getByTestId('dynamic-module')).toBeInTheDocument();
+    expect(screen.queryByText(/\u7b49\u5f85\u914d\u7f6e\u9879\u63a5\u5165/)).toBeNull();
   });
 });

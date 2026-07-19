@@ -7,6 +7,9 @@ AgentHub is already past the "chat wrapper" stage. The current codebase has a us
 What is now true in the repository:
 
 - `frontend/app/page.tsx` is already thinner than before and now delegates message recovery, WebSocket URL building, and DAG state to helpers.
+- `frontend/hooks/useSessionWebSocket.ts` and `frontend/hooks/useSessionRecovery.ts` now carry the connection lifecycle and reconnect / restore logic out of the page shell.
+- `frontend/__tests__/components/chat/taskPreviewReplay.test.tsx` and `frontend/__tests__/components/chat/dagReplay.test.tsx` cover duplicate preview events, reconnect replay, and session switching.
+- `frontend/components/admin/PermissionModule.tsx` now replaces the stale `权限` placeholder with a real permission-rule surface backed by `/api/admin/permissions/rules`.
 - Prompt/token control has started through `app/services/context_compaction.py`, `app/services/conversation_history.py`, `app/services/orchestrator_preprocessor.py`, `app/services/task_decomposer.py`, and `app/services/result_synthesizer.py`.
 - `app/api/websocket_message_flow.py` and `app/api/websocket.py` now share compact task preview construction.
 - The repo already carries the architecture needed for enterprise expansion, but it still has a few oversized hot modules.
@@ -147,7 +150,14 @@ Success criteria:
 - Teams can manage tokens and permissions from the platform.
 - External developers can integrate without reading internal code first.
 
-### 4.4 Long term
+### 4.4 Near-term execution order
+
+1. Finish permission-rule CRUD and validation in the new admin module.
+2. Keep thinning the last frontend coupling in message recovery and DAG replay.
+3. Add route / agent pre-summary caches and shrink preview payloads one more layer.
+4. Only after those are stable, move to DAG editor, template market, SDKs, and token management.
+
+### 4.5 Long term
 
 Focus:
 
@@ -249,6 +259,11 @@ These are the concrete foundation pieces now in the repo:
 - `frontend/lib/messageRecovery.ts`
 - `frontend/lib/websocketUrl.ts`
 - `frontend/lib/outgoingMessageDraft.ts`
+- `frontend/hooks/useSessionWebSocket.ts`
+- `frontend/hooks/useSessionRecovery.ts`
+- `frontend/components/admin/PermissionModule.tsx`
+- `frontend/__tests__/components/chat/taskPreviewReplay.test.tsx`
+- `frontend/__tests__/components/chat/dagReplay.test.tsx`
 
 ## 7. Rule of Thumb
 
@@ -258,4 +273,3 @@ Do not expand feature surface until the core loop stays:
 - replayable,
 - observable,
 - and cheap enough to run repeatedly.
-
