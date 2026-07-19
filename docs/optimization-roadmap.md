@@ -220,7 +220,9 @@ Cognitive memory migration status:
   Markdown compatibility.
 - Landed: session conversations, summaries, and task execution history are
   classified as Episodic Memory.
-- Next: structured Semantic extraction with provenance and conflict handling.
+- Landed: structured Semantic extraction with provenance, confidence, version,
+  conflict supersession, query retrieval, and prompt projection.
+- Next: classify Skills, DAG, SOP, and tool policies as Procedural Memory.
 
 Priority:
 

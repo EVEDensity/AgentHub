@@ -36,6 +36,14 @@ Session conversations, session summaries, and `task_execution_history` are
 classified as Episodic Memory. Existing Markdown files without the new
 frontmatter fields are read as user-scoped Semantic Memory from a legacy file.
 
+Explicit durable signals in episodic summaries (`preference`, `decision`,
+`constraint`, and confirmed `fact`) are projected into structured Semantic
+Memory records under each user's existing memory directory. Records retain
+source session/event, confidence, status, and version. A conflicting value for
+the same semantic key supersedes the old record instead of overwriting its
+history. Prompt assembly retrieves query-relevant active records plus durable
+preferences; ordinary narrative sentences are not promoted automatically.
+
 The asynchronous write-back path is:
 
 ```text

@@ -1147,6 +1147,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         provider=provider,
         model=model_name,
         max_tokens=budget.section_limit("memory"),
+        query=content,
     )
 
     # Use tool-enabled call loop (handles tool detection, execution, synthesis)
@@ -1291,6 +1292,7 @@ async def stream_agent_response(
                     provider=provider,
                     model=model_name,
                     max_tokens=budget.section_limit("memory"),
+                    query=content,
                 )
                 r, u, s = await _run_tool_call_loop(
                     session_id, content, user_id, agent, agent["domain"], llm_input,
@@ -1453,6 +1455,7 @@ async def _build_memory_context(
     provider: str = "",
     model: str = "",
     max_tokens: int = 3000,
+    query: str = "",
     force: bool = False,
 ) -> str:
     """Build a budgeted, deduplicated L0/L1/L3 memory projection.
@@ -1468,12 +1471,14 @@ async def _build_memory_context(
     from app.services.memory.storage import MemoryStorage
     from app.services.memory.session_memory import SessionMemoryManager
     from app.services.memory.session_store import SessionMemoryStore
+    from app.services.memory.semantic_memory import SemanticMemoryStore
     from app.services.memory_context import MemoryContextSection, build_memory_context
     from app.services.performance_monitor import monitor
 
     uid = user_id or "local-admin"
     history_fp = hashlib.sha256(history.encode("utf-8")).hexdigest()[:12]
-    cache_key = f"{uid}:{session_id}:{provider}:{model}:{max_tokens}:{history_fp}"
+    query_fp = hashlib.sha256(query.encode("utf-8")).hexdigest()[:12]
+    cache_key = f"{uid}:{session_id}:{provider}:{model}:{max_tokens}:{history_fp}:{query_fp}"
     now_ts = time.monotonic()
     cached = _MEMORY_CONTEXT_CACHE.get(cache_key)
     if not force and cached and now_ts - cached[0] < 60.0:
@@ -1483,6 +1488,7 @@ async def _build_memory_context(
     storage = MemoryStorage(user_memory_dir)
     session_mgr = SessionMemoryManager(storage)
     session_store = SessionMemoryStore(user_memory_dir)
+    semantic_store = SemanticMemoryStore(user_memory_dir)
     sections: list[MemoryContextSection] = []
 
     if session_id:
@@ -1498,14 +1504,26 @@ async def _build_memory_context(
                 session_id, max_chars=max(2200, max_tokens * 4), recent_turns=6,
             )
             if conversation:
-                sections.append(MemoryContextSection("recent-durable-memory", conversation, 2))
+                sections.append(MemoryContextSection("recent-durable-memory", conversation, 3))
         except Exception:
             logger.debug("memory context: durable conversation unavailable", exc_info=True)
 
     try:
+        semantic_records = await semantic_store.search(query, limit=6)
+        if semantic_records:
+            semantic_text = "\n".join(
+                f"- [{record.category}] {record.value} "
+                f"(confidence={record.confidence:.2f}, source={record.source})"
+                for record in semantic_records
+            )
+            sections.append(MemoryContextSection("semantic-memory", semantic_text, 2))
+    except Exception:
+        logger.debug("memory context: semantic memory unavailable", exc_info=True)
+
+    try:
         global_summary = await session_mgr.get_global_summary()
         if global_summary:
-            sections.append(MemoryContextSection("global-summary", global_summary, 3))
+            sections.append(MemoryContextSection("global-summary", global_summary, 4))
     except Exception:
         logger.debug("memory context: global summary unavailable", exc_info=True)
 

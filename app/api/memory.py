@@ -20,6 +20,7 @@ from app.services.memory import (
 from app.services.memory.consolidator import MemoryConsolidator
 from app.services.memory.extractor import MemoryExtractor
 from app.services.memory.session_memory import SessionMemoryManager
+from app.services.memory.semantic_memory import SemanticMemoryStore
 from app.services.auth.service import get_current_user
 from app.services.auth.session_guard import check_session_access
 from app.db.session import afetch_all
@@ -99,6 +100,10 @@ def _get_session_mgr(user_id: str = "") -> SessionMemoryManager:
     return _session_mgr_shared
 
 
+def _get_semantic_store(user_id: str) -> SemanticMemoryStore:
+    return SemanticMemoryStore(_get_user_memory_dir(user_id or "local-admin"))
+
+
 # -- Pydantic request/response models -----------------------------------
 
 
@@ -166,6 +171,24 @@ class SessionTransferRequest(BaseModel):
     source_session_id: str = Field(..., min_length=1, max_length=128, description="源会话 ID")
     target_session_id: str = Field(..., min_length=1, max_length=128, description="目标会话 ID")
     mode: str = Field("append", description="append 或 overwrite")
+
+
+@router.get("/semantic")
+async def list_semantic_memories(
+    query: str = Query("", max_length=1000),
+    active_only: bool = Query(True),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """List structured semantic memories extracted from episodic summaries."""
+    store = _get_semantic_store(str(user["id"]))
+    records = (
+        await store.search(query, limit=50)
+        if query else await store.list_records(active_only=active_only)
+    )
+    return {
+        "count": len(records),
+        "records": [record.__dict__ for record in records],
+    }
 
 
 # -- endpoints -----------------------------------------------------------

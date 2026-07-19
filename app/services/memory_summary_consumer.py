@@ -12,6 +12,7 @@ from typing import Any
 
 from app.config import MEMORY_DIR
 from app.services.memory.session_memory import SessionMemoryManager
+from app.services.memory.semantic_memory import SemanticMemoryStore, extract_semantic_candidates
 from app.services.memory.storage import MemoryStorage
 from app.services.performance_monitor import monitor
 from app.services.token_budget import count_tokens
@@ -113,6 +114,13 @@ class MemorySummaryConsumer:
 
         manager = SessionMemoryManager(MemoryStorage(MEMORY_DIR / "users" / user_id))
         await manager.write_session_summary(session_id, summary)
+        semantic_store = SemanticMemoryStore(MEMORY_DIR / "users" / user_id)
+        await semantic_store.upsert_candidates(
+            extract_semantic_candidates(summary),
+            source=str(payload.get("source") or "session-summary"),
+            source_session_id=session_id,
+            source_event_id=event_id,
+        )
         try:
             from app.services.agent_service import _invalidate_memory_cache
 
