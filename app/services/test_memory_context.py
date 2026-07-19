@@ -27,3 +27,19 @@ def test_build_memory_context_prioritizes_session_summary() -> None:
     )
     assert "session-summary" in result
     assert stats["tokens_after"] <= 20
+
+
+def test_build_memory_context_enforces_per_type_budget() -> None:
+    result, stats = build_memory_context(
+        [
+            MemoryContextSection("episode", "E" * 2000, 1, "episodic"),
+            MemoryContextSection("procedure", "P" * 2000, 2, "procedural"),
+        ],
+        max_tokens=300,
+        provider="unknown",
+        model="unknown",
+        section_budgets={"episodic": 100, "procedural": 200},
+    )
+    assert "episode" in result
+    assert "procedure" in result
+    assert stats["tokens_after"] <= 300

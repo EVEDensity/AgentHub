@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.services.token_budget import TokenBudget, count_tokens, fit_prompt, truncate_to_tokens
+from app.services.token_budget import (
+    TokenBudget,
+    cognitive_memory_budgets,
+    count_tokens,
+    fit_prompt,
+    truncate_to_tokens,
+)
 
 
 def test_count_tokens_handles_cjk_and_latin() -> None:
@@ -25,3 +31,13 @@ def test_fit_prompt_applies_model_budget_to_all_prompt_types(monkeypatch) -> Non
     assert stats["truncated"] is True
     assert count_tokens(result, "unknown", "custom-model") <= budget.prompt_limit
     assert result.startswith("system rules")
+
+
+def test_cognitive_budgets_follow_task_intent() -> None:
+    coding = cognitive_memory_budgets(4000, "实现 DAG 部署工具")
+    research = cognitive_memory_budgets(4000, "调研并比较知识库方案")
+    chat = cognitive_memory_budgets(4000, "继续刚才的话题")
+    assert sum(coding.values()) == 4000
+    assert coding["procedural"] > chat["procedural"]
+    assert research["semantic"] > coding["semantic"]
+    assert chat["working"] > research["working"]

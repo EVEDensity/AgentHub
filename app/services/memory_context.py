@@ -11,6 +11,7 @@ class MemoryContextSection:
     name: str
     text: str
     priority: int
+    memory_type: str = "episodic"
 
 
 def _normalized(text: str) -> str:
@@ -55,12 +56,14 @@ def build_memory_context(
     max_tokens: int = 3_000,
     provider: str = "",
     model: str = "",
+    section_budgets: dict[str, int] | None = None,
 ) -> tuple[str, dict[str, int | bool]]:
     ordered = sorted(sections, key=lambda section: section.priority)
     references = [text for text in (exclude_texts or []) if text]
     before = sum(count_tokens(section.text, provider, model) for section in ordered)
     output: list[str] = []
     truncated = False
+    used_by_type: dict[str, int] = {}
 
     for section in ordered:
         unique = deduplicate_text(section.text, references)
@@ -68,14 +71,20 @@ def build_memory_context(
             continue
         rendered = f"[{section.name}]\n{unique}"
         remaining = max_tokens - count_tokens("\n\n".join(output), provider, model)
+        if section_budgets is not None:
+            type_remaining = section_budgets.get(section.memory_type, 0) - used_by_type.get(section.memory_type, 0)
+            remaining = min(remaining, type_remaining)
         if remaining <= 8:
             truncated = True
-            break
+            continue
         rendered, was_truncated = truncate_to_tokens(
             rendered, remaining, provider, model, preserve_tail=0.65,
         )
         truncated = truncated or was_truncated
         output.append(rendered)
+        used_by_type[section.memory_type] = used_by_type.get(section.memory_type, 0) + count_tokens(
+            rendered, provider, model,
+        )
         references.append(unique)
 
     result = "\n\n".join(output)

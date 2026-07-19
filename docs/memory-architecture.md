@@ -51,6 +51,12 @@ execution owners. The catalog adds a stable record ID, source/version,
 content hash, scope, kind, and risk level without copying procedure bodies.
 `GET /api/memory/procedural` provides the combined catalog and query view.
 
+The prompt budget uses one model-aware cognitive context pool. Allocation is
+intent-sensitive: conversational continuity favors Working/Episodic, research
+favors Semantic, implementation/deployment/workflow tasks favor Procedural,
+and planning balances Episodic with Procedural. Each class has an enforced
+sub-budget in addition to the final model context-window guard.
+
 The asynchronous write-back path is:
 
 ```text

@@ -224,7 +224,10 @@ Cognitive memory migration status:
   conflict supersession, query retrieval, and prompt projection.
 - Landed: Skills, DAG templates/routes, SOP files, tool definitions, and tool
   permission rules are exposed through a versioned Procedural Memory catalog.
-- Next: dynamic four-memory token allocation by task intent.
+- Landed: task-intent-aware Working/Episodic/Semantic/Procedural token
+  allocation with per-class limits and a model-window final guard.
+- Next: native Chinese-provider tokenizers, sequence-safe summaries, NATS
+  integration tests, and Redis-distributed cache versions.
 
 Priority:
 

@@ -101,6 +101,29 @@ class TokenBudget:
         return max(256, int(self.prompt_limit * shares.get(section, 0.10)))
 
 
+def cognitive_memory_budgets(
+    total_tokens: int,
+    query: str,
+    domain: str = "",
+) -> dict[str, int]:
+    """Allocate one context pool across the four cognitive memory classes."""
+    text = f"{domain} {query}".lower()
+    if any(term in text for term in ("research", "分析", "调研", "知识", "比较", "search")):
+        shares = {"working": 0.25, "episodic": 0.15, "semantic": 0.50, "procedural": 0.10}
+    elif any(term in text for term in ("code", "实现", "修复", "部署", "workflow", "dag", "工具", "sop")):
+        shares = {"working": 0.30, "episodic": 0.20, "semantic": 0.15, "procedural": 0.35}
+    elif any(term in text for term in ("plan", "规划", "方案", "架构", "复盘")):
+        shares = {"working": 0.25, "episodic": 0.30, "semantic": 0.20, "procedural": 0.25}
+    else:
+        shares = {"working": 0.40, "episodic": 0.30, "semantic": 0.20, "procedural": 0.10}
+
+    total = max(1024, total_tokens)
+    budgets = {name: max(128, int(total * share)) for name, share in shares.items()}
+    difference = total - sum(budgets.values())
+    budgets["working"] += difference
+    return budgets
+
+
 def truncate_to_tokens(
     text: str,
     max_tokens: int,
