@@ -141,12 +141,29 @@ _PG_DDL = [
         description TEXT NOT NULL DEFAULT '',
         trigger_keywords TEXT NOT NULL DEFAULT '[]',
         nodes_json TEXT NOT NULL,
+        edges_json TEXT NOT NULL DEFAULT '[]',
         is_default INTEGER NOT NULL DEFAULT 0,
         active INTEGER NOT NULL DEFAULT 1,
+        version INTEGER NOT NULL DEFAULT 1,
+        schema_version INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
     """CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_routes_name_user ON agent_routes(name, user_id)""",
+    """CREATE TABLE IF NOT EXISTS workflow_drafts (
+        id SERIAL PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        workflow_id INTEGER,
+        draft_key TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        payload_json TEXT NOT NULL,
+        base_version INTEGER NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(user_id, draft_key)
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_workflow_drafts_user_updated ON workflow_drafts(user_id, updated_at DESC)""",
     """CREATE TABLE IF NOT EXISTS audit_log (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -377,7 +394,7 @@ async def _apply_alembic_migrations(conn) -> None:
     current = row["version_num"] if row else None
 
     # Current head revision (must match migrations/versions/)
-    head = "ff209a40779d"
+    head = "c1a7d4e82b6f"
 
     if current == head:
         logger.info("init_db: Alembic already at head (%s)", head)
@@ -561,6 +578,39 @@ async def _migrate_agent_routes_pg(conn) -> None:
         )
     except Exception as exc:
         logger.warning("agent_routes user_id migration skipped: %s", exc)
+
+    for migration in (
+        "ALTER TABLE agent_routes ADD COLUMN IF NOT EXISTS edges_json TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE agent_routes ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE agent_routes ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1",
+    ):
+        try:
+            await conn.execute(migration)
+        except Exception as exc:
+            logger.warning("agent_routes editor migration skipped: %s", exc)
+
+    try:
+        await conn.execute(
+            """CREATE TABLE IF NOT EXISTS workflow_drafts (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                workflow_id INTEGER,
+                draft_key TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL,
+                base_version INTEGER NOT NULL DEFAULT 0,
+                version INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, draft_key)
+            )"""
+        )
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workflow_drafts_user_updated "
+            "ON workflow_drafts(user_id, updated_at DESC)"
+        )
+    except Exception as exc:
+        logger.warning("workflow_drafts migration skipped: %s", exc)
 
     # 2. Drop old unique constraint on name (single-column)
     try:

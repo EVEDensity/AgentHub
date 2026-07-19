@@ -27,6 +27,8 @@ interface EmbedData {
   edges: { from:string; to:string; label?:string }[];
   isDefault: boolean;
   active: boolean;
+  version?: number;
+  schemaVersion?: number;
 }
 
 const CID='agent-flow',W=268,H=148,G=28;
@@ -110,6 +112,8 @@ export default function AgentCanvas(props?:{
 }):JSX.Element{
  const embedded=props?.embedded||false;
  const edRef=useRef(props?.initialData);
+ const workflowVersion=useRef(props?.initialData?.version||0);
+ const workflowSchemaVersion=useRef(props?.initialData?.schemaVersion||1);
  const[doc,setDoc]=useState<D>(()=>embedded&&edRef.current?embedToDoc(edRef.current):init);
  const[sel,setSel]=useState(embedded&&edRef.current?.nodes[0]?edRef.current.nodes[0].id:'orchestrator');
  const[from,setFrom]=useState(''),[msg,setMsg]=useState(''),[sz,setSz]=useState({width:900,height:720});
@@ -146,8 +150,12 @@ export default function AgentCanvas(props?:{
   }
   // Standalone mode — save through workflow API
   const d=docToEmbed(doc,props?.workflowId,wfName,wfDesc,wfKeys,false,true);
-  // Strip fields not expected by AgentRouteRequest schema
-  const payload={name:d.name,description:d.description,triggerKeywords:d.triggerKeywords,nodes:d.nodes,isDefault:d.isDefault};
+  // Keep the editor and backend contracts versioned together.
+  const payload={
+   name:d.name,description:d.description,triggerKeywords:d.triggerKeywords,
+   nodes:d.nodes,edges:d.edges,isDefault:d.isDefault,active:d.active,
+   version:workflowVersion.current,schemaVersion:workflowSchemaVersion.current,
+  };
   const token=typeof window!=='undefined'?localStorage.getItem('agenthub_token')||'':'';
   const headers:Record<string,string>={'Content-Type':'application/json'};
   if(token)headers.Authorization='Bearer '+token;
@@ -156,6 +164,10 @@ export default function AgentCanvas(props?:{
   const res=await fetch(url,{method,headers,body:JSON.stringify(payload)});
   if(!res.ok){const err=await res.json().catch(()=>({}));setMsg((err as any).detail||'保存失败');return}
   const result=await res.json();
+  if((result as any)?.route){
+   workflowVersion.current=(result as any).route.version||workflowVersion.current;
+   workflowSchemaVersion.current=(result as any).route.schemaVersion||workflowSchemaVersion.current;
+  }
   if(!props?.workflowId&&(result as any)?.route?.id){
    const newId=(result as any).route.id;
    if(typeof window!=='undefined')window.history.replaceState(null,'','/canvas?id='+newId);
@@ -174,15 +186,14 @@ export default function AgentCanvas(props?:{
 
   // If a workflowId is provided, load from workflow API
   if(props?.workflowId){
-   fetch('/api/admin/workflows',{headers}).then(r=>r.json()).then((list:any[])=>{
-    const found=list.find((w:any)=>w.id===props.workflowId);
+   fetch('/api/admin/workflows/'+props.workflowId,{headers}).then(r=>r.ok?r.json():null).then((found:any)=>{
     if(found){
      const ed:EmbedData={
       id:found.id,name:found.name,description:found.description,triggerKeywords:found.triggerKeywords||[],
-      // Reconstruct edges from node dependencies (backend stores deps, not edges)
-      nodes:found.nodes||[],edges:(()=>{const ee:{from:string;to:string;label?:string}[]=[];(found.nodes||[]).forEach((n:any)=>{(n.dependencies||[]).forEach((dep:string)=>{ee.push({from:dep,to:n.id,label:''})})});return ee.length?ee:(found.edges||[])})()||[],
-      isDefault:found.isDefault,active:found.active
+      nodes:found.nodes||[],edges:(found.edges?.length?found.edges:(()=>{const ee:{from:string;to:string;label?:string}[]=[];(found.nodes||[]).forEach((n:any)=>{(n.dependencies||[]).forEach((dep:string)=>{ee.push({from:dep,to:n.id,label:''})})});return ee})())||[],
+      isDefault:found.isDefault,active:found.active,version:found.version,schemaVersion:found.schemaVersion
      };
+     workflowVersion.current=found.version||0;workflowSchemaVersion.current=found.schemaVersion||1;
      const d=embedToDoc(ed);setDoc(d);setHist([cp(d)]);hiRef.current=0;setHi(0);
      setWfName(ed.name);setWfDesc(ed.description);setWfKeys(ed.triggerKeywords.join(','));
     }else{setMsg('工作流未找到，已使用默认模板')}

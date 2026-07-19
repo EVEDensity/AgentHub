@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.schemas.workflow import AgentRouteRequest
+
 
 class LoginRequest(BaseModel):
     name: str
@@ -72,14 +74,6 @@ class AuditConfirmRequest(BaseModel):
     riskLevel: str = "L2"
     decision: str = "approve"
     payload: dict = Field(default_factory=dict)
-
-
-class AgentRouteRequest(BaseModel):
-    name: str
-    description: str = ""
-    triggerKeywords: list[str] = Field(default_factory=list)
-    nodes: list[dict]
-    isDefault: bool = False
 
 
 class AgentRouteActiveRequest(BaseModel):

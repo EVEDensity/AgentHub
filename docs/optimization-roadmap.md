@@ -265,6 +265,11 @@ Deliverables:
 
 ### Phase E: Productization
 
+Current status: DAG editor persistence foundation complete. The backend now
+has a versioned node/edge contract, validation-only API, workflow optimistic
+locking, and user-isolated recoverable drafts. ReactFlow authoring remains the
+next UI stage.
+
 Priority:
 
 1. DAG editor.
@@ -274,8 +279,20 @@ Priority:
 Deliverables:
 
 - Workflow authoring UI.
+- Versioned workflow schema and explicit edge persistence.
+- Structured DAG validation and `409` conflict responses.
+- Per-user draft save, recovery, listing, and deletion APIs.
 - Reusable templates.
 - Public integration surface.
+
+Next small stage:
+
+1. Replace the current canvas persistence glue with a ReactFlow adapter over
+   the versioned node/edge contract.
+2. Add debounced draft autosave, refresh recovery, and explicit draft discard.
+3. Surface structured validation issues on nodes and edges before publish.
+4. Handle `409` conflicts with reload, compare, and overwrite choices.
+5. Add UI tests for draft recovery, stale-version conflicts, and edge fidelity.
 
 ## 6. Already Landed
 

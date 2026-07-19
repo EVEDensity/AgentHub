@@ -14,18 +14,17 @@ Endpoints:
 
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.db.init_db import now
 from app.db.session import aexecute
-from app.schemas.common import AgentRouteActiveRequest, AgentRouteRequest
-from app.schemas.dag import DAGConfig
+from app.schemas.common import AgentRouteActiveRequest
+from app.schemas.workflow import AgentRouteRequest, WorkflowDraftRequest, WorkflowValidationRequest
 from app.services.agent_route_service import agent_route_service
 from app.services.auth_service import get_current_user, require_admin, write_audit
 from app.services.context_summary_cache import context_summary_cache
-from app.services.template_engine import template_engine
+from app.services.workflow_contract import validate_workflow_contract
+from app.services.workflow_draft_service import workflow_draft_service
+from app.services.workflow_errors import WorkflowVersionConflict
 
 router = APIRouter(prefix="/workflows", tags=["admin-workflows"])
 
@@ -45,6 +44,59 @@ async def list_workflows(user: dict = Depends(get_current_user)) -> list[dict]:
     return await agent_route_service.list_routes(_uid(user))
 
 
+@router.post("/validate")
+async def validate_workflow(data: WorkflowValidationRequest, user: dict = Depends(get_current_user)) -> dict:
+    """Validate and normalize an editor graph without persisting it."""
+    require_admin(user)
+    result = validate_workflow_contract(data.nodes, data.edges, schema_version=data.schemaVersion)
+    return result.model_dump(mode="json")
+
+
+@router.get("/drafts")
+async def list_workflow_drafts(user: dict = Depends(get_current_user)) -> list[dict]:
+    require_admin(user)
+    return await workflow_draft_service.list_drafts(_uid(user))
+
+
+@router.get("/drafts/{draft_key}")
+async def get_workflow_draft(draft_key: str, user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    draft = await workflow_draft_service.get_draft(_uid(user), draft_key)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Workflow draft not found")
+    return draft
+
+
+@router.put("/drafts/{draft_key}")
+async def save_workflow_draft(
+    draft_key: str, data: WorkflowDraftRequest, user: dict = Depends(get_current_user),
+) -> dict:
+    require_admin(user)
+    try:
+        return await workflow_draft_service.save_draft(_uid(user), draft_key, data)
+    except WorkflowVersionConflict as exc:
+        raise _version_conflict(exc, "workflow_draft_version_conflict") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/drafts/{draft_key}")
+async def delete_workflow_draft(draft_key: str, user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    if not await workflow_draft_service.delete_draft(_uid(user), draft_key):
+        raise HTTPException(status_code=404, detail="Workflow draft not found")
+    return {"status": "success", "draftKey": draft_key}
+
+
+@router.get("/{route_id}")
+async def get_workflow(route_id: int, user: dict = Depends(get_current_user)) -> dict:
+    require_admin(user)
+    route = await agent_route_service.get_route(route_id, _uid(user))
+    if not route:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    return route
+
+
 # ── CREATE ────────────────────────────────────────────────────────────────
 
 
@@ -55,7 +107,15 @@ async def create_workflow(data: AgentRouteRequest, user: dict = Depends(get_curr
     uid = _uid(user)
     try:
         route = await agent_route_service.create_route(
-            uid, data.name, data.description, data.triggerKeywords, data.nodes, data.isDefault,
+            uid,
+            data.name,
+            data.description,
+            data.triggerKeywords,
+            data.nodes,
+            edges=data.edges,
+            is_default=data.isDefault,
+            active=data.active,
+            schema_version=data.schemaVersion,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -76,35 +136,45 @@ async def update_workflow(route_id: int, data: AgentRouteRequest, user: dict = D
     require_admin(user)
     uid = _uid(user)
 
-    existing = await agent_route_service.get_route(route_id, uid)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Workflow not found")
-
-    dag = DAGConfig(total=len(data.nodes), completed=0, nodes=data.nodes)
-    template_engine.validate(dag)
-
-    if data.isDefault:
-        await aexecute("UPDATE agent_routes SET is_default = 0 WHERE user_id = $1", uid)
-    await aexecute(
-        "UPDATE agent_routes SET name = $1, description = $2, trigger_keywords = $3, "
-        "nodes_json = $4, is_default = $5, updated_at = $6 WHERE id = $7 AND user_id = $8",
-        data.name,
-        data.description,
-        json.dumps(data.triggerKeywords, ensure_ascii=False),
-        json.dumps(data.nodes, ensure_ascii=False),
-        1 if data.isDefault else 0,
-        now(),
-        route_id,
-        uid,
-    )
-
-    route = await agent_route_service.get_route(route_id, uid)
-    context_summary_cache.invalidate("route", uid)
+    if data.version < 1:
+        raise HTTPException(status_code=428, detail="Workflow version is required for updates")
+    try:
+        route = await agent_route_service.update_route(
+            route_id,
+            uid,
+            name=data.name,
+            description=data.description,
+            trigger_keywords=data.triggerKeywords,
+            nodes=data.nodes,
+            edges=data.edges,
+            is_default=data.isDefault,
+            active=data.active,
+            schema_version=data.schemaVersion,
+            expected_version=data.version,
+        )
+    except WorkflowVersionConflict as exc:
+        raise _version_conflict(exc, "workflow_version_conflict") from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     audit_id = write_audit(
         user["id"], "admin", "workflow_update", "L2", "approve",
         {"routeId": route_id, "name": data.name},
     )
     return {"status": "success", "route": route, "auditId": audit_id}
+
+
+def _version_conflict(exc: WorkflowVersionConflict, code: str) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": code,
+            "message": str(exc),
+            "expectedVersion": exc.expected_version,
+            "currentVersion": exc.current_version,
+        },
+    )
 
 
 # ── DELETE ────────────────────────────────────────────────────────────────

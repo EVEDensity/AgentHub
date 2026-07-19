@@ -36,6 +36,8 @@ export interface WorkflowData {
   edges: FlowEdge[];
   isDefault: boolean;
   active: boolean;
+  version?: number;
+  schemaVersion?: number;
 }
 
 export interface WorkflowListItem {
@@ -47,6 +49,8 @@ export interface WorkflowListItem {
   edges: FlowEdge[];
   isDefault: boolean;
   active: boolean;
+  version: number;
+  schemaVersion: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -123,6 +127,8 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
         ),
         isDefault: found.isDefault,
         active: found.active,
+        version: found.version,
+        schemaVersion: found.schemaVersion,
       };
     } catch {
       return null;
@@ -152,7 +158,10 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           description: data.description,
           triggerKeywords: data.triggerKeywords,
           nodes,
+          edges: data.edges,
           isDefault: data.isDefault,
+          active: data.active,
+          schemaVersion: data.schemaVersion || 1,
         }),
       });
 
@@ -193,7 +202,11 @@ export const useWorkflowStore = create<WorkflowState>()((set, get) => ({
           description: data.description,
           triggerKeywords: data.triggerKeywords,
           nodes,
+          edges: data.edges,
           isDefault: data.isDefault,
+          active: data.active,
+          version: data.version || 0,
+          schemaVersion: data.schemaVersion || 1,
         }),
       });
 
