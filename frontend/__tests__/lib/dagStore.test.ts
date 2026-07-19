@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDagStateFromTaskPreview,
+  clearDagSession,
   deriveDagStateFromMessages,
+  getDagState,
   mergeDagTaskUpdate,
+  syncDagFromMessages,
 } from '../../lib/dagStore';
 import type { Message, TaskPreviewEvent } from '../../types';
 
@@ -93,5 +96,52 @@ describe('dagStore helpers', () => {
 
     expect(dag.total).toBe(1);
     expect(dag.nodes[0].id).toBe('node-3');
+  });
+
+  it('forces dag refresh from reloaded messages', () => {
+    clearDagSession('session-force-refresh');
+    const initial: Message[] = [
+      {
+        event: 'message',
+        sessionId: 'session-force-refresh',
+        sender: 'system',
+        content: 'task preview',
+        type: 'task_preview',
+        timestamp: '2026-07-19T00:00:00.000Z',
+        taskPreviewData: {
+          event: 'task_preview',
+          sessionId: 'session-force-refresh',
+          messageId: 'msg-1',
+          timestamp: '2026-07-19T00:00:00.000Z',
+          tasks: [{ id: 'node-old', description: 'Old', agent: 'A', dependencies: [] }],
+        },
+      },
+    ];
+    const refreshed: Message[] = [
+      {
+        event: 'message',
+        sessionId: 'session-force-refresh',
+        sender: 'system',
+        content: 'task preview',
+        type: 'task_preview',
+        timestamp: '2026-07-19T00:00:01.000Z',
+        taskPreviewData: {
+          event: 'task_preview',
+          sessionId: 'session-force-refresh',
+          messageId: 'msg-2',
+          timestamp: '2026-07-19T00:00:01.000Z',
+          tasks: [{ id: 'node-new', description: 'New', agent: 'B', dependencies: [] }],
+        },
+      },
+    ];
+
+    syncDagFromMessages('session-force-refresh', initial);
+    expect(getDagState('session-force-refresh').nodes[0].id).toBe('node-old');
+
+    syncDagFromMessages('session-force-refresh', refreshed);
+    expect(getDagState('session-force-refresh').nodes[0].id).toBe('node-old');
+
+    syncDagFromMessages('session-force-refresh', refreshed, true);
+    expect(getDagState('session-force-refresh').nodes[0].id).toBe('node-new');
   });
 });

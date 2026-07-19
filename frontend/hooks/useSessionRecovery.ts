@@ -46,7 +46,7 @@ export function useSessionRecovery({
       } else {
         replaceSessionMessages(sessionId, ordered);
       }
-      syncDagFromMessages(sessionId, ordered);
+      syncDagFromMessages(sessionId, ordered, true);
     } catch {
       /* ignore */
     }

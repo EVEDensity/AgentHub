@@ -24,9 +24,8 @@ import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useSessionRecovery } from '../hooks/useSessionRecovery';
+import { useSessionWebSocket } from '../hooks/useSessionWebSocket';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
-import { registerReplayMessageId } from '../lib/messageRecovery';
-import { buildChatWebSocketUrl } from '../lib/websocketUrl';
 import { clearDagSession, useDagState } from '../lib/dagStore';
 import { handleSharedWebSocketEvent } from '../lib/websocketSharedEvents';
 import { flushAllPendingStreamBuffer, handleStreamWebSocketEvent } from '../lib/websocketStreamEvents';
@@ -38,8 +37,6 @@ import {
   getSessionBuffer,
   replaceSessionMessages,
   clearSession,
-  pinSession,
-  unpinSession,
 } from '../lib/sessionStore';
 import type { Agent, AttachedFile, ChatSession, FileReference, GeneratedData, Message, PendingMessage, QuoteReference, SkillMeta, User, WorkflowSummary, WorkspacePreviewTab } from '../types';
 import type { FilePreviewTarget } from '../components/chat/FilePreviewModal';
@@ -98,12 +95,6 @@ export default function AgentHubIM(): JSX.Element {
   const messages = useSessionMessages(sessionId);
   const isStreaming = useSessionStreaming(sessionId);
   const dag = useDagState(sessionId);
-  const { reloadMessages } = useSessionRecovery({
-    sessionId,
-    token,
-    messages,
-    onTokenExpired: handleTokenExpired,
-  });
   const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
   const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
@@ -112,7 +103,6 @@ export default function AgentHubIM(): JSX.Element {
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [connected, setConnected] = useState<boolean>(false);
   const [notice, setNotice] = useState<string>('');
-  const [pending, setPending] = useState<PendingMessage[]>([]);
   const [generated, setGenerated] = useState<GeneratedData | null>(null);
   const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
   const [mentionSearch, setMentionSearch] = useState<string>('');
@@ -190,26 +180,14 @@ export default function AgentHubIM(): JSX.Element {
   // 整个外层 flex 容器的引用（用于响应式断点计算）
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // ── per-session WebSocket 连接 ─────────────────────────────────────
-  // 切 session 时不关闭旧 session 的 WebSocket，让后台 session 的流照常累积。
-  // closeWs(sid) 只在删除会话 / 登出 / 组件卸载时调用。
+  // ── per-session stream lifecycle ──────────────────────────────────
+  // streamFlushRafRef 改为 per-session Map，让每个 session 独立 RAF 调度 flush。
   const wsRef = useRef<Map<string, WebSocket>>(new Map());
-  const wsReadyRef = useRef<Map<string, boolean>>(new Map());
-  // ★ streamBufferRef 不再使用——buffer 走 SessionStore。
-  // ★ streamFlushRafRef 改为 per-session Map，让每个 session 独立 RAF 调度 flush。
   const streamFlushRafRef = useRef<Map<string, number>>(new Map());
-  // ★ progressiveFlushTimersRef: per-session setTimeout IDs for progressive
-  //    chunk release (one chunk every ~8ms for a natural typing effect).
+  // per-session setTimeout IDs for progressive chunk release.
   const progressiveFlushTimersRef = useRef<Map<string, number>>(new Map());
-  // ★ streamInterruptedAtRef 记录每个 session 上次 stream_interrupted 的时间戳。
-  //   用于在 800ms 窗口内阻断迟到的 agent_thinking 事件重新激活流式状态
-  //   (避免标题栏"AI streaming..."状态卡死)。
+  // Track the last stream_interrupted timestamp per session.
   const streamInterruptedAtRef = useRef<Map<string, number>>(new Map());
-  const retryRef = useRef<PendingMessage[]>([]);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectAttemptsRef = useRef(0);
-  const lastMessageIdRef = useRef<string>('');
-  const dedupIdsRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
@@ -234,6 +212,80 @@ export default function AgentHubIM(): JSX.Element {
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  function handleSocketSessionClosed(sid: string): void {
+    const raf = streamFlushRafRef.current.get(sid);
+    if (raf != null) {
+      window.cancelAnimationFrame(raf);
+      streamFlushRafRef.current.delete(sid);
+    }
+    const timer = progressiveFlushTimersRef.current.get(sid);
+    if (timer != null) {
+      window.clearTimeout(timer);
+      progressiveFlushTimersRef.current.delete(sid);
+    }
+    flushAllPendingStreamBuffer(sid, {
+      streamFlushRafRef,
+      progressiveFlushTimersRef,
+    });
+    streamInterruptedAtRef.current.delete(sid);
+    if (currentSessionRef.current === sid) {
+      setStreamPhase('idle');
+      setActiveTools([]);
+      setCurrentAgentName('');
+    }
+  }
+
+  function handleSocketMessage(raw: Record<string, unknown>, evt: string | undefined, chunkSessionId: string, ws: WebSocket): void {
+    void ws;
+    if (handleSharedWebSocketEvent(raw, evt, chunkSessionId, {
+      wsRef,
+      setWorkspaceVersion,
+      setPreviewTabs,
+      setNotice,
+      setPmState,
+      setDegradationStatus,
+      setSessions,
+      setIsAutoNaming,
+      setExecPermission,
+      sortSessions,
+    })) {
+      return;
+    }
+
+    if (handleStreamWebSocketEvent(raw, evt, chunkSessionId, {
+      streamFlushRafRef,
+      progressiveFlushTimersRef,
+      streamInterruptedAtRef,
+      setStreamPhase,
+      setActiveTools,
+      setCurrentAgentName,
+      setSessions,
+      sortSessions,
+      addToast,
+      setGenerated,
+      handleOpenFilePreview,
+      handleOpenDiffPreview,
+    })) {
+      return;
+    }
+  }
+
+  const {
+    connectSession,
+    closeSession,
+    disconnectAll,
+    sendOrQueue,
+  } = useSessionWebSocket({
+    wsRef,
+    currentSessionRef,
+    tokenRef,
+    setConnected,
+    setNotice,
+    addToast,
+    onSessionClosed: handleSocketSessionClosed,
+    onMessage: handleSocketMessage,
+  });
 
   // ── Effects ──────────────────────────────────────────────
 
@@ -263,22 +315,20 @@ export default function AgentHubIM(): JSX.Element {
     const sessionIds = Array.from(wsRef.current.keys());
     localStorage.removeItem('agenthub_token');
     localStorage.removeItem('agenthub_user');
-    // Close every open WebSocket — the token is dead
-    sessionIds.forEach((sid) => closeWs(sid));
+    disconnectAll();
     sessionIds.forEach((sid) => clearSession(sid));
     sessionIds.forEach((sid) => clearDagSession(sid));
-    if (reconnectRef.current) {
-      clearTimeout(reconnectRef.current);
-      reconnectRef.current = null;
-    }
-    streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
-    streamFlushRafRef.current.clear();
-    progressiveFlushTimersRef.current.forEach((tid) => window.clearTimeout(tid));
-    progressiveFlushTimersRef.current.clear();
     setToken('');
     setUser(null);
     setNotice('登录已过期，请重新登录');
   }
+
+  const { reloadMessages } = useSessionRecovery({
+    sessionId,
+    token,
+    messages,
+    onTokenExpired: handleTokenExpired,
+  });
 
   useEffect(() => {
     if (!token) return;
@@ -342,34 +392,13 @@ export default function AgentHubIM(): JSX.Element {
 
   useEffect(() => {
     if (!token || !sessionId) return;
-    // Reset session-scoped refs to prevent stale data leaking across sessions
-    lastMessageIdRef.current = '';
-    dedupIdsRef.current = new Set();
-    retryRef.current = [];
-    setPending([]);
-    // ★ 关键修复：不要清 stream buffer，也不要重置 isStreaming。
-    // 旧 session 正在流式接收的 chunks 应当继续累积到 SessionStore 里对应 session 的
-    // buffer 中，等用户切回时能立即看到流式结果。buffer 走 store，不走 ref。
     setFileReferences([]);
-    // Don't reset previewTabs on session switch — user may want to
-    // keep viewing previously generated files across sessions.
-    // ★ 关键修复：reloadMessages 改成写到 SessionStore 的 per-session Map。
-    // 如果新 session 在 Store 里已经有缓存（用户切走又切回），命中缓存就不发 API。
     const cached = getSessionBuffer(sessionId);
     if (!cached) {
       void reloadMessages(false);
     }
-    // 无论是否命中缓存，都要 connectWs —— 切回来时需要新 WebSocket 继续接收 chunks。
-    connectWs(sessionId);
-    return () => {
-      // 注意：切 session 不再关闭旧 WebSocket，旧 session 仍在后台接收 chunks。
-      // 旧 ws 仅在删除会话 / 登出 / 组件卸载时由 closeWs() 关闭。
-      if (reconnectRef.current) {
-        clearTimeout(reconnectRef.current);
-        reconnectRef.current = null;
-      }
-    };
-  }, [token, sessionId]);
+    connectSession(sessionId);
+  }, [token, sessionId, reloadMessages, connectSession]);
 
   // ── Scroll-to-bottom helper refs ──────────────────────────
   const scrollRafRef = useRef<number>(0);
@@ -418,204 +447,6 @@ export default function AgentHubIM(): JSX.Element {
       container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
     }
   }, [messages, sessionId]);
-
-  // ── WebSocket ────────────────────────────────────────────
-
-  function _reconnectDelay(): number {
-    // Exponential backoff: 1s → 2s → 4s → 8s → ... → 30s max
-    const attempt = reconnectAttemptsRef.current;
-    const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
-    return delay + Math.random() * 500; // jitter to avoid thundering herd
-  }
-
-  function closeWs(sid: string): void {
-    const existing = wsRef.current.get(sid);
-    if (existing) {
-      existing.onclose = null;
-      existing.close();
-      wsRef.current.delete(sid);
-    }
-    wsReadyRef.current.delete(sid);
-    unpinSession(sid);
-  }
-
-  function connectWs(targetSid?: string): void {
-    // 关键修复：必须用参数传入的 sessionId，而不是 currentSessionRef.current。
-    // useEffect 顺序执行的不确定性会让 ref 在 connectWs 触发时还未更新，
-    // 导致新建/切换会话时连到了旧 sid —— 表现就是 "只能发到固定会话"。
-    const sid = targetSid || currentSessionRef.current;
-    currentSessionRef.current = sid;
-
-    // Guard: empty session id produces malformed ws://…/ws/ URLs that 404.
-    // Also refuse to connect when the stored token is missing (already
-    // logged out) — this prevents spurious reconnection attempts after
-    // handleTokenExpired() fires.  Use tokenRef to avoid stale-closure
-    // issues when connectWs is called from setTimeout.
-    if (!sid || !tokenRef.current) return;
-
-    // eslint-disable-next-line no-console
-    if (process.env.NODE_ENV === "development") { console.log("[agenthub] connectWs", { targetSid, finalSid: sid, hasSocket: wsRef.current.has(sid) }); }
-    // ★ 关键修复：如果该 session 已有 ws 但已 CLOSED/CLOSING，删掉重建。
-    // 仅当 ws 是 OPEN/CONNECTING 时才跳过。
-    const existing = wsRef.current.get(sid);
-    if (existing) {
-      if (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING) {
-        return;
-      }
-      // 死连接：清理掉，准备重建
-      try { existing.close(); } catch { /* ignore */ }
-      wsRef.current.delete(sid);
-      wsReadyRef.current.delete(sid);
-    }
-    pinSession(sid);
-
-    if (reconnectRef.current) {
-      clearTimeout(reconnectRef.current);
-      reconnectRef.current = null;
-    }
-
-    const ws = new WebSocket(buildChatWebSocketUrl(sid, token));
-    wsRef.current.set(sid, ws);
-
-    ws.onopen = () => {
-      if (wsRef.current.get(sid) !== ws) return; // 已被新连接替代
-      wsReadyRef.current.set(sid, true);
-      setConnected(true);
-      reconnectAttemptsRef.current = 0;
-      setNotice('WebSocket connected');
-
-      // Replay queued messages that were pending during disconnect
-      const queued = [...retryRef.current];
-      retryRef.current = [];
-      setPending([]);
-      queued.forEach((msg) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-      });
-
-      // Request missed messages since last known ID
-      if (lastMessageIdRef.current) {
-        ws.send(JSON.stringify({
-          event: 'sync_request',
-          lastMessageId: lastMessageIdRef.current,
-        }));
-      } else {
-        void reloadMessages(true);
-      }
-    };
-
-    ws.onclose = () => {
-      wsReadyRef.current.delete(sid);
-      if (wsRef.current.get(sid) === ws) {
-        wsRef.current.delete(sid);
-      }
-      setConnected(false);
-      // Flush any buffered stream content for THIS session before clearing
-      const raf = streamFlushRafRef.current.get(sid);
-      if (raf != null) {
-        window.cancelAnimationFrame(raf);
-        streamFlushRafRef.current.delete(sid);
-      }
-      flushAllPendingStreamBuffer(sid, {
-        streamFlushRafRef,
-        progressiveFlushTimersRef,
-      });
-      // 清理该 session 的中断标记
-      streamInterruptedAtRef.current.delete(sid);
-      // ★ 方案4: 重连通知
-      const attempt = reconnectAttemptsRef.current;
-      if (currentSessionRef.current === sid && attempt === 0) {
-        addToast({ type: 'warning', title: 'WebSocket 连接断开', message: '正在尝试重新连接...', duration: 5000 });
-      } else if (currentSessionRef.current === sid && attempt >= 3) {
-        addToast({ type: 'error', title: '连接不稳定', message: `已尝试重连 ${attempt + 1} 次，请检查网络`, duration: 0 });
-      }
-      // 仅当用户当前还在这个 session 且 token 仍有效才重连
-      // tokenRef 检查防止已过期登出后仍继续无效重连
-      if (currentSessionRef.current === sid && tokenRef.current) {
-        // Cap reconnection attempts to avoid infinite loops on
-        // permanent failures (e.g. expired token, deleted session).
-        if (reconnectAttemptsRef.current >= 10) {
-          setNotice('连接已断开，请刷新页面或重新登录');
-          addToast({ type: 'error', title: '连接彻底断开', message: '请刷新页面或重新登录', duration: 0 });
-          return;
-        }
-        reconnectAttemptsRef.current += 1;
-        if (reconnectRef.current) clearTimeout(reconnectRef.current);
-        reconnectRef.current = setTimeout(connectWs, _reconnectDelay());
-      }
-    };
-
-    ws.onerror = () => {
-      wsReadyRef.current.delete(sid);
-      setConnected(false);
-      // Ensure cleanup even if browser doesn't fire onclose after error
-      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
-        try { ws.close(); } catch { /* best-effort */ }
-      }
-    };
-
-    ws.onmessage = (event: MessageEvent<string>) => {
-      // ★ 关键修复：移除 `currentSessionRef.current !== sid` 守卫。
-      // 后台 session 的 chunks 也要处理（写入该 session 的 buffer），切回来时直接可见。
-      const raw: Record<string, unknown> = JSON.parse(event.data);
-      const evt = raw.event as string | undefined;
-      const chunkSessionId = (raw.sessionId || sid) as string;
-
-      // ── Heartbeat: respond to pings ──────────────────────────
-      if (evt === 'ping') {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ event: 'pong', ts: Date.now() }));
-        }
-        return;
-      }
-
-      // ── Replayed message dedup ───────────────────────────────
-      const msgId = (raw.id || raw.messageId || '') as string;
-      if (raw._replay && msgId && dedupIdsRef.current.has(msgId)) {
-        return; // already processed
-      }
-      if (msgId) {
-        dedupIdsRef.current = registerReplayMessageId(dedupIdsRef.current, msgId);
-      }
-
-      // Track last known message ID for reconnection sync
-      if (evt === 'message' || evt === 'message_chunk') {
-        if (msgId) lastMessageIdRef.current = msgId;
-      }
-
-      // ── Workspace file change events ─────────────────────────────
-      if (handleSharedWebSocketEvent(raw, evt, chunkSessionId, {
-        wsRef,
-        setWorkspaceVersion,
-        setPreviewTabs,
-        setNotice,
-        setPmState,
-        setDegradationStatus,
-        setSessions,
-        setIsAutoNaming,
-        setExecPermission,
-        sortSessions,
-      })) {
-        return;
-      }
-
-      if (handleStreamWebSocketEvent(raw, evt, chunkSessionId, {
-        streamFlushRafRef,
-        progressiveFlushTimersRef,
-        streamInterruptedAtRef,
-        setStreamPhase,
-        setActiveTools,
-        setCurrentAgentName,
-        setSessions,
-        sortSessions,
-        addToast,
-        setGenerated,
-        handleOpenFilePreview,
-        handleOpenDiffPreview,
-      })) {
-        return;
-      }
-    };
-  }
 
   // ── Mention detection ────────────────────────────────────
 
@@ -705,22 +536,12 @@ export default function AgentHubIM(): JSX.Element {
     const sessionIds = Array.from(wsRef.current.keys());
     localStorage.removeItem('agenthub_token');
     localStorage.removeItem('agenthub_user');
-    // 关闭所有 session 的 WebSocket
-    sessionIds.forEach((sid) => closeWs(sid));
-    // 关闭 store 里所有的 session
+    disconnectAll();
     sessionIds.forEach((sid) => clearSession(sid));
     sessionIds.forEach((sid) => clearDagSession(sid));
-    if (reconnectRef.current) {
-      clearTimeout(reconnectRef.current);
-      reconnectRef.current = null;
-    }
-    streamFlushRafRef.current.forEach((raf) => window.cancelAnimationFrame(raf));
-    streamFlushRafRef.current.clear();
-    progressiveFlushTimersRef.current.forEach((tid) => window.clearTimeout(tid));
-    progressiveFlushTimersRef.current.clear();
     setToken('');
     setUser(null);
-  }, []);
+  }, [disconnectAll]);
 
   const handleCreateSession = useCallback(async () => {
     const name = `Untitled Session ${sessions.length + 1}`;
@@ -780,17 +601,8 @@ export default function AgentHubIM(): JSX.Element {
         setDeleting(false);
         return;
       }
-      // 关闭这个 session 的 WebSocket、清理 Store、清理重连定时器
-      closeWs(id);
-      if (reconnectRef.current) {
-        clearTimeout(reconnectRef.current);
-        reconnectRef.current = null;
-      }
-      const raf = streamFlushRafRef.current.get(id);
-      if (raf != null) {
-        window.cancelAnimationFrame(raf);
-        streamFlushRafRef.current.delete(id);
-      }
+      // 关闭这个 session 的 WebSocket、清理 Store
+      closeSession(id);
       clearSession(id);
       clearDagSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
@@ -809,7 +621,7 @@ export default function AgentHubIM(): JSX.Element {
     } finally {
       setDeleting(false);
     }
-  }, [confirmDelete, deleting, sessionId, sessions]);
+  }, [closeSession, confirmDelete, deleting, sessionId, sessions]);
 
   const cancelDeleteSession = useCallback(() => {
     if (deleting) return;
@@ -1246,17 +1058,10 @@ export default function AgentHubIM(): JSX.Element {
     ]);
 
     setSessions((prev) => sortSessions(prev.map((s) => (s.id === activeSessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
-    const targetWs = wsRef.current.get(activeSessionId);
-    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-      targetWs.send(JSON.stringify(wsMsg));
+    const sendResult = sendOrQueue(activeSessionId, wsMsg);
+    if (sendResult === 'sent') {
       setSendState('sent');
     } else {
-      // ws 还没连上：保险起见触发一次连接（如果本来就在连，就是 no-op）。
-      connectWs(activeSessionId);
-      retryRef.current.push(wsMsg);
-      setPending((prev) => [...prev, wsMsg]);
-      setNotice('Message queued for retry');
-      addToast({ type: 'warning', title: '消息已排队', message: 'WebSocket 未连接，正在尝试重连后发送...', duration: 5000 });
       setSendState('error');
     }
     setInput('');
@@ -1266,15 +1071,13 @@ export default function AgentHubIM(): JSX.Element {
   }, [sessionId, user, isStreaming, fileReferences, quoteReferences]);
 
   const handleRetryMessage = useCallback((msg: PendingMessage) => {
-    const targetWs = wsRef.current.get(msg.sessionId);
-    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-      targetWs.send(JSON.stringify(msg));
-      setPending((prev) => prev.filter((item) => item.timestamp !== msg.timestamp));
+    const result = sendOrQueue(msg.sessionId, msg);
+    if (result === 'sent') {
+      setNotice('Message sent');
     } else {
-      retryRef.current.push(msg);
       setNotice('WebSocket not connected, waiting for reconnect');
     }
-  }, []);
+  }, [sendOrQueue]);
 
   const handlePreview = useCallback(async () => {
     const res = await fetch('/api/preview/local-task', { headers: authHeaders() });

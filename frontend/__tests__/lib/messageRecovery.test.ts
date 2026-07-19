@@ -82,6 +82,44 @@ describe('messageRecovery helpers', () => {
     expect(merged[0].messageId).toBe('mid-1');
   });
 
+  it('deduplicates duplicate reloaded payloads and removes streaming placeholders', () => {
+    const merged = mergeReloadedMessages([
+      {
+        event: 'message',
+        sessionId: 's1',
+        sender: 'agent',
+        content: 'in-flight',
+        type: 'text',
+        timestamp: '2026-07-19T00:00:00.000Z',
+        messageId: 'mid-0',
+        isStreaming: true,
+      },
+    ], [
+      {
+        event: 'message',
+        sessionId: 's1',
+        sender: 'agent',
+        content: 'final',
+        type: 'text',
+        timestamp: '2026-07-19T00:00:01.000Z',
+        messageId: 'mid-1',
+      },
+      {
+        event: 'message',
+        sessionId: 's1',
+        sender: 'agent',
+        content: 'final',
+        type: 'text',
+        timestamp: '2026-07-19T00:00:01.000Z',
+        messageId: 'mid-1',
+      },
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].messageId).toBe('mid-1');
+    expect(merged[0].isStreaming).toBeFalsy();
+  });
+
   it('replaces streaming placeholder with the final message payload', () => {
     const merged = mergeFinalMessage([
       {

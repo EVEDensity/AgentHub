@@ -15,6 +15,22 @@ function getMessageIdentity(message: Message): string {
   return message.id || message.messageId || '';
 }
 
+function dedupeMessagesByIdentity(messages: Message[]): Message[] {
+  const seen = new Map<string, Message>();
+  const anonymous: Message[] = [];
+
+  for (const message of messages) {
+    const identity = getMessageIdentity(message);
+    if (!identity) {
+      anonymous.push(message);
+      continue;
+    }
+    seen.set(identity, message);
+  }
+
+  return [...anonymous, ...seen.values()];
+}
+
 export function registerReplayMessageId(seenIds: Set<string>, messageId: string, cap = DEFAULT_REPLAY_CAP): Set<string> {
   if (!messageId) return seenIds;
   if (seenIds.has(messageId)) return seenIds;
@@ -31,11 +47,12 @@ export function mergeReloadedMessages(prev: Message[], incoming: Message[]): Mes
     const identity = getMessageIdentity(message);
     return !identity || !existingIds.has(identity);
   });
-  if (newMessages.length === 0) {
+  const clean = prev.filter((m) => !isStreamingThinkingMessage(m));
+  const merged = dedupeMessagesByIdentity([...clean, ...newMessages]);
+  if (newMessages.length === 0 && clean.length === prev.length && merged.length === prev.length) {
     return prev;
   }
-  const clean = prev.filter((m) => !isStreamingThinkingMessage(m));
-  return [...clean, ...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  return merged.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
 export function mergeFinalMessage(prev: Message[], incoming: Message): Message[] {
@@ -64,5 +81,5 @@ export function mergeFinalMessage(prev: Message[], incoming: Message): Message[]
     return clean;
   }
 
-  return [...clean, { ...incoming, messageId: undefined, isStreaming: false }];
+  return dedupeMessagesByIdentity([...clean, { ...incoming, messageId: undefined, isStreaming: false }]);
 }

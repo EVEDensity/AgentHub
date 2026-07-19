@@ -125,10 +125,10 @@ class DagStore {
     this.notify(sessionId);
   }
 
-  syncFromMessages(sessionId: string, messages: Message[]): void {
-    if (this.sessions.has(sessionId)) return;
+  syncFromMessages(sessionId: string, messages: Message[], force = false): void {
+    if (this.sessions.has(sessionId) && !force) return;
     const derived = deriveDagStateFromMessages(messages);
-    if (derived.total === 0 && derived.nodes.length === 0) return;
+    if (!force && derived.total === 0 && derived.nodes.length === 0) return;
     this.sessions.set(sessionId, derived);
     this.notify(sessionId);
   }
@@ -159,12 +159,16 @@ export function setDagState(sessionId: string, dag: DagState): void {
   dagStore.setState(sessionId, dag);
 }
 
+export function getDagState(sessionId: string): DagState {
+  return dagStore.getState(sessionId);
+}
+
 export function updateDagState(sessionId: string, update: DagTaskUpdateEvent): void {
   dagStore.updateTask(sessionId, update);
 }
 
-export function syncDagFromMessages(sessionId: string, messages: Message[]): void {
-  dagStore.syncFromMessages(sessionId, messages);
+export function syncDagFromMessages(sessionId: string, messages: Message[], force = false): void {
+  dagStore.syncFromMessages(sessionId, messages, force);
 }
 
 export function clearDagSession(sessionId: string): void {

@@ -166,7 +166,7 @@ class ArchitectTaskDecomposer:
         if cached and (now_ts - cached[0]) < self._cache_ttl:
             return cached[1]
 
-        summary = build_agent_roster_summary(agents, max_agents=8, max_tags=4, max_duty_chars=64)
+        summary = build_agent_roster_summary(agents, max_agents=6, max_tags=3, max_duty_chars=48)
         self._agent_capability_cache[fingerprint] = (now_ts, summary)
         return summary
 
