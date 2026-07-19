@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import copy
@@ -11,6 +11,10 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.db.init_db import now
 from app.db.session import afetch_all, afetch_one
+from app.api import websocket_state as ws_state
+from app.api import websocket_message_flow as message_flow
+from app.api.websocket_dispatch import dispatch_control_event, dispatch_message_flow
+from app.api.websocket_lifecycle import close_websocket_session, open_websocket_session
 from app.services.agent_service import extract_mentions, get_direct_chat_agent, lookup_agent, save_message
 from app.services.auth_service import websocket_user
 from app.services.auth.session_guard import check_session_access, SessionRole
@@ -105,7 +109,7 @@ async def _request_tool_permission(
     request_id = str(uuid.uuid4())
     evt = asyncio.Event()
     entry = {"event": evt, "decision": "deny"}
-    _permission_state.setdefault(session_id, {})[request_id] = entry
+    ws_state._permission_state.setdefault(session_id, {})[request_id] = entry
 
     try:
         await manager.broadcast(
@@ -130,9 +134,9 @@ async def _request_tool_permission(
             )
     finally:
         decision = entry.get("decision", "deny")
-        _permission_state.get(session_id, {}).pop(request_id, None)
-        if session_id in _permission_state and not _permission_state[session_id]:
-            del _permission_state[session_id]
+        ws_state._permission_state.get(session_id, {}).pop(request_id, None)
+        if session_id in ws_state._permission_state and not ws_state._permission_state[session_id]:
+            del ws_state._permission_state[session_id]
         return decision
 
 
@@ -141,7 +145,7 @@ def _handle_permission_response(session_id: str, request_id: str, decision: str)
 
     Returns True if the request was found and signaled.
     """
-    session_entries = _permission_state.get(session_id, {})
+    session_entries = ws_state._permission_state.get(session_id, {})
     entry = session_entries.get(request_id)
     if entry:
         entry["decision"] = decision
@@ -347,16 +351,16 @@ async def _handle_agent_question_response(session_id: str, data: dict, user_id: 
     sender_id = user_id or ""
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, question_msg_id, sender_id, sender_name):
+    if not ws_state.mark_interaction_resolved(session_id, question_msg_id, sender_id, sender_name):
         # Already resolved — notify the late responder
-        resolver = _get_resolved_by(session_id, question_msg_id)
+        resolver = ws_state.get_resolved_by(session_id, question_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, question_msg_id, resolver or {},
         )
         return
 
     # Wake up the waiting agent
-    session_qs = _pm_pending_questions.get(session_id, {})
+    session_qs = ws_state._pm_pending_questions.get(session_id, {})
     entry = session_qs.get(question_msg_id)
     if entry:
         entry["response"] = {"selectedOptionId": selected, "customAnswer": custom}
@@ -391,15 +395,15 @@ async def _handle_risk_warning_response(session_id: str, data: dict, user_id: st
     sender_id = user_id or ""
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, warning_msg_id, sender_id, sender_name):
-        resolver = _get_resolved_by(session_id, warning_msg_id)
+    if not ws_state.mark_interaction_resolved(session_id, warning_msg_id, sender_id, sender_name):
+        resolver = ws_state.get_resolved_by(session_id, warning_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, warning_msg_id, resolver or {},
         )
         return
 
     # Wake up the waiting agent
-    session_ws = _pm_pending_warnings.get(session_id, {})
+    session_ws = ws_state._pm_pending_warnings.get(session_id, {})
     entry = session_ws.get(warning_msg_id)
     if entry:
         entry["response"] = {"selectedActionId": selected}
@@ -434,15 +438,15 @@ async def _handle_agent_todo_response(session_id: str, data: dict, user_id: str 
     sender_id = user_id or ""
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, todo_msg_id, sender_id, sender_name):
-        resolver = _get_resolved_by(session_id, todo_msg_id)
+    if not ws_state.mark_interaction_resolved(session_id, todo_msg_id, sender_id, sender_name):
+        resolver = ws_state.get_resolved_by(session_id, todo_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, todo_msg_id, resolver or {},
         )
         return
 
     # Wake up the waiting agent
-    session_tds = _pm_pending_todos.get(session_id, {})
+    session_tds = ws_state._pm_pending_todos.get(session_id, {})
     entry = session_tds.get(todo_msg_id)
     if entry:
         entry["response"] = {"selectedActionId": selected, "comment": comment}
@@ -486,8 +490,8 @@ async def _handle_task_preview_response(
     user_role = await _get_user_session_role(session_id, user_id)
 
     # ── First-wins: check if already resolved ────────────────────────
-    if not _mark_interaction_resolved(session_id, preview_msg_id, user_id, user_name):
-        resolver = _get_resolved_by(session_id, preview_msg_id)
+    if not ws_state.mark_interaction_resolved(session_id, preview_msg_id, user_id, user_name):
+        resolver = ws_state.get_resolved_by(session_id, preview_msg_id)
         await manager.broadcast_interaction_already_resolved(
             session_id, preview_msg_id, resolver or {},
         )
@@ -495,7 +499,7 @@ async def _handle_task_preview_response(
 
     # ── Non-owner member: record as advisory vote ─────────────────────
     if user_role != "owner":
-        entry = _pending_task_previews.get(session_id, {}).get(preview_msg_id)
+        entry = ws_state._pending_task_previews.get(session_id, {}).get(preview_msg_id)
         if entry and entry.get("member_votes") is not None:
             entry["member_votes"][user_id] = decision
         action_label = {"confirm": "赞同执行", "cancel": "建议取消", "modify": "建议修改"}.get(decision, decision)
@@ -530,7 +534,7 @@ async def _handle_task_preview_response(
 
     # ── If a _process_and_stream call is waiting on this preview,
     #     signal it so it can proceed / cancel / modify in-line ──────
-    if _resolve_pending_task_preview(session_id, preview_msg_id, decision, modifications):
+    if ws_state.resolve_pending_task_preview(session_id, preview_msg_id, decision, modifications):
         action_label = {"confirm": "确认执行", "cancel": "取消了任务执行", "modify": "修改计划"}.get(decision, decision)
         await save_message(session_id, user_name, f"[{action_label}]: {modifications or ''}", "text", user_id=user_id)
         return
@@ -565,12 +569,12 @@ async def _handle_solution_selection(
     solution_id = data.get("solutionId", "")
     auto_selected = data.get("autoSelected", False)
 
-    if session_id in _solution_selection_events:
-        _solution_selection_results[session_id] = {
+    if session_id in ws_state._solution_selection_events:
+        ws_state._solution_selection_results[session_id] = {
             "solutionId": solution_id,
             "autoSelected": auto_selected,
         }
-        _solution_selection_events[session_id].set()
+        ws_state._solution_selection_events[session_id].set()
         logger.info(
             "solution_selection: session=%s solution=%s auto=%s user=%s",
             session_id, solution_id, auto_selected, user_id,
@@ -635,7 +639,7 @@ async def _auto_name_and_broadcast(session_id: str) -> None:
         new_name = await try_auto_name_session(session_id)
         if new_name:
             # Reset attempts: we found a good name, no need to keep trying
-            _auto_name_state.pop(session_id, None)
+            ws_state._auto_name_state.pop(session_id, None)
 
             await manager.broadcast(
                 session_id,
@@ -727,9 +731,9 @@ def _should_run_memory_tasks(session_id: str) -> bool:
     """Return True if enough time has passed since last memory task run."""
     import time
     now_ts = time.monotonic()
-    last = _throttle_state.get(session_id, 0.0)
-    if now_ts - last >= _THROTTLE_SECONDS:
-        _throttle_state[session_id] = now_ts
+    last = ws_state._throttle_state.get(session_id, 0.0)
+    if now_ts - last >= ws_state._THROTTLE_SECONDS:
+        ws_state._throttle_state[session_id] = now_ts
         return True
     return False
 
@@ -766,30 +770,24 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
 
     # ── Session access control ─────────────────────────────────────
     access = await check_session_access(session_id, user)
+    return await websocket_endpoint_v2(websocket, session_id, user, access)
+def _log_task_error(session_id: str, task: asyncio.Task) -> None:
+    exc = task.exception()
+    if exc:
+        logger.error("ws background task failed session=%s: %s", session_id, exc)
 
-    conn_id = await manager.connect(session_id, websocket, user_id, access.role.value, user_name)
 
-    # ── Broadcast user_joined to other connected users ─────────────
-    await manager.broadcast_user_event(session_id, {
-        "event": "user_joined",
-        "sessionId": session_id,
-        "userId": user_id,
-        "userName": user_name,
-        "role": access.role.value,
-        "timestamp": now(),
-    }, exclude_user=user_id)
 
-    # ── Send current user roster to the newly connected client ─────
-    online_users = manager.get_online_users(session_id)
-    await manager._send_safe(websocket, {
-        "event": "user_roster",
-        "sessionId": session_id,
-        "users": online_users,
-    })
+async def websocket_endpoint_v2(websocket: WebSocket, session_id: str, user: dict, access) -> None:
+    user_id = user["id"]
+    user_name = user["name"]
 
-    # Start per-connection heartbeat
-    heartbeat_task = asyncio.create_task(
-        manager.heartbeat_loop(session_id, conn_id, websocket)
+    conn_id, heartbeat_task = await open_websocket_session(
+        session_id=session_id,
+        websocket=websocket,
+        user_id=user_id,
+        user_name=user_name,
+        role=access.role.value,
     )
 
     try:
@@ -799,173 +797,48 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str |
             except WebSocketDisconnect:
                 break
 
-            # Handle client pong responses
-            if data.get("event") == "pong":
-                manager.record_pong(session_id, conn_id)
-                continue
-
-            # ── Presence & typing indicators ────────────────────────────
-            if data.get("event") == "set_presence":
-                status = data.get("status", "online")
-                manager.set_user_presence(session_id, user_id, status)
-                await manager.broadcast_user_event(session_id, {
-                    "event": "presence_update",
-                    "sessionId": session_id,
-                    "users": [{"userId": user_id, "status": status}],
-                }, exclude_user=user_id)
-                continue
-
-            if data.get("event") == "typing":
-                is_typing = data.get("isTyping", False)
-                await manager.broadcast_user_event(session_id, {
-                    "event": "typing_indicator",
-                    "sessionId": session_id,
-                    "userId": user_id,
-                    "userName": user_name,
-                    "isTyping": is_typing,
-                }, exclude_user=user_id)
-                continue
-
-            # Handle reconnection sync request
-            if data.get("event") == "sync_request":
-                last_id = data.get("lastMessageId")
-                count = await manager.replay_missed_messages(session_id, websocket, last_id)
-                await manager._send_safe(websocket, {
-                    "event": "sync_complete",
-                    "sessionId": session_id,
-                    "replayed": count,
-                })
-                continue
-
-            # Handle permission response from frontend
-            if data.get("event") == "permission_response":
-                request_id = data.get("requestId", "")
-                decision = data.get("decision", "deny")
-                if request_id:
-                    _handle_permission_response(session_id, request_id, decision)
-                continue
-
-            # ── PM/PMO interaction responses ──────────────────────────
-            if data.get("event") == "agent_question_response":
-                await _handle_agent_question_response(session_id, data, user_id, user["name"])
-                continue
-
-            if data.get("event") == "risk_warning_response":
-                await _handle_risk_warning_response(session_id, data, user_id, user["name"])
-                continue
-
-            if data.get("event") == "agent_todo_response":
-                await _handle_agent_todo_response(session_id, data, user_id, user["name"])
-                continue
-
-            if data.get("event") == "task_preview_response":
-                await _handle_task_preview_response(session_id, data, user_id, user["name"])
-                continue
-
-            if data.get("event") == "solution_selection":
-                await _handle_solution_selection(session_id, data, user_id, user["name"])
-                continue
-
-            if data.get("event") == "diff_decision":
-                await _handle_diff_decision(session_id, data)
-                continue
-
-            # ── Execution permission mode change (real-time sync) ──────
-            if data.get("event") == "set_exec_permission":
-                exec_perm = data.get("mode")
-                if isinstance(exec_perm, int) and exec_perm in (1, 2, 3):
-                    set_session_exec_permission(session_id, exec_perm)
-                    from app.services.tools.permission import set_exec_permission
-                    set_exec_permission(session_id, exec_perm)
-                    await manager.broadcast_permission_mode_changed(
-                        session_id, exec_perm, user_id, user_name,
-                    )
+            if await dispatch_control_event(
+                session_id=session_id,
+                data=data,
+                websocket=websocket,
+                user_id=user_id,
+                user_name=user_name,
+                conn_id=conn_id,
+                on_agent_question_response=_handle_agent_question_response,
+                on_risk_warning_response=_handle_risk_warning_response,
+                on_agent_todo_response=_handle_agent_todo_response,
+                on_task_preview_response=_handle_task_preview_response,
+                on_solution_selection=_handle_solution_selection,
+                on_diff_decision=_handle_diff_decision,
+            ):
                 continue
 
             content = str(data.get("content", "")).strip()
-            if not content:
+            if await dispatch_message_flow(
+                session_id=session_id,
+                content=content,
+                sender=user_name,
+                user_id=user_id,
+                access_can_write=access.can_write,
+                websocket=websocket,
+                data=data,
+                attachments=data.get("attachments", []),
+                quote_references=data.get("quoteReferences", []),
+                auto_reply=data.get("auto_reply", True),
+                process_and_stream=_process_and_stream,
+                log_task_error=_log_task_error,
+            ):
                 continue
-
-            # ── Write access check: viewers cannot send messages ───
-            if not access.can_write:
-                await manager._send_safe(websocket, {
-                    "event": "system",
-                    "sessionId": session_id,
-                    "content": "You do not have permission to send messages in this session.",
-                    "timestamp": now(),
-                })
-                continue
-
-            # ── Store exec permission mode for this session ────────
-            exec_perm = data.get("exec_permission")
-            if isinstance(exec_perm, int) and exec_perm in (1, 2, 3):
-                set_session_exec_permission(session_id, exec_perm)
-                # Also sync to the shared permission module store
-                from app.services.tools.permission import set_exec_permission
-                set_exec_permission(session_id, exec_perm)
-
-            # Cancel any in-flight stream — but ONLY if there is one.
-            # 无条件 cancel 会让上一轮尚未走完模型循环的 invocation 看到 token.cancelled=True
-            # 并返回 "流式响应已被中断"。 先用 has_active_stream 守卫，避免误中断。
-            if manager.has_active_stream(session_id):
-                manager.cancel_token(session_id)
-                await manager.send_stream_interrupted(session_id, "New message received, interrupting current stream")
-                # 等旧任务释放 session 锁；锁释放后新任务才能进入 _process_and_stream。
-                lock = manager.get_session_lock(session_id)
-                # 最多等 2s；拿不到就直接放行（让新消息处理，新任务内部 create_token 会再取消一次）。
-                try:
-                    await asyncio.wait_for(lock.acquire(), timeout=2.0)
-                    lock.release()
-                except asyncio.TimeoutError:
-                    logger.debug("ws interrupt wait timeout session=%s", session_id)
-                await asyncio.sleep(0.02)
-
-            task = asyncio.create_task(
-                _process_and_stream(
-                    session_id, content,
-                    user["name"],
-                    user_id,
-                    data.get("attachments", []),
-                    quote_references=data.get("quoteReferences", []),
-                    auto_reply=data.get("auto_reply", True),
-                )
-            )
-            task.add_done_callback(
-                lambda t: _log_task_error(session_id, t) if t.exception() else None
-            )
-
     except WebSocketDisconnect:
         pass
     finally:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except (asyncio.CancelledError, Exception):
-            pass
-
-        # ── Broadcast user_left before disconnecting ────────────────
-        try:
-            await manager.broadcast_user_event(session_id, {
-                "event": "user_left",
-                "sessionId": session_id,
-                "userId": user_id,
-                "userName": user_name,
-                "timestamp": now(),
-            }, exclude_user=user_id)
-        except Exception:
-            pass
-
-        manager.disconnect(session_id, websocket)
-        # Only teardown if this was the last connection
-        if manager._connection_count(session_id) == 0:
-            manager.teardown_session(session_id)
-
-
-def _log_task_error(session_id: str, task: asyncio.Task) -> None:
-    exc = task.exception()
-    if exc:
-        logger.error("ws background task failed session=%s: %s", session_id, exc)
-
+        await close_websocket_session(
+            session_id=session_id,
+            websocket=websocket,
+            user_id=user_id,
+            user_name=user_name,
+            heartbeat_task=heartbeat_task,
+        )
 
 
 def _build_safety_block_message(result) -> str:
@@ -1109,6 +982,7 @@ async def _process_and_stream(
             # nodes define the workflow.  @mentions in the same message
             # are treated as conversational references, not routing
             # directives.
+            mentioned: list[str] = []
             if route_dag is not None:
                 # Build target_agents from route nodes
                 target_agents: list[dict] = []
@@ -1154,6 +1028,22 @@ async def _process_and_stream(
             # When the user explicitly selects a route via #route:name,
             # the greeting guard is skipped — they clearly intended the
             # workflow to run.
+            await message_flow.run_message_flow(
+                session_id=session_id,
+                content=content,
+                sender=sender,
+                user_id=user_id,
+                token=token,
+                attachments=attachments or [],
+                quote_references=quote_references,
+                auto_reply=auto_reply,
+                target_agents=target_agents,
+                route_dag=route_dag,
+                mentioned=mentioned,
+                invoke_agent=_invoke_agent,
+            )
+            return
+
             is_greeting_broadcast = False
             if route_dag is None and len(target_agents) >= 2:
                 # Strip @mentions to inspect the real message content
@@ -1253,22 +1143,7 @@ async def _process_and_stream(
 
                 # ── 🟡 Trigger 1: Task Preview with real DAG ────────
                 task_preview_msg_id = str(uuid.uuid4())
-                task_items = []
-                for node in dag_config.nodes:
-                    domain_label = {
-                        "orchestrator": "协调调度", "architect": "架构设计",
-                        "codegen": "代码生成", "review": "代码审查",
-                        "test": "测试验证", "deploy": "部署发布",
-                    }.get(node.domain, node.domain)
-                    task_items.append({
-                        "id": node.id,
-                        "description": f"{node.agent} ({domain_label}): {node.description}",
-                        "agent": node.agent,
-                        "dependencies": node.dependencies,
-                        "estimatedSeconds": {"low": 20, "medium": 45, "high": 90}.get(
-                            node.estimated_effort, 45
-                        ),
-                    })
+                task_items = message_flow.build_dag_task_items(list(dag_config.nodes))
                 await manager.broadcast_task_preview(
                     session_id, task_preview_msg_id, task_items,
                     eta_seconds=sum(t.get("estimatedSeconds", 45) for t in task_items),
@@ -1276,7 +1151,7 @@ async def _process_and_stream(
 
                 # ── Wait for user confirmation before executing DAG ──
                 if not token.cancelled:
-                    multi_decision, multi_modifications = await _wait_for_task_confirmation(
+                    multi_decision, multi_modifications = await ws_state.wait_for_task_confirmation(
                         session_id, task_preview_msg_id, token,
                     )
                     if token.cancelled:
@@ -1500,7 +1375,7 @@ async def _process_and_stream(
     # Both extraction and summarization fire in background after a message.
     # Throttled: only run once every _THROTTLE_SECONDS per session to avoid
     # firing expensive LLM calls on every single message.
-    if _should_run_memory_tasks(session_id):
+    if ws_state.should_run_memory_tasks(session_id):
         try:
             from app.config import AUTO_MEMORY_ENABLED
             if AUTO_MEMORY_ENABLED:
@@ -1518,7 +1393,7 @@ async def _process_and_stream(
     # ── Auto session naming (background, non-blocking) ────────
     # Fire after every message for sessions with generic names.
     # Runs on its own throttle separate from memory tasks.
-    if _should_auto_name(session_id):
+    if ws_state._should_auto_name(session_id):
         asyncio.create_task(_auto_name_and_broadcast(session_id))
 
 
@@ -1623,8 +1498,8 @@ async def _invoke_agent(
 
             # ── Set up async wait for user selection ──────────────────
             _sel_event = asyncio.Event()
-            _solution_selection_events[session_id] = _sel_event
-            _solution_selection_results.pop(session_id, None)
+            ws_state._solution_selection_events[session_id] = _sel_event
+            ws_state._solution_selection_results.pop(session_id, None)
 
             await manager.broadcast_solution_proposal(
                 session_id=session_id,
@@ -1642,7 +1517,7 @@ async def _invoke_agent(
             # Wait for user selection or auto-confirm timeout
             try:
                 await asyncio.wait_for(_sel_event.wait(), timeout=_auto_confirm_sec)
-                _selection = _solution_selection_results.get(session_id, {})
+                _selection = ws_state._solution_selection_results.get(session_id, {})
                 logger.info(
                     "ws orchestrator: solution selected session=%s solution=%s",
                     session_id, _selection.get("solutionId", "?"),
@@ -1655,8 +1530,8 @@ async def _invoke_agent(
                     session_id, recommended_id,
                 )
             finally:
-                _solution_selection_events.pop(session_id, None)
-                _solution_selection_results.pop(session_id, None)
+                ws_state._solution_selection_events.pop(session_id, None)
+                ws_state._solution_selection_results.pop(session_id, None)
 
             # Resolve the selected solution to its full context
             selected_id = _selection.get("solutionId", recommended_id)
@@ -1720,22 +1595,7 @@ async def _invoke_agent(
 
                     # ── Broadcast task preview ──────────────────────────
                     _dag_preview_id = str(uuid.uuid4())
-                    _dag_task_items = []
-                    for node in dag_config.nodes:
-                        domain_label = {
-                            "orchestrator": "协调调度", "architect": "架构设计",
-                            "codegen": "代码生成", "review": "代码审查",
-                            "test": "测试验证", "deploy": "部署发布",
-                        }.get(node.domain, node.domain)
-                        _dag_task_items.append({
-                            "id": node.id,
-                            "description": f"{node.agent} ({domain_label}): {node.description}",
-                            "agent": node.agent,
-                            "dependencies": node.dependencies,
-                            "estimatedSeconds": {"low": 20, "medium": 45, "high": 90}.get(
-                                node.estimated_effort, 45
-                            ),
-                        })
+                    _dag_task_items = message_flow.build_dag_task_items(list(dag_config.nodes))
                     await manager.broadcast_task_preview(
                         session_id, _dag_preview_id, _dag_task_items,
                         eta_seconds=sum(t.get("estimatedSeconds", 45) for t in _dag_task_items),
@@ -2123,7 +1983,7 @@ async def _invoke_agent(
         if token.cancelled:
             return
         text = str(response.get("content", ""))
-        for piece in _chunk_text_for_streaming(text):
+        for piece in ws_state.chunk_text_for_streaming(text):
             if token.cancelled:
                 return
             await manager.stream_broadcast(session_id, message_id, piece, is_final=False)
@@ -2427,3 +2287,4 @@ async def _broadcast_final_db_message(session_id: str, message_id: str) -> None:
         content = final.get("content", "")
         if sender == "Deploy" and content:
             await _maybe_broadcast_deploy_card(session_id, message_id, content, sender)
+

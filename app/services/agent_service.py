@@ -15,6 +15,16 @@ from app.db.session import afetch_all, afetch_one, aexecute
 from app.services.adapter_manager import adapter_manager
 from app.services.auth.service import AuthService
 from app.services.codegen_service import write_generated_files
+from app.services.conversation_history import build_conversation_history_transcript
+from app.services import agent_prompt_context as prompt_context
+from app.services.agent_prompt_templates import (
+    build_architect_prompt,
+    build_codegen_prompt,
+    build_deploy_prompt,
+    build_general_prompt,
+    build_orchestrator_prompt,
+)
+from app.services import prompt_sections
 from app.services.prompt_cache import prompt_cache
 from app.services.secret_service import decrypt_secret
 from app.services.text_processing import (
@@ -400,70 +410,11 @@ def _intent_from_domain(domain: str, _content: str = "") -> str:
 
 
 def _build_attachment_context(attachments: list[dict[str, Any]] | None) -> tuple[str, list[dict[str, Any]]]:
-    if not attachments:
-        return "", []
-
-    blocks: list[str] = []
-    clean: list[dict[str, Any]] = []
-    max_text_len = 12000
-
-    for idx, item in enumerate(attachments, start=1):
-        name = str(item.get("name", f"file_{idx}"))
-        file_type = str(item.get("type", "text/plain"))
-        size = int(item.get("size", 0) or 0)
-        content = str(item.get("content", ""))
-
-        is_image = file_type.startswith("image/") or name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
-        if is_image:
-            preview = content[:180]
-            blocks.append(
-                f"[附件图片 {idx}] name={name}, type={file_type}, size={size}\\n"
-                f"data_url_prefix={preview}"
-            )
-        else:
-            trimmed = content[:max_text_len]
-            ext = name.split(".")[-1] if "." in name else "text"
-            blocks.append(
-                f"[附件文件 {idx}] name={name}, type={file_type}, size={size}\\n"
-                f"```{ext}\\n{trimmed}\\n```"
-            )
-
-        clean.append({"name": name, "type": file_type, "size": size})
-
-    return "\\n\\n".join(blocks), clean
+    return prompt_context.build_attachment_context(attachments)
 
 
 def _build_quote_context(quote_references: list[dict[str, Any]] | None) -> str:
-    """Format quoted chat messages as a context block for the AI prompt.
-
-    Injects a ``[用户引用的历史消息]`` section above the current question,
-    giving the model visibility into what the user is referencing.
-    """
-    if not quote_references:
-        return ""
-
-    blocks: list[str] = []
-    for idx, qr in enumerate(quote_references, start=1):
-        original_sender = str(qr.get("originalSender", "unknown"))
-        original_timestamp = str(qr.get("originalTimestamp", ""))
-        quoted_text = str(qr.get("quotedText", ""))
-        is_full_message = bool(qr.get("isFullMessage", False))
-
-        truncation_note = ""
-        display_text = quoted_text
-        if len(quoted_text) > 2000:
-            display_text = quoted_text[:2000] + "\n… [已截断]"
-            truncation_note = " (已截断)"
-
-        msg_type = "完整消息" if is_full_message else "消息片段"
-
-        blocks.append(
-            f"[引自历史消息 {idx}] 发送者: {original_sender}, "
-            f"时间: {original_timestamp}, 类型: {msg_type}{truncation_note}\n"
-            f"---\n{display_text}\n---"
-        )
-
-    return "[用户引用的历史消息]\n\n" + "\n\n".join(blocks)
+    return prompt_context.build_quote_context(quote_references)
 
 
 async def lookup_agent(
@@ -1406,7 +1357,7 @@ async def stream_agent_response(
     return stream()
 
 
-async def _build_conversation_history(session_id: str, max_chars: int = 8000) -> str:
+async def _build_conversation_history(session_id: str, max_chars: int = 3600) -> str:
     """Fetch recent messages from this session and format as a transcript.
 
     Gives every agent called in the session full awareness of what was
@@ -1425,7 +1376,7 @@ async def _build_conversation_history(session_id: str, max_chars: int = 8000) ->
 
     try:
         rows = await afetch_all(
-            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 25",
+            "SELECT sender,content FROM messages WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 18",
             session_id,
         )
     except Exception:
@@ -1435,26 +1386,12 @@ async def _build_conversation_history(session_id: str, max_chars: int = 8000) ->
         prompt_cache.set_history(session_id, "")
         return ""
 
-    # Keep DESC order (newest first), build lines until we hit max_chars,
-    # then reverse to chronological for the prompt.
-    lines: list[str] = []
-    total = 0
-    for r in rows:
-        content = _strip_think_tags(r["content"])
-        # Truncate individual messages — larger cap to preserve more meaning
-        line = f"{r['sender']}：{content[:1200]}"
-        total += len(line)
-        lines.append(line)
-        if total > max_chars:
-            break
-
-    lines.reverse()  # chronological order for readability
-    result = "【会话历史记录 — 以下是本会话中之前的对话内容，请基于此上下文理解用户的后续问题】\n" + "\n".join(lines)
+    result = build_conversation_history_transcript(rows, max_chars=max_chars)
     prompt_cache.set_history(session_id, result)
     return result
 
 
-async def _build_memory_context(user_id: str = "", session_id: str = "", max_chars: int = 3000, force: bool = False) -> str:
+async def _build_memory_context(user_id: str = "", session_id: str = "", max_chars: int = 2200, force: bool = False) -> str:
     """Load current-session conversation memory and global summary.
 
     Only loads what is strictly needed for conversational continuity:
@@ -1704,71 +1641,17 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
     # This is the "main context window" — every agent reads it before
     # its role-specific instructions, ensuring a unified understanding
     # of what the conversation is about regardless of domain.
-    shared_context = ""
-    if history:
-        shared_context = (
-            "【共享会话上下文 — 所有Agent的对话记忆窗口】\n"
-            "以下是你与用户及其他Agent之间的完整对话记录。请首先通读此上下文，"
-            "理解当前话题和讨论脉络，再结合你的专业角色给出回复。\n"
-            "即使话题与你的专业领域不完全匹配，也请基于上下文给出合理回答，"
-            "不要以\"我是XX专家\"为由拒绝回复。\n\n"
-            f"{history}\n"
-            "─── 以上为共享记忆，以下是你的角色指令 ───\n"
-        )
-
-    collab_section = f"\n\n{collab_ctx}" if collab_ctx else ""
+    shared_context = prompt_sections.build_shared_context(history)
+    collab_section = prompt_sections.build_collab_section(collab_ctx)
 
     # ── Current date (so the model knows what "today" is) ────────────
     # The model's training cutoff may be months ago.  Without this, the
     # model hallucinates dates or uses stale ones in search queries.
-    from datetime import datetime as _dt
-    today_str = _dt.now().strftime("%Y年%m月%d日")
-    weekday_str = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][_dt.now().weekday()]
-    date_context = f"【当前日期】{today_str} {weekday_str}。涉及\"今天\"、\"最新\"、\"最近\"等内容时，请基于此日期。\n"
+    date_context = prompt_sections.build_date_context()
 
-    # ── Workspace filesystem context ─────────────────────────────────
-    # Informs the agent that it has a real filesystem to work with.
-    # The workspace is session-scoped and git-versioned — every file
-    # write is automatically committed so the agent should feel
-    # confident persisting code and data.
-    from app.services.workspace_context import get_workspace_root as _ws_root_fn
-    _ws_root = _ws_root_fn()
-    _ws_files_summary = ""
-    try:
-        if _ws_root.exists():
-            _items = sorted(_ws_root.iterdir(), key=lambda p: (p.is_dir(), p.name.lower()))[:30]
-            _lines = [f"工作区路径: {_ws_root}"]
-            for p in _items:
-                _kind = "📁" if p.is_dir() else "📄"
-                _size = ""
-                if p.is_file():
-                    try:
-                        sz = p.stat().st_size
-                        _size = f" ({sz:,} bytes)" if sz < 1024 else f" ({sz/1024:.0f} KB)"
-                    except OSError:
-                        pass
-                _lines.append(f"  {_kind} {p.name}{_size}")
-            if len(_items) >= 30:
-                _lines.append("  ... (已截断，使用 file_read 查看完整目录)")
-            _ws_files_summary = "\n".join(_lines) + "\n"
-    except OSError:
-        pass
-    workspace_context_block = (
-        "【工作区文件系统 — 真实落盘能力】\n"
-        "你拥有真实的工作区文件系统，可以使用以下工具操作文件：\n"
-        "- file_read — 读取文件内容或列出目录\n"
-        "- file_write — 创建/覆写/追加文件到工作区（自动创建父目录）\n"
-        "- file_write_batch — 批量写入多个文件（推荐用于一次生成多文件代码）\n"
-        "- file_edit — 精确字符串替换编辑文件（新文件自动创建，无需先用 file_write）\n"
-        "- file_patch — 应用 unified diff 补丁（适合增量修改）\n"
-        "- file_search — 在文件中搜索匹配内容（支持正则）\n"
-        "- file_glob — 按通配符模式查找文件（如 **/*.py）\n"
-        "- mkdir — 创建目录（类似 mkdir -p，用于搭建项目结构）\n"
-        "- code_execute — 在工作区中执行 Python/Bash 代码\n\n"
-        "所有文件操作自动纳入 Git 版本控制，可追溯变更历史。\n"
-        "多人协作时，系统自动检测文件冲突并发出警告。\n"
-        f"{_ws_files_summary}\n"
-    ) if _ws_root.exists() else ""
+    # Workspace filesystem context is intentionally compact. Tool details live in
+    # prompt_sections so build_prompt stays focused on orchestration.
+    workspace_context_block = prompt_sections.build_workspace_context()
 
     # ── Load settings for reply language, reasoning, thinking ───────
     settings = await _load_settings()
@@ -1843,224 +1726,102 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
     )
 
     if agent_id == "CodeGen":
-        return (
-            f"{memory_context}"
-            f"{shared_context}"
-            f"{date_context}"
-            f"{workspace_context_block}"
-            f"你是 CodeGenAgent，AgentHub 多智能体平台中的代码生成专家。\n\n"
-            f"{actual_model_line}"
-            f"{reply_lang_instr}"
-            f"{reasoning_instr}"
-            f"{thinking_rule}"
-            f"{code_format_rules}\n"
-            f"{mermaid_rules}\n"
-            f"{output_rules}\n"
-            "# 代码生成规则\n"
-            "当且仅当用户明确请求生成代码、创建文件、修改代码、实现具体功能时，回复使用 JSON 格式：\n"
-            "{\"files\":[{\"path\":\"相对路径\",\"content\":\"文件完整内容\"}]}\n"
-            "- 路径只能是相对路径，代码必须完整可运行\n"
-            "- JSON 不要包裹在 Markdown 代码块中\n\n"
-            "# 非代码请求：直接以纯文本回复，严禁输出 JSON 格式。\n"
-            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-            + f"{collab_section}"
-            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        return build_codegen_prompt(
+            agent_id=agent_id,
+            content=content,
+            symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+            memory_context=memory_context,
+            shared_context=shared_context,
+            date_context=date_context,
+            workspace_context=workspace_context_block,
+            actual_model_line=actual_model_line,
+            reply_lang_instruction=reply_lang_instr,
+            reasoning_instruction=reasoning_instr,
+            thinking_rule=thinking_rule,
+            code_format_rules=code_format_rules,
+            mermaid_rules=mermaid_rules,
+            output_rules=output_rules,
+            tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+            collab_section=collab_section,
         )
 
     if agent_id == "Orchestrator":
-        # ── Simple mode: tools disabled by preprocessor ────────────────
-        # When the preprocessor determines the message is a simple greeting
-        # or short non-technical message, use a minimal prompt — no tools,
-        # no workflow, no task decomposition.  This prevents the LLM from
-        # getting confused by aggressive tool-calling instructions and making
-        # chaotic tool calls for trivial messages like "你好".
-        if not tools_enabled:
-            return (
-                f"{date_context}"
-                f"你是 AgentHub 平台中的 AI 助手。\n\n"
-                f"{actual_model_line}"
-                f"{reply_lang_instr}"
-                f"【输出规则】请直接友好回复用户。如果是简单问候或闲聊，回复简洁明了（20字以内）。"
-                f"不要调用任何工具，不要拆解任务，不要输出任何任务计划。\n\n"
-                f"{shared_context}"
-                f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
-            )
-
-        # ── Preprocess block: system already analyzed the question ──
-        preprocess_block = ""
-        workflow_section = ""
-        if preprocess_context:
-            preprocess_block = (
-                "# 系统预处理分析\n\n"
-                "以下是对用户问题的预处理分析，由系统的需求分析模块生成。"
-                "请基于此分析**直接执行任务**，无需重复拆解，无需等待用户确认：\n\n"
-                f"{preprocess_context}\n\n"
-                "---\n\n"
-            )
-            workflow_section = (
-                "# 工作流程（基于预处理分析 — 直接执行，无需确认）\n\n"
-                "## 第一步：直接委派执行\n"
-                "1. 根据预处理分析中的子任务拆解和 Agent 调用顺序，**立即使用 invoke_agent 工具**调用专业 Agent。\n"
-                "2. 不要先输出计划再等确认——直接调用工具开始执行。\n"
-                "3. 有依赖关系的 Agent 串行调用；无依赖的用 invoke_agents_parallel 并行调用。\n\n"
-                "## 第二步：汇总与仲裁\n"
-                "4. 收集所有 Agent 的输出，检查是否存在冲突或矛盾。\n"
-                "5. 如果 Review 提出了修改建议而 CodeGen 未处理 → 重新调用 CodeGen 修复。\n"
-                "6. 如果 Test 发现了 Bug → 将测试结果反馈给 CodeGen 修复。\n"
-                "7. 综合所有 Agent 的输出，生成最终的用户回复。\n"
-                "8. 标注每个结论来自哪个 Agent。\n\n"
-            )
-        else:
-            # ── No preprocess: concise 3-step workflow ────────────────
-            # The LLM needs to judge complexity itself, so we give it a
-            # compact decision tree rather than verbose step-by-step.
-            workflow_section = (
-                "# 工作流程\n"
-                "1. **判断**: 简单问题(问候/闲聊/知识问答)直接回复，不调工具。\n"
-                "2. **委派**: 复杂任务**立即**调用 invoke_agent 委派给专业 Agent：\n"
-                "   Architect(架构) | CodeGen(代码) | Review(审查) | Test(测试) | Deploy(部署)\n"
-                "   无依赖→invoke_agents_parallel 并行；有依赖→串行。\n"
-                "3. **汇总**: 收集结果综合回复，冲突时仲裁，失败时重试→替代Agent→手动建议。\n"
-                "   标注结论来源（如\"根据 Architect 分析...\"）。\n\n"
-            )
-
-        # ── Slim identity + principles (merged from two sections) ─────
-        orchestrator_identity = (
-            "你是 AgentHub 调度中心，通过 invoke_agent 工具实际调用 "
-            "Architect/CodeGen/Review/Test/Deploy 等专业 Agent 执行任务。\n\n"
-            "原则: 简单直接回 | 复杂直接调 Agent(不等确认) | 冲突仲裁 | 失败降级(重试→替代→手建) | 标注来源\n\n"
-            "【批处理写入 — 减少 tool_call 次数】\n"
-            "当 CodeGen/Architect 产出多个文件时（如一个功能包含前端+后端+配置），"
-            "请使用 file_write_batch 一次性写入所有文件，而不是多次调用 file_write。"
-            "这大幅减少工具调用轮次，提升响应速度。\n"
-            "示例: file_write_batch(paths_contents=[{\"path\":\"src/app.py\",\"content\":\"...\"}, {\"path\":\"README.md\",\"content\":\"...\"}])\n\n"
-        )
-
-        return (
-            f"{memory_context}"
-            f"{shared_context}"
-            f"{date_context}"
-            f"{workspace_context_block}"
-            f"{orchestrator_identity}"
-            f"{actual_model_line}"
-            f"{reply_lang_instr}"
-            f"{reasoning_instr}"
-            f"{thinking_rule}"
-            f"{preprocess_block}"
-            f"{workflow_section}"
-            f"{mermaid_rules}\n"
-            "# 约束\n"
-            "- 简单问候/闲聊直接回复（≤20字），**严禁调工具**。\n"
-            "- 不先展示计划等确认，直接行动。\n"
-            "- 每轮最多 3 个工具调用，超过 3 轮必须给出最终回复。\n"
-            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-            + f"{collab_section}"
-            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        return build_orchestrator_prompt(
+            content=content,
+            symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+            memory_context=memory_context,
+            shared_context=shared_context,
+            date_context=date_context,
+            workspace_context=workspace_context_block,
+            actual_model_line=actual_model_line,
+            reply_lang_instruction=reply_lang_instr,
+            reasoning_instruction=reasoning_instr,
+            thinking_rule=thinking_rule,
+            mermaid_rules=mermaid_rules,
+            tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+            collab_section=collab_section,
+            preprocess_context=preprocess_context,
+            tools_enabled=tools_enabled,
         )
 
     if agent_id == "Architect":
-        return (
-            f"{memory_context}"
-            f"{shared_context}"
-            f"{date_context}"
-            f"{workspace_context_block}"
-            f"你是 AgentHub 平台中的 Architect（架构设计师），负责分析用户意图与项目结构，输出技术方案与文件影响范围。\n\n"
-            f"{actual_model_line}"
-            f"{reply_lang_instr}"
-            f"{reasoning_instr}"
-            f"{thinking_rule}"
-            f"{mermaid_rules}\n"
-            "# Architect 工作原则\n\n"
-            "## 你的职责\n"
-            "1. 分析用户需求，理解技术上下文和项目现状。\n"
-            "2. 输出清晰的技术方案，包括架构设计、技术选型、文件影响范围。\n"
-            "3. 为 CodeGen 等下游 Agent 提供足够详细的规格说明，使其可以直接开始编码。\n\n"
-            "## 汇报机制 — 每完成一项大任务主动 @ 主人\n"
-            "当你完成以下任务之一时，必须在回复开头用 '@主人' 或 '@用户' 主动汇报：\n"
-            "- 完成了一个完整的技术方案或架构设计\n"
-            "- 完成了多个文件的代码生成或修改\n"
-            "- 完成了一轮代码审查\n"
-            "- 完成了测试并给出了报告\n\n"
-            "汇报格式:\n"
-            "  @主人 👋 早上/下午/晚上好！刚刚完成了 [任务名称]。\n"
-            "  📋 **完成内容**: [简要列举关键产出]\n"
-            "  📁 **涉及文件**: [列出修改/创建的文件路径]\n"
-            "  ⚠️ **风险/注意事项**: [如有]\n"
-            "  💡 **下一步建议**: [可选]\n\n"
-            "示例: \"@主人 下午好！Architect 刚刚完成了博客系统的架构设计。\n"
-            "📋 完成: 技术栈选型(React+FastAPI+PostgreSQL)、模块划分(6个核心模块)、数据流设计\n"
-            "📁 规格说明已输出，可供 CodeGen 直接编码\n"
-            "💡 建议先实现核心 API 模块，再搭建前端页面\"\n\n"
-            "## 约束\n"
-            "- 不直接写代码 — 你的产出是设计文档和规格说明，不是可运行的代码。\n"
-            "- 不确定技术细节时，使用工具查看现有代码和项目结构，而不是猜测。\n"
-            "- 方案中要明确标注风险和边界条件。\n"
-            "- 对于简单问候或闲聊，直接简短回复即可（20 字以内）。\n"
-            "- 使用工具前确保所有必填参数齐全，缺失参数时先向用户询问。\n"
-            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-            + f"{collab_section}"
-            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        return build_architect_prompt(
+            agent_id=agent_id,
+            content=content,
+            symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+            memory_context=memory_context,
+            shared_context=shared_context,
+            date_context=date_context,
+            workspace_context=workspace_context_block,
+            actual_model_line=actual_model_line,
+            reply_lang_instruction=reply_lang_instr,
+            reasoning_instruction=reasoning_instr,
+            thinking_rule=thinking_rule,
+            mermaid_rules=mermaid_rules,
+            tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+            collab_section=collab_section,
         )
 
     if agent_id == "Deploy":
-        return (
-            f"{memory_context}"
-            f"{shared_context}"
-            f"{date_context}"
-            f"{workspace_context_block}"
-            f"你是 AgentHub 平台中的 Deploy（部署工程师），负责执行文件部署、Git 版本记录和生成部署状态报告。\n\n"
-            f"{actual_model_line}"
-            f"{reply_lang_instr}"
-            f"{reasoning_instr}"
-            f"{thinking_rule}"
-            f"{code_format_rules}\n"
-            f"{mermaid_rules}\n"
-            f"{output_rules}\n"
-            "# Deploy 工作原则\n\n"
-            "## 你的职责（聚焦版）\n"
-            "1. 根据用户需求，直接使用工具完成文件操作（创建/修改/删除）。\n"
-            "2. 完成后用 file_glob 确认目标文件存在，然后输出部署卡片。\n"
-            "3. 不需要检查 Review/Test 状态——用户直接 @Deploy 即表示授权你执行部署。\n\n"
-            "## 部署卡片 — 每完成文件操作必须发送部署卡片\n"
-            "当你完成部署任务后，必须在回复中输出以下格式的部署卡片标记，系统会自动将其渲染为可视化卡片：\n"
-            "```deploy-card\n"
-            "version: <git commit short hash 或 \"local\">\n"
-            "completed-at: <当前时间>\n"
-            "description: <简短描述本次部署内容>\n"
-            "files:\n"
-            "  - <涉及的文件路径>\n"
-            "```\n"
-            "请在卡片标记后紧接着写一段简短的部署汇报（≤50字）。\n\n"
-            "## 严格约束\n"
-            "- **工具调用上限**: 每轮最多 3 个工具调用，最多 3 轮，第 3 轮必须产出最终回复（含部署卡片）。\n"
-            "- **禁止无关探索**: 不要搜索记忆、不要查博客/项目背景、不要跑 code_execute。你的任务就是文件操作+部署卡片。\n"
-            "- **简单场景直接执行**: 用户指定了具体文件名时，直接创建/确认文件，输出部署卡片即可，不需要检查环境、端口、依赖。\n"
-            "- 简单问候或闲聊直接简短回复（≤20字），**严禁调用任何工具**。\n"
-            "- 不确定文件内容时向用户确认，不要自己编造内容。\n"
-            + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-            + f"{collab_section}"
-            f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+        return build_deploy_prompt(
+            agent_id=agent_id,
+            content=content,
+            symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+            memory_context=memory_context,
+            shared_context=shared_context,
+            date_context=date_context,
+            workspace_context=workspace_context_block,
+            actual_model_line=actual_model_line,
+            reply_lang_instruction=reply_lang_instr,
+            reasoning_instruction=reasoning_instr,
+            thinking_rule=thinking_rule,
+            code_format_rules=code_format_rules,
+            mermaid_rules=mermaid_rules,
+            output_rules=output_rules,
+            tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+            collab_section=collab_section,
         )
 
     # ── General agent prompt ────────────────────────────────────────
-    custom_role = role_prompt.strip() if role_prompt else ""
-    prompt = (
-        f"{memory_context}"
-        f"{shared_context}"
-        f"{date_context}"
-        f"{workspace_context_block}"
-        f"你是 AgentHub 平台中的 {agent_id}（{role_desc}）。\n"
-        + (f"\n{custom_role}\n\n" if custom_role else "\n")
-        + f"{actual_model_line}"
-        + f"{reply_lang_instr}"
-        f"{reasoning_instr}"
-        f"{thinking_rule}"
-        f"{code_format_rules}\n"
-        f"{mermaid_rules}\n"
-        f"{output_rules}\n"
-        + (_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "")
-        + f"{collab_section}"
-        f"符号消息: {json.dumps(public_symbolic(symbolic), ensure_ascii=False)}\n用户需求: {content}"
+    prompt = build_general_prompt(
+        agent_id=agent_id,
+        role_desc=role_desc,
+        content=content,
+        symbolic_text=json.dumps(public_symbolic(symbolic), ensure_ascii=False),
+        memory_context=memory_context,
+        shared_context=shared_context,
+        date_context=date_context,
+        workspace_context=workspace_context_block,
+        role_prompt=role_prompt,
+        actual_model_line=actual_model_line,
+        reply_lang_instruction=reply_lang_instr,
+        reasoning_instruction=reasoning_instr,
+        thinking_rule=thinking_rule,
+        code_format_rules=code_format_rules,
+        mermaid_rules=mermaid_rules,
+        output_rules=output_rules,
+        tool_section=_build_tool_section(agent_id, available_tools, permission_mode) if tools_enabled else "",
+        collab_section=collab_section,
     )
 
     # ── Prompt size guard ──────────────────────────────────────────
@@ -2108,45 +1869,11 @@ async def build_prompt(agent_id: str, domain: str, content: str, symbolic: dict,
 
 
 def _estimate_token_usage(user_text: str, model_output: str) -> tuple[int, int, int]:
-    """Estimate token counts with CJK-aware heuristics.
+    return prompt_context.estimate_token_usage(user_text, model_output)
 
-    Pure ASCII text averages ~4 chars/token.  CJK characters (Chinese,
-    Japanese, Korean) are denser — roughly 1.5 chars/token — because each
-    logogram is a distinct token unit.  Mixing the two ratios gives a much
-    better estimate than the naive ``len // 4`` for bilingual content.
-    """
-    def _count_tokens(text: str) -> int:
-        cjk = sum(1 for c in text if '一' <= c <= '鿿' or '㐀' <= c <= '䶿')
-        non_cjk = len(text) - cjk
-        # CJK: ~1.5 chars/token, non-CJK: ~4 chars/token
-        return max(1, int(cjk / 1.5 + non_cjk / 4))
-
-    prompt_tokens = _count_tokens(user_text)
-    completion_tokens = _count_tokens(model_output)
-    total_tokens = prompt_tokens + completion_tokens
-    return prompt_tokens, completion_tokens, total_tokens
 
 def _format_conversation(conversation: list[dict]) -> str:
-    """Format a multi-turn conversation (including tool calls/results) for prompt injection."""
-    parts: list[str] = []
-    for turn in conversation:
-        role = turn.get("role", "")
-        if role == "user":
-            parts.append(f"【用户消息】\n{turn.get('content', '')}")
-        elif role == "assistant" and "tool_calls" in turn:
-            tcs = turn["tool_calls"]
-            for tc in tcs:
-                parts.append(
-                    f"【工具调用】\n"
-                    f"调用工具: {tc.get('name', 'unknown')}\n"
-                    f"参数: {json.dumps(tc.get('arguments', {}), ensure_ascii=False)}"
-                )
-        elif role == "tool":
-            from app.services.tool_executor import tool_executor
-            parts.append(tool_executor.build_tool_result_context(turn.get("results", [])))
-        elif role == "assistant":
-            parts.append(f"【助手回复】\n{turn.get('content', '')}")
-    return "\n\n".join(parts)
+    return prompt_context.format_conversation_for_prompt(conversation)
 
 
 async def _log_tool_call(session_id: str, agent_id: str, tool_name: str, arguments: dict, result: dict) -> None:

@@ -1,16 +1,19 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['./__tests__/vitest.setup.ts'],
+    setupFiles: [path.resolve(__dirname, '__tests__/vitest.setup.ts')],
     include: ['__tests__/**/*.{test,spec}.{ts,tsx}'],
     // Ensure relative imports from the frontend root resolve
-    root: '.',
+    root: path.resolve(__dirname, '.'),
     // Allow CSS imports without crashes
     css: false,
   },

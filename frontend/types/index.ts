@@ -794,6 +794,7 @@ export interface WorkspacePreviewTab {
   textLength?: number;
   totalChars?: number;
   truncated?: boolean;
+  _version?: number;
 }
 
 // ── Agent 真落盘 — workspace real-time event types ──────────────────────

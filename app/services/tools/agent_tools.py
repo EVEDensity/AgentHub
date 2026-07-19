@@ -13,6 +13,8 @@ import logging
 import time
 from typing import Any
 
+from app.services.context_compaction import build_result_preview
+
 logger = logging.getLogger("agenthub.tools.agent")
 
 # ── Context variables (set by _run_tool_call_loop before each iteration) ─
@@ -371,7 +373,7 @@ async def invoke_agents_parallel_handler(
         }
         if success:
             result_text = r.get("result", "")
-            summary["result_preview"] = result_text[:500]
+            summary["result_preview"] = build_result_preview(result_text, max_chars=220)
             summary["result_length"] = len(result_text)
         else:
             summary["error"] = r.get("error", "未知错误")

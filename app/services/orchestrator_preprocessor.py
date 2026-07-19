@@ -12,6 +12,7 @@ from app.config import (
     ORCHESTRATOR_PREPROCESS_MIN_LENGTH,
 )
 from app.services.adapter_manager import adapter_manager
+from app.services.context_compaction import build_preprocess_context
 from app.services.secret_service import decrypt_secret
 
 logger = logging.getLogger("agenthub.orchestrator_preprocessor")
@@ -468,118 +469,8 @@ class OrchestratorPreprocessor:
     # ── Prompt formatting ──────────────────────────────────────────────
 
     def format_for_prompt(self, preprocessed: dict[str, Any]) -> str:
-        """Format a pre-processing result as a Markdown block for the main prompt.
-
-        This is injected before the user's original question in build_prompt().
-        Includes requirements, selected solution, agent routing suggestions,
-        potential conflicts, and fallback strategies.
-        """
-        if not preprocessed or preprocessed.get("is_simple"):
-            return ""
-
-        lines: list[str] = []
-
-        # Clarified question
-        clarified = preprocessed.get("clarified_question", "").strip()
-        if clarified:
-            lines.append(f"**问题重述**: {clarified}")
-
-        # ── Requirements ──────────────────────────────────────────────
-        requirements = preprocessed.get("requirements", [])
-        if requirements:
-            lines.append("\n**功能需求**:")
-            for req in requirements:
-                lines.append(f"  - {req}")
-
-        nf_reqs = preprocessed.get("non_functional_requirements", [])
-        if nf_reqs:
-            lines.append("\n**非功能需求**:")
-            for nf in nf_reqs:
-                lines.append(f"  - {nf}")
-
-        # ── Selected solution context ──────────────────────────────────
-        selected_solution = preprocessed.get("_selected_solution")
-        if selected_solution and isinstance(selected_solution, dict):
-            sol_name = selected_solution.get("name", "")
-            sol_stack = selected_solution.get("tech_stack", [])
-            sol_arch = selected_solution.get("architecture", "")
-            if sol_name:
-                lines.append(f"\n**选定技术方案**: {sol_name}")
-            if sol_stack:
-                lines.append(f"**技术栈**: {', '.join(sol_stack)}")
-            if sol_arch:
-                lines.append(f"**架构**: {sol_arch}")
-
-        # Sub-tasks with dependency info
-        sub_tasks = preprocessed.get("sub_tasks", [])
-        if sub_tasks:
-            lines.append("\n**子任务拆解**:")
-            for st in sub_tasks:
-                sid = st.get("id", "?")
-                title = st.get("title", "")
-                desc = st.get("description", "")
-                domain = st.get("domain", "general")
-                deps = st.get("depends_on", [])
-                domain_labels = {
-                    "architect": "Architect（架构设计）",
-                    "codegen": "CodeGen（代码生成）",
-                    "review": "Review（代码审查）",
-                    "test": "Test（测试验证）",
-                    "deploy": "Deploy（部署发布）",
-                    "general": "通用",
-                }
-                domain_label = domain_labels.get(domain, domain)
-                dep_str = f" (依赖: 任务{', '.join(map(str, deps))})" if deps else ""
-                lines.append(f"  {sid}. {domain_label}: {title}{dep_str}")
-                if desc:
-                    lines.append(f"     → {desc}")
-
-        # Constraints
-        constraints = preprocessed.get("constraints", [])
-        if constraints:
-            lines.append(f"\n**技术约束**: {', '.join(constraints)}")
-
-        # Suggested approach
-        approach = preprocessed.get("suggested_approach", "").strip()
-        if approach:
-            lines.append(f"\n**建议路径**: {approach}")
-
-        # ── Agent routing guidance ──────────────────────────────────────
-        routing = preprocessed.get("routing")
-        if routing and isinstance(routing, dict):
-            # Execution order
-            exec_order = routing.get("execution_order", [])
-            if exec_order:
-                arrows = " → ".join(exec_order)
-                lines.append(f"\n**Agent 调用顺序**: {arrows}")
-
-            # Parallel opportunities
-            parallel = routing.get("parallel_opportunities", [])
-            if parallel:
-                if isinstance(parallel, list):
-                    for p in parallel:
-                        lines.append(f"**并行机会**: {p}")
-                elif isinstance(parallel, str):
-                    lines.append(f"**并行机会**: {parallel}")
-
-            # Potential conflicts
-            conflicts = routing.get("potential_conflicts", [])
-            if conflicts:
-                if isinstance(conflicts, list):
-                    lines.append(f"\n**⚠️ 潜在冲突**:")
-                    for c in conflicts:
-                        lines.append(f"  - {c}")
-                elif isinstance(conflicts, str):
-                    lines.append(f"\n**⚠️ 潜在冲突**: {conflicts}")
-
-            # Fallback agents
-            fallbacks = routing.get("fallback_agents", {})
-            if fallbacks and isinstance(fallbacks, dict):
-                lines.append(f"\n**🔄 失败降级方案**:")
-                for agent_name, fallback_plan in fallbacks.items():
-                    lines.append(f"  - {agent_name} 失败时: {fallback_plan}")
-
-        return "\n".join(lines) if lines else ""
+        """Format a pre-processing result as a compact block for the main prompt."""
+        return build_preprocess_context(preprocessed)
 
     # ── DAG construction from preprocess result ─────────────────────────
 
