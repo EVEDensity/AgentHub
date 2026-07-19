@@ -113,7 +113,17 @@ class MemorySummaryConsumer:
             return False
 
         manager = SessionMemoryManager(MemoryStorage(MEMORY_DIR / "users" / user_id))
-        await manager.write_session_summary(session_id, summary)
+        accepted = await manager.write_session_summary(
+            session_id,
+            summary,
+            covered_sequence_start=int(payload.get("covered_sequence_start") or 0),
+            covered_sequence_end=int(payload.get("covered_sequence_end") or 0),
+            generated_at=float(payload.get("generated_at") or 0.0),
+            source_event_id=event_id,
+            force=False,
+        )
+        if not accepted:
+            return False
         semantic_store = SemanticMemoryStore(MEMORY_DIR / "users" / user_id)
         await semantic_store.upsert_candidates(
             extract_semantic_candidates(summary),
@@ -151,8 +161,11 @@ class MemorySummaryConsumer:
         from app.db.session import afetch_all
 
         rows = await afetch_all(
-            "SELECT id,sender,content,created_at FROM messages "
-            "WHERE session_id=$1 AND type!='system' ORDER BY created_at DESC LIMIT 60",
+            "SELECT id,sender,content,created_at,sequence FROM ("
+            "SELECT id,sender,content,created_at,"
+            "ROW_NUMBER() OVER (ORDER BY created_at,id) AS sequence "
+            "FROM messages WHERE session_id=$1 AND type!='system'"
+            ") ranked ORDER BY sequence DESC LIMIT 60",
             session_id,
         )
         rows.reverse()
@@ -164,7 +177,7 @@ class MemorySummaryConsumer:
             role = "user" if sender in {"user", user_id.lower()} else "assistant"
             content = str(row.get("content") or "")
             messages.append({
-                "sequence": index,
+                "sequence": int(row.get("sequence") or index),
                 "role": role,
                 "content": content,
                 "token_count": count_tokens(content),

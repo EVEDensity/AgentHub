@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable
+from collections.abc import Callable
+from pathlib import Path
 
 
 _MODEL_WINDOWS: tuple[tuple[str, int], ...] = (
@@ -20,6 +22,40 @@ _MODEL_WINDOWS: tuple[tuple[str, int], ...] = (
     ("glm", 128_000),
     ("kimi", 128_000),
 )
+
+_REGISTERED_TOKENIZERS: dict[str, Callable[[str], int]] = {}
+
+
+def register_model_tokenizer(
+    provider: str,
+    counter: Callable[[str], int],
+    model: str = "",
+) -> None:
+    key = f"{provider.lower()}:{model.lower()}" if model else provider.lower()
+    _REGISTERED_TOKENIZERS[key] = counter
+
+
+def unregister_model_tokenizer(provider: str, model: str = "") -> None:
+    key = f"{provider.lower()}:{model.lower()}" if model else provider.lower()
+    _REGISTERED_TOKENIZERS.pop(key, None)
+
+
+@lru_cache(maxsize=64)
+def _local_provider_tokenizer(provider: str, model: str):
+    env_provider = re.sub(r"[^A-Z0-9]+", "_", provider.upper()).strip("_")
+    configured = os.getenv(f"AGENTHUB_TOKENIZER_{env_provider}_PATH", "").strip()
+    if not configured:
+        return None
+    path = Path(configured)
+    tokenizer_file = path / "tokenizer.json" if path.is_dir() else path
+    if not tokenizer_file.is_file():
+        return None
+    try:
+        from tokenizers import Tokenizer
+
+        return Tokenizer.from_file(str(tokenizer_file))
+    except (ImportError, OSError, ValueError):
+        return None
 
 
 @lru_cache(maxsize=64)
@@ -47,6 +83,12 @@ def count_tokens(text: str, provider: str = "", model: str = "") -> int:
         return 0
     provider_key = provider.lower()
     model_key = model.lower()
+    custom = _REGISTERED_TOKENIZERS.get(f"{provider_key}:{model_key}") or _REGISTERED_TOKENIZERS.get(provider_key)
+    if custom is not None:
+        return max(1, int(custom(text)))
+    local_tokenizer = _local_provider_tokenizer(provider_key, model_key)
+    if local_tokenizer is not None:
+        return len(local_tokenizer.encode(text).ids)
     if provider_key in {"openai", "azure_openai"} or model_key.startswith(("gpt-", "o1", "o3")):
         encoder = _tiktoken_encoder(model or "gpt-4o")
         if encoder is not None:
@@ -55,6 +97,17 @@ def count_tokens(text: str, provider: str = "", model: str = "") -> int:
     cjk = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
     non_cjk = len(text) - cjk
     return max(1, cjk + (non_cjk + 3) // 4)
+
+
+def tokenizer_backend(provider: str = "", model: str = "") -> str:
+    provider_key, model_key = provider.lower(), model.lower()
+    if f"{provider_key}:{model_key}" in _REGISTERED_TOKENIZERS or provider_key in _REGISTERED_TOKENIZERS:
+        return "registered-native"
+    if _local_provider_tokenizer(provider_key, model_key) is not None:
+        return "local-tokenizer-json"
+    if provider_key in {"openai", "azure_openai"} or model_key.startswith(("gpt-", "o1", "o3")):
+        return "tiktoken" if _tiktoken_encoder(model or "gpt-4o") is not None else "multilingual-estimator"
+    return "multilingual-estimator"
 
 
 def model_context_window(provider: str = "", model: str = "") -> int:

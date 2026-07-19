@@ -73,14 +73,22 @@ class ContextSummaryCache:
                 value, version, time.monotonic() + self._ttl,
             )
 
-    def invalidate(self, kind: str, owner_id: str) -> int:
+    def invalidate(self, kind: str, owner_id: str, *, propagate: bool = True) -> int:
         owner_key = self._owner_key(kind, owner_id)
         with self._lock:
             self._versions[owner_key] = self._versions.get(owner_key, 0) + 1
             stale = [key for key in self._entries if key.startswith(owner_key + ":")]
             for key in stale:
                 self._entries.pop(key, None)
-            return self._versions[owner_key]
+            version = self._versions[owner_key]
+        if propagate:
+            try:
+                from app.services.distributed_cache_versions import distributed_cache_version_bus
+
+                distributed_cache_version_bus.schedule(kind, owner_id)
+            except Exception:
+                pass
+        return version
 
     def stats(self) -> dict[str, int | float]:
         with self._lock:

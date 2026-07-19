@@ -5,7 +5,10 @@ from app.services.token_budget import (
     cognitive_memory_budgets,
     count_tokens,
     fit_prompt,
+    register_model_tokenizer,
+    tokenizer_backend,
     truncate_to_tokens,
+    unregister_model_tokenizer,
 )
 
 
@@ -41,3 +44,12 @@ def test_cognitive_budgets_follow_task_intent() -> None:
     assert coding["procedural"] > chat["procedural"]
     assert research["semantic"] > coding["semantic"]
     assert chat["working"] > research["working"]
+
+
+def test_provider_native_tokenizer_registration() -> None:
+    register_model_tokenizer("qwen", lambda text: len(text.split()) * 2)
+    try:
+        assert count_tokens("one two three", "qwen", "qwen-max") == 6
+        assert tokenizer_backend("qwen", "qwen-max") == "registered-native"
+    finally:
+        unregister_model_tokenizer("qwen")

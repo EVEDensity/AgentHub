@@ -193,6 +193,8 @@ async def generate_compaction_summary(envelope: EventEnvelope) -> dict[str, Any]
     price_per_1k = float(os.getenv("SUMMARY_PRICE_PER_1K_TOKENS", "0"))
     estimated_cost = summary_tokens / 1000 * price_per_1k
     quality = _summary_quality(summary_text, source_text)
+    covered_sequence_start = int(raw_summary.get("covered_sequence_start") or 0)
+    covered_sequence_end = int(raw_summary.get("covered_sequence_end") or 0)
     COMPACTION_TOKENS.labels(stage="before").inc(tokens_before)
     COMPACTION_TOKENS.labels(stage="after").inc(tokens_after)
     SUMMARY_COST.inc(estimated_cost)
@@ -211,6 +213,9 @@ async def generate_compaction_summary(envelope: EventEnvelope) -> dict[str, Any]
         "summary_tokens": summary_tokens,
         "estimated_cost": estimated_cost,
         "quality_score": quality,
+        "covered_sequence_start": covered_sequence_start,
+        "covered_sequence_end": covered_sequence_end,
+        "source_event_id": envelope.event_id,
     }
     recent_summaries.append(summary)
     if len(recent_summaries) > MAX_RECENT:

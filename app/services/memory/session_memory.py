@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import logging
 import os
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from app.config import MEMORY_DIR
-from app.db.session import afetch_all
 from app.services.adapter_manager import adapter_manager
 from app.services.memory.models import CognitiveMemoryType, MemoryScope, MemoryType, sanitize_filename
 from app.services.memory.storage import MemoryStorage
+from app.services.memory.summary_version import SummaryVersion, should_accept_summary
 from app.utils.async_file import (
     aexists,
     aread_text,
@@ -60,6 +61,8 @@ class SessionMemoryManager:
 
     State file: .claude/memory/sessions/.session_state.json
     """
+
+    _summary_locks: dict[str, asyncio.Lock] = {}
 
     def __init__(self, storage: Optional[MemoryStorage] = None) -> None:
         self._storage = storage or MemoryStorage(MEMORY_DIR)
@@ -210,27 +213,66 @@ class SessionMemoryManager:
             pass
         return ""
 
-    async def write_session_summary(self, session_id: str, summary: str) -> None:
+    async def write_session_summary(
+        self,
+        session_id: str,
+        summary: str,
+        *,
+        covered_sequence_start: int = 0,
+        covered_sequence_end: int = 0,
+        generated_at: float = 0.0,
+        source_event_id: str = "",
+        force: bool = True,
+    ) -> bool:
         """Write summary for a session and refresh cursor timestamp."""
         await amkdir(self._sessions_dir)
         summary_path = self._sessions_dir / f"{sanitize_filename(session_id)}"
+        lock_key = str(summary_path)
+        lock = self._summary_locks.setdefault(lock_key, asyncio.Lock())
         try:
-            await awrite_text(summary_path, summary or "")
-            await self._ensure_state_loaded()
-            sessions = self._state.setdefault("sessions", {})
-            current = sessions.get(session_id, {})
-            sessions[session_id] = {
-                **current,
-                "last_msg_id": current.get("last_msg_id", ""),
-                "updated_at": datetime.now().isoformat(timespec="seconds"),
-                "memory_type": CognitiveMemoryType.EPISODIC.value,
-                "scope": MemoryScope.SESSION.value,
-                "source": "session-summary",
-                "version": max(1, int(current.get("version", 0)) + 1),
-            }
-            await self._save_state()
+            async with lock:
+                await self._ensure_state_loaded()
+                sessions = self._state.setdefault("sessions", {})
+                current = sessions.get(session_id, {})
+                current_version = SummaryVersion(
+                    covered_sequence_start=int(current.get("covered_sequence_start", 0)),
+                    covered_sequence_end=int(current.get("covered_sequence_end", 0)),
+                    generated_at=float(current.get("summary_generated_at", 0.0)),
+                    source_event_id=str(current.get("source_event_id", "")),
+                )
+                incoming_version = SummaryVersion(
+                    covered_sequence_start=covered_sequence_start,
+                    covered_sequence_end=covered_sequence_end,
+                    generated_at=generated_at,
+                    source_event_id=source_event_id,
+                )
+                if not force and not should_accept_summary(current_version, incoming_version):
+                    logger.info(
+                        "stale session summary rejected session=%s incoming_end=%d current_end=%d event=%s",
+                        session_id, covered_sequence_end, current_version.covered_sequence_end, source_event_id,
+                    )
+                    return False
+                await awrite_text(summary_path, summary or "")
+                stored_sequence_start = covered_sequence_start or current_version.covered_sequence_start
+                stored_sequence_end = covered_sequence_end or current_version.covered_sequence_end
+                sessions[session_id] = {
+                    **current,
+                    "last_msg_id": current.get("last_msg_id", ""),
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    "memory_type": CognitiveMemoryType.EPISODIC.value,
+                    "scope": MemoryScope.SESSION.value,
+                    "source": "session-summary",
+                    "version": max(1, int(current.get("version", 0)) + 1),
+                    "covered_sequence_start": stored_sequence_start,
+                    "covered_sequence_end": stored_sequence_end,
+                    "summary_generated_at": generated_at or current_version.generated_at,
+                    "source_event_id": source_event_id or current_version.source_event_id,
+                }
+                await self._save_state()
+                return True
         except OSError as exc:
             logger.error("failed to write session summary for session=%s: %s", session_id, exc)
+            return False
 
     async def list_session_summaries(self) -> list[dict[str, Any]]:
         """List all session summaries with metadata."""
@@ -261,6 +303,8 @@ class SessionMemoryManager:
     # ── internal helpers ────────────────────────────────────────────
 
     async def _get_session_messages(self, session_id: str) -> list[dict[str, Any]]:
+        from app.db.session import afetch_all
+
         try:
             return await afetch_all(
                 "SELECT id, sender, content, type, created_at "
@@ -340,6 +384,7 @@ class SessionMemoryManager:
 
     async def _list_summarization_models(self) -> list[dict[str, str]]:
         """Return all available models for summarization in priority order."""
+        from app.db.session import afetch_all
         from app.services.secret_service import decrypt_secret
 
         candidates: list[dict[str, str]] = []

@@ -116,6 +116,22 @@ The summarization service also exports Prometheus counters/gauges for summary
 tokens, estimated cost, compaction tokens before/after, latency, status, and
 quality.
 
+Cross-service verification is available through
+`app/services/memory/test_nats_memory_pipeline_integration.py`. With NATS,
+memory-segment-core, summarization-service, and model-adapter-service running,
+set `AGENTHUB_RUN_NATS_INTEGRATION=1` to verify request, Rust compaction,
+semantic summarization, coverage ranges, and final summary publication.
+
+Summary write-back stores `covered_sequence_start/end`, generation time, and
+source event ID. Duplicate events, older coverage, and older generation times
+are rejected under a per-session lock. Native Chinese-provider tokenizers can
+be registered in code or loaded from local `tokenizer.json` paths through the
+`AGENTHUB_TOKENIZER_<PROVIDER>_PATH` variables; the fallback remains explicitly
+reported as a multilingual estimator. Route/agent cache invalidation keeps a
+local L1 cache while Redis version counters and Pub/Sub invalidate peer workers.
+Set `AGENTHUB_RUN_REDIS_INTEGRATION=1` to run the real two-client peer
+invalidation test against `REDIS_URL`/`REDIS_ADDR`.
+
 ## 5. Current assessment
 
 The memory subsystem is now an operational multi-layer pipeline, but it is not

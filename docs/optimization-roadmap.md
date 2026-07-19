@@ -226,8 +226,11 @@ Cognitive memory migration status:
   permission rules are exposed through a versioned Procedural Memory catalog.
 - Landed: task-intent-aware Working/Episodic/Semantic/Procedural token
   allocation with per-class limits and a model-window final guard.
-- Next: native Chinese-provider tokenizers, sequence-safe summaries, NATS
-  integration tests, and Redis-distributed cache versions.
+- Landed: local/native provider tokenizer adapters with explicit fallback.
+- Landed: sequence-safe and event-idempotent summary write-back.
+- Landed: opt-in real NATS Rust/Python/online integration test.
+- Landed: Redis version counters and Pub/Sub invalidation for worker-local
+  route/agent summary caches, with single-node fallback.
 
 Priority:
 
