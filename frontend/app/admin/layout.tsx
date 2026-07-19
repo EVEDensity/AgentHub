@@ -57,6 +57,9 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
   const [sidebarWidthLive, setSidebarWidthLive] = useState<number | null>(null);
   const sidebarW = sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`;
   const consoleWidth = consoleCollapsed ? '0px' : '380px';
+  const gridTemplateColumns = consoleCollapsed
+    ? `${sidebarW} minmax(0, 1fr)`
+    : `${sidebarW} minmax(0, 1fr) 4px var(--console-w, ${consoleWidth})`;
 
   // Auto-collapse on small screens
   useEffect(() => {
@@ -196,7 +199,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
     <div
       className="admin-layout-root"
       style={{
-        gridTemplateColumns: `${sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`} minmax(0, 1fr) 4px ${consoleCollapsed ? '0px' : 'var(--console-w, 380px)'}`,
+        gridTemplateColumns,
       }}
     >
       {/* ═══════════════════════════════════════════════════════

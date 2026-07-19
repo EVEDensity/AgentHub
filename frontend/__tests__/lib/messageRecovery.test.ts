@@ -120,6 +120,23 @@ describe('messageRecovery helpers', () => {
     expect(merged[0].isStreaming).toBeFalsy();
   });
 
+  it('keeps the final snapshot when it reuses a streaming placeholder id', () => {
+    const merged = mergeReloadedMessages([
+      {
+        event: 'message', sessionId: 's1', sender: 'agent', content: 'partial', type: 'text',
+        timestamp: '2026-07-19T00:00:00.000Z', messageId: 'shared-id', isStreaming: true,
+      },
+    ], [
+      {
+        event: 'message', sessionId: 's1', sender: 'agent', content: 'final answer', type: 'text',
+        timestamp: '2026-07-19T00:00:01.000Z', messageId: 'shared-id', isStreaming: false,
+      },
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ content: 'final answer', messageId: 'shared-id', isStreaming: false });
+  });
+
   it('replaces streaming placeholder with the final message payload', () => {
     const merged = mergeFinalMessage([
       {

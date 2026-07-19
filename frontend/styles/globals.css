@@ -2090,9 +2090,6 @@ html.reduce-motion *::after {
 
 /* ── Responsive: 14-inch laptop optimization (1366px-1536px) ───────── */
 @media (max-width: 1599px) {
-  .admin-layout-root {
-    grid-template-columns: 64px minmax(0, 1fr) !important;
-  }
   /* Note: do NOT override .workspace-layout here — page.tsx sets an
      inline 5-6 column grid template that already adapts via clamp().
      Overriding it with `!important` collapses the agent/preview panels

@@ -12,6 +12,8 @@ What is now true in the repository:
 - `frontend/components/admin/PermissionModule.tsx` now replaces the stale `权限` placeholder with a real permission-rule surface backed by `/api/admin/permissions/rules`.
 - The admin shell now has explicit mobile, compact-laptop, and wide-desktop behavior; compact layouts collapse the sidebar and remove controls that cannot operate at that width.
 - Permission rules now support validated create/edit/toggle/delete flows, request retry feedback, and focused interaction tests.
+- Compact admin sidebars now expand to their persisted width without being clipped by the responsive grid.
+- Recovery now advances the replay cursor for all identified events, merges final messages over streaming placeholders, and restores persisted DAG progress without overwriting newer live updates.
 - Prompt/token control has started through `app/services/context_compaction.py`, `app/services/conversation_history.py`, `app/services/orchestrator_preprocessor.py`, `app/services/task_decomposer.py`, and `app/services/result_synthesizer.py`.
 - `app/api/websocket_message_flow.py` and `app/api/websocket.py` now share compact task preview construction.
 - The repo already carries the architecture needed for enterprise expansion, but it still has a few oversized hot modules.
@@ -176,7 +178,7 @@ Success criteria:
 
 ### Phase A: Stabilize
 
-Current status: admin responsiveness and permission-rule completion are done. The remaining Phase A work is the final message-recovery and DAG-replay edge-case pass.
+Current status: complete. Admin responsiveness, permission rules, message recovery, replay cursors, duplicate-event handling, session isolation, and persisted DAG replay are covered by focused tests.
 
 Priority:
 
@@ -206,6 +208,8 @@ Deliverables:
 - Smaller transport/event handlers.
 
 ### Phase C: Token Economy
+
+Current status: next. Start with route / agent pre-summary caches, then reduce task-preview payloads and repeated context assembly.
 
 Priority:
 

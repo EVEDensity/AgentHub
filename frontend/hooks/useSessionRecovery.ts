@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react';
 import { mergeReloadedMessages } from '../lib/messageRecovery';
-import { replaceSessionMessages, updateSessionMessages } from '../lib/sessionStore';
-import { syncDagFromMessages } from '../lib/dagStore';
+import { updateSessionMessages } from '../lib/sessionStore';
+import { restoreDagState, selectLatestPersistedDagState, syncDagFromMessages, type PersistedTaskSnapshot } from '../lib/dagStore';
 import type { Message } from '../types';
 
 export function sortMessagesByTimestamp(messages: Message[]): Message[] {
@@ -34,19 +34,27 @@ export function useSessionRecovery({
       if (token) {
         headers.Authorization = `Bearer ${token}`;
       }
-      const res = await fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, { headers });
+      const [res, tasksRes] = await Promise.all([
+        fetch(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, { headers }),
+        fetch(`/api/tasks?sessionId=${encodeURIComponent(sessionId)}`, { headers }).catch(() => null),
+      ]);
       if (!res.ok) {
         if (res.status === 401) onTokenExpired();
         return;
       }
       const data: Message[] = (await res.json()) as Message[];
       const ordered = sortMessagesByTimestamp(data);
-      if (merge) {
-        updateSessionMessages(sessionId, (prev) => mergeReloadedMessages(prev, ordered));
+      updateSessionMessages(sessionId, (prev) => (merge || prev.length > 0 ? mergeReloadedMessages(prev, ordered) : ordered));
+
+      if (tasksRes?.ok) {
+        const tasks = (await tasksRes.json()) as PersistedTaskSnapshot[];
+        const snapshot = Array.isArray(tasks) ? selectLatestPersistedDagState(tasks) : null;
+        if (snapshot) restoreDagState(sessionId, snapshot);
+        else syncDagFromMessages(sessionId, ordered, true);
       } else {
-        replaceSessionMessages(sessionId, ordered);
+        if (tasksRes?.status === 401) onTokenExpired();
+        syncDagFromMessages(sessionId, ordered, true);
       }
-      syncDagFromMessages(sessionId, ordered, true);
     } catch {
       /* ignore */
     }

@@ -51,6 +51,16 @@ function parseSocketMessage(data: string): Record<string, unknown> | null {
   }
 }
 
+export function buildSocketDedupKey(eventName: string | undefined, raw: Record<string, unknown>): string {
+  const messageId = String(raw.id || raw.messageId || '');
+  if (!eventName || !messageId) return '';
+  if (eventName === 'message_chunk') {
+    const sequence = raw.sequence ?? raw.seq ?? raw.chunkIndex;
+    return sequence === undefined ? '' : `${eventName}:${messageId}:${String(sequence)}`;
+  }
+  return `${eventName}:${messageId}`;
+}
+
 export function useSessionWebSocket({
   wsRef,
   currentSessionRef,
@@ -265,18 +275,19 @@ export function useSessionWebSocket({
       }
 
       const msgId = (raw.id || raw.messageId || '') as string;
+      const dedupKey = buildSocketDedupKey(evt, raw);
       const seenIds = dedupIdsBySessionRef.current.get(chunkSessionId) ?? new Set<string>();
-      if (raw._replay && msgId && seenIds.has(msgId)) {
+      if (dedupKey && seenIds.has(dedupKey)) {
         return;
       }
-      if (msgId) {
+      if (dedupKey) {
         dedupIdsBySessionRef.current.set(
           chunkSessionId,
-          registerReplayMessageId(seenIds, msgId),
+          registerReplayMessageId(seenIds, dedupKey),
         );
       }
 
-      if ((evt === 'message' || evt === 'message_chunk') && msgId) {
+      if (msgId) {
         lastMessageIdBySessionRef.current.set(chunkSessionId, msgId);
       }
 

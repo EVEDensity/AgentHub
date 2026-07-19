@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import DagModal from '../../../components/chat/DagModal';
-import { clearDagSession, useDagState } from '../../../lib/dagStore';
+import { clearDagSession, restoreDagState, setDagState, useDagState } from '../../../lib/dagStore';
 import { handleSharedWebSocketEvent } from '../../../lib/websocketSharedEvents';
 import type { ChatSession } from '../../../types';
 
@@ -122,5 +122,31 @@ describe('dag replay UI', () => {
     rerender(<DagFeed sessionId="dag-session-b" />);
     expect(screen.getByText('Session B')).toBeInTheDocument();
     expect(screen.queryByText('Session A')).not.toBeInTheDocument();
+  });
+
+  it('keeps live progress when a slower recovery snapshot arrives', async () => {
+    setDagState('dag-session-a', {
+      total: 2,
+      completed: 1,
+      nodes: [
+        { id: 'node-1', description: 'Recovered plan', status: 'SUCCESS' },
+        { id: 'node-2', description: 'Recovered build', status: 'RUNNING' },
+      ],
+    });
+    restoreDagState('dag-session-a', {
+      total: 2,
+      completed: 0,
+      nodes: [
+        { id: 'node-1', description: 'Recovered plan', status: 'PENDING' },
+        { id: 'node-2', description: 'Recovered build', status: 'PENDING' },
+      ],
+    });
+
+    render(<DagFeed sessionId="dag-session-a" />);
+
+    expect(screen.getByText('Recovered plan')).toBeInTheDocument();
+    expect(screen.getByText('Recovered build')).toBeInTheDocument();
+    expect(screen.getByText('1/2 \u8282\u70b9\u5b8c\u6210')).toBeInTheDocument();
+    expect(screen.getByText('\u8fd0\u884c\u4e2d')).toBeInTheDocument();
   });
 });
