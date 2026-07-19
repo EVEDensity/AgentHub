@@ -2089,9 +2089,9 @@ html.reduce-motion *::after {
 }
 
 /* ── Responsive: 14-inch laptop optimization (1366px-1536px) ───────── */
-@media (max-width: 1536px) {
+@media (max-width: 1599px) {
   .admin-layout-root {
-    grid-template-columns: clamp(200px, 14vw, 220px) 1fr clamp(260px, 20vw, 340px) !important;
+    grid-template-columns: 64px minmax(0, 1fr) !important;
   }
   /* Note: do NOT override .workspace-layout here — page.tsx sets an
      inline 5-6 column grid template that already adapts via clamp().
@@ -2100,20 +2100,54 @@ html.reduce-motion *::after {
   .composer-toolbar-toggle .composer-toggle-label {
     display: none;
   }
+  .admin-console,
+  .admin-resize-handle.console-handle,
+  .admin-console-toggle,
+  .admin-console-expand-trigger { display: none; }
+  .admin-header-status { display: none; }
+  .admin-content-inner {
+    max-width: none;
+    padding: 20px 18px;
+  }
 }
 
 /* ── Responsive: hide console on medium screens ────────────────────── */
 @media (max-width: 1279px) {
-  .admin-console { display: none; }
-  .admin-resize-handle.console-handle { display: none; }
-  .admin-layout-root {
-    grid-template-columns: clamp(200px, 14vw, 220px) 1fr !important;
-  }
+  .admin-header-workspace,
+  .admin-header-subtitle { display: none !important; }
+  .admin-header-action-btn { padding: 7px 9px; }
+  .admin-header-lang-label { display: none; }
+  .admin-header { padding: 0 14px; }
 }
 
 @media (max-width: 1023px) {
   .admin-layout-root {
     grid-template-columns: 1fr !important;
+  }
+  .admin-status-bar {
+    gap: 14px;
+    overflow: hidden;
+    padding-inline: 16px;
+  }
+  .admin-status-item:nth-child(n + 4) { display: none; }
+}
+
+@media (max-width: 639px) {
+  .admin-header-menu-tag,
+  .admin-header-user-tag { display: none !important; }
+  .admin-header-back-btn {
+    width: 38px;
+    height: 38px;
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+  }
+  .admin-content-inner { padding: 16px 12px; }
+  .admin-chat-toggle {
+    right: 16px;
+    bottom: 16px;
+    width: 48px;
+    height: 48px;
   }
 }
 
@@ -4082,4 +4116,12 @@ html.reduce-motion *::after {
 
 .workspace-layout ::-webkit-scrollbar-thumb:hover {
   background: #383E48;
+}
+
+/* Keep compact admin overrides after component rules so later declarations cannot revive hidden controls. */
+@media (max-width: 1599px) {
+  .admin-console-toggle,
+  .admin-console-expand-trigger {
+    display: none;
+  }
 }

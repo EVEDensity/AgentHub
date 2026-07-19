@@ -62,15 +62,15 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
   useEffect(() => {
     const handleResize = () => {
       const w = window.innerWidth;
-      if (w < 1024) {
+      if (w < 1440) {
         setSidebarCollapsed(true);
-      } else if (w >= 1280) {
+      } else if (w >= 1600) {
         setSidebarCollapsed(false);
       }
       if (w >= 1024) {
         setMobileDrawerOpen(false);
       }
-      if (w < 1280) {
+      if (w < 1600) {
         setConsoleCollapsed(true);
       }
     };
@@ -196,7 +196,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
     <div
       className="admin-layout-root"
       style={{
-        gridTemplateColumns: `${sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`} 1fr 4px ${consoleCollapsed ? '0px' : 'var(--console-w, 380px)'}`,
+        gridTemplateColumns: `${sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`} minmax(0, 1fr) 4px ${consoleCollapsed ? '0px' : 'var(--console-w, 380px)'}`,
       }}
     >
       {/* ═══════════════════════════════════════════════════════
@@ -225,7 +225,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
       <aside
         className="admin-desktop-sidebar"
         style={{
-          width: sidebarCollapsed ? '64px' : `${sidebarWidthLive ?? sidebarWidth}px`,
+          width: '100%',
           position: 'relative',
         }}
       >
@@ -339,7 +339,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
               <div className="admin-header-divider" />
 
               {/* Workspace selector */}
-              <div className="hidden md:block">
+              <div className="admin-header-workspace hidden md:block">
                 <WorkspaceSelector />
               </div>
 
@@ -373,7 +373,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
             <div className="admin-header-right">
               {/* Console toggle */}
               <button
-                className="admin-header-action-btn"
+                className="admin-header-action-btn admin-console-toggle"
                 title={consoleCollapsed ? '显示控制台' : '隐藏控制台'}
                 onClick={() => setConsoleCollapsed((v) => !v)}
               >

@@ -10,6 +10,8 @@ What is now true in the repository:
 - `frontend/hooks/useSessionWebSocket.ts` and `frontend/hooks/useSessionRecovery.ts` now carry the connection lifecycle and reconnect / restore logic out of the page shell.
 - `frontend/__tests__/components/chat/taskPreviewReplay.test.tsx` and `frontend/__tests__/components/chat/dagReplay.test.tsx` cover duplicate preview events, reconnect replay, and session switching.
 - `frontend/components/admin/PermissionModule.tsx` now replaces the stale `权限` placeholder with a real permission-rule surface backed by `/api/admin/permissions/rules`.
+- The admin shell now has explicit mobile, compact-laptop, and wide-desktop behavior; compact layouts collapse the sidebar and remove controls that cannot operate at that width.
+- Permission rules now support validated create/edit/toggle/delete flows, request retry feedback, and focused interaction tests.
 - Prompt/token control has started through `app/services/context_compaction.py`, `app/services/conversation_history.py`, `app/services/orchestrator_preprocessor.py`, `app/services/task_decomposer.py`, and `app/services/result_synthesizer.py`.
 - `app/api/websocket_message_flow.py` and `app/api/websocket.py` now share compact task preview construction.
 - The repo already carries the architecture needed for enterprise expansion, but it still has a few oversized hot modules.
@@ -173,6 +175,8 @@ Success criteria:
 ## 5. Execution Phases
 
 ### Phase A: Stabilize
+
+Current status: admin responsiveness and permission-rule completion are done. The remaining Phase A work is the final message-recovery and DAG-replay edge-case pass.
 
 Priority:
 

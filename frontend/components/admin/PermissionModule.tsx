@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type JSX } from 'react';
-import { Plus, RefreshCw, ShieldAlert, ShieldCheck, ShieldEllipsis, Trash2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Check, Pencil, Plus, RefreshCw, ShieldAlert, ShieldCheck, ShieldEllipsis, Trash2, ToggleLeft, ToggleRight, X } from 'lucide-react';
 import type { PermissionRule } from '../../types';
 
 interface PermissionModuleProps {
@@ -19,6 +19,29 @@ type RuleDraft = {
 };
 
 type RuleInput = Partial<PermissionRule> & Record<string, unknown>;
+
+const MIN_PRIORITY = -10_000;
+const MAX_PRIORITY = 10_000;
+
+function validateDraft(draft: RuleDraft): string {
+  if (!draft.toolPattern.trim()) return '工具模式不能为空';
+  const priority = Number(draft.priority);
+  if (!Number.isInteger(priority) || priority < MIN_PRIORITY || priority > MAX_PRIORITY) {
+    return `优先级必须是 ${MIN_PRIORITY} 到 ${MAX_PRIORITY} 之间的整数`;
+  }
+  if (!['allow', 'deny', 'ask'].includes(draft.behavior)) return '请选择有效的权限动作';
+  return '';
+}
+
+function toDraft(rule: PermissionRule): RuleDraft {
+  return {
+    agentId: rule.agentId,
+    toolPattern: rule.toolPattern,
+    pathPattern: rule.pathPattern,
+    behavior: rule.behavior,
+    priority: String(rule.priority),
+  };
+}
 
 const BEHAVIOR_META: Record<PermissionRule['behavior'], { label: string; cls: string; icon: JSX.Element }> = {
   allow: {
@@ -67,6 +90,8 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<RuleDraft | null>(null);
   const [draft, setDraft] = useState<RuleDraft>({
     agentId: '*',
     toolPattern: '*',
@@ -120,8 +145,10 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
       if (!res.ok) throw new Error((data && (data.detail || data.message)) || `HTTP ${res.status}`);
       await loadRules();
       setNotice('权限规则已更新');
+      return true;
     } catch (err) {
       setError(fmtErr?.(err, '更新权限规则失败') ?? (err instanceof Error ? err.message : '更新权限规则失败'));
+      return false;
     } finally {
       setSavingId(null);
     }
@@ -130,6 +157,12 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
   const handleCreateRule = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
+    const validationError = validateDraft(draft);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setSavingId(-1);
     try {
       const res = await fetch('/api/admin/permissions/rules', {
         method: 'POST',
@@ -139,7 +172,7 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
           tool_pattern: draft.toolPattern.trim() || '*',
           path_pattern: draft.pathPattern.trim() || '*',
           behavior: draft.behavior,
-          priority: Number(draft.priority) || 0,
+          priority: Number(draft.priority),
         }),
       });
       const data = await res.json().catch(() => null);
@@ -149,8 +182,35 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
       setNotice('权限规则已创建');
     } catch (err) {
       setError(fmtErr?.(err, '创建权限规则失败') ?? (err instanceof Error ? err.message : '创建权限规则失败'));
+    } finally {
+      setSavingId(null);
     }
   }, [authHeaders, draft, fmtErr, loadRules, setNotice]);
+
+  const handleStartEdit = useCallback((rule: PermissionRule) => {
+    setError('');
+    setEditingId(rule.id);
+    setEditDraft(toDraft(rule));
+  }, []);
+
+  const handleSaveEdit = useCallback(async (ruleId: number) => {
+    if (!editDraft) return;
+    const validationError = validateDraft(editDraft);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    const saved = await mutateRule(ruleId, {
+      tool_pattern: editDraft.toolPattern.trim(),
+      path_pattern: editDraft.pathPattern.trim() || '*',
+      behavior: editDraft.behavior,
+      priority: Number(editDraft.priority),
+    });
+    if (saved) {
+      setEditingId(null);
+      setEditDraft(null);
+    }
+  }, [editDraft, mutateRule]);
 
   const handleToggleEnabled = useCallback(async (rule: PermissionRule) => {
     await mutateRule(rule.id, { enabled: !rule.enabled });
@@ -185,21 +245,22 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
         <SummaryCard label="确认 / 拒绝" value={`${summary.ask} / ${summary.deny}`} tone="warm" />
       </div>
 
-      <div className="rounded-2xl border border-warm-200 bg-warm-100">
-        <div className="flex items-center justify-between gap-3 border-b border-warm-150 px-5 py-4">
-          <div>
+      <div className="rounded-lg border border-warm-200 bg-warm-100">
+        <div className="flex flex-col items-start justify-between gap-3 border-b border-warm-150 px-4 py-4 sm:flex-row sm:items-center sm:px-5">
+          <div className="min-w-0">
             <h3 className="text-base font-semibold text-warm-900">权限规则中心</h3>
             <p className="mt-1 text-xs text-warm-500">接入后端 `/api/admin/permissions/rules`，用于管理工具执行的 allow / deny / ask 规则。</p>
           </div>
-          <button className="btn-ghost flex items-center gap-2 px-3 py-2 text-sm" onClick={() => { void loadRules(); }} disabled={loading}>
+          <button type="button" className="btn-ghost flex shrink-0 items-center gap-2 px-3 py-2 text-sm" onClick={() => { void loadRules(); }} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             刷新
           </button>
         </div>
 
         {error && (
-          <div className="border-b border-danger-100 bg-danger-50 px-5 py-3 text-sm text-danger-600">
-            {error}
+          <div className="flex items-center justify-between gap-3 border-b border-danger-100 bg-danger-50 px-5 py-3 text-sm text-danger-600" role="alert">
+            <span>{error}</span>
+            <button type="button" className="shrink-0 rounded px-2 py-1 text-xs hover:bg-danger-100" onClick={() => { void loadRules(); }}>重试</button>
           </div>
         )}
 
@@ -229,7 +290,7 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
               优先级
               <input className="input-field" type="number" value={draft.priority} onChange={(e) => setDraft((s) => ({ ...s, priority: e.target.value }))} />
             </label>
-            <button type="submit" className="btn-primary flex items-center gap-2 px-4 py-2" disabled={loading}>
+            <button type="submit" className="btn-primary flex items-center gap-2 px-4 py-2" disabled={loading || savingId === -1}>
               <Plus className="h-4 w-4" />
               创建
             </button>
@@ -260,18 +321,30 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
                 {rules.map((rule) => {
                   const behavior = BEHAVIOR_META[rule.behavior] || BEHAVIOR_META.ask;
                   const isBusy = savingId === rule.id;
+                  const isEditing = editingId === rule.id && editDraft !== null;
                   return (
                     <tr key={rule.id} className="border-b border-warm-50 hover:bg-warm-50/60">
                       <td className="px-5 py-2.5 font-medium text-warm-800">{formatAgent(rule.agentId)}</td>
-                      <td className="px-5 py-2.5 text-warm-600">{rule.toolPattern}</td>
-                      <td className="px-5 py-2.5 text-warm-600">{rule.pathPattern}</td>
-                      <td className="px-5 py-2.5">
-                        <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${behavior.cls}`}>
-                          {behavior.icon}
-                          {behavior.label}
-                        </span>
+                      <td className="px-5 py-2.5 text-warm-600">
+                        {isEditing ? <input aria-label="编辑工具模式" className="input-field min-w-32" value={editDraft.toolPattern} onChange={(e) => setEditDraft((s) => s ? { ...s, toolPattern: e.target.value } : s)} /> : rule.toolPattern}
                       </td>
-                      <td className="px-5 py-2.5 text-warm-600">{rule.priority}</td>
+                      <td className="px-5 py-2.5 text-warm-600">
+                        {isEditing ? <input aria-label="编辑路径模式" className="input-field min-w-32" value={editDraft.pathPattern} onChange={(e) => setEditDraft((s) => s ? { ...s, pathPattern: e.target.value } : s)} /> : rule.pathPattern}
+                      </td>
+                      <td className="px-5 py-2.5">
+                        {isEditing ? (
+                          <select aria-label="编辑权限动作" className="input-field min-w-24" value={editDraft.behavior} onChange={(e) => setEditDraft((s) => s ? { ...s, behavior: e.target.value as PermissionRule['behavior'] } : s)}>
+                            <option value="allow">允许</option><option value="ask">确认</option><option value="deny">拒绝</option>
+                          </select>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs font-medium ${behavior.cls}`}>
+                            {behavior.icon}{behavior.label}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-2.5 text-warm-600">
+                        {isEditing ? <input aria-label="编辑优先级" className="input-field w-24" type="number" min={MIN_PRIORITY} max={MAX_PRIORITY} value={editDraft.priority} onChange={(e) => setEditDraft((s) => s ? { ...s, priority: e.target.value } : s)} /> : rule.priority}
+                      </td>
                       <td className="px-5 py-2.5 text-warm-500">{rule.source}</td>
                       <td className="px-5 py-2.5">
                         <button
@@ -287,14 +360,17 @@ export default function PermissionModule({ authHeaders, setNotice, fmtErr }: Per
                       </td>
                       <td className="px-5 py-2.5 text-warm-500">{formatDate(rule.createdAt)}</td>
                       <td className="px-5 py-2.5 text-right">
-                        <button
-                          className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-danger-500 hover:bg-danger-50 disabled:opacity-50"
-                          onClick={() => { void handleDelete(rule); }}
-                          disabled={isBusy}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          删除
-                        </button>
+                        <div className="flex justify-end gap-1">
+                          {isEditing ? (
+                            <>
+                              <button type="button" aria-label="保存权限规则" className="inline-flex rounded-md p-1.5 text-success-600 hover:bg-success-50" onClick={() => { void handleSaveEdit(rule.id); }} disabled={isBusy}><Check className="h-4 w-4" /></button>
+                              <button type="button" aria-label="取消编辑" className="inline-flex rounded-md p-1.5 text-warm-500 hover:bg-warm-100" onClick={() => { setEditingId(null); setEditDraft(null); }} disabled={isBusy}><X className="h-4 w-4" /></button>
+                            </>
+                          ) : (
+                            <button type="button" aria-label={`编辑权限规则 ${rule.toolPattern}`} className="inline-flex rounded-md p-1.5 text-warm-500 hover:bg-warm-100" onClick={() => handleStartEdit(rule)} disabled={isBusy}><Pencil className="h-4 w-4" /></button>
+                          )}
+                          <button type="button" aria-label={`删除权限规则 ${rule.toolPattern}`} className="inline-flex rounded-md p-1.5 text-danger-500 hover:bg-danger-50 disabled:opacity-50" onClick={() => { void handleDelete(rule); }} disabled={isBusy || isEditing}><Trash2 className="h-4 w-4" /></button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -316,7 +392,7 @@ function SummaryCard({ label, value, tone }: { label: string; value: number | st
   };
 
   return (
-    <div className={`rounded-xl border px-4 py-3 ${toneClass[tone]}`}>
+    <div className={`rounded-lg border px-4 py-3 ${toneClass[tone]}`}>
       <div className="text-[11px] font-medium opacity-75">{label}</div>
       <div className="mt-1 text-xl font-semibold">{value}</div>
     </div>
