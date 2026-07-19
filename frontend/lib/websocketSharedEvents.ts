@@ -56,6 +56,26 @@ function appendMessage(sessionId: string, message: Message): void {
   updateSessionMessages(sessionId, (prev) => [...prev, message]);
 }
 
+function upsertMessage(sessionId: string, message: Message): void {
+  const identity = message.messageId || message.id;
+  if (!identity) {
+    appendMessage(sessionId, message);
+    return;
+  }
+  updateSessionMessages(sessionId, (prev) => {
+    const existingIdx = prev.findIndex((item) => (item.messageId || item.id) === identity);
+    if (existingIdx < 0) {
+      return [...prev, message];
+    }
+    const updated = [...prev];
+    updated[existingIdx] = {
+      ...updated[existingIdx],
+      ...message,
+    };
+    return updated;
+  });
+}
+
 export function handleSharedWebSocketEvent(
   raw: Record<string, unknown>,
   evt: string | undefined,
@@ -268,7 +288,7 @@ export function handleSharedWebSocketEvent(
   if (evt === 'task_preview') {
     const payload = raw as unknown as TaskPreviewEvent;
     setDagState(chunkSessionId, buildDagStateFromTaskPreview(payload));
-    appendMessage(chunkSessionId, buildTaskPreviewMessage(chunkSessionId, payload));
+    upsertMessage(chunkSessionId, buildTaskPreviewMessage(chunkSessionId, payload));
     return true;
   }
 
