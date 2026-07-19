@@ -4122,3 +4122,4 @@ html.reduce-motion *::after {
     display: none;
   }
 }
+@import '@xyflow/react/dist/style.css';

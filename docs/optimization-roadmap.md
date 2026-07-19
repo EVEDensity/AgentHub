@@ -265,10 +265,11 @@ Deliverables:
 
 ### Phase E: Productization
 
-Current status: DAG editor persistence foundation complete. The backend now
-has a versioned node/edge contract, validation-only API, workflow optimistic
-locking, and user-isolated recoverable drafts. ReactFlow authoring remains the
-next UI stage.
+Current status: DAG editor authoring loop complete. The backend has a versioned
+node/edge contract, validation-only API, workflow optimistic locking, and
+user-isolated recoverable drafts. The ReactFlow UI now adds lossless contract
+adapters, debounced autosave, refresh recovery, node/edge validation markers,
+and explicit reload/overwrite handling for `409` conflicts.
 
 Priority:
 
@@ -287,12 +288,12 @@ Deliverables:
 
 Next small stage:
 
-1. Replace the current canvas persistence glue with a ReactFlow adapter over
-   the versioned node/edge contract.
-2. Add debounced draft autosave, refresh recovery, and explicit draft discard.
-3. Surface structured validation issues on nodes and edges before publish.
-4. Handle `409` conflicts with reload, compare, and overwrite choices.
-5. Add UI tests for draft recovery, stale-version conflicts, and edge fidelity.
+1. Define template metadata, categories, versions, ownership, and publication
+   states over the stable workflow contract.
+2. Add template list/detail/install APIs with tenant isolation and audit events.
+3. Build the template market browsing, preview, install, and fork experience.
+4. Add curated built-in templates and compatibility checks by schema version.
+5. After the template loop is stable, proceed to SDK and API Token management.
 
 ## 6. Already Landed
 
