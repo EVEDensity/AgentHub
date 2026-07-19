@@ -7,10 +7,15 @@ from app.db.init_db import now
 from app.db.session import afetch_all, afetch_one, aexecute, aexecute_insert
 from app.schemas.dag import DAGConfig
 from app.services.template_engine import template_engine
+from app.services.context_summary_cache import context_summary_cache
 
 
 class AgentRouteService:
     async def list_routes(self, user_id: str, active_only: bool = False) -> list[dict[str, Any]]:
+        if active_only:
+            cached = context_summary_cache.get("route", user_id, "active-routes")
+            if cached is not None:
+                return json.loads(cached)
         if active_only:
             sql = "SELECT id,name,description,trigger_keywords,nodes_json,is_default,active,created_at,updated_at FROM agent_routes WHERE user_id=$1 AND active=1 ORDER BY is_default DESC,id DESC"
             rows = await afetch_all(sql, user_id)
@@ -22,7 +27,11 @@ class AgentRouteService:
             row["nodes"] = json.loads(row.pop("nodes_json") or "[]")
             row["isDefault"] = bool(row.pop("is_default"))
             row["active"] = bool(row["active"])
-        return rows
+        if not active_only:
+            return rows
+        serialized = json.dumps(rows, ensure_ascii=False, sort_keys=True, default=str)
+        context_summary_cache.set("route", user_id, "active-routes", serialized)
+        return json.loads(serialized)
 
     async def create_route(self, user_id: str, name: str, description: str, trigger_keywords: list[str], nodes: list[dict[str, Any]], is_default: bool = False) -> dict[str, Any]:
         dag = DAGConfig(total=len(nodes), completed=0, nodes=nodes)
@@ -39,6 +48,7 @@ class AgentRouteService:
         route = await self.get_route(int(route_id), user_id)
         if not route:
             raise ValueError("Agent route create failed")
+        context_summary_cache.invalidate("route", user_id)
         return route
 
     async def get_route(self, route_id: int, user_id: str) -> dict[str, Any] | None:
@@ -59,6 +69,7 @@ class AgentRouteService:
         route = await self.get_route(route_id, user_id)
         if not route:
             raise ValueError("Agent route not found")
+        context_summary_cache.invalidate("route", user_id)
         return route
 
     async def set_active(self, route_id: int, user_id: str, active: bool) -> dict[str, Any]:
@@ -68,6 +79,7 @@ class AgentRouteService:
         route = await self.get_route(route_id, user_id)
         if not route:
             raise ValueError("Agent route not found")
+        context_summary_cache.invalidate("route", user_id)
         return route
 
     async def resolve_dag(self, intent: str, user_id: str = "") -> tuple[DAGConfig, int | None, dict[str, Any] | None]:

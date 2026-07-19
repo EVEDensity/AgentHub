@@ -306,6 +306,9 @@ async def create_agent(data: AgentCreateRequest, user: dict = Depends(get_curren
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Agent 已存在或参数无效") from exc
+    from app.services.context_summary_cache import context_summary_cache
+    context_summary_cache.invalidate("agent", str(user["id"]))
+    context_summary_cache.invalidate("agent", "shared")
     audit_id = write_audit(user["id"], agent_id, "agent_create", "L2", "approve", {**data.model_dump(), "apiKey": "***" if data.apiKey else ""})
     return {"status": "success", "agentId": agent_id, "auditId": audit_id}
 
@@ -319,6 +322,9 @@ async def delete_agent(agent_id: str, user: dict = Depends(get_current_user)) ->
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent 不存在")
+    from app.services.context_summary_cache import context_summary_cache
+    context_summary_cache.invalidate("agent", str(user["id"]))
+    context_summary_cache.invalidate("agent", "shared")
     audit_id = write_audit(user["id"], agent_id, "agent_delete", "L2", "approve", {"agentId": agent_id})
     return {"status": "success", "agentId": agent_id, "auditId": audit_id}
 
@@ -368,6 +374,9 @@ async def update_agent(agent_id: str, data: AgentUpdateRequest, user: dict = Dep
             avatar_url, tags_json, data.baseUrl.strip(), config_json, agent_id, user["id"],
         )
 
+    from app.services.context_summary_cache import context_summary_cache
+    context_summary_cache.invalidate("agent", str(user["id"]))
+    context_summary_cache.invalidate("agent", "shared")
     audit_id = write_audit(user["id"], agent_id, "agent_update", "L2", "approve", {**data.model_dump(), "apiKey": "***" if data.apiKey else ""})
     return {"status": "success", "agentId": agent_id, "auditId": audit_id}
 

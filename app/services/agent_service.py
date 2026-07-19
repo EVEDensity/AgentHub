@@ -26,6 +26,9 @@ from app.services.agent_prompt_templates import (
 )
 from app.services import prompt_sections
 from app.services.prompt_cache import prompt_cache
+from app.services.prompt_messages import split_prompt_for_adapter
+from app.services.response_quality import estimate_response_quality
+from app.services.token_budget import TokenBudget, count_tokens, fit_prompt, truncate_to_tokens
 from app.services.secret_service import decrypt_secret
 from app.services.text_processing import (
     filter_streaming_chunk,
@@ -159,7 +162,7 @@ _RUNTIME: dict[str, dict] = {}
 # window, reducing disk I/O while staying fresh enough for cross-session
 # memory.  Invalidation is explicit via _invalidate_memory_cache() when
 # new memories are written (extraction, /memory commands).
-_MEMORY_CACHE: dict[str, Any] = {"context": "", "ts": 0.0, "ttl": 300.0, "key": ""}
+_MEMORY_CONTEXT_CACHE: dict[str, tuple[float, str]] = {}
 _SESSION_MGRS: dict[str, Any] = {}
 
 
@@ -1122,7 +1125,29 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     )
     models = choose_models(await candidate_models_for_role(agent["agent_id"], user_id))
     history = await _build_conversation_history(session_id)
-    memory_ctx = await _build_memory_context(user_id=user_id, session_id=session_id)
+    primary_model = models[0] if models else {}
+    provider = primary_model.get("provider", "")
+    model_name = primary_model.get("model_name", "")
+    budget = TokenBudget.for_model(provider, model_name)
+    history_tokens_before = count_tokens(history, provider, model_name)
+    history, history_truncated = truncate_to_tokens(
+        history, budget.section_limit("history"), provider, model_name,
+    )
+    from app.services.performance_monitor import monitor
+    monitor.record_token_compaction(
+        "history",
+        history_tokens_before,
+        count_tokens(history, provider, model_name),
+        history_truncated,
+    )
+    memory_ctx = await _build_memory_context(
+        user_id=user_id,
+        session_id=session_id,
+        history=history,
+        provider=provider,
+        model=model_name,
+        max_tokens=budget.section_limit("memory"),
+    )
 
     # Use tool-enabled call loop (handles tool detection, execution, synthesis)
     result, usage, selected = await _run_tool_call_loop(
@@ -1134,6 +1159,8 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
     )
 
     content_out = normalize_agent_output(agent["agent_id"], result, content)
+    from app.services.performance_monitor import monitor
+    monitor.record_answer_quality(estimate_response_quality(content, content_out))
     adapter = adapter_manager.get_adapter(selected.get("provider", "mock"))
     if usage and usage.get("total_tokens", 0) > 0:
         prompt_tokens, completion_tokens, total_tokens = usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]
@@ -1241,9 +1268,33 @@ async def stream_agent_response(
 
         async def _run_loop():
             try:
+                history = await _build_conversation_history(session_id)
+                primary_model = models[0] if models else {}
+                provider = primary_model.get("provider", "")
+                model_name = primary_model.get("model_name", "")
+                budget = TokenBudget.for_model(provider, model_name)
+                history_tokens_before = count_tokens(history, provider, model_name)
+                history, history_truncated = truncate_to_tokens(
+                    history, budget.section_limit("history"), provider, model_name,
+                )
+                from app.services.performance_monitor import monitor
+                monitor.record_token_compaction(
+                    "history",
+                    history_tokens_before,
+                    count_tokens(history, provider, model_name),
+                    history_truncated,
+                )
+                memory_context = await _build_memory_context(
+                    user_id=user_id,
+                    session_id=session_id,
+                    history=history,
+                    provider=provider,
+                    model=model_name,
+                    max_tokens=budget.section_limit("memory"),
+                )
                 r, u, s = await _run_tool_call_loop(
                     session_id, content, user_id, agent, agent["domain"], llm_input,
-                    models, await _build_conversation_history(session_id), await _build_memory_context(),
+                    models, history, memory_context,
                     collab_ctx, token=token, on_tool_event=on_tool_event,
                     streaming_executor=_get_streaming_executor(),
                     stream_callback=on_chunk,
@@ -1304,6 +1355,9 @@ async def stream_agent_response(
         else:
             _, result, usage, selected = loop_result
             content_out = normalize_agent_output(agent["agent_id"], result, content)
+
+        from app.services.performance_monitor import monitor
+        monitor.record_answer_quality(estimate_response_quality(content, content_out))
 
         # ── Stream performance metrics ────────────────────────────
         t_end = time.perf_counter()
@@ -1391,93 +1445,90 @@ async def _build_conversation_history(session_id: str, max_chars: int = 3600) ->
     return result
 
 
-async def _build_memory_context(user_id: str = "", session_id: str = "", max_chars: int = 2200, force: bool = False) -> str:
-    """Load current-session conversation memory and global summary.
+async def _build_memory_context(
+    user_id: str = "",
+    session_id: str = "",
+    *,
+    history: str = "",
+    provider: str = "",
+    model: str = "",
+    max_tokens: int = 3000,
+    force: bool = False,
+) -> str:
+    """Build a budgeted, deduplicated L0/L1/L3 memory projection.
 
-    Only loads what is strictly needed for conversational continuity:
-    1. Current session's raw conversation memory (from session_store)
-    2. Current session's LLM-generated summary
-    3. Global cross-session summary
-
-    File-backed memories (MEMORY.md etc.) are deliberately NOT loaded here —
-    they were adding 200+ file I/O operations per message for marginal value.
-    Agents access them on-demand via the ``memory_search`` tool instead.
-
-    Cached with a 60 s TTL.  Call with force=True to bypass the cache.
+    DB history is treated as L0 working context and excluded from the memory
+    projection. Session summary is L1, file conversation is the recent durable
+    tail, and global summary is L3 cross-session memory. L2 knowledge remains
+    retrieval-only through memory_search.
     """
-    uid = user_id or "local-admin"
-    cache_key = f"{uid}:{session_id}" if session_id else uid
-    now_ts = time.monotonic()
-    if not force and _MEMORY_CACHE.get("key") == cache_key and _MEMORY_CACHE["context"] and (now_ts - _MEMORY_CACHE["ts"]) < _MEMORY_CACHE["ttl"]:
-        return _MEMORY_CACHE["context"]
+    import hashlib
 
     from app.config import MEMORY_DIR
     from app.services.memory.storage import MemoryStorage
     from app.services.memory.session_memory import SessionMemoryManager
     from app.services.memory.session_store import SessionMemoryStore
+    from app.services.memory_context import MemoryContextSection, build_memory_context
+    from app.services.performance_monitor import monitor
+
+    uid = user_id or "local-admin"
+    history_fp = hashlib.sha256(history.encode("utf-8")).hexdigest()[:12]
+    cache_key = f"{uid}:{session_id}:{provider}:{model}:{max_tokens}:{history_fp}"
+    now_ts = time.monotonic()
+    cached = _MEMORY_CONTEXT_CACHE.get(cache_key)
+    if not force and cached and now_ts - cached[0] < 60.0:
+        return cached[1]
 
     user_memory_dir = MEMORY_DIR / "users" / uid
     storage = MemoryStorage(user_memory_dir)
     session_mgr = SessionMemoryManager(storage)
     session_store = SessionMemoryStore(user_memory_dir)
+    sections: list[MemoryContextSection] = []
 
-    sections: list[str] = []
-
-    # ── Current session conversation memory (highest priority) ─────
     if session_id:
         try:
-            conv = await session_store.get_conversation(
-                session_id, max_chars=max_chars,
+            session_summary = await session_mgr.get_session_summary(session_id)
+            if session_summary:
+                sections.append(MemoryContextSection("session-summary", session_summary, 1))
+        except Exception:
+            logger.debug("memory context: session summary unavailable", exc_info=True)
+
+        try:
+            conversation = await session_store.get_conversation(
+                session_id, max_chars=max(2200, max_tokens * 4), recent_turns=6,
             )
-            if conv and len(conv) > 100:
-                sections.append(
-                    "【当前会话对话记忆】\n"
-                    "以下是你与用户在本会话中的对话记录：\n\n"
-                    f"{conv}"
-                )
+            if conversation:
+                sections.append(MemoryContextSection("recent-durable-memory", conversation, 2))
         except Exception:
-            pass
+            logger.debug("memory context: durable conversation unavailable", exc_info=True)
 
-    # ── Current session summary (LLM-generated) ────────────────────
-    if session_id:
-        try:
-            sess_summary = await session_mgr.get_session_summary(session_id)
-            if sess_summary:
-                sections.append(
-                    "【当前会话摘要】\n"
-                    f"{sess_summary}"
-                )
-        except Exception:
-            pass
-
-    # ── Global summary (cross-session aggregated) ─────────────────
     try:
         global_summary = await session_mgr.get_global_summary()
         if global_summary:
-            sections.append(
-                "【全局记忆 — 跨会话聚合摘要】\n"
-                f"{global_summary}"
-            )
+            sections.append(MemoryContextSection("global-summary", global_summary, 3))
     except Exception:
-        pass
+        logger.debug("memory context: global summary unavailable", exc_info=True)
 
-    if not sections:
-        _MEMORY_CACHE["context"] = ""
-        _MEMORY_CACHE["ts"] = now_ts
-        _MEMORY_CACHE["key"] = cache_key
-        return ""
-
-    result = "\n\n".join(sections) + "\n─── 以上为记忆上下文，以下是当前对话 ───\n"
-    _MEMORY_CACHE["context"] = result
-    _MEMORY_CACHE["ts"] = now_ts
-    _MEMORY_CACHE["key"] = cache_key
+    result, stats = build_memory_context(
+        sections,
+        exclude_texts=[history],
+        max_tokens=max_tokens,
+        provider=provider,
+        model=model,
+    )
+    monitor.record_token_compaction(
+        "memory",
+        int(stats["tokens_before"]),
+        int(stats["tokens_after"]),
+        bool(stats["truncated"]),
+    )
+    _MEMORY_CONTEXT_CACHE[cache_key] = (now_ts, result)
     return result
 
 
 def _invalidate_memory_cache() -> None:
     """Clear the memory context cache so next call rebuilds it."""
-    _MEMORY_CACHE["context"] = ""
-    _MEMORY_CACHE["ts"] = 0.0
+    _MEMORY_CONTEXT_CACHE.clear()
 
 
 async def _load_settings() -> dict[str, Any]:
@@ -1971,18 +2022,10 @@ async def _run_tool_call_loop(
     # reuse on iterations 1-4, appending only the dynamic conversation
     # content.  This saves ~3-6KB of repeated string construction per
     # iteration.
-    _loop_prefix_key = prompt_cache.make_prefix_key(
-        agent["agent_id"], domain, not simple_mode,
-        tuple(sorted(available_tools)) if available_tools else None,
-        session_id, preprocess_context,
-        models[0].get("provider", "") if models else "",
-        models[0].get("model_name", "") if models else "",
-    )
     _loop_prefix_cached: str | None = None  # populated on iteration 0
-    _loop_prefix_cached_mode: str | None = None  # 记录缓存时使用的 mode，mode 切换时失效
 
     async def _loop_body() -> tuple[str, dict, dict]:
-        nonlocal final_text, usage, selected, adapter, _loop_prefix_cached, _loop_prefix_cached_mode
+        nonlocal final_text, usage, selected, adapter, _loop_prefix_cached
         # ── Circuit-breaker counters (reset when a tool succeeds) ────────
         # Three-tier detection:
         #   1. Same-tool-same-error: the deadliest loop — agent calls the same
@@ -2048,14 +2091,28 @@ async def _run_tool_call_loop(
                     preprocess_context=preprocess_context,
                     permission_mode=get_permission_mode_for_session(session_id).value,
                 )
-                # Split and cache the system prefix for subsequent iterations.
-                # The anchor "符号消息:" is present in every build_prompt()
-                # return path (CodeGen, Orchestrator, Architect, General).
-                anchor = "符号消息:"
-                split_idx = prompt.rfind(anchor)
-                if split_idx > 0:
-                    _loop_prefix_cached = prompt[:split_idx]
-                    _loop_prefix_cached_mode = get_permission_mode_for_session(session_id).value
+
+            primary_model = models[0] if models else {}
+            prompt, prompt_budget_stats = fit_prompt(
+                prompt,
+                primary_model.get("provider", ""),
+                primary_model.get("model_name", ""),
+                anchor="符号消息:",
+            )
+            from app.services.performance_monitor import monitor
+            monitor.record_token_compaction(
+                "prompt",
+                int(prompt_budget_stats["tokens_before"]),
+                int(prompt_budget_stats["tokens_after"]),
+                bool(prompt_budget_stats["truncated"]),
+            )
+
+            # Send the static prefix once as the system message. Only the
+            # dynamic symbolic message and conversation are user content.
+            system_prefix, user_prompt = split_prompt_for_adapter(prompt)
+            if system_prefix:
+                _loop_prefix_cached = system_prefix
+                prompt = user_prompt
 
             logger.info(
                 "tool_loop iter=%d: prompt_len=%d has_tool_section=%s",

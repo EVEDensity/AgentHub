@@ -10,6 +10,7 @@ from typing import Any
 from app.db.session import afetch_all
 from app.schemas.dag import DAGConfig, DAGNode
 from app.services.context_compaction import build_agent_roster_summary, compact_text
+from app.services.context_summary_cache import context_summary_cache
 from app.services.template_engine import template_engine
 
 logger = logging.getLogger("agenthub.task_decomposer")
@@ -72,7 +73,6 @@ class ArchitectTaskDecomposer:
     DECOMPOSE_TIMEOUT = 30.0
 
     def __init__(self) -> None:
-        self._agent_capability_cache: dict[str, tuple[float, str]] = {}
         self._historical_context_cache: dict[str, tuple[float, str | None]] = {}
         self._cache_ttl: float = 300.0  # 5 min
 
@@ -161,14 +161,15 @@ class ArchitectTaskDecomposer:
     async def _build_capability_summary(self, agents: list[dict[str, Any]]) -> str:
         """Build a concise agent capability description for the prompt."""
         fingerprint = self._fingerprint_agents(agents)
-        cached = self._agent_capability_cache.get(fingerprint)
-        now_ts = time.monotonic()
-        if cached and (now_ts - cached[0]) < self._cache_ttl:
-            return cached[1]
-
-        summary = build_agent_roster_summary(agents, max_agents=6, max_tags=3, max_duty_chars=48)
-        self._agent_capability_cache[fingerprint] = (now_ts, summary)
-        return summary
+        owner_id = str(agents[0].get("user_id", "shared")) if agents else "shared"
+        return context_summary_cache.get_or_build(
+            "agent",
+            owner_id,
+            fingerprint,
+            lambda: build_agent_roster_summary(
+                agents, max_agents=6, max_tags=3, max_duty_chars=48,
+            ),
+        )
 
     async def _build_historical_context(self, content: str) -> str | None:
         """Query task_execution_history for relevant past performance."""

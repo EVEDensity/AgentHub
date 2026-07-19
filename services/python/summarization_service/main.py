@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from prometheus_client import Counter, Histogram, make_asgi_app
+from prometheus_client import Counter, Gauge, Histogram, make_asgi_app
 
 from shared.events import EventEnvelope
 from shared.nats_client import NatsClient
@@ -38,6 +38,11 @@ logging.basicConfig(level=logging.INFO)
 SUMMARY_COUNT = Counter("summarization_sessions_total", "Total sessions summarized", ["status"])
 SUMMARY_LATENCY = Histogram("summarization_latency_seconds", "Time to generate a summary")
 SUMMARY_TOKENS = Counter("summarization_tokens_total", "Tokens consumed by summarization")
+SUMMARY_COST = Counter("summarization_estimated_cost_total", "Estimated summarization model cost")
+SUMMARY_QUALITY = Gauge("summarization_quality_score", "Latest heuristic summary quality score")
+COMPACTION_TOKENS = Counter(
+    "memory_compaction_tokens_total", "Tokens observed in memory compaction", ["stage"],
+)
 
 # In-memory stores for debugging
 recent_summaries: list[dict[str, Any]] = []
@@ -61,6 +66,7 @@ async def lifespan(app: FastAPI):
         if to_state != "finished":
             return
         logger.info("react finished session=%s steps=%s", envelope.session_id, envelope.payload.get("step_count"))
+        started = time.perf_counter()
         try:
             summary = await generate_summary(envelope)
             SUMMARY_COUNT.labels(status="ok").inc()
@@ -68,8 +74,24 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("summary failed session=%s: %s", envelope.session_id, e)
             SUMMARY_COUNT.labels(status="error").inc()
+        finally:
+            SUMMARY_LATENCY.observe(time.perf_counter() - started)
+
+    async def on_memory_compacted(envelope: EventEnvelope):
+        if envelope.event_type != "memory.compact.completed" or not envelope.payload.get("compacted"):
+            return
+        started = time.perf_counter()
+        try:
+            await generate_compaction_summary(envelope)
+            SUMMARY_COUNT.labels(status="compact_ok").inc()
+        except Exception as exc:
+            logger.error("compaction summary failed session=%s: %s", envelope.session_id, exc)
+            SUMMARY_COUNT.labels(status="compact_error").inc()
+        finally:
+            SUMMARY_LATENCY.observe(time.perf_counter() - started)
 
     await nats_client.subscribe("summarization-react-finished", "agenthub.session.stream.events", on_react_finished)
+    await nats_client.subscribe("summarization-memory-compact", "agenthub.memory.audit", on_memory_compacted)
     logger.info("summarization-service started (adapter=%s)", model_adapter_url)
     yield
     if nats_client:
@@ -126,6 +148,10 @@ async def generate_summary(envelope: EventEnvelope) -> dict[str, Any]:
         "step_count": step_count,
         "final_state": final_state,
         "generated_at": time.time(),
+        "source": "react-finished",
+        "summary_tokens": max(1, len(summary_text) // 4),
+        "estimated_cost": 0.0,
+        "quality_score": _summary_quality(summary_text, context),
     }
 
     # Buffer for debug inspection.
@@ -134,19 +160,87 @@ async def generate_summary(envelope: EventEnvelope) -> dict[str, Any]:
         recent_summaries.pop(0)
 
     # Publish summary event back to NATS.
-    if nats_client and nats_client.connected:
-        summary_env = EventEnvelope(
-            event_id=f"summary-{envelope.event_id}",
-            event_type="session.summary.generated",
-            trace_id=trace_id,
-            tenant_id=tenant_id,
-            session_id=session_id,
-            producer={"service": "summarization-service", "instance": os.getenv("HOSTNAME", "local")},
-            payload=summary,
-        )
-        await nats_client.publish("agenthub.session.summary", summary_env)
+    await _publish_summary(envelope, summary)
 
     return summary
+
+
+async def generate_compaction_summary(envelope: EventEnvelope) -> dict[str, Any]:
+    payload = envelope.payload
+    raw_summary = payload.get("summary") or {}
+    compacted_text = str(raw_summary.get("content") or "")
+    retained = payload.get("retained") or []
+    retained_text = "\n".join(
+        f"{item.get('role', 'unknown')}: {str(item.get('content', ''))[:500]}"
+        for item in retained[-6:]
+        if isinstance(item, dict)
+    )
+    source_text = (compacted_text + "\n" + retained_text).strip()[:20_000]
+    prompt = (
+        "Compress this conversation memory into a durable summary. Preserve user goals, "
+        "decisions, constraints, produced artifacts, and unresolved work. Remove repetition.\n\n"
+        f"{source_text}\n\nDurable summary:"
+    )
+    summary_text = await _call_llm(
+        prompt, envelope.tenant_id, envelope.session_id, envelope.trace_id,
+    )
+    if not summary_text:
+        summary_text = compacted_text[:1200] or "Memory compaction completed."
+
+    tokens_before = int(payload.get("tokens_before") or 0)
+    tokens_after = int(payload.get("tokens_after") or 0)
+    summary_tokens = max(1, len(summary_text) // 4)
+    price_per_1k = float(os.getenv("SUMMARY_PRICE_PER_1K_TOKENS", "0"))
+    estimated_cost = summary_tokens / 1000 * price_per_1k
+    quality = _summary_quality(summary_text, source_text)
+    COMPACTION_TOKENS.labels(stage="before").inc(tokens_before)
+    COMPACTION_TOKENS.labels(stage="after").inc(tokens_after)
+    SUMMARY_COST.inc(estimated_cost)
+    SUMMARY_QUALITY.set(quality)
+
+    summary = {
+        "id": f"summary-{uuid.uuid4().hex[:12]}",
+        "session_id": envelope.session_id,
+        "tenant_id": envelope.tenant_id,
+        "trace_id": envelope.trace_id,
+        "summary": summary_text,
+        "generated_at": time.time(),
+        "source": "memory-compact",
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "summary_tokens": summary_tokens,
+        "estimated_cost": estimated_cost,
+        "quality_score": quality,
+    }
+    recent_summaries.append(summary)
+    if len(recent_summaries) > MAX_RECENT:
+        recent_summaries.pop(0)
+    await _publish_summary(envelope, summary)
+    return summary
+
+
+def _summary_quality(summary: str, source: str) -> float:
+    """Cheap regression signal; production evaluation can replace this gauge."""
+    if not summary.strip() or not source.strip():
+        return 0.0
+    length_score = min(1.0, len(summary) / 120)
+    compression_score = 1.0 if len(summary) < len(source) else 0.4
+    return round(0.55 * length_score + 0.45 * compression_score, 4)
+
+
+async def _publish_summary(envelope: EventEnvelope, summary: dict[str, Any]) -> None:
+    if not nats_client or not nats_client.connected:
+        return
+    summary_env = EventEnvelope(
+        event_id=f"summary-{envelope.event_id}",
+        event_type="session.summary.generated",
+        trace_id=envelope.trace_id,
+        tenant_id=envelope.tenant_id,
+        session_id=envelope.session_id,
+        producer={"service": "summarization-service", "instance": os.getenv("HOSTNAME", "local")},
+        payload=summary,
+    )
+    await nats_client.publish("agenthub.session.summary", summary_env)
 
 
 async def _call_llm(prompt: str, tenant_id: str, session_id: str, trace_id: str) -> str:

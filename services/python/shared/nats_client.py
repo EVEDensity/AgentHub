@@ -40,7 +40,7 @@ STREAM_DEFS = [
     {"name": "RETRIEVAL", "subjects": ["agenthub.retrieval.>"], "max_age_seconds": 86400},
     {"name": "KNOWLEDGE", "subjects": ["agenthub.knowledge.>"], "max_age_seconds": 604800},  # 7d
     {"name": "TOOL-PERMISSIONS", "subjects": ["agenthub.tool.permission.>"], "max_age_seconds": 604800},  # 7d
-    {"name": "AUDIT", "subjects": ["agenthub.audit.>"], "max_age_seconds": 7776000},  # 90d
+    {"name": "AUDIT", "subjects": ["agenthub.audit.>", "agenthub.memory.>"], "max_age_seconds": 7776000},  # 90d
 ]
 
 Handler = Callable[[EventEnvelope], Awaitable[None]]
@@ -73,7 +73,13 @@ class NatsClient:
 
         for stream_def in STREAM_DEFS:
             try:
-                await self._js.stream_info(stream_def["name"])
+                info = await self._js.stream_info(stream_def["name"])
+                current = set(info.config.subjects or [])
+                desired = set(stream_def["subjects"])
+                if not desired.issubset(current):
+                    info.config.subjects = sorted(current | desired)
+                    await self._js.update_stream(info.config)
+                    logger.info("updated jetstream subjects for %s", stream_def["name"])
             except Exception:
                 try:
                     from nats.js.api import StreamConfig, StorageType, RetentionPolicy

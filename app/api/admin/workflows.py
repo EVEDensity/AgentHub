@@ -24,6 +24,7 @@ from app.schemas.common import AgentRouteActiveRequest, AgentRouteRequest
 from app.schemas.dag import DAGConfig
 from app.services.agent_route_service import agent_route_service
 from app.services.auth_service import get_current_user, require_admin, write_audit
+from app.services.context_summary_cache import context_summary_cache
 from app.services.template_engine import template_engine
 
 router = APIRouter(prefix="/workflows", tags=["admin-workflows"])
@@ -98,6 +99,7 @@ async def update_workflow(route_id: int, data: AgentRouteRequest, user: dict = D
     )
 
     route = await agent_route_service.get_route(route_id, uid)
+    context_summary_cache.invalidate("route", uid)
     audit_id = write_audit(
         user["id"], "admin", "workflow_update", "L2", "approve",
         {"routeId": route_id, "name": data.name},
@@ -119,6 +121,7 @@ async def delete_workflow(route_id: int, user: dict = Depends(get_current_user))
         raise HTTPException(status_code=404, detail="Workflow not found")
 
     await aexecute("DELETE FROM agent_routes WHERE id = $1 AND user_id = $2", route_id, uid)
+    context_summary_cache.invalidate("route", uid)
 
     audit_id = write_audit(
         user["id"], "admin", "workflow_delete", "L2", "approve",

@@ -1,0 +1,142 @@
+# AgentHub Memory Architecture
+
+## 1. Current online projection
+
+AgentHub does not send every stored memory item to every model call. The online
+prompt is assembled as a bounded projection:
+
+| Layer | Current source | Online behavior | Maturity |
+| --- | --- | --- | --- |
+| L0 working memory | PostgreSQL `messages` | Latest conversation transcript, deduplicated and token-budgeted | Usable |
+| L1 session memory | `users/{user}/sessions/{session}/conversation.md` and session summary | Recent durable turns plus semantic session summary | Usable, partly duplicated at rest |
+| L2 retrieval memory | File memories and memory search tools | Not injected by default; loaded on demand through `memory_search` | Partial; no unified vector lifecycle |
+| L3 global memory | Per-user global summary | Cross-session decisions and preferences, token-budgeted | Partial; freshness and provenance are coarse |
+| Segment compaction | Rust memory-segment-core | Triggered from the online session path, emits token reduction and retained messages | Integrated |
+| Semantic consolidation | Python summarization-service | Converts Rust structural compaction into a durable semantic summary | Integrated |
+
+The request path is:
+
+```text
+DB history (L0)
+  -> token budget
+  -> session summary + durable recent turns + global summary
+  -> semantic/exact overlap removal
+  -> per-model memory budget
+  -> agent prompt
+```
+
+The asynchronous write-back path is:
+
+```text
+session turn persisted
+  -> agenthub.memory.compact.requested
+  -> Rust compact/prune metrics
+  -> memory.compact.completed
+  -> Python semantic summary
+  -> session.summary.generated
+  -> online summary consumer
+  -> per-user session summary + prompt cache invalidation
+```
+
+## 2. Compression policy
+
+- DB history is limited before prompt construction using the selected model's
+  tokenizer and context window.
+- Session summary has higher prompt priority than raw durable turns.
+- Raw durable turns that overlap the DB transcript are removed by normalized
+  block and shingle similarity.
+- Global summary is added last and is removed when it duplicates session
+  context.
+- File-backed knowledge is retrieval-only and does not consume every request's
+  context window.
+- Rust compaction defaults remain 40 messages or 32,000 estimated tokens, with
+  10 recent messages retained.
+- The online publisher samples every 10 turns; Rust decides whether the actual
+  threshold has been reached.
+
+## 3. Token budget
+
+`app/services/token_budget.py` is the single budget authority.
+
+- Uses `tiktoken` for supported OpenAI model families.
+- Uses a conservative multilingual fallback for providers without a bundled
+  native tokenizer.
+- Resolves model context windows and reserves output capacity.
+- Applies section budgets for history, memory, preprocessing, collaboration,
+  tools, and current user content.
+- Applies a final prompt guard to every agent prompt, including specialized
+  CodeGen, Orchestrator, Architect, and Deploy prompts.
+
+## 4. Observability
+
+`GET /api/system/metrics` now exposes `tokenEconomy`:
+
+- Tokens before and after compaction by section.
+- Tokens saved and reduction rate.
+- Truncation count.
+- Route/agent summary cache entries, hits, misses, and hit ratio.
+- Semantic summary tokens and estimated cost.
+- Heuristic summary quality score and sample count.
+- Operational answer-quality proxy and sample count, for detecting obvious
+  empty/error/repetition regressions after budget changes.
+
+The summarization service also exports Prometheus counters/gauges for summary
+tokens, estimated cost, compaction tokens before/after, latency, status, and
+quality.
+
+## 5. Current assessment
+
+The memory subsystem is now an operational multi-layer pipeline, but it is not
+yet a complete ContextOS implementation.
+
+Strengths:
+
+- Tenant-scoped durable memory and summaries.
+- Prompt projection is bounded and retrieval-first.
+- Structural compaction and semantic summarization form an event-driven loop.
+- Idempotent online summary consumption and explicit cache invalidation.
+- Cost and compression visibility exists at both online and offline layers.
+
+Remaining gaps:
+
+1. Native tokenizers are not yet available for every Chinese provider. The
+   fallback is safe for limits but cannot guarantee exact billing parity.
+2. L2 lacks a unified embedding version, retention policy, provenance model,
+   and deletion propagation across vector and file stores.
+3. L3 global summaries do not yet distinguish durable facts, preferences,
+   hypotheses, and expired information.
+4. Summary quality is a heuristic operational signal, not an evaluator-model
+   or human-rated regression score.
+5. In-process caches and the online consumer are worker-local. Multi-replica
+   deployment needs Redis-backed versions and a single durable consumer group.
+6. Summary write-back is last-write-wins. Concurrent summaries need sequence
+   or covered-range conflict checks.
+
+## 6. Next improvements
+
+### Short term
+
+- Add Qwen, DeepSeek, Doubao, GLM, and Claude native tokenizer adapters.
+- Include covered message sequence ranges in summary state and reject stale
+  write-back events.
+- Add integration tests with NATS, Rust core, summarization-service, and the
+  online consumer in Docker Compose.
+- Replace the heuristic history metric with exact before/after counters on all
+  streaming and non-streaming paths.
+
+### Medium term
+
+- Introduce a memory record schema containing tenant, session, source,
+  provenance, confidence, sensitivity, TTL, embedding version, and tombstone.
+- Build L2 vector indexing with deletion propagation and tenant filters.
+- Split L3 into durable facts, user/team preferences, decisions, and expired
+  candidates; refresh incrementally instead of regenerating all summaries.
+- Move cache versions and summary checkpoints to Redis/PostgreSQL for replicas.
+
+### Long term
+
+- Implement AutoDream consolidation with contradiction detection and approval
+  rules for high-risk enterprise memory.
+- Add knowledge-graph memory with temporal edges and source citations.
+- Evaluate summaries against retained facts, unresolved tasks, and answer
+  quality using offline datasets and canary traffic.

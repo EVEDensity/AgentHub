@@ -96,7 +96,18 @@ async def lifespan(app: FastAPI):
             exc_info=True,
         )
 
+    try:
+        from app.services.memory_summary_consumer import memory_summary_consumer
+        await memory_summary_consumer.start()
+        app.state.memory_summary_consumer = memory_summary_consumer
+    except Exception:
+        _log.warning("startup: memory summary consumer unavailable", exc_info=True)
+
     yield
+
+    consumer = getattr(app.state, "memory_summary_consumer", None)
+    if consumer is not None:
+        await consumer.close()
 
     # ── Shutdown: close DB pool ─────────────────────────────────────
     try:

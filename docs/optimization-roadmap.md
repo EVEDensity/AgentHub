@@ -209,7 +209,10 @@ Deliverables:
 
 ### Phase C: Token Economy
 
-Current status: next. Start with route / agent pre-summary caches, then reduce task-preview payloads and repeated context assembly.
+Current status: in progress. Route / agent versioned caches, tokenizer-aware
+budgets, memory deduplication, prompt prefix de-duplication, and the
+Rust-to-Python-to-online summary loop are landed. Native provider tokenizers,
+distributed cache versions, and end-to-end quality evaluation remain.
 
 Priority:
 
@@ -222,6 +225,11 @@ Deliverables:
 - `app/services/context_compaction.py`.
 - Shorter history and memory context.
 - Shorter synthesis inputs.
+- `app/services/token_budget.py` as the shared model budget authority.
+- `app/services/context_summary_cache.py` with explicit version invalidation.
+- `app/services/memory_context.py` for layered projection and overlap removal.
+- `app/services/memory_summary_consumer.py` for durable summary write-back.
+- Memory architecture and maturity assessment in `docs/memory-architecture.md`.
 
 ### Phase D: Platform Hardening
 
