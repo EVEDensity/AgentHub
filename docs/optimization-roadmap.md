@@ -214,6 +214,14 @@ budgets, memory deduplication, prompt prefix de-duplication, and the
 Rust-to-Python-to-online summary loop are landed. Native provider tokenizers,
 distributed cache versions, and end-to-end quality evaluation remain.
 
+Cognitive memory migration status:
+
+- Landed: orthogonal `memory_type/scope/source/version` metadata with legacy
+  Markdown compatibility.
+- Landed: session conversations, summaries, and task execution history are
+  classified as Episodic Memory.
+- Next: structured Semantic extraction with provenance and conflict handling.
+
 Priority:
 
 1. Cache route / agent pre-summaries.

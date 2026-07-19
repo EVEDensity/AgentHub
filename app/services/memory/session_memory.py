@@ -9,7 +9,7 @@ from typing import Any, Optional
 from app.config import MEMORY_DIR
 from app.db.session import afetch_all
 from app.services.adapter_manager import adapter_manager
-from app.services.memory.models import MemoryType, sanitize_filename
+from app.services.memory.models import CognitiveMemoryType, MemoryScope, MemoryType, sanitize_filename
 from app.services.memory.storage import MemoryStorage
 from app.utils.async_file import (
     aexists,
@@ -172,7 +172,12 @@ class SessionMemoryManager:
         global_path = self._storage.base / "总体系统记忆文档.md"
         await awrite_text(global_path, result)
 
-        self._state.setdefault("global", {})["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        global_state = self._state.setdefault("global", {})
+        global_state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        global_state["memory_type"] = CognitiveMemoryType.SEMANTIC.value
+        global_state["scope"] = MemoryScope.USER.value
+        global_state["source"] = "session-summary-aggregation"
+        global_state["version"] = max(1, int(global_state.get("version", 0)) + 1)
         await self._save_state()
 
         # Invalidate memory context cache so the next agent call picks up fresh data
@@ -215,8 +220,13 @@ class SessionMemoryManager:
             sessions = self._state.setdefault("sessions", {})
             current = sessions.get(session_id, {})
             sessions[session_id] = {
+                **current,
                 "last_msg_id": current.get("last_msg_id", ""),
                 "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "memory_type": CognitiveMemoryType.EPISODIC.value,
+                "scope": MemoryScope.SESSION.value,
+                "source": "session-summary",
+                "version": max(1, int(current.get("version", 0)) + 1),
             }
             await self._save_state()
         except OSError as exc:
@@ -402,9 +412,15 @@ class SessionMemoryManager:
     async def _update_session_cursor(self, session_id: str, message_id: str) -> None:
         await self._ensure_state_loaded()
         sessions = self._state.setdefault("sessions", {})
+        current = sessions.get(session_id, {})
         sessions[session_id] = {
+            **current,
             "last_msg_id": message_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "memory_type": CognitiveMemoryType.EPISODIC.value,
+            "scope": MemoryScope.SESSION.value,
+            "source": "session-summary",
+            "version": max(1, int(current.get("version", 0)) + 1),
         }
         await self._save_state()
 

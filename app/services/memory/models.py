@@ -9,7 +9,7 @@ from typing import Optional
 
 
 class MemoryType(str, Enum):
-    """Four strictly-defined memory types matching the architecture document."""
+    """Legacy content category retained for API and file compatibility."""
 
     USER = "user"
     FEEDBACK = "feedback"
@@ -25,6 +25,23 @@ MEMORY_TYPE_DESCRIPTIONS = {
 }
 
 
+class CognitiveMemoryType(str, Enum):
+    WORKING = "working"
+    EPISODIC = "episodic"
+    SEMANTIC = "semantic"
+    PROCEDURAL = "procedural"
+
+
+class MemoryScope(str, Enum):
+    REQUEST = "request"
+    SESSION = "session"
+    USER = "user"
+    TEAM = "team"
+    AGENT = "agent"
+    TENANT = "tenant"
+    GLOBAL = "global"
+
+
 @dataclass
 class MemoryMeta:
     """YAML frontmatter of a memory file."""
@@ -32,6 +49,10 @@ class MemoryMeta:
     name: str
     description: str
     type: MemoryType
+    memory_type: CognitiveMemoryType = CognitiveMemoryType.SEMANTIC
+    scope: MemoryScope = MemoryScope.USER
+    source: str = "manual"
+    version: int = 1
     created_at: str = ""
     updated_at: str = ""
 
@@ -40,6 +61,10 @@ class MemoryMeta:
         lines.append(f'name: {self.name}')
         lines.append(f'description: {self.description}')
         lines.append(f'type: {self.type.value}')
+        lines.append(f'memory_type: {self.memory_type.value}')
+        lines.append(f'scope: {self.scope.value}')
+        lines.append(f'source: {self.source}')
+        lines.append(f'version: {max(1, self.version)}')
         if self.created_at:
             lines.append(f'created_at: {self.created_at}')
         if self.updated_at:
@@ -75,10 +100,26 @@ class MemoryMeta:
             mem_type = MemoryType(raw_type)
         except ValueError:
             mem_type = MemoryType.REFERENCE
+        try:
+            cognitive_type = CognitiveMemoryType(fields.get("memory_type", "semantic"))
+        except ValueError:
+            cognitive_type = CognitiveMemoryType.SEMANTIC
+        try:
+            scope = MemoryScope(fields.get("scope", "user"))
+        except ValueError:
+            scope = MemoryScope.USER
+        try:
+            version = max(1, int(fields.get("version", "1")))
+        except ValueError:
+            version = 1
         return cls(
             name=name,
             description=desc,
             type=mem_type,
+            memory_type=cognitive_type,
+            scope=scope,
+            source=fields.get("source", "legacy-file"),
+            version=version,
             created_at=fields.get("created_at", ""),
             updated_at=fields.get("updated_at", ""),
         )
@@ -93,6 +134,10 @@ class MemoryHeader:
     mtime: float
     description: str
     type: MemoryType
+    memory_type: CognitiveMemoryType = CognitiveMemoryType.SEMANTIC
+    scope: MemoryScope = MemoryScope.USER
+    source: str = "legacy-file"
+    version: int = 1
     name: str = ""
     created_at: str = ""
     updated_at: str = ""

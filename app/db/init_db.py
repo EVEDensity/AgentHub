@@ -97,9 +97,18 @@ _PG_DDL = [
         retry_count INTEGER DEFAULT 0,
         error_type TEXT,
         session_id TEXT,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        memory_type TEXT NOT NULL DEFAULT 'episodic',
+        memory_scope TEXT NOT NULL DEFAULT 'session',
+        memory_source TEXT NOT NULL DEFAULT 'task_execution',
+        memory_version INTEGER NOT NULL DEFAULT 1
     )""",
+    """ALTER TABLE task_execution_history ADD COLUMN IF NOT EXISTS memory_type TEXT NOT NULL DEFAULT 'episodic'""",
+    """ALTER TABLE task_execution_history ADD COLUMN IF NOT EXISTS memory_scope TEXT NOT NULL DEFAULT 'session'""",
+    """ALTER TABLE task_execution_history ADD COLUMN IF NOT EXISTS memory_source TEXT NOT NULL DEFAULT 'task_execution'""",
+    """ALTER TABLE task_execution_history ADD COLUMN IF NOT EXISTS memory_version INTEGER NOT NULL DEFAULT 1""",
     """CREATE INDEX IF NOT EXISTS idx_teh_agent_type ON task_execution_history(assigned_agent, task_type)""",
+    """CREATE INDEX IF NOT EXISTS idx_teh_memory_type_scope ON task_execution_history(memory_type, memory_scope, session_id)""",
     """CREATE TABLE IF NOT EXISTS dag_templates (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,

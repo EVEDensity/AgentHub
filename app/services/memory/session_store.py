@@ -24,6 +24,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from app.services.memory.models import CognitiveMemoryType, MemoryScope
+
 from app.utils.async_file import (
     aexists,
     aread_text,
@@ -59,6 +61,10 @@ class SessionMemoryInfo:
     conversation_size_chars: int = 0
     turn_count: int = 0
     is_active: bool = True
+    memory_type: str = CognitiveMemoryType.EPISODIC.value
+    scope: str = MemoryScope.SESSION.value
+    source: str = "conversation"
+    version: int = 1
 
 
 class SessionMemoryStore:
@@ -110,6 +116,10 @@ class SessionMemoryStore:
             "updated_at": now,
             "turn_count": 0,
             "is_active": True,
+            "memory_type": CognitiveMemoryType.EPISODIC.value,
+            "scope": MemoryScope.SESSION.value,
+            "source": "conversation",
+            "version": 1,
         }
         await awrite_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
 
@@ -178,6 +188,10 @@ class SessionMemoryStore:
         # Update metadata
         meta["turn_count"] = turn_num
         meta["updated_at"] = now_str
+        meta["memory_type"] = CognitiveMemoryType.EPISODIC.value
+        meta["scope"] = MemoryScope.SESSION.value
+        meta["source"] = "conversation"
+        meta["version"] = max(1, int(meta.get("version", 1))) + 1
         await self._save_meta(session_id, meta)
 
         # Check if consolidation is needed
@@ -251,6 +265,10 @@ class SessionMemoryStore:
             conversation_size_chars=conv_size,
             turn_count=meta.get("turn_count", 0),
             is_active=meta.get("is_active", True),
+            memory_type=meta.get("memory_type", CognitiveMemoryType.EPISODIC.value),
+            scope=meta.get("scope", MemoryScope.SESSION.value),
+            source=meta.get("source", "legacy-conversation"),
+            version=max(1, int(meta.get("version", 1))),
         )
 
     async def list_sessions(self) -> list[SessionMemoryInfo]:
@@ -329,6 +347,7 @@ class SessionMemoryStore:
             if consolidated:
                 conv_path = self._sessions_dir / session_id / "conversation.md"
                 await awrite_text(conv_path, consolidated)
+                await self._bump_memory_version(session_id)
                 logger.info(
                     "consolidated session=%s: %d → %d chars",
                     session_id, len(content), len(consolidated),
@@ -464,6 +483,7 @@ class SessionMemoryStore:
             if result and result.strip():
                 conv_path = self._sessions_dir / session_id / "conversation.md"
                 await awrite_text(conv_path, result.strip())
+                await self._bump_memory_version(session_id)
                 return result.strip()
 
         except Exception as exc:
@@ -478,7 +498,16 @@ class SessionMemoryStore:
         """Build the header for a new conversation.md file."""
         name = session_name or session_id
         now = datetime.now().isoformat(timespec="seconds")
-        return f"""# 会话记忆: {name}
+        return f"""---
+memory_type: {CognitiveMemoryType.EPISODIC.value}
+scope: {MemoryScope.SESSION.value}
+source: conversation
+version: 1
+session_id: {session_id}
+created_at: {now}
+---
+
+# 会话记忆: {name}
 
 > Session ID: `{session_id}`
 > 创建时间: {now}
@@ -506,6 +535,17 @@ class SessionMemoryStore:
         await amkdir(session_dir)
         meta_path = session_dir / "session.json"
         await awrite_text(meta_path, json.dumps(meta, ensure_ascii=False, indent=2))
+
+    async def _bump_memory_version(self, session_id: str) -> None:
+        meta = await self._load_meta(session_id)
+        if not meta:
+            return
+        meta["memory_type"] = CognitiveMemoryType.EPISODIC.value
+        meta["scope"] = MemoryScope.SESSION.value
+        meta["source"] = "conversation"
+        meta["version"] = max(1, int(meta.get("version", 1))) + 1
+        meta["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        await self._save_meta(session_id, meta)
 
     @staticmethod
     def _truncate_message(msg: str, max_chars: int) -> str:

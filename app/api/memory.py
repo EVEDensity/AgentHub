@@ -8,7 +8,15 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.config import AUTO_MEMORY_ENABLED, MEMORY_DIR
-from app.services.memory import MemoryDocument, MemoryHeader, MemoryScanner, MemoryStorage, MemoryType
+from app.services.memory import (
+    CognitiveMemoryType,
+    MemoryDocument,
+    MemoryHeader,
+    MemoryScanner,
+    MemoryScope,
+    MemoryStorage,
+    MemoryType,
+)
 from app.services.memory.consolidator import MemoryConsolidator
 from app.services.memory.extractor import MemoryExtractor
 from app.services.memory.session_memory import SessionMemoryManager
@@ -100,6 +108,9 @@ class MemoryCreateRequest(BaseModel):
     type: MemoryType = Field(MemoryType.REFERENCE, description="记忆类型")
     body: str = Field("", description="记忆内容正文（Markdown）")
     filename: Optional[str] = Field(None, description="可选：指定文件名，默认从 name 自动生成")
+    memory_type: CognitiveMemoryType = CognitiveMemoryType.SEMANTIC
+    scope: MemoryScope = MemoryScope.USER
+    source: str = Field("manual", min_length=1, max_length=128)
 
 
 class MemoryUpdateRequest(BaseModel):
@@ -107,6 +118,9 @@ class MemoryUpdateRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=512)
     type: Optional[MemoryType] = None
     body: Optional[str] = None
+    memory_type: Optional[CognitiveMemoryType] = None
+    scope: Optional[MemoryScope] = None
+    source: Optional[str] = Field(None, min_length=1, max_length=128)
 
 
 class MemoryFileInfo(BaseModel):
@@ -117,6 +131,10 @@ class MemoryFileInfo(BaseModel):
     mtime: float
     created_at: str = ""
     updated_at: str = ""
+    memory_type: str = CognitiveMemoryType.SEMANTIC.value
+    scope: str = MemoryScope.USER.value
+    source: str = "legacy-file"
+    version: int = 1
 
 
 class MemoryDetail(BaseModel):
@@ -156,6 +174,7 @@ class SessionTransferRequest(BaseModel):
 @router.get("/files", response_model=list[MemoryFileInfo])
 async def list_memories(
     type_filter: Optional[str] = Query(None, alias="type"),
+    memory_type_filter: Optional[str] = Query(None, alias="memory_type"),
     user: dict = Depends(get_current_user),
 ):
     """List all memory files with headers, optionally filtered by type."""
@@ -168,6 +187,12 @@ async def list_memories(
             headers = [h for h in headers if h.type == mt]
         except ValueError:
             raise HTTPException(status_code=400, detail=f"无效的记忆类型: {type_filter}")
+    if memory_type_filter:
+        try:
+            cognitive_type = CognitiveMemoryType(memory_type_filter)
+            headers = [h for h in headers if h.memory_type == cognitive_type]
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"无效的认知记忆类型: {memory_type_filter}")
     return [
         MemoryFileInfo(
             filename=h.filename,
@@ -177,6 +202,10 @@ async def list_memories(
             mtime=h.mtime,
             created_at=h.created_at,
             updated_at=h.updated_at,
+            memory_type=h.memory_type.value,
+            scope=h.scope.value,
+            source=h.source,
+            version=h.version,
         )
         for h in headers
     ]
@@ -198,6 +227,10 @@ async def read_memory(filename: str, user: dict = Depends(get_current_user)):
             "type": doc.meta.type.value,
             "created_at": doc.meta.created_at,
             "updated_at": doc.meta.updated_at,
+            "memory_type": doc.meta.memory_type.value,
+            "scope": doc.meta.scope.value,
+            "source": doc.meta.source,
+            "version": doc.meta.version,
         },
         body=doc.body,
     )
@@ -369,6 +402,10 @@ async def import_memories(
                 type_=doc.meta.type,
                 body=doc.body,
                 filename=filename,
+                memory_type=doc.meta.memory_type,
+                scope=doc.meta.scope,
+                source=doc.meta.source,
+                version=doc.meta.version,
             )
             imported.append(filename)
         except Exception as exc:
@@ -396,6 +433,9 @@ async def create_memory(req: MemoryCreateRequest, user: dict = Depends(get_curre
         type_=req.type,
         body=req.body,
         filename=req.filename,
+        memory_type=req.memory_type,
+        scope=req.scope,
+        source=req.source,
     )
     fname = Path(doc.file_path).name
     return MemoryFileInfo(
@@ -406,6 +446,10 @@ async def create_memory(req: MemoryCreateRequest, user: dict = Depends(get_curre
         mtime=0,
         created_at=doc.meta.created_at,
         updated_at=doc.meta.updated_at,
+        memory_type=doc.meta.memory_type.value,
+        scope=doc.meta.scope.value,
+        source=doc.meta.source,
+        version=doc.meta.version,
     )
 
 
@@ -422,6 +466,9 @@ async def update_memory(filename: str, req: MemoryUpdateRequest, user: dict = De
     new_desc = req.description if req.description is not None else doc.meta.description
     new_type = req.type if req.type is not None else doc.meta.type
     new_body = req.body if req.body is not None else doc.body
+    new_memory_type = req.memory_type if req.memory_type is not None else doc.meta.memory_type
+    new_scope = req.scope if req.scope is not None else doc.meta.scope
+    new_source = req.source if req.source is not None else doc.meta.source
 
     await storage.save(
         name=new_name,
@@ -429,6 +476,9 @@ async def update_memory(filename: str, req: MemoryUpdateRequest, user: dict = De
         type_=new_type,
         body=new_body,
         filename=filename,
+        memory_type=new_memory_type,
+        scope=new_scope,
+        source=new_source,
     )
     # Re-read to get fresh metadata
     updated = await storage.get(filename)
@@ -442,6 +492,10 @@ async def update_memory(filename: str, req: MemoryUpdateRequest, user: dict = De
         mtime=0,
         created_at=updated.meta.created_at,
         updated_at=updated.meta.updated_at,
+        memory_type=updated.meta.memory_type.value,
+        scope=updated.meta.scope.value,
+        source=updated.meta.source,
+        version=updated.meta.version,
     )
 
 

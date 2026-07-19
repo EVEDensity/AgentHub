@@ -2,6 +2,13 @@
 
 ## 1. Current online projection
 
+Memory now has two orthogonal classifications:
+
+- Existing `type=user|feedback|project|reference` remains the content category.
+- `memory_type=working|episodic|semantic|procedural` is the cognitive type.
+- `scope`, `source`, and monotonic `version` define ownership, provenance, and
+  optimistic evolution without changing the underlying file/database storage.
+
 AgentHub does not send every stored memory item to every model call. The online
 prompt is assembled as a bounded projection:
 
@@ -24,6 +31,10 @@ DB history (L0)
   -> per-model memory budget
   -> agent prompt
 ```
+
+Session conversations, session summaries, and `task_execution_history` are
+classified as Episodic Memory. Existing Markdown files without the new
+frontmatter fields are read as user-scoped Semantic Memory from a legacy file.
 
 The asynchronous write-back path is:
 
