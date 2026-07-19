@@ -21,6 +21,7 @@ from app.services.memory.consolidator import MemoryConsolidator
 from app.services.memory.extractor import MemoryExtractor
 from app.services.memory.session_memory import SessionMemoryManager
 from app.services.memory.semantic_memory import SemanticMemoryStore
+from app.services.memory.procedural_memory import ProceduralMemoryCatalog
 from app.services.auth.service import get_current_user
 from app.services.auth.session_guard import check_session_access
 from app.db.session import afetch_all
@@ -102,6 +103,10 @@ def _get_session_mgr(user_id: str = "") -> SessionMemoryManager:
 
 def _get_semantic_store(user_id: str) -> SemanticMemoryStore:
     return SemanticMemoryStore(_get_user_memory_dir(user_id or "local-admin"))
+
+
+def _get_procedural_catalog(user_id: str) -> ProceduralMemoryCatalog:
+    return ProceduralMemoryCatalog(user_id, _get_storage(user_id))
 
 
 # -- Pydantic request/response models -----------------------------------
@@ -189,6 +194,18 @@ async def list_semantic_memories(
         "count": len(records),
         "records": [record.__dict__ for record in records],
     }
+
+
+@router.get("/procedural")
+async def list_procedural_memories(
+    query: str = Query("", max_length=1000),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """List the unified read-through catalog for skills, workflows and policies."""
+    user_id = str(user["id"])
+    catalog = _get_procedural_catalog(user_id)
+    records = await catalog.search(query, limit=100) if query else await catalog.list_records()
+    return {"count": len(records), "records": [record.to_dict() for record in records]}
 
 
 # -- endpoints -----------------------------------------------------------

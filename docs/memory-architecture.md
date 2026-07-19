@@ -44,6 +44,13 @@ the same semantic key supersedes the old record instead of overwriting its
 history. Prompt assembly retrieves query-relevant active records plus durable
 preferences; ordinary narrative sentences are not promoted automatically.
 
+Procedural Memory is exposed as a read-through catalog over existing sources
+of truth. Skills, DAG templates, user agent routes, memory files marked as SOP,
+registered tools, and tool permission rules keep their original storage and
+execution owners. The catalog adds a stable record ID, source/version,
+content hash, scope, kind, and risk level without copying procedure bodies.
+`GET /api/memory/procedural` provides the combined catalog and query view.
+
 The asynchronous write-back path is:
 
 ```text

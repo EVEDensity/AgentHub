@@ -222,7 +222,9 @@ Cognitive memory migration status:
   classified as Episodic Memory.
 - Landed: structured Semantic extraction with provenance, confidence, version,
   conflict supersession, query retrieval, and prompt projection.
-- Next: classify Skills, DAG, SOP, and tool policies as Procedural Memory.
+- Landed: Skills, DAG templates/routes, SOP files, tool definitions, and tool
+  permission rules are exposed through a versioned Procedural Memory catalog.
+- Next: dynamic four-memory token allocation by task intent.
 
 Priority:
 

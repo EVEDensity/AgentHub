@@ -23,6 +23,8 @@ _LAZY_EXPORTS = {
     "MemoryConsolidator": ("app.services.memory.consolidator", "MemoryConsolidator"),
     "SemanticMemoryStore": ("app.services.memory.semantic_memory", "SemanticMemoryStore"),
     "SemanticMemoryRecord": ("app.services.memory.semantic_memory", "SemanticMemoryRecord"),
+    "ProceduralMemoryCatalog": ("app.services.memory.procedural_memory", "ProceduralMemoryCatalog"),
+    "ProceduralMemoryRecord": ("app.services.memory.procedural_memory", "ProceduralMemoryRecord"),
 }
 
 
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
     from app.services.memory.session_store import SessionMemoryInfo, SessionMemoryStore
     from app.services.memory.storage import MemoryStorage
     from app.services.memory.semantic_memory import SemanticMemoryRecord, SemanticMemoryStore
+    from app.services.memory.procedural_memory import ProceduralMemoryCatalog, ProceduralMemoryRecord
 
 
 __all__ = [
@@ -62,4 +65,6 @@ __all__ = [
     "SessionMemoryStore",
     "SemanticMemoryRecord",
     "SemanticMemoryStore",
+    "ProceduralMemoryCatalog",
+    "ProceduralMemoryRecord",
 ]
