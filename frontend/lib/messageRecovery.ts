@@ -42,12 +42,12 @@ export function registerReplayMessageId(seenIds: Set<string>, messageId: string,
 }
 
 export function mergeReloadedMessages(prev: Message[], incoming: Message[]): Message[] {
-  const existingIds = new Set(prev.map(getMessageIdentity).filter(Boolean));
+  const clean = prev.filter((message) => !isStreamingThinkingMessage(message));
+  const existingIds = new Set(clean.map(getMessageIdentity).filter(Boolean));
   const newMessages = incoming.filter((message) => {
     const identity = getMessageIdentity(message);
     return !identity || !existingIds.has(identity);
   });
-  const clean = prev.filter((m) => !isStreamingThinkingMessage(m));
   const merged = dedupeMessagesByIdentity([...clean, ...newMessages]);
   if (newMessages.length === 0 && clean.length === prev.length && merged.length === prev.length) {
     return prev;

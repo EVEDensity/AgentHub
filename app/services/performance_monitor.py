@@ -152,6 +152,20 @@ class PerformanceMonitor:
         self._total_http_retries = 0
         self._total_tool_call_loops = 0
         self._total_tool_call_iterations = 0
+        self._token_economy: dict[str, dict[str, float]] = defaultdict(
+            lambda: {
+                "tokens_before": 0,
+                "tokens_after": 0,
+                "truncations": 0,
+                "operations": 0,
+            }
+        )
+        self._summary_tokens = 0
+        self._summary_cost = 0.0
+        self._summary_quality_total = 0.0
+        self._summary_quality_samples = 0
+        self._answer_quality_total = 0.0
+        self._answer_quality_samples = 0
 
     # ── LLM Call tracking (sync — hot-path safe) ───────────────────
 
@@ -248,6 +262,40 @@ class PerformanceMonitor:
             self._total_tool_call_loops += 1
             self._total_tool_call_iterations += iterations
 
+    def record_token_compaction(
+        self,
+        section: str,
+        tokens_before: int,
+        tokens_after: int,
+        truncated: bool = False,
+    ) -> None:
+        with self._lock:
+            metrics = self._token_economy[section]
+            metrics["tokens_before"] += max(0, tokens_before)
+            metrics["tokens_after"] += max(0, tokens_after)
+            metrics["operations"] += 1
+            if truncated:
+                metrics["truncations"] += 1
+
+    def record_summary_usage(
+        self,
+        tokens: int,
+        *,
+        estimated_cost: float = 0.0,
+        quality_score: float | None = None,
+    ) -> None:
+        with self._lock:
+            self._summary_tokens += max(0, tokens)
+            self._summary_cost += max(0.0, estimated_cost)
+            if quality_score is not None:
+                self._summary_quality_total += max(0.0, min(1.0, quality_score))
+                self._summary_quality_samples += 1
+
+    def record_answer_quality(self, score: float) -> None:
+        with self._lock:
+            self._answer_quality_total += max(0.0, min(1.0, score))
+            self._answer_quality_samples += 1
+
     # ── Snapshot API (can be called from sync or async context) ────
 
     def snapshot(self) -> dict[str, Any]:
@@ -309,6 +357,40 @@ class PerformanceMonitor:
 
             uptime = time.time() - self._started_at
 
+            token_sections: dict[str, dict[str, float]] = {}
+            for name, values in sorted(self._token_economy.items()):
+                before = int(values["tokens_before"])
+                after = int(values["tokens_after"])
+                token_sections[name] = {
+                    "tokensBefore": before,
+                    "tokensAfter": after,
+                    "tokensSaved": max(0, before - after),
+                    "reductionRate": round((before - after) / before, 4) if before else 0.0,
+                    "truncations": int(values["truncations"]),
+                    "operations": int(values["operations"]),
+                }
+
+            try:
+                from app.services.context_summary_cache import context_summary_cache
+                summary_cache = context_summary_cache.stats()
+            except Exception:
+                summary_cache = {}
+
+            token_economy = {
+                "sections": token_sections,
+                "summaryCache": summary_cache,
+                "summaryTokens": self._summary_tokens,
+                "summaryEstimatedCost": round(self._summary_cost, 6),
+                "summaryQualityScore": round(
+                    self._summary_quality_total / self._summary_quality_samples, 4,
+                ) if self._summary_quality_samples else None,
+                "summaryQualitySamples": self._summary_quality_samples,
+                "answerQualityScore": round(
+                    self._answer_quality_total / self._answer_quality_samples, 4,
+                ) if self._answer_quality_samples else None,
+                "answerQualitySamples": self._answer_quality_samples,
+            }
+
             return {
                 "uptimeSeconds": round(uptime, 1),
                 "global": {
@@ -323,6 +405,7 @@ class PerformanceMonitor:
                 "streaming": stream_snap,
                 "websocket": ws_snap,
                 "degradations": deg_snap,
+                "tokenEconomy": token_economy,
             }
 
     def model_health(self) -> dict[str, Any]:

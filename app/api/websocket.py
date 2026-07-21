@@ -706,13 +706,21 @@ async def _append_turn_to_session_memory(
     """
     try:
         store = _get_session_store(user_id)
-        await store.append_turn(
+        turn_count = await store.append_turn(
             session_id=session_id,
             user_message=user_message,
             agent_response=agent_response,
             sender=sender or "user",
             agent_name=agent_name or "assistant",
         )
+        if turn_count >= 10 and turn_count % 10 == 0:
+            try:
+                from app.services.memory_summary_consumer import memory_summary_consumer
+                await memory_summary_consumer.request_compaction(
+                    session_id, user_id or "local-admin",
+                )
+            except Exception:
+                logger.debug("memory compaction request failed", exc_info=True)
         # Invalidate the memory context cache so the next agent call
         # picks up the updated session memory.
         try:

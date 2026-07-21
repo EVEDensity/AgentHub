@@ -16,6 +16,10 @@ export interface DagTaskUpdateEvent {
   retries?: number;
 }
 
+export interface PersistedTaskSnapshot {
+  dagProgress?: DagState;
+}
+
 type Listener = () => void;
 
 const EMPTY_DAG_STATE: DagState = Object.freeze({
@@ -65,12 +69,56 @@ export function mergeDagTaskUpdate(prev: DagState, update: DagTaskUpdateEvent): 
     return prev;
   }
 
-  return {
+  const next = {
     ...prev,
     total,
     completed,
     nodes,
   };
+  const unchanged = next.total === prev.total
+    && next.completed === prev.completed
+    && next.nodes.every((node, index) => (
+      node.status === prev.nodes[index]?.status
+      && node.error === prev.nodes[index]?.error
+      && node.duration_ms === prev.nodes[index]?.duration_ms
+    ));
+  return unchanged ? prev : next;
+}
+
+function statusRank(status?: string): number {
+  if (status === 'SUCCESS' || status === 'FAILED') return 2;
+  if (status === 'RUNNING') return 1;
+  return 0;
+}
+
+export function mergeRecoveredDagState(snapshot: DagState, live: DagState): DagState {
+  if (!snapshot.nodes.length) return live;
+  if (!live.nodes.length) return snapshot;
+
+  const liveById = new Map(live.nodes.map((node) => [node.id, node]));
+  const hasSharedNode = snapshot.nodes.some((node) => node.id && liveById.has(node.id));
+  if (!hasSharedNode) return snapshot;
+
+  const nodes = snapshot.nodes.map((node) => {
+    const liveNode = node.id ? liveById.get(node.id) : undefined;
+    if (!liveNode || statusRank(liveNode.status) < statusRank(node.status)) return node;
+    return {
+      ...node,
+      status: liveNode.status,
+      error: liveNode.error ?? node.error,
+      duration_ms: liveNode.duration_ms ?? node.duration_ms,
+    };
+  });
+  return {
+    ...snapshot,
+    completed: Math.max(snapshot.completed, live.completed, nodes.filter((node) => node.status === 'SUCCESS').length),
+    nodes,
+  };
+}
+
+export function selectLatestPersistedDagState(tasks: PersistedTaskSnapshot[]): DagState | null {
+  const dag = tasks.find((task) => task.dagProgress?.nodes?.length)?.dagProgress;
+  return dag ? { ...dag, nodes: dag.nodes.map((node) => ({ ...node })) } : null;
 }
 
 export function deriveDagStateFromMessages(messages: Message[]): DagState {
@@ -117,6 +165,13 @@ class DagStore {
     this.notify(sessionId);
   }
 
+  restoreState(sessionId: string, snapshot: DagState): void {
+    const live = this.sessions.get(sessionId) ?? createEmptyDagState();
+    const next = mergeRecoveredDagState(snapshot, live);
+    this.sessions.set(sessionId, next);
+    this.notify(sessionId);
+  }
+
   updateTask(sessionId: string, update: DagTaskUpdateEvent): void {
     const prev = this.sessions.get(sessionId) ?? createEmptyDagState();
     const next = mergeDagTaskUpdate(prev, update);
@@ -129,7 +184,8 @@ class DagStore {
     if (this.sessions.has(sessionId) && !force) return;
     const derived = deriveDagStateFromMessages(messages);
     if (!force && derived.total === 0 && derived.nodes.length === 0) return;
-    this.sessions.set(sessionId, derived);
+    const current = this.sessions.get(sessionId) ?? createEmptyDagState();
+    this.sessions.set(sessionId, force ? mergeRecoveredDagState(derived, current) : derived);
     this.notify(sessionId);
   }
 
@@ -173,4 +229,8 @@ export function syncDagFromMessages(sessionId: string, messages: Message[], forc
 
 export function clearDagSession(sessionId: string): void {
   dagStore.clearSession(sessionId);
+}
+
+export function restoreDagState(sessionId: string, snapshot: DagState): void {
+  dagStore.restoreState(sessionId, snapshot);
 }

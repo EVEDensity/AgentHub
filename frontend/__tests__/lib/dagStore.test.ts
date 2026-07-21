@@ -5,6 +5,8 @@ import {
   deriveDagStateFromMessages,
   getDagState,
   mergeDagTaskUpdate,
+  mergeRecoveredDagState,
+  selectLatestPersistedDagState,
   syncDagFromMessages,
 } from '../../lib/dagStore';
 import type { Message, TaskPreviewEvent } from '../../types';
@@ -143,5 +145,38 @@ describe('dagStore helpers', () => {
 
     syncDagFromMessages('session-force-refresh', refreshed, true);
     expect(getDagState('session-force-refresh').nodes[0].id).toBe('node-new');
+  });
+
+  it('merges a persisted snapshot without regressing newer live progress', () => {
+    const snapshot = {
+      total: 2,
+      completed: 0,
+      nodes: [
+        { id: 'node-1', status: 'PENDING', description: 'Plan' },
+        { id: 'node-2', status: 'PENDING', description: 'Build' },
+      ],
+    };
+    const live = {
+      total: 2,
+      completed: 1,
+      nodes: [
+        { id: 'node-1', status: 'SUCCESS', description: 'Plan' },
+        { id: 'node-2', status: 'RUNNING', description: 'Build' },
+      ],
+    };
+
+    expect(mergeRecoveredDagState(snapshot, live)).toMatchObject({
+      completed: 1,
+      nodes: [{ status: 'SUCCESS' }, { status: 'RUNNING' }],
+    });
+  });
+
+  it('selects the newest persisted task that contains a dag', () => {
+    const dag = { total: 1, completed: 1, nodes: [{ id: 'done', status: 'SUCCESS' }] };
+    expect(selectLatestPersistedDagState([
+      {},
+      { dagProgress: dag },
+      { dagProgress: { total: 1, completed: 0, nodes: [{ id: 'old' }] } },
+    ])).toEqual(dag);
   });
 });

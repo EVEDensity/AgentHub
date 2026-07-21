@@ -96,7 +96,29 @@ async def lifespan(app: FastAPI):
             exc_info=True,
         )
 
+    try:
+        from app.services.memory_summary_consumer import memory_summary_consumer
+        await memory_summary_consumer.start()
+        app.state.memory_summary_consumer = memory_summary_consumer
+    except Exception:
+        _log.warning("startup: memory summary consumer unavailable", exc_info=True)
+
+    try:
+        from app.services.distributed_cache_versions import distributed_cache_version_bus
+        await distributed_cache_version_bus.start()
+        app.state.distributed_cache_version_bus = distributed_cache_version_bus
+    except Exception:
+        _log.warning("startup: distributed cache version bus unavailable", exc_info=True)
+
     yield
+
+    consumer = getattr(app.state, "memory_summary_consumer", None)
+    if consumer is not None:
+        await consumer.close()
+
+    version_bus = getattr(app.state, "distributed_cache_version_bus", None)
+    if version_bus is not None:
+        await version_bus.close()
 
     # ── Shutdown: close DB pool ─────────────────────────────────────
     try:

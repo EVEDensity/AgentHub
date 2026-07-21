@@ -78,12 +78,12 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
 
   return (
     <section className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-start">
         <div>
-          <h2 className="text-[34px] font-semibold leading-tight text-warm-900">服务商</h2>
+          <h2 className="text-2xl font-semibold leading-tight text-warm-900 sm:text-[30px]">服务商</h2>
           <p className="mt-1 text-sm text-warm-500">管理 API 服务商以访问模型。</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           <button className="btn-secondary" onClick={() => props.setShowLocalAgentModal(true)}>
             [laptop] 接入本地 Agent
           </button>
@@ -147,9 +147,9 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
           return (
             <div
               key={a.agentId}
-              className={`rounded-2xl border bg-warm-100 px-5 py-4 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-success-400' : 'border-warm-200'}`}
+              className={`rounded-lg border bg-warm-100 px-4 py-4 sm:px-5 ${isDefaultAgent ? 'border-primary-400 ring-1 ring-primary-200' : online ? 'border-success-400' : 'border-warm-200'}`}
             >
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                 <div className="min-w-0 flex items-start gap-3">
                   {a.avatarUrl ? (
                     <img src={a.avatarUrl} className="h-10 w-10 rounded-full object-cover shrink-0" alt={a.displayName || a.agentId} loading="lazy" decoding="async" />
@@ -188,7 +188,7 @@ export default function ServiceProviderModule(props: ServiceProviderModuleProps)
                     )}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 xl:shrink-0 xl:justify-end">
                   {!isDefaultAgent && (
                     <button className="btn-secondary px-3 py-1 text-sm" onClick={() => { void props.handleSetDefaultChatAgent(a.agentId); }}>设为默认对话模型</button>
                   )}

@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, type JSX } from 'react';
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 
-const AgentCanvas = dynamic(() => import('../../components/flow/AgentCanvas'), {
+const ReactFlowWorkflowEditor = dynamic(() => import('../../components/flow/ReactFlowWorkflowEditor'), {
   ssr: false,
   loading: () => (
     <div className="flex h-screen items-center justify-center bg-warm-50 text-warm-500">
@@ -40,10 +40,7 @@ function CanvasContent(): JSX.Element {
   }, [searchParams]);
 
   return (
-    <AgentCanvas
-      workflowId={workflowId}
-      initialData={undefined}
-    />
+    <ReactFlowWorkflowEditor workflowId={workflowId} />
   );
 }
 

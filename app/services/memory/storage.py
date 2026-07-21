@@ -9,9 +9,11 @@ from typing import Optional
 from app.services.memory.models import (
     MEMORY_TYPE_DESCRIPTIONS,
     MemoryDocument,
+    CognitiveMemoryType,
     MemoryHeader,
     MemoryMeta,
     MemoryType,
+    MemoryScope,
     sanitize_filename,
 )
 from app.utils.async_file import (
@@ -68,6 +70,11 @@ class MemoryStorage:
         type_: MemoryType,
         body: str = "",
         filename: str | None = None,
+        *,
+        memory_type: CognitiveMemoryType | None = None,
+        scope: MemoryScope | None = None,
+        source: str | None = None,
+        version: int | None = None,
     ) -> MemoryDocument:
         """Create or overwrite a memory file."""
         await self._ensure_dir()
@@ -87,6 +94,10 @@ class MemoryStorage:
             name=name,
             description=description,
             type=type_,
+            memory_type=memory_type or (existing.meta.memory_type if existing else CognitiveMemoryType.SEMANTIC),
+            scope=scope or (existing.meta.scope if existing else MemoryScope.USER),
+            source=source or (existing.meta.source if existing else "manual"),
+            version=max(1, version if version is not None else ((existing.meta.version + 1) if existing else 1)),
             created_at=created_at,
             updated_at=now,
         )
@@ -310,6 +321,10 @@ class MemoryStorage:
                         mtime=mtime,
                         description=meta.description,
                         type=meta.type,
+                        memory_type=meta.memory_type,
+                        scope=meta.scope,
+                        source=meta.source,
+                        version=meta.version,
                         name=meta.name,
                         created_at=meta.created_at,
                         updated_at=meta.updated_at,
@@ -349,16 +364,19 @@ class MemoryStorage:
             "## 概述",
             "",
             "本目录存储跨会话的持久化记忆。每一条记忆是一个 `.md` 文件，",
-            "包含 YAML frontmatter（name, description, type）。",
+            "包含 YAML frontmatter（name, description, type, memory_type, scope, source, version）。",
             "",
-            "| 文件名 | 名称 | 类型 | 描述 | 更新于 |",
-            "|--------|------|------|------|--------|",
+            "| 文件名 | 名称 | 内容类别 | 认知类型 | 作用域 | 版本 | 描述 | 更新于 |",
+            "|--------|------|----------|----------|--------|------|------|--------|",
         ]
         for h in headers:
             updated = h.updated_at or datetime.fromtimestamp(h.mtime).isoformat(timespec="seconds") if h.mtime else "-"
             # Truncate description for table
             desc = h.description[:60] + "…" if len(h.description) > 60 else h.description
-            lines.append(f"| {h.filename} | {h.name} | {h.type.value} | {desc} | {updated} |")
+            lines.append(
+                f"| {h.filename} | {h.name} | {h.type.value} | {h.memory_type.value} | "
+                f"{h.scope.value} | {h.version} | {desc} | {updated} |"
+            )
 
         lines.append("")
         lines.append("---")

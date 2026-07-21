@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
-from app.services.memory.models import MemoryHeader, MemoryType
+from app.services.memory.models import CognitiveMemoryType, MemoryHeader, MemoryType
 from app.services.memory.storage import MemoryStorage
 
 
@@ -27,6 +27,14 @@ class MemoryScanner:
         """Return only memories of a specific type."""
         return [h for h in await self.scan(max_files=max_files) if h.type == type_]
 
+    async def filter_by_memory_type(
+        self, memory_type: CognitiveMemoryType, max_files: int = 200,
+    ) -> list[MemoryHeader]:
+        return [
+            header for header in await self.scan(max_files=max_files)
+            if header.memory_type == memory_type
+        ]
+
     async def format_manifest(self, headers: Optional[list[MemoryHeader]] = None) -> str:
         """Format scan results as a text manifest (formatMemoryManifest equivalent)."""
         if headers is None:
@@ -39,7 +47,8 @@ class MemoryScanner:
             freshness = self.freshness_text(h.mtime)
             lines.append(
                 f"  - {h.filename} | {h.name} | type={h.type.value} | "
-                f"{h.description[:50]}{freshness}"
+                f"memory_type={h.memory_type.value} | scope={h.scope.value} | "
+                f"v{h.version} | {h.description[:50]}{freshness}"
             )
         return "\n".join(lines)
 

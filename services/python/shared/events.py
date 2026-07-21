@@ -19,6 +19,7 @@ class EventType(str, Enum):
     SESSION_STREAM_CHUNK = "session.stream.chunk"
     SESSION_STREAM_FLUSH = "session.stream.flush"
     SESSION_STREAM_COMPLETE = "session.stream.complete"
+    SESSION_SUMMARY_GENERATED = "session.summary.generated"
     AGENT_REACT_TRANSITION = "agent.react.transition"
     AGENT_RUNTIME_DISPATCH = "agent.runtime.dispatch"
     AGENT_RUNTIME_RESULT = "agent.runtime.result"
@@ -32,6 +33,8 @@ class EventType(str, Enum):
     KNOWLEDGE_DOCUMENT_REQUESTED = "knowledge.document.requested"
     KNOWLEDGE_DOCUMENT_COMPLETED = "knowledge.document.completed"
     AUDIT_SECURITY_EVENT = "audit.security.event"
+    MEMORY_COMPACT_REQUESTED = "memory.compact.requested"
+    MEMORY_COMPACT_COMPLETED = "memory.compact.completed"
 
 
 class Producer(BaseModel):

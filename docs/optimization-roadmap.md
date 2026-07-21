@@ -7,6 +7,13 @@ AgentHub is already past the "chat wrapper" stage. The current codebase has a us
 What is now true in the repository:
 
 - `frontend/app/page.tsx` is already thinner than before and now delegates message recovery, WebSocket URL building, and DAG state to helpers.
+- `frontend/hooks/useSessionWebSocket.ts` and `frontend/hooks/useSessionRecovery.ts` now carry the connection lifecycle and reconnect / restore logic out of the page shell.
+- `frontend/__tests__/components/chat/taskPreviewReplay.test.tsx` and `frontend/__tests__/components/chat/dagReplay.test.tsx` cover duplicate preview events, reconnect replay, and session switching.
+- `frontend/components/admin/PermissionModule.tsx` now replaces the stale `权限` placeholder with a real permission-rule surface backed by `/api/admin/permissions/rules`.
+- The admin shell now has explicit mobile, compact-laptop, and wide-desktop behavior; compact layouts collapse the sidebar and remove controls that cannot operate at that width.
+- Permission rules now support validated create/edit/toggle/delete flows, request retry feedback, and focused interaction tests.
+- Compact admin sidebars now expand to their persisted width without being clipped by the responsive grid.
+- Recovery now advances the replay cursor for all identified events, merges final messages over streaming placeholders, and restores persisted DAG progress without overwriting newer live updates.
 - Prompt/token control has started through `app/services/context_compaction.py`, `app/services/conversation_history.py`, `app/services/orchestrator_preprocessor.py`, `app/services/task_decomposer.py`, and `app/services/result_synthesizer.py`.
 - `app/api/websocket_message_flow.py` and `app/api/websocket.py` now share compact task preview construction.
 - The repo already carries the architecture needed for enterprise expansion, but it still has a few oversized hot modules.
@@ -147,7 +154,14 @@ Success criteria:
 - Teams can manage tokens and permissions from the platform.
 - External developers can integrate without reading internal code first.
 
-### 4.4 Long term
+### 4.4 Near-term execution order
+
+1. Finish permission-rule CRUD and validation in the new admin module.
+2. Keep thinning the last frontend coupling in message recovery and DAG replay.
+3. Add route / agent pre-summary caches and shrink preview payloads one more layer.
+4. Only after those are stable, move to DAG editor, template market, SDKs, and token management.
+
+### 4.5 Long term
 
 Focus:
 
@@ -163,6 +177,8 @@ Success criteria:
 ## 5. Execution Phases
 
 ### Phase A: Stabilize
+
+Current status: complete. Admin responsiveness, permission rules, message recovery, replay cursors, duplicate-event handling, session isolation, and persisted DAG replay are covered by focused tests.
 
 Priority:
 
@@ -193,6 +209,29 @@ Deliverables:
 
 ### Phase C: Token Economy
 
+Current status: in progress. Route / agent versioned caches, tokenizer-aware
+budgets, memory deduplication, prompt prefix de-duplication, and the
+Rust-to-Python-to-online summary loop are landed. Native provider tokenizers,
+distributed cache versions, and end-to-end quality evaluation remain.
+
+Cognitive memory migration status:
+
+- Landed: orthogonal `memory_type/scope/source/version` metadata with legacy
+  Markdown compatibility.
+- Landed: session conversations, summaries, and task execution history are
+  classified as Episodic Memory.
+- Landed: structured Semantic extraction with provenance, confidence, version,
+  conflict supersession, query retrieval, and prompt projection.
+- Landed: Skills, DAG templates/routes, SOP files, tool definitions, and tool
+  permission rules are exposed through a versioned Procedural Memory catalog.
+- Landed: task-intent-aware Working/Episodic/Semantic/Procedural token
+  allocation with per-class limits and a model-window final guard.
+- Landed: local/native provider tokenizer adapters with explicit fallback.
+- Landed: sequence-safe and event-idempotent summary write-back.
+- Landed: opt-in real NATS Rust/Python/online integration test.
+- Landed: Redis version counters and Pub/Sub invalidation for worker-local
+  route/agent summary caches, with single-node fallback.
+
 Priority:
 
 1. Cache route / agent pre-summaries.
@@ -204,6 +243,11 @@ Deliverables:
 - `app/services/context_compaction.py`.
 - Shorter history and memory context.
 - Shorter synthesis inputs.
+- `app/services/token_budget.py` as the shared model budget authority.
+- `app/services/context_summary_cache.py` with explicit version invalidation.
+- `app/services/memory_context.py` for layered projection and overlap removal.
+- `app/services/memory_summary_consumer.py` for durable summary write-back.
+- Memory architecture and maturity assessment in `docs/memory-architecture.md`.
 
 ### Phase D: Platform Hardening
 
@@ -221,6 +265,12 @@ Deliverables:
 
 ### Phase E: Productization
 
+Current status: DAG editor authoring loop complete. The backend has a versioned
+node/edge contract, validation-only API, workflow optimistic locking, and
+user-isolated recoverable drafts. The ReactFlow UI now adds lossless contract
+adapters, debounced autosave, refresh recovery, node/edge validation markers,
+and explicit reload/overwrite handling for `409` conflicts.
+
 Priority:
 
 1. DAG editor.
@@ -230,8 +280,20 @@ Priority:
 Deliverables:
 
 - Workflow authoring UI.
+- Versioned workflow schema and explicit edge persistence.
+- Structured DAG validation and `409` conflict responses.
+- Per-user draft save, recovery, listing, and deletion APIs.
 - Reusable templates.
 - Public integration surface.
+
+Next small stage:
+
+1. Define template metadata, categories, versions, ownership, and publication
+   states over the stable workflow contract.
+2. Add template list/detail/install APIs with tenant isolation and audit events.
+3. Build the template market browsing, preview, install, and fork experience.
+4. Add curated built-in templates and compatibility checks by schema version.
+5. After the template loop is stable, proceed to SDK and API Token management.
 
 ## 6. Already Landed
 
@@ -249,6 +311,11 @@ These are the concrete foundation pieces now in the repo:
 - `frontend/lib/messageRecovery.ts`
 - `frontend/lib/websocketUrl.ts`
 - `frontend/lib/outgoingMessageDraft.ts`
+- `frontend/hooks/useSessionWebSocket.ts`
+- `frontend/hooks/useSessionRecovery.ts`
+- `frontend/components/admin/PermissionModule.tsx`
+- `frontend/__tests__/components/chat/taskPreviewReplay.test.tsx`
+- `frontend/__tests__/components/chat/dagReplay.test.tsx`
 
 ## 7. Rule of Thumb
 
@@ -258,4 +325,3 @@ Do not expand feature surface until the core loop stays:
 - replayable,
 - observable,
 - and cheap enough to run repeatedly.
-

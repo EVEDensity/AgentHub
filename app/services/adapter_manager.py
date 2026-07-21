@@ -984,6 +984,9 @@ class OllamaAdapter(BaseAdapter):
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", **kwargs: Any) -> str:
         url = (base_url.rstrip("/") if base_url else OLLAMA_BASE_URL) + "/api/generate"
         payload = {"model": model or "llama3", "prompt": prompt, "stream": False}
+        system_prompt = str(kwargs.get("system_prompt") or "")
+        if system_prompt:
+            payload["system"] = system_prompt
         try:
             response = await _retry_request("POST", url, json_body=payload)
             if response.status_code >= 400:
@@ -1002,6 +1005,8 @@ class OllamaAdapter(BaseAdapter):
     async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         url = (base_url.rstrip("/") if base_url else OLLAMA_BASE_URL) + "/api/generate"
         payload = {"model": model or "llama3", "prompt": prompt, "stream": True}
+        if system_prompt:
+            payload["system"] = system_prompt
         self.last_usage = {}
         full_text = ""
         try:
