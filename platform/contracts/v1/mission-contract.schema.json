@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/mission-contract.schema.json",
+  "title": "Mission contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "version", "repositoryScopes", "allowedCapabilities", "budgets",
+    "acceptanceCriteria", "decisionGates", "forbiddenActions"
+  ],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "version": { "type": "integer", "minimum": 1 },
+    "repositoryScopes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["repository", "baseRef", "paths"],
+        "properties": {
+          "repository": { "type": "string", "minLength": 1, "maxLength": 2048 },
+          "baseRef": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          },
+          "write": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "allowedCapabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["capability"],
+        "properties": {
+          "capability": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "scope": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeSeconds", "modelCost", "retries"],
+      "properties": {
+        "timeSeconds": { "type": "integer", "minimum": 1 },
+        "modelCost": { "type": "number", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "description", "required"],
+        "properties": {
+          "id": { "$ref": "common.schema.json#/$defs/identifier" },
+          "kind": {
+            "type": "string",
+            "enum": ["command", "test", "build", "security", "contract", "manual"]
+          },
+          "description": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "required": { "type": "boolean" },
+          "configuration": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "decisionGates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "trigger"],
+        "properties": {
+          "id": { "$ref": "common.schema.json#/$defs/identifier" },
+          "trigger": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "blocking": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "forbiddenActions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 255 }
+    },
+    "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+  }
+}

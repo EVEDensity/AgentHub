@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/mission.schema.json",
+  "title": "Mission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "workspaceId", "title", "objective", "source", "contractId",
+    "status", "planVersion", "createdBy", "createdAt", "updatedAt"
+  ],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "workspaceId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "objective": { "type": "string", "minLength": 1, "maxLength": 10000 },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["manual", "issue", "api", "import"] },
+        "reference": { "type": "string", "maxLength": 2048 },
+        "externalId": { "type": "string", "maxLength": 255 }
+      }
+    },
+    "contractId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "DRAFT", "READY", "RUNNING", "VERIFYING", "WAITING_DECISION",
+        "SUCCEEDED", "FAILED", "CANCELLED"
+      ]
+    },
+    "planVersion": { "type": "integer", "minimum": 0 },
+    "createdBy": { "$ref": "common.schema.json#/$defs/actorRef" },
+    "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "updatedAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+  }
+}

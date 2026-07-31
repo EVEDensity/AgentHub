@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/evidence.schema.json",
+  "title": "Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "missionId", "criterionId", "verifier", "verdict", "artifactRefs",
+    "summary", "generatedAt", "integrityHash"
+  ],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "missionId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "workUnitId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "criterionId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "configurationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-fA-F0-9]{64}$"
+        }
+      }
+    },
+    "verdict": { "type": "string", "enum": ["PASS", "FAIL", "INCONCLUSIVE"] },
+    "artifactRefs": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/artifactRef" }
+    },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 10000 },
+    "generatedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "integrityHash": {
+      "type": "string",
+      "pattern": "^sha256:[a-fA-F0-9]{64}$"
+    }
+  }
+}
