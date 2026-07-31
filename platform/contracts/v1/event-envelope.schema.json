@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/event-envelope.schema.json",
+  "title": "Mission event envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id", "aggregate_type", "aggregate_id", "sequence", "event_type",
+    "actor", "occurred_at", "correlation_id", "payload", "schema_version"
+  ],
+  "properties": {
+    "event_id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "aggregate_type": {
+      "type": "string",
+      "enum": ["mission", "mission_contract", "work_unit", "evidence"]
+    },
+    "aggregate_id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "event_type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){2,}$"
+    },
+    "actor": { "$ref": "common.schema.json#/$defs/actorRef" },
+    "occurred_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "correlation_id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "causation_id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "payload": { "type": "object" },
+    "schema_version": { "const": 1 }
+  }
+}

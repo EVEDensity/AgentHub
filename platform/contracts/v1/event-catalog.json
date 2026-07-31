@@ -1,0 +1,19 @@
+{
+  "catalogVersion": 1,
+  "events": [
+    { "eventType": "mission.lifecycle.created", "aggregateType": "mission", "payloadRequired": ["contractId", "status"] },
+    { "eventType": "mission.lifecycle.started", "aggregateType": "mission", "payloadRequired": ["planVersion"] },
+    { "eventType": "mission.lifecycle.cancelled", "aggregateType": "mission", "payloadRequired": ["reason"] },
+    { "eventType": "mission.verification.started", "aggregateType": "mission", "payloadRequired": [] },
+    { "eventType": "mission.verification.succeeded", "aggregateType": "mission", "payloadRequired": ["evidenceIds"] },
+    { "eventType": "mission.verification.failed", "aggregateType": "mission", "payloadRequired": ["evidenceIds"] },
+    { "eventType": "mission_contract.version.created", "aggregateType": "mission_contract", "payloadRequired": ["version"] },
+    { "eventType": "work_unit.lifecycle.created", "aggregateType": "work_unit", "payloadRequired": ["missionId", "status"] },
+    { "eventType": "work_unit.lease.granted", "aggregateType": "work_unit", "payloadRequired": ["leaseId", "runnerId", "expiresAt"] },
+    { "eventType": "work_unit.execution.started", "aggregateType": "work_unit", "payloadRequired": ["attempt"] },
+    { "eventType": "work_unit.execution.completed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "artifactRefs"] },
+    { "eventType": "work_unit.execution.failed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "reason"] },
+    { "eventType": "work_unit.verification.completed", "aggregateType": "work_unit", "payloadRequired": ["evidenceIds", "verdict"] },
+    { "eventType": "evidence.verification.recorded", "aggregateType": "evidence", "payloadRequired": ["missionId", "criterionId", "verdict", "integrityHash"] }
+  ]
+}

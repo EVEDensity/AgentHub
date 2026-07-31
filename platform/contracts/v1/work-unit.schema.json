@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/work-unit.schema.json",
+  "title": "Work unit",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "missionId", "kind", "dependencies", "inputRefs", "expectedOutputs",
+    "requiredCapabilities", "status", "attempt"
+  ],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "missionId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "kind": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "dependencies": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/identifier" }
+    },
+    "inputRefs": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/artifactRef" }
+    },
+    "expectedOutputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "required"],
+        "properties": {
+          "kind": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "requiredCapabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 255 }
+    },
+    "assignedAdapter": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PENDING", "LEASED", "RUNNING", "VERIFYING", "WAITING",
+        "RETRYING", "SUCCEEDED", "FAILED", "CANCELLED"
+      ]
+    },
+    "attempt": { "type": "integer", "minimum": 0 },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runnerId", "expiresAt"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "runnerId": { "$ref": "common.schema.json#/$defs/identifier" },
+        "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+      }
+    }
+  }
+}
