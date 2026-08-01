@@ -4,12 +4,16 @@ on:
   push:
     paths:
       - "platform/contracts/v1/**"
+      - "app/domain/**"
       - "tests/contracts/**"
+      - "tests/domain/**"
       - ".github/workflows/contracts.yml"
   pull_request:
     paths:
       - "platform/contracts/v1/**"
+      - "app/domain/**"
       - "tests/contracts/**"
+      - "tests/domain/**"
       - ".github/workflows/contracts.yml"
 
 jobs:
@@ -24,3 +28,4 @@ jobs:
           cache-dependency-path: tests/contracts/requirements.txt
       - run: pip install -r tests/contracts/requirements.txt
       - run: python -m unittest discover -s tests/contracts -p "test_*.py" -v
+      - run: python -m unittest discover -s tests/domain -p "test_*.py" -v
