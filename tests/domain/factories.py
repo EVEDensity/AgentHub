@@ -8,13 +8,13 @@ from app.domain import (
     Budgets,
     CapabilityGrant,
     DecisionGate,
+    EventEnvelope,
     Mission,
     MissionContract,
     MissionSource,
     RepositoryScope,
     WorkUnit,
 )
-
 
 NOW = datetime(2026, 8, 1, tzinfo=timezone.utc)
 DIGEST = "sha256:" + "a" * 64
@@ -59,6 +59,23 @@ def build_contract(**updates: object) -> MissionContract:
     }
     values.update(updates)
     return MissionContract.model_validate(values)
+
+
+def build_event(**updates: object) -> EventEnvelope:
+    values: dict[str, object] = {
+        "event_id": "evt-1",
+        "aggregate_type": "mission",
+        "aggregate_id": "mis-1",
+        "sequence": 1,
+        "event_type": "mission.lifecycle.created",
+        "actor": ActorRef(type="human", id="user-1"),
+        "occurred_at": NOW,
+        "correlation_id": "mis-1",
+        "payload": {"contractId": "contract-1", "status": "READY"},
+        "schema_version": 1,
+    }
+    values.update(updates)
+    return EventEnvelope.model_validate(values)
 
 
 def build_work_unit(**updates: object) -> WorkUnit:

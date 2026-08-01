@@ -20,10 +20,10 @@ from tests.domain.factories import (
     DIGEST,
     NOW,
     build_contract,
+    build_event,
     build_mission,
     build_work_unit,
 )
-
 
 CONTRACT_DIR = Path(__file__).parents[2] / "platform" / "contracts" / "v1"
 
@@ -66,6 +66,25 @@ class DomainModelTests(unittest.TestCase):
         self.assert_matches_schema("mission-contract.schema.json", contract)
         self.assert_matches_schema("work-unit.schema.json", work_unit)
         self.assert_matches_schema("evidence.schema.json", evidence)
+
+    def test_event_envelope_uses_public_snake_case_contract(self) -> None:
+        event = build_event()
+        public = event.to_public_dict()
+
+        self.assert_matches_schema("event-envelope.schema.json", event)
+        self.assertEqual(public["event_id"], "evt-1")
+        self.assertEqual(public["aggregate_type"], "mission")
+        self.assertNotIn("eventId", public)
+
+    def test_event_payload_is_deeply_immutable_json(self) -> None:
+        event = build_event(payload={"nested": {"enabled": True}})
+
+        with self.assertRaises(TypeError):
+            event.payload["added"] = True
+        with self.assertRaises(TypeError):
+            event.payload["nested"]["enabled"] = False
+        with self.assertRaises(ValidationError):
+            build_event(payload={"bad": object()})
 
     def test_models_accept_public_camel_case_documents(self) -> None:
         document = build_mission().to_public_dict()
@@ -139,7 +158,8 @@ class DomainModelTests(unittest.TestCase):
     def test_mission_requires_ordered_timezone_aware_timestamps(self) -> None:
         with self.assertRaises(ValidationError):
             build_mission(
-                created_at=datetime(2026, 8, 1), updated_at=datetime(2026, 8, 1)
+                created_at=datetime(2026, 8, 1),  # noqa: DTZ001
+                updated_at=datetime(2026, 8, 1),  # noqa: DTZ001
             )
         with self.assertRaisesRegex(ValidationError, "updated_at cannot be earlier"):
             build_mission(updated_at=datetime(2026, 7, 31, tzinfo=timezone.utc))

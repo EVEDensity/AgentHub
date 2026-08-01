@@ -7,6 +7,8 @@ from app.db.migrations import (
     MISSION_CONTROL_PLANE_DOWN_REVISION,
     MISSION_CONTROL_PLANE_REVISION,
     MISSION_CONTROL_PLANE_UPGRADE,
+    MISSION_EVENT_LEDGER_REVISION,
+    MISSION_EVENT_LEDGER_UPGRADE,
 )
 from app.db.migrations.runner import (
     UnsupportedMigrationPath,
@@ -29,9 +31,7 @@ class FakeConnection:
         self.executed.append((sql, args))
         if self.fail_on and self.fail_on in sql:
             raise RuntimeError("injected migration failure")
-        if sql.startswith("INSERT INTO alembic_version"):
-            self.current_revision = args[0]
-        elif sql.startswith("UPDATE alembic_version"):
+        if sql.startswith(("INSERT INTO alembic_version", "UPDATE alembic_version")):
             self.current_revision = args[0]
 
     async def fetchrow(self, _sql: str) -> dict[str, str] | None:
@@ -49,7 +49,9 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         statements = [sql for sql, _args in connection.executed]
         for statement in MISSION_CONTROL_PLANE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, MISSION_CONTROL_PLANE_REVISION)
+        for statement in MISSION_EVENT_LEDGER_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, MISSION_EVENT_LEDGER_REVISION)
         self.assertTrue(statements[-1].startswith("INSERT INTO alembic_version"))
 
     async def test_previous_head_is_upgraded_and_versioned_last(self) -> None:
@@ -57,24 +59,36 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
 
         await apply_startup_migrations(connection)
 
-        self.assertEqual(connection.current_revision, MISSION_CONTROL_PLANE_REVISION)
+        self.assertEqual(connection.current_revision, MISSION_EVENT_LEDGER_REVISION)
         self.assertTrue(connection.executed[-1][0].startswith("UPDATE alembic_version"))
 
     async def test_current_head_is_idempotent(self) -> None:
-        connection = FakeConnection(MISSION_CONTROL_PLANE_REVISION)
+        connection = FakeConnection(MISSION_EVENT_LEDGER_REVISION)
 
         await apply_startup_migrations(connection)
 
         self.assertEqual(len(connection.executed), 1)
 
+    async def test_mission_control_plane_head_advances_to_event_ledger(self) -> None:
+        connection = FakeConnection(MISSION_CONTROL_PLANE_REVISION)
+
+        await apply_startup_migrations(connection)
+
+        statements = [sql for sql, _args in connection.executed]
+        for statement in MISSION_EVENT_LEDGER_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, MISSION_EVENT_LEDGER_REVISION)
+
     async def test_unknown_upgrade_path_is_not_falsely_stamped(self) -> None:
         connection = FakeConnection("unknown-revision")
 
-        with self.assertLogs("agenthub.db.migrations", level="ERROR"):
-            with self.assertRaisesRegex(
+        with (
+            self.assertLogs("agenthub.db.migrations", level="ERROR"),
+            self.assertRaisesRegex(
                 UnsupportedMigrationPath, "unsupported Alembic upgrade path"
-            ):
-                await apply_startup_migrations(connection)
+            ),
+        ):
+            await apply_startup_migrations(connection)
 
         self.assertEqual(connection.current_revision, "unknown-revision")
         self.assertEqual(len(connection.executed), 1)

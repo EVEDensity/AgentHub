@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AwareDatetime,
@@ -126,6 +126,44 @@ class MissionStatus(str, Enum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+
+class AggregateType(str, Enum):
+    MISSION = "mission"
+    MISSION_CONTRACT = "mission_contract"
+    WORK_UNIT = "work_unit"
+    EVIDENCE = "evidence"
+
+
+class EventEnvelope(BaseModel):
+    model_config = ConfigDict(
+        allow_inf_nan=False,
+        extra="forbid",
+        frozen=True,
+        populate_by_name=True,
+    )
+
+    event_id: Identifier
+    aggregate_type: AggregateType
+    aggregate_id: Identifier
+    sequence: Annotated[int, Field(ge=1)]
+    event_type: Annotated[
+        str, Field(pattern=r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}$")
+    ]
+    actor: ActorRef
+    occurred_at: AwareDatetime
+    correlation_id: Identifier
+    causation_id: Identifier | None = None
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
+    schema_version: Literal[1] = 1
+
+    @field_validator("payload", mode="after")
+    @classmethod
+    def freeze_payload(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        return _deep_freeze(value)
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return self.model_dump(exclude_none=True, mode="json")
 
 
 class Mission(DomainModel):

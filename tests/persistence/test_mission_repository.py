@@ -6,7 +6,7 @@ from typing import Any
 
 from app.domain import Mission
 from app.repositories import MissionRepository
-from tests.domain.factories import build_contract, build_mission
+from tests.domain.factories import build_contract, build_event, build_mission
 
 
 class FakeDatabase:
@@ -74,6 +74,20 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.list_missions("workspace-1", limit=0)
         with self.assertRaises(ValueError):
             await self.repository.list_missions("workspace-1", offset=-1)
+
+    async def test_append_event_persists_public_envelope_fields(self) -> None:
+        event = build_event()
+
+        await self.repository.append_event(event)
+
+        sql, args = self.database.executed[-1]
+        self.assertIn("INSERT INTO mission_events", sql)
+        self.assertEqual(args[0], event.event_id)
+        self.assertEqual(args[1], "mission")
+        self.assertEqual(args[3], 1)
+        self.assertEqual(json.loads(args[5]), event.actor.to_public_dict())
+        self.assertEqual(json.loads(args[9]), event.payload)
+        self.assertEqual(args[10], 1)
 
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:

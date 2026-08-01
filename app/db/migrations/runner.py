@@ -5,8 +5,10 @@ from typing import Any
 
 from app.db.migrations.mission_control_plane import (
     MISSION_CONTROL_PLANE_DOWN_REVISION,
-    MISSION_CONTROL_PLANE_REVISION,
     MISSION_CONTROL_PLANE_UPGRADE,
+    MISSION_EVENT_LEDGER_DOWN_REVISION,
+    MISSION_EVENT_LEDGER_REVISION,
+    MISSION_EVENT_LEDGER_UPGRADE,
 )
 
 
@@ -29,35 +31,43 @@ async def apply_startup_migrations(
     )
     row = await connection.fetchrow("SELECT version_num FROM alembic_version LIMIT 1")
     current = row["version_num"] if row else None
-    if current == MISSION_CONTROL_PLANE_REVISION:
+    if current == MISSION_EVENT_LEDGER_REVISION:
         migration_logger.info("init_db: Alembic already at head (%s)", current)
         return
 
-    if current not in {None, MISSION_CONTROL_PLANE_DOWN_REVISION}:
+    if current not in {
+        None,
+        MISSION_CONTROL_PLANE_DOWN_REVISION,
+        MISSION_EVENT_LEDGER_DOWN_REVISION,
+    }:
         message = (
             "unsupported Alembic upgrade path "
-            f"(current={current}, head={MISSION_CONTROL_PLANE_REVISION}); "
+            f"(current={current}, head={MISSION_EVENT_LEDGER_REVISION}); "
             "run 'alembic upgrade head' offline before starting AgentHub"
         )
         migration_logger.error("init_db: %s", message)
         raise UnsupportedMigrationPath(message)
 
-    for statement in MISSION_CONTROL_PLANE_UPGRADE:
+    if current in {None, MISSION_CONTROL_PLANE_DOWN_REVISION}:
+        for statement in MISSION_CONTROL_PLANE_UPGRADE:
+            await connection.execute(statement)
+
+    for statement in MISSION_EVENT_LEDGER_UPGRADE:
         await connection.execute(statement)
 
     if current is None:
         await connection.execute(
             "INSERT INTO alembic_version(version_num) VALUES($1)",
-            MISSION_CONTROL_PLANE_REVISION,
+            MISSION_EVENT_LEDGER_REVISION,
         )
     else:
         await connection.execute(
             "UPDATE alembic_version SET version_num=$1 WHERE version_num=$2",
-            MISSION_CONTROL_PLANE_REVISION,
+            MISSION_EVENT_LEDGER_REVISION,
             current,
         )
     migration_logger.info(
         "init_db: Alembic advanced from %s to %s",
         current or "unversioned",
-        MISSION_CONTROL_PLANE_REVISION,
+        MISSION_EVENT_LEDGER_REVISION,
     )

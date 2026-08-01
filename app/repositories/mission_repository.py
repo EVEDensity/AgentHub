@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from typing import Any
 
-from app.domain import Mission, MissionContract
+from app.domain import EventEnvelope, Mission, MissionContract
 
 Execute = Callable[..., Awaitable[None]]
 FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
 FetchAll = Callable[..., Awaitable[list[dict[str, Any]]]]
+TransactionFactory = Callable[..., Any]
 
 
 def _encode_json(value: object) -> str:
@@ -19,7 +21,7 @@ def _decode_json_object(value: object, field_name: str) -> dict[str, Any]:
     if isinstance(value, str):
         value = json.loads(value)
     if not isinstance(value, Mapping):
-        raise ValueError(f"database field {field_name} must contain a JSON object")
+        raise TypeError(f"database field {field_name} must contain a JSON object")
     return dict(value)
 
 
@@ -32,6 +34,7 @@ class MissionRepository:
         execute: Execute | None = None,
         fetch_one: FetchOne | None = None,
         fetch_all: FetchAll | None = None,
+        transaction_factory: TransactionFactory | None = None,
     ) -> None:
         if execute is None or fetch_one is None or fetch_all is None:
             from app.db.session import aexecute, afetch_all, afetch_one
@@ -39,9 +42,27 @@ class MissionRepository:
             execute = execute or aexecute
             fetch_one = fetch_one or afetch_one
             fetch_all = fetch_all or afetch_all
+        if transaction_factory is None:
+            from app.db.session import atransaction
+
+            transaction_factory = atransaction
         self._execute = execute
         self._fetch_one = fetch_one
         self._fetch_all = fetch_all
+        self._transaction_factory = transaction_factory
+
+    @classmethod
+    def from_connection(cls, connection: Any) -> MissionRepository:
+        return cls(
+            execute=connection.execute,
+            fetch_one=connection.fetchrow,
+            fetch_all=connection.fetch,
+        )
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._transaction_factory() as connection:
+            yield self.from_connection(connection)
 
     async def add_contract(self, contract: MissionContract) -> None:
         await self._execute(
@@ -92,6 +113,28 @@ class MissionRepository:
             mission_id,
         )
         return self._mission_from_row(row) if row is not None else None
+
+    async def append_event(self, event: EventEnvelope) -> None:
+        await self._execute(
+            """INSERT INTO mission_events(
+                   event_id, aggregate_type, aggregate_id, sequence, event_type,
+                   actor, occurred_at, correlation_id, causation_id, payload,
+                   schema_version
+               ) VALUES(
+                   $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11
+               )""",
+            event.event_id,
+            event.aggregate_type.value,
+            event.aggregate_id,
+            event.sequence,
+            event.event_type,
+            _encode_json(event.actor.to_public_dict()),
+            event.occurred_at,
+            event.correlation_id,
+            event.causation_id,
+            _encode_json(event.payload),
+            event.schema_version,
+        )
 
     async def list_missions(
         self,
