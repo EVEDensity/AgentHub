@@ -42,10 +42,6 @@ class MissionRepository:
             execute = execute or aexecute
             fetch_one = fetch_one or afetch_one
             fetch_all = fetch_all or afetch_all
-        if transaction_factory is None:
-            from app.db.session import atransaction
-
-            transaction_factory = atransaction
         self._execute = execute
         self._fetch_one = fetch_one
         self._fetch_all = fetch_all
@@ -61,7 +57,12 @@ class MissionRepository:
 
     @asynccontextmanager
     async def transaction(self):
-        async with self._transaction_factory() as connection:
+        transaction_factory = self._transaction_factory
+        if transaction_factory is None:
+            from app.db.session import atransaction
+
+            transaction_factory = atransaction
+        async with transaction_factory() as connection:
             yield self.from_connection(connection)
 
     async def add_contract(self, contract: MissionContract) -> None:
