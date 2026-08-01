@@ -26,6 +26,8 @@ data/
 !frontend/data/
 *.sqlite3
 *.db
+.codegraph/
+.understand-anything/
 
 # ─── Compiled Binaries ────────────────────────────────────────────
 *.exe

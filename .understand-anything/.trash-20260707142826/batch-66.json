@@ -1,6 +1,0 @@
-{
-  "nodes": [
-    {"id": "file:test_main.http", "type": "file", "name": "test_main.http", "filePath": "test_main.http", "summary": "HTTP API 测试文件（JetBrains HTTP Client）", "tags": ["test", "http", "api"], "complexity": "simple"}
-  ],
-  "edges": []
-}
