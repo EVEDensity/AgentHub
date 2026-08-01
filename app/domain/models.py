@@ -3,12 +3,64 @@ from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 
 def _to_camel(value: str) -> str:
     head, *tail = value.split("_")
     return head + "".join(part.capitalize() for part in tail)
+
+
+class FrozenDict(dict[str, Any]):
+    """Dictionary that can be constructed normally but not mutated afterwards."""
+
+    def _immutable(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("domain mappings are immutable")
+
+    __delitem__ = _immutable
+    __ior__ = _immutable
+    __setitem__ = _immutable
+    clear = _immutable
+    pop = _immutable
+    popitem = _immutable
+    setdefault = _immutable
+    update = _immutable
+
+
+class FrozenList(list[Any]):
+    """List that preserves JSON array serialization without allowing mutation."""
+
+    def _immutable(self, *_args: object, **_kwargs: object) -> None:
+        raise TypeError("domain sequences are immutable")
+
+    __delitem__ = _immutable
+    __iadd__ = _immutable
+    __imul__ = _immutable
+    __setitem__ = _immutable
+    append = _immutable
+    clear = _immutable
+    extend = _immutable
+    insert = _immutable
+    pop = _immutable
+    remove = _immutable
+    reverse = _immutable
+    sort = _immutable
+
+
+def _deep_freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return FrozenDict({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return FrozenList(_deep_freeze(item) for item in value)
+    return value
 
 
 class DomainModel(BaseModel):
@@ -99,13 +151,21 @@ class Mission(DomainModel):
 class RepositoryScope(DomainModel):
     repository: Annotated[str, Field(min_length=1, max_length=2048)]
     base_ref: Annotated[str, Field(min_length=1, max_length=255)]
-    paths: Annotated[list[Annotated[str, Field(min_length=1, max_length=1024)]], Field(min_length=1)]
+    paths: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=1024)], ...],
+        Field(min_length=1),
+    ]
     write: bool = True
 
 
 class CapabilityGrant(DomainModel):
     capability: Annotated[str, Field(min_length=1, max_length=255)]
-    scope: dict[str, Any] = Field(default_factory=dict)
+    scope: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("scope", mode="after")
+    @classmethod
+    def freeze_scope(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        return _deep_freeze(value)
 
 
 class Budgets(DomainModel):
@@ -128,7 +188,12 @@ class AcceptanceCriterion(DomainModel):
     kind: CriterionKind
     description: Annotated[str, Field(min_length=1, max_length=2000)]
     required: bool
-    configuration: dict[str, Any] = Field(default_factory=dict)
+    configuration: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("configuration", mode="after")
+    @classmethod
+    def freeze_configuration(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        return _deep_freeze(value)
 
 
 class DecisionGate(DomainModel):
@@ -140,12 +205,12 @@ class DecisionGate(DomainModel):
 class MissionContract(DomainModel):
     id: Identifier
     version: Annotated[int, Field(ge=1)]
-    repository_scopes: list[RepositoryScope]
-    allowed_capabilities: list[CapabilityGrant]
+    repository_scopes: tuple[RepositoryScope, ...]
+    allowed_capabilities: tuple[CapabilityGrant, ...]
     budgets: Budgets
-    acceptance_criteria: Annotated[list[AcceptanceCriterion], Field(min_length=1)]
-    decision_gates: list[DecisionGate]
-    forbidden_actions: list[Annotated[str, Field(min_length=1, max_length=255)]]
+    acceptance_criteria: Annotated[tuple[AcceptanceCriterion, ...], Field(min_length=1)]
+    decision_gates: tuple[DecisionGate, ...]
+    forbidden_actions: tuple[Annotated[str, Field(min_length=1, max_length=255)], ...]
     expires_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
@@ -188,10 +253,12 @@ class WorkUnit(DomainModel):
     id: Identifier
     mission_id: Identifier
     kind: Annotated[str, Field(min_length=1, max_length=255)]
-    dependencies: list[Identifier]
-    input_refs: list[ArtifactRef]
-    expected_outputs: list[OutputSpec]
-    required_capabilities: list[Annotated[str, Field(min_length=1, max_length=255)]]
+    dependencies: tuple[Identifier, ...]
+    input_refs: tuple[ArtifactRef, ...]
+    expected_outputs: tuple[OutputSpec, ...]
+    required_capabilities: tuple[
+        Annotated[str, Field(min_length=1, max_length=255)], ...
+    ]
     assigned_adapter: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     status: WorkUnitStatus
     attempt: Annotated[int, Field(ge=0)] = 0
@@ -205,8 +272,16 @@ class WorkUnit(DomainModel):
             raise ValueError("work unit dependencies must be unique")
         if len(self.required_capabilities) != len(set(self.required_capabilities)):
             raise ValueError("required capabilities must be unique")
-        if self.status in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING} and self.lease is None:
+        if (
+            self.status in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING}
+            and self.lease is None
+        ):
             raise ValueError(f"{self.status.value} work unit requires a lease")
+        if (
+            self.status not in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING}
+            and self.lease is not None
+        ):
+            raise ValueError(f"{self.status.value} work unit cannot retain a lease")
         return self
 
 
@@ -229,7 +304,7 @@ class Evidence(DomainModel):
     criterion_id: Identifier
     verifier: VerifierRef
     verdict: EvidenceVerdict
-    artifact_refs: list[ArtifactRef]
+    artifact_refs: tuple[ArtifactRef, ...]
     summary: Annotated[str, Field(min_length=1, max_length=10000)]
     generated_at: AwareDatetime
     integrity_hash: Digest

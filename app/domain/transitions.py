@@ -44,7 +44,9 @@ MISSION_TRANSITIONS: Mapping[MissionStatus, frozenset[MissionStatus]] = {
 
 
 WORK_UNIT_TRANSITIONS: Mapping[WorkUnitStatus, frozenset[WorkUnitStatus]] = {
-    WorkUnitStatus.PENDING: frozenset({WorkUnitStatus.LEASED, WorkUnitStatus.CANCELLED}),
+    WorkUnitStatus.PENDING: frozenset(
+        {WorkUnitStatus.LEASED, WorkUnitStatus.CANCELLED}
+    ),
     WorkUnitStatus.LEASED: frozenset(
         {
             WorkUnitStatus.RUNNING,
@@ -64,20 +66,31 @@ WORK_UNIT_TRANSITIONS: Mapping[WorkUnitStatus, frozenset[WorkUnitStatus]] = {
     ),
     WorkUnitStatus.WAITING: frozenset(
         {
-            WorkUnitStatus.RUNNING,
+            WorkUnitStatus.LEASED,
+            WorkUnitStatus.FAILED,
+            WorkUnitStatus.CANCELLED,
+        }
+    ),
+    WorkUnitStatus.RETRYING: frozenset(
+        {WorkUnitStatus.LEASED, WorkUnitStatus.FAILED, WorkUnitStatus.CANCELLED}
+    ),
+    WorkUnitStatus.VERIFYING: frozenset(
+        {
+            WorkUnitStatus.SUCCEEDED,
             WorkUnitStatus.RETRYING,
             WorkUnitStatus.FAILED,
             WorkUnitStatus.CANCELLED,
         }
     ),
-    WorkUnitStatus.RETRYING: frozenset({WorkUnitStatus.LEASED, WorkUnitStatus.FAILED, WorkUnitStatus.CANCELLED}),
-    WorkUnitStatus.VERIFYING: frozenset(
-        {WorkUnitStatus.SUCCEEDED, WorkUnitStatus.RETRYING, WorkUnitStatus.FAILED, WorkUnitStatus.CANCELLED}
-    ),
     WorkUnitStatus.SUCCEEDED: frozenset(),
     WorkUnitStatus.FAILED: frozenset(),
     WorkUnitStatus.CANCELLED: frozenset(),
 }
+
+
+def _require_aware(value: datetime, field_name: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field_name} must be timezone-aware")
 
 
 def transition_mission(
@@ -86,6 +99,7 @@ def transition_mission(
     *,
     occurred_at: datetime,
 ) -> Mission:
+    _require_aware(occurred_at, "occurred_at")
     if target not in MISSION_TRANSITIONS[mission.status]:
         raise InvalidStateTransition("mission", mission.status.value, target.value)
     if occurred_at < mission.updated_at:
@@ -100,8 +114,10 @@ def transition_work_unit(
     work_unit: WorkUnit,
     target: WorkUnitStatus,
     *,
+    occurred_at: datetime,
     lease: Lease | None = None,
 ) -> WorkUnit:
+    _require_aware(occurred_at, "occurred_at")
     if target not in WORK_UNIT_TRANSITIONS[work_unit.status]:
         raise InvalidStateTransition("work_unit", work_unit.status.value, target.value)
 
@@ -110,10 +126,15 @@ def transition_work_unit(
     if target == WorkUnitStatus.LEASED:
         if lease is None:
             raise ValueError("transition to LEASED requires a new lease")
+        if lease.expires_at <= occurred_at:
+            raise ValueError("transition to LEASED requires an unexpired lease")
         next_lease = lease
         next_attempt += 1
     elif target == WorkUnitStatus.RUNNING:
-        next_lease = lease or work_unit.lease
+        if lease is not None:
+            raise ValueError("transition to RUNNING cannot replace the active lease")
+        if work_unit.lease is None or work_unit.lease.expires_at <= occurred_at:
+            raise ValueError("transition to RUNNING requires an unexpired active lease")
     else:
         if lease is not None:
             raise ValueError(f"transition to {target.value} does not accept a lease")
