@@ -336,7 +336,6 @@ async def ainit_db() -> None:
 
 async def _ainit_postgresql() -> None:
     """Create all tables and seed data on PostgreSQL."""
-    import asyncio
     from app.db.session import aget_pool
 
     pool = await aget_pool()
@@ -373,49 +372,10 @@ async def _ainit_postgresql() -> None:
 
 
 async def _apply_alembic_migrations(conn) -> None:
-    """Apply pending Alembic migrations via the asyncpg connection.
+    """Apply the runtime-supported migration chain on the active connection."""
+    from app.db.migrations.runner import apply_startup_migrations
 
-    Uses a simple version-check approach: queries ``alembic_version`` to
-    find the current revision, then applies any migrations whose
-    ``down_revision`` matches the current head.
-
-    This avoids pulling in SQLAlchemy / psycopg2 for the async startup path
-    while still giving us Alembic's versioned migration framework.
-    """
-    # Ensure the version table exists
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS alembic_version (
-            version_num TEXT PRIMARY KEY
-        )"""
-    )
-
-    # Check current version
-    row = await conn.fetchrow("SELECT version_num FROM alembic_version LIMIT 1")
-    current = row["version_num"] if row else None
-
-    # Current head revision (must match migrations/versions/)
-    head = "c1a7d4e82b6f"
-
-    if current == head:
-        logger.info("init_db: Alembic already at head (%s)", head)
-        return
-
-    if current is None:
-        logger.info("init_db: Alembic fresh install — stamping head (%s)", head)
-        # New database: stamp the head revision directly (tables will be
-        # created by the legacy DDL path above).
-        await conn.execute(
-            "INSERT INTO alembic_version(version_num) VALUES($1) ON CONFLICT DO NOTHING",
-            head,
-        )
-        return
-
-    # Future: apply incremental migrations when current != head
-    logger.warning(
-        "init_db: Alembic version mismatch (current=%s, head=%s). "
-        "Run 'alembic upgrade head' offline or contact the administrator.",
-        current, head,
-    )
+    await apply_startup_migrations(conn, logger=logger)
 
 
 async def _migrate_agent_registry_pg(conn) -> None:
