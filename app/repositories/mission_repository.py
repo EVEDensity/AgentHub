@@ -123,6 +123,26 @@ class MissionRepository:
         )
         return self._mission_from_row(row) if row is not None else None
 
+    async def get_mission_by_source(
+        self,
+        workspace_id: str,
+        *,
+        source_type: str,
+        external_id: str,
+    ) -> Mission | None:
+        row = await self._fetch_one(
+            """SELECT id, workspace_id, title, objective, source, contract_id,
+                      status, plan_version, created_by, created_at, updated_at
+               FROM missions
+               WHERE workspace_id=$1
+                 AND source->>'type'=$2
+                 AND source->>'externalId'=$3""",
+            workspace_id,
+            source_type,
+            external_id,
+        )
+        return self._mission_from_row(row) if row is not None else None
+
     async def get_mission_for_update(self, mission_id: str) -> Mission | None:
         row = await self._fetch_one(
             """SELECT id, workspace_id, title, objective, source, contract_id,

@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.api.v1.access import authorize_workspace
 from app.domain import InvalidStateTransition, Mission
 from app.repositories import MissionRepository
 from app.schemas.mission import (
@@ -39,21 +40,13 @@ WorkUnitLimit = Annotated[int, Query(ge=1, le=200)]
 WorkUnitOffset = Annotated[int, Query(ge=0)]
 
 
-def _authorize_workspace(user: dict, workspace_id: str) -> None:
-    if user.get("role") == "admin":
-        return
-    if str(user["id"]) == workspace_id:
-        return
-    raise HTTPException(status_code=403, detail="Workspace access denied")
-
-
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_mission(
     request: MissionCreateRequest,
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:
-    _authorize_workspace(user, request.workspace_id)
+    authorize_workspace(user, request.workspace_id)
     service = MissionService(repository)
     try:
         mission = await service.create_mission(
@@ -79,7 +72,7 @@ async def get_mission(
     mission = await repository.get_mission(mission_id)
     if mission is None:
         raise HTTPException(status_code=404, detail="Mission not found")
-    _authorize_workspace(user, mission.workspace_id)
+    authorize_workspace(user, mission.workspace_id)
     return mission.to_public_dict()
 
 
@@ -92,7 +85,7 @@ async def _authorized_mission(
     mission = await repository.get_mission(mission_id)
     if mission is None:
         raise HTTPException(status_code=404, detail="Mission not found")
-    _authorize_workspace(user, mission.workspace_id)
+    authorize_workspace(user, mission.workspace_id)
     return mission
 
 
@@ -409,7 +402,7 @@ async def list_missions(
     limit: MissionLimit = 100,
     offset: MissionOffset = 0,
 ) -> dict:
-    _authorize_workspace(user, workspace_id)
+    authorize_workspace(user, workspace_id)
     missions = await repository.list_missions(
         workspace_id,
         limit=limit,

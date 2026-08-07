@@ -47,6 +47,23 @@ class FakeMissionRepository:
             return self.mission
         return None
 
+    async def get_mission_by_source(
+        self,
+        workspace_id: str,
+        *,
+        source_type: str,
+        external_id: str,
+    ) -> Mission | None:
+        mission = self.mission
+        if (
+            mission is not None
+            and mission.workspace_id == workspace_id
+            and mission.source.type.value == source_type
+            and mission.source.external_id == external_id
+        ):
+            return mission
+        return None
+
     async def get_mission_for_update(self, mission_id: str) -> Mission | None:
         return await self.get_mission(mission_id)
 

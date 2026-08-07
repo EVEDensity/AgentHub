@@ -108,6 +108,7 @@ class MissionSourceType(str, Enum):
     MANUAL = "manual"
     ISSUE = "issue"
     API = "api"
+    A2A = "a2a"
     IMPORT = "import"
 
 

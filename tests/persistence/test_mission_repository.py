@@ -70,6 +70,29 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.repository.get_contract("missing"))
         self.assertIsNone(await self.repository.get_mission("missing"))
 
+    async def test_mission_source_lookup_is_workspace_and_protocol_scoped(self) -> None:
+        mission = build_mission(
+            source={
+                "type": "a2a",
+                "reference": "https://agent.example.test",
+                "externalId": "task-1",
+            }
+        )
+        self.database.one = self.build_mission_row(mission)
+
+        restored = await self.repository.get_mission_by_source(
+            "workspace-1",
+            source_type="a2a",
+            external_id="task-1",
+        )
+
+        self.assertEqual(restored, mission)
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("workspace_id=$1", sql)
+        self.assertIn("source->>'type'=$2", sql)
+        self.assertIn("source->>'externalId'=$3", sql)
+        self.assertEqual(args, ("workspace-1", "a2a", "task-1"))
+
     async def test_list_is_workspace_scoped_and_bounded(self) -> None:
         mission = build_mission()
         self.database.all = [self.build_mission_row(mission)]

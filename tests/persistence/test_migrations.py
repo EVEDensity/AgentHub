@@ -4,6 +4,8 @@ import unittest
 from typing import Any
 
 from app.db.migrations import (
+    A2A_SOURCE_MAPPING_REVISION,
+    A2A_SOURCE_MAPPING_UPGRADE,
     MISSION_CONTROL_PLANE_DOWN_REVISION,
     MISSION_CONTROL_PLANE_REVISION,
     MISSION_CONTROL_PLANE_UPGRADE,
@@ -55,7 +57,9 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
+        for statement in A2A_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, A2A_SOURCE_MAPPING_REVISION)
         self.assertTrue(statements[-1].startswith("INSERT INTO alembic_version"))
 
     async def test_previous_head_is_upgraded_and_versioned_last(self) -> None:
@@ -63,11 +67,20 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
 
         await apply_startup_migrations(connection)
 
-        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
+        statements = [sql for sql, _args in connection.executed]
+        for statement in MISSION_CONTROL_PLANE_UPGRADE:
+            self.assertIn(statement, statements)
+        for statement in MISSION_EVENT_LEDGER_UPGRADE:
+            self.assertIn(statement, statements)
+        for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
+            self.assertIn(statement, statements)
+        for statement in A2A_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, A2A_SOURCE_MAPPING_REVISION)
         self.assertTrue(connection.executed[-1][0].startswith("UPDATE alembic_version"))
 
     async def test_current_head_is_idempotent(self) -> None:
-        connection = FakeConnection(WORK_UNIT_PERSISTENCE_REVISION)
+        connection = FakeConnection(A2A_SOURCE_MAPPING_REVISION)
 
         await apply_startup_migrations(connection)
 
@@ -81,7 +94,11 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         statements = [sql for sql, _args in connection.executed]
         for statement in MISSION_EVENT_LEDGER_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
+        for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
+            self.assertIn(statement, statements)
+        for statement in A2A_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, A2A_SOURCE_MAPPING_REVISION)
 
     async def test_event_ledger_head_advances_to_work_unit_persistence(self) -> None:
         connection = FakeConnection(MISSION_EVENT_LEDGER_REVISION)
@@ -91,9 +108,23 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         statements = [sql for sql, _args in connection.executed]
         for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
+        for statement in A2A_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
         for statement in MISSION_EVENT_LEDGER_UPGRADE:
             self.assertNotIn(statement, statements)
-        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
+        self.assertEqual(connection.current_revision, A2A_SOURCE_MAPPING_REVISION)
+
+    async def test_work_unit_head_advances_only_a2a_source_mapping(self) -> None:
+        connection = FakeConnection(WORK_UNIT_PERSISTENCE_REVISION)
+
+        await apply_startup_migrations(connection)
+
+        statements = [sql for sql, _args in connection.executed]
+        for statement in A2A_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
+        for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
+            self.assertNotIn(statement, statements)
+        self.assertEqual(connection.current_revision, A2A_SOURCE_MAPPING_REVISION)
 
     async def test_unknown_upgrade_path_is_not_falsely_stamped(self) -> None:
         connection = FakeConnection("unknown-revision")
