@@ -110,8 +110,8 @@ type AgentCard struct {
 	IconURL         string            `json:"iconUrl,omitempty"`
 	// Extended metadata (AgentHub-specific)
 	TenantID   string   `json:"tenantId,omitempty"`
-	Source     string   `json:"source,omitempty"`     // "internal" | "external"
-	Status     string   `json:"status,omitempty"`      // "active" | "inactive" | "error"
+	Source     string   `json:"source,omitempty"` // "internal" | "external"
+	Status     string   `json:"status,omitempty"` // "active" | "inactive" | "error"
 	LastSeenAt string   `json:"lastSeenAt,omitempty"`
 	CreatedAt  string   `json:"createdAt,omitempty"`
 	Tags       []string `json:"tags,omitempty"`
@@ -135,11 +135,11 @@ type AgentCapabilities struct {
 }
 
 type AgentSkill struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Tags        []string       `json:"tags"`
-	Examples    []string       `json:"examples,omitempty"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	Tags         []string       `json:"tags"`
+	Examples     []string       `json:"examples,omitempty"`
 	InputSchema  map[string]any `json:"inputSchema,omitempty"`
 	OutputSchema map[string]any `json:"outputSchema,omitempty"`
 }
@@ -1108,6 +1108,23 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 			start := time.Now()
 			a2aTaskRequests.WithLabelValues("tasksSend").Inc()
 
+			agentURL, _ := req.Params["agentUrl"].(string)
+			if agentURL == "" {
+				agentURL, _ = req.Params["target"].(string)
+			}
+			if agentURL == "" {
+				a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
+				writeJSON(w, http.StatusNotImplemented, A2ATaskResponse{
+					JSONRPC: "2.0",
+					Error: &A2AError{
+						Code:    -32004,
+						Message: "A2A task execution is not configured; agentUrl or target is required",
+					},
+					ID: req.ID,
+				})
+				return
+			}
+
 			// Create a new task with UUID
 			taskID := genTaskID()
 			msg := extractMessage(req.Params)
@@ -1121,47 +1138,36 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 			}
 			globalTaskStore.put(task)
 
-			// Try to forward to target agent if specified
-			agentURL, _ := req.Params["agentUrl"].(string)
-			if agentURL == "" {
-				// No target agent — use a generic target from params or self
-				if target, ok := req.Params["target"].(string); ok {
-					agentURL = target
-				}
-			}
+			// Forward task to the explicitly selected agent.
+			task.Status = "working"
+			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			globalTaskStore.put(task)
 
-			if agentURL != "" {
-				// Forward task to the target agent's endpoint
-				task.Status = "working"
+			fwdResp, fwdErr := forwardTaskToAgent(client, agentURL, "tasks/send", req.Params)
+			if fwdErr != nil {
+				log.Printf("a2a: task forward to %s failed: %v", agentURL, fwdErr)
+				task.Status = "failed"
 				task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 				globalTaskStore.put(task)
+				a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
+				writeJSON(w, http.StatusOK, A2ATaskResponse{
+					JSONRPC: "2.0",
+					Result:  task,
+					ID:      req.ID,
+				})
+				return
+			}
 
-				fwdResp, fwdErr := forwardTaskToAgent(client, agentURL, "tasks/send", req.Params)
-				if fwdErr != nil {
-					log.Printf("a2a: task forward to %s failed: %v", agentURL, fwdErr)
-					task.Status = "failed"
-					task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-					globalTaskStore.put(task)
-					a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
-					writeJSON(w, http.StatusOK, A2ATaskResponse{
-						JSONRPC: "2.0",
-						Result:  task,
-						ID:      req.ID,
-					})
-					return
-				}
-
-				// Update task from forwarded response
-				if fwdResp != nil && fwdResp.Result != nil {
-					if resultMap, ok := fwdResp.Result.(map[string]any); ok {
-						if status, ok := resultMap["status"].(string); ok {
-							task.Status = status
-						}
+			// Update task from forwarded response.
+			if fwdResp != nil && fwdResp.Result != nil {
+				if resultMap, ok := fwdResp.Result.(map[string]any); ok {
+					if status, ok := resultMap["status"].(string); ok {
+						task.Status = status
 					}
 				}
-				task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-				globalTaskStore.put(task)
 			}
+			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			globalTaskStore.put(task)
 
 			a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
@@ -1175,28 +1181,29 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 			a2aTaskRequests.WithLabelValues("tasksGet").Inc()
 
 			taskID, _ := req.Params["id"].(string)
-			var task *A2ATask
-			if taskID != "" {
-				task = globalTaskStore.get(taskID)
+			if taskID == "" {
+				a2aTaskLatency.WithLabelValues("tasksGet").Observe(time.Since(start).Seconds())
+				writeJSON(w, http.StatusBadRequest, A2ATaskResponse{
+					JSONRPC: "2.0",
+					Error:   &A2AError{Code: -32602, Message: "Invalid params: task id is required"},
+					ID:      req.ID,
+				})
+				return
 			}
 
+			task := globalTaskStore.get(taskID)
 			if task == nil {
-				// Return a demo completed task when not found
-				task = &A2ATask{
-					ID:        taskID,
-					Status:    "completed",
-					CreatedAt: time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339),
-					UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-					Artifacts: []A2AArtifact{
-						{
-							ArtifactID: "art-" + genShortID(),
-							Name:       "result",
-							Parts: []A2AMessagePart{
-								{Type: "text", Text: "Task completed successfully (AgentHub A2A gateway)"},
-							},
-						},
+				a2aTaskLatency.WithLabelValues("tasksGet").Observe(time.Since(start).Seconds())
+				writeJSON(w, http.StatusNotFound, A2ATaskResponse{
+					JSONRPC: "2.0",
+					Error: &A2AError{
+						Code:    -32001,
+						Message: "Task not found",
+						Data:    map[string]string{"id": taskID},
 					},
-				}
+					ID: req.ID,
+				})
+				return
 			}
 
 			a2aTaskLatency.WithLabelValues("tasksGet").Observe(time.Since(start).Seconds())
@@ -1211,6 +1218,31 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 			a2aTaskRequests.WithLabelValues("tasksCancel").Inc()
 
 			taskID, _ := req.Params["id"].(string)
+			if taskID == "" {
+				a2aTaskLatency.WithLabelValues("tasksCancel").Observe(time.Since(start).Seconds())
+				writeJSON(w, http.StatusBadRequest, A2ATaskResponse{
+					JSONRPC: "2.0",
+					Error:   &A2AError{Code: -32602, Message: "Invalid params: task id is required"},
+					ID:      req.ID,
+				})
+				return
+			}
+
+			task := globalTaskStore.get(taskID)
+			if task == nil {
+				a2aTaskLatency.WithLabelValues("tasksCancel").Observe(time.Since(start).Seconds())
+				writeJSON(w, http.StatusNotFound, A2ATaskResponse{
+					JSONRPC: "2.0",
+					Error: &A2AError{
+						Code:    -32001,
+						Message: "Task not found",
+						Data:    map[string]string{"id": taskID},
+					},
+					ID: req.ID,
+				})
+				return
+			}
+
 			globalTaskStore.updateStatus(taskID, "cancelled")
 
 			// Try to forward cancel to the agent
@@ -1221,14 +1253,7 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 				}()
 			}
 
-			task := globalTaskStore.get(taskID)
-			if task == nil {
-				task = &A2ATask{
-					ID:        taskID,
-					Status:    "cancelled",
-					UpdatedAt: time.Now().UTC().Format(time.RFC3339),
-				}
-			}
+			task = globalTaskStore.get(taskID)
 
 			a2aTaskLatency.WithLabelValues("tasksCancel").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
@@ -1261,12 +1286,6 @@ func genTaskID() string {
 	b := make([]byte, 12)
 	rand.Read(b)
 	return "task-" + hex.EncodeToString(b)
-}
-
-func genShortID() string {
-	b := make([]byte, 6)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 func extractMessage(params map[string]any) *A2AMessage {

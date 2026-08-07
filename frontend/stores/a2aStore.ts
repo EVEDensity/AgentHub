@@ -29,9 +29,6 @@ interface A2AState {
   discoveryLoading: boolean;
   taskLoading: boolean;
 
-  // Demo mode
-  demoMode: boolean;
-
   // Actions
   loadAgents: () => Promise<void>;
   loadSelfCard: () => Promise<void>;
@@ -42,58 +39,6 @@ interface A2AState {
   selectAgent: (url: string | null) => void;
 }
 
-// Demo data for when the API is unavailable
-const DEMO_AGENTS: A2AAgentCard[] = [
-  {
-    protocolVersion: '1.0',
-    name: 'AgentHub Platform',
-    description: 'Enterprise self-hosted multi-agent collaboration platform',
-    url: 'http://localhost:8081',
-    version: '5.1.0',
-    provider: { name: 'AgentHub', organization: 'AgentHub Community' },
-    capabilities: { streaming: true, pushNotifications: true, stateTransitionHistory: true, multimodal: true, codeExecution: true },
-    skills: [
-      { id: 'knowledge_search', name: 'Knowledge Search', tags: ['rag', 'search', 'knowledge'] },
-      { id: 'agent_orchestration', name: 'Agent Orchestration', tags: ['orchestration', 'multi-agent', 'dag'] },
-      { id: 'code_generation', name: 'Code Generation', tags: ['code', 'generation', 'review'] },
-    ],
-    endpoints: { taskApi: 'http://localhost:8081/platform/a2a/tasks' },
-    source: 'internal',
-    status: 'active',
-    tags: ['agenthub', 'platform'],
-  },
-  {
-    protocolVersion: '1.0',
-    name: 'Code Review Bot',
-    description: 'Specialized code review agent with security analysis',
-    url: 'http://localhost:8090',
-    capabilities: { streaming: true, pushNotifications: false, stateTransitionHistory: false, codeExecution: true },
-    skills: [
-      { id: 'code_review', name: 'Code Review', tags: ['code', 'review', 'security'] },
-      { id: 'diff_analysis', name: 'Diff Analysis', tags: ['diff', 'analysis'] },
-    ],
-    endpoints: { taskApi: 'http://localhost:8090/a2a/tasks' },
-    source: 'external',
-    status: 'active',
-    tags: ['code', 'review'],
-  },
-  {
-    protocolVersion: '1.0',
-    name: 'Data Analyzer',
-    description: 'Data analysis and visualization agent',
-    url: 'http://localhost:8091',
-    capabilities: { streaming: false, pushNotifications: false, stateTransitionHistory: false, multimodal: true },
-    skills: [
-      { id: 'data_analysis', name: 'Data Analysis', tags: ['data', 'analysis', 'visualization'] },
-      { id: 'report_generation', name: 'Report Generation', tags: ['report', 'document'] },
-    ],
-    endpoints: { taskApi: 'http://localhost:8091/a2a/tasks' },
-    source: 'external',
-    status: 'active',
-    tags: ['data', 'analytics'],
-  },
-];
-
 export const useA2AStore = create<A2AState>()((set, get) => ({
   agents: [],
   selfCard: null,
@@ -103,7 +48,6 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
   loading: false,
   discoveryLoading: false,
   taskLoading: false,
-  demoMode: false,
 
   loadAgents: async () => {
     set({ loading: true });
@@ -111,12 +55,14 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
       const res = await api('/registry');
       const data = await res.json();
       if (res.ok) {
-        set({ agents: data.agents || [], demoMode: false });
+        set({ agents: data.agents || [] });
       } else {
-        set({ agents: DEMO_AGENTS, demoMode: true });
+        set({ agents: [] });
+        useAdminStore.getState().setNotice(data.error || 'A2A Agent 列表加载失败');
       }
     } catch {
-      set({ agents: DEMO_AGENTS, demoMode: true });
+      set({ agents: [] });
+      useAdminStore.getState().setNotice('A2A 网关不可用，无法加载 Agent 列表');
     } finally {
       set({ loading: false });
     }
@@ -128,8 +74,14 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
       const data = await res.json();
       if (res.ok) {
         set({ selfCard: data });
+      } else {
+        set({ selfCard: null });
+        useAdminStore.getState().setNotice(data.error || 'AgentHub Agent Card 加载失败');
       }
-    } catch { /* use demo from loadAgents */ }
+    } catch {
+      set({ selfCard: null });
+      useAdminStore.getState().setNotice('A2A 网关不可用，无法加载 Agent Card');
+    }
   },
 
   discoverAgents: async (capabilities: string[]) => {
@@ -141,14 +93,12 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
       if (res.ok) {
         set({ discoveryResults: data.agents || [] });
       } else {
-        // Demo: filter by capability
-        const results = DEMO_AGENTS.filter((a) =>
-          a.skills.some((s) => capabilities.some((c) => s.tags.some((t) => t.toLowerCase().includes(c.toLowerCase()))))
-        );
-        set({ discoveryResults: results.length > 0 ? results : DEMO_AGENTS });
+        set({ discoveryResults: [] });
+        useAdminStore.getState().setNotice('A2A Agent 发现失败');
       }
     } catch {
-      set({ discoveryResults: DEMO_AGENTS });
+      set({ discoveryResults: [] });
+      useAdminStore.getState().setNotice('A2A 网关不可用，无法发现 Agent');
     } finally {
       set({ discoveryLoading: false });
     }
@@ -184,9 +134,11 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
         useAdminStore.getState().setNotice('A2A Agent 已注销');
         if (get().selectedAgentUrl === url) set({ selectedAgentUrl: null });
         await get().loadAgents();
+      } else {
+        useAdminStore.getState().setNotice('A2A Agent 注销失败');
       }
     } catch {
-      useAdminStore.getState().setNotice('注销失败 (Demo 模式)');
+      useAdminStore.getState().setNotice('A2A 网关不可用，注销失败');
     }
   },
 
@@ -200,6 +152,7 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
           id: Date.now(),
           method: 'tasks/send',
           params: {
+            agentUrl,
             message: {
               role: 'user',
               parts: [{ type: 'text', text: message }],
@@ -208,13 +161,21 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
         }),
       });
       const data = await res.json();
-      if (res.ok) {
-        set({ taskResult: data.result || data });
-        useAdminStore.getState().setNotice('A2A 任务已发送');
+      if (res.ok && !data.error) {
+        const result = data.result || data;
+        set({ taskResult: result });
+        if (result.status === 'failed') {
+          useAdminStore.getState().setNotice('A2A Agent 执行任务失败');
+        } else {
+          useAdminStore.getState().setNotice('A2A 任务已发送');
+        }
+      } else {
+        set({ taskResult: null });
+        useAdminStore.getState().setNotice(data.error?.message || data.error || 'A2A 任务发送失败');
       }
     } catch {
-      set({ taskResult: { id: `task-demo-${Date.now()}`, status: 'working', createdAt: new Date().toISOString() } });
-      useAdminStore.getState().setNotice('任务已发送 (Demo 模式)');
+      set({ taskResult: null });
+      useAdminStore.getState().setNotice('A2A 网关不可用，任务未发送');
     } finally {
       set({ taskLoading: false });
     }
