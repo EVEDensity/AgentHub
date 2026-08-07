@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import unittest
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.v1.missions import get_mission_repository, router
-from app.domain import EventEnvelope, Mission, MissionContract, WorkUnit
+from app.domain import EventEnvelope, Lease, Mission, MissionContract, WorkUnit
 from app.services.auth_service import get_current_user
 from tests.domain.factories import (
     build_contract,
@@ -466,6 +467,105 @@ class MissionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(repository.work_units[1].status.value, "PENDING")
+        self.assertEqual(repository.events, [])
+
+    def test_start_requires_matching_active_lease(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                status="LEASED",
+                lease=Lease(
+                    id="lease-1",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/start",
+            json={"leaseId": "wrong-lease"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(repository.work_units[0].status.value, "LEASED")
+        self.assertEqual(repository.events, [])
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/start",
+            json={"leaseId": "lease-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "RUNNING")
+        self.assertIsNotNone(repository.work_units[0].lease)
+        self.assertEqual(
+            repository.events[-1].event_type, "work_unit.lifecycle.started"
+        )
+
+    def test_expired_lease_is_recovered_to_retrying(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                status="LEASED",
+                attempt=2,
+                lease=Lease(
+                    id="lease-expired",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post("/api/v1/missions/mis-1/work-units/wu-1/recover")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "RETRYING")
+        self.assertEqual(response.json()["attempt"], 2)
+        self.assertIsNone(repository.work_units[0].lease)
+        self.assertEqual(
+            repository.events[-1].event_type,
+            "work_unit.lifecycle.lease_expired",
+        )
+
+    def test_active_lease_cannot_be_recovered(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                status="LEASED",
+                lease=Lease(
+                    id="lease-active",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post("/api/v1/missions/mis-1/work-units/wu-1/recover")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(repository.work_units[0].status.value, "LEASED")
         self.assertEqual(repository.events, [])
 
 

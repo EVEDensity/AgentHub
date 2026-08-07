@@ -10,13 +10,13 @@ from app.schemas.mission import (
     MissionCreateRequest,
     WorkUnitCreateRequest,
     WorkUnitLeaseRequest,
+    WorkUnitStartRequest,
 )
 from app.services.auth_service import get_current_user
 from app.services.mission_service import (
     MissionNotFoundError,
     MissionService,
     WorkUnitNotFoundError,
-    WorkUnitNotReadyError,
     build_human_actor,
 )
 
@@ -232,9 +232,66 @@ async def lease_work_unit(
         raise HTTPException(status_code=404, detail="Mission not found") from exc
     except WorkUnitNotFoundError as exc:
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
-    except (InvalidStateTransition, WorkUnitNotReadyError, ValueError) as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return leased.to_public_dict()
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/start")
+async def start_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    request: WorkUnitStartRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    service = MissionService(repository)
+    try:
+        started = await service.start_work_unit(
+            mission_id,
+            work_unit_id,
+            lease_id=request.lease_id,
+            runner_id=str(user["id"]),
+            actor=build_human_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return started.to_public_dict()
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/recover")
+async def recover_work_unit_lease(
+    mission_id: str,
+    work_unit_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    service = MissionService(repository)
+    try:
+        recovered = await service.recover_expired_lease(
+            mission_id,
+            work_unit_id,
+            actor=build_human_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return recovered.to_public_dict()
 
 
 @router.get("")

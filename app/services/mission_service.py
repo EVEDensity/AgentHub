@@ -45,6 +45,14 @@ class WorkUnitNotReadyError(ValueError):
     pass
 
 
+class LeaseOwnershipError(ValueError):
+    pass
+
+
+class LeaseExpiredError(ValueError):
+    pass
+
+
 class MissionService:
     def __init__(self, repository: MissionRepository | None = None) -> None:
         self._repository = repository or MissionRepository()
@@ -290,6 +298,124 @@ class MissionService:
                     "runnerId": lease.runner_id,
                     "attempt": updated.attempt,
                     "expiresAt": lease.expires_at.isoformat(),
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
+
+    async def start_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if work_unit.lease.id != lease_id:
+                raise LeaseOwnershipError("lease id does not match the work unit")
+            if work_unit.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("lease belongs to another runner")
+
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("work unit lease has expired")
+            updated = transition_work_unit(
+                work_unit,
+                WorkUnitStatus.RUNNING,
+                occurred_at=occurred_at,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.started",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated.status.value,
+                    "leaseId": lease_id,
+                    "attempt": updated.attempt,
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
+
+    async def recover_expired_lease(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at > occurred_at:
+                raise LeaseExpiredError("work unit lease has not expired")
+            updated = transition_work_unit(
+                work_unit,
+                WorkUnitStatus.RETRYING,
+                occurred_at=occurred_at,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.lease_expired",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated.status.value,
+                    "leaseId": work_unit.lease.id,
+                    "attempt": updated.attempt,
                 },
                 schema_version=1,
             )

@@ -4,7 +4,7 @@ import json
 import unittest
 from typing import Any
 
-from app.domain import EventEnvelope, Mission, WorkUnit
+from app.domain import EventEnvelope, Lease, Mission, WorkUnit
 from app.repositories import MissionRepository
 from tests.domain.factories import (
     build_contract,
@@ -179,7 +179,14 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.list_work_units(work_unit.mission_id, limit=0)
 
     async def test_work_unit_lock_and_update_lease_snapshot(self) -> None:
-        work_unit = build_work_unit()
+        work_unit = build_work_unit(
+            status="LEASED",
+            lease=Lease(
+                id="lease-1",
+                runner_id="runner-1",
+                expires_at=build_mission().updated_at,
+            ),
+        )
         self.database.one = self.build_work_unit_row(work_unit)
 
         locked = await self.repository.get_work_unit_for_update(work_unit.id)
@@ -191,8 +198,8 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(lock_args, (work_unit.id,))
         update_sql, update_args = self.database.executed[-1]
         self.assertIn("UPDATE work_units", update_sql)
-        self.assertEqual(update_args[:3], (work_unit.id, "PENDING", 0))
-        self.assertIsNone(update_args[3])
+        self.assertEqual(update_args[:3], (work_unit.id, "LEASED", 0))
+        self.assertEqual(json.loads(update_args[3]), work_unit.lease.to_public_dict())
 
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:
@@ -243,7 +250,11 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "assigned_adapter": work_unit.assigned_adapter,
             "status": work_unit.status.value,
             "attempt": work_unit.attempt,
-            "lease": None,
+            "lease": (
+                json.dumps(work_unit.lease.to_public_dict())
+                if work_unit.lease is not None
+                else None
+            ),
         }
 
 
