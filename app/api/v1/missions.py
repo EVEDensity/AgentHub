@@ -9,6 +9,7 @@ from app.repositories import MissionRepository
 from app.schemas.mission import (
     MissionCreateRequest,
     WorkUnitCreateRequest,
+    WorkUnitExecutionRequest,
     WorkUnitLeaseRequest,
     WorkUnitStartRequest,
 )
@@ -292,6 +293,112 @@ async def recover_work_unit_lease(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return recovered.to_public_dict()
+
+
+async def _run_work_unit_execution_command(
+    mission_id: str,
+    work_unit_id: str,
+    *,
+    command: Literal["complete", "fail", "retry"],
+    request: WorkUnitExecutionRequest,
+    user: dict,
+    repository: MissionRepository,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    service = MissionService(repository)
+    runner_id = str(user["id"])
+    actor = build_human_actor(user)
+    try:
+        if command == "complete":
+            updated = await service.complete_work_unit(
+                mission_id,
+                work_unit_id,
+                lease_id=request.lease_id,
+                runner_id=runner_id,
+                actor=actor,
+            )
+        elif command == "fail":
+            updated = await service.fail_work_unit(
+                mission_id,
+                work_unit_id,
+                lease_id=request.lease_id,
+                runner_id=runner_id,
+                actor=actor,
+                reason=request.reason,
+            )
+        else:
+            updated = await service.retry_work_unit(
+                mission_id,
+                work_unit_id,
+                lease_id=request.lease_id,
+                runner_id=runner_id,
+                actor=actor,
+                reason=request.reason,
+            )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return updated.to_public_dict()
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/complete")
+async def complete_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    request: WorkUnitExecutionRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    return await _run_work_unit_execution_command(
+        mission_id,
+        work_unit_id,
+        command="complete",
+        request=request,
+        user=user,
+        repository=repository,
+    )
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/fail")
+async def fail_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    request: WorkUnitExecutionRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    return await _run_work_unit_execution_command(
+        mission_id,
+        work_unit_id,
+        command="fail",
+        request=request,
+        user=user,
+        repository=repository,
+    )
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/retry")
+async def retry_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    request: WorkUnitExecutionRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    return await _run_work_unit_execution_command(
+        mission_id,
+        work_unit_id,
+        command="retry",
+        request=request,
+        user=user,
+        repository=repository,
+    )
 
 
 @router.get("")

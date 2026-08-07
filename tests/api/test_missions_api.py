@@ -568,6 +568,85 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.work_units[0].status.value, "LEASED")
         self.assertEqual(repository.events, [])
 
+    def test_complete_moves_running_work_unit_to_verifying(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                status="RUNNING",
+                lease=Lease(
+                    id="lease-running",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/complete",
+            json={"leaseId": "lease-running"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "VERIFYING")
+        self.assertIsNone(repository.work_units[0].lease)
+        self.assertEqual(
+            repository.events[-1].event_type,
+            "work_unit.lifecycle.completed",
+        )
+
+    def test_fail_and_retry_require_lease_and_respect_retry_budget(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(
+                status="RUNNING",
+                lease=Lease(
+                    id="lease-fail",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        failed = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/fail",
+            json={"leaseId": "lease-fail", "reason": "runner error"},
+        )
+        self.assertEqual(failed.status_code, 200)
+        self.assertEqual(failed.json()["status"], "FAILED")
+        self.assertEqual(repository.events[-1].payload["reason"], "runner error")
+
+        repository.work_units[0] = build_work_unit(
+            status="RUNNING",
+            attempt=3,
+            lease=Lease(
+                id="lease-exhausted",
+                runner_id="user-1",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            ),
+        )
+        before_events = len(repository.events)
+        exhausted = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/retry",
+            json={"leaseId": "lease-exhausted", "reason": "retry"},
+        )
+        self.assertEqual(exhausted.status_code, 409)
+        self.assertEqual(len(repository.events), before_events)
+
 
 if __name__ == "__main__":
     unittest.main()

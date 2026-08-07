@@ -314,6 +314,89 @@ class MissionService:
         runner_id: str,
         actor: ActorRef,
     ) -> WorkUnit:
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.RUNNING,
+            event_type="work_unit.lifecycle.started",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+        )
+
+    async def complete_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.VERIFYING,
+            event_type="work_unit.lifecycle.completed",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+        )
+
+    async def fail_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        reason: str | None = None,
+    ) -> WorkUnit:
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.FAILED,
+            event_type="work_unit.lifecycle.failed",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+            reason=reason,
+        )
+
+    async def retry_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        reason: str | None = None,
+    ) -> WorkUnit:
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.RETRYING,
+            event_type="work_unit.lifecycle.retrying",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+            reason=reason,
+        )
+
+    async def _transition_execution_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        target: WorkUnitStatus,
+        event_type: str,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        reason: str | None = None,
+    ) -> WorkUnit:
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
             if mission is None:
@@ -334,9 +417,15 @@ class MissionService:
             occurred_at = datetime.now(timezone.utc)
             if work_unit.lease.expires_at <= occurred_at:
                 raise LeaseExpiredError("work unit lease has expired")
+            if target == WorkUnitStatus.RETRYING:
+                contract = await repository.get_contract(mission.contract_id)
+                if contract is None:
+                    raise WorkUnitNotReadyError("mission contract not found")
+                if work_unit.attempt >= contract.budgets.retries + 1:
+                    raise WorkUnitNotReadyError("work unit retry budget is exhausted")
             updated = transition_work_unit(
                 work_unit,
-                WorkUnitStatus.RUNNING,
+                target,
                 occurred_at=occurred_at,
             )
             sequence = (
@@ -351,7 +440,7 @@ class MissionService:
                 aggregate_type="work_unit",
                 aggregate_id=work_unit.id,
                 sequence=sequence,
-                event_type="work_unit.lifecycle.started",
+                event_type=event_type,
                 actor=actor,
                 occurred_at=occurred_at,
                 correlation_id=mission_id,
@@ -360,6 +449,7 @@ class MissionService:
                     "status": updated.status.value,
                     "leaseId": lease_id,
                     "attempt": updated.attempt,
+                    **({"reason": reason} if reason is not None else {}),
                 },
                 schema_version=1,
             )
