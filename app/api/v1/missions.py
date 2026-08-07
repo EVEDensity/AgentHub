@@ -6,11 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.domain import InvalidStateTransition, Mission
 from app.repositories import MissionRepository
-from app.schemas.mission import MissionCreateRequest, WorkUnitCreateRequest
+from app.schemas.mission import (
+    MissionCreateRequest,
+    WorkUnitCreateRequest,
+    WorkUnitLeaseRequest,
+)
 from app.services.auth_service import get_current_user
 from app.services.mission_service import (
     MissionNotFoundError,
     MissionService,
+    WorkUnitNotFoundError,
+    WorkUnitNotReadyError,
     build_human_actor,
 )
 
@@ -199,6 +205,36 @@ async def list_work_units(
         offset=offset,
     )
     return {"workUnits": [work_unit.to_public_dict() for work_unit in work_units]}
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/lease")
+async def lease_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    request: WorkUnitLeaseRequest | None = None,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    service = MissionService(repository)
+    try:
+        leased = await service.lease_work_unit(
+            mission_id,
+            work_unit_id,
+            runner_id=str(user["id"]),
+            actor=build_human_actor(user),
+            lease_seconds=request.lease_seconds if request is not None else 300,
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except (InvalidStateTransition, WorkUnitNotReadyError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return leased.to_public_dict()
 
 
 @router.get("")

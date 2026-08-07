@@ -52,12 +52,17 @@ class FakeMissionRepository:
     async def update_mission(self, mission: Mission) -> None:
         self.mission = mission
 
-    async def get_last_event_sequence(self, mission_id: str) -> int:
+    async def get_last_event_sequence(
+        self,
+        aggregate_id: str,
+        *,
+        aggregate_type: str = "mission",
+    ) -> int:
         sequences = [
             event.sequence
             for event in self.events
-            if event.aggregate_type.value == "mission"
-            and event.aggregate_id == mission_id
+            if event.aggregate_type.value == aggregate_type
+            and event.aggregate_id == aggregate_id
         ]
         return max(sequences, default=0)
 
@@ -105,6 +110,16 @@ class FakeMissionRepository:
             ),
             None,
         )
+
+    async def get_work_unit_for_update(self, work_unit_id: str) -> WorkUnit | None:
+        return await self.get_work_unit(work_unit_id)
+
+    async def update_work_unit(self, work_unit: WorkUnit) -> None:
+        for index, existing in enumerate(self.work_units):
+            if existing.id == work_unit.id:
+                self.work_units[index] = work_unit
+                return
+        self.work_units.append(work_unit)
 
     async def list_work_units(
         self,
@@ -344,7 +359,7 @@ class MissionApiTests(unittest.TestCase):
         event = repository.events[-1]
         self.assertEqual(event.aggregate_type.value, "work_unit")
         self.assertEqual(event.aggregate_id, "wu-api-1")
-        self.assertEqual(event.event_type, "workunit.lifecycle.created")
+        self.assertEqual(event.event_type, "work_unit.lifecycle.created")
         self.assertEqual(event.actor.id, "user-1")
         self.assertEqual(event.correlation_id, "mis-1")
 
@@ -401,6 +416,56 @@ class MissionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(len(repository.work_units), 1)
+        self.assertEqual(repository.events, [])
+
+    def test_lease_claim_updates_attempt_and_appends_event(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit()]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/lease",
+            json={"leaseSeconds": 60},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "LEASED")
+        self.assertEqual(body["attempt"], 1)
+        self.assertEqual(body["lease"]["runnerId"], "user-1")
+        self.assertEqual(len(repository.events), 1)
+        event = repository.events[-1]
+        self.assertEqual(event.sequence, 1)
+        self.assertEqual(event.event_type, "work_unit.lifecycle.leased")
+        self.assertEqual(event.actor.id, "user-1")
+        self.assertEqual(event.payload["attempt"], 1)
+
+    def test_lease_claim_requires_completed_dependencies(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(id="wu-dependency"),
+            build_work_unit(id="wu-child", dependencies=["wu-dependency"]),
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post("/api/v1/missions/mis-1/work-units/wu-child/lease")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(repository.work_units[1].status.value, "PENDING")
         self.assertEqual(repository.events, [])
 
 

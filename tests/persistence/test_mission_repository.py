@@ -178,6 +178,22 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.repository.list_work_units(work_unit.mission_id, limit=0)
 
+    async def test_work_unit_lock_and_update_lease_snapshot(self) -> None:
+        work_unit = build_work_unit()
+        self.database.one = self.build_work_unit_row(work_unit)
+
+        locked = await self.repository.get_work_unit_for_update(work_unit.id)
+        await self.repository.update_work_unit(work_unit)
+
+        self.assertEqual(locked, work_unit)
+        lock_sql, lock_args = self.database.fetched_one[-1]
+        self.assertIn("FOR UPDATE", lock_sql)
+        self.assertEqual(lock_args, (work_unit.id,))
+        update_sql, update_args = self.database.executed[-1]
+        self.assertIn("UPDATE work_units", update_sql)
+        self.assertEqual(update_args[:3], (work_unit.id, "PENDING", 0))
+        self.assertIsNone(update_args[3])
+
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:
         return {

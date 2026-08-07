@@ -166,14 +166,20 @@ class MissionRepository:
             event.schema_version,
         )
 
-    async def get_last_event_sequence(self, mission_id: str) -> int:
+    async def get_last_event_sequence(
+        self,
+        aggregate_id: str,
+        *,
+        aggregate_type: str = "mission",
+    ) -> int:
         row = await self._fetch_one(
             """SELECT sequence
                FROM mission_events
-               WHERE aggregate_type='mission' AND aggregate_id=$1
+               WHERE aggregate_type=$1 AND aggregate_id=$2
                ORDER BY sequence DESC
                LIMIT 1""",
-            mission_id,
+            aggregate_type,
+            aggregate_id,
         )
         return int(row["sequence"]) if row is not None else 0
 
@@ -261,6 +267,30 @@ class MissionRepository:
             work_unit_id,
         )
         return self._work_unit_from_row(row) if row is not None else None
+
+    async def get_work_unit_for_update(self, work_unit_id: str) -> WorkUnit | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, kind, dependencies, input_refs,
+                      expected_outputs, required_capabilities, assigned_adapter,
+                      status, attempt, lease
+               FROM work_units WHERE id=$1
+               FOR UPDATE""",
+            work_unit_id,
+        )
+        return self._work_unit_from_row(row) if row is not None else None
+
+    async def update_work_unit(self, work_unit: WorkUnit) -> None:
+        await self._execute(
+            """UPDATE work_units
+               SET status=$2, attempt=$3, lease=$4::jsonb
+               WHERE id=$1""",
+            work_unit.id,
+            work_unit.status.value,
+            work_unit.attempt,
+            _encode_json(work_unit.lease.to_public_dict())
+            if work_unit.lease is not None
+            else None,
+        )
 
     async def list_work_units(
         self,

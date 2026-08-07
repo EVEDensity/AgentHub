@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.domain import (
     ActorRef,
     ArtifactRef,
     EventEnvelope,
+    Lease,
     Mission,
     MissionContract,
     MissionSource,
     MissionStatus,
     OutputSpec,
     WorkUnit,
+    WorkUnitStatus,
     transition_mission,
+    transition_work_unit,
 )
 from app.repositories import MissionRepository
 
@@ -31,6 +34,14 @@ def new_identifier(prefix: str) -> str:
 
 
 class MissionNotFoundError(LookupError):
+    pass
+
+
+class WorkUnitNotFoundError(LookupError):
+    pass
+
+
+class WorkUnitNotReadyError(ValueError):
     pass
 
 
@@ -198,7 +209,7 @@ class MissionService:
                 aggregate_type="work_unit",
                 aggregate_id=work_unit.id,
                 sequence=1,
-                event_type="workunit.lifecycle.created",
+                event_type="work_unit.lifecycle.created",
                 actor=actor,
                 occurred_at=occurred_at,
                 correlation_id=mission_id,
@@ -212,3 +223,76 @@ class MissionService:
             await repository.add_work_unit(work_unit)
             await repository.append_event(event)
         return work_unit
+
+    async def lease_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+
+            occurred_at = datetime.now(timezone.utc)
+            for dependency_id in work_unit.dependencies:
+                dependency = await repository.get_work_unit(dependency_id)
+                if dependency is None:
+                    raise WorkUnitNotReadyError(
+                        f"work unit dependency is missing: {dependency_id}"
+                    )
+                if dependency.status != WorkUnitStatus.SUCCEEDED:
+                    raise WorkUnitNotReadyError(
+                        f"work unit dependency is not complete: {dependency_id}"
+                    )
+
+            lease = Lease(
+                id=new_identifier("lease"),
+                runner_id=runner_id,
+                expires_at=occurred_at + timedelta(seconds=lease_seconds),
+            )
+            updated = transition_work_unit(
+                work_unit,
+                WorkUnitStatus.LEASED,
+                occurred_at=occurred_at,
+                lease=lease,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.leased",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated.status.value,
+                    "leaseId": lease.id,
+                    "runnerId": lease.runner_id,
+                    "attempt": updated.attempt,
+                    "expiresAt": lease.expires_at.isoformat(),
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
