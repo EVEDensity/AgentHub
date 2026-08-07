@@ -64,7 +64,7 @@ plugins/
 
 ## 完整文档
 
-详见 [docs/plugin-development.md](../docs/plugin-development.md)，包含：
+详见 [docs/development/plugin-development.md](../docs/development/plugin-development.md)，包含：
 - 4 个 hookspec 的完整签名与返回值契约
 - hook 执行顺序与生命周期图
 - 调试技巧（`plugin_manager.list_plugins()`、日志级别）

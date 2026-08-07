@@ -1,5 +1,8 @@
 # AgentNet DAG 编排
 
+> 兼容说明：AgentNet/DAG 是现有 Legacy 控制面。新任务必须通过 Mission
+> 和 WorkUnit 建模，AgentNet 不得新增第二套业务真相。
+
 AgentNet 的去中心化 DAG 编排引擎详解。
 
 ## 动态 DAG 拓扑

@@ -22,7 +22,7 @@ export default defineConfig({
     nav: [
       { text: '指南', link: '/zh/guide/what-is-agenthub' },
       { text: 'API', link: '/zh/api/overview' },
-      { text: '高级', link: '/zh/advanced/architecture' },
+      { text: '架构', link: '/architecture/' },
       { text: 'GitHub', link: 'https://github.com/EVEDensity/AgentHub' },
     ],
 
@@ -57,8 +57,6 @@ export default defineConfig({
             { text: 'Agent API', link: '/zh/api/agent' },
             { text: '工作流 API', link: '/zh/api/workflow' },
             { text: '知识库 API', link: '/zh/api/knowledge' },
-            { text: 'MCP Gateway API', link: '/zh/api/mcp-gateway' },
-            { text: 'A2A Protocol API', link: '/zh/api/a2a' },
             { text: 'WebSocket 事件', link: '/zh/api/websocket' },
           ],
         },
@@ -67,16 +65,11 @@ export default defineConfig({
         {
           text: '高级主题',
           items: [
-            { text: '架构详解', link: '/zh/advanced/architecture' },
             { text: 'ContextOS 4 层记忆', link: '/zh/advanced/contextos' },
             { text: 'AgentNet DAG 编排', link: '/zh/advanced/agentnet-dag' },
-            { text: 'Docker 沙箱安全', link: '/zh/advanced/sandbox-security' },
-            { text: 'MCP 协议深入', link: '/zh/advanced/mcp-deep-dive' },
-            { text: 'A2A 互操作', link: '/zh/advanced/a2a-interop' },
             { text: '性能调优', link: '/zh/advanced/performance' },
             { text: '安全架构', link: '/zh/advanced/security' },
             { text: 'K8s 生产部署', link: '/zh/advanced/k8s-deployment' },
-            { text: 'CI/CD 流水线', link: '/zh/advanced/cicd' },
           ],
         },
       ],

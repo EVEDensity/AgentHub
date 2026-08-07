@@ -1,31 +1,44 @@
 # AgentHub 文档
 
-欢迎来到 **AgentHub** — 企业级自托管多智能体协作平台。
+欢迎来到 **AgentHub** — 面向可验证 AI 工作执行的自托管平台。
 
 ## 什么是 AgentHub？
 
-AgentHub 是一个开源的企业级多智能体 (Multi-Agent) 协作平台，提供从单 Agent 到 Agent 团队的完整解决方案。
+AgentHub 当前处于 Mission-centric 重构阶段。长期目标是把一个 Issue 或
+API 目标转换为可恢复、可审计、附带 Artifact 和 Evidence 的执行结果。
+
+> 文档声明：以下能力按当前代码分为“已实现、原型、迁移中”。方案文档不
+> 等于实现证明；请以代码、迁移和测试为准。
 
 ### 核心能力
 
-- **AgentNet 协作网络** — DAG 拓扑编排，去中心化多 Agent 协作
-- **ContextOS 记忆引擎** — 4 层记忆体系（L0-L3），支持 LLM 自主记忆策略
-- **MCP Gateway** — Model Context Protocol 完整实现，STDIO + SSE 双传输
-- **RAG 文档检索** — Qdrant + OpenSearch 混合检索，7 步 DeepSearch 流程
-- **A2A 互操作** — Agent-to-Agent 开放标准，跨平台 Agent 互通
-- **Docker 安全沙箱** — seccomp + AppArmor + 只读文件系统的安全执行环境
-- **企业级安全** — IAM + ABAC + KMS + 审计日志，OWASP Top 10 完整防护
+| 能力 | 当前状态 | 说明 |
+|---|---|---|
+| Mission / WorkUnit | 已实现，持续补齐 | 当前唯一推荐的新业务状态模型 |
+| AgentNet / Legacy DAG | 已实现，迁移中 | 兼容现有功能，不再作为新写模型 |
+| MCP Gateway | 原型 | STDIO + SSE 已有，业务无状态化待完成 |
+| A2A | 原型 | Agent Card 和任务接口已有，签名/互操作测试待完成 |
+| RAG / Memory | 部分实现 | 检索与记忆组件存在，统一 Context Compiler 待完成 |
+| 沙箱、IAM、审计 | 部分实现 | 部署能力与安全边界按环境逐项验证 |
 
 ### 技术栈
 
 | 层级 | 技术 | 组件 |
 |------|------|------|
-| 接入层 | Go | Gateway, MCP Gateway, A2A Handler |
-| 编排层 | Go + Rust | Orchestrator, AgentNet |
-| 性能层 | Rust | stream-core, retrieval-core, fanout-core |
-| 离线层 | Python | Knowledge, Embedding, Model Adapter |
-| 前端 | Next.js 13 | Warm Studio 2.0 Design System |
-| 数据层 | PostgreSQL, Qdrant, OpenSearch, Redis, NATS | 持久化 + 向量 + 全文 + 缓存 + 事件 |
+| 控制面 | Python | Mission、Contract、WorkUnit、事件与 API |
+| 执行与协议 | Go | Gateway、Runner 相关服务、MCP/A2A 适配 |
+| 性能组件 | Rust | 流处理、检索和合并等可独立扩展核心 |
+| 数据与事件 | PostgreSQL、对象存储、NATS | 业务真相、Artifact 和异步事件 |
+| 可选上下文 | Qdrant、OpenSearch、Redis | 检索、缓存和会话能力，按部署启用 |
+| 前端 | Next.js 13 | 控制面投影和用户审查界面 |
+
+## Documentation map
+
+- [Architecture boundaries](./architecture/)
+- [Documentation governance](./governance/documentation-standard.md)
+- [Chinese user and API guides](./zh/)
+- Detailed private target architecture is kept locally in `docs/internal/` and
+  is intentionally excluded from releases.
 
 ### 开源
 

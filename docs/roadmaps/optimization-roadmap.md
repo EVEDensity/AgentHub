@@ -1,5 +1,10 @@
 # AgentHub Optimization Roadmap
 
+> Status: legacy implementation roadmap  
+> Last reviewed: 2026-08-08  
+> The Mission-centric sequence in local `docs/internal/roadmaps/12-week-refactor.md`
+> supersedes this document for architecture and execution priorities.
+
 ## 0. Current Position
 
 AgentHub is already past the "chat wrapper" stage. The current codebase has a usable multi-agent runtime, DAG tasking, WebSocket collaboration, memory/session persistence, and a multi-language service backbone.
@@ -247,7 +252,7 @@ Deliverables:
 - `app/services/context_summary_cache.py` with explicit version invalidation.
 - `app/services/memory_context.py` for layered projection and overlap removal.
 - `app/services/memory_summary_consumer.py` for durable summary write-back.
-- Memory architecture and maturity assessment in `docs/memory-architecture.md`.
+- Memory architecture and maturity assessment in `docs/architecture/components/memory.md`.
 
 ### Phase D: Platform Hardening
 

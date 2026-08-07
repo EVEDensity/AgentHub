@@ -1,5 +1,8 @@
 # 什么是 AgentHub？
 
+> 文档状态：产品介绍（迁移中）。功能勾选不代表生产级完成度；请参阅
+> [当前架构总览](./architecture.md) 和 [文档治理](../../governance/documentation-standard.md)。
+
 AgentHub 是一个**企业级自托管多智能体协作平台**，旨在让团队通过自然语言编排多个 AI Agent 完成复杂任务。
 
 ## 设计理念

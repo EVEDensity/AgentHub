@@ -1,5 +1,8 @@
 # 核心概念
 
+> 文档状态：legacy compatibility guide。AgentNet、ContextOS 和 A2A 的现有
+> 描述对应历史能力；新开发请以 Mission/WorkUnit 架构和当前测试为准。
+
 理解 AgentHub 的核心概念有助于你更好地使用平台。
 
 ## Agent（智能体）

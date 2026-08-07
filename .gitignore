@@ -1,4 +1,4 @@
-# ─── Python ───────────────────────────────────────────────────────
+# Python
 .venv/
 __pycache__/
 *.py[cod]
@@ -6,22 +6,20 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-# ─── Frontend ─────────────────────────────────────────────────────
+# Frontend and Node.js
+node_modules/
 frontend/node_modules/
 frontend/.next/
 frontend/.next-*/
 frontend/out/
 frontend/.env*.local
 
-# ─── Root node_modules (accidental commits) ─────────────────────────
-node_modules/
-
-# ─── Environment & Secrets ────────────────────────────────────────
+# Environment and secrets
 .env
 .env.*
 !.env.example
 
-# ─── Data ─────────────────────────────────────────────────────────
+# Runtime data and local indexes
 data/
 !frontend/data/
 *.sqlite3
@@ -30,49 +28,15 @@ data/
 .understand-anything/
 .playwright-cli/
 
-# Private product strategy documents
+# Local/private documentation
+# Stable public documentation remains tracked under docs/. Internal strategy,
+# architecture drafts, review notes, and generated output must stay local.
+docs/internal/
+docs/generated/
+docs/.cache/
+
+# Legacy private documentation locations. New material belongs in docs/internal/.
 docs/strategy/
-
-# ─── Compiled Binaries ────────────────────────────────────────────
-*.exe
-*.dll
-*.so
-*.dylib
-
-# ─── Backup & Temp Files ──────────────────────────────────────────
-*.bak
-*.tmp
-*.swp
-*~
-
-# ─── Logs ─────────────────────────────────────────────────────────
-*.log
-
-# ─── IDE / Editor ─────────────────────────────────────────────────
-.idea/
-.vscode/
-.DS_Store
-Thumbs.db
-*Thumbs.db
-
-# ─── Claude AI (项目记忆/计划包含架构策略) ──────────────────────────
-.claude/
-
-# ─── K8s Deployment (生产部署拓扑 — 个人开发者不宜公开) ─────────────
-k8s/
-
-# ─── Platform Internal (内部契约/架构/容量/迁移 — 架构设计 IP) ─────────
-platform/contracts/
-platform/*.json
-
-# ─── Monitoring Configs (暴露服务拓扑和端口) ────────────────────────
-deploy/prometheus.yml
-deploy/grafana/
-
-# ─── Frontend Internal Charts (架构可视化 — 暴露内部设计) ─────────────
-frontend/public/charts/
-
-# ─── Strategic Planning Docs (竞品分析/产品路线图/内部架构文档) ─────────
 AgentHub V[0-9]*.md
 AgentHub-*.md
 重构*.md
@@ -80,3 +44,34 @@ AgentHub-*.md
 docs/AgentHub-*.md
 docs/AI_COLLABORATION*.md
 架构对比分析与修改计划.md
+
+# Compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Backup, temporary, and log files
+*.bak
+*.tmp
+*.swp
+*~
+*.log
+
+# IDE and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*Thumbs.db
+
+# Local AI assistant state
+.claude/
+
+# Private deployment and platform material
+k8s/
+platform/contracts/
+platform/*.json
+deploy/prometheus.yml
+deploy/grafana/
+frontend/public/charts/

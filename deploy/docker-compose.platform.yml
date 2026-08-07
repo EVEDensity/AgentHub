@@ -50,7 +50,7 @@ services:
   #  启用方式：docker compose -f deploy/docker-compose.platform.yml --profile milvus up
   #  适用场景：向量规模 > 1000 万条、需要分布式部署、多索引类型
   #  当前推荐：保留 Qdrant（轻量、Rust 实现、单机友好、API 简洁）
-  #  迁移评估点：见 docs/vector-db-migration-checklist.md
+  #  迁移评估点：见 docs/operations/migrations/vector-db-migration-checklist.md
   # ═══════════════════════════════════════════════════════════════════
   # milvus-etcd:
   #   profiles: ["milvus"]
@@ -453,7 +453,7 @@ services:
   #  ─────────────────────────────────────────────────────────────────
   #  启用方式：docker compose -f deploy/docker-compose.platform.yml --profile vllm up
   #  GPU 要求：8GB+ VRAM（推荐 T4/A10/A100），CPU 模式仅用于功能验证
-  #  部署文档：见 docs/vllm-deployment.md
+  #  部署文档：见 docs/operations/deployment/vllm.md
   #  调用方式：model 字段传 vllm-<hf-model-id>，如 vllm-Qwen/Qwen2.5-7B-Instruct
   # ═══════════════════════════════════════════════════════════════════
   vllm:

@@ -1,5 +1,10 @@
 # AgentHub Memory Architecture
 
+> Status: implemented baseline  
+> Last reviewed: 2026-08-08  
+> This component is being consolidated into the Context Compiler and L0-L4
+> Memory Layers described in the private target architecture.
+
 ## 1. Current online projection
 
 Memory now has two orthogonal classifications:
