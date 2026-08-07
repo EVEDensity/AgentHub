@@ -9,6 +9,8 @@ from app.db.migrations import (
     MISSION_CONTROL_PLANE_UPGRADE,
     MISSION_EVENT_LEDGER_REVISION,
     MISSION_EVENT_LEDGER_UPGRADE,
+    WORK_UNIT_PERSISTENCE_REVISION,
+    WORK_UNIT_PERSISTENCE_UPGRADE,
 )
 from app.db.migrations.runner import (
     UnsupportedMigrationPath,
@@ -51,7 +53,9 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in MISSION_EVENT_LEDGER_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, MISSION_EVENT_LEDGER_REVISION)
+        for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
         self.assertTrue(statements[-1].startswith("INSERT INTO alembic_version"))
 
     async def test_previous_head_is_upgraded_and_versioned_last(self) -> None:
@@ -59,11 +63,11 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
 
         await apply_startup_migrations(connection)
 
-        self.assertEqual(connection.current_revision, MISSION_EVENT_LEDGER_REVISION)
+        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
         self.assertTrue(connection.executed[-1][0].startswith("UPDATE alembic_version"))
 
     async def test_current_head_is_idempotent(self) -> None:
-        connection = FakeConnection(MISSION_EVENT_LEDGER_REVISION)
+        connection = FakeConnection(WORK_UNIT_PERSISTENCE_REVISION)
 
         await apply_startup_migrations(connection)
 
@@ -77,7 +81,19 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         statements = [sql for sql, _args in connection.executed]
         for statement in MISSION_EVENT_LEDGER_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, MISSION_EVENT_LEDGER_REVISION)
+        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
+
+    async def test_event_ledger_head_advances_to_work_unit_persistence(self) -> None:
+        connection = FakeConnection(MISSION_EVENT_LEDGER_REVISION)
+
+        await apply_startup_migrations(connection)
+
+        statements = [sql for sql, _args in connection.executed]
+        for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
+            self.assertIn(statement, statements)
+        for statement in MISSION_EVENT_LEDGER_UPGRADE:
+            self.assertNotIn(statement, statements)
+        self.assertEqual(connection.current_revision, WORK_UNIT_PERSISTENCE_REVISION)
 
     async def test_unknown_upgrade_path_is_not_falsely_stamped(self) -> None:
         connection = FakeConnection("unknown-revision")

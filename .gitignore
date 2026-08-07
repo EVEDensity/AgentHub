@@ -28,6 +28,10 @@ data/
 *.db
 .codegraph/
 .understand-anything/
+.playwright-cli/
+
+# Private product strategy documents
+docs/strategy/
 
 # ─── Compiled Binaries ────────────────────────────────────────────
 *.exe

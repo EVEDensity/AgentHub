@@ -3,7 +3,18 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from app.domain import ActorRef, EventEnvelope, Mission, MissionContract, MissionSource
+from app.domain import (
+    ActorRef,
+    ArtifactRef,
+    EventEnvelope,
+    Mission,
+    MissionContract,
+    MissionSource,
+    MissionStatus,
+    OutputSpec,
+    WorkUnit,
+    transition_mission,
+)
 from app.repositories import MissionRepository
 
 
@@ -17,6 +28,10 @@ def build_human_actor(user: dict) -> ActorRef:
 
 def new_identifier(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
+
+
+class MissionNotFoundError(LookupError):
+    pass
 
 
 class MissionService:
@@ -72,3 +87,128 @@ class MissionService:
             await repository.add_mission(mission)
             await repository.append_event(event)
         return mission
+
+    async def start_mission(self, mission_id: str, *, actor: ActorRef) -> Mission:
+        return await self._transition_mission(
+            mission_id,
+            target=MissionStatus.RUNNING,
+            event_type="mission.lifecycle.started",
+            actor=actor,
+        )
+
+    async def cancel_mission(self, mission_id: str, *, actor: ActorRef) -> Mission:
+        return await self._transition_mission(
+            mission_id,
+            target=MissionStatus.CANCELLED,
+            event_type="mission.lifecycle.cancelled",
+            actor=actor,
+        )
+
+    async def _transition_mission(
+        self,
+        mission_id: str,
+        *,
+        target: MissionStatus,
+        event_type: str,
+        actor: ActorRef,
+    ) -> Mission:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+
+            occurred_at = datetime.now(timezone.utc)
+            updated = transition_mission(mission, target, occurred_at=occurred_at)
+            sequence = await repository.get_last_event_sequence(mission_id) + 1
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="mission",
+                aggregate_id=mission_id,
+                sequence=sequence,
+                event_type=event_type,
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": mission.status.value,
+                    "status": updated.status.value,
+                },
+                schema_version=1,
+            )
+            await repository.update_mission(updated)
+            await repository.append_event(event)
+        return updated
+
+    async def create_work_unit(
+        self,
+        mission_id: str,
+        *,
+        work_unit_id: str | None,
+        kind: str,
+        dependencies: list[str],
+        input_refs: list[ArtifactRef],
+        expected_outputs: list[OutputSpec],
+        required_capabilities: list[str],
+        assigned_adapter: str | None,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise ValueError("work units require a RUNNING mission")
+
+            contract = await repository.get_contract(mission.contract_id)
+            if contract is None:
+                raise ValueError("mission contract not found")
+            allowed_capabilities = {
+                grant.capability for grant in contract.allowed_capabilities
+            }
+            unsupported = sorted(set(required_capabilities) - allowed_capabilities)
+            if unsupported:
+                raise ValueError(
+                    "work unit requires capabilities outside the mission contract: "
+                    + ", ".join(unsupported)
+                )
+
+            identifier = work_unit_id or new_identifier("wu")
+            for dependency_id in dependencies:
+                dependency = await repository.get_work_unit(dependency_id)
+                if dependency is None or dependency.mission_id != mission_id:
+                    raise ValueError(
+                        f"work unit dependency is not part of the mission: {dependency_id}"
+                    )
+
+            work_unit = WorkUnit(
+                id=identifier,
+                mission_id=mission_id,
+                kind=kind,
+                dependencies=dependencies,
+                input_refs=input_refs,
+                expected_outputs=expected_outputs,
+                required_capabilities=required_capabilities,
+                assigned_adapter=assigned_adapter,
+                status="PENDING",
+                attempt=0,
+            )
+            occurred_at = datetime.now(timezone.utc)
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=1,
+                event_type="workunit.lifecycle.created",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "kind": work_unit.kind,
+                    "missionId": mission_id,
+                    "status": work_unit.status.value,
+                },
+                schema_version=1,
+            )
+            await repository.add_work_unit(work_unit)
+            await repository.append_event(event)
+        return work_unit

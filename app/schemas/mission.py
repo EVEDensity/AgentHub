@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain import MissionContract, MissionSource
+from app.domain import ArtifactRef, MissionContract, MissionSource, OutputSpec
 
 
 def _to_camel(value: str) -> str:
@@ -29,3 +29,23 @@ class MissionCreateRequest(BaseModel):
 
 class MissionListResponse(BaseModel):
     missions: list[dict]
+
+
+class WorkUnitCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    id: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    kind: Annotated[str, Field(min_length=1, max_length=255)]
+    dependencies: list[Annotated[str, Field(min_length=1, max_length=255)]] = Field(
+        default_factory=list
+    )
+    input_refs: list[ArtifactRef] = Field(default_factory=list)
+    expected_outputs: list[OutputSpec] = Field(default_factory=list)
+    required_capabilities: list[Annotated[str, Field(min_length=1, max_length=255)]] = (
+        Field(default_factory=list)
+    )
+    assigned_adapter: Annotated[str, Field(min_length=1, max_length=255)] | None = None

@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
-from app.domain import EventEnvelope, Mission, MissionContract
+from app.domain import EventEnvelope, Mission, MissionContract, WorkUnit
 
 Execute = Callable[..., Awaitable[None]]
 FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
@@ -23,6 +23,14 @@ def _decode_json_object(value: object, field_name: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError(f"database field {field_name} must contain a JSON object")
     return dict(value)
+
+
+def _decode_json_array(value: object, field_name: str) -> list[Any]:
+    if isinstance(value, str):
+        value = json.loads(value)
+    if not isinstance(value, list):
+        raise TypeError(f"database field {field_name} must contain a JSON array")
+    return value
 
 
 class MissionRepository:
@@ -115,6 +123,27 @@ class MissionRepository:
         )
         return self._mission_from_row(row) if row is not None else None
 
+    async def get_mission_for_update(self, mission_id: str) -> Mission | None:
+        row = await self._fetch_one(
+            """SELECT id, workspace_id, title, objective, source, contract_id,
+                      status, plan_version, created_by, created_at, updated_at
+               FROM missions WHERE id=$1
+               FOR UPDATE""",
+            mission_id,
+        )
+        return self._mission_from_row(row) if row is not None else None
+
+    async def update_mission(self, mission: Mission) -> None:
+        await self._execute(
+            """UPDATE missions
+               SET status=$2, plan_version=$3, updated_at=$4
+               WHERE id=$1""",
+            mission.id,
+            mission.status.value,
+            mission.plan_version,
+            mission.updated_at,
+        )
+
     async def append_event(self, event: EventEnvelope) -> None:
         await self._execute(
             """INSERT INTO mission_events(
@@ -136,6 +165,42 @@ class MissionRepository:
             _encode_json(event.payload),
             event.schema_version,
         )
+
+    async def get_last_event_sequence(self, mission_id: str) -> int:
+        row = await self._fetch_one(
+            """SELECT sequence
+               FROM mission_events
+               WHERE aggregate_type='mission' AND aggregate_id=$1
+               ORDER BY sequence DESC
+               LIMIT 1""",
+            mission_id,
+        )
+        return int(row["sequence"]) if row is not None else 0
+
+    async def list_events(
+        self,
+        mission_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> list[EventEnvelope]:
+        if after_sequence < 0:
+            raise ValueError("after_sequence cannot be negative")
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        rows = await self._fetch_all(
+            """SELECT event_id, aggregate_type, aggregate_id, sequence, event_type,
+                      actor, occurred_at, correlation_id, causation_id, payload,
+                      schema_version
+               FROM mission_events
+               WHERE aggregate_type='mission' AND aggregate_id=$1 AND sequence>$2
+               ORDER BY sequence ASC
+               LIMIT $3""",
+            mission_id,
+            after_sequence,
+            limit,
+        )
+        return [self._event_from_row(row) for row in rows]
 
     async def list_missions(
         self,
@@ -161,9 +226,91 @@ class MissionRepository:
         )
         return [self._mission_from_row(row) for row in rows]
 
+    async def add_work_unit(self, work_unit: WorkUnit) -> None:
+        await self._execute(
+            """INSERT INTO work_units(
+                   id, mission_id, kind, dependencies, input_refs, expected_outputs,
+                   required_capabilities, assigned_adapter, status, attempt, lease
+               ) VALUES(
+                   $1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb,
+                   $7::jsonb, $8, $9, $10, $11::jsonb
+               )""",
+            work_unit.id,
+            work_unit.mission_id,
+            work_unit.kind,
+            _encode_json(list(work_unit.dependencies)),
+            _encode_json([item.to_public_dict() for item in work_unit.input_refs]),
+            _encode_json(
+                [item.to_public_dict() for item in work_unit.expected_outputs]
+            ),
+            _encode_json(list(work_unit.required_capabilities)),
+            work_unit.assigned_adapter,
+            work_unit.status.value,
+            work_unit.attempt,
+            _encode_json(work_unit.lease.to_public_dict())
+            if work_unit.lease is not None
+            else None,
+        )
+
+    async def get_work_unit(self, work_unit_id: str) -> WorkUnit | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, kind, dependencies, input_refs,
+                      expected_outputs, required_capabilities, assigned_adapter,
+                      status, attempt, lease
+               FROM work_units WHERE id=$1""",
+            work_unit_id,
+        )
+        return self._work_unit_from_row(row) if row is not None else None
+
+    async def list_work_units(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[WorkUnit]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        rows = await self._fetch_all(
+            """SELECT id, mission_id, kind, dependencies, input_refs,
+                      expected_outputs, required_capabilities, assigned_adapter,
+                      status, attempt, lease
+               FROM work_units
+               WHERE mission_id=$1
+               ORDER BY id ASC
+               LIMIT $2 OFFSET $3""",
+            mission_id,
+            limit,
+            offset,
+        )
+        return [self._work_unit_from_row(row) for row in rows]
+
     @staticmethod
     def _mission_from_row(row: Mapping[str, Any]) -> Mission:
         values = dict(row)
         values["source"] = _decode_json_object(values["source"], "source")
         values["created_by"] = _decode_json_object(values["created_by"], "created_by")
         return Mission.model_validate(values)
+
+    @staticmethod
+    def _event_from_row(row: Mapping[str, Any]) -> EventEnvelope:
+        values = dict(row)
+        values["actor"] = _decode_json_object(values["actor"], "actor")
+        values["payload"] = _decode_json_object(values["payload"], "payload")
+        return EventEnvelope.model_validate(values)
+
+    @staticmethod
+    def _work_unit_from_row(row: Mapping[str, Any]) -> WorkUnit:
+        values = dict(row)
+        for field_name in (
+            "dependencies",
+            "input_refs",
+            "expected_outputs",
+            "required_capabilities",
+        ):
+            values[field_name] = _decode_json_array(values[field_name], field_name)
+        if values["lease"] is not None:
+            values["lease"] = _decode_json_object(values["lease"], "lease")
+        return WorkUnit.model_validate(values)

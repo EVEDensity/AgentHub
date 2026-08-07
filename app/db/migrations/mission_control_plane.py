@@ -4,6 +4,8 @@ MISSION_CONTROL_PLANE_REVISION = "4f6d2a8c901b"
 MISSION_CONTROL_PLANE_DOWN_REVISION = "c1a7d4e82b6f"
 MISSION_EVENT_LEDGER_REVISION = "8b7c3d9e0a12"
 MISSION_EVENT_LEDGER_DOWN_REVISION = MISSION_CONTROL_PLANE_REVISION
+WORK_UNIT_PERSISTENCE_REVISION = "9c8d4e0f1b23"
+WORK_UNIT_PERSISTENCE_DOWN_REVISION = MISSION_EVENT_LEDGER_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -81,3 +83,40 @@ MISSION_EVENT_LEDGER_UPGRADE = (
 )
 
 MISSION_EVENT_LEDGER_DOWNGRADE = ("DROP TABLE IF EXISTS mission_events",)
+
+WORK_UNIT_PERSISTENCE_UPGRADE = (
+    """
+    CREATE TABLE IF NOT EXISTS work_units (
+        id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL REFERENCES missions(id),
+        kind TEXT NOT NULL,
+        dependencies JSONB NOT NULL,
+        input_refs JSONB NOT NULL,
+        expected_outputs JSONB NOT NULL,
+        required_capabilities JSONB NOT NULL,
+        assigned_adapter TEXT,
+        status TEXT NOT NULL CHECK (
+            status IN (
+                'PENDING', 'LEASED', 'RUNNING', 'VERIFYING', 'WAITING',
+                'RETRYING', 'SUCCEEDED', 'FAILED', 'CANCELLED'
+            )
+        ),
+        attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+        lease JSONB,
+        CHECK (jsonb_typeof(dependencies) = 'array'),
+        CHECK (jsonb_typeof(input_refs) = 'array'),
+        CHECK (jsonb_typeof(expected_outputs) = 'array'),
+        CHECK (jsonb_typeof(required_capabilities) = 'array'),
+        CHECK (
+            (status IN ('LEASED', 'RUNNING') AND lease IS NOT NULL)
+            OR (status NOT IN ('LEASED', 'RUNNING') AND lease IS NULL)
+        )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_work_units_mission_status
+    ON work_units(mission_id, status, id)
+    """,
+)
+
+WORK_UNIT_PERSISTENCE_DOWNGRADE = ("DROP TABLE IF EXISTS work_units",)
