@@ -14,6 +14,7 @@ from app.services.artifact_store_service import (
     ContentAddressedArtifactPublisher,
     PublishedArtifact,
 )
+from app.services.harness_service import HarnessRequest, HarnessResult
 from app.services.runner_service import (
     MissionControlRunnerClient,
     RunnerControlError,
@@ -110,6 +111,23 @@ class BlockingSandbox(FakeSandbox):
         return self.result
 
 
+class RecordingHarness:
+    def __init__(self, result: SandboxResult | None = None) -> None:
+        self.requests: list[HarnessRequest] = []
+        self.result = result or SandboxResult(
+            success=True,
+            stdout="harness output\n",
+            stderr="",
+            exit_code=0,
+            duration_ms=1,
+            mode="harness-fake",
+        )
+
+    async def execute(self, request: HarnessRequest) -> HarnessResult:
+        self.requests.append(request)
+        return HarnessResult(sandbox=self.result, iterations=2, tool_calls=1)
+
+
 class FakePublisher:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
@@ -131,6 +149,39 @@ class FakePublisher:
 
 
 class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runner_delegates_execution_to_explicit_harness(self) -> None:
+        control = FakeControl()
+        harness = RecordingHarness()
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            sandbox=FakeSandbox(
+                SandboxResult(
+                    success=False,
+                    stdout="should not run",
+                    stderr="unexpected sandbox call",
+                    exit_code=1,
+                    duration_ms=1,
+                    mode="fake",
+                )
+            ),
+            harness=harness,
+            runner_id="runner-1",
+        )
+
+        result = await runner.run(
+            "mis-1",
+            "wu-1",
+            code="print('harness')",
+            language="python",
+            timeout=12,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(harness.requests), 1)
+        self.assertEqual(harness.requests[0].code, "print('harness')")
+        self.assertEqual(harness.requests[0].timeout, 12)
+
     async def test_runner_executes_publishes_registers_and_completes(self) -> None:
         control = FakeControl()
         publisher = FakePublisher()

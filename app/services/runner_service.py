@@ -13,6 +13,11 @@ from app.services.artifact_store_service import (
     ArtifactPublisher,
     PublishedArtifact,
 )
+from app.services.harness_service import (
+    HarnessPort,
+    HarnessRequest,
+    SandboxHarness,
+)
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
 
 
@@ -306,12 +311,14 @@ class WorkUnitRunner:
         *,
         publisher: ArtifactPublisher,
         sandbox: SandboxPort | None = None,
+        harness: HarnessPort | None = None,
         runner_id: str,
         heartbeat_interval_seconds: float | None = None,
     ) -> None:
         self._control = control
         self._publisher = publisher
         self._sandbox = sandbox or SandboxExecutor()
+        self._harness = harness or SandboxHarness(self._sandbox)
         self._runner_id = runner_id
         if heartbeat_interval_seconds is not None and heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be positive")
@@ -448,11 +455,13 @@ class WorkUnitRunner:
         lease_seconds: int,
     ) -> SandboxResult:
         execution_task = asyncio.create_task(
-            self._sandbox.execute(
-                code,
-                language=language,
-                timeout=timeout,
-                cwd=str(cwd) if cwd is not None else None,
+            self._harness.execute(
+                HarnessRequest(
+                    code=code,
+                    language=language,
+                    timeout=timeout,
+                    cwd=cwd,
+                )
             )
         )
         heartbeat_task = asyncio.create_task(
@@ -481,7 +490,7 @@ class WorkUnitRunner:
                 raise RunnerHeartbeatError(
                     "lease heartbeat failed"
                 ) from heartbeat_error
-            return execution_task.result()
+            return execution_task.result().sandbox
         except asyncio.CancelledError:
             execution_task.cancel()
             await _drain_cancelled_task(execution_task)
