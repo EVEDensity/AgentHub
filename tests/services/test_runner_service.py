@@ -14,7 +14,13 @@ from app.services.artifact_store_service import (
     ContentAddressedArtifactPublisher,
     PublishedArtifact,
 )
-from app.services.harness_service import HarnessRequest, HarnessResult
+from app.services.harness_service import (
+    FunctionCallingHarness,
+    FunctionResult,
+    HarnessRequest,
+    HarnessResult,
+    ModelResponse,
+)
 from app.services.runner_service import (
     MissionControlRunnerClient,
     RunnerControlError,
@@ -128,6 +134,16 @@ class RecordingHarness:
         return HarnessResult(sandbox=self.result, iterations=2, tool_calls=1)
 
 
+class FinalResponseModel:
+    async def complete(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+    ) -> ModelResponse:
+        del request, tool_results
+        return ModelResponse(content="harness model output\n")
+
+
 class FakePublisher:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
@@ -149,6 +165,30 @@ class FakePublisher:
 
 
 class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runner_publishes_final_output_from_function_calling_harness(self) -> None:
+        control = FakeControl()
+        publisher = FakePublisher()
+        runner = WorkUnitRunner(
+            control,
+            publisher=publisher,
+            harness=FunctionCallingHarness(FinalResponseModel(), []),
+            runner_id="runner-1",
+        )
+
+        result = await runner.run(
+            "mis-1",
+            "wu-1",
+            code="Summarize the work",
+            language="text",
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(publisher.contents, [b"harness model output\n"])
+        self.assertEqual(
+            [name for name, _ in control.calls],
+            ["lease", "start", "register", "complete"],
+        )
+
     async def test_runner_delegates_execution_to_explicit_harness(self) -> None:
         control = FakeControl()
         harness = RecordingHarness()

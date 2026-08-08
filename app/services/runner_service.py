@@ -387,10 +387,10 @@ class WorkUnitRunner:
                 mission_id,
                 work_unit_id,
                 lease,
-                f"sandbox execution raised: {exc}",
+                f"Harness execution raised: {exc}",
             )
             raise RunnerExecutionError(
-                f"sandbox execution failed for WorkUnit {work_unit_id}"
+                f"Harness execution failed for WorkUnit {work_unit_id}"
             ) from exc
 
         if not result.success:
