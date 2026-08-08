@@ -14,7 +14,8 @@ boundary. It is not the permanent home of every Agent feature.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. Harness owns bounded model/tool loops and explicit per-run tool
-  grants; Runner must not write repository state directly.
+  grants; ModelAdapterPort normalizes provider responses; Runner must not write
+  repository state directly.
 - `api/`: HTTP/WebSocket transport; handlers must delegate to services.
 - `schemas/`: versioned request and response validation.
 - `compat/`: one-way adapters from legacy Task/DAG data into Mission objects.
