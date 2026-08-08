@@ -86,6 +86,7 @@ def _task_state(mission: Mission, work_unit: WorkUnit | None) -> str:
 def task_projection(mission: Mission, work_unit: WorkUnit | None) -> dict:
     return {
         "taskId": mission.source.external_id,
+        "agentUrl": mission.source.reference,
         "state": _task_state(mission, work_unit),
         "missionId": mission.id,
         "missionStatus": mission.status.value,
@@ -175,12 +176,52 @@ class A2AAdapterService:
         actor: ActorRef,
     ) -> dict:
         mission = await self._mission_for_task(workspace_id, task_id)
+        work_unit = await self._get_mapped_work_unit(workspace_id, task_id)
+        if work_unit is not None and work_unit.status == WorkUnitStatus.PENDING:
+            work_unit = await self._missions.cancel_pending_work_unit(
+                mission.id,
+                work_unit.id,
+                actor=actor,
+            )
         if mission.status != MissionStatus.CANCELLED:
             try:
                 mission = await self._missions.cancel_mission(mission.id, actor=actor)
             except ValueError as exc:
                 raise A2ATaskConflictError(str(exc)) from exc
+        return task_projection(mission, work_unit)
+
+    async def fail_task(
+        self,
+        workspace_id: str,
+        task_id: str,
+        *,
+        actor: ActorRef,
+        reason: str,
+    ) -> dict:
+        mission = await self._mission_for_task(workspace_id, task_id)
         work_unit = await self._get_mapped_work_unit(workspace_id, task_id)
+        if work_unit is not None and work_unit.status == WorkUnitStatus.PENDING:
+            work_unit = await self._missions.fail_pending_work_unit(
+                mission.id,
+                work_unit.id,
+                actor=actor,
+                reason=reason,
+            )
+        elif work_unit is not None and work_unit.status != WorkUnitStatus.FAILED:
+            raise A2ATaskConflictError(
+                "A2A dispatch failure can only be recorded before execution starts"
+            )
+
+        if mission.status == MissionStatus.RUNNING:
+            mission = await self._missions.fail_mission(
+                mission.id,
+                actor=actor,
+                reason=reason,
+            )
+        elif mission.status != MissionStatus.FAILED:
+            raise A2ATaskConflictError(
+                f"A2A dispatch failure cannot replace {mission.status.value}"
+            )
         return task_projection(mission, work_unit)
 
     async def _create_mission(

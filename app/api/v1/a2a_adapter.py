@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.access import authorize_workspace
 from app.repositories import MissionRepository
-from app.schemas.a2a_adapter import A2ATaskCancelRequest, A2ATaskCreateRequest
+from app.schemas.a2a_adapter import (
+    A2ATaskCancelRequest,
+    A2ATaskCreateRequest,
+    A2ATaskFailRequest,
+)
 from app.services.a2a_adapter_service import (
     A2AAdapterService,
     A2ATaskConflictError,
@@ -76,6 +80,24 @@ async def cancel_a2a_task(
             request.workspace_id,
             request.task_id,
             actor=build_a2a_actor(user),
+        )
+    except (A2ATaskNotFoundError, A2ATaskConflictError) as exc:
+        raise _translate_error(exc) from exc
+
+
+@router.post("/fail")
+async def fail_a2a_task(
+    request: A2ATaskFailRequest,
+    user: CurrentUser,
+    repository: A2ARepositoryDep,
+) -> dict:
+    authorize_workspace(user, request.workspace_id)
+    try:
+        return await A2AAdapterService(repository).fail_task(
+            request.workspace_id,
+            request.task_id,
+            actor=build_a2a_actor(user),
+            reason=request.reason,
         )
     except (A2ATaskNotFoundError, A2ATaskConflictError) as exc:
         raise _translate_error(exc) from exc

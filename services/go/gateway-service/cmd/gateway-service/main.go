@@ -452,7 +452,11 @@ func main() {
 		log.Printf("a2a: TLS enabled (cert=%s, key=%s, ca=%s, strict=%v)",
 			a2aTLS.CertFile, a2aTLS.KeyFile, a2aTLS.CAFile, a2aTLS.StrictVerify)
 	}
-	a2a := newA2AHandler(a2aBaseURL, pool, a2aTLS)
+	a2aControl := newA2AControlPlaneClient(
+		getenv("MISSION_CONTROL_PLANE_URL", "http://127.0.0.1:8000"),
+		nil,
+	)
+	a2a := newA2AHandler(a2aBaseURL, pool, a2aTLS, a2aControl)
 	mux.Handle("/platform/a2a/", http.StripPrefix("/platform/a2a", a2a))
 
 	// ── API Keys + Public API ─────────────────────────────────────

@@ -14,7 +14,10 @@ async function getA2AStore() {
 
   vi.doMock('../../stores/authStore', () => ({
     useAuthStore: {
-      getState: () => ({ authHeaders: () => ({ Authorization: 'Bearer test-token' }) }),
+      getState: () => ({
+        user: { id: 'workspace-1', name: 'Ada', role: 'developer' },
+        authHeaders: () => ({ Authorization: 'Bearer test-token' }),
+      }),
     },
   }));
   vi.doMock('../../stores/adminStore', () => ({
@@ -68,6 +71,7 @@ describe('a2aStore honest failure behavior', () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(String(init.body));
     expect(body.params.agentUrl).toBe('http://agent.test');
+    expect(body.params.workspaceId).toBe('workspace-1');
     expect(store.getState().taskResult).toEqual({ id: 'task-1', status: 'working' });
     expect(setNotice).toHaveBeenCalledWith('A2A 任务已发送');
   });

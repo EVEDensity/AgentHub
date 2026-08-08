@@ -123,6 +123,21 @@ class MissionService:
             actor=actor,
         )
 
+    async def fail_mission(
+        self,
+        mission_id: str,
+        *,
+        actor: ActorRef,
+        reason: str,
+    ) -> Mission:
+        return await self._transition_mission(
+            mission_id,
+            target=MissionStatus.FAILED,
+            event_type="mission.lifecycle.failed",
+            actor=actor,
+            reason=reason,
+        )
+
     async def _transition_mission(
         self,
         mission_id: str,
@@ -130,6 +145,7 @@ class MissionService:
         target: MissionStatus,
         event_type: str,
         actor: ActorRef,
+        reason: str | None = None,
     ) -> Mission:
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
@@ -139,6 +155,12 @@ class MissionService:
             occurred_at = datetime.now(timezone.utc)
             updated = transition_mission(mission, target, occurred_at=occurred_at)
             sequence = await repository.get_last_event_sequence(mission_id) + 1
+            payload = {
+                "previousStatus": mission.status.value,
+                "status": updated.status.value,
+            }
+            if reason is not None:
+                payload["reason"] = reason
             event = EventEnvelope(
                 event_id=new_identifier("evt"),
                 aggregate_type="mission",
@@ -148,10 +170,7 @@ class MissionService:
                 actor=actor,
                 occurred_at=occurred_at,
                 correlation_id=mission_id,
-                payload={
-                    "previousStatus": mission.status.value,
-                    "status": updated.status.value,
-                },
+                payload=payload,
                 schema_version=1,
             )
             await repository.update_mission(updated)
@@ -231,6 +250,95 @@ class MissionService:
             await repository.add_work_unit(work_unit)
             await repository.append_event(event)
         return work_unit
+
+    async def fail_pending_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        actor: ActorRef,
+        reason: str,
+    ) -> WorkUnit:
+        return await self._transition_pending_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.FAILED,
+            event_type="work_unit.lifecycle.failed",
+            actor=actor,
+            reason=reason,
+        )
+
+    async def cancel_pending_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        return await self._transition_pending_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.CANCELLED,
+            event_type="work_unit.lifecycle.cancelled",
+            actor=actor,
+        )
+
+    async def _transition_pending_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        target: WorkUnitStatus,
+        event_type: str,
+        actor: ActorRef,
+        reason: str | None = None,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.status != WorkUnitStatus.PENDING:
+                raise WorkUnitNotReadyError(
+                    "only PENDING work units can use an adapter pre-execution transition"
+                )
+
+            occurred_at = datetime.now(timezone.utc)
+            updated = transition_work_unit(
+                work_unit,
+                target,
+                occurred_at=occurred_at,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            payload = {
+                "previousStatus": work_unit.status.value,
+                "status": updated.status.value,
+            }
+            if reason is not None:
+                payload["reason"] = reason
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type=event_type,
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload=payload,
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
 
     async def lease_work_unit(
         self,

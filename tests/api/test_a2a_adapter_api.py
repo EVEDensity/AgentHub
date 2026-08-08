@@ -96,7 +96,31 @@ class A2AAdapterApiTests(unittest.TestCase):
         self.assertEqual(cancelled.status_code, 200)
         self.assertEqual(cancelled.json()["state"], "canceled")
         self.assertEqual(cancelled.json()["missionStatus"], "CANCELLED")
+        self.assertEqual(cancelled.json()["workUnitStatus"], "CANCELLED")
         self.assertEqual(self.repository.mission.status.value, "CANCELLED")
+
+    def test_dispatch_failure_fails_work_unit_and_mission_with_reason(self) -> None:
+        self.client.post("/api/v1/a2a/tasks", json=self.request)
+
+        failed = self.client.post(
+            "/api/v1/a2a/tasks/fail",
+            json={
+                "workspaceId": "user-1",
+                "taskId": "external-task-1",
+                "reason": "remote agent refused the request",
+            },
+        )
+
+        self.assertEqual(failed.status_code, 200)
+        self.assertEqual(failed.json()["state"], "failed")
+        self.assertEqual(failed.json()["missionStatus"], "FAILED")
+        self.assertEqual(failed.json()["workUnitStatus"], "FAILED")
+        self.assertEqual(self.repository.events[-2].event_type, "work_unit.lifecycle.failed")
+        self.assertEqual(self.repository.events[-1].event_type, "mission.lifecycle.failed")
+        self.assertEqual(
+            self.repository.events[-1].payload["reason"],
+            "remote agent refused the request",
+        )
 
     def test_unknown_and_cross_workspace_tasks_are_not_exposed(self) -> None:
         missing = self.client.get(

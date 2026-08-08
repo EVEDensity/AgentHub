@@ -144,6 +144,12 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
 
   sendTask: async (agentUrl: string, message: string) => {
     set({ taskLoading: true, taskResult: null });
+    const workspaceId = useAuthStore.getState().user?.id;
+    if (!workspaceId) {
+      set({ taskLoading: false });
+      useAdminStore.getState().setNotice('当前用户未绑定工作区，A2A 任务未发送');
+      return;
+    }
     try {
       const res = await api('/tasks', {
         method: 'POST',
@@ -152,6 +158,7 @@ export const useA2AStore = create<A2AState>()((set, get) => ({
           id: Date.now(),
           method: 'tasks/send',
           params: {
+            workspaceId,
             agentUrl,
             message: {
               role: 'user',

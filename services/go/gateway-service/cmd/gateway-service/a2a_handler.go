@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -169,14 +170,14 @@ type A2ATaskRequest struct {
 	JSONRPC string         `json:"jsonrpc"`
 	Method  string         `json:"method"`
 	Params  map[string]any `json:"params"`
-	ID      string         `json:"id"`
+	ID      any            `json:"id"`
 }
 
 type A2ATaskResponse struct {
 	JSONRPC string    `json:"jsonrpc"`
 	Result  any       `json:"result,omitempty"`
 	Error   *A2AError `json:"error,omitempty"`
-	ID      string    `json:"id"`
+	ID      any       `json:"id"`
 }
 
 type A2AError struct {
@@ -186,13 +187,15 @@ type A2AError struct {
 }
 
 type A2ATask struct {
-	ID        string        `json:"id"`
-	SessionID string        `json:"sessionId"`
-	Status    string        `json:"status"` // "pending" | "working" | "completed" | "failed" | "cancelled"
-	Message   *A2AMessage   `json:"message,omitempty"`
-	Artifacts []A2AArtifact `json:"artifacts,omitempty"`
-	CreatedAt string        `json:"createdAt"`
-	UpdatedAt string        `json:"updatedAt"`
+	ID         string        `json:"id"`
+	SessionID  string        `json:"sessionId,omitempty"`
+	Status     string        `json:"status"`
+	MissionID  string        `json:"missionId,omitempty"`
+	WorkUnitID string        `json:"workUnitId,omitempty"`
+	Message    *A2AMessage   `json:"message,omitempty"`
+	Artifacts  []A2AArtifact `json:"artifacts,omitempty"`
+	CreatedAt  string        `json:"createdAt,omitempty"`
+	UpdatedAt  string        `json:"updatedAt,omitempty"`
 }
 
 type A2AMessage struct {
@@ -725,36 +728,6 @@ func (r *a2aRegistry) discover(capabilities []string) []*AgentCard {
 	return r.discoverMem(capabilities)
 }
 
-// ── Task Store (in-memory) ──────────────────────────────────────────
-
-type a2aTaskStore struct {
-	mu    sync.RWMutex
-	tasks map[string]*A2ATask
-}
-
-var globalTaskStore = &a2aTaskStore{tasks: make(map[string]*A2ATask)}
-
-func (ts *a2aTaskStore) put(task *A2ATask) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ts.tasks[task.ID] = task
-}
-
-func (ts *a2aTaskStore) get(id string) *A2ATask {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.tasks[id]
-}
-
-func (ts *a2aTaskStore) updateStatus(id, status string) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	if t, ok := ts.tasks[id]; ok {
-		t.Status = status
-		t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	}
-}
-
 // ── AgentHub Self Agent Card ────────────────────────────────────────
 
 func buildAgentHubCard(baseURL string) *AgentCard {
@@ -915,6 +888,12 @@ func forwardTaskToAgent(client *http.Client, agentURL, method string, params map
 	if err := json.NewDecoder(resp.Body).Decode(&taskResp); err != nil {
 		return nil, fmt.Errorf("decode response from %s: %w", taskEndpoint, err)
 	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if taskResp.Error != nil {
+			return &taskResp, nil
+		}
+		return nil, fmt.Errorf("remote A2A endpoint %s returned HTTP %d", taskEndpoint, resp.StatusCode)
+	}
 
 	return &taskResp, nil
 }
@@ -925,7 +904,7 @@ func forwardTaskToAgent(client *http.Client, agentURL, method string, params map
 // When pool is non-nil, PostgreSQL persistence is used for the agent registry.
 // When pool is nil, an in-memory map serves as fallback.
 // tlsCfg enables TLS/mTLS for outbound calls to external A2A agents.
-func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Handler {
+func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control a2aControlPlane) http.Handler {
 	mux := http.NewServeMux()
 
 	selfCard := buildAgentHubCard(baseURL)
@@ -1124,50 +1103,62 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 				})
 				return
 			}
-
-			// Create a new task with UUID
-			taskID := genTaskID()
-			msg := extractMessage(req.Params)
-			now := time.Now().UTC().Format(time.RFC3339)
-			task := &A2ATask{
-				ID:        taskID,
-				Status:    "submitted",
-				Message:   msg,
-				CreatedAt: now,
-				UpdatedAt: now,
+			workspaceID, _ := req.Params["workspaceId"].(string)
+			if workspaceID == "" {
+				writeA2AInvalidParams(w, req.ID, "workspaceId is required")
+				return
 			}
-			globalTaskStore.put(task)
-
-			// Forward task to the explicitly selected agent.
-			task.Status = "working"
-			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-			globalTaskStore.put(task)
-
-			fwdResp, fwdErr := forwardTaskToAgent(client, agentURL, "tasks/send", req.Params)
-			if fwdErr != nil {
-				log.Printf("a2a: task forward to %s failed: %v", agentURL, fwdErr)
-				task.Status = "failed"
-				task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-				globalTaskStore.put(task)
-				a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
-				writeJSON(w, http.StatusOK, A2ATaskResponse{
-					JSONRPC: "2.0",
-					Result:  task,
-					ID:      req.ID,
-				})
+			taskID, _ := req.Params["id"].(string)
+			if taskID == "" {
+				taskID = genTaskID()
+			}
+			msg := extractMessage(req.Params)
+			objective := extractTextObjective(msg)
+			if objective == "" {
+				writeA2AInvalidParams(w, req.ID, "message must contain a non-empty text part")
+				return
+			}
+			if control == nil {
+				writeA2AControlError(w, req.ID, taskID, fmt.Errorf("Mission control plane is not configured"))
+				return
+			}
+			controlTask, err := control.Submit(
+				r.Context(),
+				r.Header.Get("Authorization"),
+				a2aControlSubmit{
+					TaskID:      taskID,
+					WorkspaceID: workspaceID,
+					Objective:   objective,
+					AgentURL:    agentURL,
+				},
+			)
+			if err != nil {
+				writeA2AControlError(w, req.ID, taskID, err)
 				return
 			}
 
-			// Update task from forwarded response.
-			if fwdResp != nil && fwdResp.Result != nil {
-				if resultMap, ok := fwdResp.Result.(map[string]any); ok {
-					if status, ok := resultMap["status"].(string); ok {
-						task.Status = status
-					}
+			forwardParams := cloneA2AParams(req.Params)
+			forwardParams["id"] = taskID
+			fwdResp, fwdErr := forwardTaskToAgent(client, agentURL, "tasks/send", forwardParams)
+			if fwdErr == nil && fwdResp != nil && fwdResp.Error != nil {
+				fwdErr = fmt.Errorf("remote A2A error %d: %s", fwdResp.Error.Code, fwdResp.Error.Message)
+			}
+			if fwdErr != nil {
+				log.Printf("a2a: task forward to %s failed: %v", agentURL, fwdErr)
+				controlTask, err = control.Fail(
+					r.Context(),
+					r.Header.Get("Authorization"),
+					workspaceID,
+					taskID,
+					truncateA2AReason(fwdErr.Error()),
+				)
+				if err != nil {
+					writeA2AControlError(w, req.ID, taskID, fmt.Errorf("record dispatch failure: %w", err))
+					return
 				}
 			}
-			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-			globalTaskStore.put(task)
+			task := controlTask.toA2ATask()
+			task.Message = msg
 
 			a2aTaskLatency.WithLabelValues("tasksSend").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
@@ -1190,26 +1181,25 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 				})
 				return
 			}
-
-			task := globalTaskStore.get(taskID)
-			if task == nil {
-				a2aTaskLatency.WithLabelValues("tasksGet").Observe(time.Since(start).Seconds())
-				writeJSON(w, http.StatusNotFound, A2ATaskResponse{
-					JSONRPC: "2.0",
-					Error: &A2AError{
-						Code:    -32001,
-						Message: "Task not found",
-						Data:    map[string]string{"id": taskID},
-					},
-					ID: req.ID,
-				})
+			workspaceID, _ := req.Params["workspaceId"].(string)
+			if workspaceID == "" {
+				writeA2AInvalidParams(w, req.ID, "workspaceId is required")
+				return
+			}
+			if control == nil {
+				writeA2AControlError(w, req.ID, taskID, fmt.Errorf("Mission control plane is not configured"))
+				return
+			}
+			controlTask, err := control.Get(r.Context(), r.Header.Get("Authorization"), workspaceID, taskID)
+			if err != nil {
+				writeA2AControlError(w, req.ID, taskID, err)
 				return
 			}
 
 			a2aTaskLatency.WithLabelValues("tasksGet").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
 				JSONRPC: "2.0",
-				Result:  task,
+				Result:  controlTask.toA2ATask(),
 				ID:      req.ID,
 			})
 
@@ -1227,38 +1217,32 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig) http.Han
 				})
 				return
 			}
-
-			task := globalTaskStore.get(taskID)
-			if task == nil {
-				a2aTaskLatency.WithLabelValues("tasksCancel").Observe(time.Since(start).Seconds())
-				writeJSON(w, http.StatusNotFound, A2ATaskResponse{
-					JSONRPC: "2.0",
-					Error: &A2AError{
-						Code:    -32001,
-						Message: "Task not found",
-						Data:    map[string]string{"id": taskID},
-					},
-					ID: req.ID,
-				})
+			workspaceID, _ := req.Params["workspaceId"].(string)
+			if workspaceID == "" {
+				writeA2AInvalidParams(w, req.ID, "workspaceId is required")
 				return
 			}
-
-			globalTaskStore.updateStatus(taskID, "cancelled")
-
-			// Try to forward cancel to the agent
-			agentURL, _ := req.Params["agentUrl"].(string)
-			if agentURL != "" {
-				go func() {
-					_, _ = forwardTaskToAgent(client, agentURL, "tasks/cancel", req.Params)
-				}()
+			if control == nil {
+				writeA2AControlError(w, req.ID, taskID, fmt.Errorf("Mission control plane is not configured"))
+				return
 			}
-
-			task = globalTaskStore.get(taskID)
+			controlTask, err := control.Cancel(r.Context(), r.Header.Get("Authorization"), workspaceID, taskID)
+			if err != nil {
+				writeA2AControlError(w, req.ID, taskID, err)
+				return
+			}
+			if controlTask.AgentURL != "" {
+				forwardParams := cloneA2AParams(req.Params)
+				forwardParams["id"] = taskID
+				if _, forwardErr := forwardTaskToAgent(client, controlTask.AgentURL, "tasks/cancel", forwardParams); forwardErr != nil {
+					log.Printf("a2a: remote cancellation for %s failed: %v", taskID, forwardErr)
+				}
+			}
 
 			a2aTaskLatency.WithLabelValues("tasksCancel").Observe(time.Since(start).Seconds())
 			writeJSON(w, http.StatusOK, A2ATaskResponse{
 				JSONRPC: "2.0",
-				Result:  task,
+				Result:  controlTask.toA2ATask(),
 				ID:      req.ID,
 			})
 
@@ -1280,6 +1264,53 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func writeA2AInvalidParams(w http.ResponseWriter, requestID any, message string) {
+	writeJSON(w, http.StatusBadRequest, A2ATaskResponse{
+		JSONRPC: "2.0",
+		Error:   &A2AError{Code: -32602, Message: "Invalid params: " + message},
+		ID:      requestID,
+	})
+}
+
+func writeA2AControlError(w http.ResponseWriter, requestID any, taskID string, err error) {
+	statusCode := http.StatusBadGateway
+	code := -32005
+	message := "A2A Mission control plane unavailable"
+	var controlErr *a2aControlPlaneError
+	if errors.As(err, &controlErr) {
+		statusCode = controlErr.StatusCode
+		switch controlErr.StatusCode {
+		case http.StatusNotFound:
+			code = -32001
+			message = "Task not found"
+		case http.StatusConflict:
+			code = -32002
+			message = "Task state conflict"
+		case http.StatusUnauthorized, http.StatusForbidden:
+			code = -32003
+			message = "Task authorization failed"
+		case http.StatusBadRequest, http.StatusUnprocessableEntity:
+			code = -32602
+			message = "Invalid task request"
+		default:
+			message = "A2A Mission control plane rejected the request"
+		}
+	} else if strings.Contains(err.Error(), "not configured") {
+		statusCode = http.StatusServiceUnavailable
+		code = -32004
+		message = "A2A Mission control plane is not configured"
+	}
+	writeJSON(w, statusCode, A2ATaskResponse{
+		JSONRPC: "2.0",
+		Error: &A2AError{
+			Code:    code,
+			Message: message,
+			Data:    map[string]string{"id": taskID, "detail": err.Error()},
+		},
+		ID: requestID,
+	})
 }
 
 func genTaskID() string {
@@ -1316,4 +1347,33 @@ func extractMessage(params map[string]any) *A2AMessage {
 		}
 	}
 	return nil
+}
+
+func extractTextObjective(message *A2AMessage) string {
+	if message == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(message.Parts))
+	for _, part := range message.Parts {
+		if text := strings.TrimSpace(part.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func cloneA2AParams(params map[string]any) map[string]any {
+	cloned := make(map[string]any, len(params)+1)
+	for key, value := range params {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func truncateA2AReason(reason string) string {
+	runes := []rune(reason)
+	if len(runes) <= 2000 {
+		return reason
+	}
+	return string(runes[:2000])
 }

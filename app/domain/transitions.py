@@ -45,7 +45,7 @@ MISSION_TRANSITIONS: Mapping[MissionStatus, frozenset[MissionStatus]] = {
 
 WORK_UNIT_TRANSITIONS: Mapping[WorkUnitStatus, frozenset[WorkUnitStatus]] = {
     WorkUnitStatus.PENDING: frozenset(
-        {WorkUnitStatus.LEASED, WorkUnitStatus.CANCELLED}
+        {WorkUnitStatus.LEASED, WorkUnitStatus.FAILED, WorkUnitStatus.CANCELLED}
     ),
     WorkUnitStatus.LEASED: frozenset(
         {
