@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── Derive base paths ──────────────────────────────────────────────────
@@ -133,6 +133,37 @@ class CommandSettings(BaseSettings):
     max_output: int = Field(default=100000, alias="AGENTHUB_COMMAND_MAX_OUTPUT")
 
 
+class ArtifactStoreSettings(BaseSettings):
+    """Artifact byte-store locations and verification limits."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    local_root: Path = Field(
+        default=_DATA_DIR / "artifacts",
+        alias="AGENTHUB_ARTIFACT_LOCAL_ROOT",
+    )
+    minio_endpoint: str = Field(
+        default="127.0.0.1:9000",
+        alias="MINIO_ENDPOINT",
+    )
+    minio_access_key: str = Field(default="minio", alias="MINIO_ACCESS_KEY")
+    minio_secret_key: SecretStr = Field(
+        default=SecretStr("minio123"),
+        alias="MINIO_SECRET_KEY",
+    )
+    minio_bucket: str = Field(default="agenthub", alias="MINIO_BUCKET")
+    minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
+    verify_max_bytes: int = Field(
+        default=1024 * 1024 * 1024,
+        ge=1,
+        alias="AGENTHUB_ARTIFACT_VERIFY_MAX_BYTES",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Main settings (aggregates sub-models + top-level keys)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -199,6 +230,7 @@ class Settings(BaseSettings):
     streaming: StreamingSettings = Field(default_factory=StreamingSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     command: CommandSettings = Field(default_factory=CommandSettings)
+    artifact_store: ArtifactStoreSettings = Field(default_factory=ArtifactStoreSettings)
 
     # ── Derived paths (not from env) ──────────────────────────────────
     @property

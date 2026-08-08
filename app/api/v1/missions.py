@@ -18,6 +18,12 @@ from app.schemas.mission import (
     WorkUnitStartRequest,
     WorkUnitVerificationRequest,
 )
+from app.services.artifact_integrity_service import (
+    ArtifactBytesUnavailableError,
+    ArtifactByteVerifier,
+    ArtifactIntegrityError,
+    build_artifact_byte_verifier,
+)
 from app.services.auth_service import get_current_user
 from app.services.mission_service import (
     MissionNotFoundError,
@@ -34,8 +40,16 @@ def get_mission_repository() -> MissionRepository:
     return MissionRepository()
 
 
+def get_artifact_byte_verifier() -> ArtifactByteVerifier:
+    return build_artifact_byte_verifier()
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 MissionRepositoryDep = Annotated[MissionRepository, Depends(get_mission_repository)]
+ArtifactByteVerifierDep = Annotated[
+    ArtifactByteVerifier,
+    Depends(get_artifact_byte_verifier),
+]
 WorkspaceId = Annotated[str, Query(alias="workspaceId")]
 MissionLimit = Annotated[int, Query(ge=1, le=200)]
 MissionOffset = Annotated[int, Query(ge=0)]
@@ -483,6 +497,7 @@ async def verify_work_unit(
     request: WorkUnitVerificationRequest,
     user: CurrentUser,
     repository: MissionRepositoryDep,
+    artifact_byte_verifier: ArtifactByteVerifierDep,
 ) -> dict:
     authorize_verifier(user)
     if user.get("role") != "admin" and request.verifier_id != str(user["id"]):
@@ -491,7 +506,10 @@ async def verify_work_unit(
     work_unit = await repository.get_work_unit(work_unit_id)
     if work_unit is None or work_unit.mission_id != mission_id:
         raise HTTPException(status_code=404, detail="WorkUnit not found")
-    service = MissionService(repository)
+    service = MissionService(
+        repository,
+        artifact_byte_verifier=artifact_byte_verifier,
+    )
     try:
         evidence, updated_work_unit, updated_mission = (
             await service.verify_work_unit(
@@ -512,6 +530,13 @@ async def verify_work_unit(
         raise HTTPException(status_code=404, detail="Mission not found") from exc
     except WorkUnitNotFoundError as exc:
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ArtifactBytesUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_424_FAILED_DEPENDENCY,
+            detail=str(exc),
+        ) from exc
+    except ArtifactIntegrityError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {

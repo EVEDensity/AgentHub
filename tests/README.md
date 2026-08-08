@@ -5,6 +5,7 @@ Tests are organized by the contract they protect:
 - `domain/`: pure state transitions and invariants.
 - `persistence/`: transaction, event ledger, lease, and recovery behavior.
 - `api/`: request validation, authorization, and response contracts.
+- `services/`: storage adapters and application-service boundary behavior.
 - `contracts/`: cross-process and protocol compatibility.
 - `compat/`: one-way legacy mappings.
 

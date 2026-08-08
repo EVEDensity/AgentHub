@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -8,7 +9,11 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.v1.missions import get_mission_repository, router
+from app.api.v1.missions import (
+    get_artifact_byte_verifier,
+    get_mission_repository,
+    router,
+)
 from app.domain import (
     Artifact,
     EventEnvelope,
@@ -17,6 +22,12 @@ from app.domain import (
     Mission,
     MissionContract,
     WorkUnit,
+)
+from app.services.artifact_integrity_service import (
+    ArtifactBytesUnavailableError,
+    ArtifactByteVerification,
+    ArtifactByteVerificationError,
+    ArtifactIntegrityError,
 )
 from app.services.auth_service import get_current_user
 from tests.domain.factories import (
@@ -38,10 +49,15 @@ class FakeMissionRepository:
         self.evidence: list[Evidence] = []
         self.list_result: list[Mission] = []
         self.work_units: list[WorkUnit] = []
+        self.transaction_depth = 0
 
     @asynccontextmanager
     async def transaction(self):
-        yield self
+        self.transaction_depth += 1
+        try:
+            yield self
+        finally:
+            self.transaction_depth -= 1
 
     async def add_contract(self, contract: MissionContract) -> None:
         self.contract = contract
@@ -240,10 +256,51 @@ class FakeMissionRepository:
         self.events.append(event)
 
 
-def build_app(repository: FakeMissionRepository, user: dict[str, Any]) -> FastAPI:
+class FakeArtifactByteVerifier:
+    def __init__(
+        self,
+        *,
+        error: ArtifactByteVerificationError | None = None,
+        on_verify: Callable[[list[Artifact]], None] | None = None,
+    ) -> None:
+        self.error = error
+        self.on_verify = on_verify
+        self.calls: list[list[Artifact]] = []
+        self.repository: FakeMissionRepository | None = None
+
+    async def verify_all(
+        self,
+        artifacts: list[Artifact],
+    ) -> list[ArtifactByteVerification]:
+        if self.repository is not None and self.repository.transaction_depth:
+            raise AssertionError("artifact storage I/O ran inside a transaction")
+        self.calls.append(list(artifacts))
+        if self.on_verify is not None:
+            self.on_verify(artifacts)
+        if self.error is not None:
+            raise self.error
+        return [
+            ArtifactByteVerification(
+                artifact_id=artifact.id,
+                digest=artifact.digest,
+                size_bytes=artifact.size_bytes,
+            )
+            for artifact in artifacts
+        ]
+
+
+def build_app(
+    repository: FakeMissionRepository,
+    user: dict[str, Any],
+    *,
+    artifact_byte_verifier: FakeArtifactByteVerifier | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
+    verifier = artifact_byte_verifier or FakeArtifactByteVerifier()
+    verifier.repository = repository
     app.dependency_overrides[get_mission_repository] = lambda: repository
+    app.dependency_overrides[get_artifact_byte_verifier] = lambda: verifier
     app.dependency_overrides[get_current_user] = lambda: user
     return app
 
@@ -1102,10 +1159,12 @@ class MissionApiTests(unittest.TestCase):
         repository.contract = build_contract()
         repository.work_units = [build_work_unit(status="VERIFYING")]
         repository.artifacts = [build_artifact()]
+        artifact_byte_verifier = FakeArtifactByteVerifier()
         client = TestClient(
             build_app(
                 repository,
                 {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=artifact_byte_verifier,
             )
         )
 
@@ -1129,6 +1188,10 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(body["evidence"]["verdict"], "PASS")
         self.assertEqual(body["workUnit"]["status"], "SUCCEEDED")
         self.assertEqual(body["mission"]["status"], "SUCCEEDED")
+        self.assertEqual(
+            artifact_byte_verifier.calls,
+            [[repository.artifacts[0]]],
+        )
         self.assertEqual(repository.evidence, [Evidence.model_validate(body["evidence"])])
         self.assertEqual(
             [event.event_type for event in repository.events],
@@ -1142,6 +1205,146 @@ class MissionApiTests(unittest.TestCase):
         listed = client.get("/api/v1/missions/mis-1/evidence")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["evidence"], [body["evidence"]])
+
+    def test_unavailable_artifact_bytes_fail_without_state_changes(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        initial_mission = repository.mission
+        initial_work_unit = repository.work_units[0]
+        verifier = FakeArtifactByteVerifier(
+            error=ArtifactBytesUnavailableError("artifact store unavailable")
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=verifier,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "All required tests passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 424)
+        self.assertEqual(response.json()["detail"], "artifact store unavailable")
+        self.assertEqual(repository.mission, initial_mission)
+        self.assertEqual(repository.work_units, [initial_work_unit])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+
+    def test_artifact_digest_mismatch_fails_without_state_changes(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        initial_mission = repository.mission
+        initial_work_unit = repository.work_units[0]
+        verifier = FakeArtifactByteVerifier(
+            error=ArtifactIntegrityError("artifact byte digest does not match")
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=verifier,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "All required tests passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json()["detail"],
+            "artifact byte digest does not match",
+        )
+        self.assertEqual(repository.mission, initial_mission)
+        self.assertEqual(repository.work_units, [initial_work_unit])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+
+    def test_artifact_metadata_is_revalidated_after_byte_verification(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        initial_mission = repository.mission
+        initial_work_unit = repository.work_units[0]
+
+        def replace_artifact(_: list[Artifact]) -> None:
+            repository.artifacts[0] = build_artifact(size_bytes=129)
+
+        verifier = FakeArtifactByteVerifier(on_verify=replace_artifact)
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=verifier,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "All required tests passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json()["detail"],
+            "artifact metadata changed during byte verification",
+        )
+        self.assertEqual(repository.mission, initial_mission)
+        self.assertEqual(repository.work_units, [initial_work_unit])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
 
     def test_mission_success_uses_unbounded_passed_criterion_projection(self) -> None:
         repository = FakeMissionRepository()

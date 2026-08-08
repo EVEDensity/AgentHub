@@ -27,6 +27,10 @@ from app.domain import (
     transition_work_unit,
 )
 from app.repositories import MissionRepository
+from app.services.artifact_integrity_service import (
+    ArtifactBytesUnavailableError,
+    ArtifactByteVerifier,
+)
 
 
 def build_human_actor(user: dict) -> ActorRef:
@@ -70,8 +74,14 @@ class LeaseExpiredError(ValueError):
 
 
 class MissionService:
-    def __init__(self, repository: MissionRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: MissionRepository | None = None,
+        *,
+        artifact_byte_verifier: ArtifactByteVerifier | None = None,
+    ) -> None:
         self._repository = repository or MissionRepository()
+        self._artifact_byte_verifier = artifact_byte_verifier
 
     async def create_mission(
         self,
@@ -770,10 +780,11 @@ class MissionService:
         *,
         work_unit_id: str | None = None,
         attempt: int | None = None,
-    ) -> None:
+    ) -> list[Artifact]:
         artifact_ids = [artifact_ref.id for artifact_ref in artifact_refs]
         if len(artifact_ids) != len(set(artifact_ids)):
             raise WorkUnitNotReadyError("artifact references must be unique")
+        artifacts: list[Artifact] = []
         for artifact_ref in artifact_refs:
             artifact = await repository.get_artifact(artifact_ref.id)
             if artifact is None:
@@ -796,6 +807,8 @@ class MissionService:
                 raise WorkUnitNotReadyError(
                     f"artifact belongs to another attempt: {artifact_ref.id}"
                 )
+            artifacts.append(artifact)
+        return artifacts
 
     async def verify_work_unit(
         self,
@@ -814,6 +827,17 @@ class MissionService:
     ) -> tuple[Evidence, WorkUnit, Mission]:
         if actor.type != ActorType.VERIFIER:
             raise ValueError("only verifier actors can record Evidence")
+        artifacts = await self._validate_artifact_refs(
+            self._repository,
+            mission_id,
+            artifact_refs,
+        )
+        if self._artifact_byte_verifier is None:
+            raise ArtifactBytesUnavailableError(
+                "artifact byte verifier is not configured"
+            )
+        await self._artifact_byte_verifier.verify_all(artifacts)
+
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
             if mission is None:
@@ -840,11 +864,15 @@ class MissionService:
                 raise WorkUnitNotReadyError(
                     "Evidence criterion is not part of the mission contract"
                 )
-            await self._validate_artifact_refs(
+            current_artifacts = await self._validate_artifact_refs(
                 repository,
                 mission_id,
                 artifact_refs,
             )
+            if current_artifacts != artifacts:
+                raise WorkUnitNotReadyError(
+                    "artifact metadata changed during byte verification"
+                )
 
             occurred_at = datetime.now(timezone.utc)
             evidence = Evidence(
