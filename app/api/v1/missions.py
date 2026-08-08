@@ -8,6 +8,7 @@ from app.api.v1.access import authorize_verifier, authorize_workspace
 from app.domain import EvidenceVerdict, InvalidStateTransition, Mission
 from app.repositories import MissionRepository
 from app.schemas.mission import (
+    ArtifactCreateRequest,
     MissionCreateRequest,
     WorkUnitCompletionRequest,
     WorkUnitCreateRequest,
@@ -42,6 +43,8 @@ EventAfterSequence = Annotated[int, Query(alias="afterSequence", ge=0)]
 EventLimit = Annotated[int, Query(ge=1, le=200)]
 WorkUnitLimit = Annotated[int, Query(ge=1, le=200)]
 WorkUnitOffset = Annotated[int, Query(ge=0)]
+ArtifactLimit = Annotated[int, Query(ge=1, le=200)]
+ArtifactOffset = Annotated[int, Query(ge=0)]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -205,6 +208,23 @@ async def list_work_units(
     return {"workUnits": [work_unit.to_public_dict() for work_unit in work_units]}
 
 
+@router.get("/{mission_id}/artifacts")
+async def list_artifacts(
+    mission_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    limit: ArtifactLimit = 100,
+    offset: ArtifactOffset = 0,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    artifacts = await repository.list_artifacts(
+        mission_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"artifacts": [artifact.to_public_dict() for artifact in artifacts]}
+
+
 @router.post("/{mission_id}/work-units/{work_unit_id}/lease")
 async def lease_work_unit(
     mission_id: str,
@@ -294,6 +314,49 @@ async def heartbeat_work_unit(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return renewed.to_public_dict()
+
+
+@router.post(
+    "/{mission_id}/work-units/{work_unit_id}/artifacts",
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_artifact(
+    mission_id: str,
+    work_unit_id: str,
+    request: ArtifactCreateRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    service = MissionService(repository)
+    try:
+        artifact = await service.register_artifact(
+            mission_id,
+            work_unit_id,
+            artifact_id=request.id,
+            lease_id=request.lease_id,
+            runner_id=str(user["id"]),
+            kind=request.kind,
+            digest=request.digest,
+            content_address=request.content_address,
+            media_type=request.media_type,
+            size_bytes=request.size_bytes,
+            source_repository=request.source_repository,
+            base_commit=request.base_commit,
+            retention=request.retention,
+            sensitivity=request.sensitivity,
+            actor=build_human_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return artifact.to_public_dict()
 
 
 @router.post("/{mission_id}/work-units/{work_unit_id}/recover")

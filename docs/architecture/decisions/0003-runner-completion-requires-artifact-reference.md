@@ -27,9 +27,9 @@ Verifier operation must evaluate the referenced artifacts and provide Evidence.
 
 Every verification attempt has a durable pointer to the output it claims to
 produce. Existing clients must add `artifactRefs` to completion requests, and
-the event ledger grows with the immutable reference list. The system still does
-not claim artifact existence or verifier approval until those follow-up
-operations are implemented.
+the event ledger grows with the immutable reference list. Artifact existence
+and Mission/WorkUnit/attempt ownership are established by the Artifact
+registration contract in ADR-0007 before completion is accepted.
 
 ## Alternatives considered
 
@@ -45,6 +45,8 @@ operations are implemented.
 - API tests reject empty `artifactRefs` without changing WorkUnit state.
 - API tests assert valid digest references are persisted in the completion
   event and the resulting status is `VERIFYING`.
+- API tests reject references that have not been registered for the current
+  WorkUnit attempt.
 - Domain, persistence, and A2A regression suites continue to pass.
 
 ## Supersedes

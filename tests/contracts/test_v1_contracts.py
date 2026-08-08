@@ -7,7 +7,6 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-
 CONTRACT_DIR = Path(__file__).parents[2] / "platform" / "contracts" / "v1"
 
 
@@ -34,6 +33,7 @@ class PublicContractTests(unittest.TestCase):
                 "mission.schema.json",
                 "mission-contract.schema.json",
                 "work-unit.schema.json",
+                "artifact.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
             },
@@ -91,6 +91,21 @@ class PublicContractTests(unittest.TestCase):
                 "requiredCapabilities": ["repository.write"],
                 "status": "PENDING",
                 "attempt": 0,
+            },
+            "artifact.schema.json": {
+                "id": "artifact-1",
+                "missionId": "mis-1",
+                "workUnitId": "wu-1",
+                "attempt": 1,
+                "kind": "diff",
+                "digest": digest,
+                "contentAddress": "local:sha256/" + "a" * 64,
+                "mediaType": "text/x-diff",
+                "sizeBytes": 128,
+                "retention": "mission",
+                "sensitivity": "internal",
+                "createdBy": actor,
+                "createdAt": timestamp,
             },
             "evidence.schema.json": {
                 "id": "evd-1",

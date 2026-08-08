@@ -4,7 +4,15 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.domain import ArtifactRef, MissionContract, MissionSource, OutputSpec
+from app.domain import (
+    ArtifactKind,
+    ArtifactRef,
+    ArtifactRetention,
+    ArtifactSensitivity,
+    MissionContract,
+    MissionSource,
+    OutputSpec,
+)
 
 
 def _to_camel(value: str) -> str:
@@ -102,6 +110,28 @@ class WorkUnitCompletionRequest(BaseModel):
 
     lease_id: Annotated[str, Field(min_length=1, max_length=255)]
     artifact_refs: Annotated[list[ArtifactRef], Field(min_length=1)]
+
+
+class ArtifactCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    id: Annotated[str, Field(min_length=1, max_length=255)]
+    lease_id: Annotated[str, Field(min_length=1, max_length=255)]
+    kind: ArtifactKind
+    digest: Annotated[str, Field(pattern=r"^sha256:[a-fA-F0-9]{64}$")]
+    content_address: Annotated[str, Field(min_length=1, max_length=2048)]
+    media_type: Annotated[str, Field(min_length=1, max_length=255)]
+    size_bytes: Annotated[int, Field(ge=0)]
+    source_repository: Annotated[str, Field(min_length=1, max_length=2048)] | None = None
+    base_commit: Annotated[
+        str, Field(pattern=r"^[a-fA-F0-9]{7,64}$")
+    ] | None = None
+    retention: ArtifactRetention = ArtifactRetention.MISSION
+    sensitivity: ArtifactSensitivity = ArtifactSensitivity.INTERNAL
 
 
 class WorkUnitVerificationRequest(BaseModel):

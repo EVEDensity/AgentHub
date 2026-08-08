@@ -176,18 +176,12 @@ class A2AAdapterService:
         actor: ActorRef,
     ) -> dict:
         mission = await self._mission_for_task(workspace_id, task_id)
-        work_unit = await self._get_mapped_work_unit(workspace_id, task_id)
-        if work_unit is not None and work_unit.status == WorkUnitStatus.PENDING:
-            work_unit = await self._missions.cancel_pending_work_unit(
-                mission.id,
-                work_unit.id,
-                actor=actor,
-            )
         if mission.status != MissionStatus.CANCELLED:
             try:
                 mission = await self._missions.cancel_mission(mission.id, actor=actor)
             except ValueError as exc:
                 raise A2ATaskConflictError(str(exc)) from exc
+        work_unit = await self._get_mapped_work_unit(workspace_id, task_id)
         return task_projection(mission, work_unit)
 
     async def fail_task(
@@ -207,6 +201,7 @@ class A2AAdapterService:
                 actor=actor,
                 reason=reason,
             )
+            mission = await self._mission_for_task(workspace_id, task_id)
         elif work_unit is not None and work_unit.status != WorkUnitStatus.FAILED:
             raise A2ATaskConflictError(
                 "A2A dispatch failure can only be recorded before execution starts"

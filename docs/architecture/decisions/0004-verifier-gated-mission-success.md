@@ -28,8 +28,9 @@ Mission Control exposes a verifier-only WorkUnit verification command.
   `RUNNING -> VERIFYING -> SUCCEEDED` only when every WorkUnit is successful
   and every required acceptance criterion has at least one PASS Evidence in
   the mission's event history, all in one transaction.
-- `FAIL` transitions the WorkUnit to `FAILED`; `INCONCLUSIVE` records Evidence
-  and leaves the WorkUnit in `VERIFYING`.
+- `FAIL` transitions the WorkUnit and its Mission to `FAILED` in the same
+  transaction; `INCONCLUSIVE` records Evidence and leaves the WorkUnit in
+  `VERIFYING`.
 - The endpoint never stores artifact bytes; Artifact storage remains a
   separate digest-addressed boundary.
 

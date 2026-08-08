@@ -27,8 +27,8 @@ Mission Control exposes a runner-scoped heartbeat operation for a WorkUnit.
   cannot be revived by heartbeat. Expired work must use the recovery path.
 - Recovery returns a WorkUnit to `RETRYING` only while its Contract retry
   budget permits another attempt. Once exhausted, recovery transitions the
-  WorkUnit to `FAILED` and records the budget exhaustion in the lease-expired
-  event.
+  WorkUnit and its Mission to `FAILED` and records the budget exhaustion in
+  the lease-expired event.
 - Heartbeat does not imply completion, verification, artifact creation, or a
   Mission terminal transition.
 

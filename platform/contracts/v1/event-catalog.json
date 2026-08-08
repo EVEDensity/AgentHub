@@ -14,6 +14,7 @@
     { "eventType": "work_unit.execution.completed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "artifactRefs"] },
     { "eventType": "work_unit.execution.failed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "reason"] },
     { "eventType": "work_unit.verification.completed", "aggregateType": "work_unit", "payloadRequired": ["evidenceIds", "verdict"] },
+    { "eventType": "artifact.lifecycle.registered", "aggregateType": "artifact", "payloadRequired": ["missionId", "workUnitId", "attempt", "digest", "contentAddress"] },
     { "eventType": "evidence.verification.recorded", "aggregateType": "evidence", "payloadRequired": ["missionId", "criterionId", "verdict", "integrityHash"] }
   ]
 }

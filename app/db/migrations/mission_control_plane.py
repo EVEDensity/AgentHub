@@ -8,6 +8,8 @@ WORK_UNIT_PERSISTENCE_REVISION = "9c8d4e0f1b23"
 WORK_UNIT_PERSISTENCE_DOWN_REVISION = MISSION_EVENT_LEDGER_REVISION
 A2A_SOURCE_MAPPING_REVISION = "a47e5f102c34"
 A2A_SOURCE_MAPPING_DOWN_REVISION = WORK_UNIT_PERSISTENCE_REVISION
+ARTIFACT_PERSISTENCE_REVISION = "b58f6a213d45"
+ARTIFACT_PERSISTENCE_DOWN_REVISION = A2A_SOURCE_MAPPING_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -133,4 +135,71 @@ A2A_SOURCE_MAPPING_UPGRADE = (
 
 A2A_SOURCE_MAPPING_DOWNGRADE = (
     "DROP INDEX IF EXISTS uq_missions_a2a_external_task",
+)
+
+ARTIFACT_PERSISTENCE_UPGRADE = (
+    """
+    ALTER TABLE mission_events
+    DROP CONSTRAINT IF EXISTS mission_events_aggregate_type_check
+    """,
+    """
+    ALTER TABLE mission_events
+    ADD CONSTRAINT mission_events_aggregate_type_check CHECK (
+        aggregate_type IN (
+            'mission', 'mission_contract', 'work_unit', 'artifact', 'evidence'
+        )
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL REFERENCES missions(id),
+        work_unit_id TEXT NOT NULL REFERENCES work_units(id),
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        kind TEXT NOT NULL CHECK (
+            kind IN (
+                'diff', 'commit', 'file', 'log', 'report', 'test-result',
+                'build', 'pull-request'
+            )
+        ),
+        digest TEXT NOT NULL CHECK (digest ~ '^sha256:[a-fA-F0-9]{64}$'),
+        content_address TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+        source_repository TEXT,
+        base_commit TEXT CHECK (
+            base_commit IS NULL OR base_commit ~ '^[a-fA-F0-9]{7,64}$'
+        ),
+        retention TEXT NOT NULL CHECK (
+            retention IN ('ephemeral', 'mission', 'standard', 'legal-hold')
+        ),
+        sensitivity TEXT NOT NULL CHECK (
+            sensitivity IN ('public', 'internal', 'confidential', 'restricted')
+        ),
+        created_by JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_artifacts_mission_created
+    ON artifacts(mission_id, created_at, id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_artifacts_work_unit_attempt
+    ON artifacts(work_unit_id, attempt, id)
+    """,
+)
+
+ARTIFACT_PERSISTENCE_DOWNGRADE = (
+    "DROP TABLE IF EXISTS artifacts",
+    """
+    ALTER TABLE mission_events
+    DROP CONSTRAINT IF EXISTS mission_events_aggregate_type_check
+    """,
+    """
+    ALTER TABLE mission_events
+    ADD CONSTRAINT mission_events_aggregate_type_check CHECK (
+        aggregate_type IN ('mission', 'mission_contract', 'work_unit', 'evidence')
+    )
+    """,
 )

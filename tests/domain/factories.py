@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from app.domain import (
     AcceptanceCriterion,
     ActorRef,
+    Artifact,
     Budgets,
     CapabilityGrant,
     DecisionGate,
@@ -59,6 +60,24 @@ def build_contract(**updates: object) -> MissionContract:
     }
     values.update(updates)
     return MissionContract.model_validate(values)
+
+
+def build_artifact(**updates: object) -> Artifact:
+    values: dict[str, object] = {
+        "id": "artifact-1",
+        "mission_id": "mis-1",
+        "work_unit_id": "wu-1",
+        "attempt": 1,
+        "kind": "diff",
+        "digest": DIGEST,
+        "content_address": "local:sha256/" + "a" * 64,
+        "media_type": "text/x-diff",
+        "size_bytes": 128,
+        "created_by": ActorRef(type="human", id="runner-1"),
+        "created_at": NOW,
+    }
+    values.update(updates)
+    return Artifact.model_validate(values)
 
 
 def build_event(**updates: object) -> EventEnvelope:

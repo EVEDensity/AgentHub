@@ -19,6 +19,7 @@ from app.domain import (
 from tests.domain.factories import (
     DIGEST,
     NOW,
+    build_artifact,
     build_contract,
     build_event,
     build_mission,
@@ -50,6 +51,7 @@ class DomainModelTests(unittest.TestCase):
         mission = build_mission()
         contract = build_contract()
         work_unit = build_work_unit()
+        artifact = build_artifact()
         evidence = Evidence(
             id="evd-1",
             mission_id="mis-1",
@@ -65,6 +67,7 @@ class DomainModelTests(unittest.TestCase):
         self.assert_matches_schema("mission.schema.json", mission)
         self.assert_matches_schema("mission-contract.schema.json", contract)
         self.assert_matches_schema("work-unit.schema.json", work_unit)
+        self.assert_matches_schema("artifact.schema.json", artifact)
         self.assert_matches_schema("evidence.schema.json", evidence)
 
     def test_event_envelope_uses_public_snake_case_contract(self) -> None:

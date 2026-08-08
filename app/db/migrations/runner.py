@@ -5,8 +5,10 @@ from typing import Any
 
 from app.db.migrations.mission_control_plane import (
     A2A_SOURCE_MAPPING_DOWN_REVISION,
-    A2A_SOURCE_MAPPING_REVISION,
     A2A_SOURCE_MAPPING_UPGRADE,
+    ARTIFACT_PERSISTENCE_DOWN_REVISION,
+    ARTIFACT_PERSISTENCE_REVISION,
+    ARTIFACT_PERSISTENCE_UPGRADE,
     MISSION_CONTROL_PLANE_DOWN_REVISION,
     MISSION_CONTROL_PLANE_UPGRADE,
     MISSION_EVENT_LEDGER_DOWN_REVISION,
@@ -35,7 +37,7 @@ async def apply_startup_migrations(
     )
     row = await connection.fetchrow("SELECT version_num FROM alembic_version LIMIT 1")
     current = row["version_num"] if row else None
-    if current == A2A_SOURCE_MAPPING_REVISION:
+    if current == ARTIFACT_PERSISTENCE_REVISION:
         migration_logger.info("init_db: Alembic already at head (%s)", current)
         return
 
@@ -45,10 +47,11 @@ async def apply_startup_migrations(
         MISSION_EVENT_LEDGER_DOWN_REVISION,
         WORK_UNIT_PERSISTENCE_DOWN_REVISION,
         A2A_SOURCE_MAPPING_DOWN_REVISION,
+        ARTIFACT_PERSISTENCE_DOWN_REVISION,
     }:
         message = (
             "unsupported Alembic upgrade path "
-            f"(current={current}, head={A2A_SOURCE_MAPPING_REVISION}); "
+            f"(current={current}, head={ARTIFACT_PERSISTENCE_REVISION}); "
             "run 'alembic upgrade head' offline before starting AgentHub"
         )
         migration_logger.error("init_db: %s", message)
@@ -75,22 +78,32 @@ async def apply_startup_migrations(
         for statement in WORK_UNIT_PERSISTENCE_UPGRADE:
             await connection.execute(statement)
 
-    for statement in A2A_SOURCE_MAPPING_UPGRADE:
+    if current in {
+        None,
+        MISSION_CONTROL_PLANE_DOWN_REVISION,
+        MISSION_EVENT_LEDGER_DOWN_REVISION,
+        WORK_UNIT_PERSISTENCE_DOWN_REVISION,
+        A2A_SOURCE_MAPPING_DOWN_REVISION,
+    }:
+        for statement in A2A_SOURCE_MAPPING_UPGRADE:
+            await connection.execute(statement)
+
+    for statement in ARTIFACT_PERSISTENCE_UPGRADE:
         await connection.execute(statement)
 
     if current is None:
         await connection.execute(
             "INSERT INTO alembic_version(version_num) VALUES($1)",
-            A2A_SOURCE_MAPPING_REVISION,
+            ARTIFACT_PERSISTENCE_REVISION,
         )
     else:
         await connection.execute(
             "UPDATE alembic_version SET version_num=$1 WHERE version_num=$2",
-            A2A_SOURCE_MAPPING_REVISION,
+            ARTIFACT_PERSISTENCE_REVISION,
             current,
         )
     migration_logger.info(
         "init_db: Alembic advanced from %s to %s",
         current or "unversioned",
-        A2A_SOURCE_MAPPING_REVISION,
+        ARTIFACT_PERSISTENCE_REVISION,
     )

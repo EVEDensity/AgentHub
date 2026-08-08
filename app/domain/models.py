@@ -104,6 +104,51 @@ class ArtifactRef(DomainModel):
     digest: Digest
 
 
+class ArtifactKind(str, Enum):
+    DIFF = "diff"
+    COMMIT = "commit"
+    FILE = "file"
+    LOG = "log"
+    REPORT = "report"
+    TEST_RESULT = "test-result"
+    BUILD = "build"
+    PULL_REQUEST = "pull-request"
+
+
+class ArtifactRetention(str, Enum):
+    EPHEMERAL = "ephemeral"
+    MISSION = "mission"
+    STANDARD = "standard"
+    LEGAL_HOLD = "legal-hold"
+
+
+class ArtifactSensitivity(str, Enum):
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+
+class Artifact(DomainModel):
+    id: Identifier
+    mission_id: Identifier
+    work_unit_id: Identifier
+    attempt: Annotated[int, Field(ge=1)]
+    kind: ArtifactKind
+    digest: Digest
+    content_address: Annotated[str, Field(min_length=1, max_length=2048)]
+    media_type: Annotated[str, Field(min_length=1, max_length=255)]
+    size_bytes: Annotated[int, Field(ge=0)]
+    source_repository: Annotated[str, Field(min_length=1, max_length=2048)] | None = None
+    base_commit: Annotated[
+        str, Field(pattern=r"^[a-fA-F0-9]{7,64}$")
+    ] | None = None
+    retention: ArtifactRetention = ArtifactRetention.MISSION
+    sensitivity: ArtifactSensitivity = ArtifactSensitivity.INTERNAL
+    created_by: ActorRef
+    created_at: AwareDatetime
+
+
 class MissionSourceType(str, Enum):
     MANUAL = "manual"
     ISSUE = "issue"
@@ -133,6 +178,7 @@ class AggregateType(str, Enum):
     MISSION = "mission"
     MISSION_CONTRACT = "mission_contract"
     WORK_UNIT = "work_unit"
+    ARTIFACT = "artifact"
     EVIDENCE = "evidence"
 
 

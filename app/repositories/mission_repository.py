@@ -5,7 +5,14 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
-from app.domain import EventEnvelope, Evidence, Mission, MissionContract, WorkUnit
+from app.domain import (
+    Artifact,
+    EventEnvelope,
+    Evidence,
+    Mission,
+    MissionContract,
+    WorkUnit,
+)
 
 Execute = Callable[..., Awaitable[None]]
 FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
@@ -252,6 +259,68 @@ class MissionRepository:
             for row in rows
         ]
 
+    async def add_artifact(self, artifact: Artifact) -> None:
+        await self._execute(
+            """INSERT INTO artifacts(
+                   id, mission_id, work_unit_id, attempt, kind, digest,
+                   content_address, media_type, size_bytes, source_repository,
+                   base_commit, retention, sensitivity, created_by, created_at
+               ) VALUES(
+                   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                   $14::jsonb, $15
+               )""",
+            artifact.id,
+            artifact.mission_id,
+            artifact.work_unit_id,
+            artifact.attempt,
+            artifact.kind.value,
+            artifact.digest,
+            artifact.content_address,
+            artifact.media_type,
+            artifact.size_bytes,
+            artifact.source_repository,
+            artifact.base_commit,
+            artifact.retention.value,
+            artifact.sensitivity.value,
+            _encode_json(artifact.created_by.to_public_dict()),
+            artifact.created_at,
+        )
+
+    async def get_artifact(self, artifact_id: str) -> Artifact | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, work_unit_id, attempt, kind, digest,
+                      content_address, media_type, size_bytes, source_repository,
+                      base_commit, retention, sensitivity, created_by, created_at
+               FROM artifacts WHERE id=$1""",
+            artifact_id,
+        )
+        return self._artifact_from_row(row) if row is not None else None
+
+    async def list_artifacts(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Artifact]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        rows = await self._fetch_all(
+            """SELECT id, mission_id, work_unit_id, attempt, kind, digest,
+                      content_address, media_type, size_bytes, source_repository,
+                      base_commit, retention, sensitivity, created_by, created_at
+               FROM artifacts
+               WHERE mission_id=$1
+               ORDER BY created_at ASC, id ASC
+               LIMIT $2 OFFSET $3""",
+            mission_id,
+            limit,
+            offset,
+        )
+        return [self._artifact_from_row(row) for row in rows]
+
     async def list_missions(
         self,
         workspace_id: str,
@@ -361,6 +430,19 @@ class MissionRepository:
         )
         return [self._work_unit_from_row(row) for row in rows]
 
+    async def list_work_units_for_update(self, mission_id: str) -> list[WorkUnit]:
+        rows = await self._fetch_all(
+            """SELECT id, mission_id, kind, dependencies, input_refs,
+                      expected_outputs, required_capabilities, assigned_adapter,
+                      status, attempt, lease
+               FROM work_units
+               WHERE mission_id=$1
+               ORDER BY id ASC
+               FOR UPDATE""",
+            mission_id,
+        )
+        return [self._work_unit_from_row(row) for row in rows]
+
     @staticmethod
     def _mission_from_row(row: Mapping[str, Any]) -> Mission:
         values = dict(row)
@@ -374,6 +456,12 @@ class MissionRepository:
         values["actor"] = _decode_json_object(values["actor"], "actor")
         values["payload"] = _decode_json_object(values["payload"], "payload")
         return EventEnvelope.model_validate(values)
+
+    @staticmethod
+    def _artifact_from_row(row: Mapping[str, Any]) -> Artifact:
+        values = dict(row)
+        values["created_by"] = _decode_json_object(values["created_by"], "created_by")
+        return Artifact.model_validate(values)
 
     @staticmethod
     def _work_unit_from_row(row: Mapping[str, Any]) -> WorkUnit:

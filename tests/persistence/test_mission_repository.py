@@ -4,9 +4,10 @@ import json
 import unittest
 from typing import Any
 
-from app.domain import EventEnvelope, Evidence, Lease, Mission, WorkUnit
+from app.domain import Artifact, EventEnvelope, Evidence, Lease, Mission, WorkUnit
 from app.repositories import MissionRepository
 from tests.domain.factories import (
+    build_artifact,
     build_contract,
     build_event,
     build_mission,
@@ -199,6 +200,49 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.repository.list_evidence("mis-1", limit=0)
 
+    async def test_artifact_round_trip_and_mission_list(self) -> None:
+        artifact = build_artifact()
+
+        await self.repository.add_artifact(artifact)
+
+        insert_sql, insert_args = self.database.executed[-1]
+        self.assertIn("INSERT INTO artifacts", insert_sql)
+        self.assertEqual(
+            insert_args[0:6],
+            (
+                artifact.id,
+                artifact.mission_id,
+                artifact.work_unit_id,
+                artifact.attempt,
+                artifact.kind.value,
+                artifact.digest,
+            ),
+        )
+        self.assertEqual(
+            json.loads(insert_args[13]), artifact.created_by.to_public_dict()
+        )
+
+        row = self.build_artifact_row(artifact)
+        self.database.one = row
+        restored = await self.repository.get_artifact(artifact.id)
+        self.assertEqual(restored, artifact)
+
+        self.database.all = [row]
+        listed = await self.repository.list_artifacts(
+            artifact.mission_id,
+            limit=20,
+            offset=5,
+        )
+        self.assertEqual(listed, [artifact])
+        list_sql, list_args = self.database.fetched_all[-1]
+        self.assertIn("WHERE mission_id=$1", list_sql)
+        self.assertIn("ORDER BY created_at ASC, id ASC", list_sql)
+        self.assertEqual(list_args, (artifact.mission_id, 20, 5))
+        with self.assertRaises(ValueError):
+            await self.repository.list_artifacts(artifact.mission_id, limit=0)
+        with self.assertRaises(ValueError):
+            await self.repository.list_artifacts(artifact.mission_id, offset=-1)
+
     async def test_work_unit_round_trip_and_mission_list(self) -> None:
         work_unit = build_work_unit()
 
@@ -259,6 +303,21 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update_args[:3], (work_unit.id, "LEASED", 0))
         self.assertEqual(json.loads(update_args[3]), work_unit.lease.to_public_dict())
 
+    async def test_list_work_units_for_update_locks_entire_mission_set(self) -> None:
+        work_unit = build_work_unit()
+        self.database.all = [self.build_work_unit_row(work_unit)]
+
+        restored = await self.repository.list_work_units_for_update(
+            work_unit.mission_id
+        )
+
+        self.assertEqual(restored, [work_unit])
+        sql, args = self.database.fetched_all[-1]
+        self.assertIn("WHERE mission_id=$1", sql)
+        self.assertIn("ORDER BY id ASC", sql)
+        self.assertIn("FOR UPDATE", sql)
+        self.assertEqual(args, (work_unit.mission_id,))
+
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:
         return {
@@ -289,6 +348,26 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "causation_id": event.causation_id,
             "payload": json.dumps(dict(event.payload)),
             "schema_version": event.schema_version,
+        }
+
+    @staticmethod
+    def build_artifact_row(artifact: Artifact) -> dict[str, Any]:
+        return {
+            "id": artifact.id,
+            "mission_id": artifact.mission_id,
+            "work_unit_id": artifact.work_unit_id,
+            "attempt": artifact.attempt,
+            "kind": artifact.kind.value,
+            "digest": artifact.digest,
+            "content_address": artifact.content_address,
+            "media_type": artifact.media_type,
+            "size_bytes": artifact.size_bytes,
+            "source_repository": artifact.source_repository,
+            "base_commit": artifact.base_commit,
+            "retention": artifact.retention.value,
+            "sensitivity": artifact.sensitivity.value,
+            "created_by": json.dumps(artifact.created_by.to_public_dict()),
+            "created_at": artifact.created_at,
         }
 
     @staticmethod

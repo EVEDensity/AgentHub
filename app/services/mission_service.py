@@ -6,7 +6,11 @@ from datetime import datetime, timedelta, timezone
 from app.domain import (
     ActorRef,
     ActorType,
+    Artifact,
+    ArtifactKind,
     ArtifactRef,
+    ArtifactRetention,
+    ArtifactSensitivity,
     EventEnvelope,
     Evidence,
     EvidenceVerdict,
@@ -128,12 +132,82 @@ class MissionService:
         )
 
     async def cancel_mission(self, mission_id: str, *, actor: ActorRef) -> Mission:
-        return await self._transition_mission(
-            mission_id,
-            target=MissionStatus.CANCELLED,
-            event_type="mission.lifecycle.cancelled",
-            actor=actor,
-        )
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+
+            occurred_at = datetime.now(timezone.utc)
+            updated_mission = transition_mission(
+                mission,
+                MissionStatus.CANCELLED,
+                occurred_at=occurred_at,
+            )
+            mission_sequence = (
+                await repository.get_last_event_sequence(mission_id) + 1
+            )
+            mission_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="mission",
+                aggregate_id=mission_id,
+                sequence=mission_sequence,
+                event_type="mission.lifecycle.cancelled",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": mission.status.value,
+                    "status": updated_mission.status.value,
+                },
+                schema_version=1,
+            )
+            work_units = await repository.list_work_units_for_update(mission_id)
+            await repository.update_mission(updated_mission)
+            await repository.append_event(mission_event)
+
+            cancellable_statuses = {
+                WorkUnitStatus.PENDING,
+                WorkUnitStatus.LEASED,
+                WorkUnitStatus.RUNNING,
+                WorkUnitStatus.VERIFYING,
+                WorkUnitStatus.WAITING,
+                WorkUnitStatus.RETRYING,
+            }
+            for work_unit in work_units:
+                if work_unit.status not in cancellable_statuses:
+                    continue
+                updated_work_unit = transition_work_unit(
+                    work_unit,
+                    WorkUnitStatus.CANCELLED,
+                    occurred_at=occurred_at,
+                )
+                work_unit_sequence = (
+                    await repository.get_last_event_sequence(
+                        work_unit.id,
+                        aggregate_type="work_unit",
+                    )
+                    + 1
+                )
+                work_unit_event = EventEnvelope(
+                    event_id=new_identifier("evt"),
+                    aggregate_type="work_unit",
+                    aggregate_id=work_unit.id,
+                    sequence=work_unit_sequence,
+                    event_type="work_unit.lifecycle.cancelled",
+                    actor=actor,
+                    occurred_at=occurred_at,
+                    correlation_id=mission_id,
+                    causation_id=mission_event.event_id,
+                    payload={
+                        "previousStatus": work_unit.status.value,
+                        "status": updated_work_unit.status.value,
+                        "reason": "mission cancelled",
+                    },
+                    schema_version=1,
+                )
+                await repository.update_work_unit(updated_work_unit)
+                await repository.append_event(work_unit_event)
+        return updated_mission
 
     async def fail_mission(
         self,
@@ -187,6 +261,51 @@ class MissionService:
             )
             await repository.update_mission(updated)
             await repository.append_event(event)
+        return updated
+
+    async def _fail_mission_for_work_unit(
+        self,
+        repository: MissionRepository,
+        mission: Mission,
+        *,
+        work_unit_id: str,
+        actor: ActorRef,
+        reason: str,
+        occurred_at: datetime,
+        causation_id: str,
+    ) -> Mission:
+        if mission.status == MissionStatus.FAILED:
+            return mission
+        if mission.status not in {MissionStatus.RUNNING, MissionStatus.VERIFYING}:
+            raise WorkUnitNotReadyError(
+                f"failed WorkUnit cannot replace {mission.status.value} Mission"
+            )
+        updated = transition_mission(
+            mission,
+            MissionStatus.FAILED,
+            occurred_at=occurred_at,
+        )
+        sequence = await repository.get_last_event_sequence(mission.id) + 1
+        event = EventEnvelope(
+            event_id=new_identifier("evt"),
+            aggregate_type="mission",
+            aggregate_id=mission.id,
+            sequence=sequence,
+            event_type="mission.lifecycle.failed",
+            actor=actor,
+            occurred_at=occurred_at,
+            correlation_id=mission.id,
+            causation_id=causation_id,
+            payload={
+                "previousStatus": mission.status.value,
+                "status": updated.status.value,
+                "workUnitId": work_unit_id,
+                "reason": reason,
+            },
+            schema_version=1,
+        )
+        await repository.update_mission(updated)
+        await repository.append_event(event)
         return updated
 
     async def create_work_unit(
@@ -350,6 +469,16 @@ class MissionService:
             )
             await repository.update_work_unit(updated)
             await repository.append_event(event)
+            if target == WorkUnitStatus.FAILED:
+                await self._fail_mission_for_work_unit(
+                    repository,
+                    mission,
+                    work_unit_id=work_unit.id,
+                    actor=actor,
+                    reason=reason or "work unit failed before execution",
+                    occurred_at=occurred_at,
+                    causation_id=event.event_id,
+                )
         return updated
 
     async def lease_work_unit(
@@ -541,6 +670,133 @@ class MissionService:
             artifact_refs=artifact_refs,
         )
 
+    async def register_artifact(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        artifact_id: str,
+        lease_id: str,
+        runner_id: str,
+        kind: ArtifactKind,
+        digest: str,
+        content_address: str,
+        media_type: str,
+        size_bytes: int,
+        source_repository: str | None,
+        base_commit: str | None,
+        retention: ArtifactRetention,
+        sensitivity: ArtifactSensitivity,
+        actor: ActorRef,
+    ) -> Artifact:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("artifacts require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.status != WorkUnitStatus.RUNNING:
+                raise WorkUnitNotReadyError(
+                    "artifacts can only be registered for a RUNNING work unit"
+                )
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if work_unit.lease.id != lease_id:
+                raise LeaseOwnershipError("lease id does not match the work unit")
+            if work_unit.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("lease belongs to another runner")
+
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("work unit lease has expired")
+            digest_value = digest.removeprefix("sha256:")
+            if digest not in content_address and digest_value not in content_address:
+                raise ValueError("artifact content address must include its digest")
+
+            existing = await repository.get_artifact(artifact_id)
+            expected_values = {
+                "mission_id": mission_id,
+                "work_unit_id": work_unit_id,
+                "attempt": work_unit.attempt,
+                "kind": kind,
+                "digest": digest,
+                "content_address": content_address,
+                "media_type": media_type,
+                "size_bytes": size_bytes,
+                "source_repository": source_repository,
+                "base_commit": base_commit,
+                "retention": retention,
+                "sensitivity": sensitivity,
+                "created_by": actor,
+            }
+            if existing is not None:
+                if all(
+                    getattr(existing, field_name) == value
+                    for field_name, value in expected_values.items()
+                ):
+                    return existing
+                raise ValueError("artifact id already exists with different metadata")
+
+            artifact = Artifact(
+                id=artifact_id,
+                created_at=occurred_at,
+                **expected_values,
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="artifact",
+                aggregate_id=artifact.id,
+                sequence=1,
+                event_type="artifact.lifecycle.registered",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload=artifact.to_public_dict(),
+                schema_version=1,
+            )
+            await repository.add_artifact(artifact)
+            await repository.append_event(event)
+        return artifact
+
+    async def _validate_artifact_refs(
+        self,
+        repository: MissionRepository,
+        mission_id: str,
+        artifact_refs: list[ArtifactRef],
+        *,
+        work_unit_id: str | None = None,
+        attempt: int | None = None,
+    ) -> None:
+        artifact_ids = [artifact_ref.id for artifact_ref in artifact_refs]
+        if len(artifact_ids) != len(set(artifact_ids)):
+            raise WorkUnitNotReadyError("artifact references must be unique")
+        for artifact_ref in artifact_refs:
+            artifact = await repository.get_artifact(artifact_ref.id)
+            if artifact is None:
+                raise WorkUnitNotReadyError(
+                    f"artifact is not registered: {artifact_ref.id}"
+                )
+            if artifact.mission_id != mission_id:
+                raise WorkUnitNotReadyError(
+                    f"artifact belongs to another mission: {artifact_ref.id}"
+                )
+            if artifact.digest.lower() != artifact_ref.digest.lower():
+                raise WorkUnitNotReadyError(
+                    f"artifact digest does not match: {artifact_ref.id}"
+                )
+            if work_unit_id is not None and artifact.work_unit_id != work_unit_id:
+                raise WorkUnitNotReadyError(
+                    f"artifact belongs to another work unit: {artifact_ref.id}"
+                )
+            if attempt is not None and artifact.attempt != attempt:
+                raise WorkUnitNotReadyError(
+                    f"artifact belongs to another attempt: {artifact_ref.id}"
+                )
+
     async def verify_work_unit(
         self,
         mission_id: str,
@@ -584,6 +840,11 @@ class MissionService:
                 raise WorkUnitNotReadyError(
                     "Evidence criterion is not part of the mission contract"
                 )
+            await self._validate_artifact_refs(
+                repository,
+                mission_id,
+                artifact_refs,
+            )
 
             occurred_at = datetime.now(timezone.utc)
             evidence = Evidence(
@@ -662,7 +923,17 @@ class MissionService:
             await repository.append_event(work_unit_event)
 
             updated_mission = mission
-            if verdict == EvidenceVerdict.PASS:
+            if verdict == EvidenceVerdict.FAIL:
+                updated_mission = await self._fail_mission_for_work_unit(
+                    repository,
+                    mission,
+                    work_unit_id=work_unit.id,
+                    actor=actor,
+                    reason=summary,
+                    occurred_at=occurred_at,
+                    causation_id=work_unit_event.event_id,
+                )
+            elif verdict == EvidenceVerdict.PASS:
                 work_units = await repository.list_work_units(mission_id)
                 evidence_history = await repository.list_evidence(mission_id)
                 passed_criteria = {
@@ -826,6 +1097,14 @@ class MissionService:
                 raise WorkUnitNotReadyError(
                     "work unit verification requires at least one artifact"
                 )
+            if target == WorkUnitStatus.VERIFYING:
+                await self._validate_artifact_refs(
+                    repository,
+                    mission_id,
+                    artifact_refs or [],
+                    work_unit_id=work_unit.id,
+                    attempt=work_unit.attempt,
+                )
             updated = transition_work_unit(
                 work_unit,
                 target,
@@ -863,6 +1142,16 @@ class MissionService:
             )
             await repository.update_work_unit(updated)
             await repository.append_event(event)
+            if target == WorkUnitStatus.FAILED:
+                await self._fail_mission_for_work_unit(
+                    repository,
+                    mission,
+                    work_unit_id=work_unit.id,
+                    actor=actor,
+                    reason=reason or "work unit execution failed",
+                    occurred_at=occurred_at,
+                    causation_id=event.event_id,
+                )
         return updated
 
     async def recover_expired_lease(
@@ -930,4 +1219,14 @@ class MissionService:
             )
             await repository.update_work_unit(updated)
             await repository.append_event(event)
+            if retry_budget_exhausted:
+                await self._fail_mission_for_work_unit(
+                    repository,
+                    mission,
+                    work_unit_id=work_unit.id,
+                    actor=actor,
+                    reason="work unit retry budget exhausted after lease expiry",
+                    occurred_at=occurred_at,
+                    causation_id=event.event_id,
+                )
         return updated
