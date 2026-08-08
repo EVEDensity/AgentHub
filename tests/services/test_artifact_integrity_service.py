@@ -334,6 +334,8 @@ class ArtifactIntegrityServiceTests(unittest.IsolatedAsyncioTestCase):
             os.environ,
             {
                 "AGENTHUB_ARTIFACT_LOCAL_ROOT": str(self.local_root),
+                "AGENTHUB_ARTIFACT_STORE_BACKEND": "minio",
+                "AGENTHUB_ARTIFACT_PUBLISH_MAX_BYTES": "4096",
                 "AGENTHUB_ARTIFACT_VERIFY_MAX_BYTES": "2048",
                 "MINIO_ENDPOINT": "storage:9000",
                 "MINIO_ACCESS_KEY": "access",
@@ -345,6 +347,8 @@ class ArtifactIntegrityServiceTests(unittest.IsolatedAsyncioTestCase):
             settings = ArtifactStoreSettings()
 
         self.assertEqual(settings.local_root, self.local_root)
+        self.assertEqual(settings.backend, "minio")
+        self.assertEqual(settings.publish_max_bytes, 4096)
         self.assertEqual(settings.verify_max_bytes, 2048)
         self.assertEqual(settings.minio_endpoint, "storage:9000")
         self.assertEqual(settings.minio_bucket, "verified-artifacts")

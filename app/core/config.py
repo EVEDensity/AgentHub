@@ -142,6 +142,10 @@ class ArtifactStoreSettings(BaseSettings):
         populate_by_name=True,
     )
 
+    backend: Literal["local", "minio"] = Field(
+        default="local",
+        alias="AGENTHUB_ARTIFACT_STORE_BACKEND",
+    )
     local_root: Path = Field(
         default=_DATA_DIR / "artifacts",
         alias="AGENTHUB_ARTIFACT_LOCAL_ROOT",
@@ -161,6 +165,11 @@ class ArtifactStoreSettings(BaseSettings):
         default=1024 * 1024 * 1024,
         ge=1,
         alias="AGENTHUB_ARTIFACT_VERIFY_MAX_BYTES",
+    )
+    publish_max_bytes: int = Field(
+        default=1024 * 1024 * 1024,
+        ge=1,
+        alias="AGENTHUB_ARTIFACT_PUBLISH_MAX_BYTES",
     )
 
 
