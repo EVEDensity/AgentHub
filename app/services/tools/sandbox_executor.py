@@ -14,16 +14,14 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import os
 import re
-import subprocess
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import httpx
 
@@ -72,7 +70,7 @@ class OutputSanitizer:
     """
 
     # Secret patterns (always filtered in basic+)
-    SECRET_PATTERNS: dict[str, re.Pattern] = {
+    SECRET_PATTERNS: ClassVar[dict[str, re.Pattern]] = {
         "aws_access_key": re.compile(r"AKIA[0-9A-Z]{16}"),
         "aws_secret_key": re.compile(r"(?<![A-Za-z0-9/+=])[A-Za-z0-9/+=]{40}(?![A-Za-z0-9/+=])"),
         "github_token": re.compile(r"gh[pousr]_[A-Za-z0-9]{36}"),
@@ -87,7 +85,7 @@ class OutputSanitizer:
     FILE_PATH_PATTERN = re.compile(r"/(?:home|Users|root|var|opt|etc)/[^\s\"']+")
     EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
 
-    REDACTION_MAP = {
+    REDACTION_MAP: ClassVar[dict[str, str]] = {
         "aws_access_key": "[REDACTED:AWS_KEY]",
         "aws_secret_key": "[REDACTED:AWS_SECRET]",
         "github_token": "[REDACTED:GITHUB_TOKEN]",
@@ -178,7 +176,7 @@ class SandboxExecutor:
         else:  # auto
             try:
                 return await self._execute_remote(code, language, timeout)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - auto mode intentionally falls back
                 logger.warning(
                     "sandbox: remote execution failed (%s), falling back to subprocess",
                     exc,
@@ -233,12 +231,20 @@ class SandboxExecutor:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout
                 )
+            except asyncio.CancelledError:
+                try:
+                    if proc.returncode is None:
+                        proc.kill()
+                    await proc.wait()
+                except (OSError, ProcessLookupError):
+                    logger.debug("sandbox child was already stopped", exc_info=True)
+                raise
             except asyncio.TimeoutError:
                 try:
                     proc.kill()
                     await proc.wait()
-                except Exception:
-                    pass
+                except (OSError, ProcessLookupError):
+                    logger.debug("sandbox child cleanup failed", exc_info=True)
                 elapsed = int((time.monotonic() - start) * 1000)
                 return SandboxResult(
                     success=False,

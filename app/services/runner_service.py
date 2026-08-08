@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -26,6 +28,10 @@ class RunnerExecutionError(RunnerError):
     """Raised when execution or Artifact publication cannot finish honestly."""
 
 
+class RunnerHeartbeatError(RunnerControlError):
+    """Raised when lease supervision cannot renew the active lease."""
+
+
 class MissionControlRunnerPort(Protocol):
     async def lease_work_unit(
         self,
@@ -43,6 +49,16 @@ class MissionControlRunnerPort(Protocol):
         *,
         runner_id: str,
         lease_id: str,
+    ) -> dict[str, Any]: ...
+
+    async def heartbeat_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        lease_seconds: int,
     ) -> dict[str, Any]: ...
 
     async def register_artifact(
@@ -145,6 +161,25 @@ class MissionControlRunnerClient:
             "POST",
             f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/start",
             json={"leaseId": lease_id},
+        )
+
+    async def heartbeat_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        del runner_id
+        return await self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/heartbeat",
+            json={
+                "leaseId": lease_id,
+                "leaseSeconds": lease_seconds,
+            },
         )
 
     async def register_artifact(
@@ -272,11 +307,15 @@ class WorkUnitRunner:
         publisher: ArtifactPublisher,
         sandbox: SandboxPort | None = None,
         runner_id: str,
+        heartbeat_interval_seconds: float | None = None,
     ) -> None:
         self._control = control
         self._publisher = publisher
         self._sandbox = sandbox or SandboxExecutor()
         self._runner_id = runner_id
+        if heartbeat_interval_seconds is not None and heartbeat_interval_seconds <= 0:
+            raise ValueError("heartbeat_interval_seconds must be positive")
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
 
     async def run(
         self,
@@ -307,12 +346,35 @@ class WorkUnitRunner:
         _assert_lease_context(started, lease)
 
         try:
-            result = await self._sandbox.execute(
-                code,
+            result = await self._execute_with_supervision(
+                mission_id,
+                work_unit_id,
+                lease,
+                code=code,
                 language=language,
                 timeout=timeout,
-                cwd=str(cwd) if cwd is not None else None,
+                cwd=cwd,
+                lease_seconds=lease_seconds,
             )
+        except asyncio.CancelledError:
+            with suppress(RunnerControlError):
+                await self._fail(
+                    mission_id,
+                    work_unit_id,
+                    lease,
+                    "runner execution cancelled",
+                )
+            raise
+        except RunnerHeartbeatError as exc:
+            await self._fail(
+                mission_id,
+                work_unit_id,
+                lease,
+                f"heartbeat supervision failed: {exc}",
+            )
+            raise RunnerExecutionError(
+                f"heartbeat supervision failed for WorkUnit {work_unit_id}"
+            ) from exc
         except Exception as exc:
             await self._fail(
                 mission_id,
@@ -373,6 +435,87 @@ class WorkUnitRunner:
             artifact=published,
         )
 
+    async def _execute_with_supervision(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        lease: _LeaseContext,
+        *,
+        code: str,
+        language: str,
+        timeout: float,
+        cwd: Path | None,
+        lease_seconds: int,
+    ) -> SandboxResult:
+        execution_task = asyncio.create_task(
+            self._sandbox.execute(
+                code,
+                language=language,
+                timeout=timeout,
+                cwd=str(cwd) if cwd is not None else None,
+            )
+        )
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(
+                mission_id,
+                work_unit_id,
+                lease,
+                lease_seconds=lease_seconds,
+            )
+        )
+        try:
+            done, _ = await asyncio.wait(
+                (execution_task, heartbeat_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done:
+                heartbeat_error = heartbeat_task.exception()
+                if heartbeat_error is None:
+                    heartbeat_error = RunnerHeartbeatError(
+                        "heartbeat supervisor stopped unexpectedly"
+                    )
+                execution_task.cancel()
+                await _drain_cancelled_task(execution_task)
+                if isinstance(heartbeat_error, RunnerHeartbeatError):
+                    raise heartbeat_error
+                raise RunnerHeartbeatError(
+                    "lease heartbeat failed"
+                ) from heartbeat_error
+            return execution_task.result()
+        except asyncio.CancelledError:
+            execution_task.cancel()
+            await _drain_cancelled_task(execution_task)
+            raise
+        finally:
+            if not heartbeat_task.done():
+                heartbeat_task.cancel()
+            await _drain_cancelled_task(heartbeat_task)
+
+    async def _heartbeat_loop(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        lease: _LeaseContext,
+        *,
+        lease_seconds: int,
+    ) -> None:
+        interval = self._heartbeat_interval_seconds
+        if interval is None:
+            interval = min(max(lease_seconds / 3, 0.1), 30.0)
+        while True:
+            await asyncio.sleep(interval)
+            renewed = await self._control.heartbeat_work_unit(
+                mission_id,
+                work_unit_id,
+                runner_id=self._runner_id,
+                lease_id=lease.lease_id,
+                lease_seconds=lease_seconds,
+            )
+            try:
+                _assert_lease_context(renewed, lease)
+            except RunnerControlError as exc:
+                raise RunnerHeartbeatError(str(exc)) from exc
+
     async def _fail(
         self,
         mission_id: str,
@@ -426,12 +569,25 @@ def _artifact_id(work_unit_id: str, attempt: int, digest: str) -> str:
     return f"artifact-{work_unit_id}-{attempt}-{digest_hex[:32]}"
 
 
+async def _drain_cancelled_task(task: asyncio.Task[Any]) -> None:
+    """Wait for a supervised task after cancellation without leaking it."""
+    try:
+        await task
+    except asyncio.CancelledError:
+        return
+    except Exception:  # noqa: BLE001 - task is drained after its outcome is captured
+        # The caller has already captured the relevant supervision failure.
+        # Drain the task so asyncio does not report an unhandled exception.
+        return
+
+
 __all__ = [
     "MissionControlRunnerClient",
     "MissionControlRunnerPort",
     "RunnerControlError",
     "RunnerError",
     "RunnerExecutionError",
+    "RunnerHeartbeatError",
     "RunnerRunResult",
     "SandboxPort",
     "WorkUnitRunner",

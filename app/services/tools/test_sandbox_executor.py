@@ -3,8 +3,11 @@
 # ─────────────────────────────────────────────────────────────────────
 # Run: pytest app/services/tools/test_sandbox_executor.py -v
 # ─────────────────────────────────────────────────────────────────────
+import asyncio
 import os
 import sys
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -19,7 +22,6 @@ from app.services.tools.sandbox_executor import (
     SandboxResult,
     sandbox_executor,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════
 #  OutputSanitizer Tests
@@ -163,6 +165,44 @@ class TestSandboxExecutorSubprocess:
         assert result.success is False
         assert "timed out" in result.stderr.lower() or result.error == "timeout"
 
+    @pytest.mark.asyncio
+    async def test_subprocess_cancellation_kills_and_reaps_child(self):
+        """Cancelling local execution must stop the child before it can finish."""
+        executor = SandboxExecutor()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            started_path = temporary_path / "started"
+            completed_path = temporary_path / "completed"
+            started_literal = str(started_path).replace("\\", "\\\\")
+            completed_literal = str(completed_path).replace("\\", "\\\\")
+            code = (
+                "from pathlib import Path\n"
+                "import time\n"
+                f'Path(r"{started_literal}").write_text("started", encoding="utf-8")\n'
+                "time.sleep(0.5)\n"
+                f'Path(r"{completed_literal}").write_text("completed", encoding="utf-8")\n'
+            )
+            execution = asyncio.create_task(
+                executor._execute_subprocess(
+                    code,
+                    "python",
+                    10,
+                    cwd=temporary_directory,
+                )
+            )
+            for _ in range(100):
+                if started_path.exists():
+                    break
+                await asyncio.sleep(0.01)
+            assert started_path.exists()
+
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+
+            await asyncio.sleep(0.6)
+            assert not completed_path.exists()
+
 
 class TestSandboxExecutorRemote:
     """Test remote execution mode (mocked HTTP)."""
@@ -294,9 +334,8 @@ class TestSandboxExecutorAuto:
             executor,
             "_execute_remote",
             side_effect=ConnectionError("service down"),
-        ):
-            with pytest.raises(ConnectionError):
-                await executor.execute("print('hi')", "python", 10)
+        ), pytest.raises(ConnectionError):
+            await executor.execute("print('hi')", "python", 10)
 
 
 class TestSandboxExecutorSanitize:

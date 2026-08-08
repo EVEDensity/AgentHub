@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import tempfile
 import unittest
@@ -29,6 +30,9 @@ class FakeControl:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.registered: list[dict[str, Any]] = []
         self.should_fail_reporting = False
+        self.should_fail_failure = False
+        self.heartbeat_error: Exception | None = None
+        self.heartbeat_received = asyncio.Event()
 
     async def lease_work_unit(self, mission_id: str, work_unit_id: str, **kwargs: Any):
         self.calls.append(("lease", kwargs))
@@ -36,6 +40,15 @@ class FakeControl:
 
     async def start_work_unit(self, mission_id: str, work_unit_id: str, **kwargs: Any):
         self.calls.append(("start", kwargs))
+        return {"id": work_unit_id, "attempt": 1, "lease": {"id": "lease-1"}}
+
+    async def heartbeat_work_unit(
+        self, mission_id: str, work_unit_id: str, **kwargs: Any
+    ):
+        self.calls.append(("heartbeat", kwargs))
+        self.heartbeat_received.set()
+        if self.heartbeat_error is not None:
+            raise self.heartbeat_error
         return {"id": work_unit_id, "attempt": 1, "lease": {"id": "lease-1"}}
 
     async def register_artifact(
@@ -58,6 +71,8 @@ class FakeControl:
 
     async def fail_work_unit(self, mission_id: str, work_unit_id: str, **kwargs: Any):
         self.calls.append(("fail", kwargs))
+        if self.should_fail_failure:
+            raise RuntimeError("failure reporting unavailable")
         return {"id": work_unit_id, "status": "FAILED"}
 
 
@@ -74,6 +89,24 @@ class FakeSandbox:
 
     async def execute(self, code: str, **kwargs: Any) -> SandboxResult:
         del code, kwargs
+        return self.result
+
+
+class BlockingSandbox(FakeSandbox):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = False
+
+    async def execute(self, code: str, **kwargs: Any) -> SandboxResult:
+        del code, kwargs
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
         return self.result
 
 
@@ -149,6 +182,97 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.failure_reason, "tests failed")
         self.assertEqual(publisher.contents, [])
+        self.assertEqual([name for name, _ in control.calls], ["lease", "start", "fail"])
+
+    async def test_long_execution_heartbeats_before_artifact_reporting(self) -> None:
+        control = FakeControl()
+        publisher = FakePublisher()
+        sandbox = BlockingSandbox()
+        runner = WorkUnitRunner(
+            control,
+            publisher=publisher,
+            sandbox=sandbox,
+            runner_id="runner-1",
+            heartbeat_interval_seconds=0.01,
+        )
+
+        run_task = asyncio.create_task(
+            runner.run("mis-1", "wu-1", code="print('ignored')")
+        )
+        await asyncio.wait_for(control.heartbeat_received.wait(), timeout=1)
+        sandbox.release.set()
+        result = await run_task
+
+        self.assertTrue(result.success)
+        call_names = [name for name, _ in control.calls]
+        self.assertIn("heartbeat", call_names)
+        self.assertLess(call_names.index("heartbeat"), call_names.index("register"))
+
+    async def test_heartbeat_failure_cancels_execution_and_records_failure(self) -> None:
+        control = FakeControl()
+        control.heartbeat_error = RunnerControlError("lease expired")
+        publisher = FakePublisher()
+        sandbox = BlockingSandbox()
+        runner = WorkUnitRunner(
+            control,
+            publisher=publisher,
+            sandbox=sandbox,
+            runner_id="runner-1",
+            heartbeat_interval_seconds=0.01,
+        )
+
+        with self.assertRaisesRegex(RunnerExecutionError, "heartbeat supervision failed"):
+            await runner.run("mis-1", "wu-1", code="print('ignored')")
+
+        self.assertTrue(sandbox.cancelled)
+        self.assertEqual(publisher.contents, [])
+        self.assertEqual([name for name, _ in control.calls], ["lease", "start", "heartbeat", "fail"])
+        self.assertIn("heartbeat supervision failed", control.calls[-1][1]["reason"])
+
+    async def test_caller_cancellation_records_failure_and_propagates(self) -> None:
+        control = FakeControl()
+        sandbox = BlockingSandbox()
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            sandbox=sandbox,
+            runner_id="runner-1",
+        )
+
+        run_task = asyncio.create_task(
+            runner.run("mis-1", "wu-1", code="print('ignored')")
+        )
+        await asyncio.wait_for(sandbox.started.wait(), timeout=1)
+        run_task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await run_task
+
+        self.assertTrue(sandbox.cancelled)
+        self.assertEqual([name for name, _ in control.calls], ["lease", "start", "fail"])
+        self.assertEqual(control.calls[-1][1]["reason"], "runner execution cancelled")
+
+    async def test_caller_cancellation_propagates_when_failure_recording_fails(self) -> None:
+        control = FakeControl()
+        control.should_fail_failure = True
+        sandbox = BlockingSandbox()
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            sandbox=sandbox,
+            runner_id="runner-1",
+        )
+
+        run_task = asyncio.create_task(
+            runner.run("mis-1", "wu-1", code="print('ignored')")
+        )
+        await asyncio.wait_for(sandbox.started.wait(), timeout=1)
+        run_task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await run_task
+
+        self.assertTrue(sandbox.cancelled)
         self.assertEqual([name for name, _ in control.calls], ["lease", "start", "fail"])
 
     async def test_reporting_failure_records_work_unit_failure_and_raises(self) -> None:
@@ -291,6 +415,39 @@ class MissionControlClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(requests[0].url), "http://mission-control/api/v1/missions/mis-1/work-units/wu-1/lease")
         self.assertEqual(requests[0].headers["Authorization"], "Bearer token-1")
         self.assertEqual(requests[0].read(), b'{"leaseSeconds":120}')
+
+    async def test_client_sends_heartbeat_with_lease_context(self) -> None:
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={"id": "wu-1", "attempt": 1, "lease": {"id": "lease-1"}},
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            control = MissionControlRunnerClient(
+                "http://mission-control",
+                http_client=client,
+            )
+            payload = await control.heartbeat_work_unit(
+                "mis-1",
+                "wu-1",
+                runner_id="runner-1",
+                lease_id="lease-1",
+                lease_seconds=120,
+            )
+
+        self.assertEqual(payload["lease"]["id"], "lease-1")
+        self.assertEqual(
+            str(requests[0].url),
+            "http://mission-control/api/v1/missions/mis-1/work-units/wu-1/heartbeat",
+        )
+        self.assertEqual(
+            requests[0].read(),
+            b'{"leaseId":"lease-1","leaseSeconds":120}',
+        )
 
     async def test_client_maps_control_rejection_to_runner_error(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:

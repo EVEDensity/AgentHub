@@ -12,7 +12,8 @@ boundary. It is not the permanent home of every Agent feature.
   Artifact byte verification reads Runner-owned content through this boundary;
   Mission Control retains only immutable Artifact metadata.
   The minimum Runner loop uses the HTTP Mission Control adapter and must not
-  write repository state directly.
+  write repository state directly. While executing, it renews its fenced lease
+  and cancels local work when supervision can no longer prove ownership.
 - `api/`: HTTP/WebSocket transport; handlers must delegate to services.
 - `schemas/`: versioned request and response validation.
 - `compat/`: one-way adapters from legacy Task/DAG data into Mission objects.
