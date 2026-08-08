@@ -514,7 +514,10 @@ class MissionService:
         lease_id: str,
         runner_id: str,
         actor: ActorRef,
+        artifact_refs: list[ArtifactRef],
     ) -> WorkUnit:
+        if not artifact_refs:
+            raise ValueError("work unit completion requires at least one artifact")
         return await self._transition_execution_work_unit(
             mission_id,
             work_unit_id,
@@ -523,6 +526,7 @@ class MissionService:
             lease_id=lease_id,
             runner_id=runner_id,
             actor=actor,
+            artifact_refs=artifact_refs,
         )
 
     async def fail_work_unit(
@@ -578,6 +582,7 @@ class MissionService:
         runner_id: str,
         actor: ActorRef,
         reason: str | None = None,
+        artifact_refs: list[ArtifactRef] | None = None,
     ) -> WorkUnit:
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
@@ -605,6 +610,10 @@ class MissionService:
                     raise WorkUnitNotReadyError("mission contract not found")
                 if work_unit.attempt >= contract.budgets.retries + 1:
                     raise WorkUnitNotReadyError("work unit retry budget is exhausted")
+            if target == WorkUnitStatus.VERIFYING and not artifact_refs:
+                raise WorkUnitNotReadyError(
+                    "work unit verification requires at least one artifact"
+                )
             updated = transition_work_unit(
                 work_unit,
                 target,
@@ -631,6 +640,11 @@ class MissionService:
                     "status": updated.status.value,
                     "leaseId": lease_id,
                     "attempt": updated.attempt,
+                    **(
+                        {"artifactRefs": [ref.to_public_dict() for ref in artifact_refs]}
+                        if artifact_refs is not None
+                        else {}
+                    ),
                     **({"reason": reason} if reason is not None else {}),
                 },
                 schema_version=1,

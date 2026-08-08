@@ -9,6 +9,7 @@ from app.domain import InvalidStateTransition, Mission
 from app.repositories import MissionRepository
 from app.schemas.mission import (
     MissionCreateRequest,
+    WorkUnitCompletionRequest,
     WorkUnitCreateRequest,
     WorkUnitExecutionRequest,
     WorkUnitHeartbeatRequest,
@@ -325,7 +326,7 @@ async def _run_work_unit_execution_command(
     work_unit_id: str,
     *,
     command: Literal["complete", "fail", "retry"],
-    request: WorkUnitExecutionRequest,
+    request: WorkUnitExecutionRequest | WorkUnitCompletionRequest,
     user: dict,
     repository: MissionRepository,
 ) -> dict:
@@ -344,6 +345,7 @@ async def _run_work_unit_execution_command(
                 lease_id=request.lease_id,
                 runner_id=runner_id,
                 actor=actor,
+                artifact_refs=request.artifact_refs,
             )
         elif command == "fail":
             updated = await service.fail_work_unit(
@@ -376,7 +378,7 @@ async def _run_work_unit_execution_command(
 async def complete_work_unit(
     mission_id: str,
     work_unit_id: str,
-    request: WorkUnitExecutionRequest,
+    request: WorkUnitCompletionRequest,
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:

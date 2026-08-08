@@ -683,7 +683,15 @@ class MissionApiTests(unittest.TestCase):
 
         response = client.post(
             "/api/v1/missions/mis-1/work-units/wu-1/complete",
-            json={"leaseId": "lease-running"},
+            json={
+                "leaseId": "lease-running",
+                "artifactRefs": [
+                    {
+                        "id": "artifact-1",
+                        "digest": "sha256:" + "a" * 64,
+                    }
+                ],
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -693,6 +701,39 @@ class MissionApiTests(unittest.TestCase):
             repository.events[-1].event_type,
             "work_unit.lifecycle.completed",
         )
+        self.assertEqual(
+            repository.events[-1].payload["artifactRefs"][0]["id"],
+            "artifact-1",
+        )
+
+    def test_complete_requires_artifact_refs(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                status="RUNNING",
+                lease=Lease(
+                    id="lease-running",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/complete",
+            json={"leaseId": "lease-running", "artifactRefs": []},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(repository.work_units[0].status.value, "RUNNING")
+        self.assertEqual(repository.events, [])
 
     def test_fail_and_retry_require_lease_and_respect_retry_budget(self) -> None:
         repository = FakeMissionRepository()

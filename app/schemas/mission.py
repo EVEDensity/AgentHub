@@ -91,3 +91,14 @@ class WorkUnitExecutionRequest(BaseModel):
 
     lease_id: Annotated[str, Field(min_length=1, max_length=255)]
     reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+
+
+class WorkUnitCompletionRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    lease_id: Annotated[str, Field(min_length=1, max_length=255)]
+    artifact_refs: Annotated[list[ArtifactRef], Field(min_length=1)]
