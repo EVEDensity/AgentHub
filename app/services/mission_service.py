@@ -875,6 +875,7 @@ class MissionService:
                 payload=evidence.to_public_dict(),
                 schema_version=1,
             )
+            await repository.add_evidence(evidence)
             await repository.append_event(evidence_event)
 
             updated_work_unit = work_unit
@@ -935,12 +936,9 @@ class MissionService:
                 )
             elif verdict == EvidenceVerdict.PASS:
                 work_units = await repository.list_work_units(mission_id)
-                evidence_history = await repository.list_evidence(mission_id)
-                passed_criteria = {
-                    item.criterion_id
-                    for item in evidence_history
-                    if item.verdict == EvidenceVerdict.PASS
-                }
+                passed_criteria = (
+                    await repository.list_passed_evidence_criterion_ids(mission_id)
+                )
                 required_criteria = {
                     criterion.id
                     for criterion in contract.acceptance_criteria

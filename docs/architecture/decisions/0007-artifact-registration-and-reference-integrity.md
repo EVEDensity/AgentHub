@@ -39,8 +39,9 @@ Completion and verification failures are explicit when an Artifact Store has
 not registered metadata, a digest is wrong, or an output belongs to another
 attempt. Artifact bytes can move to object storage without changing Mission
 contracts, while list and audit queries remain available from Mission Control.
-The current metadata projection is intentionally small; retention enforcement,
-byte availability checks, and a dedicated Evidence projection are later slices.
+The current metadata projection is intentionally small; retention enforcement
+and byte availability checks are later slices. Evidence persistence is defined
+by ADR-0008.
 
 ## Alternatives considered
 

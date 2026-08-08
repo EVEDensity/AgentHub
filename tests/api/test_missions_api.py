@@ -23,6 +23,7 @@ from tests.domain.factories import (
     build_artifact,
     build_contract,
     build_event,
+    build_evidence,
     build_mission,
     build_work_unit,
 )
@@ -34,6 +35,7 @@ class FakeMissionRepository:
         self.mission: Mission | None = None
         self.events: list[EventEnvelope] = []
         self.artifacts: list[Artifact] = []
+        self.evidence: list[Evidence] = []
         self.list_result: list[Mission] = []
         self.work_units: list[WorkUnit] = []
 
@@ -113,22 +115,38 @@ class FakeMissionRepository:
         )
         return events[:limit]
 
+    async def add_evidence(self, evidence: Evidence) -> None:
+        self.evidence.append(evidence)
+
+    async def get_evidence(self, evidence_id: str) -> Evidence | None:
+        return next(
+            (evidence for evidence in self.evidence if evidence.id == evidence_id),
+            None,
+        )
+
     async def list_evidence(
         self,
         mission_id: str,
         *,
         limit: int = 200,
+        offset: int = 0,
     ) -> list[Evidence]:
-        evidence_events = sorted(
+        matching = sorted(
             (
-                event
-                for event in self.events
-                if event.aggregate_type.value == "evidence"
-                and event.correlation_id == mission_id
+                evidence
+                for evidence in self.evidence
+                if evidence.mission_id == mission_id
             ),
-            key=lambda event: event.occurred_at,
+            key=lambda evidence: (evidence.generated_at, evidence.id),
         )
-        return [Evidence.model_validate(event.payload) for event in evidence_events[:limit]]
+        return matching[offset : offset + limit]
+
+    async def list_passed_evidence_criterion_ids(self, mission_id: str) -> set[str]:
+        return {
+            evidence.criterion_id
+            for evidence in self.evidence
+            if evidence.mission_id == mission_id and evidence.verdict.value == "PASS"
+        }
 
     async def add_artifact(self, artifact: Artifact) -> None:
         self.artifacts.append(artifact)
@@ -1111,6 +1129,7 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(body["evidence"]["verdict"], "PASS")
         self.assertEqual(body["workUnit"]["status"], "SUCCEEDED")
         self.assertEqual(body["mission"]["status"], "SUCCEEDED")
+        self.assertEqual(repository.evidence, [Evidence.model_validate(body["evidence"])])
         self.assertEqual(
             [event.event_type for event in repository.events],
             [
@@ -1120,6 +1139,51 @@ class MissionApiTests(unittest.TestCase):
                 "mission.lifecycle.succeeded",
             ],
         )
+        listed = client.get("/api/v1/missions/mis-1/evidence")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.json()["evidence"], [body["evidence"]])
+
+    def test_mission_success_uses_unbounded_passed_criterion_projection(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        repository.evidence = [
+            build_evidence(
+                id=f"evd-history-{index}",
+                criterion_id=f"legacy-{index}",
+            )
+            for index in range(200)
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "All required tests passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["mission"]["status"], "SUCCEEDED")
+        self.assertEqual(len(repository.evidence), 201)
 
     def test_mission_waits_for_all_required_criteria(self) -> None:
         repository = FakeMissionRepository()
@@ -1217,6 +1281,7 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["workUnit"]["status"], "VERIFYING")
         self.assertEqual(response.json()["mission"]["status"], "RUNNING")
+        self.assertEqual(len(repository.evidence), 1)
         self.assertEqual(
             repository.events[-1].event_type,
             "work_unit.lifecycle.verification_inconclusive",
@@ -1256,6 +1321,7 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["workUnit"]["status"], "FAILED")
         self.assertEqual(response.json()["mission"]["status"], "FAILED")
+        self.assertEqual(len(repository.evidence), 1)
         self.assertEqual(
             [event.event_type for event in repository.events],
             [

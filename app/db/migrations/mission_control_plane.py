@@ -10,6 +10,8 @@ A2A_SOURCE_MAPPING_REVISION = "a47e5f102c34"
 A2A_SOURCE_MAPPING_DOWN_REVISION = WORK_UNIT_PERSISTENCE_REVISION
 ARTIFACT_PERSISTENCE_REVISION = "b58f6a213d45"
 ARTIFACT_PERSISTENCE_DOWN_REVISION = A2A_SOURCE_MAPPING_REVISION
+EVIDENCE_PROJECTION_REVISION = "c69e7b324f56"
+EVIDENCE_PROJECTION_DOWN_REVISION = ARTIFACT_PERSISTENCE_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -203,3 +205,63 @@ ARTIFACT_PERSISTENCE_DOWNGRADE = (
     )
     """,
 )
+
+EVIDENCE_PROJECTION_UPGRADE = (
+    """
+    CREATE TABLE IF NOT EXISTS evidence (
+        id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL REFERENCES missions(id),
+        work_unit_id TEXT REFERENCES work_units(id),
+        criterion_id TEXT NOT NULL CHECK (
+            length(criterion_id) BETWEEN 1 AND 255
+        ),
+        verifier JSONB NOT NULL CHECK (jsonb_typeof(verifier) = 'object'),
+        verdict TEXT NOT NULL CHECK (
+            verdict IN ('PASS', 'FAIL', 'INCONCLUSIVE')
+        ),
+        artifact_refs JSONB NOT NULL CHECK (
+            jsonb_typeof(artifact_refs) = 'array'
+        ),
+        summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 10000),
+        generated_at TIMESTAMPTZ NOT NULL,
+        integrity_hash TEXT NOT NULL CHECK (
+            integrity_hash ~ '^sha256:[a-fA-F0-9]{64}$'
+        )
+    )
+    """,
+    """
+    INSERT INTO evidence(
+        id, mission_id, work_unit_id, criterion_id, verifier, verdict,
+        artifact_refs, summary, generated_at, integrity_hash
+    )
+    SELECT
+        payload->>'id',
+        payload->>'missionId',
+        NULLIF(payload->>'workUnitId', ''),
+        payload->>'criterionId',
+        payload->'verifier',
+        payload->>'verdict',
+        payload->'artifactRefs',
+        payload->>'summary',
+        (payload->>'generatedAt')::timestamptz,
+        payload->>'integrityHash'
+    FROM mission_events
+    WHERE aggregate_type = 'evidence'
+      AND event_type = 'evidence.lifecycle.recorded'
+    ON CONFLICT (id) DO NOTHING
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_evidence_mission_generated
+    ON evidence(mission_id, generated_at, id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_evidence_work_unit_criterion
+    ON evidence(work_unit_id, criterion_id, generated_at)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_evidence_mission_verdict_criterion
+    ON evidence(mission_id, verdict, criterion_id)
+    """,
+)
+
+EVIDENCE_PROJECTION_DOWNGRADE = ("DROP TABLE IF EXISTS evidence",)

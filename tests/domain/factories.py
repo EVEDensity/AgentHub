@@ -10,6 +10,7 @@ from app.domain import (
     CapabilityGrant,
     DecisionGate,
     EventEnvelope,
+    Evidence,
     Mission,
     MissionContract,
     MissionSource,
@@ -78,6 +79,23 @@ def build_artifact(**updates: object) -> Artifact:
     }
     values.update(updates)
     return Artifact.model_validate(values)
+
+
+def build_evidence(**updates: object) -> Evidence:
+    values: dict[str, object] = {
+        "id": "evd-1",
+        "mission_id": "mis-1",
+        "work_unit_id": "wu-1",
+        "criterion_id": "tests",
+        "verifier": {"id": "pytest", "version": "9.0"},
+        "verdict": "PASS",
+        "artifact_refs": [{"id": "artifact-1", "digest": DIGEST}],
+        "summary": "All required tests passed.",
+        "generated_at": NOW,
+        "integrity_hash": "sha256:" + "b" * 64,
+    }
+    values.update(updates)
+    return Evidence.model_validate(values)
 
 
 def build_event(**updates: object) -> EventEnvelope:

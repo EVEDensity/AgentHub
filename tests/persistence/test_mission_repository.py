@@ -10,6 +10,7 @@ from tests.domain.factories import (
     build_artifact,
     build_contract,
     build_event,
+    build_evidence,
     build_mission,
     build_work_unit,
 )
@@ -70,6 +71,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_records_return_none(self) -> None:
         self.assertIsNone(await self.repository.get_contract("missing"))
         self.assertIsNone(await self.repository.get_mission("missing"))
+        self.assertIsNone(await self.repository.get_evidence("missing"))
 
     async def test_mission_source_lookup_is_workspace_and_protocol_scoped(self) -> None:
         mission = build_mission(
@@ -165,40 +167,64 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.repository.list_events("mis-1", limit=201)
 
-    async def test_list_evidence_reads_correlated_event_payloads(self) -> None:
-        evidence = Evidence(
-            id="evd-1",
-            mission_id="mis-1",
-            work_unit_id="wu-1",
-            criterion_id="tests",
-            verifier={"id": "pytest", "version": "9.0"},
-            verdict="PASS",
-            artifact_refs=[
-                {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-            ],
-            summary="All required tests passed.",
-            generated_at=build_mission().updated_at,
-            integrity_hash="sha256:" + "b" * 64,
-        )
-        event = build_event(
-            event_id="evt-evidence-1",
-            aggregate_type="evidence",
-            aggregate_id=evidence.id,
-            event_type="evidence.lifecycle.recorded",
-            correlation_id="mis-1",
-            payload=evidence.to_public_dict(),
-        )
-        self.database.all = [self.build_event_row(event)]
+    async def test_evidence_round_trip_and_mission_list(self) -> None:
+        evidence = build_evidence()
 
-        restored = await self.repository.list_evidence("mis-1", limit=20)
+        await self.repository.add_evidence(evidence)
 
-        self.assertEqual(restored, [evidence])
+        insert_sql, insert_args = self.database.executed[-1]
+        self.assertIn("INSERT INTO evidence", insert_sql)
+        self.assertEqual(
+            insert_args[0:4],
+            (
+                evidence.id,
+                evidence.mission_id,
+                evidence.work_unit_id,
+                evidence.criterion_id,
+            ),
+        )
+        self.assertEqual(json.loads(insert_args[4]), evidence.verifier.to_public_dict())
+        self.assertEqual(insert_args[5], "PASS")
+        self.assertEqual(
+            json.loads(insert_args[6]),
+            [item.to_public_dict() for item in evidence.artifact_refs],
+        )
+
+        row = self.build_evidence_row(evidence)
+        self.database.one = row
+        restored = await self.repository.get_evidence(evidence.id)
+        self.assertEqual(restored, evidence)
+
+        self.database.all = [row]
+        listed = await self.repository.list_evidence(
+            evidence.mission_id,
+            limit=20,
+            offset=5,
+        )
+        self.assertEqual(listed, [evidence])
         sql, args = self.database.fetched_all[-1]
-        self.assertIn("aggregate_type='evidence'", sql)
-        self.assertIn("ORDER BY occurred_at ASC", sql)
-        self.assertEqual(args, ("mis-1", 20))
+        self.assertIn("FROM evidence", sql)
+        self.assertIn("ORDER BY generated_at ASC, id ASC", sql)
+        self.assertEqual(args, (evidence.mission_id, 20, 5))
         with self.assertRaises(ValueError):
             await self.repository.list_evidence("mis-1", limit=0)
+        with self.assertRaises(ValueError):
+            await self.repository.list_evidence("mis-1", offset=-1)
+
+    async def test_passed_evidence_criteria_are_not_page_limited(self) -> None:
+        self.database.all = [
+            {"criterion_id": "tests"},
+            {"criterion_id": "security"},
+        ]
+
+        restored = await self.repository.list_passed_evidence_criterion_ids("mis-1")
+
+        self.assertEqual(restored, {"tests", "security"})
+        sql, args = self.database.fetched_all[-1]
+        self.assertIn("SELECT DISTINCT criterion_id", sql)
+        self.assertIn("verdict='PASS'", sql)
+        self.assertNotIn("LIMIT", sql)
+        self.assertEqual(args, ("mis-1",))
 
     async def test_artifact_round_trip_and_mission_list(self) -> None:
         artifact = build_artifact()
@@ -368,6 +394,23 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "sensitivity": artifact.sensitivity.value,
             "created_by": json.dumps(artifact.created_by.to_public_dict()),
             "created_at": artifact.created_at,
+        }
+
+    @staticmethod
+    def build_evidence_row(evidence: Evidence) -> dict[str, Any]:
+        return {
+            "id": evidence.id,
+            "mission_id": evidence.mission_id,
+            "work_unit_id": evidence.work_unit_id,
+            "criterion_id": evidence.criterion_id,
+            "verifier": json.dumps(evidence.verifier.to_public_dict()),
+            "verdict": evidence.verdict.value,
+            "artifact_refs": json.dumps(
+                [item.to_public_dict() for item in evidence.artifact_refs]
+            ),
+            "summary": evidence.summary,
+            "generated_at": evidence.generated_at,
+            "integrity_hash": evidence.integrity_hash,
         }
 
     @staticmethod

@@ -235,29 +235,67 @@ class MissionRepository:
         )
         return [self._event_from_row(row) for row in rows]
 
+    async def add_evidence(self, evidence: Evidence) -> None:
+        await self._execute(
+            """INSERT INTO evidence(
+                   id, mission_id, work_unit_id, criterion_id, verifier, verdict,
+                   artifact_refs, summary, generated_at, integrity_hash
+               ) VALUES($1, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9, $10)""",
+            evidence.id,
+            evidence.mission_id,
+            evidence.work_unit_id,
+            evidence.criterion_id,
+            _encode_json(evidence.verifier.to_public_dict()),
+            evidence.verdict.value,
+            _encode_json(
+                [artifact_ref.to_public_dict() for artifact_ref in evidence.artifact_refs]
+            ),
+            evidence.summary,
+            evidence.generated_at,
+            evidence.integrity_hash,
+        )
+
+    async def get_evidence(self, evidence_id: str) -> Evidence | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, work_unit_id, criterion_id, verifier, verdict,
+                      artifact_refs, summary, generated_at, integrity_hash
+               FROM evidence WHERE id=$1""",
+            evidence_id,
+        )
+        return self._evidence_from_row(row) if row is not None else None
+
     async def list_evidence(
         self,
         mission_id: str,
         *,
         limit: int = 200,
+        offset: int = 0,
     ) -> list[Evidence]:
         if not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
         rows = await self._fetch_all(
-            """SELECT payload
-               FROM mission_events
-               WHERE aggregate_type='evidence' AND correlation_id=$1
-               ORDER BY occurred_at ASC
-               LIMIT $2""",
+            """SELECT id, mission_id, work_unit_id, criterion_id, verifier, verdict,
+                      artifact_refs, summary, generated_at, integrity_hash
+               FROM evidence
+               WHERE mission_id=$1
+               ORDER BY generated_at ASC, id ASC
+               LIMIT $2 OFFSET $3""",
             mission_id,
             limit,
+            offset,
         )
-        return [
-            Evidence.model_validate(
-                _decode_json_object(row["payload"], "payload")
-            )
-            for row in rows
-        ]
+        return [self._evidence_from_row(row) for row in rows]
+
+    async def list_passed_evidence_criterion_ids(self, mission_id: str) -> set[str]:
+        rows = await self._fetch_all(
+            """SELECT DISTINCT criterion_id
+               FROM evidence
+               WHERE mission_id=$1 AND verdict='PASS'""",
+            mission_id,
+        )
+        return {str(row["criterion_id"]) for row in rows}
 
     async def add_artifact(self, artifact: Artifact) -> None:
         await self._execute(
@@ -456,6 +494,15 @@ class MissionRepository:
         values["actor"] = _decode_json_object(values["actor"], "actor")
         values["payload"] = _decode_json_object(values["payload"], "payload")
         return EventEnvelope.model_validate(values)
+
+    @staticmethod
+    def _evidence_from_row(row: Mapping[str, Any]) -> Evidence:
+        values = dict(row)
+        values["verifier"] = _decode_json_object(values["verifier"], "verifier")
+        values["artifact_refs"] = _decode_json_array(
+            values["artifact_refs"], "artifact_refs"
+        )
+        return Evidence.model_validate(values)
 
     @staticmethod
     def _artifact_from_row(row: Mapping[str, Any]) -> Artifact:

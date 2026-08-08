@@ -22,12 +22,13 @@ Mission Control exposes a verifier-only WorkUnit verification command.
 - The WorkUnit must be `VERIFYING`, the criterion must belong to the immutable
   Mission Contract, and the Evidence must contain at least one ArtifactRef,
   verifier metadata, a summary, and an integrity hash.
-- Evidence is appended to the event ledger as an `evidence` aggregate before
-  the WorkUnit verification event.
+- Evidence is written to the append-only projection and event ledger as an
+  `evidence` aggregate before the WorkUnit verification event, in the same
+  transaction as resulting WorkUnit and Mission transitions.
 - `PASS` transitions the WorkUnit to `SUCCEEDED`. Mission Control records
   `RUNNING -> VERIFYING -> SUCCEEDED` only when every WorkUnit is successful
   and every required acceptance criterion has at least one PASS Evidence in
-  the mission's event history, all in one transaction.
+  the Mission projection, all in one transaction.
 - `FAIL` transitions the WorkUnit and its Mission to `FAILED` in the same
   transaction; `INCONCLUSIVE` records Evidence and leaves the WorkUnit in
   `VERIFYING`.
@@ -41,16 +42,16 @@ Missions cannot claim success without criterion-scoped Evidence for every
 required acceptance criterion. Inconclusive checks require a later verifier
 decision, and failed checks remain eligible for a policy-defined retry path.
 Event consumers must handle `evidence` aggregates in addition to mission and
-work-unit aggregates.
+work-unit aggregates. Query consumers use the Evidence projection described in
+ADR-0008; its pagination is not used for Mission success decisions.
 
 ## Alternatives considered
 
 - Let the Runner submit PASS Evidence: rejected because it is not independent.
 - Treat any Evidence verdict as Mission success: rejected because all required
   WorkUnits and every required contract criterion must be satisfied.
-- Add a separate Evidence table in this slice: deferred until query and
-  retention requirements justify a projection beyond the immutable event
-  ledger.
+- Derive all Evidence reads from event payloads: superseded by ADR-0008 because
+  audit envelopes and business queries require different indexes and limits.
 
 ## Verification
 

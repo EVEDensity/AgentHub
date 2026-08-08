@@ -45,6 +45,8 @@ WorkUnitLimit = Annotated[int, Query(ge=1, le=200)]
 WorkUnitOffset = Annotated[int, Query(ge=0)]
 ArtifactLimit = Annotated[int, Query(ge=1, le=200)]
 ArtifactOffset = Annotated[int, Query(ge=0)]
+EvidenceLimit = Annotated[int, Query(ge=1, le=200)]
+EvidenceOffset = Annotated[int, Query(ge=0)]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -161,6 +163,23 @@ async def list_mission_events(
         limit=limit,
     )
     return {"events": [event.to_public_dict() for event in events]}
+
+
+@router.get("/{mission_id}/evidence")
+async def list_evidence(
+    mission_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    limit: EvidenceLimit = 100,
+    offset: EvidenceOffset = 0,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    evidence = await repository.list_evidence(
+        mission_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"evidence": [item.to_public_dict() for item in evidence]}
 
 
 @router.post("/{mission_id}/work-units", status_code=status.HTTP_201_CREATED)
