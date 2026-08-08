@@ -11,6 +11,7 @@ from app.schemas.mission import (
     MissionCreateRequest,
     WorkUnitCreateRequest,
     WorkUnitExecutionRequest,
+    WorkUnitHeartbeatRequest,
     WorkUnitLeaseRequest,
     WorkUnitStartRequest,
 )
@@ -259,6 +260,37 @@ async def start_work_unit(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return started.to_public_dict()
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/heartbeat")
+async def heartbeat_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    request: WorkUnitHeartbeatRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    service = MissionService(repository)
+    try:
+        renewed = await service.heartbeat_work_unit(
+            mission_id,
+            work_unit_id,
+            lease_id=request.lease_id,
+            runner_id=str(user["id"]),
+            actor=build_human_actor(user),
+            lease_seconds=request.lease_seconds,
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return renewed.to_public_dict()
 
 
 @router.post("/{mission_id}/work-units/{work_unit_id}/recover")

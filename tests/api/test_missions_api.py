@@ -527,6 +527,82 @@ class MissionApiTests(unittest.TestCase):
             repository.events[-1].event_type, "work_unit.lifecycle.started"
         )
 
+    def test_heartbeat_renews_active_lease_and_appends_event(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        previous_expiry = datetime.now(timezone.utc) + timedelta(seconds=30)
+        repository.work_units = [
+            build_work_unit(
+                status="RUNNING",
+                lease=Lease(
+                    id="lease-running",
+                    runner_id="user-1",
+                    expires_at=previous_expiry,
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/heartbeat",
+            json={"leaseId": "lease-running", "leaseSeconds": 300},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "RUNNING")
+        self.assertEqual(body["lease"]["id"], "lease-running")
+        renewed_expiry = datetime.fromisoformat(body["lease"]["expiresAt"])
+        self.assertGreater(renewed_expiry, previous_expiry)
+        self.assertEqual(
+            repository.events[-1].event_type,
+            "work_unit.lifecycle.heartbeat",
+        )
+        self.assertEqual(repository.events[-1].payload["leaseId"], "lease-running")
+
+    def test_heartbeat_rejects_expired_or_mismatched_lease(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                status="LEASED",
+                lease=Lease(
+                    id="lease-expired",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/heartbeat",
+            json={"leaseId": "wrong-lease"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(repository.work_units[0].lease.id, "lease-expired")
+        self.assertEqual(repository.events, [])
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/heartbeat",
+            json={"leaseId": "lease-expired"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(repository.work_units[0].lease.id, "lease-expired")
+        self.assertEqual(repository.events, [])
+
     def test_expired_lease_is_recovered_to_retrying(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="user-1", status="RUNNING")

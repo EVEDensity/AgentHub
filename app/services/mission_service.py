@@ -413,6 +413,80 @@ class MissionService:
             await repository.append_event(event)
         return updated
 
+    async def heartbeat_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit:
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.status not in {
+                WorkUnitStatus.LEASED,
+                WorkUnitStatus.RUNNING,
+            }:
+                raise WorkUnitNotReadyError(
+                    "only LEASED or RUNNING work units can send a heartbeat"
+                )
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if work_unit.lease.id != lease_id:
+                raise LeaseOwnershipError("lease id does not match the work unit")
+            if work_unit.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("lease belongs to another runner")
+
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("work unit lease has expired")
+            renewed_lease = Lease(
+                id=work_unit.lease.id,
+                runner_id=work_unit.lease.runner_id,
+                expires_at=occurred_at + timedelta(seconds=lease_seconds),
+            )
+            updated = work_unit.model_copy(update={"lease": renewed_lease})
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.heartbeat",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "status": updated.status.value,
+                    "leaseId": renewed_lease.id,
+                    "runnerId": renewed_lease.runner_id,
+                    "previousExpiresAt": work_unit.lease.expires_at.isoformat(),
+                    "expiresAt": renewed_lease.expires_at.isoformat(),
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
+
     async def start_work_unit(
         self,
         mission_id: str,
