@@ -4,8 +4,8 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.api.v1.access import authorize_workspace
-from app.domain import InvalidStateTransition, Mission
+from app.api.v1.access import authorize_verifier, authorize_workspace
+from app.domain import EvidenceVerdict, InvalidStateTransition, Mission
 from app.repositories import MissionRepository
 from app.schemas.mission import (
     MissionCreateRequest,
@@ -15,6 +15,7 @@ from app.schemas.mission import (
     WorkUnitHeartbeatRequest,
     WorkUnitLeaseRequest,
     WorkUnitStartRequest,
+    WorkUnitVerificationRequest,
 )
 from app.services.auth_service import get_current_user
 from app.services.mission_service import (
@@ -22,6 +23,7 @@ from app.services.mission_service import (
     MissionService,
     WorkUnitNotFoundError,
     build_human_actor,
+    build_verifier_actor,
 )
 
 router = APIRouter(prefix="/missions", tags=["missions"])
@@ -390,6 +392,51 @@ async def complete_work_unit(
         user=user,
         repository=repository,
     )
+
+
+@router.post("/{mission_id}/work-units/{work_unit_id}/verify")
+async def verify_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    request: WorkUnitVerificationRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    authorize_verifier(user)
+    if user.get("role") != "admin" and request.verifier_id != str(user["id"]):
+        raise HTTPException(status_code=403, detail="Verifier identity mismatch")
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    service = MissionService(repository)
+    try:
+        evidence, updated_work_unit, updated_mission = (
+            await service.verify_work_unit(
+                mission_id,
+                work_unit_id,
+                criterion_id=request.criterion_id,
+                verifier_id=request.verifier_id,
+                verifier_version=request.verifier_version,
+                configuration_digest=request.configuration_digest,
+                verdict=EvidenceVerdict(request.verdict),
+                artifact_refs=request.artifact_refs,
+                summary=request.summary,
+                integrity_hash=request.integrity_hash,
+                actor=build_verifier_actor(user),
+            )
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "evidence": evidence.to_public_dict(),
+        "workUnit": updated_work_unit.to_public_dict(),
+        "mission": updated_mission.to_public_dict(),
+    }
 
 
 @router.post("/{mission_id}/work-units/{work_unit_id}/fail")

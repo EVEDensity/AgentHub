@@ -4,7 +4,7 @@ import json
 import unittest
 from typing import Any
 
-from app.domain import EventEnvelope, Lease, Mission, WorkUnit
+from app.domain import EventEnvelope, Evidence, Lease, Mission, WorkUnit
 from app.repositories import MissionRepository
 from tests.domain.factories import (
     build_contract,
@@ -163,6 +163,41 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.list_events("mis-1", after_sequence=-1)
         with self.assertRaises(ValueError):
             await self.repository.list_events("mis-1", limit=201)
+
+    async def test_list_evidence_reads_correlated_event_payloads(self) -> None:
+        evidence = Evidence(
+            id="evd-1",
+            mission_id="mis-1",
+            work_unit_id="wu-1",
+            criterion_id="tests",
+            verifier={"id": "pytest", "version": "9.0"},
+            verdict="PASS",
+            artifact_refs=[
+                {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+            ],
+            summary="All required tests passed.",
+            generated_at=build_mission().updated_at,
+            integrity_hash="sha256:" + "b" * 64,
+        )
+        event = build_event(
+            event_id="evt-evidence-1",
+            aggregate_type="evidence",
+            aggregate_id=evidence.id,
+            event_type="evidence.lifecycle.recorded",
+            correlation_id="mis-1",
+            payload=evidence.to_public_dict(),
+        )
+        self.database.all = [self.build_event_row(event)]
+
+        restored = await self.repository.list_evidence("mis-1", limit=20)
+
+        self.assertEqual(restored, [evidence])
+        sql, args = self.database.fetched_all[-1]
+        self.assertIn("aggregate_type='evidence'", sql)
+        self.assertIn("ORDER BY occurred_at ASC", sql)
+        self.assertEqual(args, ("mis-1", 20))
+        with self.assertRaises(ValueError):
+            await self.repository.list_evidence("mis-1", limit=0)
 
     async def test_work_unit_round_trip_and_mission_list(self) -> None:
         work_unit = build_work_unit()

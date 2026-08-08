@@ -9,7 +9,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.v1.missions import get_mission_repository, router
-from app.domain import EventEnvelope, Lease, Mission, MissionContract, WorkUnit
+from app.domain import (
+    EventEnvelope,
+    Evidence,
+    Lease,
+    Mission,
+    MissionContract,
+    WorkUnit,
+)
 from app.services.auth_service import get_current_user
 from tests.domain.factories import (
     build_contract,
@@ -102,6 +109,23 @@ class FakeMissionRepository:
             key=lambda event: event.sequence,
         )
         return events[:limit]
+
+    async def list_evidence(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[Evidence]:
+        evidence_events = sorted(
+            (
+                event
+                for event in self.events
+                if event.aggregate_type.value == "evidence"
+                and event.correlation_id == mission_id
+            ),
+            key=lambda event: event.occurred_at,
+        )
+        return [Evidence.model_validate(event.payload) for event in evidence_events[:limit]]
 
     async def list_missions(
         self,
@@ -606,6 +630,7 @@ class MissionApiTests(unittest.TestCase):
     def test_expired_lease_is_recovered_to_retrying(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
         repository.work_units = [
             build_work_unit(
                 status="LEASED",
@@ -634,6 +659,41 @@ class MissionApiTests(unittest.TestCase):
             repository.events[-1].event_type,
             "work_unit.lifecycle.lease_expired",
         )
+        self.assertFalse(repository.events[-1].payload["retryBudgetExhausted"])
+
+    def test_expired_lease_fails_when_retry_budget_is_exhausted(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(
+                status="RUNNING",
+                attempt=3,
+                lease=Lease(
+                    id="lease-expired",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post("/api/v1/missions/mis-1/work-units/wu-1/recover")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "FAILED")
+        self.assertEqual(response.json()["attempt"], 3)
+        self.assertIsNone(repository.work_units[0].lease)
+        self.assertEqual(
+            repository.events[-1].event_type,
+            "work_unit.lifecycle.lease_expired",
+        )
+        self.assertTrue(repository.events[-1].payload["retryBudgetExhausted"])
 
     def test_active_lease_cannot_be_recovered(self) -> None:
         repository = FakeMissionRepository()
@@ -733,6 +793,213 @@ class MissionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertEqual(repository.work_units[0].status.value, "RUNNING")
+        self.assertEqual(repository.events, [])
+
+    def test_independent_verifier_passes_work_unit_and_mission(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "All required tests passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["evidence"]["verdict"], "PASS")
+        self.assertEqual(body["workUnit"]["status"], "SUCCEEDED")
+        self.assertEqual(body["mission"]["status"], "SUCCEEDED")
+        self.assertEqual(
+            [event.event_type for event in repository.events],
+            [
+                "evidence.lifecycle.recorded",
+                "work_unit.lifecycle.verified",
+                "mission.lifecycle.verifying",
+                "mission.lifecycle.succeeded",
+            ],
+        )
+
+    def test_mission_waits_for_all_required_criteria(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                {
+                    "id": "tests",
+                    "kind": "test",
+                    "description": "Tests pass",
+                    "required": True,
+                },
+                {
+                    "id": "security",
+                    "kind": "security",
+                    "description": "Security scan passes",
+                    "required": True,
+                },
+            ]
+        )
+        repository.work_units = [
+            build_work_unit(id="wu-tests", status="VERIFYING"),
+            build_work_unit(id="wu-security", status="VERIFYING"),
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+            )
+        )
+        request = {
+            "verifierId": "verifier-1",
+            "verifierVersion": "9.0",
+            "verdict": "PASS",
+            "artifactRefs": [
+                {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+            ],
+            "summary": "Verification passed.",
+            "integrityHash": "sha256:" + "b" * 64,
+        }
+
+        first = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-tests/verify",
+            json={**request, "criterionId": "tests"},
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json()["workUnit"]["status"], "SUCCEEDED")
+        self.assertEqual(first.json()["mission"]["status"], "RUNNING")
+
+        second = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-security/verify",
+            json={**request, "criterionId": "security"},
+        )
+
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["workUnit"]["status"], "SUCCEEDED")
+        self.assertEqual(second.json()["mission"]["status"], "SUCCEEDED")
+
+    def test_inconclusive_evidence_does_not_claim_success(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "INCONCLUSIVE",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "The test environment was unavailable.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["workUnit"]["status"], "VERIFYING")
+        self.assertEqual(response.json()["mission"]["status"], "RUNNING")
+        self.assertEqual(
+            repository.events[-1].event_type,
+            "work_unit.lifecycle.verification_inconclusive",
+        )
+
+    def test_non_verifier_cannot_record_evidence(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "pytest",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "All required tests passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(repository.events, [])
+
+    def test_verifier_cannot_impersonate_another_verifier(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "other-verifier",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "All required tests passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(repository.events, [])
 
     def test_fail_and_retry_require_lease_and_respect_retry_budget(self) -> None:

@@ -5,14 +5,18 @@ from datetime import datetime, timedelta, timezone
 
 from app.domain import (
     ActorRef,
+    ActorType,
     ArtifactRef,
     EventEnvelope,
+    Evidence,
+    EvidenceVerdict,
     Lease,
     Mission,
     MissionContract,
     MissionSource,
     MissionStatus,
     OutputSpec,
+    VerifierRef,
     WorkUnit,
     WorkUnitStatus,
     transition_mission,
@@ -24,6 +28,14 @@ from app.repositories import MissionRepository
 def build_human_actor(user: dict) -> ActorRef:
     return ActorRef(
         type="human",
+        id=str(user["id"]),
+        display_name=str(user["name"]) if user.get("name") else None,
+    )
+
+
+def build_verifier_actor(user: dict) -> ActorRef:
+    return ActorRef(
+        type=ActorType.VERIFIER,
         id=str(user["id"]),
         display_name=str(user["name"]) if user.get("name") else None,
     )
@@ -529,6 +541,206 @@ class MissionService:
             artifact_refs=artifact_refs,
         )
 
+    async def verify_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        criterion_id: str,
+        verifier_id: str,
+        verifier_version: str,
+        configuration_digest: str | None,
+        verdict: EvidenceVerdict,
+        artifact_refs: list[ArtifactRef],
+        summary: str,
+        integrity_hash: str,
+        actor: ActorRef,
+    ) -> tuple[Evidence, WorkUnit, Mission]:
+        if actor.type != ActorType.VERIFIER:
+            raise ValueError("only verifier actors can record Evidence")
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status not in {MissionStatus.RUNNING, MissionStatus.VERIFYING}:
+                raise WorkUnitNotReadyError(
+                    "mission must be RUNNING or VERIFYING to record Evidence"
+                )
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.status != WorkUnitStatus.VERIFYING:
+                raise WorkUnitNotReadyError(
+                    "Evidence can only be recorded for a VERIFYING work unit"
+                )
+
+            contract = await repository.get_contract(mission.contract_id)
+            if contract is None:
+                raise WorkUnitNotReadyError("mission contract not found")
+            if criterion_id not in {
+                criterion.id for criterion in contract.acceptance_criteria
+            }:
+                raise WorkUnitNotReadyError(
+                    "Evidence criterion is not part of the mission contract"
+                )
+
+            occurred_at = datetime.now(timezone.utc)
+            evidence = Evidence(
+                id=new_identifier("evd"),
+                mission_id=mission_id,
+                work_unit_id=work_unit_id,
+                criterion_id=criterion_id,
+                verifier=VerifierRef(
+                    id=verifier_id,
+                    version=verifier_version,
+                    configuration_digest=configuration_digest,
+                ),
+                verdict=verdict,
+                artifact_refs=artifact_refs,
+                summary=summary,
+                generated_at=occurred_at,
+                integrity_hash=integrity_hash,
+            )
+            evidence_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="evidence",
+                aggregate_id=evidence.id,
+                sequence=1,
+                event_type="evidence.lifecycle.recorded",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload=evidence.to_public_dict(),
+                schema_version=1,
+            )
+            await repository.append_event(evidence_event)
+
+            updated_work_unit = work_unit
+            work_unit_event_type = {
+                EvidenceVerdict.PASS: "work_unit.lifecycle.verified",
+                EvidenceVerdict.FAIL: "work_unit.lifecycle.verification_failed",
+                EvidenceVerdict.INCONCLUSIVE: (
+                    "work_unit.lifecycle.verification_inconclusive"
+                ),
+            }[verdict]
+            if verdict != EvidenceVerdict.INCONCLUSIVE:
+                updated_work_unit = transition_work_unit(
+                    work_unit,
+                    (
+                        WorkUnitStatus.SUCCEEDED
+                        if verdict == EvidenceVerdict.PASS
+                        else WorkUnitStatus.FAILED
+                    ),
+                    occurred_at=occurred_at,
+                )
+                await repository.update_work_unit(updated_work_unit)
+            work_unit_sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit_id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            work_unit_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit_id,
+                sequence=work_unit_sequence,
+                event_type=work_unit_event_type,
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated_work_unit.status.value,
+                    "evidenceId": evidence.id,
+                    "verdict": verdict.value,
+                },
+                schema_version=1,
+            )
+            await repository.append_event(work_unit_event)
+
+            updated_mission = mission
+            if verdict == EvidenceVerdict.PASS:
+                work_units = await repository.list_work_units(mission_id)
+                evidence_history = await repository.list_evidence(mission_id)
+                passed_criteria = {
+                    item.criterion_id
+                    for item in evidence_history
+                    if item.verdict == EvidenceVerdict.PASS
+                }
+                required_criteria = {
+                    criterion.id
+                    for criterion in contract.acceptance_criteria
+                    if criterion.required
+                }
+                if (
+                    work_units
+                    and all(
+                        item.status == WorkUnitStatus.SUCCEEDED
+                        for item in work_units
+                    )
+                    and required_criteria <= passed_criteria
+                ):
+                    mission_sequence = await repository.get_last_event_sequence(
+                        mission_id
+                    )
+                    if mission.status == MissionStatus.RUNNING:
+                        updated_mission = transition_mission(
+                            mission,
+                            MissionStatus.VERIFYING,
+                            occurred_at=occurred_at,
+                        )
+                        mission_sequence += 1
+                        await repository.append_event(
+                            EventEnvelope(
+                                event_id=new_identifier("evt"),
+                                aggregate_type="mission",
+                                aggregate_id=mission_id,
+                                sequence=mission_sequence,
+                                event_type="mission.lifecycle.verifying",
+                                actor=actor,
+                                occurred_at=occurred_at,
+                                correlation_id=mission_id,
+                                payload={
+                                    "previousStatus": mission.status.value,
+                                    "status": updated_mission.status.value,
+                                },
+                                schema_version=1,
+                            )
+                        )
+                    updated_mission = transition_mission(
+                        updated_mission,
+                        MissionStatus.SUCCEEDED,
+                        occurred_at=occurred_at,
+                    )
+                    mission_sequence += 1
+                    await repository.append_event(
+                        EventEnvelope(
+                            event_id=new_identifier("evt"),
+                            aggregate_type="mission",
+                            aggregate_id=mission_id,
+                            sequence=mission_sequence,
+                            event_type="mission.lifecycle.succeeded",
+                            actor=actor,
+                            occurred_at=occurred_at,
+                            correlation_id=mission_id,
+                            payload={
+                                "previousStatus": (
+                                    MissionStatus.VERIFYING.value
+                                    if mission.status == MissionStatus.RUNNING
+                                    else mission.status.value
+                                ),
+                                "status": updated_mission.status.value,
+                            },
+                            schema_version=1,
+                        )
+                    )
+                    await repository.update_mission(updated_mission)
+
+        return evidence, updated_work_unit, updated_mission
+
     async def fail_work_unit(
         self,
         mission_id: str,
@@ -676,9 +888,19 @@ class MissionService:
             occurred_at = datetime.now(timezone.utc)
             if work_unit.lease.expires_at > occurred_at:
                 raise LeaseExpiredError("work unit lease has not expired")
+            contract = await repository.get_contract(mission.contract_id)
+            if contract is None:
+                raise WorkUnitNotReadyError("mission contract not found")
+            retry_budget_exhausted = (
+                work_unit.attempt >= contract.budgets.retries + 1
+            )
             updated = transition_work_unit(
                 work_unit,
-                WorkUnitStatus.RETRYING,
+                (
+                    WorkUnitStatus.FAILED
+                    if retry_budget_exhausted
+                    else WorkUnitStatus.RETRYING
+                ),
                 occurred_at=occurred_at,
             )
             sequence = (
@@ -702,6 +924,7 @@ class MissionService:
                     "status": updated.status.value,
                     "leaseId": work_unit.lease.id,
                     "attempt": updated.attempt,
+                    "retryBudgetExhausted": retry_budget_exhausted,
                 },
                 schema_version=1,
             )

@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
-from app.domain import EventEnvelope, Mission, MissionContract, WorkUnit
+from app.domain import EventEnvelope, Evidence, Mission, MissionContract, WorkUnit
 
 Execute = Callable[..., Awaitable[None]]
 FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
@@ -227,6 +227,30 @@ class MissionRepository:
             limit,
         )
         return [self._event_from_row(row) for row in rows]
+
+    async def list_evidence(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 200,
+    ) -> list[Evidence]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        rows = await self._fetch_all(
+            """SELECT payload
+               FROM mission_events
+               WHERE aggregate_type='evidence' AND correlation_id=$1
+               ORDER BY occurred_at ASC
+               LIMIT $2""",
+            mission_id,
+            limit,
+        )
+        return [
+            Evidence.model_validate(
+                _decode_json_object(row["payload"], "payload")
+            )
+            for row in rows
+        ]
 
     async def list_missions(
         self,

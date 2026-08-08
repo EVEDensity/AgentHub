@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -102,3 +102,22 @@ class WorkUnitCompletionRequest(BaseModel):
 
     lease_id: Annotated[str, Field(min_length=1, max_length=255)]
     artifact_refs: Annotated[list[ArtifactRef], Field(min_length=1)]
+
+
+class WorkUnitVerificationRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    criterion_id: Annotated[str, Field(min_length=1, max_length=255)]
+    verifier_id: Annotated[str, Field(min_length=1, max_length=255)]
+    verifier_version: Annotated[str, Field(min_length=1, max_length=255)]
+    configuration_digest: Annotated[
+        str, Field(pattern=r"^sha256:[a-fA-F0-9]{64}$")
+    ] | None = None
+    verdict: Literal["PASS", "FAIL", "INCONCLUSIVE"]
+    artifact_refs: Annotated[list[ArtifactRef], Field(min_length=1)]
+    summary: Annotated[str, Field(min_length=1, max_length=10000)]
+    integrity_hash: Annotated[str, Field(pattern=r"^sha256:[a-fA-F0-9]{64}$")]

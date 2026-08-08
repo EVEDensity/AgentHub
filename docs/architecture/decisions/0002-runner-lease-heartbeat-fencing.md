@@ -25,6 +25,10 @@ Mission Control exposes a runner-scoped heartbeat operation for a WorkUnit.
   `work_unit.lifecycle.heartbeat` event containing the old and new expiry.
 - An expired, mismatched, or terminal lease is rejected with a conflict; it
   cannot be revived by heartbeat. Expired work must use the recovery path.
+- Recovery returns a WorkUnit to `RETRYING` only while its Contract retry
+  budget permits another attempt. Once exhausted, recovery transitions the
+  WorkUnit to `FAILED` and records the budget exhaustion in the lease-expired
+  event.
 - Heartbeat does not imply completion, verification, artifact creation, or a
   Mission terminal transition.
 
@@ -34,7 +38,8 @@ Runners can safely maintain ownership during execution, and stale runners are
 fenced by the same durable lease identity used for startup and terminal
 commands. The system records heartbeat history, adding event volume proportional
 to runner activity. Clients must renew before expiry and use recovery when a
-lease has already expired.
+lease has already expired. Recovery cannot create attempts beyond the immutable
+Contract retry budget.
 
 ## Alternatives considered
 
@@ -48,7 +53,8 @@ lease has already expired.
 ## Verification
 
 - Mission API tests cover active renewal, expiry extension, mismatched lease
-  rejection, expired lease rejection, and event persistence.
+  rejection, expired lease rejection, recovery, retry-budget exhaustion, and
+  event persistence.
 - The service validates the lease duration to the same one-hour bound as the
   HTTP schema.
 - Existing lease/start/recovery tests continue to pass, preserving the
