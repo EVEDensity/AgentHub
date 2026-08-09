@@ -110,7 +110,6 @@ func TestBuiltinToolsDeclareStableCapabilities(t *testing.T) {
 	want := map[string]string{
 		"knowledge_search": "knowledge.search",
 		"list_agents":      "agent.read",
-		"call_agent":       "agent.dispatch",
 		"list_sessions":    "session.read",
 		"create_workflow":  "workflow.create",
 		"ingest_document":  "document.ingest",
@@ -390,51 +389,28 @@ func TestJSONResourceRejectsDownstreamFailureAndInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestCallAgentPropagatesAuthenticatedTenantActorAndCredential(t *testing.T) {
-	var payload map[string]any
-	var authorization string
-	var decodeErr error
-	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authorization = r.Header.Get("Authorization")
-		decodeErr = json.NewDecoder(r.Body).Decode(&payload)
-		if decodeErr != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"published":true}`))
+func TestCallAgentIsNotAdvertisedOrDispatched(t *testing.T) {
+	called := false
+	downstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
 	}))
 	defer downstream.Close()
-
-	identity, wantAuthorization := authenticatedIdentityContext(t)
-	ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
-		MissionID:  "mission-1",
-		WorkUnitID: "work-unit-1",
-		Attempt:    1,
-		Capability: "agent.dispatch",
-		Scope:      map[string]any{},
-		TraceID:    "trace-real",
-	})
 	r := New("http://knowledge.test", downstream.URL)
-	_, err := r.CallTool(ctx, "call_agent", map[string]any{
-		"agent_id":   "reviewer",
-		"message":    "review this",
-		"session_id": "session-real",
+
+	for _, tool := range r.ListTools() {
+		if tool.Name == "call_agent" {
+			t.Fatal("call_agent must not be advertised without a controlled WorkUnit delegation path")
+		}
+	}
+	_, err := r.CallTool(executionContext("agent.dispatch"), "call_agent", map[string]any{
+		"agent_id": "reviewer",
+		"message":  "review this",
 	})
-	if err != nil {
-		t.Fatalf("call agent: %v", err)
+	if err == nil || err.Error() != `tool "call_agent" not found` {
+		t.Fatalf("error = %v, want explicit tool not found", err)
 	}
-	if decodeErr != nil {
-		t.Fatalf("decode publish body: %v", decodeErr)
-	}
-	if payload["tenant_id"] != "tenant-real" || payload["actor_id"] != "actor-real" {
-		t.Fatalf("downstream identity = tenant:%v actor:%v", payload["tenant_id"], payload["actor_id"])
-	}
-	if payload["trace_id"] != "trace-real" {
-		t.Fatalf("trace_id = %v, want trace-real", payload["trace_id"])
-	}
-	if authorization != wantAuthorization {
-		t.Fatal("verified credential was not forwarded")
+	if called {
+		t.Fatal("unavailable agent delegation must not publish a session message")
 	}
 }
 
@@ -667,7 +643,6 @@ func TestTenantScopedToolsFailBeforeNetworkWithoutAuthenticatedIdentity(t *testi
 		capability string
 		arguments  map[string]any
 	}{
-		{name: "call_agent", capability: "agent.dispatch", arguments: map[string]any{"agent_id": "reviewer", "message": "review"}},
 		{name: "ingest_document", capability: "document.ingest", arguments: map[string]any{"content": "content", "title": "doc"}},
 		{name: "list_sessions", capability: "session.read", arguments: map[string]any{}},
 		{name: "list_agents", capability: "agent.read", arguments: map[string]any{}},
@@ -682,18 +657,6 @@ func TestTenantScopedToolsFailBeforeNetworkWithoutAuthenticatedIdentity(t *testi
 	}
 	if called {
 		t.Fatal("downstream must not be called without authenticated identity")
-	}
-}
-
-func TestCallAgentRequiresVerifiedDownstreamCredential(t *testing.T) {
-	ctx := iam.WithTenantContext(executionContext("agent.dispatch"), iam.TenantContext{
-		TenantID: "tenant-real",
-		UserID:   "actor-real",
-	})
-	r := New("http://knowledge.test", "http://gateway.test")
-	_, err := r.CallTool(ctx, "call_agent", map[string]any{"agent_id": "reviewer", "message": "review"})
-	if !errors.Is(err, ErrDownstreamCredentialRequired) {
-		t.Fatalf("error = %v, want ErrDownstreamCredentialRequired", err)
 	}
 }
 

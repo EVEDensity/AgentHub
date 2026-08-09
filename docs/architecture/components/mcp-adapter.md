@@ -31,12 +31,16 @@ scope is snapshotted into each call only after authorization.
   not exactly match that assignment. The tool handler is never entered on a
   mismatch.
 - Tenant propagation: tenant-scoped Registry tools obtain tenant and actor
-  only from the verified IAM context. Agent dispatch forwards the verified
-  Bearer credential to the platform Gateway; document ingest records the actor
-  in metadata. Session listing forwards the verified tenant and credential to
-  the Gateway's `/platform/sessions` route; Gateway owns authentication and
-  proxies the bounded query to Session Service. Missing identity or required
-  downstream credential fails before any network request.
+  only from the verified IAM context. Document ingest records the actor in
+  metadata. Session listing forwards the verified tenant and credential to the
+  Gateway's `/platform/sessions` route; Gateway owns authentication and proxies
+  the bounded query to Session Service. Missing identity or required downstream
+  credential fails before any network request.
+- Agent delegation: `call_agent` is not advertised by the Registry. Its former
+  implementation published a session message and returned the publish receipt,
+  which did not create a WorkUnit or prove Agent execution. The tool may return
+  only after a durable, ArtifactRef-based Mission Control delegation command is
+  available.
 - Agent catalog projection: `list_agents` forwards the verified tenant and
   credential to Gateway `/platform/agent-registry`. Gateway derives the actor
   from IAM context, requires `agent:read`, reads the existing user-scoped Agent

@@ -235,25 +235,6 @@ func (r *Registry) registerAgentHubTools() {
 		Handler:    r.listAgentsHandler,
 	})
 
-	// ── Call Agent ───────────────────────────────────────────────────
-	r.registerTool(RegisteredTool{
-		Definition: protocol.ToolDefinition{
-			Name:        "call_agent",
-			Description: "Send a message to a specific agent and get its response. Supports @AgentName syntax for multi-agent routing.",
-			InputSchema: protocol.ToolInputSchema{
-				Type: "object",
-				Properties: map[string]protocol.SchemaProperty{
-					"agent_id":   {Type: "string", Description: "The agent ID to call (e.g., 'Architect', 'CodeGen')"},
-					"message":    {Type: "string", Description: "The message/prompt to send to the agent"},
-					"session_id": {Type: "string", Description: "Optional session ID for conversation continuity"},
-				},
-				Required: []string{"agent_id", "message"},
-			},
-		},
-		Capability: "agent.dispatch",
-		Handler:    r.callAgentHandler,
-	})
-
 	// ── List Sessions ────────────────────────────────────────────────
 	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
@@ -500,57 +481,6 @@ func (r *Registry) fetchAgentCatalog(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("gateway returned invalid JSON")
 	}
 	return data, nil
-}
-
-func (r *Registry) callAgentHandler(ctx context.Context, args map[string]any) (*protocol.ToolCallResult, error) {
-	agentID := getStringArg(args, "agent_id")
-	message := getStringArg(args, "message")
-	if agentID == "" || message == "" {
-		return errorResult("agent_id and message are required"), nil
-	}
-	sessionID := getStringArg(args, "session_id")
-	if sessionID == "" {
-		sessionID = fmt.Sprintf("mcp-%d", time.Now().UnixMilli())
-	}
-	principal, err := tenantPrincipal(ctx)
-	if err != nil {
-		return nil, err
-	}
-	authorization, ok := mcpauth.AuthorizationHeaderFromContext(ctx)
-	if !ok {
-		return nil, ErrDownstreamCredentialRequired
-	}
-	traceID := fmt.Sprintf("mcp-trace-%d", time.Now().UnixNano())
-	if request, ok := transport.RequestContextFromContext(ctx); ok && request.TraceID != "" {
-		traceID = request.TraceID
-	}
-
-	body, _ := json.Marshal(map[string]any{
-		"tenant_id":  principal.TenantID,
-		"session_id": sessionID,
-		"trace_id":   traceID,
-		"actor_id":   principal.UserID,
-		"content":    message,
-		"metadata":   map[string]any{"agent_id": agentID, "source": "mcp-gateway"},
-	})
-
-	req, _ := http.NewRequestWithContext(ctx, "POST", r.gatewayURL+"/publish", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", authorization)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return errorResult(fmt.Sprintf("Agent call failed: %v", err)), nil
-	}
-	defer resp.Body.Close()
-
-	data, _ := io.ReadAll(resp.Body)
-	return &protocol.ToolCallResult{
-		Content: []protocol.ToolContent{
-			{Type: "text", Text: string(data)},
-		},
-	}, nil
 }
 
 func (r *Registry) listSessionsHandler(ctx context.Context, args map[string]any) (*protocol.ToolCallResult, error) {

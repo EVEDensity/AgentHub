@@ -5,6 +5,9 @@
 > Date: 2026-08-09
 > Scope: Tenant-scoped MCP Registry adapters
 
+The `call_agent` portion of this decision is superseded by ADR-0028. The
+document-ingest identity decision remains active.
+
 ## Context
 
 The MCP Registry's `call_agent` and `ingest_document` adapters wrote
