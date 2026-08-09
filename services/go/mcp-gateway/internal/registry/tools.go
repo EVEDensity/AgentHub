@@ -181,7 +181,7 @@ func (r *Registry) registerAgentHubTools() {
 	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "list_agents",
-			Description: "List all registered agents in the AgentHub platform with their capabilities, status, and configuration.",
+			Description: "List the authenticated actor's available agents with safe catalog metadata, capabilities, and status.",
 			InputSchema: protocol.ToolInputSchema{
 				Type:       "object",
 				Properties: map[string]protocol.SchemaProperty{},
@@ -386,15 +386,45 @@ func (r *Registry) knowledgeSearchHandler(ctx context.Context, args map[string]a
 }
 
 func (r *Registry) listAgentsHandler(ctx context.Context, _ map[string]any) (*protocol.ToolCallResult, error) {
-	req, _ := http.NewRequestWithContext(ctx, "GET", r.gatewayURL+"/platform/agent-registry", nil)
+	principal, err := tenantPrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	authorization, ok := mcpauth.AuthorizationHeaderFromContext(ctx)
+	if !ok {
+		return nil, ErrDownstreamCredentialRequired
+	}
+
+	endpoint, err := url.Parse(strings.TrimRight(r.gatewayURL, "/") + "/platform/agent-registry")
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to build agent registry request: %v", err)), nil
+	}
+	query := endpoint.Query()
+	query.Set("tenant_id", principal.TenantID)
+	endpoint.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to build agent registry request: %v", err)), nil
+	}
+	req.Header.Set("Authorization", authorization)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Failed to list agents: %v", err)), nil
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return errorResult(fmt.Sprintf("Failed to list agents: gateway returned HTTP %d", resp.StatusCode)), nil
+	}
 
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to read agent registry response: %v", err)), nil
+	}
+	if !json.Valid(data) {
+		return errorResult("Failed to list agents: gateway returned invalid JSON"), nil
+	}
 	return &protocol.ToolCallResult{
 		Content: []protocol.ToolContent{
 			{Type: "text", Text: string(data)},

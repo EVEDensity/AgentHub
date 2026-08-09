@@ -439,6 +439,8 @@ func main() {
 	// Session Service owns durable chat sessions; Gateway owns public auth and routing.
 	sessions := newSessionProxy(parseSessionServiceURL())
 	mux.Handle("/platform/sessions", sessions)
+	agents := newAgentRegistryHandler(pool)
+	mux.Handle("/platform/agent-registry", iam.RequireScope(iam.ScopeAgentRead)(agents))
 
 	// ── Agent Versions (P1-6) ───────────────────────────────────────
 	agentVersions := newAgentVersionHandler()

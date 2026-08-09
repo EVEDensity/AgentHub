@@ -37,6 +37,12 @@ scope is snapshotted into each call only after authorization.
   the Gateway's `/platform/sessions` route; Gateway owns authentication and
   proxies the bounded query to Session Service. Missing identity or required
   downstream credential fails before any network request.
+- Agent catalog projection: `list_agents` forwards the verified tenant and
+  credential to Gateway `/platform/agent-registry`. Gateway derives the actor
+  from IAM context, requires `agent:read`, reads the existing user-scoped Agent
+  catalog as a read-only compatibility projection, and excludes provider
+  credentials, base URLs, raw configuration, and avatar data from the MCP
+  response.
 - Audit: `MCPToolAuditEvent` containing request ID, correlation context, tool
   name, success, duration, and sanitized error type only.
 

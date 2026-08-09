@@ -25,6 +25,9 @@ not create a competing Mission or WorkUnit state machine.
   synthetic default. Its SSE session endpoints remain compatibility transport
   only. Session listing enters through the authenticated Gateway
   `/platform/sessions` proxy and is persisted/read by `session-service`.
+  Agent listing enters through Gateway `/platform/agent-registry`, which emits
+  a credential-free, actor-scoped projection of the configured Agent catalog;
+  AgentNet and Realtime role registries are not catalog truth.
 - NATS subjects and payloads require versioned contracts before production use.
 
 Before adding a service, document its independent scaling, security, failure, or

@@ -250,6 +250,70 @@ func TestIngestDocumentPropagatesAuthenticatedTenantAndActor(t *testing.T) {
 	}
 }
 
+func TestListAgentsPropagatesAuthenticatedTenantAndCredential(t *testing.T) {
+	var tenantID, authorization string
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID = r.URL.Query().Get("tenant_id")
+		authorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agents":[]}`))
+	}))
+	defer downstream.Close()
+
+	identity, wantAuthorization := authenticatedIdentityContext(t)
+	ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+		MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+		Capability: "agent.read", Scope: map[string]any{},
+	})
+	result, err := New("http://knowledge.test", downstream.URL).CallTool(ctx, "list_agents", map[string]any{
+		"tenant_id": "tenant-attacker",
+	})
+	if err != nil {
+		t.Fatalf("list agents: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("list agents returned tool error: %+v", result)
+	}
+	if tenantID != "tenant-real" {
+		t.Fatalf("tenant_id = %q, want authenticated tenant", tenantID)
+	}
+	if authorization != wantAuthorization {
+		t.Fatal("verified credential was not forwarded")
+	}
+}
+
+func TestListAgentsRejectsDownstreamFailureAndInvalidJSON(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "non-success status", status: http.StatusForbidden, body: `{"error":"forbidden"}`},
+		{name: "invalid json", status: http.StatusOK, body: `not-json`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer downstream.Close()
+			identity, _ := authenticatedIdentityContext(t)
+			ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+				MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+				Capability: "agent.read", Scope: map[string]any{},
+			})
+			result, err := New("http://knowledge.test", downstream.URL).CallTool(ctx, "list_agents", nil)
+			if err != nil {
+				t.Fatalf("list agents: %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("downstream failure must be returned as a tool error")
+			}
+		})
+	}
+}
+
 func TestListSessionsPropagatesAuthenticatedTenantLimitAndCredential(t *testing.T) {
 	var tenantID, limit, authorization string
 	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -379,6 +443,7 @@ func TestTenantScopedToolsFailBeforeNetworkWithoutAuthenticatedIdentity(t *testi
 		{name: "call_agent", capability: "agent.dispatch", arguments: map[string]any{"agent_id": "reviewer", "message": "review"}},
 		{name: "ingest_document", capability: "document.ingest", arguments: map[string]any{"content": "content", "title": "doc"}},
 		{name: "list_sessions", capability: "session.read", arguments: map[string]any{}},
+		{name: "list_agents", capability: "agent.read", arguments: map[string]any{}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -412,6 +477,18 @@ func TestListSessionsRequiresVerifiedDownstreamCredential(t *testing.T) {
 	})
 	r := New("http://knowledge.test", "http://gateway.test")
 	_, err := r.CallTool(ctx, "list_sessions", nil)
+	if !errors.Is(err, ErrDownstreamCredentialRequired) {
+		t.Fatalf("error = %v, want ErrDownstreamCredentialRequired", err)
+	}
+}
+
+func TestListAgentsRequiresVerifiedDownstreamCredential(t *testing.T) {
+	ctx := iam.WithTenantContext(executionContext("agent.read"), iam.TenantContext{
+		TenantID: "tenant-real",
+		UserID:   "actor-real",
+	})
+	r := New("http://knowledge.test", "http://gateway.test")
+	_, err := r.CallTool(ctx, "list_agents", nil)
 	if !errors.Is(err, ErrDownstreamCredentialRequired) {
 		t.Fatalf("error = %v, want ErrDownstreamCredentialRequired", err)
 	}
