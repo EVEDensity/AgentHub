@@ -26,9 +26,11 @@ import (
 	"syscall"
 	"time"
 
+	mcpauth "github.com/agenthub/mcp-gateway/internal/auth"
 	"github.com/agenthub/mcp-gateway/internal/protocol"
 	"github.com/agenthub/mcp-gateway/internal/registry"
 	"github.com/agenthub/mcp-gateway/internal/transport"
+	"github.com/agenthub/platform/shared/iam"
 )
 
 func main() {
@@ -37,9 +39,13 @@ func main() {
 	addr := getenv("MCP_ADDR", ":8099")
 	knowledgeURL := getenv("KNOWLEDGE_URL", "http://127.0.0.1:8092")
 	gatewayURL := getenv("GATEWAY_URL", "http://127.0.0.1:8081")
+	jwtSecret := os.Getenv("JWT_SECRET")
 
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[mcp-gateway] ")
+	if transportMode != "stdio" && jwtSecret == "" && os.Getenv("MCP_ALLOW_INSECURE_DEV_AUTH") != "true" {
+		log.Fatal("JWT_SECRET is required for HTTP transport; set MCP_ALLOW_INSECURE_DEV_AUTH=true only for local development")
+	}
 
 	// ── Initialize registry with AgentHub tools ──────────────────────
 	reg := registry.New(knowledgeURL, gatewayURL)
@@ -78,6 +84,19 @@ func main() {
 		return responses, nil
 	}
 
+	// MCP RPC authentication reuses the platform IAM verifier. The transport
+	// remains protocol-only; this callback intersects the authenticated
+	// principal's permissions with the Contract capability declaration.
+	issuer := iam.NewTokenIssuer(
+		[]byte(jwtSecret),
+		getenv("IAM_ISSUER", "iam-service"),
+		time.Hour,
+	)
+	statelessRPC := transport.NewStatelessHTTPHandlerWithAuthorizer(dispatcher, mcpauth.AuthorizeMCP)
+	rpcHandler := mcpauth.Middleware(issuer, statelessRPC, func(_ *http.Request, reason string) {
+		log.Printf("MCP authorization denied: %s", reason)
+	})
+
 	// ── Start transport ──────────────────────────────────────────────
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -86,7 +105,7 @@ func main() {
 	case "stdio":
 		runSTDIO(ctx, dispatcher)
 	default:
-		runSSE(ctx, addr, dispatcher)
+		runSSE(ctx, addr, dispatcher, rpcHandler)
 	}
 }
 
@@ -102,7 +121,7 @@ func runSTDIO(ctx context.Context, dispatcher transport.MessageHandler) {
 
 // ── SSE (HTTP) Mode ──────────────────────────────────────────────────
 
-func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandler) {
+func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandler, rpcHandler http.Handler) {
 	sseHandler := transport.NewSSEHandler(dispatcher, "/mcp")
 
 	mux := http.NewServeMux()
@@ -110,7 +129,7 @@ func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandle
 	mux.Handle("/mcp/sse", sseHandler)
 	mux.Handle("/mcp/message", sseHandler)
 	// Stateless JSON-RPC endpoint; every request carries its own execution context.
-	mux.Handle("/mcp/rpc", transport.NewStatelessHTTPHandler(dispatcher))
+	mux.Handle("/mcp/rpc", rpcHandler)
 
 	// Health + info endpoints
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

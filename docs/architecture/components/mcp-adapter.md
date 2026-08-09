@@ -22,7 +22,8 @@ scope is snapshotted into each call only after authorization.
 - Transport: an HTTP(S) endpoint receiving JSON-RPC `tools/call`; no
   `initialize` handshake, `sessionId`, or client-side MCP session store. The
   bundled Go Gateway exposes this contract at `POST /mcp/rpc` and validates
-  the required context headers before dispatch.
+  the required context headers before dispatch. The HTTP route also requires
+  a Bearer token verified by the shared IAM package.
 - Output: normalized `MCPToolResult`, with text content joined for Harness
   feedback and MCP `isError` preserved.
 - Audit: `MCPToolAuditEvent` containing request ID, correlation context, tool
@@ -41,8 +42,17 @@ an untracked result.
 The adapter does not own MCP server sessions, tool registration, Mission state,
 WorkUnit transitions, or durable audit storage. Capability authorization is
 still supplied by `CapabilityToolResolver`; the binding forwards the resolved
-capability scope but does not widen it. Audit events intentionally exclude
-arguments, prompts, and tool result content. A future durable audit adapter
-must add retention and ACL policy before production persistence. The Go
-transport only attaches validated context to the request; it does not write
-Mission state or treat headers as authorization proof by themselves.
+capability scope but does not widen it. The server intersects that declaration
+with the authenticated principal's `tool:execute` scope, optional
+`required_scope`, and optional tenant constraint. Tenant and actor identity are
+propagated in Go `context.Context` independently from the untrusted execution
+headers. Audit events intentionally exclude arguments, prompts, and tool
+result content. A future durable audit adapter must add retention and ACL
+policy before production persistence. The Go transport only attaches validated
+context to the request; it does not write Mission state or treat headers as
+authorization proof by themselves.
+
+HTTP mode fails to start without `JWT_SECRET`. Local unsigned IAM dev mode
+requires the explicit `MCP_ALLOW_INSECURE_DEV_AUTH=true` opt-in. The stateless
+RPC route accepts credentials only from the Authorization header; the shared
+IAM query-token compatibility path is not exposed there.

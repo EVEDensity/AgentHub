@@ -149,3 +149,68 @@ func TestStatelessHTTPTransportReturnsNoContentForNotifications(t *testing.T) {
 		t.Fatalf("notification body = %q, want empty", body)
 	}
 }
+
+func TestStatelessHTTPTransportRunsAuthorizerAfterContextValidation(t *testing.T) {
+	var observed MCPRequestContext
+	transport := NewStatelessHTTPTransportWithAuthorizer(
+		func(ctx context.Context, _ json.RawMessage) ([]json.RawMessage, error) {
+			if got, ok := RequestContextFromContext(ctx); ok {
+				observed = got
+			}
+			return []json.RawMessage{json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{}}`)}, nil
+		},
+		1024,
+		func(ctx context.Context, request MCPRequestContext) error {
+			if _, ok := RequestContextFromContext(ctx); !ok {
+				return errors.New("validated context missing")
+			}
+			if request.Capability != "repository.read" {
+				return errors.New("unexpected capability")
+			}
+			return nil
+		},
+	)
+	recorder := httptest.NewRecorder()
+	transport.ServeHTTP(recorder, validStatelessRequest(t, `{"jsonrpc":"2.0","id":1}`))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if observed.MissionID != "mis-1" {
+		t.Fatalf("authorizer context was not preserved: %+v", observed)
+	}
+}
+
+func TestStatelessHTTPTransportRejectsUnauthorizedRequestBeforeDispatch(t *testing.T) {
+	transport := NewStatelessHTTPHandlerWithAuthorizer(
+		func(context.Context, json.RawMessage) ([]json.RawMessage, error) {
+			t.Fatal("handler must not run after authorization failure")
+			return nil, nil
+		},
+		func(context.Context, MCPRequestContext) error {
+			return &AuthorizationError{Status: http.StatusUnauthorized, Message: "authorization required"}
+		},
+	)
+	recorder := httptest.NewRecorder()
+	transport.ServeHTTP(recorder, validStatelessRequest(t, `{"jsonrpc":"2.0","id":1}`))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+	if !strings.Contains(recorder.Body.String(), "authorization required") {
+		t.Fatalf("body = %q", recorder.Body.String())
+	}
+}
+
+func TestStatelessHTTPTransportDefaultsUnknownAuthorizationErrorsToForbidden(t *testing.T) {
+	transport := NewStatelessHTTPHandlerWithAuthorizer(
+		func(context.Context, json.RawMessage) ([]json.RawMessage, error) {
+			t.Fatal("handler must not run after authorization failure")
+			return nil, nil
+		},
+		func(context.Context, MCPRequestContext) error { return errors.New("missing capability") },
+	)
+	recorder := httptest.NewRecorder()
+	transport.ServeHTTP(recorder, validStatelessRequest(t, `{}`))
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
+	}
+}

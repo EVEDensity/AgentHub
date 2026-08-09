@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,22 +39,68 @@ func RequestContextFromContext(ctx context.Context) (MCPRequestContext, bool) {
 type StatelessHTTPTransport struct {
 	handler      MessageHandler
 	maxBodyBytes int64
+	authorize    StatelessAuthorizer
+}
+
+// StatelessAuthorizer is the server-side authorization boundary for one
+// stateless MCP request. Authentication is expected to have run upstream and
+// placed the principal in the context; the authorizer must not trust the
+// X-AgentHub-* headers as identity proof.
+type StatelessAuthorizer func(context.Context, MCPRequestContext) error
+
+// AuthorizationError lets an authorizer distinguish authentication failures
+// (401) from authenticated-but-forbidden requests (403) without coupling the
+// transport package to a particular IAM implementation.
+type AuthorizationError struct {
+	Status  int
+	Message string
+}
+
+func (e *AuthorizationError) Error() string {
+	if e.Message == "" {
+		return "MCP request is not authorized"
+	}
+	return e.Message
 }
 
 // NewStatelessHTTPTransport creates a stateless transport with a bounded body.
 func NewStatelessHTTPTransport(handler MessageHandler, maxBodyBytes int64) *StatelessHTTPTransport {
+	return NewStatelessHTTPTransportWithAuthorizer(handler, maxBodyBytes, nil)
+}
+
+// NewStatelessHTTPTransportWithAuthorizer creates a stateless transport with
+// an injectable identity/capability authorization boundary.
+func NewStatelessHTTPTransportWithAuthorizer(
+	handler MessageHandler,
+	maxBodyBytes int64,
+	authorize StatelessAuthorizer,
+) *StatelessHTTPTransport {
 	if maxBodyBytes <= 0 {
 		maxBodyBytes = defaultStatelessBodyLimit
 	}
 	return &StatelessHTTPTransport{
 		handler:      handler,
 		maxBodyBytes: maxBodyBytes,
+		authorize:    authorize,
 	}
 }
 
 // NewStatelessHTTPHandler returns a handler using the default body limit.
 func NewStatelessHTTPHandler(handler MessageHandler) http.Handler {
 	return NewStatelessHTTPTransport(handler, defaultStatelessBodyLimit)
+}
+
+// NewStatelessHTTPHandlerWithAuthorizer returns a stateless handler with an
+// authorization callback evaluated after request context validation.
+func NewStatelessHTTPHandlerWithAuthorizer(
+	handler MessageHandler,
+	authorize StatelessAuthorizer,
+) http.Handler {
+	return NewStatelessHTTPTransportWithAuthorizer(
+		handler,
+		defaultStatelessBodyLimit,
+		authorize,
+	)
 }
 
 // ServeHTTP validates request context and dispatches exactly one JSON-RPC
@@ -82,6 +129,18 @@ func (t *StatelessHTTPTransport) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	}
 
 	ctx := context.WithValue(r.Context(), requestContextKey{}, requestContext)
+	if t.authorize != nil {
+		if err := t.authorize(ctx, requestContext); err != nil {
+			status := http.StatusForbidden
+			var authErr *AuthorizationError
+			if errors.As(err, &authErr) &&
+				(authErr.Status == http.StatusUnauthorized || authErr.Status == http.StatusForbidden) {
+				status = authErr.Status
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+	}
 	responses, err := t.handler(ctx, json.RawMessage(body))
 	if err != nil {
 		http.Error(w, "MCP request dispatch failed", http.StatusInternalServerError)
