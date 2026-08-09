@@ -109,6 +109,8 @@ func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandle
 	// MCP SSE endpoints
 	mux.Handle("/mcp/sse", sseHandler)
 	mux.Handle("/mcp/message", sseHandler)
+	// Stateless JSON-RPC endpoint; every request carries its own execution context.
+	mux.Handle("/mcp/rpc", transport.NewStatelessHTTPHandler(dispatcher))
 
 	// Health + info endpoints
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -122,9 +124,10 @@ func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandle
 			"version":  "1.0.0",
 			"protocol": "2024-11-05",
 			"endpoints": map[string]string{
-				"sse":         "GET /mcp/sse",
-				"message":     "POST /mcp/message",
-				"healthz":     "GET /healthz",
+				"sse":     "GET /mcp/sse",
+				"message": "POST /mcp/message",
+				"rpc":     "POST /mcp/rpc",
+				"healthz": "GET /healthz",
 			},
 			"sessions": sseHandler.SessionCount(),
 		})
@@ -158,6 +161,7 @@ func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandle
 	log.Printf("MCP Gateway (SSE mode) listening on %s", addr)
 	log.Printf("  SSE endpoint:   GET  http://localhost%s/mcp/sse", addr)
 	log.Printf("  Message endpoint: POST http://localhost%s/mcp/message", addr)
+	log.Printf("  Stateless RPC:  POST http://localhost%s/mcp/rpc", addr)
 	log.Printf("  Health:         GET  http://localhost%s/healthz", addr)
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {

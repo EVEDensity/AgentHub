@@ -19,6 +19,9 @@ not create a competing Mission or WorkUnit state machine.
 - Mission Control owns durable execution state.
 - Harness and Runner own execution attempts, isolation, and evidence capture.
 - MCP and A2A services are protocol boundaries, not business databases.
+- The MCP Gateway's `/mcp/rpc` endpoint is stateless and requires per-call
+  Mission/WorkUnit/attempt/capability context; its SSE session endpoints remain
+  compatibility transport only.
 - NATS subjects and payloads require versioned contracts before production use.
 
 Before adding a service, document its independent scaling, security, failure, or

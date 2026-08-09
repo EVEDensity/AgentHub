@@ -20,7 +20,9 @@ scope is snapshotted into each call only after authorization.
 - Input: `MCPToolCall` with `MCPCallContext`, tool name, and JSON-object
   arguments.
 - Transport: an HTTP(S) endpoint receiving JSON-RPC `tools/call`; no
-  `initialize` handshake, `sessionId`, or client-side MCP session store.
+  `initialize` handshake, `sessionId`, or client-side MCP session store. The
+  bundled Go Gateway exposes this contract at `POST /mcp/rpc` and validates
+  the required context headers before dispatch.
 - Output: normalized `MCPToolResult`, with text content joined for Harness
   feedback and MCP `isError` preserved.
 - Audit: `MCPToolAuditEvent` containing request ID, correlation context, tool
@@ -41,4 +43,6 @@ WorkUnit transitions, or durable audit storage. Capability authorization is
 still supplied by `CapabilityToolResolver`; the binding forwards the resolved
 capability scope but does not widen it. Audit events intentionally exclude
 arguments, prompts, and tool result content. A future durable audit adapter
-must add retention and ACL policy before production persistence.
+must add retention and ACL policy before production persistence. The Go
+transport only attaches validated context to the request; it does not write
+Mission state or treat headers as authorization proof by themselves.
