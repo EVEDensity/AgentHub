@@ -18,6 +18,8 @@ boundary. It is not the permanent home of every Agent feature.
   ModelAdapterPort normalizes provider responses and reports provider usage;
   Harness enforces per-run token and model-cost budgets and emits request-scoped
   checkpoints; Runner must not write repository state directly.
+  `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
+  Mission/WorkUnit/capability context and emits content-free call audit events.
 - `api/`: HTTP/WebSocket transport; handlers must delegate to services.
 - `schemas/`: versioned request and response validation.
 - `compat/`: one-way adapters from legacy Task/DAG data into Mission objects.
