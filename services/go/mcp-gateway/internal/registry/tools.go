@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agenthub/mcp-gateway/internal/protocol"
+	"github.com/agenthub/mcp-gateway/internal/transport"
 )
 
 // ── Tool Registry ────────────────────────────────────────────────────
@@ -26,7 +27,19 @@ type ToolFunc func(ctx context.Context, args map[string]any) (*protocol.ToolCall
 // RegisteredTool pairs a tool definition with its executor.
 type RegisteredTool struct {
 	Definition protocol.ToolDefinition
+	Capability string
 	Handler    ToolFunc
+}
+
+// CapabilityMismatchError means a stateless request tried to invoke a tool
+// outside the single capability declared by its Contract execution context.
+type CapabilityMismatchError struct {
+	Tool               string
+	DeclaredCapability string
+}
+
+func (e *CapabilityMismatchError) Error() string {
+	return fmt.Sprintf("tool %q is not available for the declared capability", e.Tool)
 }
 
 // Registry holds all registered MCP tools, resources, and prompts.
@@ -80,7 +93,26 @@ func (r *Registry) CallTool(ctx context.Context, name string, args map[string]an
 	if !ok {
 		return nil, fmt.Errorf("tool %q not found", name)
 	}
+	if request, scoped := transport.RequestContextFromContext(ctx); scoped && request.Capability != t.Capability {
+		return nil, &CapabilityMismatchError{
+			Tool:               name,
+			DeclaredCapability: request.Capability,
+		}
+	}
 	return t.Handler(ctx, args)
+}
+
+func (r *Registry) registerTool(tool RegisteredTool) {
+	name := strings.TrimSpace(tool.Definition.Name)
+	capability := strings.TrimSpace(tool.Capability)
+	if name == "" || capability == "" || tool.Handler == nil {
+		panic("MCP tool registration requires name, capability, and handler")
+	}
+	if _, exists := r.tools[name]; exists {
+		panic(fmt.Sprintf("MCP tool %q is already registered", name))
+	}
+	tool.Capability = capability
+	r.tools[name] = tool
 }
 
 // ListResources returns all registered resource definitions.
@@ -117,7 +149,7 @@ func (r *Registry) GetPrompt(name string, args map[string]string) (*protocol.Pro
 
 func (r *Registry) registerAgentHubTools() {
 	// ── Knowledge Search ─────────────────────────────────────────────
-	r.tools["knowledge_search"] = RegisteredTool{
+	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "knowledge_search",
 			Description: "Search the AgentHub knowledge base using semantic (vector) search. Returns relevant document chunks with scores and citations.",
@@ -131,11 +163,12 @@ func (r *Registry) registerAgentHubTools() {
 				Required: []string{"query"},
 			},
 		},
-		Handler: r.knowledgeSearchHandler,
-	}
+		Capability: "knowledge.search",
+		Handler:    r.knowledgeSearchHandler,
+	})
 
 	// ── List Agents ──────────────────────────────────────────────────
-	r.tools["list_agents"] = RegisteredTool{
+	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "list_agents",
 			Description: "List all registered agents in the AgentHub platform with their capabilities, status, and configuration.",
@@ -144,29 +177,31 @@ func (r *Registry) registerAgentHubTools() {
 				Properties: map[string]protocol.SchemaProperty{},
 			},
 		},
-		Handler: r.listAgentsHandler,
-	}
+		Capability: "agent.read",
+		Handler:    r.listAgentsHandler,
+	})
 
 	// ── Call Agent ───────────────────────────────────────────────────
-	r.tools["call_agent"] = RegisteredTool{
+	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "call_agent",
 			Description: "Send a message to a specific agent and get its response. Supports @AgentName syntax for multi-agent routing.",
 			InputSchema: protocol.ToolInputSchema{
 				Type: "object",
 				Properties: map[string]protocol.SchemaProperty{
-					"agent_id": {Type: "string", Description: "The agent ID to call (e.g., 'Architect', 'CodeGen')"},
-					"message":  {Type: "string", Description: "The message/prompt to send to the agent"},
+					"agent_id":   {Type: "string", Description: "The agent ID to call (e.g., 'Architect', 'CodeGen')"},
+					"message":    {Type: "string", Description: "The message/prompt to send to the agent"},
 					"session_id": {Type: "string", Description: "Optional session ID for conversation continuity"},
 				},
 				Required: []string{"agent_id", "message"},
 			},
 		},
-		Handler: r.callAgentHandler,
-	}
+		Capability: "agent.dispatch",
+		Handler:    r.callAgentHandler,
+	})
 
 	// ── List Sessions ────────────────────────────────────────────────
-	r.tools["list_sessions"] = RegisteredTool{
+	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "list_sessions",
 			Description: "List recent chat sessions in the AgentHub platform.",
@@ -177,11 +212,12 @@ func (r *Registry) registerAgentHubTools() {
 				},
 			},
 		},
-		Handler: r.listSessionsHandler,
-	}
+		Capability: "session.read",
+		Handler:    r.listSessionsHandler,
+	})
 
 	// ── Create Workflow ──────────────────────────────────────────────
-	r.tools["create_workflow"] = RegisteredTool{
+	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "create_workflow",
 			Description: "Create a multi-agent workflow (DAG) specifying nodes, edges, and execution strategy.",
@@ -196,11 +232,12 @@ func (r *Registry) registerAgentHubTools() {
 				Required: []string{"name", "nodes"},
 			},
 		},
-		Handler: r.createWorkflowHandler,
-	}
+		Capability: "workflow.create",
+		Handler:    r.createWorkflowHandler,
+	})
 
 	// ── Document Ingest ──────────────────────────────────────────────
-	r.tools["ingest_document"] = RegisteredTool{
+	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "ingest_document",
 			Description: "Ingest a document (text/markdown/code) into the knowledge base for later retrieval.",
@@ -215,11 +252,12 @@ func (r *Registry) registerAgentHubTools() {
 				Required: []string{"content", "title"},
 			},
 		},
-		Handler: r.ingestDocumentHandler,
-	}
+		Capability: "document.ingest",
+		Handler:    r.ingestDocumentHandler,
+	})
 
 	// ── System Health ────────────────────────────────────────────────
-	r.tools["system_health"] = RegisteredTool{
+	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
 			Name:        "system_health",
 			Description: "Check the health status of the AgentHub platform and its connected services.",
@@ -228,8 +266,9 @@ func (r *Registry) registerAgentHubTools() {
 				Properties: map[string]protocol.SchemaProperty{},
 			},
 		},
-		Handler: r.systemHealthHandler,
-	}
+		Capability: "platform.health",
+		Handler:    r.systemHealthHandler,
+	})
 }
 
 // ── Resource Registration ────────────────────────────────────────────
@@ -451,13 +490,13 @@ func (r *Registry) ingestDocumentHandler(ctx context.Context, args map[string]an
 	}
 
 	body, _ := json.Marshal(map[string]any{
-		"request_id":  fmt.Sprintf("mcp-ingest-%d", time.Now().UnixNano()),
-		"tenant_id":   "default",
-		"source_id":   title,
-		"collection":  collection,
+		"request_id":   fmt.Sprintf("mcp-ingest-%d", time.Now().UnixNano()),
+		"tenant_id":    "default",
+		"source_id":    title,
+		"collection":   collection,
 		"content_type": "text/plain",
-		"content":     content,
-		"metadata":    map[string]any{"file_type": fileType, "source": "mcp-gateway"},
+		"content":      content,
+		"metadata":     map[string]any{"file_type": fileType, "source": "mcp-gateway"},
 	})
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", r.knowledgeURL+"/ingest", bytes.NewReader(body))

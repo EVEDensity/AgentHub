@@ -186,6 +186,24 @@ class StatelessMCPGatewayContractTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+    async def test_go_rpc_rejects_tool_outside_declared_capability(self) -> None:
+        endpoint = f"http://127.0.0.1:{self._port}/mcp/rpc"
+        client = StatelessMCPClient(endpoint, access_token=_access_token(), timeout=10)
+        with self.assertRaisesRegex(MCPProtocolError, "MCP tool call returned an error"):
+            await client.call_tool(
+                MCPToolCall(
+                    context=MCPCallContext(
+                        execution=HarnessExecutionContext("mission-contract", "work-unit-contract", 1),
+                        capability="knowledge.search",
+                        scope={
+                            "required_scope": "document:read",
+                            "tenant_id": "tenant-contract",
+                        },
+                    ),
+                    name="system_health",
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

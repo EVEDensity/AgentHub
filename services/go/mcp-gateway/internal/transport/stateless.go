@@ -34,6 +34,13 @@ func RequestContextFromContext(ctx context.Context) (MCPRequestContext, bool) {
 	return value, ok
 }
 
+// WithRequestContext attaches a validated execution context for dispatch.
+// HTTP callers should obtain the value through parseRequestContext; the helper
+// also lets other trusted transports and contract tests use the same boundary.
+func WithRequestContext(ctx context.Context, value MCPRequestContext) context.Context {
+	return context.WithValue(ctx, requestContextKey{}, value)
+}
+
 // StatelessHTTPTransport handles one JSON-RPC request per HTTP POST. It does
 // not create or look up sessions and can be safely mounted on every instance.
 type StatelessHTTPTransport struct {
@@ -128,7 +135,7 @@ func (t *StatelessHTTPTransport) ServeHTTP(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	ctx := context.WithValue(r.Context(), requestContextKey{}, requestContext)
+	ctx := WithRequestContext(r.Context(), requestContext)
 	if t.authorize != nil {
 		if err := t.authorize(ctx, requestContext); err != nil {
 			status := http.StatusForbidden

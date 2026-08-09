@@ -26,6 +26,10 @@ scope is snapshotted into each call only after authorization.
   a Bearer token verified by the shared IAM package.
 - Output: normalized `MCPToolResult`, with text content joined for Harness
   feedback and MCP `isError` preserved.
+- Tool authorization: the Go Registry assigns one static capability to every
+  built-in tool and rejects a stateless call when the request capability does
+  not exactly match that assignment. The tool handler is never entered on a
+  mismatch.
 - Audit: `MCPToolAuditEvent` containing request ID, correlation context, tool
   name, success, duration, and sanitized error type only.
 
@@ -51,6 +55,11 @@ result content. A future durable audit adapter must add retention and ACL
 policy before production persistence. The Go transport only attaches validated
 context to the request; it does not write Mission state or treat headers as
 authorization proof by themselves.
+
+The capability check is enforced on requests carrying validated stateless
+execution context. The legacy SSE and STDIO transports remain compatibility
+paths for clients that do not provide WorkUnit context; they must not be used
+as the protected Harness execution boundary.
 
 HTTP mode fails to start without `JWT_SECRET`. Local unsigned IAM dev mode
 requires the explicit `MCP_ALLOW_INSECURE_DEV_AUTH=true` opt-in. The stateless
