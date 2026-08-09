@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/artifact.schema.json",
+  "title": "Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "missionId", "workUnitId", "attempt", "kind", "digest",
+    "contentAddress", "mediaType", "sizeBytes", "retention", "sensitivity",
+    "createdBy", "createdAt"
+  ],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "missionId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "workUnitId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "diff", "commit", "file", "log", "report", "test-result", "build",
+        "pull-request"
+      ]
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-fA-F0-9]{64}$"
+    },
+    "contentAddress": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "mediaType": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "sizeBytes": { "type": "integer", "minimum": 0 },
+    "sourceRepository": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "baseCommit": { "type": "string", "pattern": "^[a-fA-F0-9]{7,64}$" },
+    "retention": {
+      "type": "string",
+      "enum": ["ephemeral", "mission", "standard", "legal-hold"]
+    },
+    "sensitivity": {
+      "type": "string",
+      "enum": ["public", "internal", "confidential", "restricted"]
+    },
+    "createdBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["human", "agent", "adapter", "system", "verifier"]
+        },
+        "id": { "$ref": "common.schema.json#/$defs/identifier" },
+        "displayName": { "type": "string", "maxLength": 255 }
+      }
+    },
+    "createdAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+  }
+}

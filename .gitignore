@@ -70,7 +70,9 @@ Thumbs.db
 
 # Private deployment and platform material
 k8s/
-platform/contracts/
+platform/contracts/*
+!platform/contracts/v1/
+!platform/contracts/v1/**
 platform/*.json
 deploy/prometheus.yml
 deploy/grafana/

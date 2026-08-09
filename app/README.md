@@ -11,6 +11,8 @@ boundary. It is not the permanent home of every Agent feature.
 - `services/`: application use cases, compatibility adapters, and storage ports.
   Artifact byte verification reads Runner-owned content through this boundary;
   Mission Control retains only immutable Artifact metadata.
+  Mission delegation accepts only same-Mission registered ArtifactRefs and
+  creates causally linked child WorkUnits behind the parent lease fence.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. Harness owns bounded model/tool loops and explicit per-run tool

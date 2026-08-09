@@ -602,6 +602,77 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.work_units, [])
         self.assertEqual(repository.events, [])
 
+    def test_delegate_work_unit_requires_active_lease_and_registered_artifact(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(
+                id="wu-parent",
+                status="RUNNING",
+                attempt=2,
+                lease=Lease(
+                    id="lease-parent",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        repository.artifacts = [build_artifact(work_unit_id="wu-parent", attempt=2)]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+        request = {
+            "id": "wu-child",
+            "assignedAdapter": "reviewer",
+            "leaseId": "lease-parent",
+            "inputRefs": [
+                {"id": "artifact-1", "digest": repository.artifacts[0].digest}
+            ],
+            "requiredCapabilities": ["repository.write"],
+        }
+
+        first = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-parent/delegations",
+            json=request,
+        )
+        second = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-parent/delegations",
+            json=request,
+        )
+
+        self.assertEqual(first.status_code, 202)
+        self.assertEqual(second.status_code, 202)
+        self.assertEqual(first.json(), second.json())
+        self.assertEqual(first.json()["parentWorkUnitId"], "wu-parent")
+        self.assertEqual(len(repository.work_units), 2)
+        self.assertEqual(len(repository.events), 2)
+        self.assertEqual(repository.events[0].event_type, "work_unit.delegation.requested")
+        self.assertEqual(repository.events[1].event_type, "work_unit.lifecycle.created")
+        self.assertEqual(
+            repository.events[1].causation_id,
+            repository.events[0].event_id,
+        )
+
+        repository.work_units[0] = build_work_unit(
+            id="wu-parent",
+            status="RUNNING",
+            attempt=2,
+            lease=Lease(
+                id="lease-parent",
+                runner_id="user-1",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            ),
+        )
+        rejected = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-parent/delegations",
+            json={**request, "id": "wu-child-2", "inputRefs": []},
+        )
+        self.assertEqual(rejected.status_code, 422)
+
     def test_work_unit_rejects_dependency_outside_mission(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="user-1", status="RUNNING")

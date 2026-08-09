@@ -12,6 +12,7 @@ from app.schemas.mission import (
     MissionCreateRequest,
     WorkUnitCompletionRequest,
     WorkUnitCreateRequest,
+    WorkUnitDelegationRequest,
     WorkUnitExecutionRequest,
     WorkUnitHeartbeatRequest,
     WorkUnitLeaseRequest,
@@ -239,6 +240,42 @@ async def list_work_units(
         offset=offset,
     )
     return {"workUnits": [work_unit.to_public_dict() for work_unit in work_units]}
+
+
+@router.post(
+    "/{mission_id}/work-units/{parent_work_unit_id}/delegations",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def delegate_work_unit(
+    mission_id: str,
+    parent_work_unit_id: str,
+    request: WorkUnitDelegationRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    service = MissionService(repository)
+    try:
+        work_unit = await service.delegate_work_unit(
+            mission_id,
+            parent_work_unit_id,
+            work_unit_id=request.id,
+            kind=request.kind,
+            input_refs=request.input_refs,
+            expected_outputs=request.expected_outputs,
+            required_capabilities=request.required_capabilities,
+            assigned_adapter=request.assigned_adapter,
+            lease_id=request.lease_id,
+            runner_id=str(user["id"]),
+            actor=build_human_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return work_unit.to_public_dict()
 
 
 @router.get("/{mission_id}/artifacts")

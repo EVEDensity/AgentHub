@@ -84,6 +84,7 @@ class PublicContractTests(unittest.TestCase):
             "work-unit.schema.json": {
                 "id": "wu-1",
                 "missionId": "mis-1",
+                "parentWorkUnitId": "wu-parent",
                 "kind": "code_change",
                 "dependencies": [],
                 "inputRefs": [],

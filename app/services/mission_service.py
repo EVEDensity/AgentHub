@@ -350,6 +350,7 @@ class MissionService:
                     "work unit requires capabilities outside the mission contract: "
                     + ", ".join(unsupported)
                 )
+            await self._validate_artifact_refs(repository, mission_id, input_refs)
 
             identifier = work_unit_id or new_identifier("wu")
             for dependency_id in dependencies:
@@ -391,6 +392,141 @@ class MissionService:
             await repository.add_work_unit(work_unit)
             await repository.append_event(event)
         return work_unit
+
+    async def delegate_work_unit(
+        self,
+        mission_id: str,
+        parent_work_unit_id: str,
+        *,
+        work_unit_id: str,
+        kind: str,
+        input_refs: list[ArtifactRef],
+        expected_outputs: list[OutputSpec],
+        required_capabilities: list[str],
+        assigned_adapter: str,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("delegation requires a RUNNING mission")
+
+            parent = await repository.get_work_unit_for_update(parent_work_unit_id)
+            if parent is None or parent.mission_id != mission_id:
+                raise WorkUnitNotFoundError(parent_work_unit_id)
+            if parent.status != WorkUnitStatus.RUNNING:
+                raise WorkUnitNotReadyError(
+                    "only a RUNNING work unit can create a delegation"
+                )
+            if parent.lease is None:
+                raise LeaseOwnershipError("parent work unit has no active lease")
+            if parent.lease.id != lease_id:
+                raise LeaseOwnershipError("lease id does not match the parent work unit")
+            if parent.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("parent lease belongs to another runner")
+
+            occurred_at = datetime.now(timezone.utc)
+            if parent.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("parent work unit lease has expired")
+
+            contract = await repository.get_contract(mission.contract_id)
+            if contract is None:
+                raise ValueError("mission contract not found")
+            allowed_capabilities = {
+                grant.capability for grant in contract.allowed_capabilities
+            }
+            unsupported = sorted(set(required_capabilities) - allowed_capabilities)
+            if unsupported:
+                raise ValueError(
+                    "delegated work unit requires capabilities outside the mission "
+                    "contract: " + ", ".join(unsupported)
+                )
+            await self._validate_artifact_refs(repository, mission_id, input_refs)
+
+            candidate = WorkUnit(
+                id=work_unit_id,
+                mission_id=mission_id,
+                parent_work_unit_id=parent_work_unit_id,
+                kind=kind,
+                dependencies=[],
+                input_refs=input_refs,
+                expected_outputs=expected_outputs,
+                required_capabilities=required_capabilities,
+                assigned_adapter=assigned_adapter,
+                status=WorkUnitStatus.PENDING,
+                attempt=0,
+            )
+            existing = await repository.get_work_unit_for_update(work_unit_id)
+            if existing is not None:
+                immutable_fields_match = all(
+                    getattr(existing, field_name) == getattr(candidate, field_name)
+                    for field_name in (
+                        "mission_id",
+                        "parent_work_unit_id",
+                        "kind",
+                        "dependencies",
+                        "input_refs",
+                        "expected_outputs",
+                        "required_capabilities",
+                        "assigned_adapter",
+                    )
+                )
+                if immutable_fields_match:
+                    return existing
+                raise ValueError(
+                    "delegation id already exists with different immutable fields"
+                )
+
+            parent_sequence = (
+                await repository.get_last_event_sequence(
+                    parent.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            delegation_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=parent.id,
+                sequence=parent_sequence,
+                event_type="work_unit.delegation.requested",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "childWorkUnitId": candidate.id,
+                    "parentAttempt": parent.attempt,
+                    "assignedAdapter": assigned_adapter,
+                    "inputRefs": [item.to_public_dict() for item in input_refs],
+                },
+                schema_version=1,
+            )
+            created_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=candidate.id,
+                sequence=1,
+                event_type="work_unit.lifecycle.created",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                causation_id=delegation_event.event_id,
+                payload={
+                    "kind": candidate.kind,
+                    "missionId": mission_id,
+                    "parentWorkUnitId": parent.id,
+                    "status": candidate.status.value,
+                },
+                schema_version=1,
+            )
+            await repository.add_work_unit(candidate)
+            await repository.append_event(delegation_event)
+            await repository.append_event(created_event)
+        return candidate
 
     async def fail_pending_work_unit(
         self,

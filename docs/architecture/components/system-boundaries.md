@@ -2,7 +2,7 @@
 
 > Status: accepted  
 > Owner: architecture maintainers  
-> Last reviewed: 2026-08-08
+> Last reviewed: 2026-08-09
 
 ## Boundary diagram
 
@@ -40,8 +40,11 @@ Mission Control
 
 New work must create a Mission and Contract, derive WorkUnits, acquire a lease,
 execute through Harness and Runner, publish immutable Artifacts, run an
-independent Verifier, and transition only through Mission Control. A protocol
-request is an input to this flow, not an alternative flow.
+independent Verifier, and transition only through Mission Control. A running
+WorkUnit may delegate a child only through the ArtifactRef-backed Mission
+Control command; the parent lease fences that command, and the child relation
+is not a dependency edge. A protocol request is an input to this flow, not an
+alternative flow.
 
 ## Migration status
 

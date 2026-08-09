@@ -270,22 +270,23 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.list_artifacts(artifact.mission_id, offset=-1)
 
     async def test_work_unit_round_trip_and_mission_list(self) -> None:
-        work_unit = build_work_unit()
+        work_unit = build_work_unit(parent_work_unit_id="wu-parent")
 
         await self.repository.add_work_unit(work_unit)
 
         insert_sql, insert_args = self.database.executed[-1]
         self.assertIn("INSERT INTO work_units", insert_sql)
         self.assertEqual(
-            insert_args[0:3], (work_unit.id, work_unit.mission_id, work_unit.kind)
+            insert_args[0:4],
+            (work_unit.id, work_unit.mission_id, work_unit.parent_work_unit_id, work_unit.kind),
         )
-        self.assertEqual(json.loads(insert_args[3]), list(work_unit.dependencies))
+        self.assertEqual(json.loads(insert_args[4]), list(work_unit.dependencies))
         self.assertEqual(
-            json.loads(insert_args[5]),
+            json.loads(insert_args[6]),
             [item.to_public_dict() for item in work_unit.expected_outputs],
         )
-        self.assertEqual(insert_args[8:10], ("PENDING", 0))
-        self.assertIsNone(insert_args[10])
+        self.assertEqual(insert_args[9:11], ("PENDING", 0))
+        self.assertIsNone(insert_args[11])
 
         row = self.build_work_unit_row(work_unit)
         self.database.one = row
@@ -418,6 +419,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         return {
             "id": work_unit.id,
             "mission_id": work_unit.mission_id,
+            "parent_work_unit_id": work_unit.parent_work_unit_id,
             "kind": work_unit.kind,
             "dependencies": json.dumps(list(work_unit.dependencies)),
             "input_refs": json.dumps(

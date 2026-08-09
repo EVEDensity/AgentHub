@@ -147,6 +147,8 @@ class DomainModelTests(unittest.TestCase):
             build_work_unit(status="RUNNING")
         with self.assertRaisesRegex(ValidationError, "cannot depend on itself"):
             build_work_unit(dependencies=["wu-1"])
+        with self.assertRaisesRegex(ValidationError, "cannot delegate to itself"):
+            build_work_unit(parent_work_unit_id="wu-1")
         with self.assertRaisesRegex(
             ValidationError, "PENDING work unit cannot retain a lease"
         ):

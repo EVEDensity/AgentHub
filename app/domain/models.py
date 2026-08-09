@@ -337,6 +337,7 @@ class WorkUnitStatus(str, Enum):
 class WorkUnit(DomainModel):
     id: Identifier
     mission_id: Identifier
+    parent_work_unit_id: Identifier | None = None
     kind: Annotated[str, Field(min_length=1, max_length=255)]
     dependencies: tuple[Identifier, ...]
     input_refs: tuple[ArtifactRef, ...]
@@ -351,6 +352,8 @@ class WorkUnit(DomainModel):
 
     @model_validator(mode="after")
     def validate_execution_state(self) -> WorkUnit:
+        if self.parent_work_unit_id == self.id:
+            raise ValueError("a work unit cannot delegate to itself")
         if self.id in self.dependencies:
             raise ValueError("a work unit cannot depend on itself")
         if len(self.dependencies) != len(set(self.dependencies)):

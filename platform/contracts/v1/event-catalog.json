@@ -9,6 +9,7 @@
     { "eventType": "mission.verification.failed", "aggregateType": "mission", "payloadRequired": ["evidenceIds"] },
     { "eventType": "mission_contract.version.created", "aggregateType": "mission_contract", "payloadRequired": ["version"] },
     { "eventType": "work_unit.lifecycle.created", "aggregateType": "work_unit", "payloadRequired": ["missionId", "status"] },
+    { "eventType": "work_unit.delegation.requested", "aggregateType": "work_unit", "payloadRequired": ["childWorkUnitId", "parentAttempt", "assignedAdapter", "inputRefs"] },
     { "eventType": "work_unit.lease.granted", "aggregateType": "work_unit", "payloadRequired": ["leaseId", "runnerId", "expiresAt"] },
     { "eventType": "work_unit.execution.started", "aggregateType": "work_unit", "payloadRequired": ["attempt"] },
     { "eventType": "work_unit.execution.completed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "artifactRefs"] },
