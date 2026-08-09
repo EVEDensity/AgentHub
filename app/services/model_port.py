@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from app.services.harness_service import (
     FunctionCall,
     FunctionResult,
+    FunctionTool,
     HarnessRequest,
     ModelPort,
     ModelResponse,
@@ -95,6 +96,21 @@ def normalize_model_response(raw: object) -> ModelResponse:
     return ModelResponse(content=raw)
 
 
+def build_function_tool_schemas(tools: list[FunctionTool]) -> list[dict[str, Any]]:
+    """Render the resolved per-run tool set for OpenAI-compatible providers."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": dict(tool.parameters),
+            },
+        }
+        for tool in tools
+    ]
+
+
 def _normalize_mapping(payload: Mapping[str, Any]) -> ModelResponse:
     if not any(key in payload for key in ("choices", "content", "tool_calls")):
         return ModelResponse(content=json.dumps(payload, ensure_ascii=False, sort_keys=True))
@@ -143,4 +159,9 @@ def _normalize_call(raw: object, index: int) -> FunctionCall | None:
     return FunctionCall(id=call_id, name=name, arguments=arguments)
 
 
-__all__ = ["ModelAdapterPort", "PromptAdapterPort", "normalize_model_response"]
+__all__ = [
+    "ModelAdapterPort",
+    "PromptAdapterPort",
+    "build_function_tool_schemas",
+    "normalize_model_response",
+]
