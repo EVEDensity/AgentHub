@@ -6,12 +6,15 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
 from app.services.harness_checkpoint import HarnessExecutionContext
 from app.services.harness_service import FunctionTool
+
+if TYPE_CHECKING:
+    from app.services.capability_tools import CapabilityToolBinding
 
 
 class MCPAdapterError(RuntimeError):
@@ -293,6 +296,67 @@ class StatelessMCPToolAdapter:
         )
 
 
+def build_mcp_capability_binding(
+    client: MCPClientPort,
+    *,
+    capability: str,
+    function_name: str,
+    execution: HarnessExecutionContext,
+    description: str = "",
+    parameters: Mapping[str, Any] | None = None,
+    trace_id: str = "",
+) -> CapabilityToolBinding:
+    """Create a CapabilityToolBinding that forwards the resolver's scope.
+
+    The return type is kept local to avoid making the capability registry depend
+    on the MCP adapter module at import time.
+    """
+    from app.services.capability_tools import CapabilityToolBinding
+
+    if not capability.strip():
+        raise ValueError("MCP capability must be non-empty")
+    if not function_name.strip():
+        raise ValueError("MCP function name must be non-empty")
+
+    def validate(
+        arguments: Mapping[str, Any],
+        scope: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        del scope
+        if not isinstance(arguments, Mapping):
+            raise TypeError("MCP tool arguments must be an object")
+        return dict(arguments)
+
+    async def handle(
+        arguments: Mapping[str, Any],
+        scope: Mapping[str, Any],
+    ) -> str:
+        result = await client.call_tool(
+            MCPToolCall(
+                context=MCPCallContext(
+                    execution=execution,
+                    capability=capability,
+                    scope=scope,
+                    trace_id=trace_id,
+                ),
+                name=function_name,
+                arguments=arguments,
+            )
+        )
+        if result.is_error:
+            raise MCPAdapterError("MCP tool returned an error")
+        return result.content
+
+    return CapabilityToolBinding(
+        capability=capability,
+        function_name=function_name,
+        description=description,
+        parameters=dict(parameters or {}),
+        validate_arguments=validate,
+        handler=handle,
+    )
+
+
 def _normalize_tool_result(raw: object) -> MCPToolResult:
     if not isinstance(raw, Mapping):
         raise MCPProtocolError("MCP response result must be an object")
@@ -325,4 +389,5 @@ __all__ = [
     "MCPToolResult",
     "StatelessMCPClient",
     "StatelessMCPToolAdapter",
+    "build_mcp_capability_binding",
 ]

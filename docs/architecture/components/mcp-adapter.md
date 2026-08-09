@@ -11,7 +11,9 @@ Harness tool boundary. Each call is self-contained: it creates a request ID,
 sends the complete Mission/WorkUnit/attempt/capability context, validates the
 response ID and MCP result shape, and discards protocol state after the call.
 `StatelessMCPToolAdapter` binds that client to one capability-granted
-`FunctionTool` for one Harness execution.
+`FunctionTool` for one Harness execution. `build_mcp_capability_binding`
+composes the client with `CapabilityToolResolver`; the resolver's Contract
+scope is snapshotted into each call only after authorization.
 
 ## Inputs and outputs
 
@@ -36,7 +38,7 @@ an untracked result.
 
 The adapter does not own MCP server sessions, tool registration, Mission state,
 WorkUnit transitions, or durable audit storage. Capability authorization is
-still supplied by `CapabilityToolResolver`; the adapter forwards the resolved
+still supplied by `CapabilityToolResolver`; the binding forwards the resolved
 capability scope but does not widen it. Audit events intentionally exclude
 arguments, prompts, and tool result content. A future durable audit adapter
 must add retention and ACL policy before production persistence.

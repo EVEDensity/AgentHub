@@ -9,6 +9,12 @@ from app.services.capability_tools import (
     CapabilityToolBinding,
     CapabilityToolResolver,
 )
+from app.services.harness_checkpoint import HarnessExecutionContext
+from app.services.mcp_tool_adapter import (
+    MCPToolCall,
+    MCPToolResult,
+    build_mcp_capability_binding,
+)
 from app.services.model_port import build_function_tool_schemas
 from tests.domain.factories import build_contract, build_work_unit
 
@@ -71,6 +77,49 @@ class CapabilityToolResolverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await tools[0].handler(arguments), "app/main.py:app/main.py")
         with self.assertRaisesRegex(ValueError, "outside the capability scope"):
             tools[0].validate_arguments({"path": "secrets.txt"})
+
+    async def test_mcp_binding_receives_resolved_contract_scope_and_execution_context(self) -> None:
+        calls: list[MCPToolCall] = []
+
+        class FakeMCPClient:
+            async def call_tool(self, request: MCPToolCall) -> MCPToolResult:
+                calls.append(request)
+                return MCPToolResult(content="read result")
+
+        execution = HarnessExecutionContext(
+            mission_id="mis-1",
+            work_unit_id="wu-1",
+            attempt=3,
+        )
+        resolver = CapabilityToolResolver(
+            [
+                build_mcp_capability_binding(
+                    FakeMCPClient(),
+                    capability="repository.read",
+                    function_name="mcp_read_file",
+                    execution=execution,
+                    description="Read through MCP",
+                )
+            ]
+        )
+        tools = resolver.resolve(
+            build_contract(
+                allowed_capabilities=[
+                    {
+                        "capability": "repository.read",
+                        "scope": {"paths": ["app/main.py"]},
+                    }
+                ]
+            ),
+            build_work_unit(required_capabilities=["repository.read"]),
+        )
+
+        arguments = tools[0].validate_arguments({"path": "app/main.py"})
+        self.assertEqual(await tools[0].handler(arguments), "read result")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].context.execution, execution)
+        self.assertEqual(calls[0].context.capability, "repository.read")
+        self.assertEqual(dict(calls[0].context.scope), {"paths": ["app/main.py"]})
 
     def test_rejects_capability_not_granted_by_contract(self) -> None:
         resolver = CapabilityToolResolver([_binding("network.read", "fetch")])
