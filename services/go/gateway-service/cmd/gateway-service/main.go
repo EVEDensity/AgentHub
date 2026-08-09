@@ -252,75 +252,75 @@ func main() {
 		_ = json.NewEncoder(w).Encode(profile)
 	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-			serveWS(hub, issuer, w, r)
-		})
+		serveWS(hub, issuer, w, r)
+	})
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sessions":           hub.sessionCount(),
+			"connections":        hub.clientCount(),
+			"jwt_enforced":       len(jwtSecret) > 0,
+			"rate_limit_buckets": rl.ActiveBuckets(),
+			"rate_limit_stats":   rl.Stats(),
+			"redis_connected":    redisStore != nil,
+		})
+	})
+	mux.HandleFunc("/routes", func(w http.ResponseWriter, r *http.Request) {
+		if hub.routes != nil {
+			serveRoutes(hub.routes, w, r)
+		} else {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"sessions":          hub.sessionCount(),
-				"connections":       hub.clientCount(),
-				"jwt_enforced":      len(jwtSecret) > 0,
-				"rate_limit_buckets": rl.ActiveBuckets(),
-				"rate_limit_stats":   rl.Stats(),
-				"redis_connected":    redisStore != nil,
+				"instance":    instance,
+				"sessions":    hub.sessionCount(),
+				"connections": hub.clientCount(),
+				"redis":       false,
 			})
-		})
-		mux.HandleFunc("/routes", func(w http.ResponseWriter, r *http.Request) {
-			if hub.routes != nil {
-				serveRoutes(hub.routes, w, r)
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"instance":    instance,
-					"sessions":    hub.sessionCount(),
-					"connections": hub.clientCount(),
-					"redis":       false,
-				})
-			}
-		})
-		mux.HandleFunc("/routes/", func(w http.ResponseWriter, r *http.Request) {
-			if hub.routes != nil {
-				serveRoutes(hub.routes, w, r)
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"instance": instance,
-					"redis":    false,
-					"note":     "Route registry disabled (REDIS_ADDR not set). Only in-memory hub active.",
-				})
-			}
-		})
+		}
+	})
+	mux.HandleFunc("/routes/", func(w http.ResponseWriter, r *http.Request) {
+		if hub.routes != nil {
+			serveRoutes(hub.routes, w, r)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"instance": instance,
+				"redis":    false,
+				"note":     "Route registry disabled (REDIS_ADDR not set). Only in-memory hub active.",
+			})
+		}
+	})
 	mux.HandleFunc("/publish", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 
-			var req PublishMessageRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+		var req PublishMessageRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+			return
+		}
+		if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.Content == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, content are required"})
+			return
+		}
+		// Multi-tenant isolation (P3-1): the authenticated principal may
+		// only publish on behalf of their own tenant. In dev mode the
+		// TenantContext is empty and the check passes through.
+		if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
+			if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
+				authDenied.WithLabelValues("cross_tenant_publish").Inc()
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
 				return
 			}
-			if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.Content == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, content are required"})
-				return
+			if req.ActorID == "" {
+				req.ActorID = tc.UserID
 			}
-			// Multi-tenant isolation (P3-1): the authenticated principal may
-			// only publish on behalf of their own tenant. In dev mode the
-			// TenantContext is empty and the check passes through.
-			if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
-				if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
-					authDenied.WithLabelValues("cross_tenant_publish").Inc()
-					w.WriteHeader(http.StatusForbidden)
-					_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
-					return
-				}
-				if req.ActorID == "" {
-					req.ActorID = tc.UserID
-				}
-			}
+		}
 
 		event := events.NewEnvelope(
 			events.EventSessionMessageReceived,
@@ -351,34 +351,34 @@ func main() {
 		_ = json.NewEncoder(w).Encode(PublishResult{Published: true, Subject: eventbus.SessionEventsSubject, Event: event})
 	})
 	mux.HandleFunc("/permissions/request", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 
-			var req PermissionRequestInput
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+		var req PermissionRequestInput
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+			return
+		}
+		if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.RequestID == "" || req.ToolName == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, request_id, tool_name are required"})
+			return
+		}
+		// Enforce tenant isolation on permission requests too.
+		if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
+			if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
+				authDenied.WithLabelValues("cross_tenant_permission").Inc()
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
 				return
 			}
-			if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.RequestID == "" || req.ToolName == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, request_id, tool_name are required"})
-				return
+			if req.ActorID == "" {
+				req.ActorID = tc.UserID
 			}
-			// Enforce tenant isolation on permission requests too.
-			if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
-				if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
-					authDenied.WithLabelValues("cross_tenant_permission").Inc()
-					w.WriteHeader(http.StatusForbidden)
-					_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
-					return
-				}
-				if req.ActorID == "" {
-					req.ActorID = tc.UserID
-				}
-			}
+		}
 
 		event := events.NewEnvelope(
 			events.EventToolPermissionRequested,
@@ -436,6 +436,10 @@ func main() {
 	mux.Handle("/platform/workspaces", workspaces)
 	mux.Handle("/platform/workspaces/", workspaces)
 
+	// Session Service owns durable chat sessions; Gateway owns public auth and routing.
+	sessions := newSessionProxy(parseSessionServiceURL())
+	mux.Handle("/platform/sessions", sessions)
+
 	// ── Agent Versions (P1-6) ───────────────────────────────────────
 	agentVersions := newAgentVersionHandler()
 	mux.Handle("/platform/agent-versions/", agentVersions)
@@ -468,23 +472,23 @@ func main() {
 	})
 
 	// ── Image Preprocessing (Sprint L1) ───────────────────────────
-		imagePreproc := newImagePreprocHandler()
-		mux.Handle("/platform/utils/image-preprocess", imagePreproc)
+	imagePreproc := newImagePreprocHandler()
+	mux.Handle("/platform/utils/image-preprocess", imagePreproc)
 
 	// ── Video Frame Extraction (Sprint L1) ───────────────────────────
-		videoH := newVideoHandler(bus)
-		mux.Handle("/platform/utils/video-frames", videoH)
-		mux.Handle("/platform/utils/video-frames/", videoH)
+	videoH := newVideoHandler(bus)
+	mux.Handle("/platform/utils/video-frames", videoH)
+	mux.Handle("/platform/utils/video-frames/", videoH)
 
-		// ── Public Bot Endpoint (Web App route) ──────────────────────
-		globalAgentVersionHandler = agentVersions
-		mux.HandleFunc("/api/public/bots/", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodOptions {
-				handlePublicBotOptions(w, r)
-				return
-			}
-			handlePublicBotConfig(w, r, pool)
-		})
+	// ── Public Bot Endpoint (Web App route) ──────────────────────
+	globalAgentVersionHandler = agentVersions
+	mux.HandleFunc("/api/public/bots/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			handlePublicBotOptions(w, r)
+			return
+		}
+		handlePublicBotConfig(w, r, pool)
+	})
 
 	// ── Channel Connector (Feishu/WeCom) ──────────────────────────
 	channels := newChannelConnector(bus)
@@ -509,10 +513,10 @@ func main() {
 	mux.Handle("/digital/", digitalID)
 	mux.Handle("/digital", digitalID)
 
-		// ── Audit log (Sprint J4) ─────────────────────────────────────
-		auditH := newAuditHandler(pool)
-		mux.Handle("/audit/", auditH)
-		mux.Handle("/audit", auditH)
+	// ── Audit log (Sprint J4) ─────────────────────────────────────
+	auditH := newAuditHandler(pool)
+	mux.Handle("/audit/", auditH)
+	mux.Handle("/audit", auditH)
 
 	// ── Logs proxy (Sprint J4) ────────────────────────────────────
 	logs := newLogsHandler()

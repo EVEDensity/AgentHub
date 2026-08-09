@@ -165,7 +165,8 @@ services:
       GATEWAY_ADDR: ":8081"
       JWT_SECRET: "${JWT_SECRET:-}"
       MISSION_CONTROL_PLANE_URL: "http://host.docker.internal:8000"
-    depends_on: [nats, tempo]
+      SESSION_SERVICE_URL: "http://session-service:8083"
+    depends_on: [nats, session-service, tempo]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports: ["8081:8081"]

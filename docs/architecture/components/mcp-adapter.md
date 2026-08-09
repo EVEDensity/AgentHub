@@ -33,8 +33,10 @@ scope is snapshotted into each call only after authorization.
 - Tenant propagation: tenant-scoped Registry tools obtain tenant and actor
   only from the verified IAM context. Agent dispatch forwards the verified
   Bearer credential to the platform Gateway; document ingest records the actor
-  in metadata. Missing identity or required downstream credential fails before
-  any network request.
+  in metadata. Session listing forwards the verified tenant and credential to
+  the Gateway's `/platform/sessions` route; Gateway owns authentication and
+  proxies the bounded query to Session Service. Missing identity or required
+  downstream credential fails before any network request.
 - Audit: `MCPToolAuditEvent` containing request ID, correlation context, tool
   name, success, duration, and sanitized error type only.
 

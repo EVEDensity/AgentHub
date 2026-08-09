@@ -250,6 +250,120 @@ func TestIngestDocumentPropagatesAuthenticatedTenantAndActor(t *testing.T) {
 	}
 }
 
+func TestListSessionsPropagatesAuthenticatedTenantLimitAndCredential(t *testing.T) {
+	var tenantID, limit, authorization string
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID = r.URL.Query().Get("tenant_id")
+		limit = r.URL.Query().Get("limit")
+		authorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sessions":[]}`))
+	}))
+	defer downstream.Close()
+
+	identity, wantAuthorization := authenticatedIdentityContext(t)
+	ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+		MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+		Capability: "session.read", Scope: map[string]any{},
+	})
+	r := New("http://knowledge.test", downstream.URL)
+	result, err := r.CallTool(ctx, "list_sessions", map[string]any{
+		"limit":     float64(500),
+		"tenant_id": "tenant-attacker",
+	})
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("list sessions returned tool error: %+v", result)
+	}
+	if tenantID != "tenant-real" {
+		t.Fatalf("tenant_id = %q, want authenticated tenant", tenantID)
+	}
+	if limit != "50" {
+		t.Fatalf("limit = %q, want 50", limit)
+	}
+	if authorization != wantAuthorization {
+		t.Fatal("verified credential was not forwarded")
+	}
+}
+
+func TestListSessionsNormalizesLimit(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "missing", want: "10"},
+		{name: "zero", value: 0, want: "10"},
+		{name: "negative", value: int64(-5), want: "10"},
+		{name: "maximum", value: float64(50), want: "50"},
+		{name: "over maximum", value: float64(51), want: "50"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got string
+			downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.URL.Query().Get("limit")
+				_, _ = w.Write([]byte(`{"sessions":[]}`))
+			}))
+			defer downstream.Close()
+
+			identity, _ := authenticatedIdentityContext(t)
+			ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+				MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+				Capability: "session.read", Scope: map[string]any{},
+			})
+			arguments := map[string]any{}
+			if test.value != nil {
+				arguments["limit"] = test.value
+			}
+			result, err := New("http://knowledge.test", downstream.URL).CallTool(ctx, "list_sessions", arguments)
+			if err != nil {
+				t.Fatalf("list sessions: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("list sessions returned tool error: %+v", result)
+			}
+			if got != test.want {
+				t.Fatalf("limit = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestListSessionsRejectsDownstreamFailureAndInvalidJSON(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "non-success status", status: http.StatusForbidden, body: `{"error":"forbidden"}`},
+		{name: "invalid json", status: http.StatusOK, body: `not-json`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer downstream.Close()
+			identity, _ := authenticatedIdentityContext(t)
+			ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+				MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+				Capability: "session.read", Scope: map[string]any{},
+			})
+			result, err := New("http://knowledge.test", downstream.URL).CallTool(ctx, "list_sessions", nil)
+			if err != nil {
+				t.Fatalf("list sessions: %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("downstream failure must be returned as a tool error")
+			}
+		})
+	}
+}
+
 func TestTenantScopedToolsFailBeforeNetworkWithoutAuthenticatedIdentity(t *testing.T) {
 	called := false
 	downstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -264,6 +378,7 @@ func TestTenantScopedToolsFailBeforeNetworkWithoutAuthenticatedIdentity(t *testi
 	}{
 		{name: "call_agent", capability: "agent.dispatch", arguments: map[string]any{"agent_id": "reviewer", "message": "review"}},
 		{name: "ingest_document", capability: "document.ingest", arguments: map[string]any{"content": "content", "title": "doc"}},
+		{name: "list_sessions", capability: "session.read", arguments: map[string]any{}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -285,6 +400,18 @@ func TestCallAgentRequiresVerifiedDownstreamCredential(t *testing.T) {
 	})
 	r := New("http://knowledge.test", "http://gateway.test")
 	_, err := r.CallTool(ctx, "call_agent", map[string]any{"agent_id": "reviewer", "message": "review"})
+	if !errors.Is(err, ErrDownstreamCredentialRequired) {
+		t.Fatalf("error = %v, want ErrDownstreamCredentialRequired", err)
+	}
+}
+
+func TestListSessionsRequiresVerifiedDownstreamCredential(t *testing.T) {
+	ctx := iam.WithTenantContext(executionContext("session.read"), iam.TenantContext{
+		TenantID: "tenant-real",
+		UserID:   "actor-real",
+	})
+	r := New("http://knowledge.test", "http://gateway.test")
+	_, err := r.CallTool(ctx, "list_sessions", nil)
 	if !errors.Is(err, ErrDownstreamCredentialRequired) {
 		t.Fatalf("error = %v, want ErrDownstreamCredentialRequired", err)
 	}

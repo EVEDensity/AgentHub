@@ -11,7 +11,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -452,18 +454,47 @@ func (r *Registry) callAgentHandler(ctx context.Context, args map[string]any) (*
 }
 
 func (r *Registry) listSessionsHandler(ctx context.Context, args map[string]any) (*protocol.ToolCallResult, error) {
-	limit := getIntArg(args, "limit", 10)
+	principal, err := tenantPrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	authorization, ok := mcpauth.AuthorizationHeaderFromContext(ctx)
+	if !ok {
+		return nil, ErrDownstreamCredentialRequired
+	}
+	limit := normalizedLimit(getIntArg(args, "limit", 10), 10, 50)
 
-	req, _ := http.NewRequestWithContext(ctx, "GET",
-		fmt.Sprintf("%s/platform/sessions?limit=%d", r.gatewayURL, limit), nil)
+	endpoint, err := url.Parse(strings.TrimRight(r.gatewayURL, "/") + "/platform/sessions")
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to build session request: %v", err)), nil
+	}
+	query := endpoint.Query()
+	query.Set("tenant_id", principal.TenantID)
+	query.Set("limit", strconv.Itoa(limit))
+	endpoint.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to build session request: %v", err)), nil
+	}
+	req.Header.Set("Authorization", authorization)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Failed to list sessions: %v", err)), nil
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return errorResult(fmt.Sprintf("Failed to list sessions: gateway returned HTTP %d", resp.StatusCode)), nil
+	}
 
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Failed to read session response: %v", err)), nil
+	}
+	if !json.Valid(data) {
+		return errorResult("Failed to list sessions: gateway returned invalid JSON"), nil
+	}
 	return &protocol.ToolCallResult{
 		Content: []protocol.ToolContent{
 			{Type: "text", Text: string(data)},
@@ -726,6 +757,16 @@ func getIntArg(args map[string]any, key string, defaultVal int) int {
 		}
 	}
 	return defaultVal
+}
+
+func normalizedLimit(value, defaultValue, maxValue int) int {
+	if value < 1 {
+		return defaultValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func errorResult(msg string) *protocol.ToolCallResult {

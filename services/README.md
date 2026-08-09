@@ -23,7 +23,8 @@ not create a competing Mission or WorkUnit state machine.
   Mission/WorkUnit/attempt/capability context plus a platform IAM Bearer token;
   tenant-scoped tools propagate verified tenant/actor identity without a
   synthetic default. Its SSE session endpoints remain compatibility transport
-  only.
+  only. Session listing enters through the authenticated Gateway
+  `/platform/sessions` proxy and is persisted/read by `session-service`.
 - NATS subjects and payloads require versioned contracts before production use.
 
 Before adding a service, document its independent scaling, security, failure, or
