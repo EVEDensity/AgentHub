@@ -41,6 +41,13 @@ type RegisteredTool struct {
 	Handler    ToolFunc
 }
 
+// RegisteredResource pairs an MCP resource with the single Contract
+// capability allowed to read it through the stateless execution boundary.
+type RegisteredResource struct {
+	Definition protocol.ResourceDefinition
+	Capability string
+}
+
 // CapabilityMismatchError means a stateless request tried to invoke a tool
 // outside the single capability declared by its Contract execution context.
 type CapabilityMismatchError struct {
@@ -52,10 +59,21 @@ func (e *CapabilityMismatchError) Error() string {
 	return fmt.Sprintf("tool %q is not available for the declared capability", e.Tool)
 }
 
+// ResourceCapabilityMismatchError means a stateless request tried to read a
+// resource outside the single capability declared by its Contract context.
+type ResourceCapabilityMismatchError struct {
+	URI                string
+	DeclaredCapability string
+}
+
+func (e *ResourceCapabilityMismatchError) Error() string {
+	return fmt.Sprintf("resource %q is not available for the declared capability", e.URI)
+}
+
 // Registry holds all registered MCP tools, resources, and prompts.
 type Registry struct {
 	tools     map[string]RegisteredTool
-	resources []protocol.ResourceDefinition
+	resources []RegisteredResource
 	prompts   []protocol.PromptDefinition
 
 	// AgentHub platform URLs (configurable for dev/prod).
@@ -74,7 +92,7 @@ func New(knowledgeURL, gatewayURL string) *Registry {
 
 	r := &Registry{
 		tools:        make(map[string]RegisteredTool),
-		resources:    make([]protocol.ResourceDefinition, 0),
+		resources:    make([]RegisteredResource, 0),
 		prompts:      make([]protocol.PromptDefinition, 0),
 		knowledgeURL: knowledgeURL,
 		gatewayURL:   gatewayURL,
@@ -127,17 +145,43 @@ func (r *Registry) registerTool(tool RegisteredTool) {
 
 // ListResources returns all registered resource definitions.
 func (r *Registry) ListResources() []protocol.ResourceDefinition {
-	return r.resources
+	definitions := make([]protocol.ResourceDefinition, 0, len(r.resources))
+	for _, resource := range r.resources {
+		definitions = append(definitions, resource.Definition)
+	}
+	return definitions
 }
 
 // ReadResource reads a resource by URI.
 func (r *Registry) ReadResource(ctx context.Context, uri string) (*protocol.ResourceReadResult, error) {
-	for _, res := range r.resources {
-		if res.URI == uri {
-			return r.handleResource(ctx, res)
+	for _, resource := range r.resources {
+		if resource.Definition.URI == uri {
+			if request, scoped := transport.RequestContextFromContext(ctx); scoped && request.Capability != resource.Capability {
+				return nil, &ResourceCapabilityMismatchError{
+					URI:                uri,
+					DeclaredCapability: request.Capability,
+				}
+			}
+			return r.handleResource(ctx, resource.Definition)
 		}
 	}
 	return nil, fmt.Errorf("resource %q not found", uri)
+}
+
+func (r *Registry) registerResource(resource RegisteredResource) {
+	uri := strings.TrimSpace(resource.Definition.URI)
+	capability := strings.TrimSpace(resource.Capability)
+	if uri == "" || capability == "" {
+		panic("MCP resource registration requires URI and capability")
+	}
+	for _, existing := range r.resources {
+		if existing.Definition.URI == uri {
+			panic(fmt.Sprintf("MCP resource %q is already registered", uri))
+		}
+	}
+	resource.Definition.URI = uri
+	resource.Capability = capability
+	r.resources = append(r.resources, resource)
 }
 
 // ListPrompts returns all registered prompt definitions.
@@ -284,31 +328,46 @@ func (r *Registry) registerAgentHubTools() {
 // ── Resource Registration ────────────────────────────────────────────
 
 func (r *Registry) registerAgentHubResources() {
-	r.resources = []protocol.ResourceDefinition{
+	resources := []RegisteredResource{
 		{
-			URI:         "agenthub://knowledge/collections",
-			Name:        "Knowledge Collections",
-			Description: "List of all knowledge base collections with document counts",
-			MimeType:    "application/json",
+			Definition: protocol.ResourceDefinition{
+				URI:         "agenthub://knowledge/collections",
+				Name:        "Knowledge Collections",
+				Description: "List of all knowledge base collections with document counts",
+				MimeType:    "application/json",
+			},
+			Capability: "knowledge.read",
 		},
 		{
-			URI:         "agenthub://agents/manifest",
-			Name:        "Agent Manifest",
-			Description: "Complete list of registered agents with their capabilities and metadata",
-			MimeType:    "application/json",
+			Definition: protocol.ResourceDefinition{
+				URI:         "agenthub://agents/manifest",
+				Name:        "Agent Manifest",
+				Description: "Authenticated actor's available agents with safe catalog metadata",
+				MimeType:    "application/json",
+			},
+			Capability: "agent.read",
 		},
 		{
-			URI:         "agenthub://templates/catalog",
-			Name:        "Template Catalog",
-			Description: "All available agent templates from the marketplace",
-			MimeType:    "application/json",
+			Definition: protocol.ResourceDefinition{
+				URI:         "agenthub://templates/catalog",
+				Name:        "Template Catalog",
+				Description: "All available agent templates from the marketplace",
+				MimeType:    "application/json",
+			},
+			Capability: "template.read",
 		},
 		{
-			URI:         "agenthub://workspaces/list",
-			Name:        "Workspace List",
-			Description: "List of workspaces with member counts",
-			MimeType:    "application/json",
+			Definition: protocol.ResourceDefinition{
+				URI:         "agenthub://workspaces/list",
+				Name:        "Workspace List",
+				Description: "List of workspaces with member counts",
+				MimeType:    "application/json",
+			},
+			Capability: "workspace.read",
 		},
+	}
+	for _, resource := range resources {
+		r.registerResource(resource)
 	}
 }
 
@@ -386,6 +445,21 @@ func (r *Registry) knowledgeSearchHandler(ctx context.Context, args map[string]a
 }
 
 func (r *Registry) listAgentsHandler(ctx context.Context, _ map[string]any) (*protocol.ToolCallResult, error) {
+	data, err := r.fetchAgentCatalog(ctx)
+	if err != nil {
+		if errors.Is(err, ErrTenantIdentityRequired) || errors.Is(err, ErrDownstreamCredentialRequired) {
+			return nil, err
+		}
+		return errorResult(fmt.Sprintf("Failed to list agents: %v", err)), nil
+	}
+	return &protocol.ToolCallResult{
+		Content: []protocol.ToolContent{
+			{Type: "text", Text: string(data)},
+		},
+	}, nil
+}
+
+func (r *Registry) fetchAgentCatalog(ctx context.Context) ([]byte, error) {
 	principal, err := tenantPrincipal(ctx)
 	if err != nil {
 		return nil, err
@@ -397,7 +471,7 @@ func (r *Registry) listAgentsHandler(ctx context.Context, _ map[string]any) (*pr
 
 	endpoint, err := url.Parse(strings.TrimRight(r.gatewayURL, "/") + "/platform/agent-registry")
 	if err != nil {
-		return errorResult(fmt.Sprintf("Failed to build agent registry request: %v", err)), nil
+		return nil, fmt.Errorf("build agent registry endpoint: %w", err)
 	}
 	query := endpoint.Query()
 	query.Set("tenant_id", principal.TenantID)
@@ -405,31 +479,27 @@ func (r *Registry) listAgentsHandler(ctx context.Context, _ map[string]any) (*pr
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return errorResult(fmt.Sprintf("Failed to build agent registry request: %v", err)), nil
+		return nil, fmt.Errorf("build agent registry request: %w", err)
 	}
 	req.Header.Set("Authorization", authorization)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return errorResult(fmt.Sprintf("Failed to list agents: %v", err)), nil
+		return nil, fmt.Errorf("request agent registry: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errorResult(fmt.Sprintf("Failed to list agents: gateway returned HTTP %d", resp.StatusCode)), nil
+		return nil, fmt.Errorf("gateway returned HTTP %d", resp.StatusCode)
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return errorResult(fmt.Sprintf("Failed to read agent registry response: %v", err)), nil
+		return nil, fmt.Errorf("read agent registry response: %w", err)
 	}
 	if !json.Valid(data) {
-		return errorResult("Failed to list agents: gateway returned invalid JSON"), nil
+		return nil, errors.New("gateway returned invalid JSON")
 	}
-	return &protocol.ToolCallResult{
-		Content: []protocol.ToolContent{
-			{Type: "text", Text: string(data)},
-		},
-	}, nil
+	return data, nil
 }
 
 func (r *Registry) callAgentHandler(ctx context.Context, args map[string]any) (*protocol.ToolCallResult, error) {
@@ -654,34 +724,56 @@ func (r *Registry) systemHealthHandler(ctx context.Context, _ map[string]any) (*
 // ── Resource Handlers ────────────────────────────────────────────────
 
 func (r *Registry) handleResource(ctx context.Context, res protocol.ResourceDefinition) (*protocol.ResourceReadResult, error) {
-	var url string
+	if res.URI == "agenthub://agents/manifest" {
+		data, err := r.fetchAgentCatalog(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("agent manifest fetch failed: %w", err)
+		}
+		return resourceTextResult(res, data), nil
+	}
+
+	var endpoint string
 	switch res.URI {
 	case "agenthub://knowledge/collections":
-		url = r.knowledgeURL + "/collections"
-	case "agenthub://agents/manifest":
-		url = r.gatewayURL + "/platform/agent-registry"
+		endpoint = r.knowledgeURL + "/collections"
 	case "agenthub://templates/catalog":
-		url = r.gatewayURL + "/platform/templates"
+		endpoint = r.gatewayURL + "/platform/templates"
 	case "agenthub://workspaces/list":
-		url = r.gatewayURL + "/platform/workspaces"
+		endpoint = r.gatewayURL + "/platform/workspaces"
 	default:
 		return nil, fmt.Errorf("unknown resource URI: %s", res.URI)
 	}
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build resource request: %w", err)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("resource fetch failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("resource endpoint returned HTTP %d", resp.StatusCode)
+	}
 
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read resource response: %w", err)
+	}
+	if strings.EqualFold(res.MimeType, "application/json") && !json.Valid(data) {
+		return nil, errors.New("resource endpoint returned invalid JSON")
+	}
+	return resourceTextResult(res, data), nil
+}
+
+func resourceTextResult(res protocol.ResourceDefinition, data []byte) *protocol.ResourceReadResult {
 	return &protocol.ResourceReadResult{
 		Contents: []protocol.ResourceContent{
 			{URI: res.URI, MimeType: res.MimeType, Text: string(data)},
 		},
-	}, nil
+	}
 }
 
 // ── Prompt Handlers ──────────────────────────────────────────────────

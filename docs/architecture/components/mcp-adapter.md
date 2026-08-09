@@ -42,7 +42,12 @@ scope is snapshotted into each call only after authorization.
   from IAM context, requires `agent:read`, reads the existing user-scoped Agent
   catalog as a read-only compatibility projection, and excludes provider
   credentials, base URLs, raw configuration, and avatar data from the MCP
-  response.
+  response. The `agenthub://agents/manifest` resource uses the same fetch path
+  and is statically bound to `agent.read`.
+- Resource authorization: every built-in resource has one Registry-owned
+  capability binding. Stateless reads must exactly match that capability
+  before a handler or network request runs. Legacy transports without a
+  validated execution context retain compatibility behavior.
 - Audit: `MCPToolAuditEvent` containing request ID, correlation context, tool
   name, success, duration, and sanitized error type only.
 

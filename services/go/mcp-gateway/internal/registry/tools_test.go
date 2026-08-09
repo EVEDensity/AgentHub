@@ -163,6 +163,233 @@ func TestRegistryRejectsIncompleteOrDuplicateBindings(t *testing.T) {
 	}
 }
 
+func TestBuiltinResourcesDeclareStableCapabilities(t *testing.T) {
+	r := New("http://knowledge.test", "http://gateway.test")
+	want := map[string]string{
+		"agenthub://knowledge/collections": "knowledge.read",
+		"agenthub://agents/manifest":       "agent.read",
+		"agenthub://templates/catalog":     "template.read",
+		"agenthub://workspaces/list":       "workspace.read",
+	}
+	if len(r.resources) != len(want) {
+		t.Fatalf("registered resources = %d, want %d", len(r.resources), len(want))
+	}
+	for _, resource := range r.resources {
+		capability, ok := want[resource.Definition.URI]
+		if !ok {
+			t.Fatalf("resource %q is not expected", resource.Definition.URI)
+		}
+		if resource.Capability != capability {
+			t.Fatalf("resource %q capability = %q, want %q", resource.Definition.URI, resource.Capability, capability)
+		}
+	}
+}
+
+func TestRegistryRejectsIncompleteOrDuplicateResourceBindings(t *testing.T) {
+	valid := RegisteredResource{
+		Definition: protocol.ResourceDefinition{URI: "agenthub://repository/files"},
+		Capability: "repository.read",
+	}
+	tests := []struct {
+		name     string
+		setup    func(*Registry)
+		resource RegisteredResource
+	}{
+		{name: "missing uri", resource: RegisteredResource{Capability: valid.Capability}},
+		{name: "missing capability", resource: RegisteredResource{Definition: valid.Definition}},
+		{name: "duplicate", setup: func(r *Registry) { r.registerResource(valid) }, resource: valid},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := &Registry{resources: make([]RegisteredResource, 0)}
+			if test.setup != nil {
+				test.setup(r)
+			}
+			defer func() {
+				if recover() == nil {
+					t.Fatal("resource registration must fail closed")
+				}
+			}()
+			r.registerResource(test.resource)
+		})
+	}
+}
+
+func TestRegistryRejectsResourceCapabilityMismatchBeforeNetwork(t *testing.T) {
+	called := false
+	downstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer downstream.Close()
+
+	_, err := New(downstream.URL, downstream.URL).ReadResource(
+		executionContext("workspace.read"),
+		"agenthub://agents/manifest",
+	)
+	var mismatch *ResourceCapabilityMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("error = %v, want ResourceCapabilityMismatchError", err)
+	}
+	if mismatch.URI != "agenthub://agents/manifest" || mismatch.DeclaredCapability != "workspace.read" {
+		t.Fatalf("unexpected mismatch metadata: %+v", mismatch)
+	}
+	if called {
+		t.Fatal("mismatched resource capability must fail before network")
+	}
+}
+
+func TestResourceCapabilityMismatchReturnsJSONRPCError(t *testing.T) {
+	called := false
+	downstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer downstream.Close()
+	handler := protocol.NewHandler(
+		protocol.ServerInfo{Name: "test", Version: "test"},
+		protocol.ServerCapabilities{Resources: &protocol.ResourcesCapability{}},
+		New(downstream.URL, downstream.URL),
+	)
+
+	responses, err := handler.Dispatch(
+		executionContext("workspace.read"),
+		json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"agenthub://agents/manifest"}}`),
+	)
+	if err != nil {
+		t.Fatalf("dispatch resource read: %v", err)
+	}
+	if len(responses) != 1 {
+		t.Fatalf("responses = %d, want 1", len(responses))
+	}
+	response, ok := responses[0].(protocol.ErrorResponse)
+	if !ok || response.Error.Code != protocol.ErrInternalError {
+		t.Fatalf("response = %#v, want JSON-RPC internal error", responses[0])
+	}
+	if called {
+		t.Fatal("JSON-RPC mismatch must fail before network")
+	}
+}
+
+func TestAgentManifestResourcePropagatesAuthenticatedTenantAndCredential(t *testing.T) {
+	var tenantID, authorization string
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID = r.URL.Query().Get("tenant_id")
+		authorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tenant_id":"tenant-real","agents":[]}`))
+	}))
+	defer downstream.Close()
+
+	identity, wantAuthorization := authenticatedIdentityContext(t)
+	ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+		MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+		Capability: "agent.read", Scope: map[string]any{},
+	})
+	result, err := New("http://knowledge.test", downstream.URL).ReadResource(ctx, "agenthub://agents/manifest")
+	if err != nil {
+		t.Fatalf("read agent manifest: %v", err)
+	}
+	if tenantID != "tenant-real" {
+		t.Fatalf("tenant_id = %q, want authenticated tenant", tenantID)
+	}
+	if authorization != wantAuthorization {
+		t.Fatal("verified credential was not forwarded")
+	}
+	if len(result.Contents) != 1 || !json.Valid([]byte(result.Contents[0].Text)) {
+		t.Fatalf("unexpected resource result: %+v", result)
+	}
+}
+
+func TestAgentManifestResourceFailsBeforeNetworkWithoutIdentityOrCredential(t *testing.T) {
+	called := false
+	downstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer downstream.Close()
+	r := New("http://knowledge.test", downstream.URL)
+
+	_, err := r.ReadResource(executionContext("agent.read"), "agenthub://agents/manifest")
+	if !errors.Is(err, ErrTenantIdentityRequired) {
+		t.Fatalf("missing identity error = %v, want ErrTenantIdentityRequired", err)
+	}
+	ctx := iam.WithTenantContext(executionContext("agent.read"), iam.TenantContext{
+		TenantID: "tenant-real",
+		UserID:   "actor-real",
+	})
+	_, err = r.ReadResource(ctx, "agenthub://agents/manifest")
+	if !errors.Is(err, ErrDownstreamCredentialRequired) {
+		t.Fatalf("missing credential error = %v, want ErrDownstreamCredentialRequired", err)
+	}
+	if called {
+		t.Fatal("agent manifest must fail before network without identity or credential")
+	}
+}
+
+func TestAgentManifestResourceRejectsDownstreamFailureAndInvalidJSON(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "non-success status", status: http.StatusForbidden, body: `{"error":"forbidden"}`},
+		{name: "invalid json", status: http.StatusOK, body: `not-json`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer downstream.Close()
+			identity, _ := authenticatedIdentityContext(t)
+			ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+				MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+				Capability: "agent.read", Scope: map[string]any{},
+			})
+			if _, err := New("http://knowledge.test", downstream.URL).ReadResource(ctx, "agenthub://agents/manifest"); err == nil {
+				t.Fatal("downstream failure must fail the resource read")
+			}
+		})
+	}
+}
+
+func TestResourceReadKeepsLegacyTransportCompatibility(t *testing.T) {
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"agents":[]}`))
+	}))
+	defer downstream.Close()
+	identity, _ := authenticatedIdentityContext(t)
+
+	if _, err := New("http://knowledge.test", downstream.URL).ReadResource(identity, "agenthub://agents/manifest"); err != nil {
+		t.Fatalf("legacy resource read: %v", err)
+	}
+}
+
+func TestJSONResourceRejectsDownstreamFailureAndInvalidJSON(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "non-success status", status: http.StatusBadGateway, body: `{"error":"unavailable"}`},
+		{name: "invalid json", status: http.StatusOK, body: `not-json`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer downstream.Close()
+			if _, err := New(downstream.URL, "http://gateway.test").ReadResource(
+				executionContext("knowledge.read"),
+				"agenthub://knowledge/collections",
+			); err == nil {
+				t.Fatal("downstream failure must fail the resource read")
+			}
+		})
+	}
+}
+
 func TestCallAgentPropagatesAuthenticatedTenantActorAndCredential(t *testing.T) {
 	var payload map[string]any
 	var authorization string
