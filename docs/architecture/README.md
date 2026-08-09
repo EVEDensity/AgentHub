@@ -26,6 +26,7 @@ The detailed target design and migration sequence are stored locally under
 ## Contents
 
 - `components/system-boundaries.md`: ownership and request flow summary.
+- `components/harness.md`: Harness loop, checkpoint, and event boundary.
 - `components/memory.md`: current memory implementation baseline.
 - `components/`: stable component-level architecture.
 - `decisions/`: accepted and proposed Architecture Decision Records.

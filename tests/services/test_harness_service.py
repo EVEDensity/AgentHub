@@ -11,8 +11,14 @@ from app.services.harness_service import (
     FunctionCallingHarness,
     FunctionResult,
     FunctionTool,
+    HarnessCheckpoint,
+    HarnessCheckpointPort,
     HarnessError,
+    HarnessEvent,
+    HarnessEventType,
+    HarnessExecutionContext,
     HarnessRequest,
+    InMemoryHarnessCheckpointPort,
     ModelResponse,
     ModelUsage,
     SandboxHarness,
@@ -131,6 +137,80 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(result.usage.cost, 0.3)
         self.assertEqual(observed_arguments, [{"count": 3}])
         self.assertEqual(model.calls[1][1][0].content, "6")
+
+    async def test_function_calling_harness_records_correlated_execution_journal(self) -> None:
+        async def double(arguments: Mapping[str, Any]) -> str:
+            return str(arguments["count"] * 2)
+
+        execution = HarnessExecutionContext(
+            mission_id="mis-1",
+            work_unit_id="wu-1",
+            attempt=2,
+        )
+        checkpoint_port = InMemoryHarnessCheckpointPort()
+        model = ScriptedModel(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        FunctionCall(id="call-1", name="double", arguments={"count": 3}),
+                    ),
+                    usage=ModelUsage(prompt_tokens=4, completion_tokens=2),
+                ),
+                ModelResponse(
+                    content="done",
+                    usage=ModelUsage(prompt_tokens=3, completion_tokens=1),
+                ),
+            ]
+        )
+        result = await FunctionCallingHarness(
+            model,
+            [
+                FunctionTool(
+                    name="double",
+                    handler=double,
+                    validate_arguments=_validate_count,
+                )
+            ],
+            checkpoint_port=checkpoint_port,
+        ).execute(
+            HarnessRequest(
+                code="Double 3",
+                language="text",
+                timeout=1,
+                execution=execution,
+            )
+        )
+
+        self.assertTrue(result.sandbox.success)
+        self.assertEqual(
+            [event.event_type for event in checkpoint_port.events],
+            [
+                HarnessEventType.EXECUTION_STARTED,
+                HarnessEventType.ITERATION_STARTED,
+                HarnessEventType.MODEL_STARTED,
+                HarnessEventType.MODEL_COMPLETED,
+                HarnessEventType.TOOL_STARTED,
+                HarnessEventType.TOOL_COMPLETED,
+                HarnessEventType.ITERATION_STARTED,
+                HarnessEventType.MODEL_STARTED,
+                HarnessEventType.MODEL_COMPLETED,
+                HarnessEventType.EXECUTION_COMPLETED,
+            ],
+        )
+        self.assertEqual(
+            [event.sequence for event in checkpoint_port.events],
+            list(range(1, 11)),
+        )
+        self.assertTrue(all(event.execution == execution for event in checkpoint_port.events))
+        tool_event = checkpoint_port.events[5]
+        self.assertEqual(tool_event.tool_call_id, "call-1")
+        self.assertEqual(tool_event.tool_name, "double")
+        self.assertTrue(tool_event.tool_success)
+        self.assertEqual(checkpoint_port.checkpoints[5].tool_results[0].content, "6")
+        assert checkpoint_port.latest is not None
+        self.assertTrue(checkpoint_port.latest.terminal)
+        self.assertEqual(checkpoint_port.latest.iteration, 2)
+        self.assertEqual(checkpoint_port.latest.usage.total_tokens, 10)
 
     async def test_function_calling_harness_rejects_unpermitted_calls_as_feedback(self) -> None:
         model = ScriptedModel(
@@ -300,6 +380,7 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
                 )
             ]
         )
+        checkpoint_port = InMemoryHarnessCheckpointPort()
         result = await FunctionCallingHarness(
             model,
             [
@@ -310,12 +391,27 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
             max_total_tokens=4,
+            checkpoint_port=checkpoint_port,
         ).execute(HarnessRequest(code="x", language="text", timeout=1))
 
         self.assertFalse(result.sandbox.success)
         self.assertEqual(result.sandbox.error, "Harness total-token budget exhausted")
         self.assertFalse(executed)
         self.assertEqual(result.usage.total_tokens, 5)
+        self.assertEqual(
+            [event.event_type for event in checkpoint_port.events[-2:]],
+            [
+                HarnessEventType.BUDGET_EXHAUSTED,
+                HarnessEventType.EXECUTION_FAILED,
+            ],
+        )
+        self.assertEqual(checkpoint_port.events[-1].budget, "total_tokens")
+        assert checkpoint_port.latest is not None
+        self.assertTrue(checkpoint_port.latest.terminal)
+        self.assertEqual(
+            checkpoint_port.latest.failure_reason,
+            "Harness total-token budget exhausted",
+        )
 
     async def test_function_calling_harness_enforces_model_cost_budget(self) -> None:
         model = ScriptedModel(
@@ -365,3 +461,73 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
             ModelUsage(cost=float("nan"))
         with self.assertRaises(ValueError):
             FunctionCallingHarness(ScriptedModel([]), [], max_model_cost=float("nan"))
+
+    async def test_in_memory_checkpoint_port_cannot_be_reused_for_another_run(self) -> None:
+        checkpoint_port = InMemoryHarnessCheckpointPort()
+        harness = FunctionCallingHarness(
+            ScriptedModel(
+                [ModelResponse(content="first"), ModelResponse(content="second")]
+            ),
+            [],
+            checkpoint_port=checkpoint_port,
+        )
+
+        first = await harness.execute(HarnessRequest(code="x", language="text", timeout=1))
+        self.assertTrue(first.sandbox.success)
+        with self.assertRaisesRegex(HarnessError, "request-scoped"):
+            await harness.execute(HarnessRequest(code="y", language="text", timeout=1))
+
+    async def test_checkpoint_adapter_failure_stops_before_model_execution(self) -> None:
+        class FailingCheckpointPort(HarnessCheckpointPort):
+            async def record(
+                self,
+                checkpoint: HarnessCheckpoint,
+                event: HarnessEvent,
+            ) -> None:
+                del checkpoint, event
+                raise RuntimeError("unavailable")
+
+        model = ScriptedModel([ModelResponse(content="must not run")])
+        harness = FunctionCallingHarness(
+            model,
+            [],
+            checkpoint_port=FailingCheckpointPort(),
+        )
+
+        with self.assertRaisesRegex(HarnessError, "checkpoint recording failed"):
+            await harness.execute(HarnessRequest(code="x", language="text", timeout=1))
+        self.assertEqual(model.calls, [])
+
+    async def test_model_failure_records_safe_terminal_event(self) -> None:
+        class FailingModel:
+            async def complete(
+                self,
+                request: HarnessRequest,
+                tool_results: tuple[FunctionResult, ...],
+            ) -> ModelResponse:
+                del request, tool_results
+                raise RuntimeError("provider secret")
+
+        checkpoint_port = InMemoryHarnessCheckpointPort()
+        result = await FunctionCallingHarness(
+            FailingModel(),
+            [],
+            checkpoint_port=checkpoint_port,
+        ).execute(HarnessRequest(code="x", language="text", timeout=1))
+
+        self.assertFalse(result.sandbox.success)
+        self.assertEqual(
+            result.sandbox.error,
+            "Harness model execution failed: RuntimeError",
+        )
+        self.assertNotIn("provider secret", result.sandbox.error)
+        self.assertEqual(
+            checkpoint_port.events[-1].event_type,
+            HarnessEventType.EXECUTION_FAILED,
+        )
+
+    def test_execution_context_requires_stable_attempt_identity(self) -> None:
+        with self.assertRaises(ValueError):
+            HarnessExecutionContext(mission_id="", work_unit_id="wu-1", attempt=1)
+        with self.assertRaises(ValueError):
+            HarnessExecutionContext(mission_id="mis-1", work_unit_id="wu-1", attempt=0)

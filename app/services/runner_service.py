@@ -14,6 +14,7 @@ from app.services.artifact_store_service import (
     PublishedArtifact,
 )
 from app.services.harness_service import (
+    HarnessExecutionContext,
     HarnessPort,
     HarnessRequest,
     SandboxHarness,
@@ -461,6 +462,11 @@ class WorkUnitRunner:
                     language=language,
                     timeout=timeout,
                     cwd=cwd,
+                    execution=HarnessExecutionContext(
+                        mission_id=mission_id,
+                        work_unit_id=work_unit_id,
+                        attempt=lease.attempt,
+                    ),
                 )
             )
         )

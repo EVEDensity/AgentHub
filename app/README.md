@@ -16,8 +16,8 @@ boundary. It is not the permanent home of every Agent feature.
   ownership. Harness owns bounded model/tool loops and explicit per-run tool
   grants resolved from Mission Contract and WorkUnit capabilities;
   ModelAdapterPort normalizes provider responses and reports provider usage;
-  Harness enforces per-run token and model-cost budgets; Runner must not write
-  repository state directly.
+  Harness enforces per-run token and model-cost budgets and emits request-scoped
+  checkpoints; Runner must not write repository state directly.
 - `api/`: HTTP/WebSocket transport; handlers must delegate to services.
 - `schemas/`: versioned request and response validation.
 - `compat/`: one-way adapters from legacy Task/DAG data into Mission objects.

@@ -261,6 +261,11 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(harness.requests), 1)
         self.assertEqual(harness.requests[0].code, "print('harness')")
         self.assertEqual(harness.requests[0].timeout, 12)
+        self.assertIsNotNone(harness.requests[0].execution)
+        assert harness.requests[0].execution is not None
+        self.assertEqual(harness.requests[0].execution.mission_id, "mis-1")
+        self.assertEqual(harness.requests[0].execution.work_unit_id, "wu-1")
+        self.assertEqual(harness.requests[0].execution.attempt, 1)
 
     async def test_runner_executes_publishes_registers_and_completes(self) -> None:
         control = FakeControl()

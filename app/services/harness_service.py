@@ -8,11 +8,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from app.services.harness_checkpoint import (
+    HarnessCheckpoint,
+    HarnessCheckpointPort,
+    HarnessError,
+    HarnessEvent,
+    HarnessEventType,
+    HarnessExecutionContext,
+    InMemoryHarnessCheckpointPort,
+    _HarnessRecorder,
+)
 from app.services.tools.sandbox_executor import SandboxResult
-
-
-class HarnessError(RuntimeError):
-    """Raised when a Harness cannot execute a bounded WorkUnit request."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,7 @@ class HarnessRequest:
     language: str
     timeout: float
     cwd: Path | None = None
+    execution: HarnessExecutionContext | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,7 @@ class FunctionCallingHarness:
         max_tool_calls: int = 32,
         max_total_tokens: int | None = None,
         max_model_cost: float | None = None,
+        checkpoint_port: HarnessCheckpointPort | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -194,41 +202,103 @@ class FunctionCallingHarness:
         self._max_tool_calls = max_tool_calls
         self._max_total_tokens = max_total_tokens
         self._max_model_cost = max_model_cost
+        self._checkpoint_port = checkpoint_port
 
     async def execute(self, request: HarnessRequest) -> HarnessResult:
         if request.timeout <= 0:
             raise HarnessError("Harness timeout must be positive")
 
         started_at = time.monotonic()
+        recorder = _HarnessRecorder(
+            self._checkpoint_port,
+            request.execution,
+            started_at,
+        )
         tool_results: list[FunctionResult] = []
         tool_calls = 0
         iterations = 0
         usage = ModelUsage()
+
+        async def failed(
+            message: str,
+            *,
+            budget: str | None = None,
+        ) -> HarnessResult:
+            if budget is not None:
+                await recorder.record(
+                    HarnessEventType.BUDGET_EXHAUSTED,
+                    iteration=iterations,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                    tool_results=tuple(tool_results),
+                    budget=budget,
+                    reason=message,
+                )
+            await recorder.record(
+                HarnessEventType.EXECUTION_FAILED,
+                iteration=iterations,
+                tool_calls=tool_calls,
+                usage=usage,
+                tool_results=tuple(tool_results),
+                budget=budget,
+                reason=message,
+                terminal=True,
+            )
+            return _failed_result(
+                message,
+                iterations,
+                tool_calls,
+                _duration_ms(started_at),
+                usage,
+            )
+
         try:
             async with asyncio.timeout(request.timeout):
+                await recorder.record(
+                    HarnessEventType.EXECUTION_STARTED,
+                    iteration=iterations,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                    tool_results=tuple(tool_results),
+                )
                 for iteration in range(1, self._max_iterations + 1):
                     iterations = iteration
+                    await recorder.record(
+                        HarnessEventType.ITERATION_STARTED,
+                        iteration=iteration,
+                        tool_calls=tool_calls,
+                        usage=usage,
+                        tool_results=tuple(tool_results),
+                    )
+                    await recorder.record(
+                        HarnessEventType.MODEL_STARTED,
+                        iteration=iteration,
+                        tool_calls=tool_calls,
+                        usage=usage,
+                        tool_results=tuple(tool_results),
+                    )
                     response = await self._model.complete(request, tuple(tool_results))
                     usage = usage.add(response.usage)
+                    await recorder.record(
+                        HarnessEventType.MODEL_COMPLETED,
+                        iteration=iteration,
+                        tool_calls=tool_calls,
+                        usage=usage,
+                        tool_results=tuple(tool_results),
+                    )
                     budget_error = self._budget_error(usage)
                     if budget_error is not None:
-                        return _failed_result(
-                            budget_error,
-                            iteration,
-                            tool_calls,
-                            _duration_ms(started_at),
-                            usage,
+                        budget, message = budget_error
+                        return await failed(
+                            message,
+                            budget=budget,
                         )
                     if not response.tool_calls:
                         if not response.content:
-                            return _failed_result(
-                                "model returned neither content nor function calls",
-                                iteration,
-                                tool_calls,
-                                _duration_ms(started_at),
-                                usage,
+                            return await failed(
+                                "model returned neither content nor function calls"
                             )
-                        return HarnessResult(
+                        result = HarnessResult(
                             sandbox=SandboxResult(
                                 success=True,
                                 stdout=response.content,
@@ -241,41 +311,63 @@ class FunctionCallingHarness:
                             tool_calls=tool_calls,
                             usage=usage,
                         )
+                        await recorder.record(
+                            HarnessEventType.EXECUTION_COMPLETED,
+                            iteration=iteration,
+                            tool_calls=tool_calls,
+                            usage=usage,
+                            tool_results=tuple(tool_results),
+                            terminal=True,
+                        )
+                        return result
 
                     for call in response.tool_calls:
-                        tool_calls += 1
-                        if tool_calls > self._max_tool_calls:
-                            return _failed_result(
+                        if tool_calls >= self._max_tool_calls:
+                            return await failed(
                                 "Harness tool-call budget exhausted",
-                                iteration,
-                                tool_calls - 1,
-                                _duration_ms(started_at),
-                                usage,
+                                budget="tool_calls",
                             )
-                        tool_results.append(await self._execute_function_call(call))
+                        tool_calls += 1
+                        await recorder.record(
+                            HarnessEventType.TOOL_STARTED,
+                            iteration=iteration,
+                            tool_calls=tool_calls,
+                            usage=usage,
+                            tool_results=tuple(tool_results),
+                            tool_call=call,
+                        )
+                        function_result = await self._execute_function_call(call)
+                        tool_results.append(function_result)
+                        await recorder.record(
+                            HarnessEventType.TOOL_COMPLETED,
+                            iteration=iteration,
+                            tool_calls=tool_calls,
+                            usage=usage,
+                            tool_results=tuple(tool_results),
+                            tool_call=call,
+                            tool_success=function_result.success,
+                        )
         except TimeoutError:
-            return _failed_result(
+            return await failed(
                 f"Harness timed out after {request.timeout}s",
-                iterations,
-                tool_calls,
-                _duration_ms(started_at),
-                usage,
+                budget="timeout",
             )
+        except HarnessError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - provider failures become safe results
+            return await failed(f"Harness model execution failed: {type(exc).__name__}")
 
-        return _failed_result(
+        return await failed(
             "Harness iteration budget exhausted before a final response",
-            iterations,
-            tool_calls,
-            _duration_ms(started_at),
-            usage,
+            budget="iterations",
         )
 
-    def _budget_error(self, usage: ModelUsage) -> str | None:
+    def _budget_error(self, usage: ModelUsage) -> tuple[str, str] | None:
         if (
             self._max_total_tokens is not None
             and usage.total_tokens > self._max_total_tokens
         ):
-            return "Harness total-token budget exhausted"
+            return "total_tokens", "Harness total-token budget exhausted"
         if (
             self._max_model_cost is not None
             and usage.cost > self._max_model_cost
@@ -286,7 +378,7 @@ class FunctionCallingHarness:
                 abs_tol=1e-12,
             )
         ):
-            return "Harness model-cost budget exhausted"
+            return "model_cost", "Harness model-cost budget exhausted"
         return None
 
     async def _execute_function_call(self, call: FunctionCall) -> FunctionResult:
@@ -384,10 +476,16 @@ __all__ = [
     "FunctionCallingHarness",
     "FunctionResult",
     "FunctionTool",
+    "HarnessCheckpoint",
+    "HarnessCheckpointPort",
     "HarnessError",
+    "HarnessEvent",
+    "HarnessEventType",
+    "HarnessExecutionContext",
     "HarnessPort",
     "HarnessRequest",
     "HarnessResult",
+    "InMemoryHarnessCheckpointPort",
     "ModelPort",
     "ModelResponse",
     "ModelUsage",
