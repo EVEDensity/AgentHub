@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -11,6 +12,7 @@ from app.services.harness_service import (
     HarnessRequest,
     ModelPort,
     ModelResponse,
+    ModelUsage,
 )
 
 
@@ -39,15 +41,26 @@ class ModelAdapterPort(ModelPort):
         base_url: str = "",
         system_prompt: str = "",
         tools: list[dict[str, Any]] | None = None,
+        prompt_token_cost: float = 0.0,
+        completion_token_cost: float = 0.0,
     ) -> None:
         if not model.strip():
             raise ValueError("model must be non-empty")
+        if (
+            not math.isfinite(prompt_token_cost)
+            or prompt_token_cost < 0
+            or not math.isfinite(completion_token_cost)
+            or completion_token_cost < 0
+        ):
+            raise ValueError("Model token costs must be non-negative")
         self._adapter = adapter
         self._model = model
         self._api_key = api_key
         self._base_url = base_url
         self._system_prompt = system_prompt
         self._tools = list(tools) if tools is not None else None
+        self._prompt_token_cost = prompt_token_cost
+        self._completion_token_cost = completion_token_cost
 
     async def complete(
         self,
@@ -63,7 +76,27 @@ class ModelAdapterPort(ModelPort):
             system_prompt=self._system_prompt,
             tools=self._tools,
         )
-        return normalize_model_response(raw)
+        response = normalize_model_response(raw)
+        return ModelResponse(
+            content=response.content,
+            tool_calls=response.tool_calls,
+            usage=self._usage(),
+        )
+
+    def _usage(self) -> ModelUsage:
+        raw_usage = getattr(self._adapter, "last_usage", {})
+        if not isinstance(raw_usage, Mapping):
+            return ModelUsage()
+        prompt_tokens = _non_negative_int(raw_usage.get("prompt_tokens"))
+        completion_tokens = _non_negative_int(raw_usage.get("completion_tokens"))
+        return ModelUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost=(
+                prompt_tokens * self._prompt_token_cost
+                + completion_tokens * self._completion_token_cost
+            ),
+        )
 
 
 def _render_prompt(prompt: str, tool_results: tuple[FunctionResult, ...]) -> str:
@@ -79,6 +112,12 @@ def _render_prompt(prompt: str, tool_results: tuple[FunctionResult, ...]) -> str
         for result in tool_results
     ]
     return f"{prompt}\n\nTool results:\n{json.dumps(rendered, ensure_ascii=False, sort_keys=True)}"
+
+
+def _non_negative_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 def normalize_model_response(raw: object) -> ModelResponse:

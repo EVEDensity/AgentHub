@@ -9,8 +9,9 @@ from app.services.model_port import ModelAdapterPort, normalize_model_response
 
 
 class FakeAdapter:
-    def __init__(self, response: str) -> None:
+    def __init__(self, response: str, *, usage: object = None) -> None:
         self.response = response
+        self.last_usage = usage
         self.calls: list[dict[str, Any]] = []
 
     async def execute_prompt(self, prompt: str, model: str, *args: Any, **kwargs: Any) -> str:
@@ -20,12 +21,17 @@ class FakeAdapter:
 
 class ModelPortTests(unittest.IsolatedAsyncioTestCase):
     async def test_adapter_forwards_request_and_renders_tool_results(self) -> None:
-        adapter = FakeAdapter('{"content":"done"}')
+        adapter = FakeAdapter(
+            '{"content":"done"}',
+            usage={"prompt_tokens": 10, "completion_tokens": 5},
+        )
         port = ModelAdapterPort(
             adapter,
             model="test-model",
             system_prompt="system",
             tools=[{"type": "function", "function": {"name": "lookup"}}],
+            prompt_token_cost=0.01,
+            completion_token_cost=0.02,
         )
         response = await port.complete(
             HarnessRequest(code="answer", language="text", timeout=5, cwd=Path("repo")),
@@ -40,6 +46,9 @@ class ModelPortTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(response.content, "done")
+        self.assertEqual(response.usage.prompt_tokens, 10)
+        self.assertEqual(response.usage.completion_tokens, 5)
+        self.assertEqual(response.usage.cost, 0.2)
         call = adapter.calls[0]
         self.assertIn("Tool results:", call["prompt"])
         self.assertIn('"callId": "call-1"', call["prompt"])
@@ -89,3 +98,24 @@ class ModelPortTests(unittest.IsolatedAsyncioTestCase):
             normalize_model_response({"answer": "plain JSON"}).content,
             '{"answer": "plain JSON"}',
         )
+
+    async def test_missing_or_invalid_usage_defaults_to_zero(self) -> None:
+        for usage in (None, {"prompt_tokens": -1, "completion_tokens": "5"}, []):
+            with self.subTest(usage=usage):
+                response = await ModelAdapterPort(
+                    FakeAdapter('{"content":"done"}', usage=usage),
+                    model="test-model",
+                ).complete(HarnessRequest(code="x", language="text", timeout=1), ())
+                self.assertEqual(response.usage.prompt_tokens, 0)
+                self.assertEqual(response.usage.completion_tokens, 0)
+                self.assertEqual(response.usage.cost, 0)
+
+    def test_negative_token_cost_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            ModelAdapterPort(FakeAdapter("ok"), model="test", prompt_token_cost=-0.1)
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            ModelAdapterPort(
+                FakeAdapter("ok"),
+                model="test",
+                completion_token_cost=float("nan"),
+            )

@@ -20,6 +20,7 @@ from app.services.harness_service import (
     HarnessRequest,
     HarnessResult,
     ModelResponse,
+    ModelUsage,
 )
 from app.services.runner_service import (
     MissionControlRunnerClient,
@@ -144,6 +145,19 @@ class FinalResponseModel:
         return ModelResponse(content="harness model output\n")
 
 
+class OverBudgetModel:
+    async def complete(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+    ) -> ModelResponse:
+        del request, tool_results
+        return ModelResponse(
+            content="must not be published",
+            usage=ModelUsage(prompt_tokens=6, completion_tokens=5),
+        )
+
+
 class FakePublisher:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
@@ -188,6 +202,32 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             [name for name, _ in control.calls],
             ["lease", "start", "register", "complete"],
         )
+
+    async def test_runner_records_harness_budget_failure_without_artifact(self) -> None:
+        control = FakeControl()
+        publisher = FakePublisher()
+        runner = WorkUnitRunner(
+            control,
+            publisher=publisher,
+            harness=FunctionCallingHarness(
+                OverBudgetModel(),
+                [],
+                max_total_tokens=10,
+            ),
+            runner_id="runner-1",
+        )
+
+        result = await runner.run(
+            "mis-1",
+            "wu-1",
+            code="Summarize the work",
+            language="text",
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.failure_reason, "Harness total-token budget exhausted")
+        self.assertEqual(publisher.contents, [])
+        self.assertEqual([name for name, _ in control.calls], ["lease", "start", "fail"])
 
     async def test_runner_delegates_execution_to_explicit_harness(self) -> None:
         control = FakeControl()

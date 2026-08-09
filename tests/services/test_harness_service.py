@@ -14,6 +14,7 @@ from app.services.harness_service import (
     HarnessError,
     HarnessRequest,
     ModelResponse,
+    ModelUsage,
     SandboxHarness,
 )
 from app.services.tools.sandbox_executor import SandboxResult
@@ -98,9 +99,13 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
                             name="double",
                             arguments={"count": 3},
                         ),
-                    )
+                    ),
+                    usage=ModelUsage(prompt_tokens=4, completion_tokens=2, cost=0.1),
                 ),
-                ModelResponse(content="The result is 6."),
+                ModelResponse(
+                    content="The result is 6.",
+                    usage=ModelUsage(prompt_tokens=3, completion_tokens=4, cost=0.2),
+                ),
             ]
         )
         harness = FunctionCallingHarness(
@@ -122,6 +127,8 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.sandbox.stdout, "The result is 6.")
         self.assertEqual(result.iterations, 2)
         self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(result.usage.total_tokens, 13)
+        self.assertAlmostEqual(result.usage.cost, 0.3)
         self.assertEqual(observed_arguments, [{"count": 3}])
         self.assertEqual(model.calls[1][1][0].content, "6")
 
@@ -275,3 +282,86 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.sandbox.success)
         self.assertIn("timed out", result.sandbox.error)
         self.assertEqual(result.iterations, 1)
+
+    async def test_function_calling_harness_enforces_total_token_budget_before_tools(self) -> None:
+        executed = False
+
+        async def tool(arguments: Mapping[str, Any]) -> str:
+            nonlocal executed
+            del arguments
+            executed = True
+            return "should not run"
+
+        model = ScriptedModel(
+            [
+                ModelResponse(
+                    tool_calls=(FunctionCall(id="call-1", name="tool", arguments={}),),
+                    usage=ModelUsage(prompt_tokens=3, completion_tokens=2),
+                )
+            ]
+        )
+        result = await FunctionCallingHarness(
+            model,
+            [
+                FunctionTool(
+                    name="tool",
+                    handler=tool,
+                    validate_arguments=lambda args: args,
+                )
+            ],
+            max_total_tokens=4,
+        ).execute(HarnessRequest(code="x", language="text", timeout=1))
+
+        self.assertFalse(result.sandbox.success)
+        self.assertEqual(result.sandbox.error, "Harness total-token budget exhausted")
+        self.assertFalse(executed)
+        self.assertEqual(result.usage.total_tokens, 5)
+
+    async def test_function_calling_harness_enforces_model_cost_budget(self) -> None:
+        model = ScriptedModel(
+            [ModelResponse(content="done", usage=ModelUsage(cost=0.11))]
+        )
+        result = await FunctionCallingHarness(
+            model,
+            [],
+            max_model_cost=0.1,
+        ).execute(HarnessRequest(code="x", language="text", timeout=1))
+
+        self.assertFalse(result.sandbox.success)
+        self.assertEqual(result.sandbox.error, "Harness model-cost budget exhausted")
+        self.assertEqual(result.usage.cost, 0.11)
+
+    async def test_function_calling_harness_allows_exact_accumulated_cost_budget(self) -> None:
+        model = ScriptedModel(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        FunctionCall(id="call-1", name="missing", arguments={}),
+                    ),
+                    usage=ModelUsage(cost=0.1),
+                ),
+                ModelResponse(content="done", usage=ModelUsage(cost=0.2)),
+            ]
+        )
+        result = await FunctionCallingHarness(
+            model,
+            [],
+            max_model_cost=0.3,
+        ).execute(HarnessRequest(code="x", language="text", timeout=1))
+
+        self.assertTrue(result.sandbox.success)
+        self.assertAlmostEqual(result.usage.cost, 0.3)
+
+    def test_model_usage_rejects_negative_values(self) -> None:
+        with self.assertRaises(ValueError):
+            ModelUsage(prompt_tokens=-1)
+        with self.assertRaises(ValueError):
+            ModelUsage(completion_tokens=-1)
+        with self.assertRaises(ValueError):
+            ModelUsage(cost=-0.1)
+        with self.assertRaises(ValueError):
+            ModelUsage(prompt_tokens=1.5)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            ModelUsage(cost=float("nan"))
+        with self.assertRaises(ValueError):
+            FunctionCallingHarness(ScriptedModel([]), [], max_model_cost=float("nan"))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -12,6 +13,41 @@ from app.services.tools.sandbox_executor import SandboxResult
 
 class HarnessError(RuntimeError):
     """Raised when a Harness cannot execute a bounded WorkUnit request."""
+
+
+@dataclass(frozen=True)
+class ModelUsage:
+    """Provider-reported usage accumulated for one Harness execution."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float = 0.0
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.prompt_tokens, bool)
+            or not isinstance(self.prompt_tokens, int)
+            or self.prompt_tokens < 0
+            or isinstance(self.completion_tokens, bool)
+            or not isinstance(self.completion_tokens, int)
+            or self.completion_tokens < 0
+            or isinstance(self.cost, bool)
+            or not isinstance(self.cost, (int, float))
+            or not math.isfinite(self.cost)
+            or self.cost < 0
+        ):
+            raise ValueError("Model usage values must be non-negative")
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def add(self, other: ModelUsage) -> ModelUsage:
+        return ModelUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            cost=self.cost + other.cost,
+        )
 
 
 @dataclass(frozen=True)
@@ -31,6 +67,7 @@ class HarnessResult:
     sandbox: SandboxResult
     iterations: int = 1
     tool_calls: int = 0
+    usage: ModelUsage = field(default_factory=ModelUsage)
 
 
 @dataclass(frozen=True)
@@ -58,6 +95,7 @@ class ModelResponse:
 
     content: str = ""
     tool_calls: tuple[FunctionCall, ...] = ()
+    usage: ModelUsage = field(default_factory=ModelUsage)
 
 
 class ModelPort(Protocol):
@@ -134,11 +172,19 @@ class FunctionCallingHarness:
         *,
         max_iterations: int = 8,
         max_tool_calls: int = 32,
+        max_total_tokens: int | None = None,
+        max_model_cost: float | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
         if max_tool_calls < 1:
             raise ValueError("max_tool_calls must be at least 1")
+        if max_total_tokens is not None and max_total_tokens < 1:
+            raise ValueError("max_total_tokens must be at least 1")
+        if max_model_cost is not None and (
+            not math.isfinite(max_model_cost) or max_model_cost < 0
+        ):
+            raise ValueError("max_model_cost must be non-negative")
         tool_index = {tool.name: tool for tool in tools}
         if len(tool_index) != len(tools) or any(not name for name in tool_index):
             raise ValueError("Function tool names must be unique and non-empty")
@@ -146,6 +192,8 @@ class FunctionCallingHarness:
         self._tools = tool_index
         self._max_iterations = max_iterations
         self._max_tool_calls = max_tool_calls
+        self._max_total_tokens = max_total_tokens
+        self._max_model_cost = max_model_cost
 
     async def execute(self, request: HarnessRequest) -> HarnessResult:
         if request.timeout <= 0:
@@ -155,11 +203,22 @@ class FunctionCallingHarness:
         tool_results: list[FunctionResult] = []
         tool_calls = 0
         iterations = 0
+        usage = ModelUsage()
         try:
             async with asyncio.timeout(request.timeout):
                 for iteration in range(1, self._max_iterations + 1):
                     iterations = iteration
                     response = await self._model.complete(request, tuple(tool_results))
+                    usage = usage.add(response.usage)
+                    budget_error = self._budget_error(usage)
+                    if budget_error is not None:
+                        return _failed_result(
+                            budget_error,
+                            iteration,
+                            tool_calls,
+                            _duration_ms(started_at),
+                            usage,
+                        )
                     if not response.tool_calls:
                         if not response.content:
                             return _failed_result(
@@ -167,6 +226,7 @@ class FunctionCallingHarness:
                                 iteration,
                                 tool_calls,
                                 _duration_ms(started_at),
+                                usage,
                             )
                         return HarnessResult(
                             sandbox=SandboxResult(
@@ -179,6 +239,7 @@ class FunctionCallingHarness:
                             ),
                             iterations=iteration,
                             tool_calls=tool_calls,
+                            usage=usage,
                         )
 
                     for call in response.tool_calls:
@@ -189,6 +250,7 @@ class FunctionCallingHarness:
                                 iteration,
                                 tool_calls - 1,
                                 _duration_ms(started_at),
+                                usage,
                             )
                         tool_results.append(await self._execute_function_call(call))
         except TimeoutError:
@@ -197,6 +259,7 @@ class FunctionCallingHarness:
                 iterations,
                 tool_calls,
                 _duration_ms(started_at),
+                usage,
             )
 
         return _failed_result(
@@ -204,7 +267,27 @@ class FunctionCallingHarness:
             iterations,
             tool_calls,
             _duration_ms(started_at),
+            usage,
         )
+
+    def _budget_error(self, usage: ModelUsage) -> str | None:
+        if (
+            self._max_total_tokens is not None
+            and usage.total_tokens > self._max_total_tokens
+        ):
+            return "Harness total-token budget exhausted"
+        if (
+            self._max_model_cost is not None
+            and usage.cost > self._max_model_cost
+            and not math.isclose(
+                usage.cost,
+                self._max_model_cost,
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+        ):
+            return "Harness model-cost budget exhausted"
+        return None
 
     async def _execute_function_call(self, call: FunctionCall) -> FunctionResult:
         if not call.id or not call.name:
@@ -278,6 +361,7 @@ def _failed_result(
     iterations: int,
     tool_calls: int,
     duration_ms: int,
+    usage: ModelUsage,
 ) -> HarnessResult:
     return HarnessResult(
         sandbox=SandboxResult(
@@ -291,6 +375,7 @@ def _failed_result(
         ),
         iterations=iterations,
         tool_calls=tool_calls,
+        usage=usage,
     )
 
 
@@ -305,6 +390,7 @@ __all__ = [
     "HarnessResult",
     "ModelPort",
     "ModelResponse",
+    "ModelUsage",
     "SandboxHarness",
     "SandboxPort",
 ]
