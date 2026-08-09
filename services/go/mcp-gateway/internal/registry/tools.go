@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,8 +15,15 @@ import (
 	"strings"
 	"time"
 
+	mcpauth "github.com/agenthub/mcp-gateway/internal/auth"
 	"github.com/agenthub/mcp-gateway/internal/protocol"
 	"github.com/agenthub/mcp-gateway/internal/transport"
+	"github.com/agenthub/platform/shared/iam"
+)
+
+var (
+	ErrTenantIdentityRequired       = errors.New("authenticated tenant and actor are required")
+	ErrDownstreamCredentialRequired = errors.New("authenticated downstream credential is required")
 )
 
 // ── Tool Registry ────────────────────────────────────────────────────
@@ -402,17 +410,31 @@ func (r *Registry) callAgentHandler(ctx context.Context, args map[string]any) (*
 	if sessionID == "" {
 		sessionID = fmt.Sprintf("mcp-%d", time.Now().UnixMilli())
 	}
+	principal, err := tenantPrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	authorization, ok := mcpauth.AuthorizationHeaderFromContext(ctx)
+	if !ok {
+		return nil, ErrDownstreamCredentialRequired
+	}
+	traceID := fmt.Sprintf("mcp-trace-%d", time.Now().UnixNano())
+	if request, ok := transport.RequestContextFromContext(ctx); ok && request.TraceID != "" {
+		traceID = request.TraceID
+	}
 
 	body, _ := json.Marshal(map[string]any{
-		"tenant_id":  "default",
+		"tenant_id":  principal.TenantID,
 		"session_id": sessionID,
-		"trace_id":   fmt.Sprintf("mcp-trace-%d", time.Now().UnixNano()),
+		"trace_id":   traceID,
+		"actor_id":   principal.UserID,
 		"content":    message,
 		"metadata":   map[string]any{"agent_id": agentID, "source": "mcp-gateway"},
 	})
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", r.gatewayURL+"/publish", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", authorization)
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -488,15 +510,23 @@ func (r *Registry) ingestDocumentHandler(ctx context.Context, args map[string]an
 	if fileType == "" {
 		fileType = "txt"
 	}
+	principal, err := tenantPrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	body, _ := json.Marshal(map[string]any{
 		"request_id":   fmt.Sprintf("mcp-ingest-%d", time.Now().UnixNano()),
-		"tenant_id":    "default",
+		"tenant_id":    principal.TenantID,
 		"source_id":    title,
 		"collection":   collection,
 		"content_type": "text/plain",
 		"content":      content,
-		"metadata":     map[string]any{"file_type": fileType, "source": "mcp-gateway"},
+		"metadata": map[string]any{
+			"actor_id":  principal.UserID,
+			"file_type": fileType,
+			"source":    "mcp-gateway",
+		},
 	})
 
 	req, _ := http.NewRequestWithContext(ctx, "POST", r.knowledgeURL+"/ingest", bytes.NewReader(body))
@@ -515,6 +545,14 @@ func (r *Registry) ingestDocumentHandler(ctx context.Context, args map[string]an
 			{Type: "text", Text: string(data)},
 		},
 	}, nil
+}
+
+func tenantPrincipal(ctx context.Context) (iam.TenantContext, error) {
+	principal, ok := iam.FromContext(ctx)
+	if !ok || strings.TrimSpace(principal.TenantID) == "" || strings.TrimSpace(principal.UserID) == "" {
+		return iam.TenantContext{}, ErrTenantIdentityRequired
+	}
+	return principal, nil
 }
 
 func (r *Registry) systemHealthHandler(ctx context.Context, _ map[string]any) (*protocol.ToolCallResult, error) {

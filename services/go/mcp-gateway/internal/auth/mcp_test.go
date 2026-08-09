@@ -95,6 +95,10 @@ func TestMiddlewareInjectsVerifiedTenantContext(t *testing.T) {
 		if !ok || principal.TenantID != "tenant-1" || principal.UserID != "actor-1" {
 			t.Fatalf("unexpected principal: %+v (ok=%v)", principal, ok)
 		}
+		authorization, ok := AuthorizationHeaderFromContext(r.Context())
+		if !ok || authorization != "Bearer "+token {
+			t.Fatalf("verified authorization was not propagated")
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}), nil)
 	req := httptest.NewRequest(http.MethodPost, "/mcp/rpc", strings.NewReader(`{}`))

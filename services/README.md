@@ -21,7 +21,9 @@ not create a competing Mission or WorkUnit state machine.
 - MCP and A2A services are protocol boundaries, not business databases.
 - The MCP Gateway's `/mcp/rpc` endpoint is stateless and requires per-call
   Mission/WorkUnit/attempt/capability context plus a platform IAM Bearer token;
-  its SSE session endpoints remain compatibility transport only.
+  tenant-scoped tools propagate verified tenant/actor identity without a
+  synthetic default. Its SSE session endpoints remain compatibility transport
+  only.
 - NATS subjects and payloads require versioned contracts before production use.
 
 Before adding a service, document its independent scaling, security, failure, or

@@ -12,11 +12,26 @@ import (
 	"github.com/agenthub/platform/shared/iam"
 )
 
+type authorizationHeaderKey struct{}
+
+// AuthorizationHeaderFromContext returns the verified inbound credential for
+// explicit on-behalf-of calls to trusted AgentHub services. Callers must never
+// log or persist this value.
+func AuthorizationHeaderFromContext(ctx context.Context) (string, bool) {
+	value, ok := ctx.Value(authorizationHeaderKey{}).(string)
+	return value, ok && value != ""
+}
+
 // Middleware composes the shared IAM JWT middleware with the MCP authorizer.
 // Unlike the compatibility WebSocket routes, stateless HTTP RPC requires a
 // standard Authorization header and never accepts a query-token fallback.
 func Middleware(issuer *iam.TokenIssuer, next http.Handler, onDeny func(*http.Request, string)) http.Handler {
-	authenticated := iam.AuthMiddleware(issuer, nil, onDeny)(next)
+	withCredential := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
+		ctx := context.WithValue(r.Context(), authorizationHeaderKey{}, header)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+	authenticated := iam.AuthMiddleware(issuer, nil, onDeny)(withCredential)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
 			http.Error(w, "authorization header is required", http.StatusUnauthorized)

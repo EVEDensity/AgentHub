@@ -30,6 +30,11 @@ scope is snapshotted into each call only after authorization.
   built-in tool and rejects a stateless call when the request capability does
   not exactly match that assignment. The tool handler is never entered on a
   mismatch.
+- Tenant propagation: tenant-scoped Registry tools obtain tenant and actor
+  only from the verified IAM context. Agent dispatch forwards the verified
+  Bearer credential to the platform Gateway; document ingest records the actor
+  in metadata. Missing identity or required downstream credential fails before
+  any network request.
 - Audit: `MCPToolAuditEvent` containing request ID, correlation context, tool
   name, success, duration, and sanitized error type only.
 
