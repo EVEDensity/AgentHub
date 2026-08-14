@@ -20,6 +20,9 @@ boundary. It is not the permanent home of every Agent feature.
   legacy user-scoped registry.
   Catalog mutations use workspace authorization and an atomic expected-version
   compare-and-set; request schemas reject provider credentials and raw config.
+  Legacy Registry synchronization reads only Agent ID, adapter type,
+  capability tags, and availability status; actor-owned rows take precedence
+  over global templates and every synchronized binding uses the same CAS path.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. Harness owns bounded model/tool loops and explicit per-run tool

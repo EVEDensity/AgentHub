@@ -6,12 +6,20 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.v1.agent_catalog import get_agent_catalog_writer, router
+from app.api.v1.agent_catalog import (
+    get_agent_catalog_synchronizer,
+    get_agent_catalog_writer,
+    router,
+)
 from app.services.agent_binding_service import (
     AgentBinding,
     AgentBindingUnavailableError,
     AgentCatalogRecord,
     AgentCatalogVersionConflictError,
+)
+from app.services.agent_catalog_sync_service import (
+    RegistryAgentNotFoundError,
+    RegistryAgentNotRunnableError,
 )
 from app.services.auth_service import get_current_user
 
@@ -38,10 +46,39 @@ class FakeAgentCatalogWriter:
         )
 
 
-def build_app(writer: FakeAgentCatalogWriter, user: dict[str, Any]) -> FastAPI:
+class FakeAgentCatalogSynchronizer:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def sync(self, **values: Any) -> AgentCatalogRecord:
+        self.calls.append(values)
+        if self.error is not None:
+            raise self.error
+        return AgentCatalogRecord(
+            scope_id=values["scope_id"],
+            binding=AgentBinding(
+                agent_id=values["agent_id"],
+                adapter_type="local_codex",
+                capabilities=("repository.read",),
+            ),
+            enabled=True,
+            source_version=values["expected_version"] + 1,
+            updated_at="2026-08-14T10:00:00+00:00",
+        )
+
+
+def build_app(
+    writer: FakeAgentCatalogWriter,
+    user: dict[str, Any],
+    *,
+    synchronizer: FakeAgentCatalogSynchronizer | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
     app.dependency_overrides[get_agent_catalog_writer] = lambda: writer
+    if synchronizer is not None:
+        app.dependency_overrides[get_agent_catalog_synchronizer] = lambda: synchronizer
     app.dependency_overrides[get_current_user] = lambda: user
     return app
 
@@ -145,6 +182,73 @@ class AgentCatalogApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 503)
+
+    def test_sync_derives_registry_owner_from_authenticated_user(self) -> None:
+        writer = FakeAgentCatalogWriter()
+        synchronizer = FakeAgentCatalogSynchronizer()
+        client = TestClient(
+            build_app(
+                writer,
+                {"id": "user-1", "name": "Ada", "role": "admin"},
+                synchronizer=synchronizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/agent-catalog/workspaces/workspace-1/bindings/reviewer/sync",
+            json={"expectedVersion": 2},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            synchronizer.calls,
+            [
+                {
+                    "scope_id": "workspace-1",
+                    "source_owner_id": "user-1",
+                    "agent_id": "reviewer",
+                    "expected_version": 2,
+                }
+            ],
+        )
+
+    def test_sync_missing_registry_agent_returns_404(self) -> None:
+        synchronizer = FakeAgentCatalogSynchronizer(
+            RegistryAgentNotFoundError("Registry Agent not found")
+        )
+        client = TestClient(
+            build_app(
+                FakeAgentCatalogWriter(),
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+                synchronizer=synchronizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/agent-catalog/workspaces/workspace-1/bindings/missing/sync",
+            json={"expectedVersion": 0},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_sync_non_runnable_registry_agent_returns_409(self) -> None:
+        synchronizer = FakeAgentCatalogSynchronizer(
+            RegistryAgentNotRunnableError("Registry Agent has no executable adapter")
+        )
+        client = TestClient(
+            build_app(
+                FakeAgentCatalogWriter(),
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+                synchronizer=synchronizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/agent-catalog/workspaces/workspace-1/bindings/reviewer/sync",
+            json={"expectedVersion": 0},
+        )
+
+        self.assertEqual(response.status_code, 409)
 
 
 if __name__ == "__main__":

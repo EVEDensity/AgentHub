@@ -27,3 +27,13 @@ class AgentCatalogBindingPutRequest(BaseModel):
     )
     enabled: bool = True
     expected_version: Annotated[int, Field(ge=0, le=2_147_483_646)]
+
+
+class AgentCatalogBindingSyncRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    expected_version: Annotated[int, Field(ge=0, le=2_147_483_646)]
