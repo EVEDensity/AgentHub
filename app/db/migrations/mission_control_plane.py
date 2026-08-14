@@ -16,6 +16,8 @@ DELEGATION_PERSISTENCE_REVISION = "d7a1b2c3e4f5"
 DELEGATION_PERSISTENCE_DOWN_REVISION = EVIDENCE_PROJECTION_REVISION
 AGENT_BINDING_PERSISTENCE_REVISION = "e8b2c3d4f5a6"
 AGENT_BINDING_PERSISTENCE_DOWN_REVISION = DELEGATION_PERSISTENCE_REVISION
+AGENT_CATALOG_PROJECTION_REVISION = "f9c3d4e5a6b7"
+AGENT_CATALOG_PROJECTION_DOWN_REVISION = AGENT_BINDING_PERSISTENCE_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -300,4 +302,27 @@ AGENT_BINDING_PERSISTENCE_UPGRADE = (
 AGENT_BINDING_PERSISTENCE_DOWNGRADE = (
     "DROP INDEX IF EXISTS idx_work_units_assigned_agent",
     "ALTER TABLE work_units DROP COLUMN IF EXISTS assigned_agent_id",
+)
+
+AGENT_CATALOG_PROJECTION_UPGRADE = (
+    """
+    CREATE TABLE IF NOT EXISTS agent_catalog_bindings (
+        scope_id TEXT NOT NULL CHECK (length(scope_id) BETWEEN 1 AND 255),
+        agent_id TEXT NOT NULL CHECK (length(agent_id) BETWEEN 1 AND 255),
+        adapter_type TEXT NOT NULL CHECK (
+            adapter_type ~ '^[a-z][a-z0-9_-]{0,63}$'
+        ),
+        capabilities JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (
+            jsonb_typeof(capabilities) = 'array'
+        ),
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        source_version INTEGER NOT NULL DEFAULT 1 CHECK (source_version >= 1),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (scope_id, agent_id)
+    )
+    """,
+)
+
+AGENT_CATALOG_PROJECTION_DOWNGRADE = (
+    "DROP TABLE IF EXISTS agent_catalog_bindings",
 )

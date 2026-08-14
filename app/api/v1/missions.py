@@ -22,7 +22,7 @@ from app.schemas.mission import (
 from app.services.agent_binding_service import (
     AgentBindingResolver,
     AgentBindingUnavailableError,
-    UnavailableAgentBindingResolver,
+    DatabaseAgentBindingResolver,
 )
 from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
@@ -52,7 +52,7 @@ def get_artifact_byte_verifier() -> ArtifactByteVerifier:
 
 
 def get_agent_binding_resolver() -> AgentBindingResolver:
-    return UnavailableAgentBindingResolver()
+    return DatabaseAgentBindingResolver()
 
 
 CurrentUser = Annotated[dict, Depends(get_current_user)]

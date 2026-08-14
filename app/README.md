@@ -15,6 +15,9 @@ boundary. It is not the permanent home of every Agent feature.
   creates causally linked child WorkUnits behind the parent lease fence.
   Delegated Agent selection goes through a scope-aware binding port; Mission
   state stores only the Agent ID, adapter type, and capability snapshot.
+  The default binding resolver reads a workspace-scoped, credential-free
+  catalog projection; catalog failures fail closed and never fall back to the
+  legacy user-scoped registry.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. Harness owns bounded model/tool loops and explicit per-run tool

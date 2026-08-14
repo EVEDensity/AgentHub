@@ -24,7 +24,13 @@ from app.domain import (
     MissionContract,
     WorkUnit,
 )
-from app.services.agent_binding_service import AgentBinding, StaticAgentBindingResolver
+from app.services.agent_binding_service import (
+    AgentBinding,
+    AgentBindingResolver,
+    DatabaseAgentBindingResolver,
+    StaticAgentBindingResolver,
+    UnavailableAgentBindingResolver,
+)
 from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerification,
@@ -296,7 +302,7 @@ def build_app(
     user: dict[str, Any],
     *,
     artifact_byte_verifier: FakeArtifactByteVerifier | None = None,
-    agent_binding_resolver: StaticAgentBindingResolver | None = None,
+    agent_binding_resolver: AgentBindingResolver | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -304,15 +310,19 @@ def build_app(
     verifier.repository = repository
     app.dependency_overrides[get_mission_repository] = lambda: repository
     app.dependency_overrides[get_artifact_byte_verifier] = lambda: verifier
-    if agent_binding_resolver is not None:
-        app.dependency_overrides[get_agent_binding_resolver] = (
-            lambda: agent_binding_resolver
-        )
+    binding_resolver = agent_binding_resolver or UnavailableAgentBindingResolver()
+    app.dependency_overrides[get_agent_binding_resolver] = lambda: binding_resolver
     app.dependency_overrides[get_current_user] = lambda: user
     return app
 
 
 class MissionApiTests(unittest.TestCase):
+    def test_default_agent_binding_dependency_uses_durable_catalog(self) -> None:
+        self.assertIsInstance(
+            get_agent_binding_resolver(),
+            DatabaseAgentBindingResolver,
+        )
+
     def test_create_mission_derives_actor_and_appends_first_event(self) -> None:
         repository = FakeMissionRepository()
         user = {"id": "user-1", "name": "Ada", "role": "developer"}
