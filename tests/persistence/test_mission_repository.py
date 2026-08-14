@@ -278,15 +278,21 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("INSERT INTO work_units", insert_sql)
         self.assertEqual(
             insert_args[0:4],
-            (work_unit.id, work_unit.mission_id, work_unit.parent_work_unit_id, work_unit.kind),
+            (
+                work_unit.id,
+                work_unit.mission_id,
+                work_unit.parent_work_unit_id,
+                work_unit.assigned_agent_id,
+            ),
         )
-        self.assertEqual(json.loads(insert_args[4]), list(work_unit.dependencies))
+        self.assertEqual(insert_args[4], work_unit.kind)
+        self.assertEqual(json.loads(insert_args[5]), list(work_unit.dependencies))
         self.assertEqual(
-            json.loads(insert_args[6]),
+            json.loads(insert_args[7]),
             [item.to_public_dict() for item in work_unit.expected_outputs],
         )
-        self.assertEqual(insert_args[9:11], ("PENDING", 0))
-        self.assertIsNone(insert_args[11])
+        self.assertEqual(insert_args[10:12], ("PENDING", 0))
+        self.assertIsNone(insert_args[12])
 
         row = self.build_work_unit_row(work_unit)
         self.database.one = row
@@ -420,6 +426,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "id": work_unit.id,
             "mission_id": work_unit.mission_id,
             "parent_work_unit_id": work_unit.parent_work_unit_id,
+            "assigned_agent_id": work_unit.assigned_agent_id,
             "kind": work_unit.kind,
             "dependencies": json.dumps(list(work_unit.dependencies)),
             "input_refs": json.dumps(

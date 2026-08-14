@@ -386,16 +386,17 @@ class MissionRepository:
     async def add_work_unit(self, work_unit: WorkUnit) -> None:
         await self._execute(
             """INSERT INTO work_units(
-                   id, mission_id, parent_work_unit_id, kind, dependencies, input_refs,
-                   expected_outputs, required_capabilities, assigned_adapter, status,
-                   attempt, lease
+                   id, mission_id, parent_work_unit_id, assigned_agent_id, kind,
+                   dependencies, input_refs, expected_outputs, required_capabilities,
+                   assigned_adapter, status, attempt, lease
                ) VALUES(
-                   $1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb,
-                   $8::jsonb, $9, $10, $11, $12::jsonb
+                   $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb,
+                   $9::jsonb, $10, $11, $12, $13::jsonb
                )""",
             work_unit.id,
             work_unit.mission_id,
             work_unit.parent_work_unit_id,
+            work_unit.assigned_agent_id,
             work_unit.kind,
             _encode_json(list(work_unit.dependencies)),
             _encode_json([item.to_public_dict() for item in work_unit.input_refs]),
@@ -413,7 +414,8 @@ class MissionRepository:
 
     async def get_work_unit(self, work_unit_id: str) -> WorkUnit | None:
         row = await self._fetch_one(
-            """SELECT id, mission_id, parent_work_unit_id, kind, dependencies, input_refs,
+            """SELECT id, mission_id, parent_work_unit_id, assigned_agent_id, kind,
+                      dependencies, input_refs,
                       expected_outputs, required_capabilities, assigned_adapter,
                       status, attempt, lease
                FROM work_units WHERE id=$1""",
@@ -423,7 +425,8 @@ class MissionRepository:
 
     async def get_work_unit_for_update(self, work_unit_id: str) -> WorkUnit | None:
         row = await self._fetch_one(
-            """SELECT id, mission_id, parent_work_unit_id, kind, dependencies, input_refs,
+            """SELECT id, mission_id, parent_work_unit_id, assigned_agent_id, kind,
+                      dependencies, input_refs,
                       expected_outputs, required_capabilities, assigned_adapter,
                       status, attempt, lease
                FROM work_units WHERE id=$1
@@ -457,7 +460,8 @@ class MissionRepository:
         if offset < 0:
             raise ValueError("offset cannot be negative")
         rows = await self._fetch_all(
-            """SELECT id, mission_id, parent_work_unit_id, kind, dependencies, input_refs,
+            """SELECT id, mission_id, parent_work_unit_id, assigned_agent_id, kind,
+                      dependencies, input_refs,
                       expected_outputs, required_capabilities, assigned_adapter,
                       status, attempt, lease
                FROM work_units
@@ -472,7 +476,8 @@ class MissionRepository:
 
     async def list_work_units_for_update(self, mission_id: str) -> list[WorkUnit]:
         rows = await self._fetch_all(
-            """SELECT id, mission_id, parent_work_unit_id, kind, dependencies, input_refs,
+            """SELECT id, mission_id, parent_work_unit_id, assigned_agent_id, kind,
+                      dependencies, input_refs,
                       expected_outputs, required_capabilities, assigned_adapter,
                       status, attempt, lease
                FROM work_units

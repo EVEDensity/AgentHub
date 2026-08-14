@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.v1.missions import (
+    get_agent_binding_resolver,
     get_artifact_byte_verifier,
     get_mission_repository,
     router,
@@ -23,6 +24,7 @@ from app.domain import (
     MissionContract,
     WorkUnit,
 )
+from app.services.agent_binding_service import AgentBinding, StaticAgentBindingResolver
 from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerification,
@@ -294,6 +296,7 @@ def build_app(
     user: dict[str, Any],
     *,
     artifact_byte_verifier: FakeArtifactByteVerifier | None = None,
+    agent_binding_resolver: StaticAgentBindingResolver | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -301,6 +304,10 @@ def build_app(
     verifier.repository = repository
     app.dependency_overrides[get_mission_repository] = lambda: repository
     app.dependency_overrides[get_artifact_byte_verifier] = lambda: verifier
+    if agent_binding_resolver is not None:
+        app.dependency_overrides[get_agent_binding_resolver] = (
+            lambda: agent_binding_resolver
+        )
     app.dependency_overrides[get_current_user] = lambda: user
     return app
 
@@ -623,11 +630,20 @@ class MissionApiTests(unittest.TestCase):
             build_app(
                 repository,
                 {"id": "user-1", "name": "Ada", "role": "developer"},
+                agent_binding_resolver=StaticAgentBindingResolver(
+                    {
+                        ("user-1", "reviewer"): AgentBinding(
+                            agent_id="reviewer",
+                            adapter_type="local_codex",
+                            capabilities=("repository.write",),
+                        )
+                    }
+                ),
             )
         )
         request = {
             "id": "wu-child",
-            "assignedAdapter": "reviewer",
+            "agentId": "reviewer",
             "leaseId": "lease-parent",
             "inputRefs": [
                 {"id": "artifact-1", "digest": repository.artifacts[0].digest}
@@ -672,6 +688,67 @@ class MissionApiTests(unittest.TestCase):
             json={**request, "id": "wu-child-2", "inputRefs": []},
         )
         self.assertEqual(rejected.status_code, 422)
+
+        restricted_client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+                agent_binding_resolver=StaticAgentBindingResolver(
+                    {
+                        ("user-1", "reviewer"): AgentBinding(
+                            agent_id="reviewer",
+                            adapter_type="local_codex",
+                            capabilities=("repository.read",),
+                        )
+                    }
+                ),
+            )
+        )
+        capability_gap = restricted_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-parent/delegations",
+            json={**request, "id": "wu-child-3"},
+        )
+        self.assertEqual(capability_gap.status_code, 409)
+        self.assertEqual(len(repository.work_units), 2)
+
+    def test_delegate_work_unit_fails_closed_without_authorized_binding(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(
+                id="wu-parent",
+                status="RUNNING",
+                lease=Lease(
+                    id="lease-parent",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        repository.artifacts = [build_artifact(work_unit_id="wu-parent")]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-parent/delegations",
+            json={
+                "id": "wu-child",
+                "agentId": "reviewer",
+                "leaseId": "lease-parent",
+                "inputRefs": [
+                    {"id": "artifact-1", "digest": repository.artifacts[0].digest}
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(len(repository.work_units), 1)
+        self.assertEqual(repository.events, [])
 
     def test_work_unit_rejects_dependency_outside_mission(self) -> None:
         repository = FakeMissionRepository()

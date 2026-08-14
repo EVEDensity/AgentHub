@@ -12,6 +12,7 @@
     "id": { "$ref": "common.schema.json#/$defs/identifier" },
     "missionId": { "$ref": "common.schema.json#/$defs/identifier" },
     "parentWorkUnitId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "assignedAgentId": { "$ref": "common.schema.json#/$defs/identifier" },
     "kind": { "type": "string", "minLength": 1, "maxLength": 255 },
     "dependencies": {
       "type": "array",

@@ -19,6 +19,11 @@ from app.schemas.mission import (
     WorkUnitStartRequest,
     WorkUnitVerificationRequest,
 )
+from app.services.agent_binding_service import (
+    AgentBindingResolver,
+    AgentBindingUnavailableError,
+    UnavailableAgentBindingResolver,
+)
 from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerifier,
@@ -27,6 +32,7 @@ from app.services.artifact_integrity_service import (
 )
 from app.services.auth_service import get_current_user
 from app.services.mission_service import (
+    AgentBindingNotFoundError,
     MissionNotFoundError,
     MissionService,
     WorkUnitNotFoundError,
@@ -45,11 +51,19 @@ def get_artifact_byte_verifier() -> ArtifactByteVerifier:
     return build_artifact_byte_verifier()
 
 
+def get_agent_binding_resolver() -> AgentBindingResolver:
+    return UnavailableAgentBindingResolver()
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 MissionRepositoryDep = Annotated[MissionRepository, Depends(get_mission_repository)]
 ArtifactByteVerifierDep = Annotated[
     ArtifactByteVerifier,
     Depends(get_artifact_byte_verifier),
+]
+AgentBindingResolverDep = Annotated[
+    AgentBindingResolver,
+    Depends(get_agent_binding_resolver),
 ]
 WorkspaceId = Annotated[str, Query(alias="workspaceId")]
 MissionLimit = Annotated[int, Query(ge=1, le=200)]
@@ -252,9 +266,10 @@ async def delegate_work_unit(
     request: WorkUnitDelegationRequest,
     user: CurrentUser,
     repository: MissionRepositoryDep,
+    agent_binding_resolver: AgentBindingResolverDep,
 ) -> dict:
     await _authorized_mission(mission_id, user=user, repository=repository)
-    service = MissionService(repository)
+    service = MissionService(repository, agent_binding_resolver=agent_binding_resolver)
     try:
         work_unit = await service.delegate_work_unit(
             mission_id,
@@ -264,7 +279,7 @@ async def delegate_work_unit(
             input_refs=request.input_refs,
             expected_outputs=request.expected_outputs,
             required_capabilities=request.required_capabilities,
-            assigned_adapter=request.assigned_adapter,
+            agent_id=request.agent_id,
             lease_id=request.lease_id,
             runner_id=str(user["id"]),
             actor=build_human_actor(user),
@@ -273,6 +288,10 @@ async def delegate_work_unit(
         raise HTTPException(status_code=404, detail="Mission not found") from exc
     except WorkUnitNotFoundError as exc:
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except AgentBindingUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AgentBindingNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return work_unit.to_public_dict()

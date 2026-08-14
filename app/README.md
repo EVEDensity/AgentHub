@@ -13,6 +13,8 @@ boundary. It is not the permanent home of every Agent feature.
   Mission Control retains only immutable Artifact metadata.
   Mission delegation accepts only same-Mission registered ArtifactRefs and
   creates causally linked child WorkUnits behind the parent lease fence.
+  Delegated Agent selection goes through a scope-aware binding port; Mission
+  state stores only the Agent ID, adapter type, and capability snapshot.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. Harness owns bounded model/tool loops and explicit per-run tool

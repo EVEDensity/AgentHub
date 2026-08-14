@@ -27,6 +27,10 @@ from app.domain import (
     transition_work_unit,
 )
 from app.repositories import MissionRepository
+from app.services.agent_binding_service import (
+    AgentBindingResolver,
+    AgentBindingUnavailableError,
+)
 from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerifier,
@@ -73,15 +77,21 @@ class LeaseExpiredError(ValueError):
     pass
 
 
+class AgentBindingNotFoundError(ValueError):
+    pass
+
+
 class MissionService:
     def __init__(
         self,
         repository: MissionRepository | None = None,
         *,
         artifact_byte_verifier: ArtifactByteVerifier | None = None,
+        agent_binding_resolver: AgentBindingResolver | None = None,
     ) -> None:
         self._repository = repository or MissionRepository()
         self._artifact_byte_verifier = artifact_byte_verifier
+        self._agent_binding_resolver = agent_binding_resolver
 
     async def create_mission(
         self,
@@ -403,7 +413,7 @@ class MissionService:
         input_refs: list[ArtifactRef],
         expected_outputs: list[OutputSpec],
         required_capabilities: list[str],
-        assigned_adapter: str,
+        agent_id: str,
         lease_id: str,
         runner_id: str,
         actor: ActorRef,
@@ -447,16 +457,39 @@ class MissionService:
                 )
             await self._validate_artifact_refs(repository, mission_id, input_refs)
 
+            resolver = self._agent_binding_resolver
+            if resolver is None:
+                raise AgentBindingUnavailableError(
+                    "tenant-scoped Agent binding resolver is not configured"
+                )
+            binding = await resolver.resolve(
+                scope_id=mission.workspace_id,
+                agent_id=agent_id,
+            )
+            if binding is None:
+                raise AgentBindingNotFoundError(
+                    f"Agent is not available in the mission scope: {agent_id}"
+                )
+            missing_binding_capabilities = sorted(
+                set(required_capabilities) - set(binding.capabilities)
+            )
+            if missing_binding_capabilities:
+                raise ValueError(
+                    "Agent binding does not grant required capabilities: "
+                    + ", ".join(missing_binding_capabilities)
+                )
+
             candidate = WorkUnit(
                 id=work_unit_id,
                 mission_id=mission_id,
                 parent_work_unit_id=parent_work_unit_id,
+                assigned_agent_id=binding.agent_id,
                 kind=kind,
                 dependencies=[],
                 input_refs=input_refs,
                 expected_outputs=expected_outputs,
                 required_capabilities=required_capabilities,
-                assigned_adapter=assigned_adapter,
+                assigned_adapter=binding.adapter_type,
                 status=WorkUnitStatus.PENDING,
                 attempt=0,
             )
@@ -467,6 +500,7 @@ class MissionService:
                     for field_name in (
                         "mission_id",
                         "parent_work_unit_id",
+                        "assigned_agent_id",
                         "kind",
                         "dependencies",
                         "input_refs",
@@ -500,7 +534,8 @@ class MissionService:
                 payload={
                     "childWorkUnitId": candidate.id,
                     "parentAttempt": parent.attempt,
-                    "assignedAdapter": assigned_adapter,
+                    "assignedAgentId": binding.agent_id,
+                    "assignedAdapter": binding.adapter_type,
                     "inputRefs": [item.to_public_dict() for item in input_refs],
                 },
                 schema_version=1,

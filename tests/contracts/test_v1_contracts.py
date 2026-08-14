@@ -85,6 +85,7 @@ class PublicContractTests(unittest.TestCase):
                 "id": "wu-1",
                 "missionId": "mis-1",
                 "parentWorkUnitId": "wu-parent",
+                "assignedAgentId": "reviewer",
                 "kind": "code_change",
                 "dependencies": [],
                 "inputRefs": [],

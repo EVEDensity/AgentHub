@@ -68,7 +68,7 @@ class WorkUnitDelegationRequest(BaseModel):
 
     id: Annotated[str, Field(min_length=1, max_length=255)]
     kind: Annotated[str, Field(min_length=1, max_length=255)] = "agent_delegation"
-    assigned_adapter: Annotated[str, Field(min_length=1, max_length=255)]
+    agent_id: Annotated[str, Field(min_length=1, max_length=255)]
     input_refs: Annotated[list[ArtifactRef], Field(min_length=1)]
     expected_outputs: list[OutputSpec] = Field(default_factory=list)
     required_capabilities: list[Annotated[str, Field(min_length=1, max_length=255)]] = (

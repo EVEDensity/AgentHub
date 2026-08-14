@@ -338,6 +338,7 @@ class WorkUnit(DomainModel):
     id: Identifier
     mission_id: Identifier
     parent_work_unit_id: Identifier | None = None
+    assigned_agent_id: Identifier | None = None
     kind: Annotated[str, Field(min_length=1, max_length=255)]
     dependencies: tuple[Identifier, ...]
     input_refs: tuple[ArtifactRef, ...]
