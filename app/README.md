@@ -25,7 +25,12 @@ boundary. It is not the permanent home of every Agent feature.
   over global templates and every synchronized binding uses the same CAS path.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
-  ownership. Harness owns bounded model/tool loops and explicit per-run tool
+  ownership. A bound Runner can atomically claim one ready delegated WorkUnit
+  through Mission Control; claim responses are validated against Mission,
+  Agent, adapter, lease owner, and attempt before execution. A replaceable
+  resolver must turn WorkUnit ArtifactRefs into bounded execution input, and a
+  missing resolver fails the claimed unit without synthetic success. Harness
+  owns bounded model/tool loops and explicit per-run tool
   grants resolved from Mission Contract and WorkUnit capabilities;
   ModelAdapterPort normalizes provider responses and reports provider usage;
   Harness enforces per-run token and model-cost budgets and emits request-scoped

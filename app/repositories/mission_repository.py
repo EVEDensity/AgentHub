@@ -435,6 +435,45 @@ class MissionRepository:
         )
         return self._work_unit_from_row(row) if row is not None else None
 
+    async def get_delegated_work_unit_for_claim(
+        self,
+        mission_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+    ) -> WorkUnit | None:
+        """Lock one ready delegated WorkUnit for the requested runner binding."""
+        row = await self._fetch_one(
+            """SELECT candidate.id, candidate.mission_id,
+                      candidate.parent_work_unit_id, candidate.assigned_agent_id,
+                      candidate.kind, candidate.dependencies, candidate.input_refs,
+                      candidate.expected_outputs, candidate.required_capabilities,
+                      candidate.assigned_adapter, candidate.status,
+                      candidate.attempt, candidate.lease
+               FROM work_units AS candidate
+               WHERE candidate.mission_id=$1
+                 AND candidate.parent_work_unit_id IS NOT NULL
+                 AND candidate.assigned_agent_id=$2
+                 AND candidate.assigned_adapter=$3
+                 AND candidate.status IN ('PENDING', 'RETRYING')
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM jsonb_array_elements_text(candidate.dependencies) AS dep(id)
+                     LEFT JOIN work_units AS dependency_unit
+                       ON dependency_unit.id=dep.id
+                     WHERE dependency_unit.id IS NULL
+                        OR dependency_unit.mission_id <> candidate.mission_id
+                        OR dependency_unit.status <> 'SUCCEEDED'
+               )
+               ORDER BY candidate.id ASC
+               LIMIT 1
+               FOR UPDATE SKIP LOCKED""",
+            mission_id,
+            agent_id,
+            adapter_type,
+        )
+        return self._work_unit_from_row(row) if row is not None else None
+
     async def update_work_unit(self, work_unit: WorkUnit) -> None:
         await self._execute(
             """UPDATE work_units

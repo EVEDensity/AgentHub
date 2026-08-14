@@ -26,6 +26,7 @@ from app.services.runner_service import (
     MissionControlRunnerClient,
     RunnerControlError,
     RunnerExecutionError,
+    RunnerExecutionInput,
     WorkUnitRunner,
 )
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
@@ -41,6 +42,12 @@ class FakeControl:
         self.should_fail_failure = False
         self.heartbeat_error: Exception | None = None
         self.heartbeat_received = asyncio.Event()
+        self.claim_payload: dict[str, Any] | None = None
+
+    async def claim_work_unit(self, mission_id: str, **kwargs: Any):
+        self.calls.append(("claim", kwargs))
+        del mission_id
+        return {"workUnit": self.claim_payload}
 
     async def lease_work_unit(self, mission_id: str, work_unit_id: str, **kwargs: Any):
         self.calls.append(("lease", kwargs))
@@ -178,7 +185,78 @@ class FakePublisher:
         return await self.publish_bytes(path.read_bytes())
 
 
+class StaticClaimedWorkResolver:
+    def __init__(self, execution_input: RunnerExecutionInput) -> None:
+        self.execution_input = execution_input
+        self.received: list[dict[str, Any]] = []
+
+    async def resolve(self, work_unit: dict[str, Any]) -> RunnerExecutionInput:
+        self.received.append(work_unit)
+        return self.execution_input
+
+
 class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runner_claims_matching_delegated_work_and_executes_once(self) -> None:
+        control = FakeControl()
+        control.claim_payload = {
+            "id": "wu-child",
+            "missionId": "mis-1",
+            "status": "LEASED",
+            "attempt": 1,
+            "assignedAgentId": "reviewer",
+            "assignedAdapter": "local_codex",
+            "lease": {
+                "id": "lease-1",
+                "runnerId": "runner-1",
+                "expiresAt": "2099-01-01T00:00:00Z",
+            },
+        }
+        resolver = StaticClaimedWorkResolver(
+            RunnerExecutionInput(code="print('delegated')", language="python")
+        )
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            runner_id="runner-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+            claimed_work_resolver=resolver,
+        )
+
+        result = await runner.claim_and_run("mis-1")
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.success)
+        self.assertEqual(resolver.received[0]["id"], "wu-child")
+        self.assertEqual(
+            [name for name, _ in control.calls],
+            ["claim", "start", "register", "complete"],
+        )
+
+    async def test_runner_claim_without_resolver_fails_claimed_unit_honestly(self) -> None:
+        control = FakeControl()
+        control.claim_payload = {
+            "id": "wu-child",
+            "missionId": "mis-1",
+            "status": "LEASED",
+            "attempt": 1,
+            "assignedAgentId": "reviewer",
+            "assignedAdapter": "local_codex",
+            "lease": {"id": "lease-1", "runnerId": "runner-1"},
+        }
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            runner_id="runner-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+        )
+
+        with self.assertRaises(RunnerExecutionError):
+            await runner.claim_and_run("mis-1")
+
+        self.assertEqual([name for name, _ in control.calls], ["claim", "fail"])
+
     async def test_runner_publishes_final_output_from_function_calling_harness(self) -> None:
         control = FakeControl()
         publisher = FakePublisher()

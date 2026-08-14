@@ -39,6 +39,16 @@ class RunnerHeartbeatError(RunnerControlError):
 
 
 class MissionControlRunnerPort(Protocol):
+    async def claim_work_unit(
+        self,
+        mission_id: str,
+        *,
+        runner_id: str,
+        agent_id: str,
+        adapter_type: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]: ...
+
     async def lease_work_unit(
         self,
         mission_id: str,
@@ -112,6 +122,27 @@ class SandboxPort(Protocol):
 
 
 @dataclass(frozen=True)
+class RunnerExecutionInput:
+    """Resolver output for a claimed WorkUnit.
+
+    The resolver is the trust boundary that turns durable WorkUnit references
+    into bounded executable input. A Runner never infers code from references.
+    """
+
+    code: str
+    language: str = "python"
+    timeout: float = 30.0
+    cwd: Path | None = None
+
+
+class ClaimedWorkResolver(Protocol):
+    async def resolve(
+        self,
+        work_unit: Mapping[str, Any],
+    ) -> RunnerExecutionInput: ...
+
+
+@dataclass(frozen=True)
 class RunnerRunResult:
     success: bool
     work_unit: dict[str, Any]
@@ -138,6 +169,26 @@ class MissionControlRunnerClient:
         self._base_url = base_url.rstrip("/")
         self._access_token = access_token
         self._http_client = http_client
+
+    async def claim_work_unit(
+        self,
+        mission_id: str,
+        *,
+        runner_id: str,
+        agent_id: str,
+        adapter_type: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        del runner_id
+        return await self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-unit-claims",
+            json={
+                "agentId": agent_id,
+                "adapterType": adapter_type,
+                "leaseSeconds": lease_seconds,
+            },
+        )
 
     async def lease_work_unit(
         self,
@@ -314,6 +365,9 @@ class WorkUnitRunner:
         sandbox: SandboxPort | None = None,
         harness: HarnessPort | None = None,
         runner_id: str,
+        assigned_agent_id: str | None = None,
+        assigned_adapter: str | None = None,
+        claimed_work_resolver: ClaimedWorkResolver | None = None,
         heartbeat_interval_seconds: float | None = None,
     ) -> None:
         self._control = control
@@ -321,6 +375,13 @@ class WorkUnitRunner:
         self._sandbox = sandbox or SandboxExecutor()
         self._harness = harness or SandboxHarness(self._sandbox)
         self._runner_id = runner_id
+        if (assigned_agent_id is None) != (assigned_adapter is None):
+            raise ValueError(
+                "assigned_agent_id and assigned_adapter must be configured together"
+            )
+        self._assigned_agent_id = assigned_agent_id
+        self._assigned_adapter = assigned_adapter
+        self._claimed_work_resolver = claimed_work_resolver
         if heartbeat_interval_seconds is not None and heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be positive")
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
@@ -344,6 +405,113 @@ class WorkUnitRunner:
             runner_id=self._runner_id,
             lease_seconds=lease_seconds,
         )
+        return await self._run_leased(
+            mission_id,
+            work_unit_id,
+            leased,
+            code=code,
+            language=language,
+            timeout=timeout,
+            cwd=cwd,
+            lease_seconds=lease_seconds,
+            artifact_kind=artifact_kind,
+            media_type=media_type,
+        )
+
+    async def claim_and_run(
+        self,
+        mission_id: str,
+        *,
+        lease_seconds: int = 300,
+        artifact_kind: str = "test-result",
+        media_type: str = "text/plain",
+    ) -> RunnerRunResult | None:
+        """Claim and execute one delegated WorkUnit for this Runner binding."""
+        if self._assigned_agent_id is None or self._assigned_adapter is None:
+            raise RunnerControlError(
+                "delegated claim requires an assigned agent and adapter binding"
+            )
+        claimed_payload = await self._control.claim_work_unit(
+            mission_id,
+            runner_id=self._runner_id,
+            agent_id=self._assigned_agent_id,
+            adapter_type=self._assigned_adapter,
+            lease_seconds=lease_seconds,
+        )
+        work_unit_payload = claimed_payload.get("workUnit")
+        if work_unit_payload is None:
+            return None
+        if not isinstance(work_unit_payload, Mapping):
+            raise RunnerControlError("Mission Control claim response has no WorkUnit")
+        _assert_claimed_work_unit(
+            work_unit_payload,
+            mission_id=mission_id,
+            runner_id=self._runner_id,
+            agent_id=self._assigned_agent_id,
+            adapter_type=self._assigned_adapter,
+        )
+        work_unit_id = work_unit_payload.get("id")
+        if not isinstance(work_unit_id, str) or not work_unit_id:
+            raise RunnerControlError("Mission Control claim response has no WorkUnit id")
+        lease = _lease_context(work_unit_payload)
+        resolver = self._claimed_work_resolver
+        if resolver is None:
+            await self._fail(
+                mission_id,
+                work_unit_id,
+                lease,
+                "claimed WorkUnit has no execution resolver",
+            )
+            raise RunnerExecutionError(
+                "claimed WorkUnit cannot execute without a trusted resolver"
+            )
+        try:
+            execution_input = await resolver.resolve(work_unit_payload)
+        except Exception as exc:
+            await self._fail(
+                mission_id,
+                work_unit_id,
+                lease,
+                f"claimed WorkUnit input resolution failed: {exc}",
+            )
+            raise RunnerExecutionError(
+                "claimed WorkUnit input resolution failed"
+            ) from exc
+        if not isinstance(execution_input, RunnerExecutionInput):
+            await self._fail(
+                mission_id,
+                work_unit_id,
+                lease,
+                "claimed WorkUnit resolver returned an invalid execution input",
+            )
+            raise RunnerExecutionError("claimed WorkUnit resolver returned invalid input")
+        return await self._run_leased(
+            mission_id,
+            work_unit_id,
+            work_unit_payload,
+            code=execution_input.code,
+            language=execution_input.language,
+            timeout=execution_input.timeout,
+            cwd=execution_input.cwd,
+            lease_seconds=lease_seconds,
+            artifact_kind=artifact_kind,
+            media_type=media_type,
+        )
+
+    async def _run_leased(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        leased: Mapping[str, Any],
+        *,
+        code: str,
+        language: str,
+        timeout: float,
+        cwd: Path | None,
+        lease_seconds: int,
+        artifact_kind: str,
+        media_type: str,
+    ) -> RunnerRunResult:
         lease = _lease_context(leased)
         started = await self._control.start_work_unit(
             mission_id,
@@ -563,6 +731,27 @@ def _lease_context(payload: Mapping[str, Any]) -> _LeaseContext:
     if not isinstance(attempt, int) or attempt < 1:
         raise RunnerControlError("Mission Control lease response has no attempt")
     return _LeaseContext(lease_id=lease_id, attempt=attempt)
+
+
+def _assert_claimed_work_unit(
+    payload: Mapping[str, Any],
+    *,
+    mission_id: str,
+    runner_id: str,
+    agent_id: str,
+    adapter_type: str,
+) -> None:
+    if payload.get("missionId") != mission_id:
+        raise RunnerControlError("Mission Control returned a WorkUnit for another mission")
+    if payload.get("status") != "LEASED":
+        raise RunnerControlError("Mission Control claim did not return a LEASED WorkUnit")
+    if payload.get("assignedAgentId") != agent_id:
+        raise RunnerControlError("Mission Control returned a WorkUnit for another agent")
+    if payload.get("assignedAdapter") != adapter_type:
+        raise RunnerControlError("Mission Control returned a WorkUnit for another adapter")
+    lease = payload.get("lease")
+    if not isinstance(lease, Mapping) or lease.get("runnerId") != runner_id:
+        raise RunnerControlError("Mission Control claim lease belongs to another runner")
 
 
 def _assert_lease_context(payload: Mapping[str, Any], expected: _LeaseContext) -> None:

@@ -53,6 +53,14 @@ def build_verifier_actor(user: dict) -> ActorRef:
     )
 
 
+def build_runner_actor(user: dict) -> ActorRef:
+    return ActorRef(
+        type=ActorType.RUNNER,
+        id=str(user["id"]),
+        display_name=str(user["name"]) if user.get("name") else None,
+    )
+
+
 def new_identifier(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
 
@@ -671,6 +679,8 @@ class MissionService:
         actor: ActorRef,
         lease_seconds: int,
     ) -> WorkUnit:
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
             if mission is None:
@@ -728,6 +738,92 @@ class MissionService:
                     "runnerId": lease.runner_id,
                     "attempt": updated.attempt,
                     "expiresAt": lease.expires_at.isoformat(),
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
+
+    async def claim_delegated_work_unit(
+        self,
+        mission_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit | None:
+        """Atomically claim the next ready delegated unit for one binding."""
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_delegated_work_unit_for_claim(
+                mission_id,
+                agent_id=agent_id,
+                adapter_type=adapter_type,
+            )
+            if work_unit is None:
+                return None
+
+            # Keep the application-level dependency check as a defense-in-depth
+            # guard for alternate repository implementations and test doubles.
+            for dependency_id in work_unit.dependencies:
+                dependency = await repository.get_work_unit(dependency_id)
+                if dependency is None or dependency.mission_id != mission_id:
+                    raise WorkUnitNotReadyError(
+                        f"work unit dependency is missing: {dependency_id}"
+                    )
+                if dependency.status != WorkUnitStatus.SUCCEEDED:
+                    raise WorkUnitNotReadyError(
+                        f"work unit dependency is not complete: {dependency_id}"
+                    )
+
+            occurred_at = datetime.now(timezone.utc)
+            lease = Lease(
+                id=new_identifier("lease"),
+                runner_id=runner_id,
+                expires_at=occurred_at + timedelta(seconds=lease_seconds),
+            )
+            updated = transition_work_unit(
+                work_unit,
+                WorkUnitStatus.LEASED,
+                occurred_at=occurred_at,
+                lease=lease,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.leased",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated.status.value,
+                    "leaseId": lease.id,
+                    "runnerId": lease.runner_id,
+                    "attempt": updated.attempt,
+                    "expiresAt": lease.expires_at.isoformat(),
+                    "claimMode": "delegated",
+                    "assignedAgentId": updated.assigned_agent_id,
+                    "assignedAdapter": updated.assigned_adapter,
                 },
                 schema_version=1,
             )

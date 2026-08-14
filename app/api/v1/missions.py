@@ -10,6 +10,7 @@ from app.repositories import MissionRepository
 from app.schemas.mission import (
     ArtifactCreateRequest,
     MissionCreateRequest,
+    WorkUnitClaimRequest,
     WorkUnitCompletionRequest,
     WorkUnitCreateRequest,
     WorkUnitDelegationRequest,
@@ -37,6 +38,7 @@ from app.services.mission_service import (
     MissionService,
     WorkUnitNotFoundError,
     build_human_actor,
+    build_runner_actor,
     build_verifier_actor,
 )
 
@@ -342,6 +344,34 @@ async def lease_work_unit(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return leased.to_public_dict()
+
+
+@router.post("/{mission_id}/work-unit-claims")
+async def claim_delegated_work_unit(
+    mission_id: str,
+    request: WorkUnitClaimRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    """Claim one ready delegated WorkUnit for a runner binding."""
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    service = MissionService(repository)
+    try:
+        claimed = await service.claim_delegated_work_unit(
+            mission_id,
+            agent_id=request.agent_id,
+            adapter_type=request.adapter_type,
+            runner_id=str(user["id"]),
+            actor=build_runner_actor(user),
+            lease_seconds=request.lease_seconds,
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"workUnit": claimed.to_public_dict() if claimed is not None else None}
 
 
 @router.post("/{mission_id}/work-units/{work_unit_id}/start")

@@ -351,6 +351,29 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FOR UPDATE", sql)
         self.assertEqual(args, (work_unit.mission_id,))
 
+    async def test_delegated_claim_uses_binding_filter_and_skip_locked(self) -> None:
+        work_unit = build_work_unit(
+            id="wu-child",
+            parent_work_unit_id="wu-parent",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+        )
+        self.database.one = self.build_work_unit_row(work_unit)
+
+        claimed = await self.repository.get_delegated_work_unit_for_claim(
+            work_unit.mission_id,
+            agent_id="reviewer",
+            adapter_type="local_codex",
+        )
+
+        self.assertEqual(claimed, work_unit)
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("parent_work_unit_id IS NOT NULL", sql)
+        self.assertIn("assigned_agent_id=$2", sql)
+        self.assertIn("assigned_adapter=$3", sql)
+        self.assertIn("FOR UPDATE SKIP LOCKED", sql)
+        self.assertEqual(args, (work_unit.mission_id, "reviewer", "local_codex"))
+
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:
         return {

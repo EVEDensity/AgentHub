@@ -227,6 +227,43 @@ class FakeMissionRepository:
     async def get_work_unit_for_update(self, work_unit_id: str) -> WorkUnit | None:
         return await self.get_work_unit(work_unit_id)
 
+    async def get_delegated_work_unit_for_claim(
+        self,
+        mission_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+    ) -> WorkUnit | None:
+        candidates = sorted(
+            (
+                work_unit
+                for work_unit in self.work_units
+                if work_unit.mission_id == mission_id
+                and work_unit.parent_work_unit_id is not None
+                and work_unit.assigned_agent_id == agent_id
+                and work_unit.assigned_adapter == adapter_type
+                and work_unit.status.value in {"PENDING", "RETRYING"}
+                and all(
+                    (
+                        dependency := next(
+                            (
+                                item
+                                for item in self.work_units
+                                if item.id == dependency_id
+                            ),
+                            None,
+                        )
+                    )
+                    is not None
+                    and dependency.mission_id == mission_id
+                    and dependency.status.value == "SUCCEEDED"
+                    for dependency_id in work_unit.dependencies
+                )
+            ),
+            key=lambda work_unit: work_unit.id,
+        )
+        return candidates[0] if candidates else None
+
     async def update_work_unit(self, work_unit: WorkUnit) -> None:
         for index, existing in enumerate(self.work_units):
             if existing.id == work_unit.id:
@@ -829,6 +866,76 @@ class MissionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(repository.work_units[1].status.value, "PENDING")
+        self.assertEqual(repository.events, [])
+
+    def test_delegated_claim_selects_matching_ready_unit_atomically(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(id="wu-parent", status="SUCCEEDED"),
+            build_work_unit(
+                id="wu-child",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            ),
+            build_work_unit(
+                id="wu-other-agent",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="other",
+                assigned_adapter="local_codex",
+            ),
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+                "leaseSeconds": 60,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()["workUnit"]
+        self.assertEqual(body["id"], "wu-child")
+        self.assertEqual(body["status"], "LEASED")
+        self.assertEqual(body["attempt"], 1)
+        self.assertEqual(body["lease"]["runnerId"], "user-1")
+        self.assertEqual(repository.events[-1].actor.type.value, "runner")
+        self.assertEqual(repository.events[-1].payload["claimMode"], "delegated")
+
+    def test_delegated_claim_returns_empty_when_binding_has_no_ready_unit(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                id="wu-child",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="remote",
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={"agentId": "reviewer", "adapterType": "local_codex"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["workUnit"])
         self.assertEqual(repository.events, [])
 
     def test_start_requires_matching_active_lease(self) -> None:
