@@ -38,7 +38,9 @@ boundary. It is not the permanent home of every Agent feature.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability
-  resolution so scope is applied at call time.
+  resolution so scope is applied at call time. Evidence admission rechecks
+  Artifact ownership against the verified WorkUnit and attempt before and
+  after byte verification; expired delegated attempts cannot satisfy a retry.
 - `api/`: HTTP/WebSocket transport; handlers must delegate to services.
 - `schemas/`: versioned request and response validation.
 - `compat/`: one-way adapters from legacy Task/DAG data into Mission objects.

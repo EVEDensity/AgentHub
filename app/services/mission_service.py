@@ -1094,10 +1094,20 @@ class MissionService:
     ) -> tuple[Evidence, WorkUnit, Mission]:
         if actor.type != ActorType.VERIFIER:
             raise ValueError("only verifier actors can record Evidence")
+        work_unit = await self._repository.get_work_unit(work_unit_id)
+        if work_unit is None or work_unit.mission_id != mission_id:
+            raise WorkUnitNotFoundError(work_unit_id)
+        if work_unit.status != WorkUnitStatus.VERIFYING:
+            raise WorkUnitNotReadyError(
+                "Evidence can only be recorded for a VERIFYING work unit"
+            )
+        verification_attempt = work_unit.attempt if work_unit.attempt > 0 else None
         artifacts = await self._validate_artifact_refs(
             self._repository,
             mission_id,
             artifact_refs,
+            work_unit_id=work_unit_id,
+            attempt=verification_attempt,
         )
         if self._artifact_byte_verifier is None:
             raise ArtifactBytesUnavailableError(
@@ -1135,6 +1145,8 @@ class MissionService:
                 repository,
                 mission_id,
                 artifact_refs,
+                work_unit_id=work_unit.id,
+                attempt=work_unit.attempt if work_unit.attempt > 0 else None,
             )
             if current_artifacts != artifacts:
                 raise WorkUnitNotReadyError(

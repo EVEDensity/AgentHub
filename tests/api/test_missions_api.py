@@ -1471,6 +1471,180 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["evidence"], [body["evidence"]])
 
+    def test_evidence_rejects_artifact_from_another_work_unit(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(id="wu-1", status="VERIFYING"),
+            build_work_unit(id="wu-2", status="VERIFYING"),
+        ]
+        repository.artifacts = [build_artifact(work_unit_id="wu-2")]
+        verifier = FakeArtifactByteVerifier()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=verifier,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "Wrong WorkUnit artifact.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("another work unit", response.json()["detail"])
+        self.assertEqual(verifier.calls, [])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+
+    def test_delegated_work_unit_closes_artifact_evidence_and_mission(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(id="wu-parent", status="SUCCEEDED"),
+            build_work_unit(
+                id="wu-child",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            ),
+        ]
+        runner_client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        claimed = runner_client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={"agentId": "reviewer", "adapterType": "local_codex"},
+        )
+        self.assertEqual(claimed.status_code, 200)
+        lease_id = claimed.json()["workUnit"]["lease"]["id"]
+        started = runner_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-child/start",
+            json={"leaseId": lease_id},
+        )
+        self.assertEqual(started.status_code, 200)
+
+        digest = "sha256:" + "a" * 64
+        registered = runner_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-child/artifacts",
+            json={
+                "id": "artifact-child",
+                "leaseId": lease_id,
+                "kind": "test-result",
+                "digest": digest,
+                "contentAddress": "local:sha256/" + "a" * 64,
+                "mediaType": "text/plain",
+                "sizeBytes": 12,
+            },
+        )
+        self.assertEqual(registered.status_code, 201)
+        completed = runner_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-child/complete",
+            json={
+                "leaseId": lease_id,
+                "artifactRefs": [{"id": "artifact-child", "digest": digest}],
+            },
+        )
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.json()["status"], "VERIFYING")
+
+        verifier = FakeArtifactByteVerifier()
+        verifier_client = TestClient(
+            build_app(
+                repository,
+                {"id": "admin-1", "name": "Verifier", "role": "admin"},
+                artifact_byte_verifier=verifier,
+            )
+        )
+        evidence = verifier_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-child/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "admin-1",
+                "verifierVersion": "1.0",
+                "verdict": "PASS",
+                "artifactRefs": [{"id": "artifact-child", "digest": digest}],
+                "summary": "Delegated artifact verified.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(evidence.status_code, 200)
+        self.assertEqual(evidence.json()["workUnit"]["status"], "SUCCEEDED")
+        self.assertEqual(evidence.json()["evidence"]["workUnitId"], "wu-child")
+        self.assertEqual(evidence.json()["mission"]["status"], "SUCCEEDED")
+        self.assertEqual(repository.artifacts[0].work_unit_id, "wu-child")
+
+    def test_expired_delegated_claim_recovers_and_can_be_reclaimed(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(id="wu-parent", status="SUCCEEDED"),
+            build_work_unit(
+                id="wu-child",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            ),
+        ]
+        runner_client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+        claimed = runner_client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={"agentId": "reviewer", "adapterType": "local_codex"},
+        )
+        self.assertEqual(claimed.status_code, 200)
+        lease_id = claimed.json()["workUnit"]["lease"]["id"]
+        child = repository.work_units[1]
+        repository.work_units[1] = child.model_copy(
+            update={
+                "lease": Lease(
+                    id=lease_id,
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+                )
+            }
+        )
+
+        recovered = runner_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-child/recover"
+        )
+        self.assertEqual(recovered.status_code, 200)
+        self.assertEqual(recovered.json()["status"], "RETRYING")
+        reclaimed = runner_client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={"agentId": "reviewer", "adapterType": "local_codex"},
+        )
+        self.assertEqual(reclaimed.status_code, 200)
+        self.assertEqual(reclaimed.json()["workUnit"]["status"], "LEASED")
+        self.assertEqual(reclaimed.json()["workUnit"]["attempt"], 2)
+
     def test_unavailable_artifact_bytes_fail_without_state_changes(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(
@@ -1679,7 +1853,22 @@ class MissionApiTests(unittest.TestCase):
             build_work_unit(id="wu-tests", status="VERIFYING"),
             build_work_unit(id="wu-security", status="VERIFYING"),
         ]
-        repository.artifacts = [build_artifact()]
+        tests_digest = "sha256:" + "a" * 64
+        security_digest = "sha256:" + "c" * 64
+        repository.artifacts = [
+            build_artifact(
+                id="artifact-tests",
+                work_unit_id="wu-tests",
+                digest=tests_digest,
+                content_address="local:sha256/" + "a" * 64,
+            ),
+            build_artifact(
+                id="artifact-security",
+                work_unit_id="wu-security",
+                digest=security_digest,
+                content_address="local:sha256/" + "c" * 64,
+            ),
+        ]
         client = TestClient(
             build_app(
                 repository,
@@ -1690,16 +1879,17 @@ class MissionApiTests(unittest.TestCase):
             "verifierId": "verifier-1",
             "verifierVersion": "9.0",
             "verdict": "PASS",
-            "artifactRefs": [
-                {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-            ],
             "summary": "Verification passed.",
             "integrityHash": "sha256:" + "b" * 64,
         }
 
         first = client.post(
             "/api/v1/missions/mis-1/work-units/wu-tests/verify",
-            json={**request, "criterionId": "tests"},
+            json={
+                **request,
+                "criterionId": "tests",
+                "artifactRefs": [{"id": "artifact-tests", "digest": tests_digest}],
+            },
         )
 
         self.assertEqual(first.status_code, 200)
@@ -1708,7 +1898,13 @@ class MissionApiTests(unittest.TestCase):
 
         second = client.post(
             "/api/v1/missions/mis-1/work-units/wu-security/verify",
-            json={**request, "criterionId": "security"},
+            json={
+                **request,
+                "criterionId": "security",
+                "artifactRefs": [
+                    {"id": "artifact-security", "digest": security_digest}
+                ],
+            },
         )
 
         self.assertEqual(second.status_code, 200)
