@@ -18,6 +18,8 @@ boundary. It is not the permanent home of every Agent feature.
   The default binding resolver reads a workspace-scoped, credential-free
   catalog projection; catalog failures fail closed and never fall back to the
   legacy user-scoped registry.
+  Catalog mutations use workspace authorization and an atomic expected-version
+  compare-and-set; request schemas reject provider credentials and raw config.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. Harness owns bounded model/tool loops and explicit per-run tool

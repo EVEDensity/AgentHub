@@ -5,7 +5,10 @@ import unittest
 from app.services.agent_binding_service import (
     AgentBinding,
     AgentBindingUnavailableError,
+    AgentCatalogMutation,
+    AgentCatalogVersionConflictError,
     DatabaseAgentBindingResolver,
+    DatabaseAgentCatalogWriter,
     StaticAgentBindingResolver,
     UnavailableAgentBindingResolver,
 )
@@ -136,3 +139,144 @@ class AgentBindingServiceTests(unittest.IsolatedAsyncioTestCase):
                 scope_id="workspace-1",
                 agent_id="reviewer",
             )
+
+    async def test_catalog_writer_creates_normalized_binding_at_version_one(
+        self,
+    ) -> None:
+        calls: list[AgentCatalogMutation] = []
+
+        async def write(mutation: AgentCatalogMutation) -> dict[str, object]:
+            calls.append(mutation)
+            return {
+                "scope_id": mutation.scope_id,
+                "agent_id": mutation.binding.agent_id,
+                "adapter_type": mutation.binding.adapter_type,
+                "capabilities": list(mutation.binding.capabilities),
+                "enabled": mutation.enabled,
+                "source_version": 1,
+                "updated_at": "2026-08-14T10:00:00+00:00",
+            }
+
+        record = await DatabaseAgentCatalogWriter(write).put(
+            scope_id=" workspace-1 ",
+            agent_id="reviewer",
+            adapter_type="local_codex",
+            capabilities=["repository.write", "repository.write"],
+            enabled=True,
+            expected_version=0,
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].scope_id, "workspace-1")
+        self.assertEqual(calls[0].binding.capabilities, ("repository.write",))
+        self.assertEqual(record.source_version, 1)
+        self.assertEqual(record.to_public_dict()["agentId"], "reviewer")
+
+    async def test_catalog_writer_accepts_exact_version_update(self) -> None:
+        async def write(mutation: AgentCatalogMutation) -> dict[str, object]:
+            return {
+                "scope_id": mutation.scope_id,
+                "agent_id": mutation.binding.agent_id,
+                "adapter_type": mutation.binding.adapter_type,
+                "capabilities": list(mutation.binding.capabilities),
+                "enabled": mutation.enabled,
+                "source_version": 8,
+                "updated_at": "2026-08-14T10:00:00+00:00",
+            }
+
+        record = await DatabaseAgentCatalogWriter(write).put(
+            scope_id="workspace-1",
+            agent_id="reviewer",
+            adapter_type="local_codex",
+            capabilities=[],
+            enabled=False,
+            expected_version=7,
+        )
+
+        self.assertEqual(record.source_version, 8)
+        self.assertFalse(record.enabled)
+
+    async def test_catalog_writer_reports_version_conflict(self) -> None:
+        async def write(_mutation: AgentCatalogMutation) -> None:
+            return None
+
+        with self.assertRaisesRegex(
+            AgentCatalogVersionConflictError,
+            "version conflict",
+        ):
+            await DatabaseAgentCatalogWriter(write).put(
+                scope_id="workspace-1",
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                capabilities=[],
+                enabled=True,
+                expected_version=2,
+            )
+
+    async def test_catalog_writer_rejects_invalid_returned_version(self) -> None:
+        async def write(mutation: AgentCatalogMutation) -> dict[str, object]:
+            return {
+                "scope_id": mutation.scope_id,
+                "agent_id": mutation.binding.agent_id,
+                "adapter_type": mutation.binding.adapter_type,
+                "capabilities": [],
+                "enabled": True,
+                "source_version": 99,
+                "updated_at": "2026-08-14T10:00:00+00:00",
+            }
+
+        with self.assertRaisesRegex(
+            AgentBindingUnavailableError,
+            "invalid mutation",
+        ):
+            await DatabaseAgentCatalogWriter(write).put(
+                scope_id="workspace-1",
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                capabilities=[],
+                enabled=True,
+                expected_version=2,
+            )
+
+    async def test_catalog_writer_rejects_changed_returned_binding(self) -> None:
+        async def write(mutation: AgentCatalogMutation) -> dict[str, object]:
+            return {
+                "scope_id": mutation.scope_id,
+                "agent_id": mutation.binding.agent_id,
+                "adapter_type": "local_claude",
+                "capabilities": [],
+                "enabled": mutation.enabled,
+                "source_version": 1,
+                "updated_at": "2026-08-14T10:00:00+00:00",
+            }
+
+        with self.assertRaisesRegex(
+            AgentBindingUnavailableError,
+            "invalid mutation",
+        ):
+            await DatabaseAgentCatalogWriter(write).put(
+                scope_id="workspace-1",
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                capabilities=[],
+                enabled=True,
+                expected_version=0,
+            )
+
+    async def test_catalog_writer_rejects_invalid_adapter_before_write(self) -> None:
+        called = False
+
+        async def write(_mutation: AgentCatalogMutation) -> None:
+            nonlocal called
+            called = True
+
+        with self.assertRaisesRegex(ValueError, "adapter_type is invalid"):
+            await DatabaseAgentCatalogWriter(write).put(
+                scope_id="workspace-1",
+                agent_id="reviewer",
+                adapter_type="https://provider.invalid",
+                capabilities=[],
+                enabled=True,
+                expected_version=0,
+            )
+        self.assertFalse(called)

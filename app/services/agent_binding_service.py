@@ -7,13 +7,22 @@ credentials and raw Agent configuration stay outside the Mission domain.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
+
+_ADAPTER_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+_MAX_CATALOG_VERSION = 2_147_483_646
 
 
 class AgentBindingUnavailableError(RuntimeError):
     """Raised when no authorized Agent catalog is configured."""
+
+
+class AgentCatalogVersionConflictError(RuntimeError):
+    """Raised when a catalog mutation loses optimistic concurrency control."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +57,14 @@ class AgentBinding:
         )
         if not agent_id or not adapter_type:
             raise ValueError("Agent binding requires agent_id and adapter_type")
+        if len(agent_id) > 255:
+            raise ValueError("Agent binding agent_id is too long")
+        if not _ADAPTER_TYPE_PATTERN.fullmatch(adapter_type):
+            raise ValueError("Agent binding adapter_type is invalid")
+        if any(len(capability) > 255 for capability in capabilities):
+            raise ValueError("Agent binding capability is too long")
+        if len(capabilities) > 256:
+            raise ValueError("Agent binding has too many capabilities")
         return cls(
             agent_id=agent_id,
             adapter_type=adapter_type,
@@ -126,6 +143,161 @@ class DatabaseAgentBindingResolver:
         if binding.agent_id != agent_id:
             raise AgentBindingUnavailableError("Agent catalog returned invalid binding")
         return binding
+
+
+@dataclass(frozen=True, slots=True)
+class AgentCatalogMutation:
+    scope_id: str
+    binding: AgentBinding
+    enabled: bool
+    expected_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class AgentCatalogRecord:
+    scope_id: str
+    binding: AgentBinding
+    enabled: bool
+    source_version: int
+    updated_at: str
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> AgentCatalogRecord:
+        scope_id = str(value.get("scope_id") or "").strip()
+        source_version = int(value.get("source_version") or 0)
+        updated_at_value = value.get("updated_at")
+        if isinstance(updated_at_value, datetime):
+            updated_at = updated_at_value.isoformat()
+        else:
+            updated_at = str(updated_at_value or "").strip()
+        if not scope_id or len(scope_id) > 255:
+            raise ValueError("Agent catalog scope_id is invalid")
+        if source_version < 1 or not updated_at:
+            raise ValueError("Agent catalog version metadata is invalid")
+        return cls(
+            scope_id=scope_id,
+            binding=AgentBinding.from_mapping(value),
+            enabled=bool(value.get("enabled")),
+            source_version=source_version,
+            updated_at=updated_at,
+        )
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {
+            "scopeId": self.scope_id,
+            "agentId": self.binding.agent_id,
+            "adapterType": self.binding.adapter_type,
+            "capabilities": list(self.binding.capabilities),
+            "enabled": self.enabled,
+            "sourceVersion": self.source_version,
+            "updatedAt": self.updated_at,
+        }
+
+
+AgentCatalogWrite = Callable[
+    [AgentCatalogMutation], Awaitable[Mapping[str, object] | None]
+]
+
+
+async def _write_catalog_binding(
+    mutation: AgentCatalogMutation,
+) -> Mapping[str, object] | None:
+    from app.db.session import afetch_one
+
+    return await afetch_one(
+        """
+        WITH updated AS (
+            UPDATE agent_catalog_bindings
+            SET adapter_type = $3,
+                capabilities = $4::jsonb,
+                enabled = $5,
+                source_version = source_version + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE scope_id = $1
+              AND agent_id = $2
+              AND $6 > 0
+              AND source_version = $6
+            RETURNING scope_id, agent_id, adapter_type, capabilities, enabled,
+                      source_version, updated_at
+        ), inserted AS (
+            INSERT INTO agent_catalog_bindings (
+                scope_id, agent_id, adapter_type, capabilities, enabled,
+                source_version
+            )
+            SELECT $1, $2, $3, $4::jsonb, $5, 1
+            WHERE $6 = 0
+            ON CONFLICT (scope_id, agent_id) DO NOTHING
+            RETURNING scope_id, agent_id, adapter_type, capabilities, enabled,
+                      source_version, updated_at
+        )
+        SELECT * FROM updated
+        UNION ALL
+        SELECT * FROM inserted
+        LIMIT 1
+        """,
+        mutation.scope_id,
+        mutation.binding.agent_id,
+        mutation.binding.adapter_type,
+        json.dumps(list(mutation.binding.capabilities)),
+        mutation.enabled,
+        mutation.expected_version,
+    )
+
+
+class DatabaseAgentCatalogWriter:
+    """Persist catalog bindings with atomic optimistic concurrency control."""
+
+    def __init__(self, write: AgentCatalogWrite | None = None) -> None:
+        self._write = write or _write_catalog_binding
+
+    async def put(
+        self,
+        *,
+        scope_id: str,
+        agent_id: str,
+        adapter_type: str,
+        capabilities: Sequence[str],
+        enabled: bool,
+        expected_version: int,
+    ) -> AgentCatalogRecord:
+        normalized_scope_id = scope_id.strip()
+        if not normalized_scope_id or len(normalized_scope_id) > 255:
+            raise ValueError("Agent catalog scope_id is invalid")
+        if not 0 <= expected_version <= _MAX_CATALOG_VERSION:
+            raise ValueError("Agent catalog expected_version is out of range")
+        binding = AgentBinding.from_mapping(
+            {
+                "agent_id": agent_id,
+                "adapter_type": adapter_type,
+                "capabilities": capabilities,
+            }
+        )
+        mutation = AgentCatalogMutation(
+            scope_id=normalized_scope_id,
+            binding=binding,
+            enabled=enabled,
+            expected_version=expected_version,
+        )
+        try:
+            row = await self._write(mutation)
+            if row is None:
+                raise AgentCatalogVersionConflictError(
+                    "Agent catalog binding version conflict"
+                )
+            record = AgentCatalogRecord.from_mapping(row)
+        except AgentCatalogVersionConflictError:
+            raise
+        except Exception as exc:
+            raise AgentBindingUnavailableError("Agent catalog write failed") from exc
+
+        if (
+            record.scope_id != normalized_scope_id
+            or record.binding != binding
+            or record.enabled is not enabled
+            or record.source_version != expected_version + 1
+        ):
+            raise AgentBindingUnavailableError("Agent catalog returned invalid mutation")
+        return record
 
 
 class StaticAgentBindingResolver:
