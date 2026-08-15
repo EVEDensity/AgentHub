@@ -40,6 +40,11 @@ remain transactional in Mission Control. Runner gains no durable queue,
 scheduling cursor, Mission scan, priority policy, or authority to declare
 success.
 
+The minimum direct authorization path uses one workspace-scoped service
+identity shared by replicas, with attempts separated by lease ID. It must not
+use administrator credentials. Distinct service-principal identities require a
+separate workspace-grant contract before they can replace the shared identity.
+
 This is still not capacity-aware fleet scheduling. Priority, quotas, model or
 hardware affinity, and per-tenant concurrency must be added to Mission Control
 policy with explicit contracts and tests.
@@ -49,5 +54,9 @@ policy with explicit contracts and tests.
 Runner tests cover workspace polling, empty/error backoff, shutdown and
 cancellation, extraction of the claimed Mission identity, rejection of a
 missing Mission ID before execution, and continued Mission-scoped compatibility.
-Service configuration and composition tests require workspace scope and retain
-file-backed credentials, strict adapters, and sanitized readiness behavior.
+ASGI integration tests drive concurrent control clients through claim, start,
+Artifact registration, and completion without duplicate execution. A dedicated
+CI PostgreSQL service forces concurrent claims to hold separate row locks and
+proves `SKIP LOCKED` selects distinct WorkUnits. Service configuration and
+composition tests retain file-backed credentials, strict adapters, and
+sanitized readiness behavior.
