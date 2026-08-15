@@ -27,6 +27,9 @@ ledger or a restart recovery mechanism.
   a tool.
 - `ModelPort`: provider-independent model completion responses.
 - `FunctionTool`: explicit capability-granted handlers and argument validators.
+- Claimed inbound work supplies a request-scoped Harness as part of one
+  execution plan. Its model factory receives the exact resolved `FunctionTool`
+  set, and its binding factory receives Mission, WorkUnit, and attempt identity.
 - Optional `HarnessCheckpointPort`: atomic checkpoint/event recording.
 
 ## Outputs
@@ -60,3 +63,9 @@ adapters consume this boundary without changing Harness policy.
 deployment that accepts inbound A2A execution must explicitly configure a
 model-capable Harness such as `FunctionCallingHarness`, with tools resolved
 from the Contract and WorkUnit through the separate capability resolver.
+Claimed execution cannot fall back to Runner's fixed Harness: resolution must
+return both bounded input and a valid request-scoped Harness. The protocol-only
+`a2a.receive` admission capability is never exposed as a model function; every
+other required capability must have a concrete binding. The model factory must
+receive those resolved tools so provider tool schemas and executable handlers
+cannot drift.

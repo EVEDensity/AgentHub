@@ -150,11 +150,23 @@ class RunnerExecutionInput:
     cwd: Path | None = None
 
 
+@dataclass(frozen=True)
+class ClaimedWorkExecution:
+    """Lease-fenced input and the request-scoped Harness that may execute it."""
+
+    execution_input: RunnerExecutionInput
+    harness: HarnessPort
+
+
+class ClaimedHarnessFactoryPort(Protocol):
+    def build(self, context: Mapping[str, Any]) -> HarnessPort: ...
+
+
 class ClaimedWorkResolver(Protocol):
     async def resolve(
         self,
         work_unit: Mapping[str, Any],
-    ) -> RunnerExecutionInput: ...
+    ) -> ClaimedWorkExecution: ...
 
 
 class A2AInboundClaimedWorkResolver:
@@ -165,6 +177,7 @@ class A2AInboundClaimedWorkResolver:
         control: MissionControlRunnerPort,
         *,
         runner_id: str,
+        harness_factory: ClaimedHarnessFactoryPort,
         max_context_chars: int = 32_768,
         max_timeout_seconds: float = 300.0,
     ) -> None:
@@ -174,13 +187,14 @@ class A2AInboundClaimedWorkResolver:
             raise ValueError("max_timeout_seconds must be positive")
         self._control = control
         self._runner_id = runner_id
+        self._harness_factory = harness_factory
         self._max_context_chars = max_context_chars
         self._max_timeout_seconds = max_timeout_seconds
 
     async def resolve(
         self,
         work_unit: Mapping[str, Any],
-    ) -> RunnerExecutionInput:
+    ) -> ClaimedWorkExecution:
         mission_id = _required_string(work_unit, "missionId")
         work_unit_id = _required_string(work_unit, "id")
         if work_unit.get("kind") != "a2a.inbound":
@@ -204,10 +218,18 @@ class A2AInboundClaimedWorkResolver:
             max_context_chars=self._max_context_chars,
             max_timeout_seconds=self._max_timeout_seconds,
         )
-        return RunnerExecutionInput(
-            code=prompt,
-            language="text",
-            timeout=timeout,
+        harness = self._harness_factory.build(context)
+        if not callable(getattr(harness, "execute", None)):
+            raise ClaimedWorkResolutionError(
+                "claimed Harness factory returned an invalid Harness"
+            )
+        return ClaimedWorkExecution(
+            execution_input=RunnerExecutionInput(
+                code=prompt,
+                language="text",
+                timeout=timeout,
+            ),
+            harness=harness,
         )
 
 
@@ -503,6 +525,7 @@ class WorkUnitRunner:
             lease_seconds=lease_seconds,
             artifact_kind=artifact_kind,
             media_type=media_type,
+            harness=self._harness,
         )
 
     async def claim_and_run(
@@ -553,7 +576,7 @@ class WorkUnitRunner:
                 "claimed WorkUnit cannot execute without a trusted resolver"
             )
         try:
-            execution_input = await resolver.resolve(work_unit_payload)
+            execution = await resolver.resolve(work_unit_payload)
         except Exception as exc:
             await self._fail(
                 mission_id,
@@ -564,14 +587,19 @@ class WorkUnitRunner:
             raise RunnerExecutionError(
                 "claimed WorkUnit input resolution failed"
             ) from exc
-        if not isinstance(execution_input, RunnerExecutionInput):
+        if (
+            not isinstance(execution, ClaimedWorkExecution)
+            or not isinstance(execution.execution_input, RunnerExecutionInput)
+            or not callable(getattr(execution.harness, "execute", None))
+        ):
             await self._fail(
                 mission_id,
                 work_unit_id,
                 lease,
-                "claimed WorkUnit resolver returned an invalid execution input",
+                "claimed WorkUnit resolver returned an invalid execution plan",
             )
-            raise RunnerExecutionError("claimed WorkUnit resolver returned invalid input")
+            raise RunnerExecutionError("claimed WorkUnit resolver returned invalid plan")
+        execution_input = execution.execution_input
         return await self._run_leased(
             mission_id,
             work_unit_id,
@@ -583,6 +611,7 @@ class WorkUnitRunner:
             lease_seconds=lease_seconds,
             artifact_kind=artifact_kind,
             media_type=media_type,
+            harness=execution.harness,
         )
 
     async def _run_leased(
@@ -598,6 +627,7 @@ class WorkUnitRunner:
         lease_seconds: int,
         artifact_kind: str,
         media_type: str,
+        harness: HarnessPort,
     ) -> RunnerRunResult:
         lease = _lease_context(leased)
         started = await self._control.start_work_unit(
@@ -618,6 +648,7 @@ class WorkUnitRunner:
                 timeout=timeout,
                 cwd=cwd,
                 lease_seconds=lease_seconds,
+                harness=harness,
             )
         except asyncio.CancelledError:
             with suppress(RunnerControlError):
@@ -709,9 +740,10 @@ class WorkUnitRunner:
         timeout: float,
         cwd: Path | None,
         lease_seconds: int,
+        harness: HarnessPort,
     ) -> SandboxResult:
         execution_task = asyncio.create_task(
-            self._harness.execute(
+            harness.execute(
                 HarnessRequest(
                     code=code,
                     language=language,
@@ -1143,6 +1175,8 @@ async def _drain_cancelled_task(task: asyncio.Task[Any]) -> None:
 
 __all__ = [
     "A2AInboundClaimedWorkResolver",
+    "ClaimedHarnessFactoryPort",
+    "ClaimedWorkExecution",
     "ClaimedWorkResolutionError",
     "MissionControlRunnerClient",
     "MissionControlRunnerPort",

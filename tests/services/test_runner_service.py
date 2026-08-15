@@ -26,6 +26,7 @@ from app.services.harness_service import (
 )
 from app.services.runner_service import (
     A2AInboundClaimedWorkResolver,
+    ClaimedWorkExecution,
     ClaimedWorkResolutionError,
     MissionControlRunnerClient,
     RunnerControlError,
@@ -198,13 +199,31 @@ class FakePublisher:
 
 
 class StaticClaimedWorkResolver:
-    def __init__(self, execution_input: RunnerExecutionInput) -> None:
+    def __init__(
+        self,
+        execution_input: RunnerExecutionInput,
+        harness: RecordingHarness | None = None,
+    ) -> None:
         self.execution_input = execution_input
+        self.harness = harness or RecordingHarness()
         self.received: list[dict[str, Any]] = []
 
-    async def resolve(self, work_unit: dict[str, Any]) -> RunnerExecutionInput:
+    async def resolve(self, work_unit: dict[str, Any]) -> ClaimedWorkExecution:
         self.received.append(work_unit)
-        return self.execution_input
+        return ClaimedWorkExecution(
+            execution_input=self.execution_input,
+            harness=self.harness,
+        )
+
+
+class StaticClaimedHarnessFactory:
+    def __init__(self, harness: RecordingHarness | None = None) -> None:
+        self.harness = harness or RecordingHarness()
+        self.contexts: list[dict[str, Any]] = []
+
+    def build(self, context: dict[str, Any]) -> RecordingHarness:
+        self.contexts.append(context)
+        return self.harness
 
 
 def inbound_claim_payload() -> dict[str, Any]:
@@ -292,10 +311,12 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         resolver = A2AInboundClaimedWorkResolver(
             control,
             runner_id="runner-1",
+            harness_factory=StaticClaimedHarnessFactory(),
             max_timeout_seconds=90,
         )
 
-        execution_input = await resolver.resolve(inbound_claim_payload())
+        execution = await resolver.resolve(inbound_claim_payload())
+        execution_input = execution.execution_input
 
         self.assertEqual(execution_input.language, "text")
         self.assertEqual(execution_input.timeout, 90)
@@ -334,6 +355,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         resolver = A2AInboundClaimedWorkResolver(
             control,
             runner_id="runner-1",
+            harness_factory=StaticClaimedHarnessFactory(),
             max_context_chars=100,
         )
 
@@ -393,6 +415,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
                 resolver = A2AInboundClaimedWorkResolver(
                     control,
                     runner_id="runner-1",
+                    harness_factory=StaticClaimedHarnessFactory(),
                 )
                 with self.assertRaisesRegex(ClaimedWorkResolutionError, message):
                     await resolver.resolve(inbound_claim_payload())
@@ -417,9 +440,10 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         resolver = StaticClaimedWorkResolver(
             RunnerExecutionInput(code="print('inbound')", language="python")
         )
+        publisher = FakePublisher()
         runner = WorkUnitRunner(
             control,
-            publisher=FakePublisher(),
+            publisher=publisher,
             runner_id="runner-1",
             assigned_agent_id="reviewer",
             assigned_adapter="local_codex",
@@ -430,6 +454,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertTrue(result.success)
+        self.assertEqual(publisher.contents, [b"harness output\n"])
         self.assertEqual(resolver.received[0]["id"], "wu-child")
         self.assertEqual(
             [name for name, _ in control.calls],

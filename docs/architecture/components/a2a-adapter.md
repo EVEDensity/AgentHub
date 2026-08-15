@@ -83,6 +83,15 @@ criterion configuration, repository scope, and arbitrary provider config.
 Tool authority is resolved independently by Harness. The Artifact/Evidence path
 remains a separate gate and executing agents still cannot verify themselves.
 
+The inbound Runner composition root builds one Harness per claimed attempt.
+`a2a.receive` proves admission eligibility but is not a callable model tool.
+Every other WorkUnit requirement must resolve through a per-attempt capability
+binding factory; the exact tools are also passed to the model factory. Missing
+bindings, invalid model factories, or recursive `a2a.outbound` adapter
+configuration fail closed. The repository does not yet contain an independently
+deployed Runner process; composition is an implementation boundary, not a
+deployment claim.
+
 ## Security and ownership
 
 Signed cards require valid hex-encoded Ed25519 public key and signature bytes.
