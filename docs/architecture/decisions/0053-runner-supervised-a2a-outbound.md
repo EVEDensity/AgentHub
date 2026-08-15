@@ -165,3 +165,12 @@ Workspace coordinator tests cover exact outbound claim binding, shared claim
 envelope and lease validation, idle/capacity no-op outcomes, native result
 preservation, invalid status isolation in worker readiness, and semantic-drift
 failure recovery behind the minimum trustworthy lease fence.
+
+The serialized integration gate combines the outbound submission and Mission
+routers behind one repository, uses the real Mission Control HTTP client and
+local content-addressed publisher, and drives the isolated workspace
+coordinator against a signed-and-pinned remote HTTP peer. It verifies
+`PENDING -> LEASED -> RUNNING -> VERIFYING`, exact receiver credential use,
+actual CAS byte integrity, two registered Artifacts, no local peer-derived
+Evidence, and an idle second claim with no duplicate send. The gate does not
+model PostgreSQL locking and does not activate production dispatch.

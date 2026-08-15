@@ -116,6 +116,13 @@ validated low-cardinality claim status, so it can supervise either result type
 without making them interchangeable. Production process wiring remains
 disabled, so Gateway and Runner cannot dispatch the same attempt.
 
+An ASGI integration gate now drives the isolated outbound coordinator through
+real Mission Control HTTP serialization and a mocked remote HTTP peer. It
+verifies the full claim-to-`VERIFYING` chain, actual local CAS bytes and digests,
+two lease-fenced Artifact registrations, attestation-only remote Evidence, and
+an idle second claim that cannot resend the task. This is a composition gate;
+it does not enable the outbound adapter in the production process.
+
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,
 binding, state, and Mission identity, then reuses the existing context, start,

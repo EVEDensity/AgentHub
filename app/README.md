@@ -98,6 +98,11 @@ boundary. It is not the permanent home of every Agent feature.
   Idle and capacity-saturated polls perform no execution. The generic worker
   supervisor now depends only on the low-cardinality claim status and validates
   that status before updating readiness; inbound result behavior is unchanged.
+  A serialized ASGI integration gate now exercises outbound submission through
+  workspace claim, execution-context read, controlled start, signed-and-pinned
+  peer routing, stateless send/result fetch, real local CAS publication,
+  Artifact registration, completion to `VERIFYING`, and an idle second claim.
+  It also proves that peer Evidence remains attestation-only.
   Production process wiring remains disabled until Gateway direct dispatch is
   removed in the same cutover.
   Inbound claimed execution uses a request-scoped execution plan, so its

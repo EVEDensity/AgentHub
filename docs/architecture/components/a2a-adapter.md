@@ -114,6 +114,14 @@ its own CAS, registers attempt-local Artifact metadata through Mission Control,
 and completes only to `VERIFYING`. Peer Evidence is retained in a report
 Artifact as a remote attestation and never becomes local Evidence authority.
 
+The isolated path has a real HTTP/ASGI integration gate covering outbound API
+submission, Mission Control workspace claim and execution commands, signed and
+pinned Agent Card discovery, receiver-authenticated JSON-RPC send/result fetch,
+local content-addressed byte publication, Artifact registration, transition to
+`VERIFYING`, and an idle follow-up claim. This verifies composition and
+serialization, not production activation or database locking. Gateway remains
+the only live dispatch path until the atomic cutover.
+
 `tasks/cancel` first cancels the durable Mission task and then best-effort
 forwards cancellation with the same route-field cleanup, Card/origin checks,
 and receiver-issued authentication. A remote cancel failure is logged because
