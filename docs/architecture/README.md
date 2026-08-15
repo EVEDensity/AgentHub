@@ -2,7 +2,7 @@
 
 > Status: accepted  
 > Owner: architecture maintainers  
-> Last reviewed: 2026-08-08  
+> Last reviewed: 2026-08-15
 > Scope: stable, reviewable system boundaries
 
 This directory contains architecture that is safe to version and review. It
@@ -27,6 +27,7 @@ The detailed target design and migration sequence are stored locally under
 
 - `components/system-boundaries.md`: ownership and request flow summary.
 - `components/harness.md`: Harness loop, checkpoint, and event boundary.
+- `components/runner.md`: execution-plan, polling, backoff, and shutdown boundary.
 - `components/a2a-adapter.md`: A2A Agent Card probing and Mission task
   translation boundary.
 - `components/mcp-adapter.md`: Stateless MCP client and audit boundary.
