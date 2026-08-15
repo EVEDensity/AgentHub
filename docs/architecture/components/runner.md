@@ -71,6 +71,21 @@ Python process composition intentionally still rejects that adapter until the
 dedicated remote send/poll/cancel/result resolver is complete; claim support is
 not a fallback to the inbound model Harness.
 
+The claimed outbound lease owner can retrieve the versioned execution context
+after Mission Control revalidates the complete source/kind/binding/capability
+and lease identity chain. Context retrieval is read-only; it does not start the
+WorkUnit or call a remote peer.
+
+The outbound claimed-work resolver now validates that projection again against
+the claimed Mission, WorkUnit, attempt, Agent, adapter, capability set, lease,
+Contract, and target-scoped grants. It emits a bounded credential-free command
+and a local supervision identity; `a2a.send` is removed from peer requirements
+because it is local transport authority. A separate stateless transport port
+defines finite `send/get/cancel` inputs and content-free lifecycle responses.
+There is deliberately no Harness result and no production composition yet, so
+a remote acknowledgement cannot enter `WorkUnitRunner` Artifact/completion
+handling and no second dispatch path exists.
+
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,
 binding, state, and Mission identity, then reuses the existing context, start,

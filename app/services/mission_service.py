@@ -1044,7 +1044,7 @@ class MissionService:
         lease_id: str,
         runner_id: str,
     ) -> ClaimedExecutionContext:
-        """Read an inbound execution snapshot behind the active lease fence."""
+        """Read a controlled A2A root snapshot behind the active lease fence."""
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
             if mission is None:
@@ -1055,13 +1055,24 @@ class MissionService:
             work_unit = await repository.get_work_unit_for_update(work_unit_id)
             if work_unit is None or work_unit.mission_id != mission_id:
                 raise WorkUnitNotFoundError(work_unit_id)
-            if (
-                mission.source.type != MissionSourceType.A2A_INBOUND
-                or work_unit.parent_work_unit_id is not None
-                or work_unit.kind != "a2a.inbound"
-            ):
+            is_inbound_root = (
+                mission.source.type == MissionSourceType.A2A_INBOUND
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == "a2a.inbound"
+                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+                and "a2a.receive" in work_unit.required_capabilities
+            )
+            is_outbound_root = (
+                mission.source.type == MissionSourceType.A2A
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == "a2a.delegate"
+                and work_unit.assigned_agent_id is not None
+                and work_unit.assigned_adapter == _A2A_OUTBOUND_ADAPTER
+                and "a2a.send" in work_unit.required_capabilities
+            )
+            if not (is_inbound_root or is_outbound_root):
                 raise WorkUnitNotReadyError(
-                    "execution context is only available for inbound A2A roots"
+                    "execution context is only available for controlled A2A roots"
                 )
             if work_unit.status not in {
                 WorkUnitStatus.LEASED,

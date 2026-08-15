@@ -52,11 +52,22 @@ boundary. It is not the permanent home of every Agent feature.
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
   prompt with the peer objective marked as untrusted intent. Capability scope,
   criterion configuration, credentials, and Artifact bytes are excluded;
-  actual tool grants remain an independent Harness input. Claimed execution
-  uses a request-scoped execution plan, so its Harness is built from the exact
-  Contract, WorkUnit, and attempt rather than falling back to Runner's fixed
-  Sandbox Harness. `a2a.receive` remains an admission marker; other required
-  capabilities must resolve to concrete per-attempt bindings or execution fails.
+  actual tool grants remain an independent Harness input.
+  Outbound A2A roots can read the same versioned projection only through the
+  active lease after Mission Control rechecks their exact source, root kind,
+  Agent, adapter, `a2a.send` marker, attempt, owner, and expiry. The read does
+  not start execution or dispatch remotely. `a2a_outbound_runner.py` revalidates
+  that projection against the claimed attempt and compiles one bounded,
+  credential-free remote command. It separates local `a2a.send` authority from
+  peer capability requirements and defines content-free `send/get/cancel`
+  transport contracts without invoking the inbound model Harness. Artifact
+  inputs fail closed until the result/input exchange contract is implemented;
+  the outbound transport and production worker composition remain disabled.
+  Inbound claimed execution uses a request-scoped execution plan, so its
+  Harness is built from the exact Contract, WorkUnit, and attempt rather than
+  falling back to Runner's fixed Sandbox Harness. `a2a.receive` remains an
+  admission marker; other required capabilities must resolve to concrete
+  per-attempt bindings or execution fails.
   `runner_worker.py` supervises polling for one explicitly configured workspace.
   It owns only process-local readiness, bounded idle/error backoff, and graceful
   stop. Mission Control authorizes scope, balances ready work by active and

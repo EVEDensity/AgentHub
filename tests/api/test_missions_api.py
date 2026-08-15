@@ -1959,6 +1959,131 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.work_units[0], before_work_unit)
         self.assertEqual(repository.events, [])
 
+    def test_execution_context_returns_lease_fenced_outbound_snapshot(self) -> None:
+        target_url = "https://receiver.example.test/a2a"
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            objective="Delegate a verified remote build.",
+            source=MissionSource(
+                type="a2a",
+                reference=target_url,
+                external_id="remote-task-1",
+            ),
+        )
+        repository.contract = build_contract(
+            allowed_capabilities=[
+                {"capability": "a2a.send", "scope": {"agentUrl": target_url}},
+                {
+                    "capability": "artifact.write",
+                    "scope": {"agentUrl": target_url},
+                },
+            ]
+        )
+        repository.work_units = [
+            build_work_unit(
+                kind="a2a.delegate",
+                status="LEASED",
+                attempt=1,
+                assigned_agent_id="outbound-dispatcher",
+                assigned_adapter="a2a.outbound",
+                required_capabilities=["a2a.send", "artifact.write"],
+                lease=Lease(
+                    id="lease-outbound",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        before_work_unit = repository.work_units[0]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/execution-context",
+            json={"leaseId": "lease-outbound"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        context = response.json()["executionContext"]
+        self.assertEqual(context["version"], 1)
+        self.assertEqual(context["mission"]["source"]["type"], "a2a")
+        self.assertEqual(context["mission"]["source"]["reference"], target_url)
+        self.assertEqual(context["mission"]["source"]["externalId"], "remote-task-1")
+        self.assertEqual(context["workUnit"]["kind"], "a2a.delegate")
+        self.assertEqual(
+            context["workUnit"]["assignedAgentId"],
+            "outbound-dispatcher",
+        )
+        self.assertEqual(context["workUnit"]["assignedAdapter"], "a2a.outbound")
+        self.assertEqual(context["workUnit"]["lease"]["id"], "lease-outbound")
+        self.assertEqual(repository.work_units[0], before_work_unit)
+        self.assertEqual(repository.events, [])
+
+    def test_execution_context_rejects_invalid_outbound_root_shape(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            source=MissionSource(
+                type="a2a",
+                reference="https://receiver.example.test/a2a",
+                external_id="remote-task-1",
+            ),
+        )
+        repository.contract = build_contract()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+        invalid_shapes = (
+            {"assigned_adapter": "local_codex"},
+            {"required_capabilities": ["artifact.write"]},
+            {"parent_work_unit_id": "wu-parent"},
+        )
+
+        for updates in invalid_shapes:
+            with self.subTest(updates=updates):
+                repository.work_units = [
+                    build_work_unit(
+                        **{
+                            "kind": "a2a.delegate",
+                            "status": "LEASED",
+                            "attempt": 1,
+                            "assigned_agent_id": "outbound-dispatcher",
+                            "assigned_adapter": "a2a.outbound",
+                            "required_capabilities": [
+                                "a2a.send",
+                                "artifact.write",
+                            ],
+                            "lease": Lease(
+                                id="lease-outbound",
+                                runner_id="user-1",
+                                expires_at=(
+                                    datetime.now(timezone.utc)
+                                    + timedelta(minutes=5)
+                                ),
+                            ),
+                            **updates,
+                        }
+                    )
+                ]
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/work-units/wu-1/execution-context",
+                    json={"leaseId": "lease-outbound"},
+                )
+
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(repository.events, [])
+
     def test_execution_context_rejects_wrong_owner_and_expired_lease(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(
@@ -1972,6 +2097,7 @@ class MissionApiTests(unittest.TestCase):
                 kind="a2a.inbound",
                 status="LEASED",
                 attempt=1,
+                required_capabilities=["a2a.receive"],
                 lease=Lease(
                     id="lease-inbound",
                     runner_id="user-1",
@@ -1996,6 +2122,7 @@ class MissionApiTests(unittest.TestCase):
             kind="a2a.inbound",
             status="LEASED",
             attempt=1,
+            required_capabilities=["a2a.receive"],
             lease=Lease(
                 id="lease-inbound",
                 runner_id="user-1",
@@ -2056,6 +2183,7 @@ class MissionApiTests(unittest.TestCase):
             kind="a2a.inbound",
             status="LEASED",
             attempt=1,
+            required_capabilities=["a2a.receive"],
             lease=Lease(
                 id="lease-1",
                 runner_id="user-1",

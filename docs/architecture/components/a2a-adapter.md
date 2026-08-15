@@ -64,6 +64,20 @@ Runner-supervised heartbeat, polling, cancellation, and result-import loop from
 ADR-0053 is implemented. Claim eligibility alone does not authorize a second
 dispatch path.
 
+The active outbound lease owner may read a versioned Mission/Contract/WorkUnit
+execution projection. Mission Control requires the same `a2a` source,
+`a2a.delegate` root, assigned Agent, `a2a.outbound` adapter, and `a2a.send`
+marker, then fences the read by WorkUnit state, attempt, lease ID, owner, and
+expiry. This read is side-effect free and contains no peer credentials. It is
+input to the outbound protocol resolver, not permission for Gateway and Runner
+to dispatch the same attempt. The resolver now rechecks the complete identity
+chain and creates a size-bounded, credential-free command containing only task
+routing, the objective message, and peer capability requirements. Local
+`a2a.send`, lease/Runner identity, Contract budgets, capability scopes, and
+credentials are not sent. A stateless `send/get/cancel` port and finite remote
+state projection are defined, but no transport implementation is composed into
+the worker while Gateway direct dispatch remains active.
+
 `tasks/cancel` first cancels the durable Mission task and then best-effort
 forwards cancellation with the same route-field cleanup, Card/origin checks,
 and receiver-issued authentication. A remote cancel failure is logged because
@@ -196,3 +210,6 @@ binding, atomic lease events, and continued delegated-child behavior.
 Result exchange tests cover source-bound status reads, PASS/current-attempt
 selection, sensitivity and digest policy, local and MinIO byte integrity,
 response limits, typed Gateway projection, and all-or-nothing failure.
+Outbound Runner tests cover claim/context identity drift, target-scoped grants,
+local-versus-peer capability separation, request bounds, unsupported Artifact
+inputs, and content-free finite transport contracts without network dispatch.

@@ -46,20 +46,30 @@ when all of these facts agree:
 Claiming emits the normal fenced lease event with claim mode `a2a.outbound`.
 It does not dispatch remotely or prove completion.
 
-The outbound worker will own the remaining lifecycle: fetch a lease-fenced
-execution projection, start the WorkUnit, call the protocol transport, renew
-the lease while polling, propagate local cancellation, import a bounded result
-into local content-addressed storage, register local Artifact metadata, and
-complete to `VERIFYING`. Remote Evidence is stored only as an attestation or
-report Artifact. A separate local verifier remains required for `SUCCEEDED`.
-Gateway will then submit commands and project Mission state; it will no longer
-supervise remote execution in the request path.
+The active outbound lease owner can read the same versioned
+Mission/Contract/WorkUnit execution projection used by controlled inbound
+roots. Mission Control rechecks source, root kind, assigned executor, adapter,
+`a2a.send`, status, attempt, lease ID, owner, and expiry before returning it.
+The read creates no event and exposes no provider or peer credential.
 
-This cutover is phased. The current slice implements catalog binding and
-controlled claim eligibility. Gateway's direct dispatch remains a compatibility
-path until the supervised worker can handle heartbeat, polling, cancellation,
-and result import end to end. The two paths must not both dispatch the same
-attempt after cutover.
+The outbound worker will own the remaining lifecycle: start the WorkUnit, call
+the protocol transport, renew the lease while polling, propagate local
+cancellation, import a bounded result into local content-addressed storage,
+register local Artifact metadata, and complete to `VERIFYING`. Remote Evidence
+is stored only as an attestation or report Artifact. A separate local verifier
+remains required for `SUCCEEDED`. Gateway will then submit commands and project
+Mission state; it will no longer supervise remote execution in the request path.
+
+This cutover is phased. The current slices implement catalog binding,
+controlled claim eligibility, lease-fenced execution context, and a dedicated
+outbound claimed-work resolver. The resolver produces a bounded,
+credential-free command and never invokes the inbound model Harness. A
+stateless transport port defines `send/get/cancel` and a finite content-free
+remote state projection, but its implementation and production composition
+remain disabled. Gateway's direct dispatch remains a compatibility path until
+the supervised worker can handle start, heartbeat, polling, cancellation, and
+result import end to end. The two paths must not both dispatch the same attempt
+after cutover.
 
 Historical unbound outbound WorkUnits are not silently rebound. They require
 an explicit migration or cancellation and resubmission under a new task ID,
@@ -83,3 +93,12 @@ Service and API tests cover exact-adapter catalog selection, namespaced adapter
 validation, fail-closed submission without persistence side effects, immutable
 idempotent binding snapshots, recursive inbound rejection, source/kind/adapter
 root guards, atomic lease creation, claim mode, and PostgreSQL query fencing.
+Execution-context tests cover the positive outbound projection and reject a
+wrong source, parent shape, adapter, capability marker, owner, or expired lease
+without mutating Mission state.
+
+Resolver contract tests revalidate the claim/context identity chain, exact
+target-scoped capability grants, local `a2a.send` separation, bounded wire
+params, unsupported Artifact inputs, and finite content-free remote states.
+They assert that resolution performs no start, network dispatch, Artifact
+publication, or lifecycle completion.
