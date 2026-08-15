@@ -65,11 +65,14 @@ controlled claim eligibility, lease-fenced execution context, and a dedicated
 outbound claimed-work resolver. The resolver produces a bounded,
 credential-free command and never invokes the inbound model Harness. A
 stateless transport port defines `send/get/cancel` and a finite content-free
-remote state projection, but its implementation and production composition
-remain disabled. Gateway's direct dispatch remains a compatibility path until
-the supervised worker can handle start, heartbeat, polling, cancellation, and
-result import end to end. The two paths must not both dispatch the same attempt
-after cutover.
+remote state projection. Its HTTP implementation now enforces strict JSON-RPC,
+bounded bodies, exact identities, safe same-origin redirects, and
+origin-specific receiver credentials. Agent Card trust/capability verification
+is injected through a trusted-route boundary rather than copied into Runner.
+That resolver and production composition remain disabled. Gateway's direct
+dispatch remains a compatibility path until the supervised worker can handle
+start, heartbeat, polling, cancellation, and result import end to end. The two
+paths must not both dispatch the same attempt after cutover.
 
 Historical unbound outbound WorkUnits are not silently rebound. They require
 an explicit migration or cancellation and resubmission under a new task ID,
@@ -102,3 +105,9 @@ target-scoped capability grants, local `a2a.send` separation, bounded wire
 params, unsupported Artifact inputs, and finite content-free remote states.
 They assert that resolution performs no start, network dispatch, Artifact
 publication, or lifecycle completion.
+
+Transport tests cover exact trusted-route origin matching, receiver-only bearer
+use, strict and bounded JSON-RPC responses, duplicate/mismatched identity
+rejection, finite remote states, and safe same-origin redirect handling. The
+transport tests do not claim a production Agent Card resolver or enable the
+second dispatch path.

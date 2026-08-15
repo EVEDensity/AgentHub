@@ -75,8 +75,13 @@ chain and creates a size-bounded, credential-free command containing only task
 routing, the objective message, and peer capability requirements. Local
 `a2a.send`, lease/Runner identity, Contract budgets, capability scopes, and
 credentials are not sent. A stateless `send/get/cancel` port and finite remote
-state projection are defined, but no transport implementation is composed into
-the worker while Gateway direct dispatch remains active.
+state projection are defined. Its HTTP adapter rejects malformed or duplicate
+JSON fields, mismatched request/task IDs, unsupported states, oversized bodies,
+unsafe redirect statuses, cross-origin redirects, and missing receiver-issued
+credentials. Agent Card verification is supplied through a trusted-route port;
+the transport cannot choose or alter the requested peer origin. No production
+route-resolver or worker composition is enabled while Gateway direct dispatch
+remains active.
 
 `tasks/cancel` first cancels the durable Mission task and then best-effort
 forwards cancellation with the same route-field cleanup, Card/origin checks,
@@ -212,4 +217,7 @@ selection, sensitivity and digest policy, local and MinIO byte integrity,
 response limits, typed Gateway projection, and all-or-nothing failure.
 Outbound Runner tests cover claim/context identity drift, target-scoped grants,
 local-versus-peer capability separation, request bounds, unsupported Artifact
-inputs, and content-free finite transport contracts without network dispatch.
+inputs, and finite transport contracts. Stateless HTTP transport tests cover
+receiver-token isolation, route-origin pinning, content-free send/get/cancel,
+same-origin redirects, response limits, JSON-RPC identity, remote errors, and
+unsupported remote states.

@@ -82,9 +82,14 @@ Contract, and target-scoped grants. It emits a bounded credential-free command
 and a local supervision identity; `a2a.send` is removed from peer requirements
 because it is local transport authority. A separate stateless transport port
 defines finite `send/get/cancel` inputs and content-free lifecycle responses.
-There is deliberately no Harness result and no production composition yet, so
-a remote acknowledgement cannot enter `WorkUnitRunner` Artifact/completion
-handling and no second dispatch path exists.
+The HTTP adapter now enforces bounded JSON-RPC envelopes and bodies, exact
+request/task identity, finite states, safe same-origin redirects, and
+receiver-issued bearer credentials scoped to the verified peer origin. It
+accepts only a route produced by an injected Agent Card trust/capability
+resolver, so Runner does not duplicate Gateway's trust policy. There is
+deliberately no Harness result and no production composition yet, so a remote
+acknowledgement cannot enter `WorkUnitRunner` Artifact/completion handling and
+no second dispatch path exists.
 
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,

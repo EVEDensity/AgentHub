@@ -62,7 +62,13 @@ boundary. It is not the permanent home of every Agent feature.
   peer capability requirements and defines content-free `send/get/cancel`
   transport contracts without invoking the inbound model Harness. Artifact
   inputs fail closed until the result/input exchange contract is implemented;
-  the outbound transport and production worker composition remain disabled.
+  `a2a_outbound_transport.py` implements those contracts with strict JSON-RPC,
+  bounded request/response bodies, same-origin 307/308 redirects, exact remote
+  task identity, and origin-bound receiver credentials. Agent Card trust and
+  capability verification remain an injected route-resolver responsibility;
+  no duplicate trust store is added to Runner. Production worker composition
+  remains disabled until that resolver and the full supervised result path are
+  available.
   Inbound claimed execution uses a request-scoped execution plan, so its
   Harness is built from the exact Contract, WorkUnit, and attempt rather than
   falling back to Runner's fixed Sandbox Harness. `a2a.receive` remains an
