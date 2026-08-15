@@ -43,6 +43,7 @@ const (
 	ScopeWorkspaceRead  = "workspace:read"  // view workspace content
 	ScopeModelManage    = "model:manage"    // configure model providers, quotas
 	ScopeMissionClaim   = "mission:claim"   // claim ready WorkUnits in an explicitly granted workspace
+	ScopeMissionVerify  = "mission:verify"  // admit Evidence for WorkUnits in an explicitly granted workspace
 )
 
 // DefaultRoleScopes maps each built-in role to the scope set it grants. These

@@ -46,6 +46,13 @@ Control command; the parent lease fences that command, and the child relation
 is not a dependency edge. A protocol request is an input to this flow, not an
 alternative flow.
 
+Independent verifier service principals receive the explicit, revocable
+`mission:verify` permission through the existing workspace ACL. Mission Control
+checks that grant before Artifact reads or Evidence mutation and fails closed
+when IAM is unavailable. The authenticated subject must still match the
+Evidence verifier identity. The grant is not workspace read access and does not
+permit Runner claims or self-verification by an executing Agent.
+
 ## Migration status
 
 LangGraph and AgentNet remain compatibility surfaces while callers migrate.

@@ -14,6 +14,7 @@ from app.api.v1.missions import (
     get_artifact_byte_verifier,
     get_mission_repository,
     get_runner_workspace_grant_authorizer,
+    get_verifier_workspace_grant_authorizer,
     get_workspace_claim_admission_policy_resolver,
     router,
 )
@@ -43,8 +44,11 @@ from app.services.artifact_integrity_service import (
 from app.services.auth_service import get_current_user
 from app.services.workspace_access_service import (
     DatabaseRunnerWorkspaceGrantAuthorizer,
+    DatabaseVerifierWorkspaceGrantAuthorizer,
     RunnerWorkspaceGrantAuthorizer,
     RunnerWorkspaceGrantUnavailableError,
+    VerifierWorkspaceGrantAuthorizer,
+    VerifierWorkspaceGrantUnavailableError,
 )
 from app.services.workspace_admission_service import (
     DatabaseWorkspaceClaimAdmissionPolicyResolver,
@@ -452,6 +456,29 @@ class FakeRunnerWorkspaceGrantAuthorizer:
         return (workspace_id, principal_id) in self.grants
 
 
+class FakeVerifierWorkspaceGrantAuthorizer:
+    def __init__(
+        self,
+        grants: set[tuple[str, str]] | None = None,
+        *,
+        error: VerifierWorkspaceGrantUnavailableError | None = None,
+    ) -> None:
+        self.grants = grants or set()
+        self.error = error
+        self.calls: list[tuple[str, str]] = []
+
+    async def has_verify_grant(
+        self,
+        *,
+        workspace_id: str,
+        principal_id: str,
+    ) -> bool:
+        self.calls.append((workspace_id, principal_id))
+        if self.error is not None:
+            raise self.error
+        return (workspace_id, principal_id) in self.grants
+
+
 class FakeWorkspaceClaimAdmissionPolicyResolver:
     def __init__(
         self,
@@ -517,6 +544,9 @@ def build_app(
     artifact_byte_verifier: FakeArtifactByteVerifier | None = None,
     agent_binding_resolver: AgentBindingResolver | None = None,
     runner_workspace_grant_authorizer: RunnerWorkspaceGrantAuthorizer | None = None,
+    verifier_workspace_grant_authorizer: (
+        VerifierWorkspaceGrantAuthorizer | None
+    ) = None,
     workspace_claim_admission_policy_resolver: (
         WorkspaceClaimAdmissionPolicyResolver | None
     ) = None,
@@ -535,6 +565,12 @@ def build_app(
     )
     app.dependency_overrides[get_runner_workspace_grant_authorizer] = (
         lambda: grant_authorizer
+    )
+    verifier_grant_authorizer = (
+        verifier_workspace_grant_authorizer or FakeVerifierWorkspaceGrantAuthorizer()
+    )
+    app.dependency_overrides[get_verifier_workspace_grant_authorizer] = lambda: (
+        verifier_grant_authorizer
     )
     admission_policy_resolver = (
         workspace_claim_admission_policy_resolver
@@ -558,6 +594,12 @@ class MissionApiTests(unittest.TestCase):
         self.assertIsInstance(
             get_runner_workspace_grant_authorizer(),
             DatabaseRunnerWorkspaceGrantAuthorizer,
+        )
+
+    def test_default_verifier_grant_dependency_uses_workspace_acl(self) -> None:
+        self.assertIsInstance(
+            get_verifier_workspace_grant_authorizer(),
+            DatabaseVerifierWorkspaceGrantAuthorizer,
         )
 
     def test_default_workspace_admission_dependency_uses_iam_quota(self) -> None:
@@ -2731,6 +2773,129 @@ class MissionApiTests(unittest.TestCase):
         listed = client.get("/api/v1/missions/mis-1/evidence")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["evidence"], [body["evidence"]])
+
+    def test_explicit_verifier_grant_authorizes_another_workspace(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer(
+            {("workspace-1", "verifier-1")}
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "Independent workspace verification passed.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["workUnit"]["status"], "SUCCEEDED")
+        self.assertEqual(response.json()["mission"]["status"], "SUCCEEDED")
+        self.assertEqual(grant_authorizer.calls, [("workspace-1", "verifier-1")])
+
+    def test_verifier_grant_denial_precedes_artifact_io_and_state_change(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        artifact_verifier = FakeArtifactByteVerifier()
+        grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=artifact_verifier,
+                verifier_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "Must not be recorded.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "Verifier workspace grant required")
+        self.assertEqual(artifact_verifier.calls, [])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+        self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
+
+    def test_unavailable_verifier_grant_store_fails_closed(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer(
+            error=VerifierWorkspaceGrantUnavailableError("database unavailable")
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "INCONCLUSIVE",
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
+                "summary": "Authorization unavailable.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["detail"],
+            "Verifier workspace authorization is unavailable",
+        )
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
 
     def test_evidence_rejects_artifact_from_another_work_unit(self) -> None:
         repository = FakeMissionRepository()

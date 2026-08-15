@@ -124,6 +124,11 @@ boundary. It is not the permanent home of every Agent feature.
   claim responses distinguish `claimed`, `idle`, and `capacity_saturated`;
   Runner consumes that transient result for sanitized process-local readiness
   counters only.
+  Independent verifier principals use the separate explicit workspace ACL
+  permission `mission:verify`. Mission Control checks it before Artifact I/O or
+  mutation, fails closed when IAM is unavailable, and still requires the token
+  subject to match `verifierId`. This grant permits only Evidence admission; it
+  does not grant Mission listing, Runner claims, or ordinary workspace access.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

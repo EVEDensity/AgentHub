@@ -45,8 +45,11 @@ from app.services.mission_service import (
 )
 from app.services.workspace_access_service import (
     DatabaseRunnerWorkspaceGrantAuthorizer,
+    DatabaseVerifierWorkspaceGrantAuthorizer,
     RunnerWorkspaceGrantAuthorizer,
     RunnerWorkspaceGrantUnavailableError,
+    VerifierWorkspaceGrantAuthorizer,
+    VerifierWorkspaceGrantUnavailableError,
 )
 from app.services.workspace_admission_service import (
     DatabaseWorkspaceClaimAdmissionPolicyResolver,
@@ -75,6 +78,10 @@ def get_runner_workspace_grant_authorizer() -> RunnerWorkspaceGrantAuthorizer:
     return DatabaseRunnerWorkspaceGrantAuthorizer()
 
 
+def get_verifier_workspace_grant_authorizer() -> VerifierWorkspaceGrantAuthorizer:
+    return DatabaseVerifierWorkspaceGrantAuthorizer()
+
+
 def get_workspace_claim_admission_policy_resolver(
 ) -> WorkspaceClaimAdmissionPolicyResolver:
     return DatabaseWorkspaceClaimAdmissionPolicyResolver()
@@ -93,6 +100,10 @@ AgentBindingResolverDep = Annotated[
 RunnerWorkspaceGrantAuthorizerDep = Annotated[
     RunnerWorkspaceGrantAuthorizer,
     Depends(get_runner_workspace_grant_authorizer),
+]
+VerifierWorkspaceGrantAuthorizerDep = Annotated[
+    VerifierWorkspaceGrantAuthorizer,
+    Depends(get_verifier_workspace_grant_authorizer),
 ]
 WorkspaceClaimAdmissionPolicyResolverDep = Annotated[
     WorkspaceClaimAdmissionPolicyResolver,
@@ -157,6 +168,36 @@ async def _authorized_mission(
     if mission is None:
         raise HTTPException(status_code=404, detail="Mission not found")
     authorize_workspace(user, mission.workspace_id)
+    return mission
+
+
+async def _authorize_verifier_mission(
+    mission_id: str,
+    *,
+    user: dict,
+    repository: MissionRepository,
+    grant_authorizer: VerifierWorkspaceGrantAuthorizer,
+) -> Mission:
+    mission = await repository.get_mission(mission_id)
+    if mission is None:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    if user.get("role") == "admin" or str(user["id"]) == mission.workspace_id:
+        return mission
+    try:
+        granted = await grant_authorizer.has_verify_grant(
+            workspace_id=mission.workspace_id,
+            principal_id=str(user["id"]),
+        )
+    except VerifierWorkspaceGrantUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Verifier workspace authorization is unavailable",
+        ) from exc
+    if not granted:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Verifier workspace grant required",
+        )
     return mission
 
 
@@ -790,11 +831,17 @@ async def verify_work_unit(
     user: CurrentUser,
     repository: MissionRepositoryDep,
     artifact_byte_verifier: ArtifactByteVerifierDep,
+    grant_authorizer: VerifierWorkspaceGrantAuthorizerDep,
 ) -> dict:
     authorize_verifier(user)
     if user.get("role") != "admin" and request.verifier_id != str(user["id"]):
         raise HTTPException(status_code=403, detail="Verifier identity mismatch")
-    await _authorized_mission(mission_id, user=user, repository=repository)
+    await _authorize_verifier_mission(
+        mission_id,
+        user=user,
+        repository=repository,
+        grant_authorizer=grant_authorizer,
+    )
     work_unit = await repository.get_work_unit(work_unit_id)
     if work_unit is None or work_unit.mission_id != mission_id:
         raise HTTPException(status_code=404, detail="WorkUnit not found")

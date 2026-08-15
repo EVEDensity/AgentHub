@@ -95,6 +95,7 @@ ALL_SCOPES: list[str] = [
     "audit:read", "tenant:manage", "role:manage", "billing:read",
     "workspace:admin", "workspace:read", "model:manage",
     "mission:claim",
+    "mission:verify",
 ]
 
 # ── Tool risk matrix (mirror services/go/shared/iam/abac.go) ───────────

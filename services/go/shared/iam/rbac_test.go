@@ -87,7 +87,13 @@ func TestAllRolesReturnsFive(t *testing.T) {
 
 func TestAllScopesIncludesNewScopes(t *testing.T) {
 	scopes := AllScopes()
-	wantScopes := []string{ScopeWorkspaceAdmin, ScopeWorkspaceRead, ScopeModelManage, ScopeMissionClaim}
+	wantScopes := []string{
+		ScopeWorkspaceAdmin,
+		ScopeWorkspaceRead,
+		ScopeModelManage,
+		ScopeMissionClaim,
+		ScopeMissionVerify,
+	}
 	for _, want := range wantScopes {
 		found := false
 		for _, s := range scopes {
@@ -102,11 +108,13 @@ func TestAllScopesIncludesNewScopes(t *testing.T) {
 	}
 }
 
-func TestMissionClaimRequiresExplicitWorkspaceGrant(t *testing.T) {
+func TestMissionServiceScopesRequireExplicitWorkspaceGrant(t *testing.T) {
 	p := DefaultPolicy()
-	for _, role := range []string{RoleTenantAdmin, RoleAgentOperator, RoleMember, RoleViewer} {
-		if p.HasScope([]string{role}, ScopeMissionClaim) {
-			t.Fatalf("%s should not receive mission:claim by default", role)
+	for _, scope := range []string{ScopeMissionClaim, ScopeMissionVerify} {
+		for _, role := range []string{RoleTenantAdmin, RoleAgentOperator, RoleMember, RoleViewer} {
+			if p.HasScope([]string{role}, scope) {
+				t.Fatalf("%s should not receive %s by default", role, scope)
+			}
 		}
 	}
 }
