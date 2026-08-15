@@ -103,14 +103,18 @@ async def submit_a2a_task(
     request: A2ATaskCreateRequest,
     user: CurrentUser,
     repository: A2ARepositoryDep,
+    binding_selector: A2ABindingSelectorDep,
 ) -> dict:
     authorize_workspace(user, request.workspace_id)
     try:
-        return await A2AAdapterService(repository).submit_task(
+        return await A2AAdapterService(
+            repository,
+            binding_selector=binding_selector,
+        ).submit_task(
             request,
             actor=build_a2a_actor(user),
         )
-    except (A2ATaskConflictError, ValueError) as exc:
+    except (AgentBindingUnavailableError, A2ATaskConflictError, ValueError) as exc:
         raise _translate_error(exc) from exc
 
 

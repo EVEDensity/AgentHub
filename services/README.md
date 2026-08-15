@@ -18,7 +18,10 @@ not create a competing Mission or WorkUnit state machine.
 - Gateway authenticates and routes; it does not invent task completion. Its A2A
   inbox can project a completed Mission Control result bundle through
   `tasks/get`, but it neither stores that bundle nor treats peer Evidence as
-  local completion authority.
+  local completion authority. Outbound root WorkUnits are bound to an exact
+  credential-free `a2a.outbound` catalog entry and are claimable through
+  Mission Control. Gateway request-path dispatch remains compatibility behavior
+  until ADR-0053's Runner-supervised remote lifecycle is complete.
 - Mission Control owns durable execution state.
 - Harness and Runner own execution attempts, isolation, and evidence capture.
 - The Python Runner service is a strict workspace-scoped process adapter. It

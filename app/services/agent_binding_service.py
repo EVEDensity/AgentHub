@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-_ADAPTER_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+_ADAPTER_TYPE_PATTERN = re.compile(
+    r"^(?=.{1,64}$)[a-z][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*$"
+)
 _MAX_CATALOG_VERSION = 2_147_483_646
 
 
@@ -88,6 +90,7 @@ class AgentBindingSelector(Protocol):
         *,
         scope_id: str,
         required_capabilities: Sequence[str],
+        adapter_type: str | None = None,
     ) -> AgentBinding | None:
         """Select one deterministic, enabled binding for all capabilities."""
 
@@ -114,8 +117,9 @@ class UnavailableAgentBindingSelector:
         *,
         scope_id: str,
         required_capabilities: Sequence[str],
+        adapter_type: str | None = None,
     ) -> AgentBinding | None:
-        del scope_id, required_capabilities
+        del scope_id, required_capabilities, adapter_type
         raise AgentBindingUnavailableError(
             "workspace-scoped Agent binding selector is not configured"
         )
@@ -126,7 +130,7 @@ AgentCatalogLookup = Callable[
 ]
 
 AgentCatalogSelect = Callable[
-    [str, tuple[str, ...]], Awaitable[Mapping[str, object] | None]
+    [str, tuple[str, ...], str | None], Awaitable[Mapping[str, object] | None]
 ]
 
 
@@ -177,6 +181,7 @@ class DatabaseAgentBindingResolver:
 async def _select_catalog_binding(
     scope_id: str,
     required_capabilities: tuple[str, ...],
+    adapter_type: str | None,
 ) -> Mapping[str, object] | None:
     from app.db.session import afetch_one
 
@@ -187,11 +192,13 @@ async def _select_catalog_binding(
         WHERE scope_id = $1
           AND enabled = TRUE
           AND capabilities @> $2::jsonb
+          AND ($3::text IS NULL OR adapter_type = $3)
         ORDER BY agent_id ASC, adapter_type ASC
         LIMIT 1
         """,
         scope_id,
         json.dumps(list(required_capabilities)),
+        adapter_type,
     )
 
 
@@ -206,13 +213,19 @@ class DatabaseAgentBindingSelector:
         *,
         scope_id: str,
         required_capabilities: Sequence[str],
+        adapter_type: str | None = None,
     ) -> AgentBinding | None:
         normalized_scope_id = scope_id.strip()
         if not normalized_scope_id or len(normalized_scope_id) > 255:
             raise ValueError("Agent catalog scope_id is invalid")
         capabilities = _normalize_required_capabilities(required_capabilities)
+        normalized_adapter = _normalize_adapter_type(adapter_type)
         try:
-            row = await self._select(normalized_scope_id, capabilities)
+            row = await self._select(
+                normalized_scope_id,
+                capabilities,
+                normalized_adapter,
+            )
             if row is None:
                 return None
             binding = AgentBinding.from_mapping(row)
@@ -224,6 +237,13 @@ class DatabaseAgentBindingSelector:
         if missing:
             raise AgentBindingUnavailableError(
                 "Agent catalog selected a capability-incomplete binding"
+            )
+        if (
+            normalized_adapter is not None
+            and binding.adapter_type != normalized_adapter
+        ):
+            raise AgentBindingUnavailableError(
+                "Agent catalog selected a binding for another adapter"
             )
         return binding
 
@@ -412,12 +432,17 @@ class StaticAgentBindingSelector:
         *,
         scope_id: str,
         required_capabilities: Sequence[str],
+        adapter_type: str | None = None,
     ) -> AgentBinding | None:
         capabilities = set(_normalize_required_capabilities(required_capabilities))
+        normalized_adapter = _normalize_adapter_type(adapter_type)
         eligible = [
             binding
             for binding in self._bindings.get(scope_id, ())
             if capabilities <= set(binding.capabilities)
+            and (
+                normalized_adapter is None or binding.adapter_type == normalized_adapter
+            )
         ]
         if not eligible:
             return None
@@ -438,4 +463,13 @@ def _normalize_required_capabilities(
         raise ValueError("required capabilities must not contain empty values")
     if len(normalized) > 256 or any(len(capability) > 255 for capability in normalized):
         raise ValueError("required capabilities exceed catalog limits")
+    return normalized
+
+
+def _normalize_adapter_type(adapter_type: str | None) -> str | None:
+    if adapter_type is None:
+        return None
+    normalized = adapter_type.strip()
+    if not _ADAPTER_TYPE_PATTERN.fullmatch(normalized):
+        raise ValueError("Agent catalog adapter_type is invalid")
     return normalized

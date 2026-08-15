@@ -60,10 +60,16 @@ workspace and binding because Mission Control owns claim locking and fairness.
 
 Mission Control now exposes a workspace-scoped atomic discovery contract. It
 filters by immutable Agent/adapter binding, allows only delegated or eligible
-inbound-root work, checks dependency readiness, orders by least in-flight
-Mission load, and locks the owning Mission plus candidate WorkUnit with
-`SKIP LOCKED`. Authentication supplies the lease owner; callers cannot provide
-one in the request.
+inbound/outbound A2A root work, checks dependency readiness, orders by least
+in-flight Mission load, and locks the owning Mission plus candidate WorkUnit
+with `SKIP LOCKED`. Authentication supplies the lease owner; callers cannot
+provide one in the request.
+
+Outbound eligibility requires the exact `a2a` Mission source,
+`a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current
+Python process composition intentionally still rejects that adapter until the
+dedicated remote send/poll/cancel/result resolver is complete; claim support is
+not a fallback to the inbound model Harness.
 
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,

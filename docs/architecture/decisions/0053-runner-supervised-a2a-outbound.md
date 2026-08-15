@@ -1,0 +1,85 @@
+# ADR-0053: Runner-Supervised Outbound A2A Execution
+
+> Status: accepted  
+> Owner: protocol, Mission Control, and Runner maintainers  
+> Date: 2026-08-15  
+> Scope: outbound A2A WorkUnit binding, claim, and execution ownership
+
+## Context
+
+Outbound `tasks/send` creates a durable `a2a` Mission and an
+`a2a.delegate` root WorkUnit, but the Gateway currently performs the remote
+request inside the caller's HTTP request. The WorkUnit previously had the
+`a2a.outbound` adapter without an assigned local execution Agent and therefore
+could not enter the fenced Runner lifecycle. A successful remote dispatch left
+the local WorkUnit `PENDING`; later reads did not supervise the remote task.
+
+Creating a long lease in the Gateway request would make the Gateway an implicit
+Runner without stable heartbeat, crash recovery, cancellation supervision, or
+attempt fencing. Treating the remote acknowledgement or peer Evidence as local
+completion would also bypass Artifact publication and independent verification.
+
+## Decision
+
+Every newly persisted outbound A2A WorkUnit is bound before Mission creation to
+one enabled, credential-free workspace catalog entry. Selection requires the
+exact `a2a.outbound` adapter plus `a2a.send`. The selected Agent ID and adapter
+type are stored as an immutable local execution snapshot. Missing, unavailable,
+wrong-adapter, or capability-incomplete catalog state fails before creating a
+new Mission.
+
+Capabilities requested from the remote Agent remain in the Contract and
+WorkUnit and are checked against the remote Agent Card. They are not required
+on the local transport worker's catalog entry: transport authority and remote
+task capability are separate trust decisions.
+
+Mission Control admits an outbound root to the existing atomic claim path only
+when all of these facts agree:
+
+- Mission source is `a2a`;
+- WorkUnit kind is `a2a.delegate` and it has no parent;
+- assigned adapter is `a2a.outbound`;
+- requested Agent and adapter equal the stored binding;
+- dependencies, status, workspace ACL, tenant concurrency, and lease policy
+  satisfy the existing claim contract.
+
+Claiming emits the normal fenced lease event with claim mode `a2a.outbound`.
+It does not dispatch remotely or prove completion.
+
+The outbound worker will own the remaining lifecycle: fetch a lease-fenced
+execution projection, start the WorkUnit, call the protocol transport, renew
+the lease while polling, propagate local cancellation, import a bounded result
+into local content-addressed storage, register local Artifact metadata, and
+complete to `VERIFYING`. Remote Evidence is stored only as an attestation or
+report Artifact. A separate local verifier remains required for `SUCCEEDED`.
+Gateway will then submit commands and project Mission state; it will no longer
+supervise remote execution in the request path.
+
+This cutover is phased. The current slice implements catalog binding and
+controlled claim eligibility. Gateway's direct dispatch remains a compatibility
+path until the supervised worker can handle heartbeat, polling, cancellation,
+and result import end to end. The two paths must not both dispatch the same
+attempt after cutover.
+
+Historical unbound outbound WorkUnits are not silently rebound. They require
+an explicit migration or cancellation and resubmission under a new task ID,
+because choosing a new executor changes execution authority.
+
+## Consequences
+
+Outbound work now has an explicit local execution identity and can enter the
+same Mission Control lease and admission system as other Runner work. Catalog
+configuration becomes a prerequisite for creating new outbound tasks. Adapter
+names may use bounded dot-separated identifiers such as `a2a.outbound`; the
+catalog continues to reject URLs, credentials, and arbitrary configuration.
+
+The current compatibility dispatch still lacks durable supervision. It must not
+be removed until the worker result path and local verifier are verified. MCP
+`call_agent` must remain behind that same end-to-end gate.
+
+## Verification
+
+Service and API tests cover exact-adapter catalog selection, namespaced adapter
+validation, fail-closed submission without persistence side effects, immutable
+idempotent binding snapshots, recursive inbound rejection, source/kind/adapter
+root guards, atomic lease creation, claim mode, and PostgreSQL query fencing.

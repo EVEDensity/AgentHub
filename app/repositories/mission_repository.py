@@ -446,7 +446,7 @@ class MissionRepository:
         *,
         agent_id: str,
         adapter_type: str,
-        allow_inbound_root: bool,
+        allowed_root_kind: str | None,
     ) -> WorkUnit | None:
         """Lock one ready, explicitly bound WorkUnit for a Runner."""
         row = await self._fetch_one(
@@ -461,9 +461,15 @@ class MissionRepository:
                  AND (
                      candidate.parent_work_unit_id IS NOT NULL
                      OR (
-                         $4::boolean = TRUE
+                         $4::text IS NOT NULL
                          AND candidate.parent_work_unit_id IS NULL
-                         AND candidate.kind = 'a2a.inbound'
+                         AND candidate.kind = $4
+                         AND (
+                             ($4 = 'a2a.inbound'
+                              AND candidate.assigned_adapter <> 'a2a.outbound')
+                             OR ($4 = 'a2a.delegate'
+                                 AND candidate.assigned_adapter = 'a2a.outbound')
+                         )
                      )
                  )
                  AND candidate.assigned_agent_id=$2
@@ -484,7 +490,7 @@ class MissionRepository:
             mission_id,
             agent_id,
             adapter_type,
-            allow_inbound_root,
+            allowed_root_kind,
         )
         return self._work_unit_from_row(row) if row is not None else None
 
@@ -527,6 +533,13 @@ class MissionRepository:
                          mission.source->>'type' = 'a2a.inbound'
                          AND candidate.parent_work_unit_id IS NULL
                          AND candidate.kind = 'a2a.inbound'
+                         AND candidate.assigned_adapter <> 'a2a.outbound'
+                     )
+                     OR (
+                         mission.source->>'type' = 'a2a'
+                         AND candidate.parent_work_unit_id IS NULL
+                         AND candidate.kind = 'a2a.delegate'
+                         AND candidate.assigned_adapter = 'a2a.outbound'
                      )
                  )
                  AND candidate.assigned_agent_id=$2

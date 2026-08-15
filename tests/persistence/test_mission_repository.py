@@ -381,7 +381,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FOR UPDATE", sql)
         self.assertEqual(args, (work_unit.mission_id,))
 
-    async def test_bound_claim_whitelists_inbound_root_and_uses_skip_locked(
+    async def test_bound_claim_whitelists_explicit_root_kind_and_uses_skip_locked(
         self,
     ) -> None:
         work_unit = build_work_unit(
@@ -396,20 +396,29 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             work_unit.mission_id,
             agent_id="reviewer",
             adapter_type="local_codex",
-            allow_inbound_root=True,
+            allowed_root_kind="a2a.inbound",
         )
 
         self.assertEqual(claimed, work_unit)
         sql, args = self.database.fetched_one[-1]
         self.assertIn("parent_work_unit_id IS NOT NULL", sql)
-        self.assertIn("$4::boolean = TRUE", sql)
-        self.assertIn("candidate.kind = 'a2a.inbound'", sql)
+        self.assertIn("$4::text IS NOT NULL", sql)
+        self.assertIn("candidate.kind = $4", sql)
+        self.assertIn("$4 = 'a2a.inbound'", sql)
+        self.assertIn("candidate.assigned_adapter <> 'a2a.outbound'", sql)
+        self.assertIn("$4 = 'a2a.delegate'", sql)
+        self.assertIn("candidate.assigned_adapter = 'a2a.outbound'", sql)
         self.assertIn("assigned_agent_id=$2", sql)
         self.assertIn("assigned_adapter=$3", sql)
         self.assertIn("FOR UPDATE SKIP LOCKED", sql)
         self.assertEqual(
             args,
-            (work_unit.mission_id, "reviewer", "local_codex", True),
+            (
+                work_unit.mission_id,
+                "reviewer",
+                "local_codex",
+                "a2a.inbound",
+            ),
         )
 
     async def test_workspace_claim_is_scoped_fair_and_locks_both_rows(self) -> None:
@@ -441,6 +450,9 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("mission.workspace_id=$1", sql)
         self.assertIn("mission.status='RUNNING'", sql)
         self.assertIn("mission.source->>'type' = 'a2a.inbound'", sql)
+        self.assertIn("mission.source->>'type' = 'a2a'", sql)
+        self.assertIn("candidate.kind = 'a2a.delegate'", sql)
+        self.assertIn("candidate.assigned_adapter = 'a2a.outbound'", sql)
         self.assertIn("candidate.assigned_agent_id=$2", sql)
         self.assertIn("candidate.assigned_adapter=$3", sql)
         self.assertIn("active_unit.status IN ('LEASED', 'RUNNING', 'VERIFYING')", sql)

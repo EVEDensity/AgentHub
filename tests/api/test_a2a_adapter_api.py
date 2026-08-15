@@ -64,6 +64,11 @@ def build_app(
             {
                 "user-1": [
                     AgentBinding(
+                        agent_id="outbound-dispatcher",
+                        adapter_type="a2a.outbound",
+                        capabilities=("a2a.send",),
+                    ),
+                    AgentBinding(
                         agent_id="inbound-reviewer",
                         adapter_type="local_codex",
                         capabilities=("a2a.receive", "code_generation"),
@@ -164,6 +169,18 @@ class A2AAdapterApiTests(unittest.TestCase):
         }
         self.assertEqual(capabilities, {"a2a.send", "artifact.write"})
         self.assertEqual(len(self.repository.work_units), 1)
+        work_unit = self.repository.work_units[0]
+        self.assertEqual(work_unit.assigned_agent_id, "outbound-dispatcher")
+        self.assertEqual(work_unit.assigned_adapter, "a2a.outbound")
+        self.assertEqual(
+            work_unit.required_capabilities,
+            ("a2a.send", "artifact.write"),
+        )
+        created_event = self.repository.events[-1]
+        self.assertEqual(
+            created_event.payload["assignedAgentId"], "outbound-dispatcher"
+        )
+        self.assertEqual(created_event.payload["assignedAdapter"], "a2a.outbound")
         self.assertEqual(len(self.repository.events), 3)
 
     def test_submit_is_idempotent_and_rejects_changed_intent(self) -> None:
@@ -187,6 +204,60 @@ class A2AAdapterApiTests(unittest.TestCase):
         self.assertEqual(len(self.repository.events), event_count)
         self.assertEqual(changed.status_code, 409)
         self.assertEqual(changed_contract.status_code, 409)
+
+    def test_submit_retry_preserves_original_outbound_binding_snapshot(self) -> None:
+        first = self.client.post("/api/v1/a2a/tasks", json=self.request)
+        self.client.app.dependency_overrides[get_a2a_binding_selector] = (
+            UnavailableAgentBindingSelector
+        )
+
+        repeated = self.client.post("/api/v1/a2a/tasks", json=self.request)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(repeated.status_code, 200)
+        self.assertEqual(
+            self.repository.work_units[0].assigned_agent_id,
+            "outbound-dispatcher",
+        )
+
+    def test_submit_without_matching_outbound_binding_has_no_side_effects(
+        self,
+    ) -> None:
+        client = TestClient(
+            build_app(
+                self.repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+                binding_selector=StaticAgentBindingSelector({}),
+            )
+        )
+
+        response = client.post("/api/v1/a2a/tasks", json=self.request)
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIsNone(self.repository.mission)
+        self.assertIsNone(self.repository.contract)
+        self.assertEqual(self.repository.work_units, [])
+        self.assertEqual(self.repository.events, [])
+
+    def test_submit_does_not_start_ready_mission_before_binding_resolves(
+        self,
+    ) -> None:
+        created = self.client.post("/api/v1/a2a/tasks", json=self.request)
+        self.assertEqual(created.status_code, 200)
+        self.repository.mission = self.repository.mission.model_copy(
+            update={"status": MissionStatus.READY}
+        )
+        self.repository.work_units.clear()
+        self.repository.events.clear()
+        self.client.app.dependency_overrides[get_a2a_binding_selector] = (
+            UnavailableAgentBindingSelector
+        )
+
+        response = self.client.post("/api/v1/a2a/tasks", json=self.request)
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(self.repository.mission.status, MissionStatus.READY)
+        self.assertEqual(self.repository.events, [])
 
     def test_inbound_accept_creates_catalog_bound_local_work_unit(self) -> None:
         response = self.client.post(
@@ -335,6 +406,34 @@ class A2AAdapterApiTests(unittest.TestCase):
                 self.repository,
                 {"id": "user-1", "name": "Ada", "role": "developer"},
                 binding_selector=IncompleteSelector(),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/a2a/tasks/inbound",
+            json=self.inbound_request,
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIsNone(self.repository.mission)
+        self.assertEqual(self.repository.events, [])
+
+    def test_inbound_rejects_recursive_outbound_binding(self) -> None:
+        client = TestClient(
+            build_app(
+                self.repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+                binding_selector=StaticAgentBindingSelector(
+                    {
+                        "user-1": [
+                            AgentBinding(
+                                agent_id="recursive-dispatcher",
+                                adapter_type="a2a.outbound",
+                                capabilities=("a2a.receive", "code_generation"),
+                            )
+                        ]
+                    }
+                ),
             )
         )
 

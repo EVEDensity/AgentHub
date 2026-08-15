@@ -147,6 +147,7 @@ class A2AAdapterService:
         *,
         actor: ActorRef,
     ) -> dict:
+        binding: AgentBinding | None = None
         mission = await self._repository.get_mission_by_source(
             request.workspace_id,
             source_type="a2a",
@@ -155,6 +156,7 @@ class A2AAdapterService:
         if mission is not None:
             await self._validate_idempotent_request(mission, request)
         else:
+            binding = await self._select_outbound_binding(request)
             try:
                 mission = await self._create_mission(request, actor=actor)
             except Exception as exc:
@@ -169,17 +171,27 @@ class A2AAdapterService:
                     raise
                 await self._validate_idempotent_request(mission, request)
 
-        if mission.status == MissionStatus.READY:
-            mission = await self._missions.start_mission(mission.id, actor=actor)
-
         work_unit = await self._get_mapped_work_unit(
             request.workspace_id,
             request.task_id,
         )
         if work_unit is not None:
             self._validate_work_unit(mission, work_unit, request)
+        elif (
+            mission.status in {MissionStatus.READY, MissionStatus.RUNNING}
+            and binding is None
+        ):
+            binding = await self._select_outbound_binding(request)
+
+        if mission.status == MissionStatus.READY:
+            mission = await self._missions.start_mission(mission.id, actor=actor)
+
         if work_unit is None and mission.status == MissionStatus.RUNNING:
             capabilities = self._capabilities(request.required_capabilities)
+            if binding is None:
+                raise AgentBindingUnavailableError(
+                    "outbound A2A binding was not resolved before persistence"
+                )
             _mission_id, _contract_id, _criterion_id, work_unit_id = _mapping_ids(
                 request.workspace_id,
                 request.task_id,
@@ -193,7 +205,8 @@ class A2AAdapterService:
                     input_refs=[],
                     expected_outputs=[OutputSpec(kind="a2a.result", required=True)],
                     required_capabilities=list(capabilities),
-                    assigned_adapter=A2A_ADAPTER_ID,
+                    assigned_agent_id=binding.agent_id,
+                    assigned_adapter=binding.adapter_type,
                     actor=actor,
                 )
             except Exception as exc:
@@ -606,9 +619,34 @@ class A2AAdapterService:
             raise AgentBindingUnavailableError(
                 "no enabled Agent binding satisfies the inbound A2A capabilities"
             )
-        if not set(capabilities) <= set(binding.capabilities):
+        if binding.adapter_type == A2A_ADAPTER_ID or not set(capabilities) <= set(
+            binding.capabilities
+        ):
             raise AgentBindingUnavailableError(
-                "Agent binding selector returned a capability-incomplete binding"
+                "Agent binding selector returned an invalid inbound A2A binding"
+            )
+        return binding
+
+    async def _select_outbound_binding(
+        self,
+        request: A2ATaskCreateRequest,
+    ) -> AgentBinding:
+        execution_capabilities = (A2A_DELEGATE_CAPABILITY,)
+        binding = await self._binding_selector.select(
+            scope_id=request.workspace_id,
+            required_capabilities=execution_capabilities,
+            adapter_type=A2A_ADAPTER_ID,
+        )
+        if binding is None:
+            raise AgentBindingUnavailableError(
+                "no enabled outbound A2A executor binding is available"
+            )
+        if (
+            binding.adapter_type != A2A_ADAPTER_ID
+            or A2A_DELEGATE_CAPABILITY not in binding.capabilities
+        ):
+            raise AgentBindingUnavailableError(
+                "Agent binding selector returned an invalid outbound A2A binding"
             )
         return binding
 
@@ -649,6 +687,7 @@ class A2AAdapterService:
         if (
             work_unit.mission_id != mission.id
             or work_unit.kind != "a2a.delegate"
+            or not work_unit.assigned_agent_id
             or work_unit.assigned_adapter != A2A_ADAPTER_ID
             or work_unit.required_capabilities != expected_capabilities
         ):

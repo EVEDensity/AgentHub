@@ -43,6 +43,8 @@ from app.services.workspace_admission_service import (
     WorkspaceClaimStatus,
 )
 
+_A2A_OUTBOUND_ADAPTER = "a2a.outbound"
+
 
 def build_human_actor(user: dict) -> ActorRef:
     return ActorRef(
@@ -828,12 +830,15 @@ class MissionService:
             if mission.status != MissionStatus.RUNNING:
                 raise WorkUnitNotReadyError("work units require a RUNNING mission")
 
-            allow_inbound_root = mission.source.type == MissionSourceType.A2A_INBOUND
+            allowed_root_kind = {
+                MissionSourceType.A2A_INBOUND: "a2a.inbound",
+                MissionSourceType.A2A: "a2a.delegate",
+            }.get(mission.source.type)
             work_unit = await repository.get_bound_work_unit_for_claim(
                 mission_id,
                 agent_id=agent_id,
                 adapter_type=adapter_type,
-                allow_inbound_root=allow_inbound_root,
+                allowed_root_kind=allowed_root_kind,
             )
             if work_unit is None:
                 return WorkUnitClaimOutcome(
@@ -959,8 +964,15 @@ class MissionService:
         elif (
             mission.source.type == MissionSourceType.A2A_INBOUND
             and work_unit.kind == "a2a.inbound"
+            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
         ):
             claim_mode = "a2a.inbound"
+        elif (
+            mission.source.type == MissionSourceType.A2A
+            and work_unit.kind == "a2a.delegate"
+            and work_unit.assigned_adapter == _A2A_OUTBOUND_ADAPTER
+        ):
+            claim_mode = "a2a.outbound"
         else:
             raise WorkUnitNotReadyError(
                 "claim repository returned an ineligible root WorkUnit"

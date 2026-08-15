@@ -53,6 +53,31 @@ class AgentBindingServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(hasattr(binding, "api_key"))
         self.assertFalse(hasattr(binding, "base_url"))
 
+    def test_mapping_parser_accepts_namespaced_adapter_type(self) -> None:
+        binding = AgentBinding.from_mapping(
+            {
+                "agentId": "outbound-runner",
+                "adapterType": "a2a.outbound",
+                "capabilities": ["a2a.send"],
+            }
+        )
+
+        self.assertEqual(binding.adapter_type, "a2a.outbound")
+
+    def test_mapping_parser_rejects_empty_adapter_namespace_segment(self) -> None:
+        for adapter_type in ("a2a..outbound", "a2a."):
+            with (
+                self.subTest(adapter_type=adapter_type),
+                self.assertRaisesRegex(ValueError, "adapter_type is invalid"),
+            ):
+                AgentBinding.from_mapping(
+                    {
+                        "agentId": "outbound-runner",
+                        "adapterType": adapter_type,
+                        "capabilities": ["a2a.send"],
+                    }
+                )
+
     async def test_unavailable_resolver_fails_closed(self) -> None:
         with self.assertRaises(AgentBindingUnavailableError):
             await UnavailableAgentBindingResolver().resolve(
@@ -106,13 +131,14 @@ class AgentBindingServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_database_selector_requires_complete_capability_match(self) -> None:
-        calls: list[tuple[str, tuple[str, ...]]] = []
+        calls: list[tuple[str, tuple[str, ...], str | None]] = []
 
         async def select(
             scope_id: str,
             capabilities: tuple[str, ...],
+            adapter_type: str | None,
         ) -> dict[str, object]:
-            calls.append((scope_id, capabilities))
+            calls.append((scope_id, capabilities, adapter_type))
             return {
                 "agent_id": "reviewer",
                 "adapter_type": "local_codex",
@@ -126,7 +152,7 @@ class AgentBindingServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             calls,
-            [("workspace-1", ("a2a.receive", "repository.read"))],
+            [("workspace-1", ("a2a.receive", "repository.read"), None)],
         )
         self.assertEqual(binding.agent_id, "reviewer")
 
@@ -134,6 +160,7 @@ class AgentBindingServiceTests(unittest.IsolatedAsyncioTestCase):
         async def select(
             _scope_id: str,
             _capabilities: tuple[str, ...],
+            _adapter_type: str | None,
         ) -> dict[str, object]:
             return {
                 "agent_id": "reviewer",
@@ -150,10 +177,33 @@ class AgentBindingServiceTests(unittest.IsolatedAsyncioTestCase):
                 required_capabilities=["a2a.receive", "repository.read"],
             )
 
+    async def test_database_selector_rejects_wrong_adapter_row(self) -> None:
+        async def select(
+            _scope_id: str,
+            _capabilities: tuple[str, ...],
+            _adapter_type: str | None,
+        ) -> dict[str, object]:
+            return {
+                "agent_id": "local-agent",
+                "adapter_type": "local_codex",
+                "capabilities": ["a2a.send"],
+            }
+
+        with self.assertRaisesRegex(
+            AgentBindingUnavailableError,
+            "another adapter",
+        ):
+            await DatabaseAgentBindingSelector(select).select(
+                scope_id="workspace-1",
+                required_capabilities=["a2a.send"],
+                adapter_type="a2a.outbound",
+            )
+
     async def test_database_selector_wraps_malformed_catalog_row(self) -> None:
         async def select(
             _scope_id: str,
             _capabilities: tuple[str, ...],
+            _adapter_type: str | None,
         ) -> dict[str, object]:
             return {
                 "agent_id": "reviewer",
@@ -186,17 +236,50 @@ class AgentBindingServiceTests(unittest.IsolatedAsyncioTestCase):
             await DatabaseAgentBindingSelector().select(
                 scope_id="workspace-1",
                 required_capabilities=["repository.read", "a2a.receive"],
+                adapter_type="local_codex",
             )
 
         query = str(captured["query"])
         self.assertIn("WHERE scope_id = $1", query)
         self.assertIn("enabled = TRUE", query)
         self.assertIn("capabilities @> $2::jsonb", query)
+        self.assertIn("adapter_type = $3", query)
         self.assertIn("ORDER BY agent_id ASC, adapter_type ASC", query)
         self.assertEqual(
             captured["args"],
-            ("workspace-1", json.dumps(["a2a.receive", "repository.read"])),
+            (
+                "workspace-1",
+                json.dumps(["a2a.receive", "repository.read"]),
+                "local_codex",
+            ),
         )
+
+    async def test_static_selector_filters_exact_adapter(self) -> None:
+        selector = StaticAgentBindingSelector(
+            {
+                "workspace-1": [
+                    AgentBinding(
+                        agent_id="local-agent",
+                        adapter_type="local_codex",
+                        capabilities=("a2a.send",),
+                    ),
+                    AgentBinding(
+                        agent_id="outbound-agent",
+                        adapter_type="a2a.outbound",
+                        capabilities=("a2a.send",),
+                    ),
+                ]
+            }
+        )
+
+        binding = await selector.select(
+            scope_id="workspace-1",
+            required_capabilities=["a2a.send"],
+            adapter_type="a2a.outbound",
+        )
+
+        self.assertIsNotNone(binding)
+        self.assertEqual(binding.agent_id, "outbound-agent")
 
     async def test_database_resolver_reads_scoped_safe_projection(self) -> None:
         calls: list[tuple[str, str]] = []

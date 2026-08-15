@@ -19,6 +19,9 @@ boundary. It is not the permanent home of every Agent feature.
   creates causally linked child WorkUnits behind the parent lease fence.
   Delegated Agent selection goes through a scope-aware binding port; Mission
   state stores only the Agent ID, adapter type, and capability snapshot.
+  New outbound A2A roots use the same credential-free catalog before Mission
+  creation, require the exact `a2a.outbound` adapter, and snapshot the selected
+  local executor. Historical unbound roots are never silently rebound.
   The default binding resolver reads a workspace-scoped, credential-free
   catalog projection; catalog failures fail closed and never fall back to the
   legacy user-scoped registry. Inbound A2A admission uses the same catalog to
@@ -33,9 +36,10 @@ boundary. It is not the permanent home of every Agent feature.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. A bound Runner can atomically claim one ready delegated WorkUnit
-  or catalog-bound root `a2a.inbound` WorkUnit through Mission Control. Other
-  root kinds remain ineligible. Claim responses are validated against Mission,
-  Agent, adapter, lease owner, and attempt before execution. A replaceable
+  or a catalog-bound inbound/outbound A2A root through Mission Control. Root
+  claims require the exact Mission source, WorkUnit kind, and adapter tuple;
+  other root kinds remain ineligible. Claim responses are validated against
+  Mission, Agent, adapter, lease owner, and attempt before execution. A replaceable
   resolver must turn durable Mission/WorkUnit references into bounded execution
   input, and a missing resolver fails the claimed unit without synthetic
   success. Harness

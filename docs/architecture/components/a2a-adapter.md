@@ -38,14 +38,31 @@ database.
 ## Dispatch flow
 
 Outbound `tasks/send` submits the idempotent task to Mission Control first. The
-Gateway then probes the Agent Card, verifies required skills/tags, and verifies
-signed cards with Ed25519. Only after those checks does it call the card's
-declared task endpoint. Before dispatch it removes `agentUrl`/`target`, binds
+control plane first selects an enabled credential-free workspace catalog
+binding with the exact `a2a.outbound` adapter and `a2a.send`. New state is not
+persisted when no matching local executor exists. The Agent ID and adapter are
+stored on the root `a2a.delegate` WorkUnit as an execution snapshot, and
+idempotent retries preserve it. Capabilities requested from the remote Agent
+remain in the Contract/WorkUnit and are checked against its Agent Card; they are
+not misrepresented as capabilities implemented by the local transport worker.
+
+The Gateway then probes the Agent Card, verifies required skills/tags, and
+verifies signed cards with Ed25519. Only after those checks does it call the
+card's declared task endpoint. Before dispatch it removes `agentUrl`/`target`, binds
 `sourceAgentUrl` to its own signed Card URL, and uses only the receiver-issued
 credential configured for that peer origin. Probe, compatibility, signature,
 capability, authentication, and remote
 dispatch failures are written back as `FAILED` through the control plane. The
 remote response is never treated as independent completion evidence.
+
+Mission Control can now atomically claim a catalog-bound outbound root only
+when the Mission source is `a2a`, the WorkUnit kind is `a2a.delegate`, and the
+assigned adapter is `a2a.outbound`. Existing binding, dependency, ACL, tenant
+concurrency, row-lock, lease, attempt, and event rules remain mandatory. The
+current Gateway request-path dispatch is a compatibility path while the
+Runner-supervised heartbeat, polling, cancellation, and result-import loop from
+ADR-0053 is implemented. Claim eligibility alone does not authorize a second
+dispatch path.
 
 `tasks/cancel` first cancels the durable Mission task and then best-effort
 forwards cancellation with the same route-field cleanup, Card/origin checks,
@@ -64,7 +81,8 @@ creating a new Mission. The Agent ID and non-secret adapter type are persisted
 on the WorkUnit as an execution snapshot. Idempotent retries preserve that
 snapshot instead of rebinding against later catalog changes.
 
-The selected adapter is a local execution adapter, never `a2a.outbound`, so a
+The selected inbound adapter is a local execution adapter, never
+`a2a.outbound`, so a
 received task cannot recursively delegate itself. Inbound identity is
 `(workspace, source agent origin, external task ID)`, so two peers may use the
 same task ID without collision. Inbound `tasks/cancel` must provide the same
@@ -101,9 +119,9 @@ The inbound Runner composition root builds one Harness per claimed attempt.
 Every other WorkUnit requirement must resolve through a per-attempt capability
 binding factory; the exact tools are also passed to the model factory. Missing
 bindings, invalid model factories, or recursive `a2a.outbound` adapter
-configuration fail closed. The repository does not yet contain an independently
-deployed Runner process; composition is an implementation boundary, not a
-deployment claim.
+configuration fail closed. The independently runnable Python Runner process
+hosts this inbound composition. It still rejects `a2a.outbound` until the
+dedicated protocol resolver and supervised remote lifecycle are complete.
 
 ## Security and ownership
 
@@ -170,10 +188,11 @@ rejection, status redaction, origin-bound peer credential loading, caller-token
 non-forwarding, route-field isolation, and a two-Gateway signed/strict-pinned
 submit, cancel, and remote-failure loop without recursive delegation.
 Python adapter tests cover workspace-scoped, capability-complete deterministic
-binding, fail-closed catalog behavior without new persistence side effects, and
-idempotent preservation of the WorkUnit binding snapshot. Mission Control tests
-cover root inbound claim eligibility, source/kind guards, exact binding, atomic
-lease events, and continued delegated-child behavior.
+binding, exact outbound adapter filtering, fail-closed catalog behavior without
+new persistence side effects, recursive inbound rejection, and idempotent
+preservation of WorkUnit binding snapshots. Mission Control tests cover root
+inbound and outbound claim eligibility, source/kind/adapter guards, exact
+binding, atomic lease events, and continued delegated-child behavior.
 Result exchange tests cover source-bound status reads, PASS/current-attempt
 selection, sensitivity and digest policy, local and MinIO byte integrity,
 response limits, typed Gateway projection, and all-or-nothing failure.

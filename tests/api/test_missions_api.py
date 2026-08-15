@@ -274,7 +274,7 @@ class FakeMissionRepository:
         *,
         agent_id: str,
         adapter_type: str,
-        allow_inbound_root: bool,
+        allowed_root_kind: str | None,
     ) -> WorkUnit | None:
         candidates = sorted(
             (
@@ -284,9 +284,9 @@ class FakeMissionRepository:
                 and (
                     work_unit.parent_work_unit_id is not None
                     or (
-                        allow_inbound_root
+                        allowed_root_kind is not None
                         and work_unit.parent_work_unit_id is None
-                        and work_unit.kind == "a2a.inbound"
+                        and work_unit.kind == allowed_root_kind
                     )
                 )
                 and work_unit.assigned_agent_id == agent_id
@@ -337,10 +337,20 @@ class FakeMissionRepository:
                 or work_unit.status.value not in {"PENDING", "RETRYING"}
             ):
                 continue
-            eligible_shape = work_unit.parent_work_unit_id is not None or (
-                mission.source.type.value == "a2a.inbound"
-                and work_unit.parent_work_unit_id is None
-                and work_unit.kind == "a2a.inbound"
+            eligible_shape = (
+                work_unit.parent_work_unit_id is not None
+                or (
+                    mission.source.type.value == "a2a.inbound"
+                    and work_unit.parent_work_unit_id is None
+                    and work_unit.kind == "a2a.inbound"
+                    and work_unit.assigned_adapter != "a2a.outbound"
+                )
+                or (
+                    mission.source.type.value == "a2a"
+                    and work_unit.parent_work_unit_id is None
+                    and work_unit.kind == "a2a.delegate"
+                    and work_unit.assigned_adapter == "a2a.outbound"
+                )
             )
             if not eligible_shape:
                 continue
@@ -1665,6 +1675,51 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(body["lease"]["runnerId"], "user-1")
         self.assertEqual(repository.events[-1].payload["claimMode"], "a2a.inbound")
 
+    def test_bound_claim_selects_catalog_bound_a2a_outbound_root(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            source=MissionSource(
+                type="a2a",
+                reference="https://receiver.example.test/a2a",
+                external_id="remote-task-1",
+            ),
+        )
+        repository.work_units = [
+            build_work_unit(
+                id="wu-outbound",
+                kind="a2a.delegate",
+                assigned_agent_id="outbound-dispatcher",
+                assigned_adapter="a2a.outbound",
+                required_capabilities=["a2a.send", "artifact.write"],
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={
+                "agentId": "outbound-dispatcher",
+                "adapterType": "a2a.outbound",
+                "leaseSeconds": 60,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["claimStatus"], "claimed")
+        body = response.json()["workUnit"]
+        self.assertEqual(body["id"], "wu-outbound")
+        self.assertEqual(body["status"], "LEASED")
+        self.assertEqual(body["attempt"], 1)
+        self.assertEqual(body["lease"]["runnerId"], "user-1")
+        self.assertEqual(repository.events[-1].payload["claimMode"], "a2a.outbound")
+
     def test_bound_claim_does_not_admit_other_root_kind(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(
@@ -1731,6 +1786,56 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.work_units[0].status.value, "PENDING")
         self.assertEqual(repository.events, [])
 
+    def test_bound_claim_rejects_recursive_outbound_inbound_root(self) -> None:
+        class RecursiveCandidateRepository(FakeMissionRepository):
+            async def get_bound_work_unit_for_claim(
+                self,
+                mission_id: str,
+                *,
+                agent_id: str,
+                adapter_type: str,
+                allowed_root_kind: str | None,
+            ) -> WorkUnit | None:
+                del mission_id, agent_id, adapter_type, allowed_root_kind
+                return self.work_units[0]
+
+        repository = RecursiveCandidateRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            source=MissionSource(
+                type="a2a.inbound",
+                reference="https://sender.example.test",
+                external_id="remote-task-1",
+            ),
+        )
+        repository.work_units = [
+            build_work_unit(
+                id="wu-inbound",
+                kind="a2a.inbound",
+                assigned_agent_id="recursive-dispatcher",
+                assigned_adapter="a2a.outbound",
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={
+                "agentId": "recursive-dispatcher",
+                "adapterType": "a2a.outbound",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(repository.work_units[0].status.value, "PENDING")
+        self.assertEqual(repository.events, [])
+
     def test_bound_claim_rejects_ineligible_candidate_from_repository(self) -> None:
         class IneligibleCandidateRepository(FakeMissionRepository):
             async def get_bound_work_unit_for_claim(
@@ -1739,9 +1844,9 @@ class MissionApiTests(unittest.TestCase):
                 *,
                 agent_id: str,
                 adapter_type: str,
-                allow_inbound_root: bool,
+                allowed_root_kind: str | None,
             ) -> WorkUnit | None:
-                del mission_id, agent_id, adapter_type, allow_inbound_root
+                del mission_id, agent_id, adapter_type, allowed_root_kind
                 return self.work_units[0]
 
         repository = IneligibleCandidateRepository()
