@@ -14,6 +14,7 @@ from app.schemas.mission import (
     WorkUnitCompletionRequest,
     WorkUnitCreateRequest,
     WorkUnitDelegationRequest,
+    WorkUnitExecutionContextRequest,
     WorkUnitExecutionRequest,
     WorkUnitHeartbeatRequest,
     WorkUnitLeaseRequest,
@@ -372,6 +373,35 @@ async def claim_delegated_work_unit(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"workUnit": claimed.to_public_dict() if claimed is not None else None}
+
+
+@router.post(
+    "/{mission_id}/work-units/{work_unit_id}/execution-context",
+)
+async def get_claimed_execution_context(
+    mission_id: str,
+    work_unit_id: str,
+    request: WorkUnitExecutionContextRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    """Return a lease-fenced context snapshot for an inbound A2A root."""
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    service = MissionService(repository)
+    try:
+        context = await service.get_claimed_execution_context(
+            mission_id,
+            work_unit_id,
+            lease_id=request.lease_id,
+            runner_id=str(user["id"]),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"executionContext": context.to_public_dict()}
 
 
 @router.post("/{mission_id}/work-units/{work_unit_id}/start")

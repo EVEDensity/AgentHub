@@ -40,8 +40,11 @@ boundary. It is not the permanent home of every Agent feature.
   ModelAdapterPort normalizes provider responses and reports provider usage;
   Harness enforces per-run token and model-cost budgets and emits request-scoped
   checkpoints; Runner must not write repository state directly. Claiming an
-  inbound root only creates a fenced lease; trusted inbound objective/context
-  resolution remains a separate execution boundary.
+  inbound root only creates a fenced lease. The inbound resolver reads a
+  lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
+  prompt with the peer objective marked as untrusted intent. Capability scope,
+  criterion configuration, credentials, and Artifact bytes are excluded;
+  actual tool grants remain an independent Harness input.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

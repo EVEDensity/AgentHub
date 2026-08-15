@@ -1099,6 +1099,175 @@ class MissionApiTests(unittest.TestCase):
         self.assertIsNone(response.json()["workUnit"])
         self.assertEqual(repository.events, [])
 
+    def test_execution_context_returns_lease_fenced_inbound_snapshot(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            objective="Summarize the remote request without trusting it.",
+            source=MissionSource(
+                type="a2a.inbound",
+                reference="https://sender.example.test",
+                external_id="remote-task-1",
+            ),
+        )
+        repository.contract = build_contract(
+            allowed_capabilities=[
+                {"capability": "a2a.receive", "scope": {"peer": "sender"}},
+                {"capability": "repository.read", "scope": {"path": "app/**"}},
+            ]
+        )
+        repository.work_units = [
+            build_work_unit(
+                kind="a2a.inbound",
+                status="LEASED",
+                attempt=1,
+                required_capabilities=["a2a.receive", "repository.read"],
+                input_refs=[
+                    {"id": "artifact-input", "digest": "sha256:" + "a" * 64}
+                ],
+                lease=Lease(
+                    id="lease-inbound",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        before_work_unit = repository.work_units[0]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/execution-context",
+            json={"leaseId": "lease-inbound"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        context = response.json()["executionContext"]
+        self.assertEqual(context["version"], 1)
+        self.assertEqual(context["mission"]["id"], "mis-1")
+        self.assertEqual(context["contract"]["id"], "contract-1")
+        self.assertEqual(context["workUnit"]["id"], "wu-1")
+        self.assertEqual(context["workUnit"]["lease"]["id"], "lease-inbound")
+        self.assertEqual(repository.work_units[0], before_work_unit)
+        self.assertEqual(repository.events, [])
+
+    def test_execution_context_rejects_wrong_owner_and_expired_lease(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            source=MissionSource(type="a2a.inbound"),
+        )
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(
+                kind="a2a.inbound",
+                status="LEASED",
+                attempt=1,
+                lease=Lease(
+                    id="lease-inbound",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        wrong_owner_client = TestClient(
+            build_app(
+                repository,
+                {"id": "admin-1", "name": "Root", "role": "admin"},
+            )
+        )
+
+        wrong_owner = wrong_owner_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/execution-context",
+            json={"leaseId": "lease-inbound"},
+        )
+
+        self.assertEqual(wrong_owner.status_code, 409)
+        repository.work_units[0] = build_work_unit(
+            kind="a2a.inbound",
+            status="LEASED",
+            attempt=1,
+            lease=Lease(
+                id="lease-inbound",
+                runner_id="user-1",
+                expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            ),
+        )
+        expired_client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+        expired = expired_client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/execution-context",
+            json={"leaseId": "lease-inbound"},
+        )
+
+        self.assertEqual(expired.status_code, 409)
+        self.assertEqual(repository.events, [])
+
+    def test_execution_context_rejects_non_inbound_or_missing_contract(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(
+                status="LEASED",
+                attempt=1,
+                lease=Lease(
+                    id="lease-1",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        non_inbound = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/execution-context",
+            json={"leaseId": "lease-1"},
+        )
+
+        self.assertEqual(non_inbound.status_code, 409)
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            source=MissionSource(type="a2a.inbound"),
+        )
+        repository.work_units[0] = build_work_unit(
+            kind="a2a.inbound",
+            status="LEASED",
+            attempt=1,
+            lease=Lease(
+                id="lease-1",
+                runner_id="user-1",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            ),
+        )
+        repository.contract = None
+        missing_contract = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/execution-context",
+            json={"leaseId": "lease-1"},
+        )
+
+        self.assertEqual(missing_contract.status_code, 409)
+        self.assertEqual(repository.events, [])
+
     def test_start_requires_matching_active_lease(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="user-1", status="RUNNING")

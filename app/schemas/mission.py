@@ -109,6 +109,16 @@ class WorkUnitStartRequest(BaseModel):
     lease_id: Annotated[str, Field(min_length=1, max_length=255)]
 
 
+class WorkUnitExecutionContextRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    lease_id: Annotated[str, Field(min_length=1, max_length=255)]
+
+
 class WorkUnitHeartbeatRequest(BaseModel):
     model_config = ConfigDict(
         alias_generator=_to_camel,

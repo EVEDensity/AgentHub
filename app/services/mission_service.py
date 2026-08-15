@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.domain import (
@@ -88,6 +89,21 @@ class LeaseExpiredError(ValueError):
 
 class AgentBindingNotFoundError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedExecutionContext:
+    mission: Mission
+    contract: MissionContract
+    work_unit: WorkUnit
+
+    def to_public_dict(self) -> dict:
+        return {
+            "version": 1,
+            "mission": self.mission.to_public_dict(),
+            "contract": self.contract.to_public_dict(),
+            "workUnit": self.work_unit.to_public_dict(),
+        }
 
 
 class MissionService:
@@ -858,6 +874,59 @@ class MissionService:
             await repository.update_work_unit(updated)
             await repository.append_event(event)
         return updated
+
+    async def get_claimed_execution_context(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+    ) -> ClaimedExecutionContext:
+        """Read an inbound execution snapshot behind the active lease fence."""
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if (
+                mission.source.type != MissionSourceType.A2A_INBOUND
+                or work_unit.parent_work_unit_id is not None
+                or work_unit.kind != "a2a.inbound"
+            ):
+                raise WorkUnitNotReadyError(
+                    "execution context is only available for inbound A2A roots"
+                )
+            if work_unit.status not in {
+                WorkUnitStatus.LEASED,
+                WorkUnitStatus.RUNNING,
+            }:
+                raise WorkUnitNotReadyError(
+                    "execution context requires a LEASED or RUNNING work unit"
+                )
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if (
+                work_unit.lease.id != lease_id
+                or work_unit.lease.runner_id != runner_id
+            ):
+                raise LeaseOwnershipError("work unit lease ownership mismatch")
+            if work_unit.lease.expires_at <= datetime.now(timezone.utc):
+                raise LeaseExpiredError("work unit lease has expired")
+
+            contract = await repository.get_contract(mission.contract_id)
+            if contract is None:
+                raise WorkUnitNotReadyError("mission contract not found")
+            return ClaimedExecutionContext(
+                mission=mission,
+                contract=contract,
+                work_unit=work_unit,
+            )
 
     async def heartbeat_work_unit(
         self,

@@ -2,7 +2,7 @@
 
 > Status: implemented
 > Owner: execution maintainers
-> Last reviewed: 2026-08-09
+> Last reviewed: 2026-08-15
 
 ## Responsibility
 
@@ -21,6 +21,10 @@ ledger or a restart recovery mechanism.
 
 - `HarnessRequest`: code, language, timeout, working directory, and optional
   `HarnessExecutionContext` containing Mission, WorkUnit, and attempt IDs.
+- Inbound A2A input is a deterministic `text` JSON document compiled from a
+  lease-fenced Mission/Contract/WorkUnit projection. The peer objective is
+  explicitly untrusted data; capability metadata in the document never grants
+  a tool.
 - `ModelPort`: provider-independent model completion responses.
 - `FunctionTool`: explicit capability-granted handlers and argument validators.
 - Optional `HarnessCheckpointPort`: atomic checkpoint/event recording.
@@ -51,3 +55,8 @@ does not import Mission repositories, write WorkUnit state, persist prompts or
 tool arguments, or claim independent Evidence. Mission Control remains the
 durable source of lifecycle truth; future observability or event-ledger
 adapters consume this boundary without changing Harness policy.
+
+`SandboxHarness` does not execute inbound `text` as a shell or program. A
+deployment that accepts inbound A2A execution must explicitly configure a
+model-capable Harness such as `FunctionCallingHarness`, with tools resolved
+from the Contract and WorkUnit through the separate capability resolver.

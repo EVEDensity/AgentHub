@@ -75,8 +75,13 @@ for delegated children. Other root kinds remain ineligible.
 
 Claim only transfers fenced execution ownership to Runner. It does not turn the
 peer objective into executable code, produce an Artifact, or prove completion.
-A trusted `ClaimedWorkResolver` and the independent Artifact/Evidence path remain
-separate gates.
+The inbound `ClaimedWorkResolver` obtains a read-only execution projection only
+for the active lease owner, rechecks Mission, Contract, WorkUnit, attempt, and
+lease identity, and compiles bounded deterministic JSON with `language=text`.
+It includes Artifact IDs and digests, not bytes, and strips capability scope,
+criterion configuration, repository scope, and arbitrary provider config.
+Tool authority is resolved independently by Harness. The Artifact/Evidence path
+remains a separate gate and executing agents still cannot verify themselves.
 
 ## Security and ownership
 
