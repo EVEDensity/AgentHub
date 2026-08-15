@@ -48,6 +48,13 @@ from app.services.workspace_access_service import (
     RunnerWorkspaceGrantAuthorizer,
     RunnerWorkspaceGrantUnavailableError,
 )
+from app.services.workspace_admission_service import (
+    DatabaseWorkspaceClaimAdmissionPolicyResolver,
+    WorkspaceClaimAdmissionDeniedError,
+    WorkspaceClaimAdmissionPolicy,
+    WorkspaceClaimAdmissionPolicyResolver,
+    WorkspaceClaimAdmissionUnavailableError,
+)
 
 router = APIRouter(prefix="/missions", tags=["missions"])
 
@@ -68,6 +75,11 @@ def get_runner_workspace_grant_authorizer() -> RunnerWorkspaceGrantAuthorizer:
     return DatabaseRunnerWorkspaceGrantAuthorizer()
 
 
+def get_workspace_claim_admission_policy_resolver(
+) -> WorkspaceClaimAdmissionPolicyResolver:
+    return DatabaseWorkspaceClaimAdmissionPolicyResolver()
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 MissionRepositoryDep = Annotated[MissionRepository, Depends(get_mission_repository)]
 ArtifactByteVerifierDep = Annotated[
@@ -81,6 +93,10 @@ AgentBindingResolverDep = Annotated[
 RunnerWorkspaceGrantAuthorizerDep = Annotated[
     RunnerWorkspaceGrantAuthorizer,
     Depends(get_runner_workspace_grant_authorizer),
+]
+WorkspaceClaimAdmissionPolicyResolverDep = Annotated[
+    WorkspaceClaimAdmissionPolicyResolver,
+    Depends(get_workspace_claim_admission_policy_resolver),
 ]
 WorkspaceId = Annotated[str, Query(alias="workspaceId")]
 MissionLimit = Annotated[int, Query(ge=1, le=200)]
@@ -397,6 +413,7 @@ async def claim_workspace_work_unit(
     user: CurrentUser,
     repository: MissionRepositoryDep,
     grant_authorizer: RunnerWorkspaceGrantAuthorizerDep,
+    admission_policy_resolver: WorkspaceClaimAdmissionPolicyResolverDep,
 ) -> dict:
     """Discover and claim one ready WorkUnit in an authorized workspace."""
 
@@ -404,6 +421,10 @@ async def claim_workspace_work_unit(
         user,
         request.workspace_id,
         grant_authorizer=grant_authorizer,
+    )
+    admission_policy = await _resolve_workspace_claim_admission(
+        request.workspace_id,
+        resolver=admission_policy_resolver,
     )
     service = MissionService(repository)
     try:
@@ -414,12 +435,30 @@ async def claim_workspace_work_unit(
             runner_id=str(user["id"]),
             actor=build_runner_actor(user),
             lease_seconds=request.lease_seconds,
+            admission_policy=admission_policy,
         )
+    except WorkspaceClaimAdmissionUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except WorkUnitNotFoundError as exc:
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"workUnit": claimed.to_public_dict() if claimed is not None else None}
+
+
+async def _resolve_workspace_claim_admission(
+    workspace_id: str,
+    *,
+    resolver: WorkspaceClaimAdmissionPolicyResolver,
+) -> WorkspaceClaimAdmissionPolicy:
+    try:
+        return await resolver.resolve(workspace_id=workspace_id)
+    except WorkspaceClaimAdmissionDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except WorkspaceClaimAdmissionUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 async def _authorize_workspace_claim(
@@ -460,9 +499,18 @@ async def claim_delegated_work_unit(
     request: WorkUnitClaimRequest,
     user: CurrentUser,
     repository: MissionRepositoryDep,
+    admission_policy_resolver: WorkspaceClaimAdmissionPolicyResolverDep,
 ) -> dict:
     """Claim one ready WorkUnit for an explicit Runner binding."""
-    await _authorized_mission(mission_id, user=user, repository=repository)
+    mission = await _authorized_mission(
+        mission_id,
+        user=user,
+        repository=repository,
+    )
+    admission_policy = await _resolve_workspace_claim_admission(
+        mission.workspace_id,
+        resolver=admission_policy_resolver,
+    )
     service = MissionService(repository)
     try:
         claimed = await service.claim_bound_work_unit(
@@ -472,7 +520,10 @@ async def claim_delegated_work_unit(
             runner_id=str(user["id"]),
             actor=build_runner_actor(user),
             lease_seconds=request.lease_seconds,
+            admission_policy=admission_policy,
         )
+    except WorkspaceClaimAdmissionUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except MissionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Mission not found") from exc
     except WorkUnitNotFoundError as exc:

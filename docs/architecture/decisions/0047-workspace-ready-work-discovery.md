@@ -5,6 +5,9 @@
 > Date: 2026-08-15  
 > Scope: ready-work discovery, authorization, fairness, and row locking
 
+Tenant concurrency admission now extends this selection policy through
+[ADR-0050](0050-tenant-runner-concurrency-admission.md).
+
 ## Context
 
 The minimum Runner process introduced by ADR-0046 must be configured with one

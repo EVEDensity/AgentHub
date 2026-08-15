@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from app.api.v1.missions import (
     get_mission_repository,
     get_runner_workspace_grant_authorizer,
+    get_workspace_claim_admission_policy_resolver,
     router,
 )
 from app.db.migrations.mission_control_plane import (
@@ -29,6 +30,10 @@ from app.services.runner_service import MissionControlRunnerClient
 from app.services.workspace_access_service import (
     DatabaseRunnerWorkspaceGrantAuthorizer,
     RunnerWorkspaceGrantAuthorizer,
+)
+from app.services.workspace_admission_service import (
+    DatabaseWorkspaceClaimAdmissionPolicyResolver,
+    WorkspaceClaimAdmissionPolicyResolver,
 )
 from tests.domain.factories import build_contract, build_mission, build_work_unit
 
@@ -95,12 +100,16 @@ async def _authenticated_runner(request: Request) -> dict[str, str]:
 def _build_app(
     repository: MissionRepository,
     grant_authorizer: RunnerWorkspaceGrantAuthorizer,
+    admission_policy_resolver: WorkspaceClaimAdmissionPolicyResolver,
 ) -> FastAPI:
     application = FastAPI()
     application.include_router(router, prefix="/api/v1")
     application.dependency_overrides[get_mission_repository] = lambda: repository
     application.dependency_overrides[get_runner_workspace_grant_authorizer] = (
         lambda: grant_authorizer
+    )
+    application.dependency_overrides[get_workspace_claim_admission_policy_resolver] = (
+        lambda: admission_policy_resolver
     )
     application.dependency_overrides[get_current_user] = _authenticated_runner
     return application
@@ -131,6 +140,50 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
         async with self._pool.acquire() as connection:
             for statement in _MIGRATIONS:
                 await connection.execute(statement)
+            await connection.execute(
+                """
+                CREATE TABLE platform_tenants (
+                    id TEXT PRIMARY KEY,
+                    plan TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    quotas_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """
+            )
+            await connection.execute(
+                """
+                CREATE TABLE platform_quota_definitions (
+                    plan TEXT PRIMARY KEY,
+                    max_concurrent INTEGER NOT NULL
+                )
+                """
+            )
+            await connection.execute(
+                """
+                CREATE TABLE platform_workspaces (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL
+                )
+                """
+            )
+            await connection.execute(
+                """
+                INSERT INTO platform_tenants (id, plan, status, quotas_json)
+                VALUES ('tenant-1', 'test', 'active', '{}')
+                """
+            )
+            await connection.execute(
+                """
+                INSERT INTO platform_quota_definitions (plan, max_concurrent)
+                VALUES ('test', 0)
+                """
+            )
+            await connection.execute(
+                """
+                INSERT INTO platform_workspaces (id, tenant_id)
+                VALUES ('workspace-1', 'tenant-1')
+                """
+            )
             await connection.execute(
                 """
                 CREATE TABLE platform_workspace_members (
@@ -178,6 +231,12 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             transaction_factory=transaction_factory,
             barrier=asyncio.Barrier(2),
         )
+        self._plain_repository = MissionRepository(
+            execute=execute,
+            fetch_one=fetch_one,
+            fetch_all=fetch_all,
+            transaction_factory=transaction_factory,
+        )
 
         async def lookup_grant(
             workspace_id: str,
@@ -201,6 +260,32 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self._grant_authorizer = DatabaseRunnerWorkspaceGrantAuthorizer(
             lookup_grant
+        )
+
+        async def lookup_admission(workspace_id: str):
+            async with self._pool.acquire() as connection:
+                return await connection.fetchrow(
+                    """
+                    SELECT workspace.tenant_id,
+                           tenant.status,
+                           CASE
+                               WHEN tenant.quotas_json::jsonb ? 'max_concurrent'
+                               THEN tenant.quotas_json::jsonb ->> 'max_concurrent'
+                               ELSE quota.max_concurrent::text
+                           END AS max_concurrent
+                    FROM platform_workspaces AS workspace
+                    JOIN platform_tenants AS tenant
+                      ON tenant.id = workspace.tenant_id
+                    LEFT JOIN platform_quota_definitions AS quota
+                      ON quota.plan = tenant.plan
+                    WHERE workspace.id = $1
+                    LIMIT 1
+                    """,
+                    workspace_id,
+                )
+
+        self._admission_policy_resolver = (
+            DatabaseWorkspaceClaimAdmissionPolicyResolver(lookup_admission)
         )
         await self._seed_ready_work()
 
@@ -244,7 +329,11 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_skip_locked_claims_distinct_rows_without_duplicate_lease(self) -> None:
         transport = httpx.ASGITransport(
-            app=_build_app(self._repository, self._grant_authorizer)
+            app=_build_app(
+                self._repository,
+                self._grant_authorizer,
+                self._admission_policy_resolver,
+            )
         )
         async with (
             httpx.AsyncClient(transport=transport) as http_a,
@@ -330,6 +419,76 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             limit=100,
         )
         self.assertEqual(events_after_revocation, events_before_revocation)
+
+    async def test_tenant_limit_prevents_concurrent_over_admission(self) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE platform_quota_definitions
+                SET max_concurrent = 1
+                WHERE plan = 'test'
+                """
+            )
+        transport = httpx.ASGITransport(
+            app=_build_app(
+                self._plain_repository,
+                self._grant_authorizer,
+                self._admission_policy_resolver,
+            )
+        )
+        async with (
+            httpx.AsyncClient(transport=transport) as http_a,
+            httpx.AsyncClient(transport=transport) as http_b,
+        ):
+            control_a = MissionControlRunnerClient(
+                "http://mission-control.test",
+                access_token="runner-a",
+                http_client=http_a,
+            )
+            control_b = MissionControlRunnerClient(
+                "http://mission-control.test",
+                access_token="runner-b",
+                http_client=http_b,
+            )
+            claims = await asyncio.wait_for(
+                asyncio.gather(
+                    control_a.claim_ready_work_unit(
+                        "workspace-1",
+                        runner_id="runner-a",
+                        agent_id="reviewer",
+                        adapter_type="local_codex",
+                        lease_seconds=120,
+                    ),
+                    control_b.claim_ready_work_unit(
+                        "workspace-1",
+                        runner_id="runner-b",
+                        agent_id="reviewer",
+                        adapter_type="local_codex",
+                        lease_seconds=120,
+                    ),
+                ),
+                timeout=10,
+            )
+
+        claimed_units = [claim["workUnit"] for claim in claims]
+        self.assertEqual(sum(unit is not None for unit in claimed_units), 1)
+        async with self._pool.acquire() as connection:
+            active_count = await connection.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM work_units
+                WHERE status IN ('LEASED', 'RUNNING')
+                """
+            )
+            lease_events = await connection.fetchval(
+                """
+                SELECT COUNT(*)
+                FROM mission_events
+                WHERE event_type = 'work_unit.lifecycle.leased'
+                """
+            )
+        self.assertEqual(active_count, 1)
+        self.assertEqual(lease_events, 1)
 
 
 if __name__ == "__main__":

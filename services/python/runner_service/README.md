@@ -95,11 +95,14 @@ Mission/WorkUnit configuration.
    workspace ACL `mission:claim` permission.
 2. The configured workspace catalog contains the exact Agent/adapter binding
    used by eligible inbound Missions.
-3. The AI Gateway supports the configured model and OpenAI tool schemas without
+3. The workspace belongs to an active IAM tenant with a valid plan quota or
+   numeric `max_concurrent` override. `0` explicitly means unlimited; missing
+   or malformed admission policy prevents new claims.
+4. The AI Gateway supports the configured model and OpenAI tool schemas without
    a mock fallback.
-4. The Stateless MCP endpoint authenticates the mounted IAM token and enforces
+5. The Stateless MCP endpoint authenticates the mounted IAM token and enforces
    the forwarded capability scope on every call.
-5. The Artifact volume is durable and shared with the independent verifier.
+6. The Artifact volume is durable and shared with the independent verifier.
 
 ## Rollback
 
@@ -115,9 +118,15 @@ The worker consumes Mission Control's workspace-scoped atomic ready-work
 contract. Deploy each process with one explicit workspace and Agent/adapter
 binding. Scaling replicas increases concurrent claim capacity through Mission
 Control row locking; it does not create a Runner-owned queue or provide fleet
-priority, quota, or capacity routing.
+priority or Agent-specific capacity routing. Tenant concurrency admission stays
+in Mission Control.
 
 Mission Control checks `mission:claim` on every new claim, so removing the
 permission prevents further leases immediately. An already claimed attempt uses
 its lease owner and lease ID as the execution fence and may still report
 heartbeat, Artifact metadata, completion, or failure after grant revocation.
+
+The same claim reads the tenant's effective Runner concurrency limit. Capacity
+is measured from live Mission WorkUnits rather than a Runner-local counter. At
+the limit, the claim returns empty and the worker uses normal bounded idle
+backoff.

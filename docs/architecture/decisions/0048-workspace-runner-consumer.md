@@ -6,7 +6,8 @@
 > Scope: Runner polling, process configuration, and deployment
 
 The shared-identity authorization limitation described below is replaced by
-[ADR-0049](0049-runner-workspace-grants.md).
+[ADR-0049](0049-runner-workspace-grants.md). Tenant concurrency admission is
+added by [ADR-0050](0050-tenant-runner-concurrency-admission.md).
 
 ## Context
 

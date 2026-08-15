@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from app.api.v1.missions import (
     get_mission_repository,
     get_runner_workspace_grant_authorizer,
+    get_workspace_claim_admission_policy_resolver,
     router,
 )
 from app.domain import Mission, WorkUnit
@@ -29,6 +30,7 @@ from app.services.tools.sandbox_executor import SandboxResult
 from tests.api.test_missions_api import (
     FakeMissionRepository,
     FakeRunnerWorkspaceGrantAuthorizer,
+    FakeWorkspaceClaimAdmissionPolicyResolver,
 )
 from tests.domain.factories import build_mission, build_work_unit
 
@@ -134,6 +136,10 @@ def _build_app(repository: _AtomicMissionRepository) -> FastAPI:
     )
     application.dependency_overrides[get_runner_workspace_grant_authorizer] = (
         lambda: grant_authorizer
+    )
+    admission_resolver = FakeWorkspaceClaimAdmissionPolicyResolver()
+    application.dependency_overrides[get_workspace_claim_admission_policy_resolver] = (
+        lambda: admission_resolver
     )
     application.dependency_overrides[get_current_user] = _authenticated_runner
     return application

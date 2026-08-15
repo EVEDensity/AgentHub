@@ -37,6 +37,10 @@ from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerifier,
 )
+from app.services.workspace_admission_service import (
+    WorkspaceClaimAdmissionPolicy,
+    WorkspaceClaimAdmissionUnavailableError,
+)
 
 
 def build_human_actor(user: dict) -> ActorRef:
@@ -780,11 +784,17 @@ class MissionService:
         runner_id: str,
         actor: ActorRef,
         lease_seconds: int,
+        admission_policy: WorkspaceClaimAdmissionPolicy,
     ) -> WorkUnit | None:
         """Atomically claim the next ready unit for one explicit binding."""
         if not 1 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 1 and 3600")
         async with self._repository.transaction() as repository:
+            if not await self._runner_claim_is_admitted(
+                repository,
+                admission_policy,
+            ):
+                return None
             mission = await repository.get_mission_for_update(mission_id)
             if mission is None:
                 raise MissionNotFoundError(mission_id)
@@ -821,6 +831,7 @@ class MissionService:
         runner_id: str,
         actor: ActorRef,
         lease_seconds: int,
+        admission_policy: WorkspaceClaimAdmissionPolicy,
     ) -> WorkUnit | None:
         """Atomically discover and claim one bound unit in a workspace."""
 
@@ -829,6 +840,11 @@ class MissionService:
         if not 1 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 1 and 3600")
         async with self._repository.transaction() as repository:
+            if not await self._runner_claim_is_admitted(
+                repository,
+                admission_policy,
+            ):
+                return None
             selection = await repository.get_workspace_bound_work_unit_for_claim(
                 workspace_id,
                 agent_id=agent_id,
@@ -851,6 +867,24 @@ class MissionService:
                 actor=actor,
                 lease_seconds=lease_seconds,
             )
+
+    @staticmethod
+    async def _runner_claim_is_admitted(
+        repository: MissionRepository,
+        policy: WorkspaceClaimAdmissionPolicy,
+    ) -> bool:
+        if policy.max_concurrent == 0:
+            return True
+        try:
+            await repository.lock_tenant_claim_admission(policy.tenant_id)
+            active_count = await repository.count_tenant_active_runner_work_units(
+                policy.tenant_id
+            )
+        except Exception as exc:
+            raise WorkspaceClaimAdmissionUnavailableError(
+                "Workspace claim admission state is unavailable"
+            ) from exc
+        return active_count < policy.max_concurrent
 
     async def _lease_bound_claim_candidate(
         self,

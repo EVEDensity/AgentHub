@@ -561,6 +561,39 @@ class MissionRepository:
         mission = self._mission_from_claim_row(row)
         return mission, self._work_unit_from_row(row)
 
+    async def lock_tenant_claim_admission(self, tenant_id: str) -> None:
+        """Serialize bounded claim admission for one tenant transaction."""
+
+        await self._fetch_one(
+            """SELECT pg_advisory_xact_lock(hashtextextended($1, 0)) AS locked""",
+            f"mission-claim-admission:{tenant_id}",
+        )
+
+    async def count_tenant_active_runner_work_units(self, tenant_id: str) -> int:
+        """Count non-expired Runner attempts against the tenant quota."""
+
+        row = await self._fetch_one(
+            """SELECT COUNT(*) AS active_count
+               FROM work_units AS active_unit
+               JOIN missions AS mission ON mission.id = active_unit.mission_id
+               JOIN platform_workspaces AS workspace
+                 ON workspace.id = mission.workspace_id
+               WHERE workspace.tenant_id = $1
+                 AND active_unit.status IN ('LEASED', 'RUNNING')
+                 AND active_unit.lease IS NOT NULL
+                 AND (active_unit.lease->>'expiresAt')::timestamptz
+                     > CURRENT_TIMESTAMP""",
+            tenant_id,
+        )
+        if row is None:
+            raise RuntimeError("Tenant Runner concurrency query returned no row")
+        active_count = row.get("active_count")
+        if isinstance(active_count, bool) or not isinstance(active_count, int):
+            raise TypeError("Tenant Runner concurrency count is invalid")
+        if active_count < 0:
+            raise ValueError("Tenant Runner concurrency count is invalid")
+        return active_count
+
     async def update_work_unit(self, work_unit: WorkUnit) -> None:
         await self._execute(
             """UPDATE work_units

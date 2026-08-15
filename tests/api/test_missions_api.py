@@ -14,6 +14,7 @@ from app.api.v1.missions import (
     get_artifact_byte_verifier,
     get_mission_repository,
     get_runner_workspace_grant_authorizer,
+    get_workspace_claim_admission_policy_resolver,
     router,
 )
 from app.domain import (
@@ -45,6 +46,13 @@ from app.services.workspace_access_service import (
     RunnerWorkspaceGrantAuthorizer,
     RunnerWorkspaceGrantUnavailableError,
 )
+from app.services.workspace_admission_service import (
+    DatabaseWorkspaceClaimAdmissionPolicyResolver,
+    WorkspaceClaimAdmissionDeniedError,
+    WorkspaceClaimAdmissionPolicy,
+    WorkspaceClaimAdmissionPolicyResolver,
+    WorkspaceClaimAdmissionUnavailableError,
+)
 from tests.domain.factories import (
     build_artifact,
     build_contract,
@@ -65,6 +73,8 @@ class FakeMissionRepository:
         self.list_result: list[Mission] = []
         self.work_units: list[WorkUnit] = []
         self.transaction_depth = 0
+        self.admission_locks: list[str] = []
+        self.tenant_active_count_override: int | None = None
 
     @asynccontextmanager
     async def transaction(self):
@@ -73,6 +83,26 @@ class FakeMissionRepository:
             yield self
         finally:
             self.transaction_depth -= 1
+
+    async def lock_tenant_claim_admission(self, tenant_id: str) -> None:
+        if not self.transaction_depth:
+            raise AssertionError("admission lock requires a transaction")
+        self.admission_locks.append(tenant_id)
+
+    async def count_tenant_active_runner_work_units(self, tenant_id: str) -> int:
+        del tenant_id
+        if not self.transaction_depth:
+            raise AssertionError("admission count requires a transaction")
+        if self.tenant_active_count_override is not None:
+            return self.tenant_active_count_override
+        now = datetime.now(timezone.utc)
+        return sum(
+            work_unit.status.value in {"LEASED", "RUNNING"}
+            and work_unit.lease is not None
+            and work_unit.lease.expires_at > now
+            for work_unit in self.work_units
+        )
+
     async def add_contract(self, contract: MissionContract) -> None:
         self.contract = contract
 
@@ -412,6 +442,31 @@ class FakeRunnerWorkspaceGrantAuthorizer:
         return (workspace_id, principal_id) in self.grants
 
 
+class FakeWorkspaceClaimAdmissionPolicyResolver:
+    def __init__(
+        self,
+        policy: WorkspaceClaimAdmissionPolicy | None = None,
+        *,
+        error: RuntimeError | None = None,
+    ) -> None:
+        self.policy = policy or WorkspaceClaimAdmissionPolicy(
+            tenant_id="tenant-test",
+            max_concurrent=0,
+        )
+        self.error = error
+        self.calls: list[str] = []
+
+    async def resolve(
+        self,
+        *,
+        workspace_id: str,
+    ) -> WorkspaceClaimAdmissionPolicy:
+        self.calls.append(workspace_id)
+        if self.error is not None:
+            raise self.error
+        return self.policy
+
+
 class FakeArtifactByteVerifier:
     def __init__(
         self,
@@ -452,6 +507,9 @@ def build_app(
     artifact_byte_verifier: FakeArtifactByteVerifier | None = None,
     agent_binding_resolver: AgentBindingResolver | None = None,
     runner_workspace_grant_authorizer: RunnerWorkspaceGrantAuthorizer | None = None,
+    workspace_claim_admission_policy_resolver: (
+        WorkspaceClaimAdmissionPolicyResolver | None
+    ) = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -468,6 +526,13 @@ def build_app(
     app.dependency_overrides[get_runner_workspace_grant_authorizer] = (
         lambda: grant_authorizer
     )
+    admission_policy_resolver = (
+        workspace_claim_admission_policy_resolver
+        or FakeWorkspaceClaimAdmissionPolicyResolver()
+    )
+    app.dependency_overrides[get_workspace_claim_admission_policy_resolver] = (
+        lambda: admission_policy_resolver
+    )
     app.dependency_overrides[get_current_user] = lambda: user
     return app
 
@@ -483,6 +548,12 @@ class MissionApiTests(unittest.TestCase):
         self.assertIsInstance(
             get_runner_workspace_grant_authorizer(),
             DatabaseRunnerWorkspaceGrantAuthorizer,
+        )
+
+    def test_default_workspace_admission_dependency_uses_iam_quota(self) -> None:
+        self.assertIsInstance(
+            get_workspace_claim_admission_policy_resolver(),
+            DatabaseWorkspaceClaimAdmissionPolicyResolver,
         )
 
     def test_create_mission_derives_actor_and_appends_first_event(self) -> None:
@@ -1036,6 +1107,50 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.events[-1].actor.type.value, "runner")
         self.assertEqual(repository.events[-1].payload["claimMode"], "delegated")
 
+    def test_mission_scoped_claim_cannot_bypass_tenant_concurrency(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+        )
+        repository.work_units = [
+            build_work_unit(
+                id="wu-child",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+        ]
+        repository.tenant_active_count_override = 1
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+                workspace_claim_admission_policy_resolver=(
+                    FakeWorkspaceClaimAdmissionPolicyResolver(
+                        WorkspaceClaimAdmissionPolicy(
+                            tenant_id="tenant-1",
+                            max_concurrent=1,
+                        )
+                    )
+                ),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-unit-claims",
+            json={
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["workUnit"])
+        self.assertEqual(repository.admission_locks, ["tenant-1"])
+        self.assertEqual(repository.work_units[0].status.value, "PENDING")
+        self.assertEqual(repository.events, [])
+
     def test_workspace_claim_selects_least_loaded_authorized_mission(self) -> None:
         repository = FakeMissionRepository()
         first = build_mission(
@@ -1094,6 +1209,160 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(claimed["missionId"], "mis-second")
         self.assertEqual(claimed["lease"]["runnerId"], "workspace-1")
         self.assertEqual(repository.events[-1].correlation_id, "mis-second")
+        self.assertEqual(repository.admission_locks, [])
+
+    def test_workspace_claim_stops_at_tenant_concurrency_limit(self) -> None:
+        repository = FakeMissionRepository()
+        mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.mission = mission
+        repository.list_result = [mission]
+        repository.work_units = [
+            build_work_unit(
+                id="wu-ready",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+        ]
+        repository.tenant_active_count_override = 1
+        admission_resolver = FakeWorkspaceClaimAdmissionPolicyResolver(
+            WorkspaceClaimAdmissionPolicy(
+                tenant_id="tenant-1",
+                max_concurrent=1,
+            )
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+                workspace_claim_admission_policy_resolver=admission_resolver,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["workUnit"])
+        self.assertEqual(admission_resolver.calls, ["workspace-1"])
+        self.assertEqual(repository.admission_locks, ["tenant-1"])
+        self.assertEqual(repository.work_units[0].status.value, "PENDING")
+        self.assertEqual(repository.events, [])
+
+    def test_workspace_claim_fails_closed_when_admission_policy_is_unavailable(
+        self,
+    ) -> None:
+        class RepositoryThatMustNotBeCalled(FakeMissionRepository):
+            @asynccontextmanager
+            async def transaction(self):
+                raise AssertionError("policy resolution must precede repository access")
+                yield self
+
+        repository = RepositoryThatMustNotBeCalled()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+                workspace_claim_admission_policy_resolver=(
+                    FakeWorkspaceClaimAdmissionPolicyResolver(
+                        error=WorkspaceClaimAdmissionUnavailableError(
+                            "workspace admission unavailable"
+                        )
+                    )
+                ),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "workspace admission unavailable")
+        self.assertEqual(repository.events, [])
+
+    def test_workspace_claim_rejects_inactive_tenant(self) -> None:
+        repository = FakeMissionRepository()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+                workspace_claim_admission_policy_resolver=(
+                    FakeWorkspaceClaimAdmissionPolicyResolver(
+                        error=WorkspaceClaimAdmissionDeniedError(
+                            "Workspace tenant is not active"
+                        )
+                    )
+                ),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "Workspace tenant is not active")
+        self.assertEqual(repository.events, [])
+
+    def test_workspace_claim_fails_closed_when_admission_state_is_unavailable(
+        self,
+    ) -> None:
+        class FailingAdmissionRepository(FakeMissionRepository):
+            async def lock_tenant_claim_admission(self, tenant_id: str) -> None:
+                del tenant_id
+                raise ConnectionError("database unavailable")
+
+        repository = FailingAdmissionRepository()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+                workspace_claim_admission_policy_resolver=(
+                    FakeWorkspaceClaimAdmissionPolicyResolver(
+                        WorkspaceClaimAdmissionPolicy(
+                            tenant_id="tenant-1",
+                            max_concurrent=1,
+                        )
+                    )
+                ),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["detail"],
+            "Workspace claim admission state is unavailable",
+        )
+        self.assertEqual(repository.events, [])
 
     def test_workspace_claim_rejects_unauthorized_workspace(self) -> None:
         repository = FakeMissionRepository()

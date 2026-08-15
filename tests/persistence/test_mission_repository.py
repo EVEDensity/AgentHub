@@ -448,6 +448,33 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FOR UPDATE OF mission, candidate SKIP LOCKED", sql)
         self.assertEqual(args, ("workspace-1", "reviewer", "local_codex"))
 
+    async def test_tenant_claim_admission_uses_transaction_advisory_lock(self) -> None:
+        await self.repository.lock_tenant_claim_admission("tenant-1")
+
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("pg_advisory_xact_lock", sql)
+        self.assertIn("hashtextextended($1, 0)", sql)
+        self.assertEqual(args, ("mission-claim-admission:tenant-1",))
+
+    async def test_tenant_active_runner_count_excludes_expired_and_verifying(
+        self,
+    ) -> None:
+        self.database.one = {"active_count": 3}
+
+        active_count = await self.repository.count_tenant_active_runner_work_units(
+            "tenant-1"
+        )
+
+        self.assertEqual(active_count, 3)
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("JOIN platform_workspaces AS workspace", sql)
+        self.assertIn("workspace.tenant_id = $1", sql)
+        self.assertIn("active_unit.status IN ('LEASED', 'RUNNING')", sql)
+        self.assertIn("active_unit.lease->>'expiresAt'", sql)
+        self.assertIn("> CURRENT_TIMESTAMP", sql)
+        self.assertNotIn("VERIFYING", sql)
+        self.assertEqual(args, ("tenant-1",))
+
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:
         return {

@@ -66,8 +66,9 @@ one in the request.
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,
 binding, state, and Mission identity, then reuses the existing context, start,
-heartbeat, cancellation, Artifact, and completion path. Priority, quotas, and
-capacity-aware routing remain future Mission Control policies.
+heartbeat, cancellation, Artifact, and completion path. Priority and
+Agent-specific capacity routing remain future Mission Control policies beyond
+the tenant concurrency ceiling described below.
 
 Each independently identifiable Runner principal receives the explicit
 `mission:claim` permission through `platform_workspace_members`; no
@@ -77,3 +78,18 @@ unavailable. Removing the permission blocks the next claim. Commands for an
 already claimed attempt are authorized by the active lease owner and lease ID,
 then rechecked inside the Mission Control transaction. The grant does not allow
 Mission listing or ordinary workspace access.
+
+## Concurrency admission
+
+Workspace claims resolve the tenant's effective `max_concurrent` from IAM plan
+quota truth and tenant overrides. A positive limit is enforced transactionally
+against non-expired `LEASED` and `RUNNING` WorkUnits across all tenant
+workspaces. Mission Control briefly serializes bounded claims per tenant to
+prevent concurrent over-admission; it does not serialize execution or persist a
+capacity counter. `0` means unlimited and retains the existing `SKIP LOCKED`
+claim path.
+
+Quota resolution and active-state reads fail closed. A saturated claim returns
+the same empty result as no ready work, so Runner applies normal idle backoff
+without becoming unready. Capacity reason metrics remain an observability
+follow-up and must not be represented as Mission state.
