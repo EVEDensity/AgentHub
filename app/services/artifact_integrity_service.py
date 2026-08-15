@@ -5,11 +5,9 @@ import hashlib
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import PurePosixPath
-from typing import Any, Protocol
+from pathlib import Path, PurePosixPath
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
-
-from app.core.config import ArtifactStoreSettings, get_settings
 
 _CHUNK_BYTES = 1024 * 1024
 _LOCAL_PREFIX = "local:sha256/"
@@ -43,6 +41,25 @@ class ArtifactByteDescriptor(Protocol):
     size_bytes: int
 
 
+class ArtifactVerificationStoreSettings(Protocol):
+    local_root: Path
+    verify_max_bytes: int
+
+
+@runtime_checkable
+class SecretValuePort(Protocol):
+    def get_secret_value(self) -> str: ...
+
+
+@runtime_checkable
+class MinioArtifactVerificationSettings(Protocol):
+    minio_endpoint: str
+    minio_access_key: str
+    minio_secret_key: SecretValuePort
+    minio_bucket: str
+    minio_secure: bool
+
+
 class ArtifactByteVerifier(Protocol):
     async def verify_all(
         self,
@@ -64,7 +81,7 @@ class ContentAddressedArtifactByteVerifier:
 
     def __init__(
         self,
-        settings: ArtifactStoreSettings,
+        settings: ArtifactVerificationStoreSettings,
         *,
         minio_client_factory: Callable[[], Any] | None = None,
     ) -> None:
@@ -215,12 +232,13 @@ class ContentAddressedArtifactByteVerifier:
         self,
         artifact: ArtifactByteDescriptor,
     ) -> tuple[str, str]:
+        settings = self._require_minio_settings()
         parsed = urlparse(artifact.content_address)
         if parsed.query or parsed.fragment or parsed.username or parsed.password:
             raise ArtifactBytesUnavailableError(
                 f"invalid MinIO artifact address: {artifact.id}"
             )
-        if parsed.netloc != self._settings.minio_bucket:
+        if parsed.netloc != settings.minio_bucket:
             raise ArtifactBytesUnavailableError(
                 f"artifact bucket is not allowed: {artifact.id}"
             )
@@ -283,6 +301,7 @@ class ContentAddressedArtifactByteVerifier:
         return self._minio_client
 
     def _build_minio_client(self) -> Any:
+        settings = self._require_minio_settings()
         try:
             from minio import Minio
         except ImportError as exc:
@@ -290,11 +309,18 @@ class ContentAddressedArtifactByteVerifier:
                 "MinIO artifact support is not installed"
             ) from exc
         return Minio(
-            self._settings.minio_endpoint,
-            access_key=self._settings.minio_access_key,
-            secret_key=self._settings.minio_secret_key.get_secret_value(),
-            secure=self._settings.minio_secure,
+            settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key.get_secret_value(),
+            secure=settings.minio_secure,
         )
+
+    def _require_minio_settings(self) -> MinioArtifactVerificationSettings:
+        if not isinstance(self._settings, MinioArtifactVerificationSettings):
+            raise ArtifactBytesUnavailableError(
+                "MinIO Artifact verification is not configured"
+            )
+        return self._settings
 
 
 def _digest_hex(artifact: ArtifactByteDescriptor) -> str:
@@ -302,4 +328,6 @@ def _digest_hex(artifact: ArtifactByteDescriptor) -> str:
 
 
 def build_artifact_byte_verifier() -> ContentAddressedArtifactByteVerifier:
+    from app.core.config import get_settings
+
     return ContentAddressedArtifactByteVerifier(get_settings().artifact_store)
