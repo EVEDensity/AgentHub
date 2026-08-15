@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import unittest
 from collections.abc import Sequence
 from typing import Any
@@ -8,18 +10,41 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.v1.a2a_adapter import (
+    get_a2a_artifact_byte_exporter,
     get_a2a_binding_selector,
     get_a2a_repository,
     router,
 )
+from app.domain import ArtifactSensitivity, MissionStatus, WorkUnitStatus
 from app.services.agent_binding_service import (
     AgentBinding,
     AgentBindingSelector,
     StaticAgentBindingSelector,
     UnavailableAgentBindingSelector,
 )
+from app.services.artifact_integrity_service import (
+    ArtifactBytesUnavailableError,
+    ArtifactIntegrityError,
+)
 from app.services.auth_service import get_current_user
 from tests.api.test_missions_api import FakeMissionRepository
+from tests.domain.factories import build_artifact, build_evidence
+
+
+class FakeArtifactByteExporter:
+    def __init__(self) -> None:
+        self.contents: dict[str, bytes] = {}
+        self.error: Exception | None = None
+        self.calls: list[tuple[str, int]] = []
+
+    async def read_verified(self, artifact, *, max_bytes: int) -> bytes:
+        self.calls.append((artifact.id, max_bytes))
+        if self.error is not None:
+            raise self.error
+        content = self.contents[artifact.id]
+        if len(content) > max_bytes:
+            raise AssertionError("service exceeded the exchange byte allowance")
+        return content
 
 
 def build_app(
@@ -27,6 +52,7 @@ def build_app(
     user: dict[str, Any],
     *,
     binding_selector: AgentBindingSelector | None = None,
+    artifact_byte_exporter: FakeArtifactByteExporter | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -46,6 +72,9 @@ def build_app(
             }
         )
     )
+    app.dependency_overrides[get_a2a_artifact_byte_exporter] = lambda: (
+        artifact_byte_exporter or FakeArtifactByteExporter()
+    )
     app.dependency_overrides[get_current_user] = lambda: user
     return app
 
@@ -53,10 +82,12 @@ def build_app(
 class A2AAdapterApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repository = FakeMissionRepository()
+        self.artifact_byte_exporter = FakeArtifactByteExporter()
         self.client = TestClient(
             build_app(
                 self.repository,
                 {"id": "user-1", "name": "Ada", "role": "developer"},
+                artifact_byte_exporter=self.artifact_byte_exporter,
             )
         )
         self.request = {
@@ -73,6 +104,46 @@ class A2AAdapterApiTests(unittest.TestCase):
             "sourceAgentUrl": "https://sender.example.test",
             "requiredCapabilities": ["code_generation"],
         }
+
+    def complete_inbound_task(self, content: bytes = b"verified result") -> None:
+        accepted = self.client.post(
+            "/api/v1/a2a/tasks/inbound",
+            json=self.inbound_request,
+        )
+        self.assertEqual(accepted.status_code, 200)
+        mission = self.repository.mission
+        work_unit = self.repository.work_units[0]
+        self.assertIsNotNone(mission)
+        mission = mission.model_copy(update={"status": MissionStatus.SUCCEEDED})
+        work_unit = work_unit.model_copy(
+            update={"status": WorkUnitStatus.SUCCEEDED, "attempt": 1}
+        )
+        self.repository.mission = mission
+        self.repository.work_units[0] = work_unit
+
+        digest = f"sha256:{hashlib.sha256(content).hexdigest()}"
+        artifact = build_artifact(
+            id="artifact-a2a-result",
+            mission_id=mission.id,
+            work_unit_id=work_unit.id,
+            attempt=work_unit.attempt,
+            kind="test-result",
+            digest=digest,
+            content_address=f"local:sha256/{digest.removeprefix('sha256:')}",
+            media_type="application/json",
+            size_bytes=len(content),
+        )
+        criterion_id = self.repository.contract.acceptance_criteria[0].id
+        evidence = build_evidence(
+            id="evidence-a2a-result",
+            mission_id=mission.id,
+            work_unit_id=work_unit.id,
+            criterion_id=criterion_id,
+            artifact_refs=[{"id": artifact.id, "digest": digest}],
+        )
+        self.repository.artifacts.append(artifact)
+        self.repository.evidence.append(evidence)
+        self.artifact_byte_exporter.contents[artifact.id] = content
 
     def test_submit_creates_started_mission_and_pending_work_unit(self) -> None:
         response = self.client.post("/api/v1/a2a/tasks", json=self.request)
@@ -333,6 +404,124 @@ class A2AAdapterApiTests(unittest.TestCase):
 
         self.assertEqual(cancelled.status_code, 404)
         self.assertEqual(self.repository.mission.status.value, "RUNNING")
+
+    def test_inbound_get_returns_status_without_intermediate_results(self) -> None:
+        self.client.post(
+            "/api/v1/a2a/tasks/inbound",
+            json=self.inbound_request,
+        )
+
+        fetched = self.client.get(
+            "/api/v1/a2a/tasks/inbound",
+            params={
+                "workspaceId": "user-1",
+                "sourceAgentUrl": "https://sender.example.test",
+                "taskId": "inbound-task-1",
+            },
+        )
+
+        self.assertEqual(fetched.status_code, 200)
+        self.assertEqual(fetched.json()["state"], "submitted")
+        self.assertNotIn("artifacts", fetched.json())
+        self.assertNotIn("evidence", fetched.json())
+        self.assertEqual(self.artifact_byte_exporter.calls, [])
+
+    def test_inbound_get_exports_verified_completed_result_bundle(self) -> None:
+        content = b'{"tests":"passed"}'
+        self.complete_inbound_task(content)
+
+        fetched = self.client.get(
+            "/api/v1/a2a/tasks/inbound",
+            params={
+                "workspaceId": "user-1",
+                "sourceAgentUrl": "HTTPS://Sender.Example.Test/",
+                "taskId": "inbound-task-1",
+            },
+        )
+
+        self.assertEqual(fetched.status_code, 200)
+        body = fetched.json()
+        self.assertEqual(body["state"], "completed")
+        self.assertEqual(len(body["artifacts"]), 1)
+        self.assertEqual(len(body["evidence"]), 1)
+        artifact = body["artifacts"][0]
+        self.assertEqual(
+            base64.b64decode(artifact["parts"][0]["file"]["bytes"]),
+            content,
+        )
+        metadata = artifact["parts"][1]["data"]
+        self.assertEqual(metadata["sizeBytes"], len(content))
+        self.assertNotIn("contentAddress", metadata)
+        evidence = body["evidence"][0]
+        self.assertEqual(evidence["verdict"], "PASS")
+        self.assertEqual(evidence["artifactRefs"][0]["id"], artifact["artifactId"])
+        self.assertEqual(
+            self.artifact_byte_exporter.calls,
+            [("artifact-a2a-result", 512 * 1024)],
+        )
+
+    def test_inbound_get_cannot_cross_source_origin(self) -> None:
+        self.client.post(
+            "/api/v1/a2a/tasks/inbound",
+            json=self.inbound_request,
+        )
+
+        fetched = self.client.get(
+            "/api/v1/a2a/tasks/inbound",
+            params={
+                "workspaceId": "user-1",
+                "sourceAgentUrl": "https://different-sender.example.test",
+                "taskId": "inbound-task-1",
+            },
+        )
+
+        self.assertEqual(fetched.status_code, 404)
+
+    def test_inbound_get_rejects_sensitive_result_as_a_whole(self) -> None:
+        self.complete_inbound_task()
+        self.repository.artifacts[0] = self.repository.artifacts[0].model_copy(
+            update={"sensitivity": ArtifactSensitivity.RESTRICTED}
+        )
+
+        fetched = self.client.get(
+            "/api/v1/a2a/tasks/inbound",
+            params={
+                "workspaceId": "user-1",
+                "sourceAgentUrl": "https://sender.example.test",
+                "taskId": "inbound-task-1",
+            },
+        )
+
+        self.assertEqual(fetched.status_code, 409)
+        self.assertEqual(fetched.json()["detail"], "A2A result bundle is not exportable")
+        self.assertEqual(self.artifact_byte_exporter.calls, [])
+
+    def test_inbound_get_maps_byte_failures_without_partial_result(self) -> None:
+        self.complete_inbound_task()
+        self.artifact_byte_exporter.error = ArtifactBytesUnavailableError("missing")
+
+        unavailable = self.client.get(
+            "/api/v1/a2a/tasks/inbound",
+            params={
+                "workspaceId": "user-1",
+                "sourceAgentUrl": "https://sender.example.test",
+                "taskId": "inbound-task-1",
+            },
+        )
+        self.artifact_byte_exporter.error = ArtifactIntegrityError("corrupt")
+        corrupt = self.client.get(
+            "/api/v1/a2a/tasks/inbound",
+            params={
+                "workspaceId": "user-1",
+                "sourceAgentUrl": "https://sender.example.test",
+                "taskId": "inbound-task-1",
+            },
+        )
+
+        self.assertEqual(unavailable.status_code, 424)
+        self.assertEqual(corrupt.status_code, 409)
+        self.assertNotIn("artifacts", unavailable.json())
+        self.assertNotIn("artifacts", corrupt.json())
 
     def test_get_and_cancel_use_mission_as_the_task_truth(self) -> None:
         self.client.post("/api/v1/a2a/tasks", json=self.request)

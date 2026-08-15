@@ -140,6 +140,20 @@ func newA2AInboxHandler(selfCard *AgentCard, client *http.Client, trustPolicy A2
 			}
 			writeJSON(w, http.StatusOK, A2ATaskResponse{JSONRPC: "2.0", Result: controlTask.toA2ATask(), ID: request.ID})
 
+		case "tasks/get":
+			controlTask, err := control.GetInbound(
+				r.Context(),
+				r.Header.Get("Authorization"),
+				workspaceID,
+				sourceAgentURL,
+				taskID,
+			)
+			if err != nil {
+				writeA2AControlError(w, request.ID, taskID, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, A2ATaskResponse{JSONRPC: "2.0", Result: controlTask.toA2ATask(), ID: request.ID})
+
 		default:
 			writeJSON(w, http.StatusBadRequest, A2ATaskResponse{
 				JSONRPC: "2.0",

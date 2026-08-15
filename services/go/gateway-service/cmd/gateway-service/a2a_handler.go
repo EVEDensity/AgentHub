@@ -213,6 +213,7 @@ type A2ATask struct {
 	WorkUnitID string        `json:"workUnitId,omitempty"`
 	Message    *A2AMessage   `json:"message,omitempty"`
 	Artifacts  []A2AArtifact `json:"artifacts,omitempty"`
+	Evidence   []A2AEvidence `json:"evidence,omitempty"`
 	CreatedAt  string        `json:"createdAt,omitempty"`
 	UpdatedAt  string        `json:"updatedAt,omitempty"`
 }
@@ -240,6 +241,29 @@ type A2AArtifact struct {
 	ArtifactID string           `json:"artifactId"`
 	Name       string           `json:"name"`
 	Parts      []A2AMessagePart `json:"parts"`
+}
+
+type A2AArtifactRef struct {
+	ID     string `json:"id"`
+	Digest string `json:"digest"`
+}
+
+type A2AVerifier struct {
+	ID                  string `json:"id"`
+	Version             string `json:"version"`
+	ConfigurationDigest string `json:"configurationDigest,omitempty"`
+}
+
+type A2AEvidence struct {
+	EvidenceID    string           `json:"evidenceId"`
+	WorkUnitID    string           `json:"workUnitId"`
+	CriterionID   string           `json:"criterionId"`
+	Verifier      A2AVerifier      `json:"verifier"`
+	Verdict       string           `json:"verdict"`
+	ArtifactRefs  []A2AArtifactRef `json:"artifactRefs"`
+	Summary       string           `json:"summary"`
+	GeneratedAt   string           `json:"generatedAt"`
+	IntegrityHash string           `json:"integrityHash"`
 }
 
 // ── TLS Configuration ────────────────────────────────────────────────

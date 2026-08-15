@@ -29,6 +29,19 @@ func TestA2AControlPlaneClientUsesMissionAdapterContract(t *testing.T) {
 				t.Fatalf("unexpected lookup query: %s", r.URL.RawQuery)
 			}
 			_ = json.NewEncoder(w).Encode(a2aControlTask{TaskID: "task-1", State: "working"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/a2a/tasks/inbound":
+			if r.URL.Query().Get("workspaceId") != "workspace-1" || r.URL.Query().Get("sourceAgentUrl") != "https://source.test" || r.URL.Query().Get("taskId") != "task-1" {
+				t.Fatalf("unexpected inbound lookup query: %s", r.URL.RawQuery)
+			}
+			_ = json.NewEncoder(w).Encode(a2aControlTask{
+				TaskID: "task-1",
+				State:  "completed",
+				Artifacts: []A2AArtifact{{
+					ArtifactID: "artifact-1",
+					Name:       "artifact-1",
+				}},
+				Evidence: []A2AEvidence{{EvidenceID: "evidence-1", Verdict: "PASS"}},
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/a2a/tasks/cancel":
 			_ = json.NewEncoder(w).Encode(a2aControlTask{TaskID: "task-1", State: "canceled"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/a2a/tasks/fail":
@@ -48,6 +61,13 @@ func TestA2AControlPlaneClientUsesMissionAdapterContract(t *testing.T) {
 	}
 	if _, err := client.Get(ctx, "Bearer control-token", "workspace-1", "task-1"); err != nil {
 		t.Fatalf("get: %v", err)
+	}
+	inbound, err := client.GetInbound(ctx, "Bearer control-token", "workspace-1", "https://source.test", "task-1")
+	if err != nil {
+		t.Fatalf("get inbound: %v", err)
+	}
+	if len(inbound.Artifacts) != 1 || len(inbound.Evidence) != 1 || inbound.Evidence[0].Verdict != "PASS" {
+		t.Fatalf("expected decoded inbound result bundle, got %#v", inbound)
 	}
 	if _, err := client.Cancel(ctx, "Bearer control-token", "workspace-1", "task-1"); err != nil {
 		t.Fatalf("cancel: %v", err)

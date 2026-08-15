@@ -11,6 +11,10 @@ boundary. It is not the permanent home of every Agent feature.
 - `services/`: application use cases, compatibility adapters, and storage ports.
   Artifact byte verification reads Runner-owned content through this boundary;
   Mission Control retains only immutable Artifact metadata.
+  Peer-facing A2A result export is a separate all-or-nothing service. It emits
+  only completed PASS Evidence and referenced current-attempt Artifacts, rereads
+  and verifies every byte, applies sensitivity/count/size limits, and never
+  exposes content addresses.
   Mission delegation accepts only same-Mission registered ArtifactRefs and
   creates causally linked child WorkUnits behind the parent lease fence.
   Delegated Agent selection goes through a scope-aware binding port; Mission

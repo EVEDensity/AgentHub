@@ -11,7 +11,7 @@ def _to_camel(value: str) -> str:
     return head + "".join(part.capitalize() for part in tail)
 
 
-def _normalize_source_agent_url(value: str) -> str:
+def normalize_source_agent_url(value: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
         raise ValueError("sourceAgentUrl must be an absolute HTTP(S) URL")
@@ -126,7 +126,7 @@ class A2AInboundTaskCreateRequest(BaseModel):
     @field_validator("source_agent_url")
     @classmethod
     def validate_source_agent_url(cls, value: str) -> str:
-        return _normalize_source_agent_url(value)
+        return normalize_source_agent_url(value)
 
 
 class A2ATaskCancelRequest(BaseModel):
@@ -153,7 +153,7 @@ class A2AInboundTaskCancelRequest(A2ATaskCancelRequest):
     @field_validator("source_agent_url")
     @classmethod
     def validate_source_agent_url(cls, value: str) -> str:
-        return _normalize_source_agent_url(value)
+        return normalize_source_agent_url(value)
 
 
 class A2ATaskFailRequest(A2ATaskCancelRequest):

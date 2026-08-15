@@ -20,16 +20,17 @@ database.
 - Inbound input: an authenticated peer request at `/platform/a2a/inbox` with a
   task ID, workspace, objective message, and origin-only `sourceAgentUrl`.
   Outbound-only `agentUrl` and `target` fields are rejected.
+- Inbound result read: `tasks/get` uses the same workspace, source origin, task
+  ID, peer Card trust, and authorization boundary as submit and cancel.
 - Capability input: optional `requiredCapabilities`, strictly decoded as a
   JSON string array. Values are trimmed, non-empty, and unique
   case-insensitively before Mission submission and remote forwarding.
 - Discovery input: `GET /.well-known/agent-card.json` from the configured
   HTTP(S) origin. The response is bounded to 1 MiB, must declare protocol major
   version 1, and must keep its card URL and task API on the same scheme/host.
-- Output: an A2A task projection returned from Mission Control. A successful
-  response means the task was accepted or its current durable state was read;
-  it does not prove remote execution, Artifact production, Evidence, or
-  Outcome acceptance.
+- Output: an A2A task projection returned from Mission Control. Non-terminal
+  responses contain status only. A completed inbound task may include the
+  bounded Artifact/Evidence result bundle defined by ADR-0052.
 - Remote response contract: task responses are bounded to 1 MiB, must use
   JSON-RPC 2.0, must echo the Gateway-generated request ID, and must contain a
   `result` or `error` object.
@@ -82,6 +83,18 @@ It includes Artifact IDs and digests, not bytes, and strips capability scope,
 criterion configuration, repository scope, and arbitrary provider config.
 Tool authority is resolved independently by Harness. The Artifact/Evidence path
 remains a separate gate and executing agents still cannot verify themselves.
+
+Inbound `tasks/get` is also source-origin isolated and reads no Gateway-local
+task state. Mission Control emits results only after the mapped Mission and
+WorkUnit succeed. It selects PASS Evidence for that WorkUnit and only the
+current-attempt Artifacts referenced by that Evidence. Artifact ID/digest,
+ownership, attempt, and sensitivity are checked before every selected byte
+stream is reread and verified for registered size and SHA-256. The response is
+all-or-nothing and bounded to 20 Artifacts, 20 Evidence records, 512 KiB raw
+bytes, and 900 KiB encoded bundle JSON. Content addresses and storage metadata
+remain private. Receiver-side export does not make remote Evidence authoritative
+for an outbound Mission; sender-side import and local verification remain a
+separate gate.
 
 The inbound Runner composition root builds one Harness per claimed attempt.
 `a2a.receive` proves admission eligibility but is not a callable model tool.
@@ -161,3 +174,6 @@ binding, fail-closed catalog behavior without new persistence side effects, and
 idempotent preservation of the WorkUnit binding snapshot. Mission Control tests
 cover root inbound claim eligibility, source/kind guards, exact binding, atomic
 lease events, and continued delegated-child behavior.
+Result exchange tests cover source-bound status reads, PASS/current-attempt
+selection, sensitivity and digest policy, local and MinIO byte integrity,
+response limits, typed Gateway projection, and all-or-nothing failure.

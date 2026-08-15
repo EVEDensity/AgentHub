@@ -42,6 +42,10 @@ class ArtifactByteVerifier(Protocol):
     ) -> list[ArtifactByteVerification]: ...
 
 
+class ArtifactByteExporter(Protocol):
+    async def read_verified(self, artifact: Artifact, *, max_bytes: int) -> bytes: ...
+
+
 class ContentAddressedArtifactByteVerifier:
     """Streams local or MinIO objects and verifies size plus SHA-256."""
 
@@ -68,19 +72,59 @@ class ContentAddressedArtifactByteVerifier:
         return verified
 
     async def verify(self, artifact: Artifact) -> ArtifactByteVerification:
-        if artifact.size_bytes > self._settings.verify_max_bytes:
+        result, _content = await self._consume(artifact, collect_bytes=False)
+        return result
+
+    async def read_verified(self, artifact: Artifact, *, max_bytes: int) -> bytes:
+        if max_bytes < 0:
+            raise ValueError("max_bytes cannot be negative")
+        _result, content = await self._consume(
+            artifact,
+            collect_bytes=True,
+            max_bytes=max_bytes,
+        )
+        if content is None:
+            raise AssertionError("verified Artifact byte export produced no content")
+        return content
+
+    async def _consume(
+        self,
+        artifact: Artifact,
+        *,
+        collect_bytes: bool,
+        max_bytes: int | None = None,
+    ) -> tuple[ArtifactByteVerification, bytes | None]:
+        byte_limit = self._settings.verify_max_bytes
+        if max_bytes is not None:
+            byte_limit = min(byte_limit, max_bytes)
+        if artifact.size_bytes > byte_limit:
             raise ArtifactIntegrityError(
                 f"artifact exceeds byte verification limit: {artifact.id}"
             )
         if artifact.content_address.startswith(_LOCAL_PREFIX):
-            return await asyncio.to_thread(self._verify_local, artifact)
+            return await asyncio.to_thread(
+                self._consume_local,
+                artifact,
+                byte_limit,
+                collect_bytes,
+            )
         if artifact.content_address.startswith("minio://"):
-            return await asyncio.to_thread(self._verify_minio, artifact)
+            return await asyncio.to_thread(
+                self._consume_minio,
+                artifact,
+                byte_limit,
+                collect_bytes,
+            )
         raise ArtifactBytesUnavailableError(
             f"unsupported artifact content address: {artifact.id}"
         )
 
-    def _verify_local(self, artifact: Artifact) -> ArtifactByteVerification:
+    def _consume_local(
+        self,
+        artifact: Artifact,
+        byte_limit: int,
+        collect_bytes: bool,
+    ) -> tuple[ArtifactByteVerification, bytes | None]:
         expected_digest = _digest_hex(artifact)
         address_digest = artifact.content_address.removeprefix(_LOCAL_PREFIX)
         if address_digest.lower() != expected_digest:
@@ -102,9 +146,11 @@ class ContentAddressedArtifactByteVerifier:
 
         try:
             with path.open("rb") as stream:
-                return self._verify_chunks(
+                return self._consume_chunks(
                     artifact,
                     iter(lambda: stream.read(_CHUNK_BYTES), b""),
+                    byte_limit=byte_limit,
+                    collect_bytes=collect_bytes,
                 )
         except ArtifactByteVerificationError:
             raise
@@ -113,7 +159,12 @@ class ContentAddressedArtifactByteVerifier:
                 f"artifact bytes could not be read: {artifact.id}"
             ) from exc
 
-    def _verify_minio(self, artifact: Artifact) -> ArtifactByteVerification:
+    def _consume_minio(
+        self,
+        artifact: Artifact,
+        byte_limit: int,
+        collect_bytes: bool,
+    ) -> tuple[ArtifactByteVerification, bytes | None]:
         bucket, key = self._parse_minio_address(artifact)
         try:
             response = self._get_minio_client().get_object(bucket, key)
@@ -123,9 +174,11 @@ class ContentAddressedArtifactByteVerifier:
             ) from exc
 
         try:
-            return self._verify_chunks(
+            return self._consume_chunks(
                 artifact,
                 response.stream(amt=_CHUNK_BYTES),
+                byte_limit=byte_limit,
+                collect_bytes=collect_bytes,
             )
         except ArtifactByteVerificationError:
             raise
@@ -163,20 +216,26 @@ class ContentAddressedArtifactByteVerifier:
             )
         return parsed.netloc, key
 
-    def _verify_chunks(
+    def _consume_chunks(
         self,
         artifact: Artifact,
         chunks: Iterable[bytes],
-    ) -> ArtifactByteVerification:
+        *,
+        byte_limit: int,
+        collect_bytes: bool,
+    ) -> tuple[ArtifactByteVerification, bytes | None]:
         digest = hashlib.sha256()
         size_bytes = 0
+        collected: list[bytes] | None = [] if collect_bytes else None
         for chunk in chunks:
             size_bytes += len(chunk)
-            if size_bytes > self._settings.verify_max_bytes:
+            if size_bytes > byte_limit:
                 raise ArtifactIntegrityError(
                     f"artifact exceeds byte verification limit: {artifact.id}"
                 )
             digest.update(chunk)
+            if collected is not None:
+                collected.append(chunk)
 
         if size_bytes != artifact.size_bytes:
             raise ArtifactIntegrityError(
@@ -187,10 +246,13 @@ class ContentAddressedArtifactByteVerifier:
             raise ArtifactIntegrityError(
                 f"artifact byte digest does not match: {artifact.id}"
             )
-        return ArtifactByteVerification(
-            artifact_id=artifact.id,
-            digest=calculated,
-            size_bytes=size_bytes,
+        return (
+            ArtifactByteVerification(
+                artifact_id=artifact.id,
+                digest=calculated,
+                size_bytes=size_bytes,
+            ),
+            b"".join(collected) if collected is not None else None,
         )
 
     def _get_minio_client(self) -> Any:

@@ -75,6 +75,15 @@ func (fake *fakeA2AControlPlane) Get(_ context.Context, authorization, _workspac
 	return nil, &a2aControlPlaneError{StatusCode: http.StatusNotFound, Detail: "A2A task not found"}
 }
 
+func (fake *fakeA2AControlPlane) GetInbound(_ context.Context, authorization, _workspaceID, sourceAgentURL, taskID string) (*a2aControlTask, error) {
+	fake.authorities = append(fake.authorities, authorization)
+	task := fake.tasks[taskID]
+	if task == nil || task.AgentURL != sourceAgentURL {
+		return nil, &a2aControlPlaneError{StatusCode: http.StatusNotFound, Detail: "inbound A2A task not found"}
+	}
+	return task, nil
+}
+
 func (fake *fakeA2AControlPlane) Cancel(_ context.Context, authorization, _workspaceID, taskID string) (*a2aControlTask, error) {
 	fake.authorities = append(fake.authorities, authorization)
 	task := fake.tasks[taskID]
@@ -129,6 +138,105 @@ func callA2ATaskAPI(t *testing.T, handler http.Handler, request A2ATaskRequest, 
 		t.Fatalf("decode response: %v; body=%s", err, recorder.Body.String())
 	}
 	return recorder, response
+}
+
+func TestA2AInboxGetReturnsControlPlaneResultBundle(t *testing.T) {
+	control := newFakeA2AControlPlane()
+	source := newA2ATestAgentServer(t, nil, func(http.ResponseWriter, *http.Request) {})
+	control.tasks["inbound-result"] = &a2aControlTask{
+		TaskID:         "inbound-result",
+		AgentURL:       source.URL,
+		State:          "completed",
+		MissionID:      "mission-inbound-result",
+		MissionStatus:  "SUCCEEDED",
+		WorkUnitID:     "work-unit-inbound-result",
+		WorkUnitStatus: "SUCCEEDED",
+		Artifacts: []A2AArtifact{{
+			ArtifactID: "artifact-result",
+			Name:       "artifact-result",
+			Parts: []A2AMessagePart{{
+				Type: "file",
+				File: &A2AFile{Name: "artifact-result", MimeType: "text/plain", Bytes: "dmVyaWZpZWQ="},
+			}},
+		}},
+		Evidence: []A2AEvidence{{
+			EvidenceID:   "evidence-result",
+			WorkUnitID:   "work-unit-inbound-result",
+			CriterionID:  "criterion-result",
+			Verifier:     A2AVerifier{ID: "pytest", Version: "9.0"},
+			Verdict:      "PASS",
+			ArtifactRefs: []A2AArtifactRef{{ID: "artifact-result", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+			Summary:      "verified",
+		}},
+	}
+	handler := newA2AInboxHandler(
+		&AgentCard{},
+		source.Client(),
+		A2ATrustPolicy{AllowUnsigned: true},
+		control,
+	)
+
+	recorder, response := callA2ATaskAPI(t, handler, A2ATaskRequest{
+		JSONRPC: "2.0",
+		Method:  "tasks/get",
+		Params: map[string]any{
+			"id":             "inbound-result",
+			"workspaceId":    "workspace-1",
+			"sourceAgentUrl": source.URL,
+		},
+		ID: "request-inbound-get",
+	}, "Bearer peer-token")
+
+	if recorder.Code != http.StatusOK || response.Error != nil {
+		t.Fatalf("expected inbound result bundle, status=%d response=%#v", recorder.Code, response)
+	}
+	result, ok := response.Result.(map[string]any)
+	if !ok || result["status"] != "completed" {
+		t.Fatalf("unexpected inbound task result: %#v", response.Result)
+	}
+	artifacts, ok := result["artifacts"].([]any)
+	if !ok || len(artifacts) != 1 {
+		t.Fatalf("expected one Artifact, got %#v", result["artifacts"])
+	}
+	evidence, ok := result["evidence"].([]any)
+	if !ok || len(evidence) != 1 || evidence[0].(map[string]any)["verdict"] != "PASS" {
+		t.Fatalf("expected PASS Evidence, got %#v", result["evidence"])
+	}
+	if len(control.authorities) != 1 || control.authorities[0] != "Bearer peer-token" {
+		t.Fatalf("inbox did not forward peer authorization to Mission Control: %#v", control.authorities)
+	}
+}
+
+func TestA2AInboxGetCannotCrossSourceOrigin(t *testing.T) {
+	control := newFakeA2AControlPlane()
+	owner := newA2ATestAgentServer(t, nil, func(http.ResponseWriter, *http.Request) {})
+	other := newA2ATestAgentServer(t, nil, func(http.ResponseWriter, *http.Request) {})
+	control.tasks["isolated-result"] = &a2aControlTask{
+		TaskID:   "isolated-result",
+		AgentURL: owner.URL,
+		State:    "completed",
+	}
+	handler := newA2AInboxHandler(
+		&AgentCard{},
+		other.Client(),
+		A2ATrustPolicy{AllowUnsigned: true},
+		control,
+	)
+
+	recorder, response := callA2ATaskAPI(t, handler, A2ATaskRequest{
+		JSONRPC: "2.0",
+		Method:  "tasks/get",
+		Params: map[string]any{
+			"id":             "isolated-result",
+			"workspaceId":    "workspace-1",
+			"sourceAgentUrl": other.URL,
+		},
+		ID: "request-isolated-get",
+	}, "Bearer other-peer-token")
+
+	if recorder.Code != http.StatusNotFound || response.Error == nil || response.Error.Code != -32001 {
+		t.Fatalf("expected source-isolated not found, status=%d response=%#v", recorder.Code, response)
+	}
 }
 
 func newA2ATestAgentServer(t *testing.T, mutateCard func(*AgentCard), taskHandler http.HandlerFunc) *httptest.Server {

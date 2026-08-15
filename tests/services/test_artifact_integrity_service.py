@@ -102,6 +102,33 @@ class ArtifactIntegrityServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.digest, f"sha256:{digest_hex}")
         self.assertEqual(result.size_bytes, len(content))
 
+    async def test_reads_and_verifies_local_bytes_in_one_pass(self) -> None:
+        content = b"exported local artifact bytes"
+        digest_hex, _ = self.write_local_artifact(content)
+        artifact = build_artifact(
+            digest=f"sha256:{digest_hex}",
+            content_address=f"local:sha256/{digest_hex}",
+            size_bytes=len(content),
+        )
+        verifier = ContentAddressedArtifactByteVerifier(self.build_settings())
+
+        exported = await verifier.read_verified(artifact, max_bytes=len(content))
+
+        self.assertEqual(exported, content)
+
+    async def test_read_verified_rejects_exchange_limit_before_read(self) -> None:
+        content = b"larger than the exchange allowance"
+        digest_hex, _ = self.write_local_artifact(content)
+        artifact = build_artifact(
+            digest=f"sha256:{digest_hex}",
+            content_address=f"local:sha256/{digest_hex}",
+            size_bytes=len(content),
+        )
+        verifier = ContentAddressedArtifactByteVerifier(self.build_settings())
+
+        with self.assertRaisesRegex(ArtifactIntegrityError, "verification limit"):
+            await verifier.read_verified(artifact, max_bytes=len(content) - 1)
+
     async def test_missing_local_bytes_are_unavailable(self) -> None:
         digest_hex = hashlib.sha256(b"missing").hexdigest()
         artifact = build_artifact(
@@ -225,6 +252,49 @@ class ArtifactIntegrityServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.digest, f"sha256:{digest_hex}")
         self.assertEqual(client.calls, [("agenthub", key)])
         self.assertEqual(response.stream_amount, 1024 * 1024)
+        self.assertTrue(response.closed)
+        self.assertTrue(response.released)
+
+    async def test_reads_and_verifies_minio_bytes_and_releases_response(self) -> None:
+        content = b"exported minio artifact bytes"
+        digest_hex = hashlib.sha256(content).hexdigest()
+        key = f"artifacts/{digest_hex}/result.bin"
+        response = FakeMinioResponse([content[:8], content[8:]])
+        client = FakeMinioClient(response)
+        artifact = build_artifact(
+            digest=f"sha256:{digest_hex}",
+            content_address=f"minio://agenthub/{key}",
+            size_bytes=len(content),
+        )
+        verifier = ContentAddressedArtifactByteVerifier(
+            self.build_settings(),
+            minio_client_factory=lambda: client,
+        )
+
+        exported = await verifier.read_verified(artifact, max_bytes=len(content))
+
+        self.assertEqual(exported, content)
+        self.assertTrue(response.closed)
+        self.assertTrue(response.released)
+
+    async def test_read_verified_rejects_corrupt_minio_bytes(self) -> None:
+        expected = b"expected exported object"
+        corrupt = b"corrupted exported object"
+        digest_hex = hashlib.sha256(expected).hexdigest()
+        response = FakeMinioResponse([corrupt])
+        client = FakeMinioClient(response)
+        artifact = build_artifact(
+            digest=f"sha256:{digest_hex}",
+            content_address=f"minio://agenthub/{digest_hex}/result.bin",
+            size_bytes=len(corrupt),
+        )
+        verifier = ContentAddressedArtifactByteVerifier(
+            self.build_settings(),
+            minio_client_factory=lambda: client,
+        )
+
+        with self.assertRaisesRegex(ArtifactIntegrityError, "byte digest"):
+            await verifier.read_verified(artifact, max_bytes=len(corrupt))
         self.assertTrue(response.closed)
         self.assertTrue(response.released)
 

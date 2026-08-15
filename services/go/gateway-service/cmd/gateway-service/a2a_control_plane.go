@@ -15,13 +15,15 @@ import (
 const maxControlPlaneResponseBytes = 1 << 20
 
 type a2aControlTask struct {
-	TaskID         string `json:"taskId"`
-	AgentURL       string `json:"agentUrl"`
-	State          string `json:"state"`
-	MissionID      string `json:"missionId"`
-	MissionStatus  string `json:"missionStatus"`
-	WorkUnitID     string `json:"workUnitId"`
-	WorkUnitStatus string `json:"workUnitStatus"`
+	TaskID         string        `json:"taskId"`
+	AgentURL       string        `json:"agentUrl"`
+	State          string        `json:"state"`
+	MissionID      string        `json:"missionId"`
+	MissionStatus  string        `json:"missionStatus"`
+	WorkUnitID     string        `json:"workUnitId"`
+	WorkUnitStatus string        `json:"workUnitStatus"`
+	Artifacts      []A2AArtifact `json:"artifacts,omitempty"`
+	Evidence       []A2AEvidence `json:"evidence,omitempty"`
 }
 
 func (task *a2aControlTask) toA2ATask() *A2ATask {
@@ -33,6 +35,8 @@ func (task *a2aControlTask) toA2ATask() *A2ATask {
 		Status:     task.State,
 		MissionID:  task.MissionID,
 		WorkUnitID: task.WorkUnitID,
+		Artifacts:  append([]A2AArtifact(nil), task.Artifacts...),
+		Evidence:   append([]A2AEvidence(nil), task.Evidence...),
 	}
 }
 
@@ -56,6 +60,7 @@ type a2aControlPlane interface {
 	Submit(context.Context, string, a2aControlSubmit) (*a2aControlTask, error)
 	Accept(context.Context, string, a2aControlAccept) (*a2aControlTask, error)
 	Get(context.Context, string, string, string) (*a2aControlTask, error)
+	GetInbound(context.Context, string, string, string, string) (*a2aControlTask, error)
 	Cancel(context.Context, string, string, string) (*a2aControlTask, error)
 	CancelInbound(context.Context, string, string, string, string) (*a2aControlTask, error)
 	Fail(context.Context, string, string, string, string) (*a2aControlTask, error)
@@ -108,6 +113,19 @@ func (client *a2aControlPlaneClient) Get(ctx context.Context, authorization, wor
 	query := url.Values{"workspaceId": {workspaceID}, "taskId": {taskID}}
 	var task a2aControlTask
 	if err := client.do(ctx, http.MethodGet, "/api/v1/a2a/tasks?"+query.Encode(), authorization, nil, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (client *a2aControlPlaneClient) GetInbound(ctx context.Context, authorization, workspaceID, sourceAgentURL, taskID string) (*a2aControlTask, error) {
+	query := url.Values{
+		"workspaceId":    {workspaceID},
+		"sourceAgentUrl": {sourceAgentURL},
+		"taskId":         {taskID},
+	}
+	var task a2aControlTask
+	if err := client.do(ctx, http.MethodGet, "/api/v1/a2a/tasks/inbound?"+query.Encode(), authorization, nil, &task); err != nil {
 		return nil, err
 	}
 	return &task, nil

@@ -15,7 +15,10 @@ not create a competing Mission or WorkUnit state machine.
 
 ## Ownership rules
 
-- Gateway authenticates and routes; it does not invent task completion.
+- Gateway authenticates and routes; it does not invent task completion. Its A2A
+  inbox can project a completed Mission Control result bundle through
+  `tasks/get`, but it neither stores that bundle nor treats peer Evidence as
+  local completion authority.
 - Mission Control owns durable execution state.
 - Harness and Runner own execution attempts, isolation, and evidence capture.
 - The Python Runner service is a strict workspace-scoped process adapter. It

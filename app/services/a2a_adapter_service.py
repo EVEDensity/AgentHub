@@ -17,12 +17,17 @@ from app.domain import (
 )
 from app.repositories import MissionRepository
 from app.schemas.a2a_adapter import A2AInboundTaskCreateRequest, A2ATaskCreateRequest
+from app.services.a2a_result_bundle_service import (
+    A2AResultBundlePolicyError,
+    A2AResultBundleService,
+)
 from app.services.agent_binding_service import (
     AgentBinding,
     AgentBindingSelector,
     AgentBindingUnavailableError,
     UnavailableAgentBindingSelector,
 )
+from app.services.artifact_integrity_service import ArtifactByteExporter
 from app.services.mission_service import MissionService
 
 A2A_DELEGATE_CAPABILITY = "a2a.send"
@@ -122,6 +127,7 @@ class A2AAdapterService:
         repository: MissionRepository | None = None,
         *,
         binding_selector: AgentBindingSelector | None = None,
+        artifact_byte_exporter: ArtifactByteExporter | None = None,
     ) -> None:
         self._repository = repository or MissionRepository()
         self._missions = MissionService(self._repository)
@@ -129,6 +135,10 @@ class A2AAdapterService:
             binding_selector
             if binding_selector is not None
             else UnavailableAgentBindingSelector()
+        )
+        self._result_bundles = A2AResultBundleService(
+            self._repository,
+            artifact_byte_exporter,
         )
 
     async def submit_task(
@@ -284,6 +294,33 @@ class A2AAdapterService:
         mission = await self._mission_for_task(workspace_id, task_id)
         work_unit = await self._get_mapped_work_unit(workspace_id, task_id)
         return task_projection(mission, work_unit)
+
+    async def get_inbound_task(
+        self,
+        workspace_id: str,
+        source_agent_url: str,
+        task_id: str,
+    ) -> dict:
+        mission = await self._mission_for_inbound_task(
+            workspace_id,
+            source_agent_url,
+            task_id,
+        )
+        work_unit = await self._get_inbound_work_unit(
+            workspace_id,
+            source_agent_url,
+            task_id,
+        )
+        projection = task_projection(mission, work_unit)
+        if mission.status != MissionStatus.SUCCEEDED:
+            return projection
+        if work_unit is None or work_unit.status != WorkUnitStatus.SUCCEEDED:
+            raise A2AResultBundlePolicyError(
+                "completed inbound Mission has no successful mapped WorkUnit"
+            )
+
+        projection.update(await self._result_bundles.export(mission.id, work_unit))
+        return projection
 
     async def cancel_task(
         self,
