@@ -135,7 +135,7 @@ EvidenceOffset = Annotated[int, Query(ge=0)]
 DecisionLimit = Annotated[int, Query(ge=1, le=200)]
 DecisionOffset = Annotated[int, Query(ge=0)]
 DecisionStatusFilter = Annotated[
-    Literal["PENDING", "RESOLVED", "CANCELLED", "ALL"],
+    Literal["PENDING", "RESOLVED", "CANCELLED", "EXPIRED", "ALL"],
     Query(alias="status"),
 ]
 DecisionMissionIdFilter = Annotated[

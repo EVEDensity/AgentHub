@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 from app.domain import (
@@ -434,6 +435,49 @@ class MissionRepository:
             offset,
         )
         return [self._decision_from_row(row) for row in rows]
+
+    async def get_expired_decision_candidate_for_update(
+        self,
+        occurred_at: datetime,
+    ) -> tuple[Mission, Decision] | None:
+        if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+            raise ValueError("occurred_at must be timezone-aware")
+        row = await self._fetch_one(
+            """SELECT
+                      mission.id AS selected_mission_id,
+                      mission.workspace_id AS selected_workspace_id,
+                      mission.title AS selected_title,
+                      mission.objective AS selected_objective,
+                      mission.source AS selected_source,
+                      mission.contract_id AS selected_contract_id,
+                      mission.status AS selected_status,
+                      mission.plan_version AS selected_plan_version,
+                      mission.created_by AS selected_created_by,
+                      mission.created_at AS selected_created_at,
+                      mission.updated_at AS selected_updated_at,
+                      decision.id, decision.mission_id, decision.work_unit_id,
+                      decision.attempt, decision.context_digest,
+                      decision.reason_code, decision.criterion_ids,
+                      decision.options, decision.recommended_option,
+                      decision.risk_summary, decision.status, decision.version,
+                      decision.requested_by, decision.requested_at,
+                      decision.expires_at, decision.resolution,
+                      decision.rationale, decision.resolved_by,
+                      decision.resolved_at
+               FROM decisions AS decision
+               JOIN missions AS mission ON mission.id=decision.mission_id
+               WHERE decision.status='PENDING'
+                 AND decision.expires_at IS NOT NULL
+                 AND decision.expires_at <= $1
+                 AND mission.status='WAITING_DECISION'
+               ORDER BY decision.expires_at ASC, decision.id ASC
+               LIMIT 1
+               FOR UPDATE OF mission, decision SKIP LOCKED""",
+            occurred_at,
+        )
+        if row is None:
+            return None
+        return self._mission_from_claim_row(row), self._decision_from_row(row)
 
     async def list_pending_decisions_for_update(
         self,
@@ -950,7 +994,30 @@ class MissionRepository:
 
     @staticmethod
     def _decision_from_row(row: Mapping[str, Any]) -> Decision:
-        values = dict(row)
+        values = {
+            field_name: row[field_name]
+            for field_name in (
+                "id",
+                "mission_id",
+                "work_unit_id",
+                "attempt",
+                "context_digest",
+                "reason_code",
+                "criterion_ids",
+                "options",
+                "recommended_option",
+                "risk_summary",
+                "status",
+                "version",
+                "requested_by",
+                "requested_at",
+                "expires_at",
+                "resolution",
+                "rationale",
+                "resolved_by",
+                "resolved_at",
+            )
+        }
         for field_name in ("criterion_ids", "options"):
             values[field_name] = _decode_json_array(values[field_name], field_name)
         values["requested_by"] = _decode_json_object(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.domain import (
@@ -384,6 +385,43 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.repository.list_workspace_decisions(
                 "workspace-1", offset=-1
+            )
+
+    async def test_expired_decision_candidate_locks_mission_and_decision(self) -> None:
+        mission = build_mission(status="WAITING_DECISION")
+        decision = build_decision(
+            requested_at=mission.created_at,
+            expires_at=mission.created_at + timedelta(hours=1),
+        )
+        mission_row = self.build_mission_row(mission)
+        self.database.one = {
+            **self.build_decision_row(decision),
+            "selected_mission_id": mission_row["id"],
+            **{
+                f"selected_{field_name}": value
+                for field_name, value in mission_row.items()
+                if field_name != "id"
+            },
+        }
+        occurred_at = decision.expires_at
+        assert occurred_at is not None
+
+        candidate = await self.repository.get_expired_decision_candidate_for_update(
+            occurred_at
+        )
+
+        self.assertEqual(candidate, (mission, decision))
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("decision.status='PENDING'", sql)
+        self.assertIn("decision.expires_at <= $1", sql)
+        self.assertIn("mission.status='WAITING_DECISION'", sql)
+        self.assertIn("ORDER BY decision.expires_at ASC, decision.id ASC", sql)
+        self.assertIn("FOR UPDATE OF mission, decision SKIP LOCKED", sql)
+        self.assertEqual(args, (occurred_at,))
+
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            await self.repository.get_expired_decision_candidate_for_update(
+                datetime(2026, 8, 16)  # noqa: DTZ001
             )
 
     async def test_artifact_round_trip_and_mission_list(self) -> None:

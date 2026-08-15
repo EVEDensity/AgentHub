@@ -9,6 +9,7 @@
     { "eventType": "mission.verification.failed", "aggregateType": "mission", "payloadRequired": ["evidenceIds"] },
     { "eventType": "mission.lifecycle.waiting_decision", "aggregateType": "mission", "payloadRequired": ["previousStatus", "status", "decisionId", "workUnitId"] },
     { "eventType": "mission.lifecycle.decision_resolved", "aggregateType": "mission", "payloadRequired": ["previousStatus", "status", "decisionId", "resolution"] },
+    { "eventType": "mission.lifecycle.decision_expired", "aggregateType": "mission", "payloadRequired": ["previousStatus", "status", "decisionId"] },
     { "eventType": "mission_contract.version.created", "aggregateType": "mission_contract", "payloadRequired": ["version"] },
     { "eventType": "work_unit.lifecycle.created", "aggregateType": "work_unit", "payloadRequired": ["missionId", "status"] },
     { "eventType": "work_unit.delegation.requested", "aggregateType": "work_unit", "payloadRequired": ["childWorkUnitId", "parentAttempt", "assignedAdapter", "inputRefs"] },
@@ -18,10 +19,12 @@
     { "eventType": "work_unit.execution.failed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "reason"] },
     { "eventType": "work_unit.verification.completed", "aggregateType": "work_unit", "payloadRequired": ["evidenceIds", "verdict"] },
     { "eventType": "work_unit.lifecycle.decision_resolved", "aggregateType": "work_unit", "payloadRequired": ["previousStatus", "status", "decisionId", "resolution"] },
+    { "eventType": "work_unit.lifecycle.decision_expired", "aggregateType": "work_unit", "payloadRequired": ["previousStatus", "status", "decisionId"] },
     { "eventType": "artifact.lifecycle.registered", "aggregateType": "artifact", "payloadRequired": ["missionId", "workUnitId", "attempt", "digest", "contentAddress"] },
     { "eventType": "evidence.verification.recorded", "aggregateType": "evidence", "payloadRequired": ["missionId", "criterionId", "verdict", "integrityHash"] },
     { "eventType": "decision.lifecycle.requested", "aggregateType": "decision", "payloadRequired": ["missionId", "workUnitId", "attempt", "contextDigest", "reasonCode", "criterionIds", "status", "version"] },
     { "eventType": "decision.lifecycle.resolved", "aggregateType": "decision", "payloadRequired": ["previousStatus", "status", "previousVersion", "version", "resolution"] },
-    { "eventType": "decision.lifecycle.cancelled", "aggregateType": "decision", "payloadRequired": ["previousStatus", "status", "previousVersion", "version"] }
+    { "eventType": "decision.lifecycle.cancelled", "aggregateType": "decision", "payloadRequired": ["previousStatus", "status", "previousVersion", "version"] },
+    { "eventType": "decision.lifecycle.expired", "aggregateType": "decision", "payloadRequired": ["previousStatus", "status", "previousVersion", "version", "expiresAt"] }
   ]
 }

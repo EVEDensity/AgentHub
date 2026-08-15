@@ -22,6 +22,8 @@ A2A_INBOUND_SOURCE_MAPPING_REVISION = "a0d4e5f6b7c8"
 A2A_INBOUND_SOURCE_MAPPING_DOWN_REVISION = AGENT_CATALOG_PROJECTION_REVISION
 DECISION_PERSISTENCE_REVISION = "b1e5f6a7c8d9"
 DECISION_PERSISTENCE_DOWN_REVISION = A2A_INBOUND_SOURCE_MAPPING_REVISION
+DECISION_EXPIRY_REVISION = "c2f6a7b8d9e0"
+DECISION_EXPIRY_DOWN_REVISION = DECISION_PERSISTENCE_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -446,4 +448,123 @@ DECISION_PERSISTENCE_DOWNGRADE = (
         )
     )
     """,
+)
+
+DECISION_EXPIRY_UPGRADE = (
+    """
+    DO $migration$
+    DECLARE constraint_name TEXT;
+    BEGIN
+        SELECT conname INTO constraint_name
+        FROM pg_constraint
+        WHERE conrelid = 'decisions'::regclass
+          AND contype = 'c'
+          AND cardinality(conkey) = 1
+          AND pg_get_constraintdef(oid) LIKE '%PENDING%'
+          AND pg_get_constraintdef(oid) LIKE '%RESOLVED%'
+          AND pg_get_constraintdef(oid) LIKE '%CANCELLED%'
+        LIMIT 1;
+        IF constraint_name IS NULL THEN
+            RAISE EXCEPTION 'decision status constraint not found';
+        END IF;
+        EXECUTE format(
+            $constraint$
+            ALTER TABLE decisions
+            DROP CONSTRAINT %I,
+            ADD CONSTRAINT decisions_status_check CHECK (
+                status IN ('PENDING', 'RESOLVED', 'CANCELLED', 'EXPIRED')
+            )
+            $constraint$,
+            constraint_name
+        );
+    END
+    $migration$
+    """,
+    """
+    DO $migration$
+    DECLARE constraint_name TEXT;
+    BEGIN
+        SELECT conname INTO constraint_name
+        FROM pg_constraint
+        WHERE conrelid = 'decisions'::regclass
+          AND contype = 'c'
+          AND cardinality(conkey) > 1
+          AND pg_get_constraintdef(oid) LIKE '%status%'
+          AND pg_get_constraintdef(oid) LIKE '%resolved_at%'
+          AND pg_get_constraintdef(oid) LIKE '%PENDING%'
+        LIMIT 1;
+        IF constraint_name IS NULL THEN
+            RAISE EXCEPTION 'decision lifecycle constraint not found';
+        END IF;
+        EXECUTE format(
+            $constraint$
+            ALTER TABLE decisions
+            DROP CONSTRAINT %I,
+            ADD CONSTRAINT decisions_lifecycle_check CHECK (
+                (
+                    status = 'PENDING' AND version = 1
+                    AND resolution IS NULL AND rationale IS NULL
+                    AND resolved_by IS NULL AND resolved_at IS NULL
+                )
+                OR (
+                    status = 'RESOLVED' AND version >= 2
+                    AND resolution IS NOT NULL AND rationale IS NOT NULL
+                    AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL
+                    AND resolved_at >= requested_at
+                )
+                OR (
+                    status = 'CANCELLED' AND version >= 2
+                    AND resolution IS NULL AND rationale IS NOT NULL
+                    AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL
+                    AND resolved_at >= requested_at
+                )
+                OR (
+                    status = 'EXPIRED' AND version >= 2
+                    AND expires_at IS NOT NULL AND resolution IS NULL
+                    AND rationale IS NOT NULL AND resolved_by IS NOT NULL
+                    AND resolved_at IS NOT NULL AND resolved_at >= expires_at
+                )
+            )
+            $constraint$,
+            constraint_name
+        );
+    END
+    $migration$
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_decisions_pending_expiry
+    ON decisions(expires_at, id)
+    WHERE status = 'PENDING' AND expires_at IS NOT NULL
+    """,
+)
+
+DECISION_EXPIRY_DOWNGRADE = (
+    """
+    ALTER TABLE decisions
+    DROP CONSTRAINT IF EXISTS decisions_lifecycle_check,
+    DROP CONSTRAINT IF EXISTS decisions_status_check,
+    ADD CONSTRAINT decisions_status_check CHECK (
+        status IN ('PENDING', 'RESOLVED', 'CANCELLED')
+    ),
+    ADD CONSTRAINT decisions_lifecycle_check CHECK (
+        (
+            status = 'PENDING' AND version = 1
+            AND resolution IS NULL AND rationale IS NULL
+            AND resolved_by IS NULL AND resolved_at IS NULL
+        )
+        OR (
+            status = 'RESOLVED' AND version >= 2
+            AND resolution IS NOT NULL AND rationale IS NOT NULL
+            AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL
+            AND resolved_at >= requested_at
+        )
+        OR (
+            status = 'CANCELLED' AND version >= 2
+            AND resolution IS NULL AND rationale IS NOT NULL
+            AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL
+            AND resolved_at >= requested_at
+        )
+    )
+    """,
+    "DROP INDEX IF EXISTS idx_decisions_pending_expiry",
 )

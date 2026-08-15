@@ -66,6 +66,7 @@ from app.services.workspace_admission_service import (
 
 _A2A_OUTBOUND_ADAPTER = "a2a.outbound"
 _MAX_VERIFICATION_ARTIFACTS = 200
+_DEFAULT_DECISION_TIMEOUT = timedelta(hours=24)
 _VERIFICATION_ARTIFACT_FIELDS = frozenset(
     {
         "id",
@@ -223,6 +224,17 @@ class VerificationDiscoveryOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionExpiryOutcome:
+    decision: Decision | None
+    work_unit: WorkUnit | None
+    mission: Mission | None
+
+    @property
+    def expired(self) -> bool:
+        return self.decision is not None
+
+
+@dataclass(frozen=True, slots=True)
 class WorkUnitClaimOutcome:
     """Transient claim result; it is not durable scheduling state."""
 
@@ -253,7 +265,10 @@ class MissionService:
         verification_policy_resolver: VerificationPolicyResolver | None = None,
         verification_evaluator: VerificationEvaluator | None = None,
         evidence_integrity_hasher: EvidenceIntegrityHasher | None = None,
+        decision_timeout: timedelta = _DEFAULT_DECISION_TIMEOUT,
     ) -> None:
+        if decision_timeout <= timedelta(0):
+            raise ValueError("decision_timeout must be positive")
         self._repository = repository or MissionRepository()
         self._artifact_byte_verifier = artifact_byte_verifier
         self._agent_binding_resolver = agent_binding_resolver
@@ -266,6 +281,7 @@ class MissionService:
         self._evidence_integrity_hasher = (
             evidence_integrity_hasher or Sha256EvidenceIntegrityHasher()
         )
+        self._decision_timeout = decision_timeout
 
     async def create_mission(
         self,
@@ -1620,6 +1636,7 @@ class MissionService:
             version=1,
             requested_by=ActorRef(type=ActorType.SERVICE, id="mission-control"),
             requested_at=occurred_at,
+            expires_at=occurred_at + self._decision_timeout,
         )
         decision_event = EventEnvelope(
             event_id=new_identifier("evt"),
@@ -1676,6 +1693,9 @@ class MissionService:
         if actor.type != ActorType.HUMAN:
             raise ValueError("only human actors can resolve Decisions")
         async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
             decision = await repository.get_decision_for_update(decision_id)
             if decision is None or decision.mission_id != mission_id:
                 raise DecisionNotFoundError(decision_id)
@@ -1685,14 +1705,13 @@ class MissionService:
                 raise DecisionConflictError("Decision version conflict")
             if resolution not in decision.options:
                 raise DecisionConflictError("Decision resolution is not offered")
-
-            mission = await repository.get_mission_for_update(mission_id)
-            if mission is None:
-                raise MissionNotFoundError(mission_id)
             if mission.status != MissionStatus.WAITING_DECISION:
                 raise DecisionConflictError(
                     "Mission is not waiting for a Decision"
                 )
+            occurred_at = datetime.now(timezone.utc)
+            if decision.expires_at is not None and decision.expires_at <= occurred_at:
+                raise DecisionConflictError("Decision has expired")
             work_unit = await repository.get_work_unit_for_update(
                 decision.work_unit_id
             )
@@ -1713,7 +1732,6 @@ class MissionService:
                 if work_unit.attempt >= contract.budgets.retries + 1:
                     raise DecisionConflictError("work unit retry budget is exhausted")
 
-            occurred_at = datetime.now(timezone.utc)
             resolved_decision = Decision.model_validate(
                 {
                     **decision.model_dump(),
@@ -1822,6 +1840,148 @@ class MissionService:
             await repository.update_mission(updated_mission)
             await repository.append_event(mission_event)
             return resolved_decision, updated_work_unit, updated_mission
+
+    async def expire_next_decision(
+        self,
+        *,
+        occurred_at: datetime | None = None,
+    ) -> DecisionExpiryOutcome:
+        expiration_time = occurred_at or datetime.now(timezone.utc)
+        if expiration_time.tzinfo is None or expiration_time.utcoffset() is None:
+            raise ValueError("occurred_at must be timezone-aware")
+        actor = ActorRef(type=ActorType.SERVICE, id="mission-control")
+        async with self._repository.transaction() as repository:
+            candidate = await repository.get_expired_decision_candidate_for_update(
+                expiration_time
+            )
+            if candidate is None:
+                return DecisionExpiryOutcome(None, None, None)
+            mission, decision = candidate
+            if decision.mission_id != mission.id:
+                raise DecisionConflictError(
+                    "expired Decision candidate belongs to another Mission"
+                )
+            if mission.status != MissionStatus.WAITING_DECISION:
+                raise DecisionConflictError(
+                    "expired Decision Mission is not waiting for a Decision"
+                )
+            if decision.status != DecisionStatus.PENDING:
+                raise DecisionConflictError("expired Decision candidate is not pending")
+            if decision.expires_at is None or decision.expires_at > expiration_time:
+                raise DecisionConflictError("Decision has not expired")
+
+            work_unit = await repository.get_work_unit_for_update(
+                decision.work_unit_id
+            )
+            if work_unit is None or work_unit.mission_id != mission.id:
+                raise WorkUnitNotFoundError(decision.work_unit_id)
+            if (
+                work_unit.status != WorkUnitStatus.VERIFYING
+                or work_unit.attempt != decision.attempt
+            ):
+                raise DecisionConflictError(
+                    "expired Decision no longer matches the verifying WorkUnit attempt"
+                )
+
+            expired_decision = Decision.model_validate(
+                {
+                    **decision.model_dump(),
+                    "status": DecisionStatus.EXPIRED,
+                    "version": decision.version + 1,
+                    "rationale": "Decision expired before human resolution.",
+                    "resolved_by": actor,
+                    "resolved_at": expiration_time,
+                }
+            )
+            decision_sequence = (
+                await repository.get_last_event_sequence(
+                    decision.id,
+                    aggregate_type="decision",
+                )
+                + 1
+            )
+            decision_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="decision",
+                aggregate_id=decision.id,
+                sequence=decision_sequence,
+                event_type="decision.lifecycle.expired",
+                actor=actor,
+                occurred_at=expiration_time,
+                correlation_id=mission.id,
+                payload={
+                    "previousStatus": decision.status.value,
+                    "status": expired_decision.status.value,
+                    "previousVersion": decision.version,
+                    "version": expired_decision.version,
+                    "expiresAt": decision.expires_at.isoformat(),
+                },
+                schema_version=1,
+            )
+            updated_work_unit = transition_work_unit(
+                work_unit,
+                WorkUnitStatus.FAILED,
+                occurred_at=expiration_time,
+            )
+            work_unit_sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            work_unit_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=work_unit_sequence,
+                event_type="work_unit.lifecycle.decision_expired",
+                actor=actor,
+                occurred_at=expiration_time,
+                correlation_id=mission.id,
+                causation_id=decision_event.event_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated_work_unit.status.value,
+                    "decisionId": decision.id,
+                },
+                schema_version=1,
+            )
+            updated_mission = transition_mission(
+                mission,
+                MissionStatus.FAILED,
+                occurred_at=expiration_time,
+            )
+            mission_sequence = await repository.get_last_event_sequence(mission.id) + 1
+            mission_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="mission",
+                aggregate_id=mission.id,
+                sequence=mission_sequence,
+                event_type="mission.lifecycle.decision_expired",
+                actor=actor,
+                occurred_at=expiration_time,
+                correlation_id=mission.id,
+                causation_id=work_unit_event.event_id,
+                payload={
+                    "previousStatus": mission.status.value,
+                    "status": updated_mission.status.value,
+                    "decisionId": decision.id,
+                },
+                schema_version=1,
+            )
+
+            await repository.update_decision(expired_decision)
+            await repository.append_event(decision_event)
+            await repository.update_work_unit(updated_work_unit)
+            await repository.append_event(work_unit_event)
+            await repository.update_mission(updated_mission)
+            await repository.append_event(mission_event)
+            return DecisionExpiryOutcome(
+                expired_decision,
+                updated_work_unit,
+                updated_mission,
+            )
 
     async def _validate_artifact_refs(
         self,

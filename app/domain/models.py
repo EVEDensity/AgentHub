@@ -412,6 +412,7 @@ class DecisionStatus(str, Enum):
     PENDING = "PENDING"
     RESOLVED = "RESOLVED"
     CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
 
 
 class DecisionResolution(str, Enum):
@@ -480,9 +481,14 @@ class Decision(DomainModel):
             raise ValueError("decision resolution cannot predate its request")
         if self.version < 2:
             raise ValueError("closed decision version must be at least 2")
-        if self.status == DecisionStatus.CANCELLED:
+        if self.status in {DecisionStatus.CANCELLED, DecisionStatus.EXPIRED}:
             if self.resolution is not None:
-                raise ValueError("cancelled decision cannot carry a resolution")
+                raise ValueError("unresolved closed decision cannot carry a resolution")
+            if self.status == DecisionStatus.EXPIRED:
+                if self.expires_at is None:
+                    raise ValueError("expired decision requires expires_at")
+                if self.resolved_at < self.expires_at:
+                    raise ValueError("decision cannot expire before expires_at")
             return self
         assert self.resolution is not None
         if self.resolution not in self.options:

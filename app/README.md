@@ -173,7 +173,11 @@ boundary. It is not the permanent home of every Agent feature.
   Decisions in the same transaction. The workspace Decision inbox is a
   read-only projection over that same durable state, defaults to PENDING, and
   applies status, Mission, and reason filters inside the workspace-scoped
-  database query.
+  database query. New verification Decisions store a 24-hour default expiry.
+  The stateless expiry command locks one eligible Mission and Decision with
+  `SKIP LOCKED`, then atomically marks the Decision EXPIRED and fails the
+  blocked WorkUnit and Mission. It is not yet composed into a deployed polling
+  process.
   `verifier_worker.py` supervises one explicit workspace with bounded backoff,
   graceful drain, cancellation propagation, and content-free snapshots. It
   owns no queue or verifier lease; Mission Control's verification transaction

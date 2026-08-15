@@ -20,4 +20,5 @@ objects without duplicating their lifecycle.
 Mission and WorkUnit attempt to immutable context, offered resolutions, and an
 optimistically versioned lifecycle. Protocol adapters and verifiers may expose
 or trigger a server-owned Decision but cannot resolve it or translate it into
-PASS Evidence.
+PASS Evidence. EXPIRED is a distinct fail-closed terminal status with service
+closure metadata; it is not a human resolution or cancellation.

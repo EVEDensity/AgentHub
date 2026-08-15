@@ -43,7 +43,7 @@
     "riskSummary": { "type": "string", "minLength": 1, "maxLength": 2000 },
     "status": {
       "type": "string",
-      "enum": ["PENDING", "RESOLVED", "CANCELLED"]
+      "enum": ["PENDING", "RESOLVED", "CANCELLED", "EXPIRED"]
     },
     "version": { "type": "integer", "minimum": 1 },
     "requestedBy": { "$ref": "common.schema.json#/$defs/actorRef" },
@@ -80,6 +80,14 @@
       "required": ["rationale", "resolvedBy", "resolvedAt"],
       "properties": {
         "status": { "const": "CANCELLED" },
+        "version": { "type": "integer", "minimum": 2 }
+      },
+      "not": { "required": ["resolution"] }
+    },
+    {
+      "required": ["expiresAt", "rationale", "resolvedBy", "resolvedAt"],
+      "properties": {
+        "status": { "const": "EXPIRED" },
         "version": { "type": "integer", "minimum": 2 }
       },
       "not": { "required": ["resolution"] }

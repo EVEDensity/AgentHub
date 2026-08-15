@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -101,6 +101,25 @@ class DomainModelTests(unittest.TestCase):
         )
         self.assert_matches_schema("decision.schema.json", cancelled)
         self.assertIsNone(cancelled.resolution)
+        expired = build_decision(
+            status="EXPIRED",
+            version=2,
+            requested_at=NOW - timedelta(hours=2),
+            expires_at=NOW - timedelta(hours=1),
+            rationale="Decision expired before human resolution.",
+            resolved_by={"type": "service", "id": "mission-control"},
+            resolved_at=NOW,
+        )
+        self.assert_matches_schema("decision.schema.json", expired)
+        self.assertIsNone(expired.resolution)
+        with self.assertRaisesRegex(ValidationError, "requires expires_at"):
+            build_decision(
+                status="EXPIRED",
+                version=2,
+                rationale="Decision expired before human resolution.",
+                resolved_by={"type": "service", "id": "mission-control"},
+                resolved_at=NOW,
+            )
         self.assertEqual(pending.version, 1)
 
     def test_event_envelope_uses_public_snake_case_contract(self) -> None:

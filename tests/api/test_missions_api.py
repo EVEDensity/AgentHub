@@ -49,6 +49,7 @@ from app.services.evidence_integrity_service import (
     EvidenceIntegrityMaterial,
     Sha256EvidenceIntegrityHasher,
 )
+from app.services.mission_service import MissionService
 from app.services.verification_evaluator_service import StrictVerificationEvaluator
 from app.services.verification_policy_service import StrictVerificationPolicyResolver
 from app.services.workspace_access_service import (
@@ -301,6 +302,27 @@ class FakeMissionRepository:
             key=lambda decision: (decision.requested_at, decision.id),
         )
         return matching[offset : offset + limit]
+
+    async def get_expired_decision_candidate_for_update(
+        self,
+        occurred_at: datetime,
+    ) -> tuple[Mission, Decision] | None:
+        if not self.transaction_depth:
+            raise AssertionError("expired decision selection requires a transaction")
+        if self.mission is None or self.mission.status.value != "WAITING_DECISION":
+            return None
+        candidates = sorted(
+            (
+                decision
+                for decision in self.decisions
+                if decision.mission_id == self.mission.id
+                and decision.status == DecisionStatus.PENDING
+                and decision.expires_at is not None
+                and decision.expires_at <= occurred_at
+            ),
+            key=lambda decision: (decision.expires_at, decision.id),
+        )
+        return (self.mission, candidates[0]) if candidates else None
 
     async def list_pending_decisions_for_update(
         self,
@@ -3471,6 +3493,10 @@ class MissionApiTests(unittest.TestCase):
         )
         self.assertEqual(decision.recommended_option.value, "FAIL_MISSION")
         self.assertEqual(
+            decision.expires_at,
+            decision.requested_at + timedelta(hours=24),
+        )
+        self.assertEqual(
             [event.event_type for event in repository.events],
             [
                 "decision.lifecycle.requested",
@@ -4777,6 +4803,113 @@ class MissionApiTests(unittest.TestCase):
         )
         self.assertEqual(exhausted.status_code, 409)
         self.assertEqual(len(repository.events), before_events)
+
+
+class DecisionExpiryServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_expiry_fails_closed_once_with_causal_events(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(status="WAITING_DECISION")
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        decision = build_decision(
+            requested_at=datetime(2026, 8, 16, 8, tzinfo=timezone.utc),
+            expires_at=datetime(2026, 8, 16, 9, tzinfo=timezone.utc),
+        )
+        repository.decisions = [decision]
+        repository.events = [
+            build_event(
+                event_id="evt-decision-requested",
+                aggregate_type="decision",
+                aggregate_id=decision.id,
+                event_type="decision.lifecycle.requested",
+                payload=decision.to_public_dict(),
+            ),
+            build_event(
+                event_id="evt-mission-waiting",
+                aggregate_id=repository.mission.id,
+                event_type="mission.lifecycle.waiting_decision",
+                payload={
+                    "previousStatus": "RUNNING",
+                    "status": "WAITING_DECISION",
+                    "decisionId": decision.id,
+                    "workUnitId": "wu-1",
+                },
+            ),
+        ]
+        service = MissionService(repository)
+        occurred_at = datetime(2026, 8, 16, 10, tzinfo=timezone.utc)
+
+        outcome = await service.expire_next_decision(occurred_at=occurred_at)
+
+        self.assertTrue(outcome.expired)
+        self.assertEqual(repository.decisions[0].status, DecisionStatus.EXPIRED)
+        self.assertEqual(repository.decisions[0].version, 2)
+        self.assertIsNone(repository.decisions[0].resolution)
+        self.assertEqual(repository.decisions[0].resolved_at, occurred_at)
+        self.assertEqual(repository.work_units[0].status.value, "FAILED")
+        self.assertEqual(repository.mission.status.value, "FAILED")
+        expiry_events = repository.events[-3:]
+        self.assertEqual(
+            [event.event_type for event in expiry_events],
+            [
+                "decision.lifecycle.expired",
+                "work_unit.lifecycle.decision_expired",
+                "mission.lifecycle.decision_expired",
+            ],
+        )
+        self.assertEqual(expiry_events[1].causation_id, expiry_events[0].event_id)
+        self.assertEqual(expiry_events[2].causation_id, expiry_events[1].event_id)
+        self.assertEqual(expiry_events[0].actor.type.value, "service")
+
+        repeated = await service.expire_next_decision(occurred_at=occurred_at)
+        self.assertFalse(repeated.expired)
+        self.assertEqual(len(repository.events), 5)
+
+    async def test_expiry_configuration_and_time_are_validated(self) -> None:
+        with self.assertRaisesRegex(ValueError, "decision_timeout must be positive"):
+            MissionService(FakeMissionRepository(), decision_timeout=timedelta(0))
+        with self.assertRaisesRegex(ValueError, "timezone-aware"):
+            await MissionService(FakeMissionRepository()).expire_next_decision(
+                occurred_at=datetime(2026, 8, 16)  # noqa: DTZ001
+            )
+
+
+class DecisionExpiryApiTests(unittest.TestCase):
+    def test_human_cannot_resolve_decision_after_expiry(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="WAITING_DECISION",
+        )
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        now = datetime.now(timezone.utc)
+        repository.decisions = [
+            build_decision(
+                requested_at=now - timedelta(hours=2),
+                expires_at=now - timedelta(hours=1),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/decisions/dec-1/resolve",
+            json={
+                "expectedVersion": 1,
+                "resolution": "FAIL_MISSION",
+                "rationale": "This command arrived after the deadline.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("expired", response.json()["detail"])
+        self.assertEqual(repository.decisions[0].status, DecisionStatus.PENDING)
+        self.assertEqual(repository.mission.status.value, "WAITING_DECISION")
+        self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
+        self.assertEqual(repository.events, [])
 
 
 if __name__ == "__main__":
