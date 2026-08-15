@@ -151,6 +151,22 @@ class A2AOutboundClaimedWork:
     timeout_seconds: float
     command: A2AOutboundTaskCommand
 
+    def __post_init__(self) -> None:
+        _validate_text(self.mission_id, "mission_id", max_length=255)
+        _validate_text(self.work_unit_id, "work_unit_id", max_length=255)
+        if type(self.attempt) is not int or self.attempt < 1:
+            raise ValueError("attempt must be a positive integer")
+        _validate_text(self.lease_id, "lease_id", max_length=255)
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be positive and finite")
+        if not isinstance(self.command, A2AOutboundTaskCommand):
+            raise TypeError("command must be an A2AOutboundTaskCommand")
+
 
 class A2AOutboundClaimedWorkResolver:
     """Resolve a claimed outbound root without invoking a Harness or transport."""

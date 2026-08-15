@@ -81,7 +81,12 @@ unsafe redirect statuses, cross-origin redirects, and missing receiver-issued
 credentials. Agent Card verification is supplied through a trusted-route port;
 the transport cannot choose or alter the requested peer origin. No production
 route-resolver or worker composition is enabled while Gateway direct dispatch
-remains active.
+remains active. A dedicated Runner supervisor now owns the bounded execution
+loop after resolution: it performs the fenced local start, sends once per
+invocation, renews the lease during polling, attempts remote cancellation on
+timeout or supervision loss, and records terminal failures through Mission
+Control. Remote `COMPLETED` stops at an in-process `RESULT_READY` outcome until
+the result bytes are imported, verified, published, and registered locally.
 
 `tasks/cancel` first cancels the durable Mission task and then best-effort
 forwards cancellation with the same route-field cleanup, Card/origin checks,
@@ -217,7 +222,9 @@ selection, sensitivity and digest policy, local and MinIO byte integrity,
 response limits, typed Gateway projection, and all-or-nothing failure.
 Outbound Runner tests cover claim/context identity drift, target-scoped grants,
 local-versus-peer capability separation, request bounds, unsupported Artifact
-inputs, and finite transport contracts. Stateless HTTP transport tests cover
+inputs, finite transport contracts, supervised lifecycle polling, lease
+heartbeat, timeout, cancellation, failure write-back, and the non-completing
+`RESULT_READY` outcome. Stateless HTTP transport tests cover
 receiver-token isolation, route-origin pinning, content-free send/get/cancel,
 same-origin redirects, response limits, JSON-RPC identity, remote errors, and
 unsupported remote states.

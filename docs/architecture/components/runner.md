@@ -86,10 +86,16 @@ The HTTP adapter now enforces bounded JSON-RPC envelopes and bodies, exact
 request/task identity, finite states, safe same-origin redirects, and
 receiver-issued bearer credentials scoped to the verified peer origin. It
 accepts only a route produced by an injected Agent Card trust/capability
-resolver, so Runner does not duplicate Gateway's trust policy. There is
-deliberately no Harness result and no production composition yet, so a remote
-acknowledgement cannot enter `WorkUnitRunner` Artifact/completion handling and
-no second dispatch path exists.
+resolver, so Runner does not duplicate Gateway's trust policy. The outbound
+supervisor now starts the claimed attempt through Mission Control, dispatches
+once, heartbeats its lease while polling, and propagates timeout, remote
+failure, unsupported input, transport/heartbeat failure, and caller
+cancellation through fenced local failure handling. A remote `COMPLETED`
+snapshot produces only `RESULT_READY`; it is not an Artifact and does not move
+the local WorkUnit beyond `RUNNING`. There is deliberately no Harness result
+and no production composition yet, so a remote acknowledgement cannot enter
+`WorkUnitRunner` Artifact/completion handling and no second dispatch path
+exists.
 
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,

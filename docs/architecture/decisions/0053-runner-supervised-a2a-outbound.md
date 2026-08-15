@@ -68,11 +68,15 @@ stateless transport port defines `send/get/cancel` and a finite content-free
 remote state projection. Its HTTP implementation now enforces strict JSON-RPC,
 bounded bodies, exact identities, safe same-origin redirects, and
 origin-specific receiver credentials. Agent Card trust/capability verification
-is injected through a trusted-route boundary rather than copied into Runner.
-That resolver and production composition remain disabled. Gateway's direct
-dispatch remains a compatibility path until the supervised worker can handle
-start, heartbeat, polling, cancellation, and result import end to end. The two
-paths must not both dispatch the same attempt after cutover.
+is injected through a trusted-route boundary rather than copied into Runner. A
+dedicated supervisor now performs the fenced start, one send per invocation,
+lease heartbeat, bounded polling, best-effort remote cancellation, and local
+failure write-back. A remote `COMPLETED` snapshot yields `RESULT_READY` only;
+it cannot register an Artifact or complete the local WorkUnit. Production
+composition remains disabled because trusted route resolution and result
+import are not yet complete. Gateway's direct dispatch remains a compatibility
+path until the supervised worker can handle the full result path end to end.
+The two paths must not both dispatch the same attempt after cutover.
 
 Historical unbound outbound WorkUnits are not silently rebound. They require
 an explicit migration or cancellation and resubmission under a new task ID,
@@ -111,3 +115,9 @@ use, strict and bounded JSON-RPC responses, duplicate/mismatched identity
 rejection, finite remote states, and safe same-origin redirect handling. The
 transport tests do not claim a production Agent Card resolver or enable the
 second dispatch path.
+
+Supervisor tests cover exact start fencing, single dispatch per invocation,
+heartbeat during polling, terminal remote failure mapping, unsupported input,
+timeout, caller cancellation, transport failure redaction, invalid remote task
+identity, and the `RESULT_READY` stop line. They assert that remote completion
+does not register an Artifact, complete the WorkUnit, or create Evidence.

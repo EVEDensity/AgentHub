@@ -7,6 +7,7 @@ from typing import Any
 
 from app.domain import Budgets, CapabilityGrant, Lease, MissionSource
 from app.services.a2a_outbound_runner import (
+    A2AOutboundClaimedWork,
     A2AOutboundClaimedWorkResolver,
     A2AOutboundTaskCommand,
     A2ARemoteTaskReference,
@@ -78,6 +79,44 @@ def outbound_claim(context: dict[str, Any]) -> dict[str, Any]:
 
 
 class A2AOutboundRunnerTests(unittest.IsolatedAsyncioTestCase):
+    def test_claimed_work_rejects_invalid_execution_identity(self) -> None:
+        reference = A2ARemoteTaskReference(
+            target_agent_url="https://receiver.example.test/a2a",
+            source_agent_url="https://sender.example.test",
+            workspace_id="workspace-1",
+            task_id="task-1",
+        )
+        command = A2AOutboundTaskCommand(
+            reference=reference,
+            objective="Do the work.",
+            required_capabilities=(),
+        )
+        valid = {
+            "mission_id": "mis-1",
+            "work_unit_id": "wu-1",
+            "attempt": 1,
+            "lease_id": "lease-1",
+            "timeout_seconds": 30.0,
+            "command": command,
+        }
+        cases = (
+            ({"mission_id": ""}, ValueError, "mission_id"),
+            ({"work_unit_id": " "}, ValueError, "work_unit_id"),
+            ({"attempt": True}, ValueError, "attempt"),
+            ({"attempt": 0}, ValueError, "attempt"),
+            ({"lease_id": ""}, ValueError, "lease_id"),
+            ({"timeout_seconds": 0.0}, ValueError, "timeout_seconds"),
+            ({"timeout_seconds": True}, ValueError, "timeout_seconds"),
+            ({"timeout_seconds": float("inf")}, ValueError, "timeout_seconds"),
+            ({"command": object()}, TypeError, "command"),
+        )
+
+        for update, error_type, message in cases:
+            with self.subTest(update=update):
+                values = {**valid, **update}
+                with self.assertRaisesRegex(error_type, message):
+                    A2AOutboundClaimedWork(**values)
+
     async def test_resolver_builds_bounded_credential_free_command(self) -> None:
         context = outbound_context()
         control = FakeControl(context)

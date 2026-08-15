@@ -66,8 +66,14 @@ boundary. It is not the permanent home of every Agent feature.
   bounded request/response bodies, same-origin 307/308 redirects, exact remote
   task identity, and origin-bound receiver credentials. Agent Card trust and
   capability verification remain an injected route-resolver responsibility;
-  no duplicate trust store is added to Runner. Production worker composition
-  remains disabled until that resolver and the full supervised result path are
+  no duplicate trust store is added to Runner. The dedicated outbound
+  supervisor performs the fenced `LEASED -> RUNNING` start, sends once per
+  invocation, renews the lease while polling, and converts timeout, remote
+  terminal failure, unsupported input, transport failure, heartbeat loss, and
+  caller cancellation into explicit local failure handling. Remote completion
+  returns only an in-process `RESULT_READY` outcome; it does not register an
+  Artifact or complete the WorkUnit. Production worker composition remains
+  disabled until trusted route resolution and the full result import path are
   available.
   Inbound claimed execution uses a request-scoped execution plan, so its
   Harness is built from the exact Contract, WorkUnit, and attempt rather than
