@@ -5,8 +5,11 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Protocol
 
-from app.services.runner_service import RunnerWorkspacePollResult
 from app.services.workspace_admission_service import WorkspaceClaimStatus
+
+
+class WorkspacePollResultPort(Protocol):
+    claim_status: WorkspaceClaimStatus
 
 
 class ClaimingRunnerPort(Protocol):
@@ -15,9 +18,7 @@ class ClaimingRunnerPort(Protocol):
         workspace_id: str,
         *,
         lease_seconds: int = 300,
-        artifact_kind: str = "test-result",
-        media_type: str = "text/plain",
-    ) -> RunnerWorkspacePollResult: ...
+    ) -> WorkspacePollResultPort: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,8 @@ class RunnerWorker:
                 self._workspace_id,
                 lease_seconds=self._lease_seconds,
             )
+            if not isinstance(result.claim_status, WorkspaceClaimStatus):
+                raise TypeError("workspace poll returned an invalid claim status")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - poll supervisor must stay alive
@@ -197,4 +200,5 @@ __all__ = [
     "ClaimingRunnerPort",
     "RunnerWorker",
     "RunnerWorkerSnapshot",
+    "WorkspacePollResultPort",
 ]

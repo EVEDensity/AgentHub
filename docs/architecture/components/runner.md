@@ -108,7 +108,12 @@ it to `SUCCEEDED`. This path does not invoke Harness or `WorkUnitRunner`.
 The attempt factory also records context-resolution failure or cancellation
 behind the validated claim fence and rejects inconsistent Mission Control
 failure responses. It accepts only already claimed work and owns neither ready-
-work polling nor HTTP-client lifetime. Production process wiring remains
+work polling nor HTTP-client lifetime. A separate outbound workspace coordinator
+now performs one exact Agent/`a2a.outbound` claim, applies the same claim envelope,
+binding, lease-owner, and status checks as inbound execution, and returns the
+native supervision result. The process-local `RunnerWorker` consumes only the
+validated low-cardinality claim status, so it can supervise either result type
+without making them interchangeable. Production process wiring remains
 disabled, so Gateway and Runner cannot dispatch the same attempt.
 
 The process worker consumes this endpoint with explicit workspace scope. It

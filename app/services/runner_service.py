@@ -618,7 +618,7 @@ class WorkUnitRunner:
             adapter_type=adapter_type,
             lease_seconds=lease_seconds,
         )
-        claim_status = _workspace_claim_status(claimed_payload)
+        claim_status = parse_workspace_claim_status(claimed_payload)
         run_result = await self._run_claimed_payload(
             claimed_payload,
             expected_mission_id=None,
@@ -662,7 +662,7 @@ class WorkUnitRunner:
                 "Mission Control returned a WorkUnit for another mission"
             )
         agent_id, adapter_type = self._claim_binding()
-        _assert_claimed_work_unit(
+        assert_claimed_work_unit(
             work_unit_payload,
             mission_id=mission_id,
             runner_id=self._runner_id,
@@ -1230,7 +1230,7 @@ def _compile_a2a_inbound_context(
     return prompt, min(float(time_seconds), max_timeout_seconds)
 
 
-def _assert_claimed_work_unit(
+def assert_claimed_work_unit(
     payload: Mapping[str, Any],
     *,
     mission_id: str,
@@ -1251,7 +1251,7 @@ def _assert_claimed_work_unit(
         raise RunnerControlError("Mission Control claim lease belongs to another runner")
 
 
-def _workspace_claim_status(
+def parse_workspace_claim_status(
     claimed_payload: Mapping[str, Any],
 ) -> WorkspaceClaimStatus:
     if "claimStatus" not in claimed_payload or "workUnit" not in claimed_payload:
@@ -1318,4 +1318,6 @@ __all__ = [
     "RunnerWorkspacePollResult",
     "SandboxPort",
     "WorkUnitRunner",
+    "assert_claimed_work_unit",
+    "parse_workspace_claim_status",
 ]

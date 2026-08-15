@@ -91,8 +91,15 @@ boundary. It is not the permanent home of every Agent feature.
   imported Artifacts are registered behind the original lease before the
   WorkUnit moves to `VERIFYING`; they do not prove local success. This isolated
   attempt composition does not claim or poll workspace work, invoke Harness, or
-  own the HTTP client. Production worker wiring remains disabled until Gateway
-  direct dispatch is removed in the same cutover.
+  own the HTTP client. `a2a_outbound_worker.py` adds one isolated workspace poll:
+  it requests only the configured Agent with the exact `a2a.outbound` adapter,
+  validates the shared claim envelope and lease ownership contract, and invokes
+  the native outbound attempt result without converting it to a Harness result.
+  Idle and capacity-saturated polls perform no execution. The generic worker
+  supervisor now depends only on the low-cardinality claim status and validates
+  that status before updating readiness; inbound result behavior is unchanged.
+  Production process wiring remains disabled until Gateway direct dispatch is
+  removed in the same cutover.
   Inbound claimed execution uses a request-scoped execution plan, so its
   Harness is built from the exact Contract, WorkUnit, and attempt rather than
   falling back to Runner's fixed Sandbox Harness. `a2a.receive` remains an

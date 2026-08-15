@@ -346,6 +346,37 @@ class A2AOutboundCompositionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertNotIn("version", failure["reason"])
 
+    async def test_claim_semantic_drift_is_failed_after_minimum_fence_parse(
+        self,
+    ) -> None:
+        context = outbound_context()
+        claim = outbound_claim(context)
+        claim["kind"] = "unexpected.kind"
+        control = FakeControl(context)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: None)
+        ) as client:
+            runner = build_a2a_outbound_attempt_runner(
+                control,
+                publisher=FakePublisher(),
+                http_client=client,
+                trust_policy=strict_policy(),
+                credential_provider=StaticCredentialProvider(),
+                runner_id="runner-1",
+                source_agent_url="https://sender.example.test",
+            )
+            with self.assertRaisesRegex(
+                A2AOutboundAttemptError,
+                "claimed context resolution failed",
+            ):
+                await runner.run_claimed(claim)
+
+        self.assertEqual([name for name, _ in control.calls], ["fail"])
+        self.assertEqual(
+            control.calls[-1][1]["reason"],
+            "outbound A2A resolution failed: ClaimedWorkResolutionError",
+        )
+
     async def test_resolution_cancellation_records_failure_and_propagates(self) -> None:
         context = outbound_context()
         control = FakeControl(context)

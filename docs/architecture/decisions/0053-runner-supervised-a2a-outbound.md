@@ -94,9 +94,14 @@ supervisor for one already claimed WorkUnit. Valid claim fences are reused to
 record context-resolution failure or cancellation, and Mission Control failure
 responses are validated before the attempt is considered recovered. The
 factory does not claim workspace work, invoke Harness, own the HTTP client, or
-enable runtime dispatch. Production wiring remains disabled because Gateway
-direct dispatch is still a compatibility path. The two paths must not both
-dispatch the same attempt after cutover.
+enable runtime dispatch. An isolated workspace coordinator now performs one
+exact Agent/`a2a.outbound` claim, reuses the shared claim envelope and lease
+validation, and preserves the native A2A supervision result. The generic worker
+loop observes only a validated `claimed`, `idle`, or `capacity_saturated` status;
+it does not require inbound and outbound execution results to share a type.
+Neither coordinator is wired into the production process. Production wiring
+remains disabled because Gateway direct dispatch is still a compatibility path.
+The two paths must not both dispatch the same attempt after cutover.
 
 Historical unbound outbound WorkUnits are not silently rebound. They require
 an explicit migration or cancellation and resubmission under a new task ID,
@@ -156,3 +161,7 @@ token only to the verified task origin, import and register result bytes, and
 stop at `VERIFYING`. They also cover strict-policy enforcement, injected client
 ownership, lease-fenced resolution failure, cancellation propagation, and
 inconsistent failure-response rejection without enabling production dispatch.
+Workspace coordinator tests cover exact outbound claim binding, shared claim
+envelope and lease validation, idle/capacity no-op outcomes, native result
+preservation, invalid status isolation in worker readiness, and semantic-drift
+failure recovery behind the minimum trustworthy lease fence.

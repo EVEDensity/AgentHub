@@ -69,7 +69,33 @@ class BlockingRunner:
         )
 
 
+class InvalidStatusRunner:
+    def __init__(self) -> None:
+        self.called = asyncio.Event()
+
+    async def claim_ready_and_run(self, *args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        self.called.set()
+        return type("InvalidPollResult", (), {"claim_status": "claimed"})()
+
+
 class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalid_poll_status_is_a_sanitized_worker_failure(self) -> None:
+        runner = InvalidStatusRunner()
+        worker = RunnerWorker(
+            runner,
+            workspace_id="workspace-1",
+            idle_delay_seconds=1,
+        )
+
+        task = asyncio.create_task(worker.run())
+        await asyncio.wait_for(runner.called.wait(), timeout=1)
+        worker.request_stop()
+        await asyncio.wait_for(task, timeout=1)
+
+        self.assertEqual(worker.snapshot.failed_polls, 1)
+        self.assertEqual(worker.snapshot.last_error_type, "TypeError")
+
     async def test_worker_polls_with_backoff_and_resets_after_claim(self) -> None:
         claimed = RunnerRunResult(success=True, work_unit={}, artifact=None)
         runner = SequenceRunner(

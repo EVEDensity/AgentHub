@@ -10,8 +10,10 @@ from app.services.a2a_outbound_result import A2AOutboundResultImporter
 from app.services.a2a_outbound_runner import (
     A2AOutboundClaimedWork,
     A2AOutboundClaimedWorkResolver,
+    A2AOutboundClaimFence,
     A2AOutboundClaimIdentity,
     parse_a2a_outbound_claim,
+    parse_a2a_outbound_claim_fence,
 )
 from app.services.a2a_outbound_supervisor import (
     A2AOutboundSupervisionResult,
@@ -61,17 +63,21 @@ class A2AOutboundAttemptRunner:
 
         if not 1 <= lease_seconds <= 3_600:
             raise ValueError("lease_seconds must be between 1 and 3600")
-        identity = parse_a2a_outbound_claim(
+        fence = parse_a2a_outbound_claim_fence(
             claimed_work_unit,
             runner_id=self._runner_id,
         )
         try:
+            identity = parse_a2a_outbound_claim(
+                claimed_work_unit,
+                runner_id=self._runner_id,
+            )
             work = await self._resolver.resolve(claimed_work_unit)
             _assert_resolved_identity(work, identity)
         except asyncio.CancelledError:
             try:
                 await self._record_resolution_failure(
-                    identity,
+                    fence,
                     "outbound A2A resolution canceled",
                 )
             except A2AOutboundAttemptError:
@@ -80,7 +86,7 @@ class A2AOutboundAttemptRunner:
             raise
         except Exception as exc:
             await self._record_resolution_failure(
-                identity,
+                fence,
                 f"outbound A2A resolution failed: {type(exc).__name__}",
             )
             raise A2AOutboundAttemptError(
@@ -90,7 +96,7 @@ class A2AOutboundAttemptRunner:
 
     async def _record_resolution_failure(
         self,
-        identity: A2AOutboundClaimIdentity,
+        identity: A2AOutboundClaimFence,
         reason: str,
     ) -> None:
         try:

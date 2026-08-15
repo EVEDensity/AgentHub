@@ -289,25 +289,30 @@ class A2AOutboundClaimIdentity:
     required_capabilities: tuple[str, ...]
 
 
-def parse_a2a_outbound_claim(
+@dataclass(frozen=True, slots=True)
+class A2AOutboundClaimFence:
+    """Minimum active lease identity safe to use for failure recovery."""
+
+    mission_id: str
+    work_unit_id: str
+    attempt: int
+    lease_id: str
+    status: WorkUnitStatus
+    runner_id: str
+
+
+def parse_a2a_outbound_claim_fence(
     value: Mapping[str, Any],
     *,
     runner_id: str,
-) -> A2AOutboundClaimIdentity:
-    """Parse only the identity needed to fence resolution and failure recovery."""
+) -> A2AOutboundClaimFence:
+    """Extract an active lease fence before outbound semantic validation."""
 
     if not isinstance(value, Mapping):
         raise TypeError("value must be a Mapping")
     _validate_text(runner_id, "runner_id", max_length=255)
     mission_id = _required_string(value, "missionId")
     work_unit_id = _required_string(value, "id")
-    if value.get("kind") != "a2a.delegate" or value.get("parentWorkUnitId") is not None:
-        raise ClaimedWorkResolutionError("claimed WorkUnit is not an outbound A2A root")
-    if value.get("assignedAdapter") != A2A_OUTBOUND_ADAPTER:
-        raise ClaimedWorkResolutionError(
-            "claimed WorkUnit is not bound to a2a.outbound"
-        )
-    assigned_agent_id = _required_string(value, "assignedAgentId")
     try:
         status = WorkUnitStatus(_required_string(value, "status"))
     except ValueError as exc:
@@ -323,16 +328,41 @@ def parse_a2a_outbound_claim(
     lease_id = _required_string(lease, "id")
     if _required_string(lease, "runnerId") != runner_id:
         raise ClaimedWorkResolutionError("claimed WorkUnit belongs to another runner")
-    required_capabilities = _required_string_sequence(value, "requiredCapabilities")
-    if A2A_SEND_CAPABILITY not in required_capabilities:
-        raise ClaimedWorkResolutionError("claimed WorkUnit lacks a2a.send")
-    return A2AOutboundClaimIdentity(
+    return A2AOutboundClaimFence(
         mission_id=mission_id,
         work_unit_id=work_unit_id,
         attempt=attempt,
         lease_id=lease_id,
         status=status,
         runner_id=runner_id,
+    )
+
+
+def parse_a2a_outbound_claim(
+    value: Mapping[str, Any],
+    *,
+    runner_id: str,
+) -> A2AOutboundClaimIdentity:
+    """Parse only the identity needed to fence resolution and failure recovery."""
+
+    fence = parse_a2a_outbound_claim_fence(value, runner_id=runner_id)
+    if value.get("kind") != "a2a.delegate" or value.get("parentWorkUnitId") is not None:
+        raise ClaimedWorkResolutionError("claimed WorkUnit is not an outbound A2A root")
+    if value.get("assignedAdapter") != A2A_OUTBOUND_ADAPTER:
+        raise ClaimedWorkResolutionError(
+            "claimed WorkUnit is not bound to a2a.outbound"
+        )
+    assigned_agent_id = _required_string(value, "assignedAgentId")
+    required_capabilities = _required_string_sequence(value, "requiredCapabilities")
+    if A2A_SEND_CAPABILITY not in required_capabilities:
+        raise ClaimedWorkResolutionError("claimed WorkUnit lacks a2a.send")
+    return A2AOutboundClaimIdentity(
+        mission_id=fence.mission_id,
+        work_unit_id=fence.work_unit_id,
+        attempt=fence.attempt,
+        lease_id=fence.lease_id,
+        status=fence.status,
+        runner_id=fence.runner_id,
         assigned_agent_id=assigned_agent_id,
         required_capabilities=required_capabilities,
     )
@@ -495,6 +525,8 @@ def _normalize_http_origin(value: str, field: str) -> str:
 
 
 __all__ = [
+    "A2A_OUTBOUND_ADAPTER",
+    "A2AOutboundClaimFence",
     "A2AOutboundClaimIdentity",
     "A2AOutboundClaimedWork",
     "A2AOutboundClaimedWorkResolver",
@@ -504,4 +536,5 @@ __all__ = [
     "A2ARemoteTaskSnapshot",
     "A2ARemoteTaskState",
     "parse_a2a_outbound_claim",
+    "parse_a2a_outbound_claim_fence",
 ]

@@ -97,6 +97,12 @@ policy and an injected HTTP client whose lifecycle remains process-owned. It
 operates only on an already claimed WorkUnit; it neither polls workspace work
 nor creates a second production dispatch path. Resolution failure and caller
 cancellation are written back through the validated claim lease when possible.
+An isolated outbound workspace coordinator now performs one exact Agent plus
+`a2a.outbound` claim, reuses the shared claim-status/binding/lease validation,
+and passes claimed work to that attempt factory. It preserves the native A2A
+supervision result rather than fabricating a Harness result. Idle or tenant-
+capacity outcomes do not invoke the attempt. The coordinator can satisfy the
+generic worker polling protocol but is not composed by the live process.
 Production worker wiring remains disabled while Gateway direct dispatch remains
 active. A dedicated Runner supervisor owns the bounded execution loop after
 resolution: it performs the fenced local start, sends once per

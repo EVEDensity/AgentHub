@@ -81,9 +81,12 @@ visible ASCII secrets and symbolic links are rejected.
 
 Loading this manifest produces a strict signed-and-pinned trust policy plus an
 exact-origin credential provider. It does not alter `RunnerServiceSettings`,
-claim `a2a.outbound`, or compose the transport into the worker. Those actions
-remain part of the atomic Gateway-to-Runner dispatch cutover; operators must not
-deploy this file as evidence that outbound Runner execution is enabled.
+claim `a2a.outbound`, or compose the transport into the worker. The application
+layer now has isolated attempt and single-poll outbound coordinators, but this
+service does not load or invoke them. Runtime settings still reject
+`a2a.outbound`. Enabling that adapter and removing Gateway request-path dispatch
+remain one atomic cutover; operators must not deploy this file as evidence that
+outbound Runner execution is enabled.
 
 ## Run
 
