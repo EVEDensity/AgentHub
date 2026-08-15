@@ -4,12 +4,26 @@ import asyncio
 import unittest
 from typing import Any
 
-from app.services.runner_service import RunnerRunResult
+from app.services.runner_service import RunnerRunResult, RunnerWorkspacePollResult
 from app.services.runner_worker import RunnerWorker
+from app.services.workspace_admission_service import WorkspaceClaimStatus
+
+
+def poll_result(
+    status: WorkspaceClaimStatus,
+    run_result: RunnerRunResult | None = None,
+) -> RunnerWorkspacePollResult:
+    return RunnerWorkspacePollResult(
+        claim_status=status,
+        run_result=run_result,
+    )
 
 
 class SequenceRunner:
-    def __init__(self, outcomes: list[RunnerRunResult | None | Exception]) -> None:
+    def __init__(
+        self,
+        outcomes: list[RunnerWorkspacePollResult | Exception],
+    ) -> None:
         self.outcomes = outcomes
         self.calls: list[tuple[str, int]] = []
         self.called = asyncio.Event()
@@ -20,10 +34,10 @@ class SequenceRunner:
         *,
         lease_seconds: int = 300,
         **kwargs: Any,
-    ) -> RunnerRunResult | None:
+    ) -> RunnerWorkspacePollResult:
         del kwargs
         self.calls.append((workspace_id, lease_seconds))
-        outcome = self.outcomes.pop(0) if self.outcomes else None
+        outcome = self.outcomes.pop(0)
         if not self.outcomes:
             self.called.set()
         if isinstance(outcome, Exception):
@@ -40,7 +54,7 @@ class BlockingRunner:
 
     async def claim_ready_and_run(
         self, *args: Any, **kwargs: Any
-    ) -> RunnerRunResult:
+    ) -> RunnerWorkspacePollResult:
         del args, kwargs
         self.calls += 1
         self.started.set()
@@ -49,13 +63,23 @@ class BlockingRunner:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
-        return RunnerRunResult(success=True, work_unit={}, artifact=None)
+        return poll_result(
+            WorkspaceClaimStatus.CLAIMED,
+            RunnerRunResult(success=True, work_unit={}, artifact=None),
+        )
 
 
 class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_worker_polls_with_backoff_and_resets_after_claim(self) -> None:
         claimed = RunnerRunResult(success=True, work_unit={}, artifact=None)
-        runner = SequenceRunner([None, RuntimeError("control unavailable"), claimed])
+        runner = SequenceRunner(
+            [
+                poll_result(WorkspaceClaimStatus.IDLE),
+                poll_result(WorkspaceClaimStatus.CAPACITY_SATURATED),
+                RuntimeError("control unavailable"),
+                poll_result(WorkspaceClaimStatus.CLAIMED, claimed),
+            ]
+        )
         worker = RunnerWorker(
             runner,
             workspace_id="workspace-1",
@@ -73,14 +97,19 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(snapshot.running)
         self.assertFalse(snapshot.ready)
         self.assertTrue(snapshot.stop_requested)
-        self.assertEqual(snapshot.polls, 3)
+        self.assertEqual(snapshot.polls, 4)
         self.assertEqual(snapshot.claimed, 1)
         self.assertEqual(snapshot.idle_polls, 1)
+        self.assertEqual(snapshot.capacity_saturated_polls, 1)
         self.assertEqual(snapshot.failed_polls, 1)
         self.assertEqual(snapshot.consecutive_failures, 0)
         self.assertEqual(snapshot.current_delay_seconds, 0.001)
         self.assertIsNone(snapshot.last_error_type)
-        self.assertEqual(runner.calls, [("workspace-1", 120)] * 3)
+        self.assertEqual(
+            snapshot.last_claim_status,
+            WorkspaceClaimStatus.CLAIMED,
+        )
+        self.assertEqual(runner.calls, [("workspace-1", 120)] * 4)
 
     async def test_stop_waits_for_active_claim_before_exiting(self) -> None:
         runner = BlockingRunner()
@@ -152,6 +181,8 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(public["lastErrorType"], "RuntimeError")
         self.assertNotIn("provider-secret", str(public))
         self.assertEqual(public["failedPolls"], 1)
+        self.assertEqual(public["capacitySaturatedPolls"], 0)
+        self.assertIsNone(public["lastClaimStatus"])
 
     def test_worker_rejects_invalid_poll_configuration(self) -> None:
         runner = SequenceRunner([])

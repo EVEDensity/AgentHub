@@ -4,6 +4,8 @@
 > Owner: IAM, Mission Control, and Runner maintainers  
 > Date: 2026-08-15  
 > Scope: workspace claim admission and execution concurrency
+> Follow-up: [ADR-0051](0051-runner-claim-outcome-observability.md) adds
+> transient claim outcome observability.
 
 ## Context
 

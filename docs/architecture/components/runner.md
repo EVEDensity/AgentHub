@@ -29,10 +29,12 @@ Runner neither lists Missions nor retains a ready queue. The Mission-scoped
 
 ## Polling and shutdown
 
-A successful empty claim marks the control path ready and exponentially backs
-off to the configured maximum. A claimed WorkUnit resets delay to the minimum.
-Any non-cancellation failure marks the worker unready, increments failure
-counters, stores only the exception type, and continues with bounded backoff.
+A successful `idle` or `capacity_saturated` claim marks the control path ready
+and exponentially backs off to the configured maximum. The snapshot counts the
+two outcomes separately and exposes only the last low-cardinality status. A
+`claimed` WorkUnit resets delay to the minimum. Any non-cancellation failure
+marks the worker unready, increments failure counters, stores only the
+exception type, and continues with bounded backoff.
 
 A requested stop prevents another poll but waits for an active claim to finish.
 Task cancellation propagates into `WorkUnitRunner`; Runner's existing
@@ -89,7 +91,9 @@ prevent concurrent over-admission; it does not serialize execution or persist a
 capacity counter. `0` means unlimited and retains the existing `SKIP LOCKED`
 claim path.
 
-Quota resolution and active-state reads fail closed. A saturated claim returns
-the same empty result as no ready work, so Runner applies normal idle backoff
-without becoming unready. Capacity reason metrics remain an observability
-follow-up and must not be represented as Mission state.
+Quota resolution and active-state reads fail closed. A successful claim returns
+`claimed`, `idle`, or `capacity_saturated` under the versioned response
+contract. Runner validates the status/payload pair before execution and applies
+the same bounded backoff to both empty outcomes without becoming unready.
+Operational counters are process-local and must not be represented as Mission
+state, quota usage truth, or a scheduling cursor.

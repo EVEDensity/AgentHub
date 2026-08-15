@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.services.runner_worker import RunnerWorkerSnapshot
+from app.services.workspace_admission_service import WorkspaceClaimStatus
 from services.python.runner_service.config import RunnerServiceSettings
 from services.python.runner_service.main import create_app
 from services.python.runner_service.runtime import (
@@ -144,6 +145,11 @@ class RunnerServiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
 class RunnerServiceEndpointTests(unittest.TestCase):
     def test_health_and_readiness_expose_only_operational_state(self) -> None:
         worker = FakeWorker()
+        worker._snapshot = replace(
+            worker.snapshot,
+            capacity_saturated_polls=2,
+            last_claim_status=WorkspaceClaimStatus.CAPACITY_SATURATED,
+        )
         runtime = RunnerServiceRuntime(
             worker=worker,
             shutdown_timeout_seconds=1,
@@ -161,6 +167,14 @@ class RunnerServiceEndpointTests(unittest.TestCase):
             self.assertEqual(health.json()["status"], "ok")
             self.assertEqual(ready.status_code, 200)
             self.assertEqual(ready.json()["status"], "ready")
+            self.assertEqual(
+                ready.json()["worker"]["lastClaimStatus"],
+                "capacity_saturated",
+            )
+            self.assertEqual(
+                ready.json()["worker"]["capacitySaturatedPolls"],
+                2,
+            )
             rendered = ready.text
             self.assertNotIn("workspace-1", rendered)
             self.assertNotIn("agent-1", rendered)

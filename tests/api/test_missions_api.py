@@ -1099,6 +1099,7 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["claimStatus"], "claimed")
         body = response.json()["workUnit"]
         self.assertEqual(body["id"], "wu-child")
         self.assertEqual(body["status"], "LEASED")
@@ -1146,6 +1147,10 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["claimStatus"],
+            "capacity_saturated",
+        )
         self.assertIsNone(response.json()["workUnit"])
         self.assertEqual(repository.admission_locks, ["tenant-1"])
         self.assertEqual(repository.work_units[0].status.value, "PENDING")
@@ -1204,6 +1209,7 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["claimStatus"], "claimed")
         claimed = response.json()["workUnit"]
         self.assertEqual(claimed["id"], "wu-second")
         self.assertEqual(claimed["missionId"], "mis-second")
@@ -1252,6 +1258,10 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["claimStatus"],
+            "capacity_saturated",
+        )
         self.assertIsNone(response.json()["workUnit"])
         self.assertEqual(admission_resolver.calls, ["workspace-1"])
         self.assertEqual(repository.admission_locks, ["tenant-1"])
@@ -1647,6 +1657,7 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["claimStatus"], "claimed")
         body = response.json()["workUnit"]
         self.assertEqual(body["id"], "wu-inbound")
         self.assertEqual(body["status"], "LEASED")
@@ -1686,6 +1697,7 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["claimStatus"], "idle")
         self.assertIsNone(response.json()["workUnit"])
         self.assertEqual(repository.work_units[0].status.value, "PENDING")
         self.assertEqual(repository.events, [])
@@ -1714,6 +1726,7 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["claimStatus"], "idle")
         self.assertIsNone(response.json()["workUnit"])
         self.assertEqual(repository.work_units[0].status.value, "PENDING")
         self.assertEqual(repository.events, [])

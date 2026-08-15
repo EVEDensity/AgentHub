@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from typing import Protocol
 
 _MAX_RUNNER_CONCURRENCY = 1_000_000
+
+
+class WorkspaceClaimStatus(str, Enum):
+    """Low-cardinality outcome of one authorized workspace claim."""
+
+    CLAIMED = "claimed"
+    IDLE = "idle"
+    CAPACITY_SATURATED = "capacity_saturated"
 
 
 class WorkspaceClaimAdmissionUnavailableError(RuntimeError):

@@ -32,9 +32,11 @@ from app.services.runner_service import (
     RunnerControlError,
     RunnerExecutionError,
     RunnerExecutionInput,
+    RunnerWorkspacePollResult,
     WorkUnitRunner,
 )
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
+from app.services.workspace_admission_service import WorkspaceClaimStatus
 from tests.api.test_missions_api import FakeMissionRepository, build_app
 from tests.domain.factories import build_contract, build_mission, build_work_unit
 
@@ -57,7 +59,14 @@ class FakeControl:
 
     async def claim_ready_work_unit(self, workspace_id: str, **kwargs: Any):
         self.calls.append(("claim_ready", {"workspace_id": workspace_id, **kwargs}))
-        return {"workUnit": self.claim_payload}
+        return {
+            "claimStatus": (
+                WorkspaceClaimStatus.CLAIMED.value
+                if self.claim_payload is not None
+                else WorkspaceClaimStatus.IDLE.value
+            ),
+            "workUnit": self.claim_payload,
+        }
 
     async def lease_work_unit(self, mission_id: str, work_unit_id: str, **kwargs: Any):
         self.calls.append(("lease", kwargs))
@@ -487,7 +496,9 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             lease_seconds=120,
         )
 
-        self.assertIsNotNone(result)
+        self.assertIsInstance(result, RunnerWorkspacePollResult)
+        self.assertEqual(result.claim_status, WorkspaceClaimStatus.CLAIMED)
+        self.assertIsNotNone(result.run_result)
         self.assertEqual(
             [name for name, _ in control.calls],
             ["claim_ready", "start", "register", "complete"],
@@ -512,6 +523,38 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaisesRegex(RunnerControlError, "no Mission id"):
+            await runner.claim_ready_and_run("workspace-1")
+
+        self.assertEqual([name for name, _ in control.calls], ["claim_ready"])
+
+    async def test_workspace_claim_rejects_inconsistent_status_before_execution(
+        self,
+    ) -> None:
+        class InconsistentControl(FakeControl):
+            async def claim_ready_work_unit(
+                self, workspace_id: str, **kwargs: Any
+            ) -> dict[str, Any]:
+                self.calls.append(
+                    ("claim_ready", {"workspace_id": workspace_id, **kwargs})
+                )
+                return {
+                    "claimStatus": WorkspaceClaimStatus.IDLE.value,
+                    "workUnit": inbound_claim_payload(),
+                }
+
+        control = InconsistentControl()
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            runner_id="runner-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+            claimed_work_resolver=StaticClaimedWorkResolver(
+                RunnerExecutionInput(code="must not run", language="text")
+            ),
+        )
+
+        with self.assertRaisesRegex(RunnerControlError, "inconsistent"):
             await runner.claim_ready_and_run("workspace-1")
 
         self.assertEqual([name for name, _ in control.calls], ["claim_ready"])

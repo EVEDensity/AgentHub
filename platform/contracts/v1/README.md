@@ -14,3 +14,8 @@ control plane, runners, adapters, and user interfaces.
 
 Domain objects use camelCase to match the public API. Event envelopes use
 snake_case because they are persisted and transported as ledger records.
+
+`work-unit-claim-response.schema.json` is the additive Runner polling contract.
+`claimStatus` distinguishes ready-work absence from tenant capacity saturation;
+the existing `workUnit` field remains unchanged for backward-compatible
+consumers.

@@ -40,6 +40,7 @@ from app.services.artifact_integrity_service import (
 from app.services.workspace_admission_service import (
     WorkspaceClaimAdmissionPolicy,
     WorkspaceClaimAdmissionUnavailableError,
+    WorkspaceClaimStatus,
 )
 
 
@@ -107,6 +108,29 @@ class ClaimedExecutionContext:
             "mission": self.mission.to_public_dict(),
             "contract": self.contract.to_public_dict(),
             "workUnit": self.work_unit.to_public_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class WorkUnitClaimOutcome:
+    """Transient claim result; it is not durable scheduling state."""
+
+    status: WorkspaceClaimStatus
+    work_unit: WorkUnit | None
+
+    def __post_init__(self) -> None:
+        has_work_unit = self.work_unit is not None
+        if has_work_unit != (self.status == WorkspaceClaimStatus.CLAIMED):
+            raise ValueError("claim status and WorkUnit payload are inconsistent")
+
+    def to_public_dict(self) -> dict:
+        return {
+            "claimStatus": self.status.value,
+            "workUnit": (
+                self.work_unit.to_public_dict()
+                if self.work_unit is not None
+                else None
+            ),
         }
 
 
@@ -785,7 +809,7 @@ class MissionService:
         actor: ActorRef,
         lease_seconds: int,
         admission_policy: WorkspaceClaimAdmissionPolicy,
-    ) -> WorkUnit | None:
+    ) -> WorkUnitClaimOutcome:
         """Atomically claim the next ready unit for one explicit binding."""
         if not 1 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 1 and 3600")
@@ -794,7 +818,10 @@ class MissionService:
                 repository,
                 admission_policy,
             ):
-                return None
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.CAPACITY_SATURATED,
+                    work_unit=None,
+                )
             mission = await repository.get_mission_for_update(mission_id)
             if mission is None:
                 raise MissionNotFoundError(mission_id)
@@ -809,17 +836,23 @@ class MissionService:
                 allow_inbound_root=allow_inbound_root,
             )
             if work_unit is None:
-                return None
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.IDLE,
+                    work_unit=None,
+                )
 
-            return await self._lease_bound_claim_candidate(
-                repository,
-                mission,
-                work_unit,
-                agent_id=agent_id,
-                adapter_type=adapter_type,
-                runner_id=runner_id,
-                actor=actor,
-                lease_seconds=lease_seconds,
+            return WorkUnitClaimOutcome(
+                status=WorkspaceClaimStatus.CLAIMED,
+                work_unit=await self._lease_bound_claim_candidate(
+                    repository,
+                    mission,
+                    work_unit,
+                    agent_id=agent_id,
+                    adapter_type=adapter_type,
+                    runner_id=runner_id,
+                    actor=actor,
+                    lease_seconds=lease_seconds,
+                ),
             )
 
     async def claim_workspace_bound_work_unit(
@@ -832,7 +865,7 @@ class MissionService:
         actor: ActorRef,
         lease_seconds: int,
         admission_policy: WorkspaceClaimAdmissionPolicy,
-    ) -> WorkUnit | None:
+    ) -> WorkUnitClaimOutcome:
         """Atomically discover and claim one bound unit in a workspace."""
 
         if not workspace_id.strip():
@@ -844,28 +877,37 @@ class MissionService:
                 repository,
                 admission_policy,
             ):
-                return None
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.CAPACITY_SATURATED,
+                    work_unit=None,
+                )
             selection = await repository.get_workspace_bound_work_unit_for_claim(
                 workspace_id,
                 agent_id=agent_id,
                 adapter_type=adapter_type,
             )
             if selection is None:
-                return None
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.IDLE,
+                    work_unit=None,
+                )
             mission, work_unit = selection
             if mission.workspace_id != workspace_id:
                 raise WorkUnitNotReadyError(
                     "claim repository returned a Mission from another workspace"
                 )
-            return await self._lease_bound_claim_candidate(
-                repository,
-                mission,
-                work_unit,
-                agent_id=agent_id,
-                adapter_type=adapter_type,
-                runner_id=runner_id,
-                actor=actor,
-                lease_seconds=lease_seconds,
+            return WorkUnitClaimOutcome(
+                status=WorkspaceClaimStatus.CLAIMED,
+                work_unit=await self._lease_bound_claim_candidate(
+                    repository,
+                    mission,
+                    work_unit,
+                    agent_id=agent_id,
+                    adapter_type=adapter_type,
+                    runner_id=runner_id,
+                    actor=actor,
+                    lease_seconds=lease_seconds,
+                ),
             )
 
     @staticmethod

@@ -377,6 +377,10 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
         claimed_units = [claim["workUnit"] for claim in claims]
+        self.assertEqual(
+            {claim["claimStatus"] for claim in claims},
+            {"claimed"},
+        )
         self.assertTrue(all(unit is not None for unit in claimed_units))
         self.assertCountEqual(
             [unit["id"] for unit in claimed_units],
@@ -387,6 +391,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             {"runner-a", "runner-b"},
         )
         self.assertIsNone(empty["workUnit"])
+        self.assertEqual(empty["claimStatus"], "idle")
 
         async with self._pool.acquire() as connection:
             await connection.execute(
@@ -472,6 +477,10 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         claimed_units = [claim["workUnit"] for claim in claims]
         self.assertEqual(sum(unit is not None for unit in claimed_units), 1)
+        self.assertCountEqual(
+            [claim["claimStatus"] for claim in claims],
+            ["claimed", "capacity_saturated"],
+        )
         async with self._pool.acquire() as connection:
             active_count = await connection.fetchval(
                 """

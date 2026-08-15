@@ -443,7 +443,7 @@ async def claim_workspace_work_unit(
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"workUnit": claimed.to_public_dict() if claimed is not None else None}
+    return claimed.to_public_dict()
 
 
 async def _resolve_workspace_claim_admission(
@@ -530,7 +530,7 @@ async def claim_delegated_work_unit(
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"workUnit": claimed.to_public_dict() if claimed is not None else None}
+    return claimed.to_public_dict()
 
 
 @router.post(

@@ -5,7 +5,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Protocol
 
-from app.services.runner_service import RunnerRunResult
+from app.services.runner_service import RunnerWorkspacePollResult
+from app.services.workspace_admission_service import WorkspaceClaimStatus
 
 
 class ClaimingRunnerPort(Protocol):
@@ -16,7 +17,7 @@ class ClaimingRunnerPort(Protocol):
         lease_seconds: int = 300,
         artifact_kind: str = "test-result",
         media_type: str = "text/plain",
-    ) -> RunnerRunResult | None: ...
+    ) -> RunnerWorkspacePollResult: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,10 +28,12 @@ class RunnerWorkerSnapshot:
     polls: int = 0
     claimed: int = 0
     idle_polls: int = 0
+    capacity_saturated_polls: int = 0
     failed_polls: int = 0
     consecutive_failures: int = 0
     current_delay_seconds: float = 0.0
     last_error_type: str | None = None
+    last_claim_status: WorkspaceClaimStatus | None = None
     last_poll_at: str | None = None
 
     def to_public_dict(self) -> dict[str, object]:
@@ -41,10 +44,16 @@ class RunnerWorkerSnapshot:
             "polls": self.polls,
             "claimed": self.claimed,
             "idlePolls": self.idle_polls,
+            "capacitySaturatedPolls": self.capacity_saturated_polls,
             "failedPolls": self.failed_polls,
             "consecutiveFailures": self.consecutive_failures,
             "currentDelaySeconds": self.current_delay_seconds,
             "lastErrorType": self.last_error_type,
+            "lastClaimStatus": (
+                self.last_claim_status.value
+                if self.last_claim_status is not None
+                else None
+            ),
             "lastPollAt": self.last_poll_at,
         }
 
@@ -141,7 +150,7 @@ class RunnerWorker:
             )
             return delay
 
-        if result is None:
+        if result.claim_status != WorkspaceClaimStatus.CLAIMED:
             delay = min(
                 max(previous_delay, self._idle_delay_seconds) * 2,
                 self._max_delay_seconds,
@@ -149,9 +158,20 @@ class RunnerWorker:
             self._snapshot = replace(
                 self._snapshot,
                 ready=True,
-                idle_polls=self._snapshot.idle_polls + 1,
+                idle_polls=(
+                    self._snapshot.idle_polls
+                    + (result.claim_status == WorkspaceClaimStatus.IDLE)
+                ),
+                capacity_saturated_polls=(
+                    self._snapshot.capacity_saturated_polls
+                    + (
+                        result.claim_status
+                        == WorkspaceClaimStatus.CAPACITY_SATURATED
+                    )
+                ),
                 consecutive_failures=0,
                 last_error_type=None,
+                last_claim_status=result.claim_status,
             )
             return delay
 
@@ -161,6 +181,7 @@ class RunnerWorker:
             claimed=self._snapshot.claimed + 1,
             consecutive_failures=0,
             last_error_type=None,
+            last_claim_status=result.claim_status,
         )
         return self._idle_delay_seconds
 

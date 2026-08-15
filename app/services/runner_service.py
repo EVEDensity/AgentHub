@@ -22,6 +22,7 @@ from app.services.harness_service import (
     SandboxHarness,
 )
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
+from app.services.workspace_admission_service import WorkspaceClaimStatus
 
 
 class RunnerError(RuntimeError):
@@ -249,6 +250,19 @@ class RunnerRunResult:
     work_unit: dict[str, Any]
     artifact: PublishedArtifact | None
     failure_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class RunnerWorkspacePollResult:
+    """One workspace poll with its low-cardinality admission outcome."""
+
+    claim_status: WorkspaceClaimStatus
+    run_result: RunnerRunResult | None
+
+    def __post_init__(self) -> None:
+        has_run_result = self.run_result is not None
+        if has_run_result != (self.claim_status == WorkspaceClaimStatus.CLAIMED):
+            raise ValueError("claim status and Runner result are inconsistent")
 
 
 @dataclass(frozen=True)
@@ -591,7 +605,7 @@ class WorkUnitRunner:
         lease_seconds: int = 300,
         artifact_kind: str = "test-result",
         media_type: str = "text/plain",
-    ) -> RunnerRunResult | None:
+    ) -> RunnerWorkspacePollResult:
         """Discover, claim, and execute one bound WorkUnit in a workspace."""
 
         if not workspace_id.strip():
@@ -604,12 +618,17 @@ class WorkUnitRunner:
             adapter_type=adapter_type,
             lease_seconds=lease_seconds,
         )
-        return await self._run_claimed_payload(
+        claim_status = _workspace_claim_status(claimed_payload)
+        run_result = await self._run_claimed_payload(
             claimed_payload,
             expected_mission_id=None,
             lease_seconds=lease_seconds,
             artifact_kind=artifact_kind,
             media_type=media_type,
+        )
+        return RunnerWorkspacePollResult(
+            claim_status=claim_status,
+            run_result=run_result,
         )
 
     def _claim_binding(self) -> tuple[str, str]:
@@ -1232,6 +1251,27 @@ def _assert_claimed_work_unit(
         raise RunnerControlError("Mission Control claim lease belongs to another runner")
 
 
+def _workspace_claim_status(
+    claimed_payload: Mapping[str, Any],
+) -> WorkspaceClaimStatus:
+    if "claimStatus" not in claimed_payload or "workUnit" not in claimed_payload:
+        raise RunnerControlError(
+            "Mission Control returned an incomplete workspace claim response"
+        )
+    try:
+        status = WorkspaceClaimStatus(claimed_payload["claimStatus"])
+    except (TypeError, ValueError) as exc:
+        raise RunnerControlError(
+            "Mission Control returned an invalid workspace claim status"
+        ) from exc
+    has_work_unit = claimed_payload["workUnit"] is not None
+    if has_work_unit != (status == WorkspaceClaimStatus.CLAIMED):
+        raise RunnerControlError(
+            "Mission Control returned an inconsistent workspace claim response"
+        )
+    return status
+
+
 def _assert_lease_context(payload: Mapping[str, Any], expected: _LeaseContext) -> None:
     actual = _lease_context(payload)
     if actual != expected:
@@ -1275,6 +1315,7 @@ __all__ = [
     "RunnerExecutionError",
     "RunnerHeartbeatError",
     "RunnerRunResult",
+    "RunnerWorkspacePollResult",
     "SandboxPort",
     "WorkUnitRunner",
 ]

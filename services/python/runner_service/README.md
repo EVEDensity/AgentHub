@@ -36,10 +36,12 @@ resources, Artifact byte publication, and sanitized health state.
   that root on storage readable by the Mission Control verifier.
 
 `/healthz` reports whether the worker task is alive. `/readyz` becomes ready
-after a successful Mission Control claim request, including an empty claim.
-Readiness does not probe the AI Gateway or every MCP tool, because doing so
-would execute provider-specific operations outside a WorkUnit. Both endpoints
-expose only counters, timestamps, delay, and exception type.
+after a successful Mission Control claim request, including `idle` and
+`capacity_saturated` outcomes. Its worker snapshot separates those counters and
+exposes only the last low-cardinality claim status. Readiness does not probe the
+AI Gateway or every MCP tool, because doing so would execute provider-specific
+operations outside a WorkUnit. Both endpoints exclude tenant, quota, objective,
+prompt, tool, and credential content.
 
 ## Required configuration
 
@@ -128,5 +130,6 @@ heartbeat, Artifact metadata, completion, or failure after grant revocation.
 
 The same claim reads the tenant's effective Runner concurrency limit. Capacity
 is measured from live Mission WorkUnits rather than a Runner-local counter. At
-the limit, the claim returns empty and the worker uses normal bounded idle
-backoff.
+the limit, the claim returns `capacity_saturated` with no WorkUnit and the
+worker uses normal bounded idle backoff while recording only a process-local
+operational count.

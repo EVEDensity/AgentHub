@@ -27,6 +27,7 @@ from app.services.runner_service import (
     WorkUnitRunner,
 )
 from app.services.tools.sandbox_executor import SandboxResult
+from app.services.workspace_admission_service import WorkspaceClaimStatus
 from tests.api.test_missions_api import (
     FakeMissionRepository,
     FakeRunnerWorkspaceGrantAuthorizer,
@@ -191,8 +192,15 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             empty = await runner_a.claim_ready_and_run("workspace-1")
 
-        self.assertTrue(all(result is not None for result in results))
-        self.assertIsNone(empty)
+        self.assertTrue(
+            all(
+                result.claim_status == WorkspaceClaimStatus.CLAIMED
+                and result.run_result is not None
+                for result in results
+            )
+        )
+        self.assertEqual(empty.claim_status, WorkspaceClaimStatus.IDLE)
+        self.assertIsNone(empty.run_result)
         claimed_ids = resolver_a.claimed_ids + resolver_b.claimed_ids
         self.assertCountEqual(claimed_ids, ["work-a", "work-b"])
         self.assertEqual(len(claimed_ids), len(set(claimed_ids)))
@@ -237,7 +245,13 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 runner_b.claim_ready_and_run("workspace-1"),
             )
 
-        self.assertEqual(sum(result is not None for result in results), 1)
+        self.assertEqual(
+            sum(
+                result.claim_status == WorkspaceClaimStatus.CLAIMED
+                for result in results
+            ),
+            1,
+        )
         claimed_ids = resolver_a.claimed_ids + resolver_b.claimed_ids
         self.assertEqual(claimed_ids, ["work-a"])
         self.assertEqual(repository.work_units[0].status.value, "VERIFYING")

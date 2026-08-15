@@ -59,7 +59,10 @@ boundary. It is not the permanent home of every Agent feature.
   Control reads that grant on every new claim, while an active lease remains
   the sole authority for subsequent execution commands. IAM tenant
   `max_concurrent` quota is enforced against live, non-expired Runner leases in
-  the same claim transaction without a durable capacity counter.
+  the same claim transaction without a durable capacity counter. Successful
+  claim responses distinguish `claimed`, `idle`, and `capacity_saturated`;
+  Runner consumes that transient result for sanitized process-local readiness
+  counters only.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

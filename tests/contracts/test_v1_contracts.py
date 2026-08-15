@@ -33,6 +33,7 @@ class PublicContractTests(unittest.TestCase):
                 "mission.schema.json",
                 "mission-contract.schema.json",
                 "work-unit.schema.json",
+                "work-unit-claim-response.schema.json",
                 "artifact.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
@@ -94,6 +95,10 @@ class PublicContractTests(unittest.TestCase):
                 "status": "PENDING",
                 "attempt": 0,
             },
+            "work-unit-claim-response.schema.json": {
+                "claimStatus": "idle",
+                "workUnit": None,
+            },
             "artifact.schema.json": {
                 "id": "artifact-1",
                 "missionId": "mis-1",
@@ -138,6 +143,41 @@ class PublicContractTests(unittest.TestCase):
                 Draft202012Validator(
                     self.documents[schema_name], registry=self.registry
                 ).validate(instance)
+
+    def test_work_unit_claim_status_matches_payload(self) -> None:
+        validator = Draft202012Validator(
+            self.documents["work-unit-claim-response.schema.json"],
+            registry=self.registry,
+        )
+        claimed_work_unit = {
+            "id": "wu-1",
+            "missionId": "mis-1",
+            "kind": "code_change",
+            "dependencies": [],
+            "inputRefs": [],
+            "expectedOutputs": [],
+            "requiredCapabilities": [],
+            "status": "LEASED",
+            "attempt": 1,
+            "lease": {
+                "id": "lease-1",
+                "runnerId": "runner-1",
+                "expiresAt": "2026-08-15T01:00:00Z",
+            },
+        }
+
+        validator.validate(
+            {"claimStatus": "claimed", "workUnit": claimed_work_unit}
+        )
+        validator.validate({"claimStatus": "capacity_saturated", "workUnit": None})
+        invalid_documents = [
+            {"claimStatus": "claimed", "workUnit": None},
+            {"claimStatus": "idle", "workUnit": claimed_work_unit},
+            {"claimStatus": "unknown", "workUnit": None},
+        ]
+        for document in invalid_documents:
+            with self.subTest(document=document):
+                self.assertTrue(list(validator.iter_errors(document)))
 
     def test_event_catalog_is_unique_and_matches_envelope_aggregates(self) -> None:
         catalog = self.documents["event-catalog.json"]
