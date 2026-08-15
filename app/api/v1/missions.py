@@ -908,7 +908,6 @@ async def verify_work_unit(
                 verdict=EvidenceVerdict(request.verdict),
                 artifact_refs=request.artifact_refs,
                 summary=request.summary,
-                integrity_hash=request.integrity_hash,
                 actor=build_verifier_actor(user),
             )
         )

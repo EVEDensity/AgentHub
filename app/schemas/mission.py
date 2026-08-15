@@ -204,4 +204,7 @@ class WorkUnitVerificationRequest(BaseModel):
     verdict: Literal["PASS", "FAIL", "INCONCLUSIVE"]
     artifact_refs: Annotated[list[ArtifactRef], Field(min_length=1)]
     summary: Annotated[str, Field(min_length=1, max_length=10000)]
-    integrity_hash: Annotated[str, Field(pattern=r"^sha256:[a-fA-F0-9]{64}$")]
+    integrity_hash: Annotated[
+        str,
+        Field(pattern=r"^sha256:[a-fA-F0-9]{64}$", deprecated=True),
+    ] | None = None

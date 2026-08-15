@@ -37,6 +37,11 @@ from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerifier,
 )
+from app.services.evidence_integrity_service import (
+    EvidenceIntegrityHasher,
+    EvidenceIntegrityMaterial,
+    Sha256EvidenceIntegrityHasher,
+)
 from app.services.verification_evaluator_service import (
     StrictVerificationEvaluator,
     VerificationEvaluationResult,
@@ -236,6 +241,7 @@ class MissionService:
         agent_binding_resolver: AgentBindingResolver | None = None,
         verification_policy_resolver: VerificationPolicyResolver | None = None,
         verification_evaluator: VerificationEvaluator | None = None,
+        evidence_integrity_hasher: EvidenceIntegrityHasher | None = None,
     ) -> None:
         self._repository = repository or MissionRepository()
         self._artifact_byte_verifier = artifact_byte_verifier
@@ -245,6 +251,9 @@ class MissionService:
         )
         self._verification_evaluator = (
             verification_evaluator or StrictVerificationEvaluator()
+        )
+        self._evidence_integrity_hasher = (
+            evidence_integrity_hasher or Sha256EvidenceIntegrityHasher()
         )
 
     async def create_mission(
@@ -1536,7 +1545,6 @@ class MissionService:
         verdict: EvidenceVerdict,
         artifact_refs: list[ArtifactRef],
         summary: str,
-        integrity_hash: str,
         actor: ActorRef,
     ) -> tuple[Evidence, WorkUnit, Mission]:
         if actor.type != ActorType.VERIFIER:
@@ -1621,6 +1629,7 @@ class MissionService:
                 raise WorkUnitNotReadyError(
                     "artifact metadata changed during byte verification"
                 )
+            admitted_evaluation: VerificationEvaluationResult | None = None
             if verdict == EvidenceVerdict.PASS:
                 current_plan = self._admit_pass_evidence(
                     contract=contract,
@@ -1638,18 +1647,40 @@ class MissionService:
                     raise WorkUnitNotReadyError(
                         "verification evaluation changed before Evidence admission"
                     )
+                admitted_evaluation = current_evaluation
 
             occurred_at = datetime.now(timezone.utc)
+            evidence_id = new_identifier("evd")
+            verifier = VerifierRef(
+                id=verifier_id,
+                version=verifier_version,
+                configuration_digest=configuration_digest,
+            )
+            integrity_hash = self._evidence_integrity_hasher.compute(
+                EvidenceIntegrityMaterial(
+                    evidence_id=evidence_id,
+                    mission_id=mission_id,
+                    contract_id=contract.id,
+                    contract_version=contract.version,
+                    work_unit_id=work_unit_id,
+                    work_unit_attempt=work_unit.attempt,
+                    criterion_id=criterion_id,
+                    verifier=verifier,
+                    verdict=verdict,
+                    artifact_refs=tuple(artifact_refs),
+                    artifacts=tuple(current_artifacts),
+                    byte_verifications=tuple(byte_verifications),
+                    evaluation=admitted_evaluation,
+                    summary=summary,
+                    generated_at=occurred_at,
+                )
+            )
             evidence = Evidence(
-                id=new_identifier("evd"),
+                id=evidence_id,
                 mission_id=mission_id,
                 work_unit_id=work_unit_id,
                 criterion_id=criterion_id,
-                verifier=VerifierRef(
-                    id=verifier_id,
-                    version=verifier_version,
-                    configuration_digest=configuration_digest,
-                ),
+                verifier=verifier,
                 verdict=verdict,
                 artifact_refs=artifact_refs,
                 summary=summary,

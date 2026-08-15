@@ -78,6 +78,13 @@ transaction, while raw Artifact content stays in Runner-owned storage. A
 non-throwing storage adapter or caller-supplied verdict is not by itself a PASS
 proof.
 
+Evidence integrity is also owned by Mission Control. A canonical v1 envelope
+binds Mission/Contract identity, WorkUnit attempt, verifier, verdict, Artifact
+byte observations, controlled PASS evaluation, summary, and generation time.
+The API caller's deprecated hash field is ignored. The resulting SHA-256 value
+supports deterministic tamper checks but is not a signature; authenticity and
+key custody remain verifier-runtime concerns.
+
 ## Migration status
 
 LangGraph and AgentNet remain compatibility surfaces while callers migrate.

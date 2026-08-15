@@ -147,7 +147,12 @@ boundary. It is not the permanent home of every Agent feature.
   and during transactional admission. Missing, extra, duplicate, wrong-digest,
   or wrong-size results fail without Evidence or state mutation; successful
   observations are canonicalized by Artifact ID for the future Evidence
-  integrity envelope.
+  integrity envelope. Mission Control now owns that versioned envelope: it
+  hashes Evidence/Mission/Contract identity, WorkUnit attempt, verifier and
+  verdict, canonical Artifact byte observations, controlled PASS evaluation,
+  summary, and generation time. The request's deprecated `integrityHash` is
+  optional and ignored; only the server-generated digest is persisted. This is
+  tamper-evident hashing, not verifier authentication or a signature.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

@@ -42,6 +42,11 @@ from app.services.artifact_integrity_service import (
     ArtifactIntegrityError,
 )
 from app.services.auth_service import get_current_user
+from app.services.evidence_integrity_service import (
+    EvidenceIntegrityMaterial,
+    Sha256EvidenceIntegrityHasher,
+)
+from app.services.verification_evaluator_service import StrictVerificationEvaluator
 from app.services.verification_policy_service import StrictVerificationPolicyResolver
 from app.services.workspace_access_service import (
     DatabaseRunnerWorkspaceGrantAuthorizer,
@@ -628,6 +633,60 @@ def evaluation_policy_digest(
     if decision.plan is None:
         raise AssertionError(f"test evaluation policy is not ready: {decision.reason}")
     return decision.plan.configuration_digest
+
+
+def recompute_evidence_integrity_hash(
+    repository: FakeMissionRepository,
+    evidence: Evidence,
+) -> str:
+    if repository.mission is None or repository.contract is None:
+        raise AssertionError("test Mission and Contract must be configured")
+    work_unit = next(
+        item for item in repository.work_units if item.id == evidence.work_unit_id
+    )
+    artifacts_by_id = {artifact.id: artifact for artifact in repository.artifacts}
+    artifacts = tuple(artifacts_by_id[ref.id] for ref in evidence.artifact_refs)
+    observations = tuple(
+        ArtifactByteVerification(
+            artifact_id=artifact.id,
+            digest=artifact.digest,
+            size_bytes=artifact.size_bytes,
+        )
+        for artifact in artifacts
+    )
+    evaluation = None
+    if evidence.verdict.value == "PASS":
+        decision = StrictVerificationPolicyResolver().resolve(
+            repository.contract,
+            work_unit,
+            artifacts,
+        )
+        if decision.plan is None:
+            raise AssertionError("test PASS policy must resolve")
+        evaluation = StrictVerificationEvaluator().evaluate(
+            decision.plan,
+            artifacts,
+            observations,
+        )
+    return Sha256EvidenceIntegrityHasher().compute(
+        EvidenceIntegrityMaterial(
+            evidence_id=evidence.id,
+            mission_id=evidence.mission_id,
+            contract_id=repository.contract.id,
+            contract_version=repository.contract.version,
+            work_unit_id=work_unit.id,
+            work_unit_attempt=work_unit.attempt,
+            criterion_id=evidence.criterion_id,
+            verifier=evidence.verifier,
+            verdict=evidence.verdict,
+            artifact_refs=evidence.artifact_refs,
+            artifacts=artifacts,
+            byte_verifications=observations,
+            evaluation=evaluation,
+            summary=evidence.summary,
+            generated_at=evidence.generated_at,
+        )
+    )
 
 
 def build_app(
@@ -2849,20 +2908,28 @@ class MissionApiTests(unittest.TestCase):
                     {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
                 ],
                 "summary": "All required tests passed.",
-                "integrityHash": "sha256:" + "b" * 64,
             },
         )
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body["evidence"]["verdict"], "PASS")
+        self.assertRegex(
+            body["evidence"]["integrityHash"],
+            r"^sha256:[a-f0-9]{64}$",
+        )
         self.assertEqual(body["workUnit"]["status"], "SUCCEEDED")
         self.assertEqual(body["mission"]["status"], "SUCCEEDED")
         self.assertEqual(
             artifact_byte_verifier.calls,
             [[repository.artifacts[0]]],
         )
-        self.assertEqual(repository.evidence, [Evidence.model_validate(body["evidence"])])
+        evidence = Evidence.model_validate(body["evidence"])
+        self.assertEqual(repository.evidence, [evidence])
+        self.assertEqual(
+            evidence.integrity_hash,
+            recompute_evidence_integrity_hash(repository, evidence),
+        )
         self.assertEqual(
             [event.event_type for event in repository.events],
             [
@@ -3308,6 +3375,10 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["workUnit"]["status"], "SUCCEEDED")
         self.assertEqual(response.json()["mission"]["status"], "SUCCEEDED")
+        self.assertNotEqual(
+            response.json()["evidence"]["integrityHash"],
+            "sha256:" + "b" * 64,
+        )
         self.assertEqual(grant_authorizer.calls, [("workspace-1", "verifier-1")])
 
     def test_verifier_grant_denial_precedes_artifact_io_and_state_change(self) -> None:
