@@ -73,20 +73,26 @@ boundary. It is not the permanent home of every Agent feature.
   `a2a_peer_credentials.py` supplies exact-origin Bearer lookup without exposing
   an enumerable credential map. Runner's standalone peer-manifest loader binds
   strict pins to optional mounted token files, rejects plaintext credentials
-  and shared token files, and is not yet part of production composition. The
-  dedicated outbound supervisor performs the fenced `LEASED -> RUNNING` start,
-  sends once per
-  invocation, renews the lease while polling, and converts timeout, remote
-  terminal failure, unsupported input, transport failure, heartbeat loss, and
-  caller cancellation into explicit local failure handling. After remote
+  and shared token files. `a2a_outbound_composition.py` accepts only that strict
+  signed-and-pinned policy, an exact-origin credential provider, and an
+  externally owned HTTP client, then composes the claimed-work resolver, trusted
+  Card resolver, stateless transport, result importer, CAS publisher, and
+  supervisor for one already claimed attempt. Resolution failure or caller
+  cancellation is recorded behind the original lease fence when the claim
+  identity is valid. The dedicated outbound supervisor performs the fenced
+  `LEASED -> RUNNING` start, sends once per invocation, renews the lease while
+  polling, and converts timeout, remote terminal failure, unsupported input,
+  transport failure, heartbeat loss, and caller cancellation into explicit
+  local failure handling. After remote
   completion it performs a separate trusted `tasks/get`, strictly validates
   the bounded bundle schema, Base64, sizes, SHA-256 digests, and Evidence-to-
   Artifact reference closure, then publishes bytes to local CAS. Remote
   Evidence is preserved only in a local attestation `report` Artifact. All
   imported Artifacts are registered behind the original lease before the
-  WorkUnit moves to `VERIFYING`; they do not prove local success. Production
-  worker composition remains disabled until the trusted route resolver is
-  composed and Gateway direct dispatch is removed in the same cutover.
+  WorkUnit moves to `VERIFYING`; they do not prove local success. This isolated
+  attempt composition does not claim or poll workspace work, invoke Harness, or
+  own the HTTP client. Production worker wiring remains disabled until Gateway
+  direct dispatch is removed in the same cutover.
   Inbound claimed execution uses a request-scoped execution plan, so its
   Harness is built from the exact Contract, WorkUnit, and attempt rather than
   falling back to Runner's fixed Sandbox Harness. `a2a.receive` remains an

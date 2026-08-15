@@ -86,10 +86,17 @@ manifest contains exact origins, rotating public pins, and optional absolute
 token-file references, while the loaded provider exposes only exact-origin
 lookup. Plaintext token fields, unsigned compatibility, duplicate origins, and
 cross-peer token-file reuse are rejected. This loader is not yet a
-`RunnerServiceSettings` or worker dependency. Production
-composition remains disabled because the resolver is not yet wired into the
-worker and Gateway direct dispatch remains a compatibility path. The two paths
-must not both dispatch the same attempt after cutover.
+`RunnerServiceSettings` or worker dependency. An isolated outbound attempt
+factory now requires the strict signed-and-pinned policy, exact-origin
+credential provider, CAS publisher, and a process-owned HTTP client. It composes
+the resolver, Card verifier, stateless transport, result importer, and
+supervisor for one already claimed WorkUnit. Valid claim fences are reused to
+record context-resolution failure or cancellation, and Mission Control failure
+responses are validated before the attempt is considered recovered. The
+factory does not claim workspace work, invoke Harness, own the HTTP client, or
+enable runtime dispatch. Production wiring remains disabled because Gateway
+direct dispatch is still a compatibility path. The two paths must not both
+dispatch the same attempt after cutover.
 
 Historical unbound outbound WorkUnits are not silently rebound. They require
 an explicit migration or cancellation and resubmission under a new task ID,
@@ -142,3 +149,10 @@ declared and aggregate size, SHA-256, Evidence reference closure, deterministic
 local IDs, CAS metadata, fenced registration responses, and remote Evidence as
 attestation-only report content. No path creates local Evidence from the peer
 bundle or declares the Mission successful.
+
+Composition tests traverse the complete signed-and-pinned mocked object graph,
+prove that Agent Card probes receive no bearer credential, bind the receiver
+token only to the verified task origin, import and register result bytes, and
+stop at `VERIFYING`. They also cover strict-policy enforcement, injected client
+ownership, lease-fenced resolution failure, cancellation propagation, and
+inconsistent failure-response rejection without enabling production dispatch.

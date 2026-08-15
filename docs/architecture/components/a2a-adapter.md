@@ -90,9 +90,16 @@ only. Runner's versioned peer loader accepts strict public pins and optional
 absolute token-file references, rejects plaintext token fields, duplicate
 canonical origins, and cross-peer token-file reuse, and suppresses underlying
 validation/file errors that could disclose configuration or secret content.
-No production worker composition is enabled while Gateway direct dispatch
-remains active. A dedicated Runner supervisor owns the bounded execution
-loop after resolution: it performs the fenced local start, sends once per
+An isolated Runner attempt factory now composes the claimed-work resolver,
+trusted Card resolver, exact-origin credential provider, stateless transport,
+result importer, CAS publisher, and supervisor. It requires a signed-and-pinned
+policy and an injected HTTP client whose lifecycle remains process-owned. It
+operates only on an already claimed WorkUnit; it neither polls workspace work
+nor creates a second production dispatch path. Resolution failure and caller
+cancellation are written back through the validated claim lease when possible.
+Production worker wiring remains disabled while Gateway direct dispatch remains
+active. A dedicated Runner supervisor owns the bounded execution loop after
+resolution: it performs the fenced local start, sends once per
 invocation, renews the lease during polling, attempts remote cancellation on
 timeout or supervision loss, and records terminal failures through Mission
 Control. Remote `COMPLETED` triggers a separate bounded `tasks/get`; the sender

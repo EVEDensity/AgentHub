@@ -73,7 +73,10 @@ to the inbound model Harness. The standalone Agent Card route resolver is now
 implemented and tested. A separate versioned peer-manifest loader now creates a
 strict signed-and-pinned policy and exact-origin receiver credential provider
 from mounted files without accepting plaintext tokens. Neither component is
-production wiring authority by itself.
+production wiring authority by itself. An isolated outbound attempt factory now
+requires those strict trust inputs and an injected process-owned HTTP client,
+then composes the resolver, trusted route, stateless transport, result importer,
+CAS publisher, and supervisor without Harness or `WorkUnitRunner`.
 
 The claimed outbound lease owner can retrieve the versioned execution context
 after Mission Control revalidates the complete source/kind/binding/capability
@@ -102,8 +105,11 @@ local metadata behind the active attempt lease, and stores remote Evidence only
 as an attestation `report` Artifact. Completion uses all local references and
 moves the WorkUnit to `VERIFYING`; only an independent local verifier may move
 it to `SUCCEEDED`. This path does not invoke Harness or `WorkUnitRunner`.
-Production composition remains disabled, so Gateway and Runner cannot dispatch
-the same attempt.
+The attempt factory also records context-resolution failure or cancellation
+behind the validated claim fence and rejects inconsistent Mission Control
+failure responses. It accepts only already claimed work and owns neither ready-
+work polling nor HTTP-client lifetime. Production process wiring remains
+disabled, so Gateway and Runner cannot dispatch the same attempt.
 
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,

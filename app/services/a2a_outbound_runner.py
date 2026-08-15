@@ -88,7 +88,9 @@ class A2AOutboundTaskCommand:
         for capability in self.required_capabilities:
             _validate_text(capability, "required_capability", max_length=255)
         if A2A_SEND_CAPABILITY in self.required_capabilities:
-            raise ValueError("a2a.send is local transport authority, not a peer capability")
+            raise ValueError(
+                "a2a.send is local transport authority, not a peer capability"
+            )
 
     def to_send_params(self) -> dict[str, Any]:
         """Build the protocol params without credentials or local lease metadata."""
@@ -203,7 +205,10 @@ class A2AOutboundClaimedWorkResolver:
         self,
         claimed_work_unit: Mapping[str, Any],
     ) -> A2AOutboundClaimedWork:
-        claim = _parse_claim(claimed_work_unit, runner_id=self._runner_id)
+        claim = parse_a2a_outbound_claim(
+            claimed_work_unit,
+            runner_id=self._runner_id,
+        )
         payload = await self._control.get_execution_context(
             claim.mission_id,
             claim.work_unit_id,
@@ -271,7 +276,9 @@ class A2AOutboundClaimedWorkResolver:
 
 
 @dataclass(frozen=True, slots=True)
-class _ClaimIdentity:
+class A2AOutboundClaimIdentity:
+    """Validated lease fence extracted from one claimed outbound WorkUnit."""
+
     mission_id: str
     work_unit_id: str
     attempt: int
@@ -282,22 +289,31 @@ class _ClaimIdentity:
     required_capabilities: tuple[str, ...]
 
 
-def _parse_claim(
+def parse_a2a_outbound_claim(
     value: Mapping[str, Any],
     *,
     runner_id: str,
-) -> _ClaimIdentity:
+) -> A2AOutboundClaimIdentity:
+    """Parse only the identity needed to fence resolution and failure recovery."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("value must be a Mapping")
+    _validate_text(runner_id, "runner_id", max_length=255)
     mission_id = _required_string(value, "missionId")
     work_unit_id = _required_string(value, "id")
     if value.get("kind") != "a2a.delegate" or value.get("parentWorkUnitId") is not None:
         raise ClaimedWorkResolutionError("claimed WorkUnit is not an outbound A2A root")
     if value.get("assignedAdapter") != A2A_OUTBOUND_ADAPTER:
-        raise ClaimedWorkResolutionError("claimed WorkUnit is not bound to a2a.outbound")
+        raise ClaimedWorkResolutionError(
+            "claimed WorkUnit is not bound to a2a.outbound"
+        )
     assigned_agent_id = _required_string(value, "assignedAgentId")
     try:
         status = WorkUnitStatus(_required_string(value, "status"))
     except ValueError as exc:
-        raise ClaimedWorkResolutionError("claimed WorkUnit has an invalid status") from exc
+        raise ClaimedWorkResolutionError(
+            "claimed WorkUnit has an invalid status"
+        ) from exc
     if status not in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING}:
         raise ClaimedWorkResolutionError("claimed WorkUnit is not actively leased")
     attempt = value.get("attempt")
@@ -310,7 +326,7 @@ def _parse_claim(
     required_capabilities = _required_string_sequence(value, "requiredCapabilities")
     if A2A_SEND_CAPABILITY not in required_capabilities:
         raise ClaimedWorkResolutionError("claimed WorkUnit lacks a2a.send")
-    return _ClaimIdentity(
+    return A2AOutboundClaimIdentity(
         mission_id=mission_id,
         work_unit_id=work_unit_id,
         attempt=attempt,
@@ -327,7 +343,9 @@ def _parse_domain_context(
 ) -> tuple[Mission, MissionContract, WorkUnit]:
     try:
         mission = Mission.model_validate(_required_mapping(context, "mission"))
-        contract = MissionContract.model_validate(_required_mapping(context, "contract"))
+        contract = MissionContract.model_validate(
+            _required_mapping(context, "contract")
+        )
         work_unit = WorkUnit.model_validate(_required_mapping(context, "workUnit"))
     except (TypeError, ValidationError) as exc:
         raise ClaimedWorkResolutionError(
@@ -337,7 +355,7 @@ def _parse_domain_context(
 
 
 def _validate_context_identity(
-    claim: _ClaimIdentity,
+    claim: A2AOutboundClaimIdentity,
     *,
     mission: Mission,
     contract: MissionContract,
@@ -346,15 +364,21 @@ def _validate_context_identity(
     if mission.id != claim.mission_id or work_unit.id != claim.work_unit_id:
         raise ClaimedWorkResolutionError("execution context does not match the claim")
     if work_unit.mission_id != mission.id:
-        raise ClaimedWorkResolutionError("execution context WorkUnit has another Mission")
+        raise ClaimedWorkResolutionError(
+            "execution context WorkUnit has another Mission"
+        )
     if mission.status != MissionStatus.RUNNING:
         raise ClaimedWorkResolutionError("execution context Mission is not RUNNING")
     if mission.source.type != MissionSourceType.A2A:
         raise ClaimedWorkResolutionError("execution context source is not outbound A2A")
     if contract.id != mission.contract_id:
-        raise ClaimedWorkResolutionError("execution context Contract does not match Mission")
+        raise ClaimedWorkResolutionError(
+            "execution context Contract does not match Mission"
+        )
     if work_unit.parent_work_unit_id is not None or work_unit.kind != "a2a.delegate":
-        raise ClaimedWorkResolutionError("execution context WorkUnit is not an outbound root")
+        raise ClaimedWorkResolutionError(
+            "execution context WorkUnit is not an outbound root"
+        )
     if work_unit.assigned_adapter != A2A_OUTBOUND_ADAPTER:
         raise ClaimedWorkResolutionError("execution context WorkUnit adapter changed")
     if work_unit.assigned_agent_id != claim.assigned_agent_id:
@@ -364,25 +388,35 @@ def _validate_context_identity(
     if work_unit.lease is None or work_unit.lease.id != claim.lease_id:
         raise ClaimedWorkResolutionError("execution context WorkUnit lease changed")
     if work_unit.lease.runner_id != claim.runner_id:
-        raise ClaimedWorkResolutionError("execution context lease belongs to another runner")
+        raise ClaimedWorkResolutionError(
+            "execution context lease belongs to another runner"
+        )
     if work_unit.required_capabilities != claim.required_capabilities:
-        raise ClaimedWorkResolutionError("execution context WorkUnit capabilities changed")
+        raise ClaimedWorkResolutionError(
+            "execution context WorkUnit capabilities changed"
+        )
     if A2A_SEND_CAPABILITY not in work_unit.required_capabilities:
         raise ClaimedWorkResolutionError("outbound WorkUnit lacks a2a.send")
     if work_unit.input_refs:
         raise ClaimedWorkResolutionError(
             "outbound Artifact inputs are not supported by the current transport contract"
         )
-    if tuple((output.kind, output.required) for output in work_unit.expected_outputs) != (
-        ("a2a.result", True),
-    ):
-        raise ClaimedWorkResolutionError("outbound WorkUnit has an unsupported output contract")
+    if tuple(
+        (output.kind, output.required) for output in work_unit.expected_outputs
+    ) != (("a2a.result", True),):
+        raise ClaimedWorkResolutionError(
+            "outbound WorkUnit has an unsupported output contract"
+        )
 
     grants = {grant.capability: grant for grant in contract.allowed_capabilities}
     if len(grants) != len(contract.allowed_capabilities):
-        raise ClaimedWorkResolutionError("execution context has duplicate capability grants")
+        raise ClaimedWorkResolutionError(
+            "execution context has duplicate capability grants"
+        )
     if not set(work_unit.required_capabilities).issubset(grants):
-        raise ClaimedWorkResolutionError("WorkUnit capabilities exceed the Mission Contract")
+        raise ClaimedWorkResolutionError(
+            "WorkUnit capabilities exceed the Mission Contract"
+        )
     target_agent_url = mission.source.reference
     if target_agent_url is None:
         raise ClaimedWorkResolutionError("outbound Mission has no target Agent URL")
@@ -391,6 +425,7 @@ def _validate_context_identity(
             raise ClaimedWorkResolutionError(
                 "outbound capability scope does not match the target Agent"
             )
+
 
 def _required_mapping(value: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     result = value.get(key)
@@ -460,6 +495,7 @@ def _normalize_http_origin(value: str, field: str) -> str:
 
 
 __all__ = [
+    "A2AOutboundClaimIdentity",
     "A2AOutboundClaimedWork",
     "A2AOutboundClaimedWorkResolver",
     "A2AOutboundTaskCommand",
@@ -467,4 +503,5 @@ __all__ = [
     "A2ARemoteTaskReference",
     "A2ARemoteTaskSnapshot",
     "A2ARemoteTaskState",
+    "parse_a2a_outbound_claim",
 ]
