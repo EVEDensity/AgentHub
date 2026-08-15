@@ -27,6 +27,7 @@ from app.services.artifact_integrity_service import (
     ArtifactIntegrityError,
 )
 from app.services.auth_service import get_current_user
+from app.services.verification_policy_service import StrictVerificationPolicyResolver
 from tests.api.test_missions_api import FakeMissionRepository
 from tests.domain.factories import build_artifact, build_evidence
 
@@ -176,6 +177,19 @@ class A2AAdapterApiTests(unittest.TestCase):
             work_unit.required_capabilities,
             ("a2a.send", "artifact.write"),
         )
+        evaluation_policy = StrictVerificationPolicyResolver().resolve(
+            self.repository.contract,
+            work_unit,
+            (
+                build_artifact(id="artifact-imported", kind="diff"),
+                build_artifact(id="artifact-attestation", kind="report"),
+            ),
+        )
+        self.assertEqual(evaluation_policy.to_public_dict()["status"], "ready")
+        self.assertEqual(
+            evaluation_policy.to_public_dict()["criterionId"],
+            self.repository.contract.acceptance_criteria[0].id,
+        )
         created_event = self.repository.events[-1]
         self.assertEqual(
             created_event.payload["assignedAgentId"], "outbound-dispatcher"
@@ -282,6 +296,12 @@ class A2AAdapterApiTests(unittest.TestCase):
         self.assertEqual(work_unit.kind, "a2a.inbound")
         self.assertEqual(work_unit.assigned_agent_id, "inbound-reviewer")
         self.assertEqual(work_unit.assigned_adapter, "local_codex")
+        evaluation_policy = StrictVerificationPolicyResolver().resolve(
+            self.repository.contract,
+            work_unit,
+            (build_artifact(kind="test-result"),),
+        )
+        self.assertEqual(evaluation_policy.to_public_dict()["status"], "ready")
         self.assertEqual(
             work_unit.required_capabilities,
             ("a2a.receive", "code_generation"),

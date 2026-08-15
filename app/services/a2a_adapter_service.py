@@ -503,7 +503,12 @@ class A2AAdapterService:
                         "validated by independent evidence."
                     ),
                     required=True,
-                    configuration={"protocol": "a2a"},
+                    configuration={
+                        "evaluator": "artifact-set.v1",
+                        "workUnitKinds": ["a2a.delegate"],
+                        "minimumArtifacts": 2,
+                        "requiredArtifactKinds": ["report"],
+                    },
                 )
             ],
             decision_gates=[],
@@ -543,7 +548,12 @@ class A2AAdapterService:
                         "validated by independent evidence."
                     ),
                     required=True,
-                    configuration={"protocol": "a2a", "direction": "inbound"},
+                    configuration={
+                        "evaluator": "artifact-set.v1",
+                        "workUnitKinds": ["a2a.inbound"],
+                        "minimumArtifacts": 1,
+                        "requiredArtifactKinds": [],
+                    },
                 )
             ],
             decision_gates=[],

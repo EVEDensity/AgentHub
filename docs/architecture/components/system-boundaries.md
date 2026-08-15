@@ -61,6 +61,15 @@ snapshot consistent but is not a verifier lease; `/verify` remains the durable
 state-transition authority. Ordinary Mission listing and Artifact bytes are not
 part of this projection.
 
+The version-2 discovery projection includes a fail-closed evaluation-policy
+decision derived from the Mission Contract. A PASS transition requires one
+supported, applicable policy and an exact criterion/configuration-digest match,
+checked both before Artifact byte I/O and inside Mission Control's transaction.
+Unknown, malformed, ambiguous, unsupported, or unsatisfied policies remain
+inconclusive. The initial `artifact-set.v1` evaluator establishes only bounded
+Artifact-set presence and byte verifiability; semantic or test correctness
+requires a stronger independently implemented evaluator.
+
 ## Migration status
 
 LangGraph and AgentNet remain compatibility surfaces while callers migrate.

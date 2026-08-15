@@ -11,6 +11,7 @@ from app.services.mission_service import (
     VerificationContext,
     VerificationDiscoveryOutcome,
 )
+from app.services.verification_policy_service import StrictVerificationPolicyResolver
 from tests.domain.factories import (
     build_artifact,
     build_contract,
@@ -46,6 +47,7 @@ class PublicContractTests(unittest.TestCase):
                 "work-unit.schema.json",
                 "work-unit-claim-response.schema.json",
                 "verification-work-discovery-response.schema.json",
+                "verification-evaluation-policy.schema.json",
                 "artifact.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
@@ -114,7 +116,7 @@ class PublicContractTests(unittest.TestCase):
             "verification-work-discovery-response.schema.json": {
                 "discoveryStatus": "ready",
                 "verificationContext": {
-                    "version": 1,
+                    "version": 2,
                     "mission": {
                         "id": "mis-1",
                         "title": "Fix issue 42",
@@ -153,6 +155,20 @@ class PublicContractTests(unittest.TestCase):
                             "sensitivity": "internal",
                         }
                     ],
+                    "evaluationPolicy": {
+                        "status": "inconclusive",
+                        "reasonCode": "no_applicable_policy",
+                    },
+                },
+            },
+            "verification-evaluation-policy.schema.json": {
+                "status": "ready",
+                "criterionId": "tests",
+                "evaluator": "artifact-set.v1",
+                "configurationDigest": digest,
+                "parameters": {
+                    "minimumArtifacts": 1,
+                    "requiredArtifactKinds": ["test-result"],
                 },
             },
             "artifact.schema.json": {
@@ -251,6 +267,26 @@ class PublicContractTests(unittest.TestCase):
             with self.subTest(document=document):
                 self.assertTrue(list(validator.iter_errors(document)))
 
+    def test_evaluation_policy_status_matches_payload(self) -> None:
+        validator = Draft202012Validator(
+            self.documents["verification-evaluation-policy.schema.json"],
+            registry=self.registry,
+        )
+        validator.validate(
+            {
+                "status": "inconclusive",
+                "reasonCode": "no_applicable_policy",
+            }
+        )
+        invalid_documents = (
+            {"status": "ready", "reasonCode": "no_applicable_policy"},
+            {"status": "inconclusive", "criterionId": "tests"},
+            {"status": "inconclusive", "reasonCode": "unknown"},
+        )
+        for document in invalid_documents:
+            with self.subTest(document=document):
+                self.assertTrue(list(validator.iter_errors(document)))
+
     def test_verification_discovery_producer_matches_contract(self) -> None:
         validator = Draft202012Validator(
             self.documents["verification-work-discovery-response.schema.json"],
@@ -261,6 +297,11 @@ class PublicContractTests(unittest.TestCase):
             contract=build_contract(),
             work_unit=build_work_unit(status="VERIFYING", attempt=1),
             artifacts=(build_artifact(),),
+            evaluation_policy=StrictVerificationPolicyResolver().resolve(
+                build_contract(),
+                build_work_unit(status="VERIFYING", attempt=1),
+                (build_artifact(),),
+            ),
         )
 
         validator.validate(

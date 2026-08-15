@@ -134,7 +134,15 @@ boundary. It is not the permanent home of every Agent feature.
   current-attempt `VERIFYING` context. Its short database lock creates no
   durable claim, and its projection excludes Mission source, Contract
   repository/capability grants, execution leases, credentials, and Artifact
-  bytes.
+  bytes. The projection also carries a fail-closed evaluation-policy decision.
+  Mission Control currently recognizes only the deterministic
+  `artifact-set.v1` evaluator, whose canonical configuration digest binds one
+  acceptance criterion to WorkUnit kind and Artifact requirements. PASS
+  Evidence must reproduce that criterion and digest before Artifact I/O and
+  again inside the state-transition transaction; unsupported, ambiguous, or
+  unsatisfied policies cannot be bypassed through the direct verification API.
+  This evaluator proves Artifact-set availability and byte integrity only, not
+  semantic correctness or test execution.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

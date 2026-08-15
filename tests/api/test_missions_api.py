@@ -42,6 +42,7 @@ from app.services.artifact_integrity_service import (
     ArtifactIntegrityError,
 )
 from app.services.auth_service import get_current_user
+from app.services.verification_policy_service import StrictVerificationPolicyResolver
 from app.services.workspace_access_service import (
     DatabaseRunnerWorkspaceGrantAuthorizer,
     DatabaseVerifierWorkspaceGrantAuthorizer,
@@ -587,6 +588,42 @@ class FakeArtifactByteVerifier:
             )
             for artifact in artifacts
         ]
+
+
+def artifact_set_criterion(
+    *,
+    criterion_id: str = "tests",
+    criterion_kind: str = "test",
+    work_unit_kind: str = "code_change",
+    required_artifact_kinds: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "id": criterion_id,
+        "kind": criterion_kind,
+        "description": f"{criterion_id} artifacts satisfy the contract",
+        "required": True,
+        "configuration": {
+            "evaluator": "artifact-set.v1",
+            "workUnitKinds": [work_unit_kind],
+            "minimumArtifacts": 1,
+            "requiredArtifactKinds": required_artifact_kinds or [],
+        },
+    }
+
+
+def evaluation_policy_digest(
+    contract: MissionContract,
+    work_unit: WorkUnit,
+    artifacts: list[Artifact],
+) -> str:
+    decision = StrictVerificationPolicyResolver().resolve(
+        contract,
+        work_unit,
+        tuple(artifacts),
+    )
+    if decision.plan is None:
+        raise AssertionError(f"test evaluation policy is not ready: {decision.reason}")
+    return decision.plan.configuration_digest
 
 
 def build_app(
@@ -2776,7 +2813,11 @@ class MissionApiTests(unittest.TestCase):
             workspace_id="verifier-1",
             status="RUNNING",
         )
-        repository.contract = build_contract()
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["diff"])
+            ]
+        )
         repository.work_units = [build_work_unit(status="VERIFYING")]
         repository.artifacts = [build_artifact()]
         artifact_byte_verifier = FakeArtifactByteVerifier()
@@ -2794,6 +2835,11 @@ class MissionApiTests(unittest.TestCase):
                 "criterionId": "tests",
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    repository.artifacts,
+                ),
                 "verdict": "PASS",
                 "artifactRefs": [
                     {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
@@ -2825,6 +2871,193 @@ class MissionApiTests(unittest.TestCase):
         listed = client.get("/api/v1/missions/mis-1/evidence")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["evidence"], [body["evidence"]])
+
+    def test_pass_without_applicable_policy_fails_before_artifact_io(self) -> None:
+        for configuration, reason in (
+            (None, "no_applicable_policy"),
+            (
+                {
+                    "evaluator": "model-judge.v1",
+                    "workUnitKinds": ["code_change"],
+                    "minimumArtifacts": 1,
+                    "requiredArtifactKinds": [],
+                },
+                "unsupported_evaluator",
+            ),
+        ):
+            with self.subTest(reason=reason):
+                repository = FakeMissionRepository()
+                repository.mission = build_mission(
+                    workspace_id="verifier-1",
+                    status="RUNNING",
+                )
+                criterion: dict[str, object] = {
+                    "id": "tests",
+                    "kind": "test",
+                    "description": "Tests pass",
+                    "required": True,
+                }
+                if configuration is not None:
+                    criterion["configuration"] = configuration
+                repository.contract = build_contract(
+                    acceptance_criteria=[criterion]
+                )
+                repository.work_units = [build_work_unit(status="VERIFYING")]
+                repository.artifacts = [build_artifact()]
+                verifier = FakeArtifactByteVerifier()
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {
+                            "id": "verifier-1",
+                            "name": "Verifier",
+                            "role": "verifier",
+                        },
+                        artifact_byte_verifier=verifier,
+                    )
+                )
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/work-units/wu-1/verify",
+                    json={
+                        "criterionId": "tests",
+                        "verifierId": "verifier-1",
+                        "verifierVersion": "9.0",
+                        "configurationDigest": "sha256:" + "c" * 64,
+                        "verdict": "PASS",
+                        "artifactRefs": [
+                            {
+                                "id": "artifact-1",
+                                "digest": "sha256:" + "a" * 64,
+                            }
+                        ],
+                        "summary": "Must not be accepted.",
+                        "integrityHash": "sha256:" + "b" * 64,
+                    },
+                )
+
+                self.assertEqual(response.status_code, 409)
+                self.assertIn(reason, response.json()["detail"])
+                self.assertEqual(verifier.calls, [])
+                self.assertEqual(repository.evidence, [])
+                self.assertEqual(repository.events, [])
+
+    def test_pass_must_match_policy_criterion_and_digest(self) -> None:
+        for criterion_id, configuration_digest, expected_detail in (
+            (
+                "security",
+                "sha256:" + "c" * 64,
+                "criterion does not match",
+            ),
+            ("tests", None, "requires the evaluation policy configuration digest"),
+            (
+                "tests",
+                "sha256:" + "c" * 64,
+                "configuration digest does not match",
+            ),
+        ):
+            with self.subTest(expected_detail=expected_detail):
+                repository = FakeMissionRepository()
+                repository.mission = build_mission(
+                    workspace_id="verifier-1",
+                    status="RUNNING",
+                )
+                repository.contract = build_contract(
+                    acceptance_criteria=[
+                        artifact_set_criterion(required_artifact_kinds=["diff"])
+                    ]
+                )
+                repository.work_units = [build_work_unit(status="VERIFYING")]
+                repository.artifacts = [build_artifact()]
+                verifier = FakeArtifactByteVerifier()
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {
+                            "id": "verifier-1",
+                            "name": "Verifier",
+                            "role": "verifier",
+                        },
+                        artifact_byte_verifier=verifier,
+                    )
+                )
+                request = {
+                    "criterionId": criterion_id,
+                    "verifierId": "verifier-1",
+                    "verifierVersion": "9.0",
+                    "verdict": "PASS",
+                    "artifactRefs": [
+                        {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                    ],
+                    "summary": "Must not be accepted.",
+                    "integrityHash": "sha256:" + "b" * 64,
+                }
+                if configuration_digest is not None:
+                    request["configurationDigest"] = configuration_digest
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/work-units/wu-1/verify",
+                    json=request,
+                )
+
+                self.assertEqual(response.status_code, 409)
+                self.assertIn(expected_detail, response.json()["detail"])
+                self.assertEqual(verifier.calls, [])
+                self.assertEqual(repository.evidence, [])
+                self.assertEqual(repository.events, [])
+
+    def test_pass_policy_is_revalidated_after_artifact_io(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["diff"])
+            ]
+        )
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        configuration_digest = evaluation_policy_digest(
+            repository.contract,
+            repository.work_units[0],
+            repository.artifacts,
+        )
+
+        def replace_contract(_: list[Artifact]) -> None:
+            repository.contract = build_contract()
+
+        verifier = FakeArtifactByteVerifier(on_verify=replace_contract)
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=verifier,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "configurationDigest": configuration_digest,
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "The policy changed during verification.",
+                "integrityHash": "sha256:" + "b" * 64,
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("no_applicable_policy", response.json()["detail"])
+        self.assertEqual(verifier.calls, [[build_artifact()]])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
 
     def test_verifier_discovers_only_minimal_current_attempt_context(self) -> None:
         repository = FakeMissionRepository()
@@ -2858,7 +3091,7 @@ class MissionApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["discoveryStatus"], "ready")
         context = body["verificationContext"]
-        self.assertEqual(context["version"], 1)
+        self.assertEqual(context["version"], 2)
         self.assertEqual(
             context["mission"],
             {
@@ -2883,6 +3116,13 @@ class MissionApiTests(unittest.TestCase):
         self.assertNotIn("createdBy", context["artifacts"][0])
         self.assertNotIn("source", context["mission"])
         self.assertNotIn("repositoryScopes", context["contract"])
+        self.assertEqual(
+            context["evaluationPolicy"],
+            {
+                "status": "inconclusive",
+                "reasonCode": "no_applicable_policy",
+            },
+        )
         self.assertEqual(
             repository.verification_candidate_calls,
             ["workspace-1"],
@@ -3023,7 +3263,11 @@ class MissionApiTests(unittest.TestCase):
             workspace_id="workspace-1",
             status="RUNNING",
         )
-        repository.contract = build_contract()
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["diff"])
+            ]
+        )
         repository.work_units = [build_work_unit(status="VERIFYING")]
         repository.artifacts = [build_artifact()]
         grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer(
@@ -3043,6 +3287,11 @@ class MissionApiTests(unittest.TestCase):
                 "criterionId": "tests",
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    repository.artifacts,
+                ),
                 "verdict": "PASS",
                 "artifactRefs": [
                     {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
@@ -3185,7 +3434,11 @@ class MissionApiTests(unittest.TestCase):
     def test_delegated_work_unit_closes_artifact_evidence_and_mission(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
-        repository.contract = build_contract()
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["test-result"])
+            ]
+        )
         repository.work_units = [
             build_work_unit(id="wu-parent", status="SUCCEEDED"),
             build_work_unit(
@@ -3252,6 +3505,11 @@ class MissionApiTests(unittest.TestCase):
                 "criterionId": "tests",
                 "verifierId": "admin-1",
                 "verifierVersion": "1.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[1],
+                    repository.artifacts,
+                ),
                 "verdict": "PASS",
                 "artifactRefs": [{"id": "artifact-child", "digest": digest}],
                 "summary": "Delegated artifact verified.",
@@ -3320,7 +3578,11 @@ class MissionApiTests(unittest.TestCase):
             workspace_id="verifier-1",
             status="RUNNING",
         )
-        repository.contract = build_contract()
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["diff"])
+            ]
+        )
         repository.work_units = [build_work_unit(status="VERIFYING")]
         repository.artifacts = [build_artifact()]
         initial_mission = repository.mission
@@ -3342,6 +3604,11 @@ class MissionApiTests(unittest.TestCase):
                 "criterionId": "tests",
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    repository.artifacts,
+                ),
                 "verdict": "PASS",
                 "artifactRefs": [
                     {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
@@ -3364,7 +3631,11 @@ class MissionApiTests(unittest.TestCase):
             workspace_id="verifier-1",
             status="RUNNING",
         )
-        repository.contract = build_contract()
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["diff"])
+            ]
+        )
         repository.work_units = [build_work_unit(status="VERIFYING")]
         repository.artifacts = [build_artifact()]
         initial_mission = repository.mission
@@ -3386,6 +3657,11 @@ class MissionApiTests(unittest.TestCase):
                 "criterionId": "tests",
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    repository.artifacts,
+                ),
                 "verdict": "PASS",
                 "artifactRefs": [
                     {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
@@ -3411,7 +3687,11 @@ class MissionApiTests(unittest.TestCase):
             workspace_id="verifier-1",
             status="RUNNING",
         )
-        repository.contract = build_contract()
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["diff"])
+            ]
+        )
         repository.work_units = [build_work_unit(status="VERIFYING")]
         repository.artifacts = [build_artifact()]
         initial_mission = repository.mission
@@ -3435,6 +3715,11 @@ class MissionApiTests(unittest.TestCase):
                 "criterionId": "tests",
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    repository.artifacts,
+                ),
                 "verdict": "PASS",
                 "artifactRefs": [
                     {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
@@ -3460,7 +3745,11 @@ class MissionApiTests(unittest.TestCase):
             workspace_id="verifier-1",
             status="RUNNING",
         )
-        repository.contract = build_contract()
+        repository.contract = build_contract(
+            acceptance_criteria=[
+                artifact_set_criterion(required_artifact_kinds=["diff"])
+            ]
+        )
         repository.work_units = [build_work_unit(status="VERIFYING")]
         repository.artifacts = [build_artifact()]
         repository.evidence = [
@@ -3483,6 +3772,11 @@ class MissionApiTests(unittest.TestCase):
                 "criterionId": "tests",
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    repository.artifacts,
+                ),
                 "verdict": "PASS",
                 "artifactRefs": [
                     {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
@@ -3504,23 +3798,30 @@ class MissionApiTests(unittest.TestCase):
         )
         repository.contract = build_contract(
             acceptance_criteria=[
-                {
-                    "id": "tests",
-                    "kind": "test",
-                    "description": "Tests pass",
-                    "required": True,
-                },
-                {
-                    "id": "security",
-                    "kind": "security",
-                    "description": "Security scan passes",
-                    "required": True,
-                },
+                artifact_set_criterion(
+                    criterion_id="tests",
+                    work_unit_kind="test_verification",
+                    required_artifact_kinds=["diff"],
+                ),
+                artifact_set_criterion(
+                    criterion_id="security",
+                    criterion_kind="security",
+                    work_unit_kind="security_verification",
+                    required_artifact_kinds=["diff"],
+                ),
             ]
         )
         repository.work_units = [
-            build_work_unit(id="wu-tests", status="VERIFYING"),
-            build_work_unit(id="wu-security", status="VERIFYING"),
+            build_work_unit(
+                id="wu-tests",
+                kind="test_verification",
+                status="VERIFYING",
+            ),
+            build_work_unit(
+                id="wu-security",
+                kind="security_verification",
+                status="VERIFYING",
+            ),
         ]
         tests_digest = "sha256:" + "a" * 64
         security_digest = "sha256:" + "c" * 64
@@ -3557,6 +3858,11 @@ class MissionApiTests(unittest.TestCase):
             json={
                 **request,
                 "criterionId": "tests",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    [repository.artifacts[0]],
+                ),
                 "artifactRefs": [{"id": "artifact-tests", "digest": tests_digest}],
             },
         )
@@ -3570,6 +3876,11 @@ class MissionApiTests(unittest.TestCase):
             json={
                 **request,
                 "criterionId": "security",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[1],
+                    [repository.artifacts[1]],
+                ),
                 "artifactRefs": [
                     {"id": "artifact-security", "digest": security_digest}
                 ],

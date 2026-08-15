@@ -35,9 +35,12 @@
     "verificationContext": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "mission", "contract", "workUnit", "artifacts"],
+      "required": [
+        "version", "mission", "contract", "workUnit", "artifacts",
+        "evaluationPolicy"
+      ],
       "properties": {
-        "version": { "const": 1 },
+        "version": { "const": 2 },
         "mission": {
           "type": "object",
           "additionalProperties": false,
@@ -82,6 +85,9 @@
           "minItems": 1,
           "maxItems": 200,
           "items": { "$ref": "#/$defs/artifactProjection" }
+        },
+        "evaluationPolicy": {
+          "$ref": "verification-evaluation-policy.schema.json"
         }
       }
     },

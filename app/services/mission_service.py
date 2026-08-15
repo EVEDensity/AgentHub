@@ -37,6 +37,11 @@ from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerifier,
 )
+from app.services.verification_policy_service import (
+    EvaluationPolicyDecision,
+    StrictVerificationPolicyResolver,
+    VerificationPolicyResolver,
+)
 from app.services.workspace_admission_service import (
     WorkspaceClaimAdmissionPolicy,
     WorkspaceClaimAdmissionUnavailableError,
@@ -134,10 +139,11 @@ class VerificationContext:
     contract: MissionContract
     work_unit: WorkUnit
     artifacts: tuple[Artifact, ...]
+    evaluation_policy: EvaluationPolicyDecision
 
     def to_public_dict(self) -> dict:
         return {
-            "version": 1,
+            "version": 2,
             "mission": {
                 "id": self.mission.id,
                 "title": self.mission.title,
@@ -173,6 +179,7 @@ class VerificationContext:
                 }
                 for artifact in self.artifacts
             ],
+            "evaluationPolicy": self.evaluation_policy.to_public_dict(),
         }
 
 
@@ -221,10 +228,14 @@ class MissionService:
         *,
         artifact_byte_verifier: ArtifactByteVerifier | None = None,
         agent_binding_resolver: AgentBindingResolver | None = None,
+        verification_policy_resolver: VerificationPolicyResolver | None = None,
     ) -> None:
         self._repository = repository or MissionRepository()
         self._artifact_byte_verifier = artifact_byte_verifier
         self._agent_binding_resolver = agent_binding_resolver
+        self._verification_policy_resolver = (
+            verification_policy_resolver or StrictVerificationPolicyResolver()
+        )
 
     async def create_mission(
         self,
@@ -1457,6 +1468,11 @@ class MissionService:
                     contract=contract,
                     work_unit=work_unit,
                     artifacts=tuple(artifacts),
+                    evaluation_policy=self._verification_policy_resolver.resolve(
+                        contract,
+                        work_unit,
+                        tuple(artifacts),
+                    ),
                 )
             )
 
@@ -1530,6 +1546,20 @@ class MissionService:
             work_unit_id=work_unit_id,
             attempt=verification_attempt,
         )
+        if verdict == EvidenceVerdict.PASS:
+            mission = await self._repository.get_mission(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            contract = await self._repository.get_contract(mission.contract_id)
+            if contract is None:
+                raise WorkUnitNotReadyError("mission contract not found")
+            self._admit_pass_evidence(
+                contract=contract,
+                work_unit=work_unit,
+                artifacts=tuple(artifacts),
+                criterion_id=criterion_id,
+                configuration_digest=configuration_digest,
+            )
         if self._artifact_byte_verifier is None:
             raise ArtifactBytesUnavailableError(
                 "artifact byte verifier is not configured"
@@ -1572,6 +1602,14 @@ class MissionService:
             if current_artifacts != artifacts:
                 raise WorkUnitNotReadyError(
                     "artifact metadata changed during byte verification"
+                )
+            if verdict == EvidenceVerdict.PASS:
+                self._admit_pass_evidence(
+                    contract=contract,
+                    work_unit=work_unit,
+                    artifacts=tuple(current_artifacts),
+                    criterion_id=criterion_id,
+                    configuration_digest=configuration_digest,
                 )
 
             occurred_at = datetime.now(timezone.utc)
@@ -1736,7 +1774,40 @@ class MissionService:
                     )
                     await repository.update_mission(updated_mission)
 
-        return evidence, updated_work_unit, updated_mission
+            return evidence, updated_work_unit, updated_mission
+
+    def _admit_pass_evidence(
+        self,
+        *,
+        contract: MissionContract,
+        work_unit: WorkUnit,
+        artifacts: tuple[Artifact, ...],
+        criterion_id: str,
+        configuration_digest: str | None,
+    ) -> None:
+        decision = self._verification_policy_resolver.resolve(
+            contract,
+            work_unit,
+            artifacts,
+        )
+        if decision.plan is None:
+            assert decision.reason is not None
+            raise WorkUnitNotReadyError(
+                "PASS evidence is not admitted by the evaluation policy: "
+                f"{decision.reason.value}"
+            )
+        if criterion_id != decision.plan.criterion_id:
+            raise WorkUnitNotReadyError(
+                "Evidence criterion does not match the evaluation policy"
+            )
+        if configuration_digest is None:
+            raise WorkUnitNotReadyError(
+                "PASS evidence requires the evaluation policy configuration digest"
+            )
+        if configuration_digest != decision.plan.configuration_digest:
+            raise WorkUnitNotReadyError(
+                "Evidence configuration digest does not match the evaluation policy"
+            )
 
     async def fail_work_unit(
         self,
