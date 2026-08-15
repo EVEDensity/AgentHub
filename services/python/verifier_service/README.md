@@ -26,9 +26,11 @@ remains the only durable verification, Evidence, and lifecycle authority.
   before provider I/O; there are no implicit object-store credentials.
 - The Artifact mount should be read-only for UID `10002`. The service writes no
   Artifact, Mission, WorkUnit, Evidence, queue, cursor, or verifier lease.
-- Only the registered deterministic evaluator can produce PASS. An
-  inconclusive policy remains a typed failed poll and never gains an invented
-  criterion.
+- Only the registered deterministic evaluator can produce PASS. Discovery
+  context version 3 attributes an inconclusive policy to zero or more validated
+  Contract criterion IDs, but the condition remains a typed failed poll. The
+  service does not choose one criterion, submit INCONCLUSIVE Evidence, or own a
+  durable Decision.
 
 `/healthz` reports whether the worker task is alive. `/readyz` becomes ready
 after a successful Mission Control discovery, including an idle result, and
