@@ -69,9 +69,13 @@ boundary. It is not the permanent home of every Agent feature.
   `a2a_peer_route_service.py` provides the standalone implementation with a
   bounded Card probe, strict schema, protocol/origin checks, Gateway-compatible
   Ed25519 verification, origin pins with key rotation, and skill/tag matching.
-  Its trust policy is injected and it never loads peer credentials. The
-  dedicated outbound
-  supervisor performs the fenced `LEASED -> RUNNING` start, sends once per
+  Its trust policy is injected and it never loads peer credentials.
+  `a2a_peer_credentials.py` supplies exact-origin Bearer lookup without exposing
+  an enumerable credential map. Runner's standalone peer-manifest loader binds
+  strict pins to optional mounted token files, rejects plaintext credentials
+  and shared token files, and is not yet part of production composition. The
+  dedicated outbound supervisor performs the fenced `LEASED -> RUNNING` start,
+  sends once per
   invocation, renews the lease while polling, and converts timeout, remote
   terminal failure, unsupported input, transport failure, heartbeat loss, and
   caller cancellation into explicit local failure handling. After remote

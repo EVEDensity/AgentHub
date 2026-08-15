@@ -420,6 +420,12 @@ def _normalize_origin_only(value: str, field_name: str) -> str:
     return _http_origin(value, field_name)
 
 
+def normalize_a2a_origin(value: str) -> str:
+    """Return the canonical exact origin used by A2A trust and credentials."""
+
+    return _normalize_origin_only(value, "Agent origin")
+
+
 def _agent_card_signing_payload(card: Mapping[str, Any]) -> bytes:
     return _encode_go_json(_canonical_agent_card(card)).encode("utf-8")
 
@@ -750,4 +756,5 @@ __all__ = [
     "A2AAgentCardRouteResolver",
     "A2AAgentCardTrustPolicy",
     "A2APeerRouteResolutionError",
+    "normalize_a2a_origin",
 ]

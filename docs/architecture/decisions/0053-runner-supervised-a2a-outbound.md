@@ -81,6 +81,12 @@ A standalone trusted Agent Card route resolver now implements bounded discovery,
 strict Card parsing, protocol/origin validation, Gateway-compatible Ed25519
 verification, exact-origin public-key pins with rotation, capability matching,
 and Bearer-requirement projection without reading credentials. Production
+credential preparation is a separate startup-only adapter: a versioned peer
+manifest contains exact origins, rotating public pins, and optional absolute
+token-file references, while the loaded provider exposes only exact-origin
+lookup. Plaintext token fields, unsigned compatibility, duplicate origins, and
+cross-peer token-file reuse are rejected. This loader is not yet a
+`RunnerServiceSettings` or worker dependency. Production
 composition remains disabled because the resolver is not yet wired into the
 worker and Gateway direct dispatch remains a compatibility path. The two paths
 must not both dispatch the same attempt after cutover.
@@ -123,7 +129,9 @@ rejection, finite remote states, and safe same-origin redirect handling. The
 route-resolver tests cover signed and pinned Cards, rotation, strict schema,
 protocol and origin isolation, redirect/response bounds, skill/tag completeness,
 Bearer projection, and redacted trust failures. They do not enable the second
-dispatch path.
+dispatch path. Peer configuration tests cover strict pinning, key rotation,
+exact-origin token lookup, manifest version/field validation, duplicate origin
+and token-file rejection, token bounds, and error redaction.
 
 Supervisor tests cover exact start fencing, single dispatch per invocation,
 heartbeat during polling, terminal remote failure mapping, unsupported input,

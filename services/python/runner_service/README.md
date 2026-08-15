@@ -69,6 +69,22 @@ their corresponding prefixed field names. See `mcp-bindings.example.json` for
 the manifest schema; do not deploy that example unless its capability and tool
 are actually registered by the MCP Gateway.
 
+## Outbound cutover preparation
+
+`a2a_peers.py` defines a versioned `agenthub.runner.a2a-peers.v1` startup
+manifest for the future outbound composition. Each peer entry contains one
+exact HTTP(S) origin, one or more Ed25519 public-key pins for rotation, and an
+optional absolute path to a receiver-issued Bearer token file. The manifest
+cannot contain a token value, provider configuration, unsigned compatibility,
+or two peers that share a token file. Token files are bounded, single-line,
+visible ASCII secrets and symbolic links are rejected.
+
+Loading this manifest produces a strict signed-and-pinned trust policy plus an
+exact-origin credential provider. It does not alter `RunnerServiceSettings`,
+claim `a2a.outbound`, or compose the transport into the worker. Those actions
+remain part of the atomic Gateway-to-Runner dispatch cutover; operators must not
+deploy this file as evidence that outbound Runner execution is enabled.
+
 ## Run
 
 From the repository root, with the required environment and mounts present:

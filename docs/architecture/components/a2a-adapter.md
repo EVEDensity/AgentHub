@@ -85,6 +85,11 @@ rejects duplicate or unknown fields, enforces protocol major version 1 and
 same-origin Card/task routes, verifies Gateway-compatible Ed25519 signatures,
 applies exact-origin pins with rotation, and checks required skill IDs/tags.
 It projects only route and Bearer-required metadata and never reads credentials.
+The credential adapter retains receiver-issued tokens behind exact-origin lookup
+only. Runner's versioned peer loader accepts strict public pins and optional
+absolute token-file references, rejects plaintext token fields, duplicate
+canonical origins, and cross-peer token-file reuse, and suppresses underlying
+validation/file errors that could disclose configuration or secret content.
 No production worker composition is enabled while Gateway direct dispatch
 remains active. A dedicated Runner supervisor owns the bounded execution
 loop after resolution: it performs the fenced local start, sends once per

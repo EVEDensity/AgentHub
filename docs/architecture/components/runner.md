@@ -70,7 +70,10 @@ Outbound eligibility requires the exact `a2a` Mission source,
 Python process composition intentionally still rejects that adapter until the
 Gateway-to-Runner dispatch cutover is atomic; claim support is not a fallback
 to the inbound model Harness. The standalone Agent Card route resolver is now
-implemented and tested, but it is not production wiring authority by itself.
+implemented and tested. A separate versioned peer-manifest loader now creates a
+strict signed-and-pinned policy and exact-origin receiver credential provider
+from mounted files without accepting plaintext tokens. Neither component is
+production wiring authority by itself.
 
 The claimed outbound lease owner can retrieve the versioned execution context
 after Mission Control revalidates the complete source/kind/binding/capability
