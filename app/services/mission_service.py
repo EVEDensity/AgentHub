@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -12,6 +14,9 @@ from app.domain import (
     ArtifactRef,
     ArtifactRetention,
     ArtifactSensitivity,
+    Decision,
+    DecisionResolution,
+    DecisionStatus,
     EventEnvelope,
     Evidence,
     EvidenceVerdict,
@@ -129,6 +134,14 @@ class AgentBindingNotFoundError(ValueError):
     pass
 
 
+class DecisionNotFoundError(LookupError):
+    pass
+
+
+class DecisionConflictError(ValueError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class ClaimedExecutionContext:
     mission: Mission
@@ -154,7 +167,7 @@ class VerificationContext:
 
     def to_public_dict(self) -> dict:
         return {
-            "version": 2,
+            "version": 3,
             "mission": {
                 "id": self.mission.id,
                 "title": self.mission.title,
@@ -196,7 +209,7 @@ class VerificationContext:
 
 @dataclass(frozen=True, slots=True)
 class VerificationDiscoveryOutcome:
-    """Transient verifier discovery result; it creates no durable claim."""
+    """Transient verifier result; inconclusive policy creates a durable Decision."""
 
     context: VerificationContext | None
 
@@ -225,9 +238,7 @@ class WorkUnitClaimOutcome:
         return {
             "claimStatus": self.status.value,
             "workUnit": (
-                self.work_unit.to_public_dict()
-                if self.work_unit is not None
-                else None
+                self.work_unit.to_public_dict() if self.work_unit is not None else None
             ),
         }
 
@@ -326,9 +337,7 @@ class MissionService:
                 MissionStatus.CANCELLED,
                 occurred_at=occurred_at,
             )
-            mission_sequence = (
-                await repository.get_last_event_sequence(mission_id) + 1
-            )
+            mission_sequence = await repository.get_last_event_sequence(mission_id) + 1
             mission_event = EventEnvelope(
                 event_id=new_identifier("evt"),
                 aggregate_type="mission",
@@ -345,8 +354,50 @@ class MissionService:
                 schema_version=1,
             )
             work_units = await repository.list_work_units_for_update(mission_id)
+            pending_decisions = await repository.list_pending_decisions_for_update(
+                mission_id
+            )
             await repository.update_mission(updated_mission)
             await repository.append_event(mission_event)
+
+            for decision in pending_decisions:
+                cancelled_decision = Decision.model_validate(
+                    {
+                        **decision.model_dump(),
+                        "status": DecisionStatus.CANCELLED,
+                        "version": decision.version + 1,
+                        "rationale": "Mission cancelled while Decision was pending.",
+                        "resolved_by": actor,
+                        "resolved_at": occurred_at,
+                    }
+                )
+                decision_sequence = (
+                    await repository.get_last_event_sequence(
+                        decision.id,
+                        aggregate_type="decision",
+                    )
+                    + 1
+                )
+                decision_event = EventEnvelope(
+                    event_id=new_identifier("evt"),
+                    aggregate_type="decision",
+                    aggregate_id=decision.id,
+                    sequence=decision_sequence,
+                    event_type="decision.lifecycle.cancelled",
+                    actor=actor,
+                    occurred_at=occurred_at,
+                    correlation_id=mission_id,
+                    causation_id=mission_event.event_id,
+                    payload={
+                        "previousStatus": decision.status.value,
+                        "status": cancelled_decision.status.value,
+                        "previousVersion": decision.version,
+                        "version": cancelled_decision.version,
+                    },
+                    schema_version=1,
+                )
+                await repository.update_decision(cancelled_decision)
+                await repository.append_event(decision_event)
 
             cancellable_statuses = {
                 WorkUnitStatus.PENDING,
@@ -607,7 +658,9 @@ class MissionService:
             if parent.lease is None:
                 raise LeaseOwnershipError("parent work unit has no active lease")
             if parent.lease.id != lease_id:
-                raise LeaseOwnershipError("lease id does not match the parent work unit")
+                raise LeaseOwnershipError(
+                    "lease id does not match the parent work unit"
+                )
             if parent.lease.runner_id != runner_id:
                 raise LeaseOwnershipError("parent lease belongs to another runner")
 
@@ -1191,10 +1244,7 @@ class MissionService:
                 )
             if work_unit.lease is None:
                 raise LeaseOwnershipError("work unit has no active lease")
-            if (
-                work_unit.lease.id != lease_id
-                or work_unit.lease.runner_id != runner_id
-            ):
+            if work_unit.lease.id != lease_id or work_unit.lease.runner_id != runner_id:
                 raise LeaseOwnershipError("work unit lease ownership mismatch")
             if work_unit.lease.expires_at <= datetime.now(timezone.utc):
                 raise LeaseExpiredError("work unit lease has expired")
@@ -1465,9 +1515,7 @@ class MissionService:
                     "verification requires current-attempt Artifacts"
                 )
             if len(artifacts) > _MAX_VERIFICATION_ARTIFACTS:
-                raise WorkUnitNotReadyError(
-                    "verification Artifact count exceeds 200"
-                )
+                raise WorkUnitNotReadyError("verification Artifact count exceeds 200")
             if len({artifact.id for artifact in artifacts}) != len(artifacts):
                 raise WorkUnitNotReadyError(
                     "verification repository returned duplicate Artifacts"
@@ -1481,19 +1529,299 @@ class MissionService:
                 raise WorkUnitNotReadyError(
                     "verification repository returned unrelated Artifacts"
                 )
-            return VerificationDiscoveryOutcome(
-                context=VerificationContext(
+            evaluation_policy = self._verification_policy_resolver.resolve(
+                contract,
+                work_unit,
+                tuple(artifacts),
+            )
+            context = VerificationContext(
+                mission=mission,
+                contract=contract,
+                work_unit=work_unit,
+                artifacts=tuple(artifacts),
+                evaluation_policy=evaluation_policy,
+            )
+            if evaluation_policy.plan is None:
+                await self._request_verification_decision(
+                    repository,
                     mission=mission,
                     contract=contract,
                     work_unit=work_unit,
                     artifacts=tuple(artifacts),
-                    evaluation_policy=self._verification_policy_resolver.resolve(
-                        contract,
-                        work_unit,
-                        tuple(artifacts),
-                    ),
+                    evaluation_policy=evaluation_policy,
                 )
+            return VerificationDiscoveryOutcome(context=context)
+
+    async def _request_verification_decision(
+        self,
+        repository: MissionRepository,
+        *,
+        mission: Mission,
+        contract: MissionContract,
+        work_unit: WorkUnit,
+        artifacts: tuple[Artifact, ...],
+        evaluation_policy: EvaluationPolicyDecision,
+    ) -> Decision:
+        if evaluation_policy.plan is not None or evaluation_policy.reason is None:
+            raise ValueError("verification Decision requires an inconclusive policy")
+        occurred_at = datetime.now(timezone.utc)
+        can_retry = work_unit.attempt < contract.budgets.retries + 1
+        options = (
+            (DecisionResolution.RETRY_WORK_UNIT, DecisionResolution.FAIL_MISSION)
+            if can_retry
+            else (DecisionResolution.FAIL_MISSION,)
+        )
+        recommended_option = (
+            DecisionResolution.RETRY_WORK_UNIT
+            if can_retry
+            and evaluation_policy.reason.value == "artifact_requirements_not_met"
+            else DecisionResolution.FAIL_MISSION
+        )
+        material = {
+            "schemaVersion": 1,
+            "missionId": mission.id,
+            "contractId": contract.id,
+            "contractVersion": contract.version,
+            "workUnitId": work_unit.id,
+            "workUnitKind": work_unit.kind,
+            "attempt": work_unit.attempt,
+            "reasonCode": evaluation_policy.reason.value,
+            "criterionIds": list(evaluation_policy.criterion_ids),
+            "artifacts": [
+                {
+                    "id": artifact.id,
+                    "digest": artifact.digest.lower(),
+                    "sizeBytes": artifact.size_bytes,
+                }
+                for artifact in sorted(artifacts, key=lambda item: item.id)
+            ],
+        }
+        encoded_material = json.dumps(
+            material,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        decision = Decision(
+            id=new_identifier("dec"),
+            mission_id=mission.id,
+            work_unit_id=work_unit.id,
+            attempt=work_unit.attempt,
+            context_digest="sha256:" + hashlib.sha256(encoded_material).hexdigest(),
+            reason_code=evaluation_policy.reason.value,
+            criterion_ids=evaluation_policy.criterion_ids,
+            options=options,
+            recommended_option=recommended_option,
+            risk_summary=(
+                "Independent verification cannot prove the affected Contract "
+                "criteria under the current policy and Artifact set."
+            ),
+            status=DecisionStatus.PENDING,
+            version=1,
+            requested_by=ActorRef(type=ActorType.SERVICE, id="mission-control"),
+            requested_at=occurred_at,
+        )
+        decision_event = EventEnvelope(
+            event_id=new_identifier("evt"),
+            aggregate_type="decision",
+            aggregate_id=decision.id,
+            sequence=1,
+            event_type="decision.lifecycle.requested",
+            actor=decision.requested_by,
+            occurred_at=occurred_at,
+            correlation_id=mission.id,
+            payload=decision.to_public_dict(),
+            schema_version=1,
+        )
+        updated_mission = transition_mission(
+            mission,
+            MissionStatus.WAITING_DECISION,
+            occurred_at=occurred_at,
+        )
+        mission_sequence = await repository.get_last_event_sequence(mission.id) + 1
+        mission_event = EventEnvelope(
+            event_id=new_identifier("evt"),
+            aggregate_type="mission",
+            aggregate_id=mission.id,
+            sequence=mission_sequence,
+            event_type="mission.lifecycle.waiting_decision",
+            actor=decision.requested_by,
+            occurred_at=occurred_at,
+            correlation_id=mission.id,
+            causation_id=decision_event.event_id,
+            payload={
+                "previousStatus": mission.status.value,
+                "status": updated_mission.status.value,
+                "decisionId": decision.id,
+                "workUnitId": work_unit.id,
+            },
+            schema_version=1,
+        )
+        await repository.add_decision(decision)
+        await repository.append_event(decision_event)
+        await repository.update_mission(updated_mission)
+        await repository.append_event(mission_event)
+        return decision
+
+    async def resolve_decision(
+        self,
+        mission_id: str,
+        decision_id: str,
+        *,
+        expected_version: int,
+        resolution: DecisionResolution,
+        rationale: str,
+        actor: ActorRef,
+    ) -> tuple[Decision, WorkUnit, Mission]:
+        if actor.type != ActorType.HUMAN:
+            raise ValueError("only human actors can resolve Decisions")
+        async with self._repository.transaction() as repository:
+            decision = await repository.get_decision_for_update(decision_id)
+            if decision is None or decision.mission_id != mission_id:
+                raise DecisionNotFoundError(decision_id)
+            if decision.status != DecisionStatus.PENDING:
+                raise DecisionConflictError("Decision is already resolved")
+            if decision.version != expected_version:
+                raise DecisionConflictError("Decision version conflict")
+            if resolution not in decision.options:
+                raise DecisionConflictError("Decision resolution is not offered")
+
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.WAITING_DECISION:
+                raise DecisionConflictError(
+                    "Mission is not waiting for a Decision"
+                )
+            work_unit = await repository.get_work_unit_for_update(
+                decision.work_unit_id
             )
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(decision.work_unit_id)
+            if (
+                work_unit.status != WorkUnitStatus.VERIFYING
+                or work_unit.attempt != decision.attempt
+            ):
+                raise DecisionConflictError(
+                    "Decision no longer matches the verifying WorkUnit attempt"
+                )
+
+            if resolution == DecisionResolution.RETRY_WORK_UNIT:
+                contract = await repository.get_contract(mission.contract_id)
+                if contract is None:
+                    raise WorkUnitNotReadyError("mission contract not found")
+                if work_unit.attempt >= contract.budgets.retries + 1:
+                    raise DecisionConflictError("work unit retry budget is exhausted")
+
+            occurred_at = datetime.now(timezone.utc)
+            resolved_decision = Decision.model_validate(
+                {
+                    **decision.model_dump(),
+                    "status": DecisionStatus.RESOLVED,
+                    "version": decision.version + 1,
+                    "resolution": resolution,
+                    "rationale": rationale,
+                    "resolved_by": actor,
+                    "resolved_at": occurred_at,
+                }
+            )
+            decision_sequence = (
+                await repository.get_last_event_sequence(
+                    decision.id,
+                    aggregate_type="decision",
+                )
+                + 1
+            )
+            decision_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="decision",
+                aggregate_id=decision.id,
+                sequence=decision_sequence,
+                event_type="decision.lifecycle.resolved",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission.id,
+                payload={
+                    "previousStatus": decision.status.value,
+                    "status": resolved_decision.status.value,
+                    "previousVersion": decision.version,
+                    "version": resolved_decision.version,
+                    "resolution": resolution.value,
+                },
+                schema_version=1,
+            )
+            work_unit_target = (
+                WorkUnitStatus.RETRYING
+                if resolution == DecisionResolution.RETRY_WORK_UNIT
+                else WorkUnitStatus.FAILED
+            )
+            updated_work_unit = transition_work_unit(
+                work_unit,
+                work_unit_target,
+                occurred_at=occurred_at,
+            )
+            work_unit_sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            work_unit_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=work_unit_sequence,
+                event_type="work_unit.lifecycle.decision_resolved",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission.id,
+                causation_id=decision_event.event_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated_work_unit.status.value,
+                    "decisionId": decision.id,
+                    "resolution": resolution.value,
+                },
+                schema_version=1,
+            )
+            mission_target = (
+                MissionStatus.RUNNING
+                if resolution == DecisionResolution.RETRY_WORK_UNIT
+                else MissionStatus.FAILED
+            )
+            updated_mission = transition_mission(
+                mission,
+                mission_target,
+                occurred_at=occurred_at,
+            )
+            mission_sequence = await repository.get_last_event_sequence(mission.id) + 1
+            mission_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="mission",
+                aggregate_id=mission.id,
+                sequence=mission_sequence,
+                event_type="mission.lifecycle.decision_resolved",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission.id,
+                causation_id=work_unit_event.event_id,
+                payload={
+                    "previousStatus": mission.status.value,
+                    "status": updated_mission.status.value,
+                    "decisionId": decision.id,
+                    "resolution": resolution.value,
+                },
+                schema_version=1,
+            )
+
+            await repository.update_decision(resolved_decision)
+            await repository.append_event(decision_event)
+            await repository.update_work_unit(updated_work_unit)
+            await repository.append_event(work_unit_event)
+            await repository.update_mission(updated_mission)
+            await repository.append_event(mission_event)
+            return resolved_decision, updated_work_unit, updated_mission
 
     async def _validate_artifact_refs(
         self,
@@ -1556,6 +1884,26 @@ class MissionService:
             raise WorkUnitNotReadyError(
                 "Evidence can only be recorded for a VERIFYING work unit"
             )
+        mission = await self._repository.get_mission(mission_id)
+        if mission is None:
+            raise MissionNotFoundError(mission_id)
+        if mission.status not in {MissionStatus.RUNNING, MissionStatus.VERIFYING}:
+            raise WorkUnitNotReadyError(
+                "mission must be RUNNING or VERIFYING to record Evidence"
+            )
+        contract = await self._repository.get_contract(mission.contract_id)
+        if contract is None:
+            raise WorkUnitNotReadyError("mission contract not found")
+        if criterion_id not in {
+            criterion.id for criterion in contract.acceptance_criteria
+        }:
+            raise WorkUnitNotReadyError(
+                "Evidence criterion is not part of the mission contract"
+            )
+        if verdict == EvidenceVerdict.INCONCLUSIVE:
+            raise WorkUnitNotReadyError(
+                "INCONCLUSIVE verification requires a Mission Decision"
+            )
         verification_attempt = work_unit.attempt if work_unit.attempt > 0 else None
         artifacts = await self._validate_artifact_refs(
             self._repository,
@@ -1566,12 +1914,6 @@ class MissionService:
         )
         evaluation_plan: ArtifactSetEvaluationPlan | None = None
         if verdict == EvidenceVerdict.PASS:
-            mission = await self._repository.get_mission(mission_id)
-            if mission is None:
-                raise MissionNotFoundError(mission_id)
-            contract = await self._repository.get_contract(mission.contract_id)
-            if contract is None:
-                raise WorkUnitNotReadyError("mission contract not found")
             evaluation_plan = self._admit_pass_evidence(
                 contract=contract,
                 work_unit=work_unit,
@@ -1702,25 +2044,18 @@ class MissionService:
             await repository.add_evidence(evidence)
             await repository.append_event(evidence_event)
 
-            updated_work_unit = work_unit
-            work_unit_event_type = {
-                EvidenceVerdict.PASS: "work_unit.lifecycle.verified",
-                EvidenceVerdict.FAIL: "work_unit.lifecycle.verification_failed",
-                EvidenceVerdict.INCONCLUSIVE: (
-                    "work_unit.lifecycle.verification_inconclusive"
-                ),
-            }[verdict]
-            if verdict != EvidenceVerdict.INCONCLUSIVE:
-                updated_work_unit = transition_work_unit(
-                    work_unit,
-                    (
-                        WorkUnitStatus.SUCCEEDED
-                        if verdict == EvidenceVerdict.PASS
-                        else WorkUnitStatus.FAILED
-                    ),
-                    occurred_at=occurred_at,
-                )
-                await repository.update_work_unit(updated_work_unit)
+            if verdict == EvidenceVerdict.PASS:
+                work_unit_event_type = "work_unit.lifecycle.verified"
+                work_unit_target = WorkUnitStatus.SUCCEEDED
+            else:
+                work_unit_event_type = "work_unit.lifecycle.verification_failed"
+                work_unit_target = WorkUnitStatus.FAILED
+            updated_work_unit = transition_work_unit(
+                work_unit,
+                work_unit_target,
+                occurred_at=occurred_at,
+            )
+            await repository.update_work_unit(updated_work_unit)
             work_unit_sequence = (
                 await repository.get_last_event_sequence(
                     work_unit_id,
@@ -1760,8 +2095,8 @@ class MissionService:
                 )
             elif verdict == EvidenceVerdict.PASS:
                 work_units = await repository.list_work_units(mission_id)
-                passed_criteria = (
-                    await repository.list_passed_evidence_criterion_ids(mission_id)
+                passed_criteria = await repository.list_passed_evidence_criterion_ids(
+                    mission_id
                 )
                 required_criteria = {
                     criterion.id
@@ -1771,8 +2106,7 @@ class MissionService:
                 if (
                     work_units
                     and all(
-                        item.status == WorkUnitStatus.SUCCEEDED
-                        for item in work_units
+                        item.status == WorkUnitStatus.SUCCEEDED for item in work_units
                     )
                     and required_criteria <= passed_criteria
                 ):
@@ -1988,7 +2322,11 @@ class MissionService:
                     "leaseId": lease_id,
                     "attempt": updated.attempt,
                     **(
-                        {"artifactRefs": [ref.to_public_dict() for ref in artifact_refs]}
+                        {
+                            "artifactRefs": [
+                                ref.to_public_dict() for ref in artifact_refs
+                            ]
+                        }
                         if artifact_refs is not None
                         else {}
                     ),
@@ -2036,9 +2374,7 @@ class MissionService:
             contract = await repository.get_contract(mission.contract_id)
             if contract is None:
                 raise WorkUnitNotReadyError("mission contract not found")
-            retry_budget_exhausted = (
-                work_unit.attempt >= contract.budgets.retries + 1
-            )
+            retry_budget_exhausted = work_unit.attempt >= contract.budgets.retries + 1
             updated = transition_work_unit(
                 work_unit,
                 (

@@ -270,6 +270,13 @@ class _InconclusiveEvaluationPolicy(_Projection):
         "unsupported_evaluator",
         "artifact_requirements_not_met",
     ]
+    criterion_ids: tuple[Annotated[str, Field(min_length=1, max_length=255)], ...]
+
+    @model_validator(mode="after")
+    def validate_unique_criterion_ids(self) -> _InconclusiveEvaluationPolicy:
+        if len(self.criterion_ids) != len(set(self.criterion_ids)):
+            raise ValueError("inconclusive policy criterion IDs must be unique")
+        return self
 
 
 _EvaluationPolicy = Annotated[
@@ -279,7 +286,7 @@ _EvaluationPolicy = Annotated[
 
 
 class _VerificationContext(_Projection):
-    version: Literal[2]
+    version: Literal[3]
     mission: _MissionProjection
     contract: _ContractProjection
     work_unit: _WorkUnitProjection
@@ -306,6 +313,11 @@ class _VerificationContext(_Projection):
             and policy.criterion_id not in criterion_ids
         ):
             raise ValueError("evaluation policy criterion is absent from Contract")
+        if (
+            isinstance(policy, _InconclusiveEvaluationPolicy)
+            and not set(policy.criterion_ids) <= criterion_ids
+        ):
+            raise ValueError("inconclusive policy criterion is absent from Contract")
         return self
 
 

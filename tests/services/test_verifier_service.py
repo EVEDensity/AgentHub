@@ -43,7 +43,7 @@ def discovery_payload(
     return {
         "discoveryStatus": "ready",
         "verificationContext": {
-            "version": 2,
+            "version": 3,
             "mission": {
                 "id": "mis-1",
                 "title": "Mission",
@@ -235,6 +235,7 @@ class ControlledVerifierTests(unittest.IsolatedAsyncioTestCase):
                 policy={
                     "status": "inconclusive",
                     "reasonCode": "no_applicable_policy",
+                    "criterionIds": ["tests"],
                 }
             )
         )
@@ -254,6 +255,34 @@ class ControlledVerifierTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(byte_verifier.calls, [])
         self.assertEqual(control.submissions, [])
+
+    async def test_inconclusive_policy_rejects_invalid_criterion_attribution(
+        self,
+    ) -> None:
+        for criterion_ids in (["tests", "tests"], ["outside-contract"]):
+            with self.subTest(criterion_ids=criterion_ids):
+                control = FakeControl(
+                    discovery_payload(
+                        policy={
+                            "status": "inconclusive",
+                            "reasonCode": "ambiguous_policy",
+                            "criterionIds": criterion_ids,
+                        }
+                    )
+                )
+                byte_verifier = RecordingByteVerifier()
+                verifier = ControlledVerifier(
+                    control,
+                    byte_verifier=byte_verifier,
+                    verifier_id="verifier-1",
+                    verifier_version="artifact-set-runtime.v1",
+                )
+
+                with self.assertRaises(VerifierProtocolError):
+                    await verifier.discover_and_verify("workspace-1")
+
+                self.assertEqual(byte_verifier.calls, [])
+                self.assertEqual(control.submissions, [])
 
     async def test_malformed_or_mismatched_responses_fail_closed(self) -> None:
         malformed_control = FakeControl(

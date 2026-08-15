@@ -41,6 +41,7 @@ class VerificationPolicyServiceTests(unittest.TestCase):
             {
                 "status": "inconclusive",
                 "reasonCode": "no_applicable_policy",
+                "criterionIds": ["artifact-set"],
             },
         )
 
@@ -146,6 +147,7 @@ class VerificationPolicyServiceTests(unittest.TestCase):
                     decision.reason,
                     EvaluationPolicyReason.INVALID_CONFIGURATION,
                 )
+                self.assertEqual(decision.criterion_ids, ("artifact-set",))
 
     def test_unknown_evaluator_is_inconclusive(self) -> None:
         decision = self.resolver.resolve(
@@ -169,6 +171,7 @@ class VerificationPolicyServiceTests(unittest.TestCase):
             decision.reason,
             EvaluationPolicyReason.UNSUPPORTED_EVALUATOR,
         )
+        self.assertEqual(decision.criterion_ids, ("artifact-set",))
 
     def test_multiple_matching_policies_are_inconclusive(self) -> None:
         configuration = {
@@ -192,6 +195,7 @@ class VerificationPolicyServiceTests(unittest.TestCase):
             decision.reason,
             EvaluationPolicyReason.AMBIGUOUS_POLICY,
         )
+        self.assertEqual(decision.criterion_ids, ("first", "second"))
 
     def test_unsatisfied_artifact_requirements_are_inconclusive(self) -> None:
         decision = self.resolver.resolve(
@@ -215,10 +219,62 @@ class VerificationPolicyServiceTests(unittest.TestCase):
             decision.reason,
             EvaluationPolicyReason.ARTIFACT_REQUIREMENTS_NOT_MET,
         )
+        self.assertEqual(decision.criterion_ids, ("artifact-set",))
+
+    def test_non_matching_policies_report_all_configured_criteria(self) -> None:
+        configuration = {
+            "evaluator": "artifact-set.v1",
+            "workUnitKinds": ["another-kind"],
+            "minimumArtifacts": 1,
+            "requiredArtifactKinds": [],
+        }
+        decision = self.resolver.resolve(
+            build_contract(
+                acceptance_criteria=[
+                    build_criterion("second", configuration=configuration),
+                    build_criterion("first", configuration=configuration),
+                ]
+            ),
+            build_work_unit(kind="code_change", status="VERIFYING", attempt=1),
+            (build_artifact(),),
+        )
+
+        self.assertEqual(
+            decision.to_public_dict(),
+            {
+                "status": "inconclusive",
+                "reasonCode": "no_applicable_policy",
+                "criterionIds": ["first", "second"],
+            },
+        )
 
     def test_decision_requires_exactly_one_plan_or_reason(self) -> None:
         with self.assertRaisesRegex(ValueError, "exactly one"):
             EvaluationPolicyDecision()
+        with self.assertRaisesRegex(ValueError, "cannot carry criterion"):
+            EvaluationPolicyDecision(
+                plan=self.resolver.resolve(
+                    build_contract(
+                        acceptance_criteria=[
+                            build_criterion(
+                                configuration={
+                                    "evaluator": "artifact-set.v1",
+                                    "workUnitKinds": ["code_change"],
+                                    "minimumArtifacts": 1,
+                                    "requiredArtifactKinds": [],
+                                }
+                            )
+                        ]
+                    ),
+                    build_work_unit(
+                        kind="code_change",
+                        status="VERIFYING",
+                        attempt=1,
+                    ),
+                    (build_artifact(),),
+                ).plan,
+                criterion_ids=("artifact-set",),
+            )
 
 
 if __name__ == "__main__":

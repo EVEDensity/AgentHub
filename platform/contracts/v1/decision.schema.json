@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/decision.schema.json",
+  "title": "Mission decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "missionId", "workUnitId", "attempt", "contextDigest",
+    "reasonCode", "criterionIds", "options", "recommendedOption",
+    "riskSummary", "status", "version", "requestedBy", "requestedAt"
+  ],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/identifier" },
+    "missionId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "workUnitId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "contextDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-fA-F0-9]{64}$"
+    },
+    "reasonCode": {
+      "type": "string",
+      "enum": [
+        "no_applicable_policy",
+        "ambiguous_policy",
+        "invalid_configuration",
+        "unsupported_evaluator",
+        "artifact_requirements_not_met"
+      ]
+    },
+    "criterionIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/identifier" }
+    },
+    "options": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/resolution" }
+    },
+    "recommendedOption": { "$ref": "#/$defs/resolution" },
+    "riskSummary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "status": {
+      "type": "string",
+      "enum": ["PENDING", "RESOLVED", "CANCELLED"]
+    },
+    "version": { "type": "integer", "minimum": 1 },
+    "requestedBy": { "$ref": "common.schema.json#/$defs/actorRef" },
+    "requestedAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "resolution": { "$ref": "#/$defs/resolution" },
+    "rationale": { "type": "string", "minLength": 1, "maxLength": 10000 },
+    "resolvedBy": { "$ref": "common.schema.json#/$defs/actorRef" },
+    "resolvedAt": { "$ref": "common.schema.json#/$defs/timestamp" }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "status": { "const": "PENDING" },
+        "version": { "const": 1 }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["resolution"] },
+          { "required": ["rationale"] },
+          { "required": ["resolvedBy"] },
+          { "required": ["resolvedAt"] }
+        ]
+      }
+    },
+    {
+      "required": ["resolution", "rationale", "resolvedBy", "resolvedAt"],
+      "properties": {
+        "status": { "const": "RESOLVED" },
+        "version": { "type": "integer", "minimum": 2 }
+      }
+    },
+    {
+      "required": ["rationale", "resolvedBy", "resolvedAt"],
+      "properties": {
+        "status": { "const": "CANCELLED" },
+        "version": { "type": "integer", "minimum": 2 }
+      },
+      "not": { "required": ["resolution"] }
+    }
+  ],
+  "$defs": {
+    "resolution": {
+      "type": "string",
+      "enum": ["RETRY_WORK_UNIT", "FAIL_MISSION"]
+    }
+  }
+}

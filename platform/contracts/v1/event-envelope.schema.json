@@ -12,7 +12,10 @@
     "event_id": { "$ref": "common.schema.json#/$defs/identifier" },
     "aggregate_type": {
       "type": "string",
-      "enum": ["mission", "mission_contract", "work_unit", "artifact", "evidence"]
+      "enum": [
+        "mission", "mission_contract", "work_unit", "artifact", "evidence",
+        "decision"
+      ]
     },
     "aggregate_id": { "$ref": "common.schema.json#/$defs/identifier" },
     "sequence": { "type": "integer", "minimum": 1 },

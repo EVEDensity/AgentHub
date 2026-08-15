@@ -113,6 +113,18 @@ class WorkspaceVerificationDiscoveryRequest(BaseModel):
     workspace_id: Annotated[str, Field(min_length=1, max_length=255)]
 
 
+class DecisionResolutionRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    expected_version: Annotated[int, Field(ge=1)]
+    resolution: Literal["RETRY_WORK_UNIT", "FAIL_MISSION"]
+    rationale: Annotated[str, Field(min_length=1, max_length=10000)]
+
+
 class WorkUnitStartRequest(BaseModel):
     model_config = ConfigDict(
         alias_generator=_to_camel,

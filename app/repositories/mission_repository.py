@@ -7,6 +7,7 @@ from typing import Any
 
 from app.domain import (
     Artifact,
+    Decision,
     EventEnvelope,
     Evidence,
     Mission,
@@ -301,6 +302,127 @@ class MissionRepository:
             mission_id,
         )
         return {str(row["criterion_id"]) for row in rows}
+
+    async def add_decision(self, decision: Decision) -> None:
+        await self._execute(
+            """INSERT INTO decisions(
+                   id, mission_id, work_unit_id, attempt, context_digest,
+                   reason_code, criterion_ids, options, recommended_option,
+                   risk_summary, status, version, requested_by, requested_at,
+                   expires_at, resolution, rationale, resolved_by, resolved_at
+               ) VALUES(
+                   $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10,
+                   $11, $12, $13::jsonb, $14, $15, $16, $17, $18::jsonb, $19
+               )""",
+            decision.id,
+            decision.mission_id,
+            decision.work_unit_id,
+            decision.attempt,
+            decision.context_digest,
+            decision.reason_code,
+            _encode_json(list(decision.criterion_ids)),
+            _encode_json([option.value for option in decision.options]),
+            decision.recommended_option.value,
+            decision.risk_summary,
+            decision.status.value,
+            decision.version,
+            _encode_json(decision.requested_by.to_public_dict()),
+            decision.requested_at,
+            decision.expires_at,
+            decision.resolution.value if decision.resolution is not None else None,
+            decision.rationale,
+            (
+                _encode_json(decision.resolved_by.to_public_dict())
+                if decision.resolved_by is not None
+                else None
+            ),
+            decision.resolved_at,
+        )
+
+    async def get_decision(self, decision_id: str) -> Decision | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, work_unit_id, attempt, context_digest,
+                      reason_code, criterion_ids, options, recommended_option,
+                      risk_summary, status, version, requested_by, requested_at,
+                      expires_at, resolution, rationale, resolved_by, resolved_at
+               FROM decisions WHERE id=$1""",
+            decision_id,
+        )
+        return self._decision_from_row(row) if row is not None else None
+
+    async def get_decision_for_update(self, decision_id: str) -> Decision | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, work_unit_id, attempt, context_digest,
+                      reason_code, criterion_ids, options, recommended_option,
+                      risk_summary, status, version, requested_by, requested_at,
+                      expires_at, resolution, rationale, resolved_by, resolved_at
+               FROM decisions WHERE id=$1
+               FOR UPDATE""",
+            decision_id,
+        )
+        return self._decision_from_row(row) if row is not None else None
+
+    async def list_decisions(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Decision]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        rows = await self._fetch_all(
+            """SELECT id, mission_id, work_unit_id, attempt, context_digest,
+                      reason_code, criterion_ids, options, recommended_option,
+                      risk_summary, status, version, requested_by, requested_at,
+                      expires_at, resolution, rationale, resolved_by, resolved_at
+               FROM decisions
+               WHERE mission_id=$1
+               ORDER BY requested_at ASC, id ASC
+               LIMIT $2 OFFSET $3""",
+            mission_id,
+            limit,
+            offset,
+        )
+        return [self._decision_from_row(row) for row in rows]
+
+    async def list_pending_decisions_for_update(
+        self,
+        mission_id: str,
+    ) -> list[Decision]:
+        rows = await self._fetch_all(
+            """SELECT id, mission_id, work_unit_id, attempt, context_digest,
+                      reason_code, criterion_ids, options, recommended_option,
+                      risk_summary, status, version, requested_by, requested_at,
+                      expires_at, resolution, rationale, resolved_by, resolved_at
+               FROM decisions
+               WHERE mission_id=$1 AND status='PENDING'
+               ORDER BY requested_at ASC, id ASC
+               FOR UPDATE""",
+            mission_id,
+        )
+        return [self._decision_from_row(row) for row in rows]
+
+    async def update_decision(self, decision: Decision) -> None:
+        await self._execute(
+            """UPDATE decisions
+               SET status=$2, version=$3, resolution=$4, rationale=$5,
+                   resolved_by=$6::jsonb, resolved_at=$7
+               WHERE id=$1""",
+            decision.id,
+            decision.status.value,
+            decision.version,
+            decision.resolution.value if decision.resolution is not None else None,
+            decision.rationale,
+            (
+                _encode_json(decision.resolved_by.to_public_dict())
+                if decision.resolved_by is not None
+                else None
+            ),
+            decision.resolved_at,
+        )
 
     async def add_artifact(self, artifact: Artifact) -> None:
         await self._execute(
@@ -778,6 +900,20 @@ class MissionRepository:
             values["artifact_refs"], "artifact_refs"
         )
         return Evidence.model_validate(values)
+
+    @staticmethod
+    def _decision_from_row(row: Mapping[str, Any]) -> Decision:
+        values = dict(row)
+        for field_name in ("criterion_ids", "options"):
+            values[field_name] = _decode_json_array(values[field_name], field_name)
+        values["requested_by"] = _decode_json_object(
+            values["requested_by"], "requested_by"
+        )
+        if values["resolved_by"] is not None:
+            values["resolved_by"] = _decode_json_object(
+                values["resolved_by"], "resolved_by"
+            )
+        return Decision.model_validate(values)
 
     @staticmethod
     def _artifact_from_row(row: Mapping[str, Any]) -> Artifact:

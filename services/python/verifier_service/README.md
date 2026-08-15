@@ -30,7 +30,8 @@ remains the only durable verification, Evidence, and lifecycle authority.
   context version 3 attributes an inconclusive policy to zero or more validated
   Contract criterion IDs, but the condition remains a typed failed poll. The
   service does not choose one criterion, submit INCONCLUSIVE Evidence, or own a
-  durable Decision.
+  durable Decision. Mission Control atomically opens that Decision and pauses
+  the Mission; the next poll sees no eligible item until a human resolves it.
 
 `/healthz` reports whether the worker task is alive. `/readyz` becomes ready
 after a successful Mission Control discovery, including an idle result, and

@@ -181,6 +181,7 @@ class AggregateType(str, Enum):
     WORK_UNIT = "work_unit"
     ARTIFACT = "artifact"
     EVIDENCE = "evidence"
+    DECISION = "decision"
 
 
 class EventEnvelope(BaseModel):
@@ -404,4 +405,86 @@ class Evidence(DomainModel):
         artifact_ids = [artifact.id for artifact in self.artifact_refs]
         if len(artifact_ids) != len(set(artifact_ids)):
             raise ValueError("evidence artifact refs must be unique")
+        return self
+
+
+class DecisionStatus(str, Enum):
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    CANCELLED = "CANCELLED"
+
+
+class DecisionResolution(str, Enum):
+    RETRY_WORK_UNIT = "RETRY_WORK_UNIT"
+    FAIL_MISSION = "FAIL_MISSION"
+
+
+class EvaluationPolicyReason(str, Enum):
+    NO_APPLICABLE_POLICY = "no_applicable_policy"
+    AMBIGUOUS_POLICY = "ambiguous_policy"
+    INVALID_CONFIGURATION = "invalid_configuration"
+    UNSUPPORTED_EVALUATOR = "unsupported_evaluator"
+    ARTIFACT_REQUIREMENTS_NOT_MET = "artifact_requirements_not_met"
+
+
+class Decision(DomainModel):
+    id: Identifier
+    mission_id: Identifier
+    work_unit_id: Identifier
+    attempt: Annotated[int, Field(ge=1)]
+    context_digest: Digest
+    reason_code: EvaluationPolicyReason
+    criterion_ids: tuple[Identifier, ...]
+    options: Annotated[tuple[DecisionResolution, ...], Field(min_length=1)]
+    recommended_option: DecisionResolution
+    risk_summary: Annotated[str, Field(min_length=1, max_length=2000)]
+    status: DecisionStatus
+    version: Annotated[int, Field(ge=1)] = 1
+    requested_by: ActorRef
+    requested_at: AwareDatetime
+    expires_at: AwareDatetime | None = None
+    resolution: DecisionResolution | None = None
+    rationale: Annotated[str, Field(min_length=1, max_length=10000)] | None = None
+    resolved_by: ActorRef | None = None
+    resolved_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def validate_lifecycle(self) -> Decision:
+        if self.criterion_ids != tuple(sorted(set(self.criterion_ids))):
+            raise ValueError("decision criterion IDs must be sorted and unique")
+        if len(self.options) != len(set(self.options)):
+            raise ValueError("decision options must be unique")
+        if self.recommended_option not in self.options:
+            raise ValueError("recommended option must be offered by the decision")
+        if self.expires_at is not None and self.expires_at <= self.requested_at:
+            raise ValueError("decision expiry must be later than requested_at")
+
+        resolution_fields = (
+            self.resolution,
+            self.rationale,
+            self.resolved_by,
+            self.resolved_at,
+        )
+        if self.status == DecisionStatus.PENDING:
+            if any(value is not None for value in resolution_fields):
+                raise ValueError("pending decision cannot carry resolution fields")
+            if self.version != 1:
+                raise ValueError("pending decision must start at version 1")
+            return self
+
+        completion_fields = (self.rationale, self.resolved_by, self.resolved_at)
+        if any(value is None for value in completion_fields):
+            raise ValueError("closed decision requires complete resolution metadata")
+        assert self.resolved_at is not None
+        if self.resolved_at < self.requested_at:
+            raise ValueError("decision resolution cannot predate its request")
+        if self.version < 2:
+            raise ValueError("closed decision version must be at least 2")
+        if self.status == DecisionStatus.CANCELLED:
+            if self.resolution is not None:
+                raise ValueError("cancelled decision cannot carry a resolution")
+            return self
+        assert self.resolution is not None
+        if self.resolution not in self.options:
+            raise ValueError("decision resolution was not an offered option")
         return self

@@ -20,6 +20,8 @@ AGENT_CATALOG_PROJECTION_REVISION = "f9c3d4e5a6b7"
 AGENT_CATALOG_PROJECTION_DOWN_REVISION = AGENT_BINDING_PERSISTENCE_REVISION
 A2A_INBOUND_SOURCE_MAPPING_REVISION = "a0d4e5f6b7c8"
 A2A_INBOUND_SOURCE_MAPPING_DOWN_REVISION = AGENT_CATALOG_PROJECTION_REVISION
+DECISION_PERSISTENCE_REVISION = "b1e5f6a7c8d9"
+DECISION_PERSISTENCE_DOWN_REVISION = A2A_INBOUND_SOURCE_MAPPING_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -341,4 +343,107 @@ A2A_INBOUND_SOURCE_MAPPING_UPGRADE = (
 
 A2A_INBOUND_SOURCE_MAPPING_DOWNGRADE = (
     "DROP INDEX IF EXISTS uq_missions_a2a_inbound_external_task",
+)
+
+DECISION_PERSISTENCE_UPGRADE = (
+    """
+    ALTER TABLE mission_events
+    DROP CONSTRAINT IF EXISTS mission_events_aggregate_type_check
+    """,
+    """
+    ALTER TABLE mission_events
+    ADD CONSTRAINT mission_events_aggregate_type_check CHECK (
+        aggregate_type IN (
+            'mission', 'mission_contract', 'work_unit', 'artifact', 'evidence',
+            'decision'
+        )
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS decisions (
+        id TEXT PRIMARY KEY,
+        mission_id TEXT NOT NULL REFERENCES missions(id),
+        work_unit_id TEXT NOT NULL REFERENCES work_units(id),
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        context_digest TEXT NOT NULL CHECK (
+            context_digest ~ '^sha256:[a-fA-F0-9]{64}$'
+        ),
+        reason_code TEXT NOT NULL CHECK (
+            reason_code IN (
+                'no_applicable_policy', 'ambiguous_policy',
+                'invalid_configuration', 'unsupported_evaluator',
+                'artifact_requirements_not_met'
+            )
+        ),
+        criterion_ids JSONB NOT NULL CHECK (jsonb_typeof(criterion_ids) = 'array'),
+        options JSONB NOT NULL CHECK (jsonb_typeof(options) = 'array'),
+        recommended_option TEXT NOT NULL CHECK (
+            recommended_option IN ('RETRY_WORK_UNIT', 'FAIL_MISSION')
+        ),
+        risk_summary TEXT NOT NULL CHECK (length(risk_summary) BETWEEN 1 AND 2000),
+        status TEXT NOT NULL CHECK (
+            status IN ('PENDING', 'RESOLVED', 'CANCELLED')
+        ),
+        version INTEGER NOT NULL CHECK (version >= 1),
+        requested_by JSONB NOT NULL CHECK (jsonb_typeof(requested_by) = 'object'),
+        requested_at TIMESTAMPTZ NOT NULL,
+        expires_at TIMESTAMPTZ,
+        resolution TEXT CHECK (
+            resolution IS NULL
+            OR resolution IN ('RETRY_WORK_UNIT', 'FAIL_MISSION')
+        ),
+        rationale TEXT CHECK (
+            rationale IS NULL OR length(rationale) BETWEEN 1 AND 10000
+        ),
+        resolved_by JSONB CHECK (
+            resolved_by IS NULL OR jsonb_typeof(resolved_by) = 'object'
+        ),
+        resolved_at TIMESTAMPTZ,
+        UNIQUE (work_unit_id, attempt, context_digest),
+        CHECK (expires_at IS NULL OR expires_at > requested_at),
+        CHECK (
+            (
+                status = 'PENDING' AND version = 1
+                AND resolution IS NULL AND rationale IS NULL
+                AND resolved_by IS NULL AND resolved_at IS NULL
+            )
+            OR (
+                status = 'RESOLVED' AND version >= 2
+                AND resolution IS NOT NULL AND rationale IS NOT NULL
+                AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL
+                AND resolved_at >= requested_at
+            )
+            OR (
+                status = 'CANCELLED' AND version >= 2
+                AND resolution IS NULL AND rationale IS NOT NULL
+                AND resolved_by IS NOT NULL AND resolved_at IS NOT NULL
+                AND resolved_at >= requested_at
+            )
+        )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_decisions_mission_status_requested
+    ON decisions(mission_id, status, requested_at, id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_decisions_work_unit_attempt
+    ON decisions(work_unit_id, attempt, requested_at, id)
+    """,
+)
+
+DECISION_PERSISTENCE_DOWNGRADE = (
+    "DROP TABLE IF EXISTS decisions",
+    """
+    ALTER TABLE mission_events
+    DROP CONSTRAINT IF EXISTS mission_events_aggregate_type_check
+    """,
+    """
+    ALTER TABLE mission_events
+    ADD CONSTRAINT mission_events_aggregate_type_check CHECK (
+        aggregate_type IN (
+            'mission', 'mission_contract', 'work_unit', 'artifact', 'evidence'
+        )
+    )
+    """,
 )

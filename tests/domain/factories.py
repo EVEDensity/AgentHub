@@ -8,6 +8,7 @@ from app.domain import (
     Artifact,
     Budgets,
     CapabilityGrant,
+    Decision,
     DecisionGate,
     EventEnvelope,
     Evidence,
@@ -96,6 +97,27 @@ def build_evidence(**updates: object) -> Evidence:
     }
     values.update(updates)
     return Evidence.model_validate(values)
+
+
+def build_decision(**updates: object) -> Decision:
+    values: dict[str, object] = {
+        "id": "dec-1",
+        "mission_id": "mis-1",
+        "work_unit_id": "wu-1",
+        "attempt": 1,
+        "context_digest": "sha256:" + "c" * 64,
+        "reason_code": "no_applicable_policy",
+        "criterion_ids": ["tests"],
+        "options": ["RETRY_WORK_UNIT", "FAIL_MISSION"],
+        "recommended_option": "FAIL_MISSION",
+        "risk_summary": "Verification policy cannot prove the required criteria.",
+        "status": "PENDING",
+        "version": 1,
+        "requested_by": ActorRef(type="service", id="mission-control"),
+        "requested_at": NOW,
+    }
+    values.update(updates)
+    return Decision.model_validate(values)
 
 
 def build_event(**updates: object) -> EventEnvelope:

@@ -21,6 +21,7 @@ from tests.domain.factories import (
     NOW,
     build_artifact,
     build_contract,
+    build_decision,
     build_event,
     build_mission,
     build_work_unit,
@@ -69,6 +70,38 @@ class DomainModelTests(unittest.TestCase):
         self.assert_matches_schema("work-unit.schema.json", work_unit)
         self.assert_matches_schema("artifact.schema.json", artifact)
         self.assert_matches_schema("evidence.schema.json", evidence)
+        self.assert_matches_schema("decision.schema.json", build_decision())
+
+    def test_decision_enforces_pending_and_resolved_lifecycle(self) -> None:
+        pending = build_decision()
+        resolved = build_decision(
+            status="RESOLVED",
+            version=2,
+            resolution="RETRY_WORK_UNIT",
+            rationale="Run a new attempt with corrected Artifact output.",
+            resolved_by={"type": "human", "id": "user-1"},
+            resolved_at=NOW,
+        )
+
+        self.assertEqual(resolved.resolution.value, "RETRY_WORK_UNIT")
+        with self.assertRaisesRegex(ValidationError, "cannot carry resolution"):
+            build_decision(resolution="FAIL_MISSION")
+        with self.assertRaisesRegex(ValidationError, "sorted and unique"):
+            build_decision(criterion_ids=["tests", "tests"])
+        with self.assertRaisesRegex(ValidationError, "offered by"):
+            build_decision(recommended_option="RETRY_WORK_UNIT", options=["FAIL_MISSION"])
+        with self.assertRaisesRegex(ValidationError, "resolution metadata"):
+            build_decision(status="RESOLVED", version=2)
+        cancelled = build_decision(
+            status="CANCELLED",
+            version=2,
+            rationale="Mission was cancelled.",
+            resolved_by={"type": "human", "id": "user-1"},
+            resolved_at=NOW,
+        )
+        self.assert_matches_schema("decision.schema.json", cancelled)
+        self.assertIsNone(cancelled.resolution)
+        self.assertEqual(pending.version, 1)
 
     def test_event_envelope_uses_public_snake_case_contract(self) -> None:
         event = build_event()
@@ -101,6 +134,10 @@ class DomainModelTests(unittest.TestCase):
             mission.status = "RUNNING"
         with self.assertRaises(ValidationError):
             build_mission(unknown_field=True)
+
+    def test_decision_rejects_unknown_evaluation_policy_reason(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "reason_code"):
+            build_decision(reason_code="model_requested_human_review")
 
     def test_contract_collections_and_nested_configuration_are_immutable(self) -> None:
         contract = build_contract(

@@ -20,6 +20,7 @@ from app.api.v1.missions import (
 )
 from app.domain import (
     Artifact,
+    Decision,
     EventEnvelope,
     Evidence,
     Lease,
@@ -66,6 +67,7 @@ from app.services.workspace_admission_service import (
 from tests.domain.factories import (
     build_artifact,
     build_contract,
+    build_decision,
     build_event,
     build_evidence,
     build_mission,
@@ -80,6 +82,7 @@ class FakeMissionRepository:
         self.events: list[EventEnvelope] = []
         self.artifacts: list[Artifact] = []
         self.evidence: list[Evidence] = []
+        self.decisions: list[Decision] = []
         self.list_result: list[Mission] = []
         self.work_units: list[WorkUnit] = []
         self.transaction_depth = 0
@@ -147,8 +150,7 @@ class FakeMissionRepository:
             and mission.source.type.value == source_type
             and mission.source.external_id == external_id
             and (
-                source_reference is None
-                or mission.source.reference == source_reference
+                source_reference is None or mission.source.reference == source_reference
             )
         ):
             return mission
@@ -226,6 +228,69 @@ class FakeMissionRepository:
             if evidence.mission_id == mission_id and evidence.verdict.value == "PASS"
         }
 
+    async def add_decision(self, decision: Decision) -> None:
+        if any(existing.id == decision.id for existing in self.decisions):
+            raise ValueError("decision id already exists")
+        if any(
+            existing.work_unit_id == decision.work_unit_id
+            and existing.attempt == decision.attempt
+            and existing.context_digest == decision.context_digest
+            for existing in self.decisions
+        ):
+            raise ValueError("decision context already exists")
+        self.decisions.append(decision)
+
+    async def get_decision(self, decision_id: str) -> Decision | None:
+        return next(
+            (decision for decision in self.decisions if decision.id == decision_id),
+            None,
+        )
+
+    async def get_decision_for_update(self, decision_id: str) -> Decision | None:
+        if not self.transaction_depth:
+            raise AssertionError("decision lock requires a transaction")
+        return await self.get_decision(decision_id)
+
+    async def list_decisions(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Decision]:
+        matching = sorted(
+            (
+                decision
+                for decision in self.decisions
+                if decision.mission_id == mission_id
+            ),
+            key=lambda decision: (decision.requested_at, decision.id),
+        )
+        return matching[offset : offset + limit]
+
+    async def list_pending_decisions_for_update(
+        self,
+        mission_id: str,
+    ) -> list[Decision]:
+        if not self.transaction_depth:
+            raise AssertionError("pending decision lock requires a transaction")
+        return sorted(
+            (
+                decision
+                for decision in self.decisions
+                if decision.mission_id == mission_id
+                and decision.status.value == "PENDING"
+            ),
+            key=lambda decision: (decision.requested_at, decision.id),
+        )
+
+    async def update_decision(self, decision: Decision) -> None:
+        for index, existing in enumerate(self.decisions):
+            if existing.id == decision.id:
+                self.decisions[index] = decision
+                return
+        raise AssertionError("decision update requires an existing row")
+
     async def add_artifact(self, artifact: Artifact) -> None:
         self.artifacts.append(artifact)
 
@@ -260,9 +325,7 @@ class FakeMissionRepository:
         *,
         limit: int = 201,
     ) -> list[Artifact]:
-        self.work_unit_artifact_calls.append(
-            (mission_id, work_unit_id, attempt, limit)
-        )
+        self.work_unit_artifact_calls.append((mission_id, work_unit_id, attempt, limit))
         matching = sorted(
             (
                 artifact
@@ -419,11 +482,7 @@ class FakeMissionRepository:
             dependencies_ready = all(
                 (
                     dependency := next(
-                        (
-                            item
-                            for item in self.work_units
-                            if item.id == dependency_id
-                        ),
+                        (item for item in self.work_units if item.id == dependency_id),
                         None,
                     )
                 )
@@ -712,11 +771,10 @@ def build_app(
     binding_resolver = agent_binding_resolver or UnavailableAgentBindingResolver()
     app.dependency_overrides[get_agent_binding_resolver] = lambda: binding_resolver
     grant_authorizer = (
-        runner_workspace_grant_authorizer
-        or FakeRunnerWorkspaceGrantAuthorizer()
+        runner_workspace_grant_authorizer or FakeRunnerWorkspaceGrantAuthorizer()
     )
-    app.dependency_overrides[get_runner_workspace_grant_authorizer] = (
-        lambda: grant_authorizer
+    app.dependency_overrides[get_runner_workspace_grant_authorizer] = lambda: (
+        grant_authorizer
     )
     verifier_grant_authorizer = (
         verifier_workspace_grant_authorizer or FakeVerifierWorkspaceGrantAuthorizer()
@@ -728,8 +786,8 @@ def build_app(
         workspace_claim_admission_policy_resolver
         or FakeWorkspaceClaimAdmissionPolicyResolver()
     )
-    app.dependency_overrides[get_workspace_claim_admission_policy_resolver] = (
-        lambda: admission_policy_resolver
+    app.dependency_overrides[get_workspace_claim_admission_policy_resolver] = lambda: (
+        admission_policy_resolver
     )
     app.dependency_overrides[get_current_user] = lambda: user
     return app
@@ -921,6 +979,62 @@ class MissionApiTests(unittest.TestCase):
             )
         )
 
+    def test_cancel_waiting_mission_closes_pending_decision(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="WAITING_DECISION",
+        )
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        decision = build_decision()
+        repository.decisions = [decision]
+        repository.events = [
+            build_event(
+                event_id="evt-decision-requested",
+                aggregate_type="decision",
+                aggregate_id=decision.id,
+                event_type="decision.lifecycle.requested",
+                payload=decision.to_public_dict(),
+            ),
+            build_event(
+                event_id="evt-mission-waiting",
+                event_type="mission.lifecycle.waiting_decision",
+                payload={
+                    "previousStatus": "RUNNING",
+                    "status": "WAITING_DECISION",
+                    "decisionId": decision.id,
+                    "workUnitId": "wu-1",
+                },
+            ),
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post("/api/v1/missions/mis-1/cancel")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(repository.mission.status.value, "CANCELLED")
+        self.assertEqual(repository.work_units[0].status.value, "CANCELLED")
+        self.assertEqual(repository.decisions[0].status.value, "CANCELLED")
+        self.assertEqual(repository.decisions[0].version, 2)
+        self.assertIsNone(repository.decisions[0].resolution)
+        self.assertEqual(
+            [event.event_type for event in repository.events[-3:]],
+            [
+                "mission.lifecycle.cancelled",
+                "decision.lifecycle.cancelled",
+                "work_unit.lifecycle.cancelled",
+            ],
+        )
+        self.assertEqual(
+            repository.events[-2].causation_id,
+            repository.events[-3].event_id,
+        )
+
     def test_invalid_transition_returns_conflict_without_event(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(
@@ -1056,7 +1170,9 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.work_units, [])
         self.assertEqual(repository.events, [])
 
-    def test_delegate_work_unit_requires_active_lease_and_registered_artifact(self) -> None:
+    def test_delegate_work_unit_requires_active_lease_and_registered_artifact(
+        self,
+    ) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
         repository.contract = build_contract()
@@ -1113,7 +1229,9 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(first.json()["parentWorkUnitId"], "wu-parent")
         self.assertEqual(len(repository.work_units), 2)
         self.assertEqual(len(repository.events), 2)
-        self.assertEqual(repository.events[0].event_type, "work_unit.delegation.requested")
+        self.assertEqual(
+            repository.events[0].event_type, "work_unit.delegation.requested"
+        )
         self.assertEqual(repository.events[1].event_type, "work_unit.lifecycle.created")
         self.assertEqual(
             repository.events[1].causation_id,
@@ -1755,9 +1873,7 @@ class MissionApiTests(unittest.TestCase):
                 repository,
                 {"id": "runner-b", "name": "Runner B", "role": "runner"},
                 runner_workspace_grant_authorizer=(
-                    FakeRunnerWorkspaceGrantAuthorizer(
-                        {("workspace-1", "runner-b")}
-                    )
+                    FakeRunnerWorkspaceGrantAuthorizer({("workspace-1", "runner-b")})
                 ),
             )
         )
@@ -2120,9 +2236,7 @@ class MissionApiTests(unittest.TestCase):
                 status="LEASED",
                 attempt=1,
                 required_capabilities=["a2a.receive", "repository.read"],
-                input_refs=[
-                    {"id": "artifact-input", "digest": "sha256:" + "a" * 64}
-                ],
+                input_refs=[{"id": "artifact-input", "digest": "sha256:" + "a" * 64}],
                 lease=Lease(
                     id="lease-inbound",
                     runner_id="user-1",
@@ -2261,8 +2375,7 @@ class MissionApiTests(unittest.TestCase):
                                 id="lease-outbound",
                                 runner_id="user-1",
                                 expires_at=(
-                                    datetime.now(timezone.utc)
-                                    + timedelta(minutes=5)
+                                    datetime.now(timezone.utc) + timedelta(minutes=5)
                                 ),
                             ),
                             **updates,
@@ -2830,9 +2943,7 @@ class MissionApiTests(unittest.TestCase):
             "/api/v1/missions/mis-1/work-units/wu-1/complete",
             json={
                 "leaseId": "lease-running",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
             },
         )
 
@@ -2904,9 +3015,7 @@ class MissionApiTests(unittest.TestCase):
                     repository.artifacts,
                 ),
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "All required tests passed.",
             },
         )
@@ -2970,9 +3079,7 @@ class MissionApiTests(unittest.TestCase):
                 }
                 if configuration is not None:
                     criterion["configuration"] = configuration
-                repository.contract = build_contract(
-                    acceptance_criteria=[criterion]
-                )
+                repository.contract = build_contract(acceptance_criteria=[criterion])
                 repository.work_units = [build_work_unit(status="VERIFYING")]
                 repository.artifacts = [build_artifact()]
                 verifier = FakeArtifactByteVerifier()
@@ -3035,7 +3142,11 @@ class MissionApiTests(unittest.TestCase):
                 )
                 repository.contract = build_contract(
                     acceptance_criteria=[
-                        artifact_set_criterion(required_artifact_kinds=["diff"])
+                        artifact_set_criterion(required_artifact_kinds=["diff"]),
+                        artifact_set_criterion(
+                            criterion_id="security",
+                            work_unit_kind="other",
+                        ),
                     ]
                 )
                 repository.work_units = [build_work_unit(status="VERIFYING")]
@@ -3116,9 +3227,7 @@ class MissionApiTests(unittest.TestCase):
                 "verifierVersion": "9.0",
                 "configurationDigest": configuration_digest,
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "The policy changed during verification.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3162,7 +3271,7 @@ class MissionApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["discoveryStatus"], "ready")
         context = body["verificationContext"]
-        self.assertEqual(context["version"], 2)
+        self.assertEqual(context["version"], 3)
         self.assertEqual(
             context["mission"],
             {
@@ -3192,6 +3301,7 @@ class MissionApiTests(unittest.TestCase):
             {
                 "status": "inconclusive",
                 "reasonCode": "no_applicable_policy",
+                "criterionIds": ["tests"],
             },
         )
         self.assertEqual(
@@ -3204,7 +3314,256 @@ class MissionApiTests(unittest.TestCase):
         )
         self.assertEqual(repository.list_mission_calls, [])
         self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.mission.status.value, "WAITING_DECISION")
+        self.assertEqual(len(repository.decisions), 1)
+        decision = repository.decisions[0]
+        self.assertEqual(decision.work_unit_id, "wu-1")
+        self.assertEqual(decision.attempt, 2)
+        self.assertEqual(decision.reason_code, "no_applicable_policy")
+        self.assertEqual(decision.criterion_ids, ("tests",))
+        self.assertEqual(
+            [option.value for option in decision.options],
+            ["RETRY_WORK_UNIT", "FAIL_MISSION"],
+        )
+        self.assertEqual(decision.recommended_option.value, "FAIL_MISSION")
+        self.assertEqual(
+            [event.event_type for event in repository.events],
+            [
+                "decision.lifecycle.requested",
+                "mission.lifecycle.waiting_decision",
+            ],
+        )
+        self.assertEqual(repository.events[1].causation_id, repository.events[0].event_id)
+
+        repeated = client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+
+        self.assertEqual(
+            repeated.json(),
+            {"discoveryStatus": "idle", "verificationContext": None},
+        )
+        self.assertEqual(len(repository.decisions), 1)
+        self.assertEqual(len(repository.events), 2)
+
+    def test_human_resolves_verification_decision_with_fenced_transitions(
+        self,
+    ) -> None:
+        for resolution, expected_work_unit, expected_mission in (
+            ("RETRY_WORK_UNIT", "RETRYING", "RUNNING"),
+            ("FAIL_MISSION", "FAILED", "FAILED"),
+        ):
+            with self.subTest(resolution=resolution):
+                repository = FakeMissionRepository()
+                repository.mission = build_mission(
+                    workspace_id="workspace-1",
+                    status="RUNNING",
+                )
+                repository.contract = build_contract()
+                repository.work_units = [
+                    build_work_unit(status="VERIFYING", attempt=1)
+                ]
+                repository.artifacts = [build_artifact()]
+                verifier_client = TestClient(
+                    build_app(
+                        repository,
+                        {
+                            "id": "verifier-1",
+                            "name": "Verifier",
+                            "role": "verifier",
+                        },
+                        verifier_workspace_grant_authorizer=(
+                            FakeVerifierWorkspaceGrantAuthorizer(
+                                {("workspace-1", "verifier-1")}
+                            )
+                        ),
+                    )
+                )
+                discovered = verifier_client.post(
+                    "/api/v1/missions/verification-work-items/discover",
+                    json={"workspaceId": "workspace-1"},
+                )
+                self.assertEqual(discovered.status_code, 200)
+                decision = repository.decisions[0]
+                human_client = TestClient(
+                    build_app(
+                        repository,
+                        {"id": "workspace-1", "name": "Ada", "role": "developer"},
+                    )
+                )
+
+                listed = human_client.get("/api/v1/missions/mis-1/decisions")
+                self.assertEqual(listed.status_code, 200)
+                self.assertEqual(listed.json()["decisions"][0]["id"], decision.id)
+                stale = human_client.post(
+                    f"/api/v1/missions/mis-1/decisions/{decision.id}/resolve",
+                    json={
+                        "expectedVersion": 2,
+                        "resolution": resolution,
+                        "rationale": "Resolve the blocked verification path.",
+                    },
+                )
+                self.assertEqual(stale.status_code, 409)
+                self.assertIn("version conflict", stale.json()["detail"])
+                self.assertEqual(repository.mission.status.value, "WAITING_DECISION")
+
+                resolved = human_client.post(
+                    f"/api/v1/missions/mis-1/decisions/{decision.id}/resolve",
+                    json={
+                        "expectedVersion": 1,
+                        "resolution": resolution,
+                        "rationale": "Resolve the blocked verification path.",
+                    },
+                )
+
+                self.assertEqual(resolved.status_code, 200)
+                self.assertEqual(resolved.json()["decision"]["status"], "RESOLVED")
+                self.assertEqual(resolved.json()["decision"]["version"], 2)
+                self.assertEqual(
+                    resolved.json()["workUnit"]["status"], expected_work_unit
+                )
+                self.assertEqual(resolved.json()["mission"]["status"], expected_mission)
+                self.assertEqual(repository.evidence, [])
+                self.assertEqual(
+                    [event.event_type for event in repository.events],
+                    [
+                        "decision.lifecycle.requested",
+                        "mission.lifecycle.waiting_decision",
+                        "decision.lifecycle.resolved",
+                        "work_unit.lifecycle.decision_resolved",
+                        "mission.lifecycle.decision_resolved",
+                    ],
+                )
+                repeated = human_client.post(
+                    f"/api/v1/missions/mis-1/decisions/{decision.id}/resolve",
+                    json={
+                        "expectedVersion": 1,
+                        "resolution": resolution,
+                        "rationale": "Must not resolve twice.",
+                    },
+                )
+                self.assertEqual(repeated.status_code, 409)
+                self.assertIn("already resolved", repeated.json()["detail"])
+
+    def test_ready_verification_policy_does_not_open_a_decision(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract(
+            acceptance_criteria=[artifact_set_criterion()]
+        )
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        repository.artifacts = [build_artifact()]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=(
+                    FakeVerifierWorkspaceGrantAuthorizer(
+                        {("workspace-1", "verifier-1")}
+                    )
+                ),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["verificationContext"]["evaluationPolicy"]["status"],
+            "ready",
+        )
+        self.assertEqual(repository.mission.status.value, "RUNNING")
+        self.assertEqual(repository.decisions, [])
         self.assertEqual(repository.events, [])
+
+    def test_decision_cannot_retry_after_budget_exhaustion(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract(
+            budgets={"timeSeconds": 3600, "modelCost": 10, "retries": 0}
+        )
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        repository.artifacts = [build_artifact()]
+        verifier_client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=(
+                    FakeVerifierWorkspaceGrantAuthorizer(
+                        {("workspace-1", "verifier-1")}
+                    )
+                ),
+            )
+        )
+        verifier_client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+        decision = repository.decisions[0]
+        self.assertEqual(
+            [option.value for option in decision.options],
+            ["FAIL_MISSION"],
+        )
+        human_client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = human_client.post(
+            f"/api/v1/missions/mis-1/decisions/{decision.id}/resolve",
+            json={
+                "expectedVersion": 1,
+                "resolution": "RETRY_WORK_UNIT",
+                "rationale": "Must not bypass the exhausted retry budget.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("not offered", response.json()["detail"])
+        self.assertEqual(repository.mission.status.value, "WAITING_DECISION")
+        self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
+        self.assertEqual(repository.decisions[0].status.value, "PENDING")
+
+    def test_verifier_cannot_resolve_a_mission_decision(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="WAITING_DECISION",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        repository.decisions = [build_decision()]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/decisions/dec-1/resolve",
+            json={
+                "expectedVersion": 1,
+                "resolution": "FAIL_MISSION",
+                "rationale": "Verifier must not control this Decision.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(repository.decisions[0].status.value, "PENDING")
+        self.assertEqual(repository.mission.status.value, "WAITING_DECISION")
 
     def test_verifier_discovery_denial_precedes_mission_reads(self) -> None:
         repository = FakeMissionRepository()
@@ -3364,9 +3723,7 @@ class MissionApiTests(unittest.TestCase):
                     repository.artifacts,
                 ),
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "Independent workspace verification passed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3408,9 +3765,7 @@ class MissionApiTests(unittest.TestCase):
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "Must not be recorded.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3492,9 +3847,7 @@ class MissionApiTests(unittest.TestCase):
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "Wrong WorkUnit artifact.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3685,9 +4038,7 @@ class MissionApiTests(unittest.TestCase):
                     repository.artifacts,
                 ),
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "All required tests passed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3736,9 +4087,7 @@ class MissionApiTests(unittest.TestCase):
                     repository.artifacts,
                 ),
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "Must not pass without complete byte evaluation.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3790,9 +4139,7 @@ class MissionApiTests(unittest.TestCase):
                     repository.artifacts,
                 ),
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "All required tests passed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3848,9 +4195,7 @@ class MissionApiTests(unittest.TestCase):
                     repository.artifacts,
                 ),
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "All required tests passed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -3905,9 +4250,7 @@ class MissionApiTests(unittest.TestCase):
                     repository.artifacts,
                 ),
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "All required tests passed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -4041,22 +4384,99 @@ class MissionApiTests(unittest.TestCase):
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
                 "verdict": "INCONCLUSIVE",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "The test environment was unavailable.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["workUnit"]["status"], "VERIFYING")
-        self.assertEqual(response.json()["mission"]["status"], "RUNNING")
-        self.assertEqual(len(repository.evidence), 1)
-        self.assertEqual(
-            repository.events[-1].event_type,
-            "work_unit.lifecycle.verification_inconclusive",
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Mission Decision", response.json()["detail"])
+        self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
+        self.assertEqual(repository.mission.status.value, "RUNNING")
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+
+    def test_non_contract_evidence_criterion_fails_before_artifact_io(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="RUNNING",
         )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING")]
+        repository.artifacts = [build_artifact()]
+        artifact_byte_verifier = FakeArtifactByteVerifier()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=artifact_byte_verifier,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "not-in-contract",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "verdict": "INCONCLUSIVE",
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
+                "summary": "Must not be admitted.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("not part", response.json()["detail"])
+        self.assertEqual(artifact_byte_verifier.calls, [])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+
+    def test_waiting_decision_rejects_evidence_before_artifact_io(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="verifier-1",
+            status="WAITING_DECISION",
+        )
+        repository.contract = build_contract(
+            acceptance_criteria=[artifact_set_criterion()]
+        )
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        repository.artifacts = [build_artifact()]
+        artifact_byte_verifier = FakeArtifactByteVerifier()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                artifact_byte_verifier=artifact_byte_verifier,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/verify",
+            json={
+                "criterionId": "tests",
+                "verifierId": "verifier-1",
+                "verifierVersion": "9.0",
+                "configurationDigest": evaluation_policy_digest(
+                    repository.contract,
+                    repository.work_units[0],
+                    repository.artifacts,
+                ),
+                "verdict": "PASS",
+                "artifactRefs": [
+                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
+                ],
+                "summary": "Must wait for the human Decision.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("RUNNING or VERIFYING", response.json()["detail"])
+        self.assertEqual(artifact_byte_verifier.calls, [])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
 
     def test_failed_evidence_fails_work_unit_and_mission(self) -> None:
         repository = FakeMissionRepository()
@@ -4081,9 +4501,7 @@ class MissionApiTests(unittest.TestCase):
                 "verifierId": "verifier-1",
                 "verifierVersion": "9.0",
                 "verdict": "FAIL",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "A required test failed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -4126,9 +4544,7 @@ class MissionApiTests(unittest.TestCase):
                 "verifierId": "pytest",
                 "verifierVersion": "9.0",
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "All required tests passed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },
@@ -4159,9 +4575,7 @@ class MissionApiTests(unittest.TestCase):
                 "verifierId": "other-verifier",
                 "verifierVersion": "9.0",
                 "verdict": "PASS",
-                "artifactRefs": [
-                    {"id": "artifact-1", "digest": "sha256:" + "a" * 64}
-                ],
+                "artifactRefs": [{"id": "artifact-1", "digest": "sha256:" + "a" * 64}],
                 "summary": "All required tests passed.",
                 "integrityHash": "sha256:" + "b" * 64,
             },

@@ -5,10 +5,17 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.v1.access import authorize_verifier, authorize_workspace
-from app.domain import ActorRef, EvidenceVerdict, InvalidStateTransition, Mission
+from app.domain import (
+    ActorRef,
+    DecisionResolution,
+    EvidenceVerdict,
+    InvalidStateTransition,
+    Mission,
+)
 from app.repositories import MissionRepository
 from app.schemas.mission import (
     ArtifactCreateRequest,
+    DecisionResolutionRequest,
     MissionCreateRequest,
     WorkspaceVerificationDiscoveryRequest,
     WorkspaceWorkUnitClaimRequest,
@@ -37,6 +44,8 @@ from app.services.artifact_integrity_service import (
 from app.services.auth_service import get_current_user
 from app.services.mission_service import (
     AgentBindingNotFoundError,
+    DecisionConflictError,
+    DecisionNotFoundError,
     MissionNotFoundError,
     MissionService,
     WorkUnitNotFoundError,
@@ -121,6 +130,8 @@ ArtifactLimit = Annotated[int, Query(ge=1, le=200)]
 ArtifactOffset = Annotated[int, Query(ge=0)]
 EvidenceLimit = Annotated[int, Query(ge=1, le=200)]
 EvidenceOffset = Annotated[int, Query(ge=0)]
+DecisionLimit = Annotated[int, Query(ge=1, le=200)]
+DecisionOffset = Annotated[int, Query(ge=0)]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -338,6 +349,59 @@ async def list_evidence(
     return {"evidence": [item.to_public_dict() for item in evidence]}
 
 
+@router.get("/{mission_id}/decisions")
+async def list_decisions(
+    mission_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    limit: DecisionLimit = 100,
+    offset: DecisionOffset = 0,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    decisions = await repository.list_decisions(
+        mission_id,
+        limit=limit,
+        offset=offset,
+    )
+    return {"decisions": [decision.to_public_dict() for decision in decisions]}
+
+
+@router.post("/{mission_id}/decisions/{decision_id}/resolve")
+async def resolve_decision(
+    mission_id: str,
+    decision_id: str,
+    request: DecisionResolutionRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    if user.get("role") in {"runner", "verifier", "agent", "service"}:
+        raise HTTPException(status_code=403, detail="Human Decision access required")
+    service = MissionService(repository)
+    try:
+        decision, work_unit, mission = await service.resolve_decision(
+            mission_id,
+            decision_id,
+            expected_version=request.expected_version,
+            resolution=DecisionResolution(request.resolution),
+            rationale=request.rationale,
+            actor=build_human_actor(user),
+        )
+    except DecisionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Decision not found") from exc
+    except (DecisionConflictError, WorkUnitNotFoundError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "decision": decision.to_public_dict(),
+        "workUnit": work_unit.to_public_dict(),
+        "mission": mission.to_public_dict(),
+    }
+
+
 @router.post("/{mission_id}/work-units", status_code=status.HTTP_201_CREATED)
 async def create_work_unit(
     mission_id: str,
@@ -517,7 +581,7 @@ async def discover_verification_work(
     repository: MissionRepositoryDep,
     grant_authorizer: VerifierWorkspaceGrantAuthorizerDep,
 ) -> dict:
-    """Return one minimal VERIFYING context without creating a durable claim."""
+    """Return verifier context; inconclusive policy opens a Mission Decision."""
 
     await _authorize_workspace_verification(
         user,

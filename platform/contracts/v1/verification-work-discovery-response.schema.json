@@ -40,7 +40,7 @@
         "evaluationPolicy"
       ],
       "properties": {
-        "version": { "const": 2 },
+        "version": { "const": 3 },
         "mission": {
           "type": "object",
           "additionalProperties": false,

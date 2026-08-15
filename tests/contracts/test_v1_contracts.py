@@ -37,7 +37,9 @@ class PublicContractTests(unittest.TestCase):
         cls.registry = Registry().with_resources(resources)
 
     def test_all_schemas_are_valid_draft_2020_12(self) -> None:
-        schema_names = {name for name in self.documents if name.endswith(".schema.json")}
+        schema_names = {
+            name for name in self.documents if name.endswith(".schema.json")
+        }
         self.assertEqual(
             schema_names,
             {
@@ -48,6 +50,7 @@ class PublicContractTests(unittest.TestCase):
                 "work-unit-claim-response.schema.json",
                 "verification-work-discovery-response.schema.json",
                 "verification-evaluation-policy.schema.json",
+                "decision.schema.json",
                 "artifact.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
@@ -74,7 +77,10 @@ class PublicContractTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "title": "Fix issue 42",
                 "objective": "Produce a tested, reviewable pull request.",
-                "source": {"type": "issue", "reference": "https://example.test/issues/42"},
+                "source": {
+                    "type": "issue",
+                    "reference": "https://example.test/issues/42",
+                },
                 "contractId": "contract-1",
                 "status": "READY",
                 "planVersion": 0,
@@ -91,7 +97,12 @@ class PublicContractTests(unittest.TestCase):
                 "allowedCapabilities": [{"capability": "repository.write"}],
                 "budgets": {"timeSeconds": 3600, "modelCost": 10, "retries": 2},
                 "acceptanceCriteria": [
-                    {"id": "tests", "kind": "test", "description": "Tests pass", "required": True}
+                    {
+                        "id": "tests",
+                        "kind": "test",
+                        "description": "Tests pass",
+                        "required": True,
+                    }
                 ],
                 "decisionGates": [],
                 "forbiddenActions": ["repository.force_push"],
@@ -116,7 +127,7 @@ class PublicContractTests(unittest.TestCase):
             "verification-work-discovery-response.schema.json": {
                 "discoveryStatus": "ready",
                 "verificationContext": {
-                    "version": 2,
+                    "version": 3,
                     "mission": {
                         "id": "mis-1",
                         "title": "Fix issue 42",
@@ -158,6 +169,7 @@ class PublicContractTests(unittest.TestCase):
                     "evaluationPolicy": {
                         "status": "inconclusive",
                         "reasonCode": "no_applicable_policy",
+                        "criterionIds": ["tests"],
                     },
                 },
             },
@@ -196,6 +208,22 @@ class PublicContractTests(unittest.TestCase):
                 "summary": "All required tests passed.",
                 "generatedAt": timestamp,
                 "integrityHash": digest,
+            },
+            "decision.schema.json": {
+                "id": "dec-1",
+                "missionId": "mis-1",
+                "workUnitId": "wu-1",
+                "attempt": 1,
+                "contextDigest": digest,
+                "reasonCode": "no_applicable_policy",
+                "criterionIds": ["tests"],
+                "options": ["RETRY_WORK_UNIT", "FAIL_MISSION"],
+                "recommendedOption": "FAIL_MISSION",
+                "riskSummary": "Verification policy cannot prove the criteria.",
+                "status": "PENDING",
+                "version": 1,
+                "requestedBy": {"type": "service", "id": "mission-control"},
+                "requestedAt": timestamp,
             },
             "event-envelope.schema.json": {
                 "event_id": "evt-1",
@@ -238,9 +266,7 @@ class PublicContractTests(unittest.TestCase):
             },
         }
 
-        validator.validate(
-            {"claimStatus": "claimed", "workUnit": claimed_work_unit}
-        )
+        validator.validate({"claimStatus": "claimed", "workUnit": claimed_work_unit})
         validator.validate({"claimStatus": "capacity_saturated", "workUnit": None})
         invalid_documents = [
             {"claimStatus": "claimed", "workUnit": None},
@@ -256,9 +282,7 @@ class PublicContractTests(unittest.TestCase):
             self.documents["verification-work-discovery-response.schema.json"],
             registry=self.registry,
         )
-        validator.validate(
-            {"discoveryStatus": "idle", "verificationContext": None}
-        )
+        validator.validate({"discoveryStatus": "idle", "verificationContext": None})
         for document in (
             {"discoveryStatus": "ready", "verificationContext": None},
             {"discoveryStatus": "idle", "verificationContext": {}},
@@ -276,12 +300,44 @@ class PublicContractTests(unittest.TestCase):
             {
                 "status": "inconclusive",
                 "reasonCode": "no_applicable_policy",
+                "criterionIds": ["tests"],
+            }
+        )
+        validator.validate(
+            {
+                "status": "inconclusive",
+                "reasonCode": "no_applicable_policy",
+                "criterionIds": [],
             }
         )
         invalid_documents = (
             {"status": "ready", "reasonCode": "no_applicable_policy"},
+            {
+                "status": "ready",
+                "criterionId": "tests",
+                "evaluator": "artifact-set.v1",
+                "configurationDigest": "sha256:" + "a" * 64,
+                "parameters": {
+                    "minimumArtifacts": 1,
+                    "requiredArtifactKinds": [],
+                },
+                "criterionIds": [],
+            },
             {"status": "inconclusive", "criterionId": "tests"},
-            {"status": "inconclusive", "reasonCode": "unknown"},
+            {
+                "status": "inconclusive",
+                "reasonCode": "unknown",
+                "criterionIds": [],
+            },
+            {
+                "status": "inconclusive",
+                "reasonCode": "no_applicable_policy",
+            },
+            {
+                "status": "inconclusive",
+                "reasonCode": "ambiguous_policy",
+                "criterionIds": ["tests", "tests"],
+            },
         )
         for document in invalid_documents:
             with self.subTest(document=document):
@@ -307,9 +363,7 @@ class PublicContractTests(unittest.TestCase):
         validator.validate(
             VerificationDiscoveryOutcome(context=context).to_public_dict()
         )
-        validator.validate(
-            VerificationDiscoveryOutcome(context=None).to_public_dict()
-        )
+        validator.validate(VerificationDiscoveryOutcome(context=None).to_public_dict())
 
     def test_event_catalog_is_unique_and_matches_envelope_aggregates(self) -> None:
         catalog = self.documents["event-catalog.json"]
@@ -318,13 +372,19 @@ class PublicContractTests(unittest.TestCase):
         self.assertEqual(len(event_types), len(set(event_types)))
 
         allowed_aggregates = set(
-            self.documents["event-envelope.schema.json"]["properties"]["aggregate_type"]["enum"]
+            self.documents["event-envelope.schema.json"]["properties"][
+                "aggregate_type"
+            ]["enum"]
         )
         for event in catalog["events"]:
             with self.subTest(event=event["eventType"]):
                 self.assertIn(event["aggregateType"], allowed_aggregates)
-                self.assertRegex(event["eventType"], r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}$")
-                self.assertEqual(len(event["payloadRequired"]), len(set(event["payloadRequired"])))
+                self.assertRegex(
+                    event["eventType"], r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){2,}$"
+                )
+                self.assertEqual(
+                    len(event["payloadRequired"]), len(set(event["payloadRequired"]))
+                )
 
 
 if __name__ == "__main__":

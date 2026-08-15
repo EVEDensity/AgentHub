@@ -4,11 +4,20 @@ import json
 import unittest
 from typing import Any
 
-from app.domain import Artifact, EventEnvelope, Evidence, Lease, Mission, WorkUnit
+from app.domain import (
+    Artifact,
+    Decision,
+    EventEnvelope,
+    Evidence,
+    Lease,
+    Mission,
+    WorkUnit,
+)
 from app.repositories import MissionRepository
 from tests.domain.factories import (
     build_artifact,
     build_contract,
+    build_decision,
     build_event,
     build_evidence,
     build_mission,
@@ -72,6 +81,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await self.repository.get_contract("missing"))
         self.assertIsNone(await self.repository.get_mission("missing"))
         self.assertIsNone(await self.repository.get_evidence("missing"))
+        self.assertIsNone(await self.repository.get_decision("missing"))
 
     async def test_mission_source_lookup_is_workspace_and_protocol_scoped(self) -> None:
         mission = build_mission(
@@ -255,6 +265,78 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("verdict='PASS'", sql)
         self.assertNotIn("LIMIT", sql)
         self.assertEqual(args, ("mis-1",))
+
+    async def test_decision_round_trip_list_lock_and_resolution_update(self) -> None:
+        decision = build_decision()
+
+        await self.repository.add_decision(decision)
+
+        insert_sql, insert_args = self.database.executed[-1]
+        self.assertIn("INSERT INTO decisions", insert_sql)
+        self.assertEqual(insert_args[0:6], (
+            decision.id,
+            decision.mission_id,
+            decision.work_unit_id,
+            decision.attempt,
+            decision.context_digest,
+            decision.reason_code,
+        ))
+        self.assertEqual(json.loads(insert_args[6]), ["tests"])
+        self.assertEqual(
+            json.loads(insert_args[7]),
+            ["RETRY_WORK_UNIT", "FAIL_MISSION"],
+        )
+
+        row = self.build_decision_row(decision)
+        self.database.one = row
+        self.assertEqual(await self.repository.get_decision(decision.id), decision)
+        self.assertEqual(
+            await self.repository.get_decision_for_update(decision.id), decision
+        )
+        lock_sql, lock_args = self.database.fetched_one[-1]
+        self.assertIn("FOR UPDATE", lock_sql)
+        self.assertEqual(lock_args, (decision.id,))
+
+        self.database.all = [row]
+        self.assertEqual(
+            await self.repository.list_decisions("mis-1", limit=20, offset=5),
+            [decision],
+        )
+        list_sql, list_args = self.database.fetched_all[-1]
+        self.assertIn("WHERE mission_id=$1", list_sql)
+        self.assertIn("ORDER BY requested_at ASC, id ASC", list_sql)
+        self.assertEqual(list_args, ("mis-1", 20, 5))
+        self.database.all = [row]
+        self.assertEqual(
+            await self.repository.list_pending_decisions_for_update("mis-1"),
+            [decision],
+        )
+        pending_sql, pending_args = self.database.fetched_all[-1]
+        self.assertIn("status='PENDING'", pending_sql)
+        self.assertIn("FOR UPDATE", pending_sql)
+        self.assertEqual(pending_args, ("mis-1",))
+
+        resolved = build_decision(
+            status="RESOLVED",
+            version=2,
+            resolution="FAIL_MISSION",
+            rationale="The Contract cannot currently be verified.",
+            resolved_by={"type": "human", "id": "user-1"},
+            resolved_at=decision.requested_at,
+        )
+        await self.repository.update_decision(resolved)
+        update_sql, update_args = self.database.executed[-1]
+        self.assertIn("UPDATE decisions", update_sql)
+        self.assertEqual(update_args[0:4], (
+            decision.id,
+            "RESOLVED",
+            2,
+            "FAIL_MISSION",
+        ))
+        with self.assertRaises(ValueError):
+            await self.repository.list_decisions("mis-1", limit=0)
+        with self.assertRaises(ValueError):
+            await self.repository.list_decisions("mis-1", offset=-1)
 
     async def test_artifact_round_trip_and_mission_list(self) -> None:
         artifact = build_artifact()
@@ -624,6 +706,36 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "summary": evidence.summary,
             "generated_at": evidence.generated_at,
             "integrity_hash": evidence.integrity_hash,
+        }
+
+    @staticmethod
+    def build_decision_row(decision: Decision) -> dict[str, Any]:
+        return {
+            "id": decision.id,
+            "mission_id": decision.mission_id,
+            "work_unit_id": decision.work_unit_id,
+            "attempt": decision.attempt,
+            "context_digest": decision.context_digest,
+            "reason_code": decision.reason_code,
+            "criterion_ids": json.dumps(list(decision.criterion_ids)),
+            "options": json.dumps([option.value for option in decision.options]),
+            "recommended_option": decision.recommended_option.value,
+            "risk_summary": decision.risk_summary,
+            "status": decision.status.value,
+            "version": decision.version,
+            "requested_by": json.dumps(decision.requested_by.to_public_dict()),
+            "requested_at": decision.requested_at,
+            "expires_at": decision.expires_at,
+            "resolution": (
+                decision.resolution.value if decision.resolution is not None else None
+            ),
+            "rationale": decision.rationale,
+            "resolved_by": (
+                json.dumps(decision.resolved_by.to_public_dict())
+                if decision.resolved_by is not None
+                else None
+            ),
+            "resolved_at": decision.resolved_at,
         }
 
     @staticmethod

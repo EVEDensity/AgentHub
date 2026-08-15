@@ -134,7 +134,15 @@ boundary. It is not the permanent home of every Agent feature.
   current-attempt `VERIFYING` context. Its short database lock creates no
   durable claim, and its projection excludes Mission source, Contract
   repository/capability grants, execution leases, credentials, and Artifact
-  bytes. The projection also carries a fail-closed evaluation-policy decision.
+  bytes. Discovery context version 3 also carries a fail-closed
+  evaluation-policy decision. Inconclusive decisions include a sorted, unique
+  set of implicated Contract criterion IDs; this set is attribution, not a
+  verdict or authority to select a criterion. Evidence admission rejects a
+  criterion outside the Mission Contract before Artifact byte I/O for every
+  verdict. An inconclusive policy now creates an attempt- and context-bound
+  PENDING Decision and atomically moves the Mission to `WAITING_DECISION`.
+  The WorkUnit remains VERIFYING, subsequent discovery excludes the Mission,
+  and direct INCONCLUSIVE Evidence is rejected.
   Mission Control currently recognizes only the deterministic
   `artifact-set.v1` evaluator, whose canonical configuration digest binds one
   acceptance criterion to WorkUnit kind and Artifact requirements. PASS
@@ -157,14 +165,19 @@ boundary. It is not the permanent home of every Agent feature.
   its narrow Mission Control HTTP port. It strictly validates discovery,
   verifies the projected Artifact bytes, replays only the registered
   `artifact-set.v1` evaluator, and submits PASS only from that controlled
-  result. It rejects inconclusive policies before submission because the
-  current inconclusive projection has no unambiguous criterion attribution.
+  result. It validates inconclusive criterion attribution but does not submit
+  inconclusive Evidence or create Decision state. Mission Control creates and
+  owns that Decision during discovery; only a workspace-authorized human can
+  resolve it to a budget-checked WorkUnit retry or explicit Mission failure.
+  Neither path can create PASS Evidence. Mission cancellation closes pending
+  Decisions in the same transaction.
   `verifier_worker.py` supervises one explicit workspace with bounded backoff,
   graceful drain, cancellation propagation, and content-free snapshots. It
   owns no queue or verifier lease; Mission Control's verification transaction
-  remains the duplicate-admission and lifecycle authority. These modules are
-  pure runtime boundaries and are not yet composed into a deployable verifier
-  process.
+  remains the duplicate-admission and lifecycle authority. The standalone
+  `services/python/verifier_service` process composes these boundaries with
+  strict Mission Control HTTP and read-only local CAS adapters; it does not add
+  durable verifier state.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

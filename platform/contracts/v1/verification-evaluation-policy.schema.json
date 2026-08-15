@@ -45,6 +45,11 @@
         "unsupported_evaluator",
         "artifact_requirements_not_met"
       ]
+    },
+    "criterionIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/identifier" }
     }
   },
   "oneOf": [
@@ -55,10 +60,15 @@
       "properties": {
         "status": { "const": "ready" }
       },
-      "not": { "required": ["reasonCode"] }
+      "not": {
+        "anyOf": [
+          { "required": ["reasonCode"] },
+          { "required": ["criterionIds"] }
+        ]
+      }
     },
     {
-      "required": ["reasonCode"],
+      "required": ["reasonCode", "criterionIds"],
       "properties": {
         "status": { "const": "inconclusive" }
       },

@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from enum import Enum
 from typing import Protocol
 
-from app.domain import Artifact, ArtifactKind, MissionContract, WorkUnit
+from app.domain import (
+    Artifact,
+    ArtifactKind,
+    EvaluationPolicyReason,
+    MissionContract,
+    WorkUnit,
+)
 
 _ARTIFACT_SET_EVALUATOR = "artifact-set.v1"
 _POLICY_KEYS = frozenset(
@@ -19,14 +25,6 @@ _POLICY_KEYS = frozenset(
         "requiredArtifactKinds",
     }
 )
-
-
-class EvaluationPolicyReason(str, Enum):
-    NO_APPLICABLE_POLICY = "no_applicable_policy"
-    AMBIGUOUS_POLICY = "ambiguous_policy"
-    INVALID_CONFIGURATION = "invalid_configuration"
-    UNSUPPORTED_EVALUATOR = "unsupported_evaluator"
-    ARTIFACT_REQUIREMENTS_NOT_MET = "artifact_requirements_not_met"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,12 +52,19 @@ class ArtifactSetEvaluationPlan:
 class EvaluationPolicyDecision:
     plan: ArtifactSetEvaluationPlan | None = None
     reason: EvaluationPolicyReason | None = None
+    criterion_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (self.plan is None) == (self.reason is None):
             raise ValueError(
                 "evaluation policy decision requires exactly one plan or reason"
             )
+        if self.plan is not None and self.criterion_ids:
+            raise ValueError("ready evaluation policy cannot carry criterion IDs")
+        if len(self.criterion_ids) != len(set(self.criterion_ids)) or any(
+            not criterion_id for criterion_id in self.criterion_ids
+        ):
+            raise ValueError("evaluation policy criterion IDs must be unique")
 
     @classmethod
     def ready(cls, plan: ArtifactSetEvaluationPlan) -> EvaluationPolicyDecision:
@@ -69,14 +74,23 @@ class EvaluationPolicyDecision:
     def inconclusive(
         cls,
         reason: EvaluationPolicyReason,
+        *,
+        criterion_ids: Sequence[str] = (),
     ) -> EvaluationPolicyDecision:
-        return cls(reason=reason)
+        return cls(
+            reason=reason,
+            criterion_ids=tuple(sorted(criterion_ids)),
+        )
 
     def to_public_dict(self) -> dict:
         if self.plan is not None:
             return self.plan.to_public_dict()
         assert self.reason is not None
-        return {"status": "inconclusive", "reasonCode": self.reason.value}
+        return {
+            "status": "inconclusive",
+            "reasonCode": self.reason.value,
+            "criterionIds": list(self.criterion_ids),
+        }
 
 
 class VerificationPolicyResolver(Protocol):
@@ -115,44 +129,58 @@ class StrictVerificationPolicyResolver:
         artifacts: tuple[Artifact, ...],
     ) -> EvaluationPolicyDecision:
         applicable: list[_ParsedPolicy] = []
+        configured_criterion_ids: list[str] = []
+        invalid_criterion_ids: list[str] = []
         for criterion in contract.acceptance_criteria:
             configuration = criterion.to_public_dict().get("configuration", {})
             if not isinstance(configuration, dict):
-                return EvaluationPolicyDecision.inconclusive(
-                    EvaluationPolicyReason.INVALID_CONFIGURATION
-                )
+                invalid_criterion_ids.append(criterion.id)
+                continue
             has_policy_key = bool(_POLICY_KEYS & configuration.keys())
             if not has_policy_key:
                 continue
+            configured_criterion_ids.append(criterion.id)
             try:
                 parsed = _parse_policy(criterion.id, configuration)
             except ValueError:
-                return EvaluationPolicyDecision.inconclusive(
-                    EvaluationPolicyReason.INVALID_CONFIGURATION
-                )
+                invalid_criterion_ids.append(criterion.id)
+                continue
             if work_unit.kind in parsed.work_unit_kinds:
                 applicable.append(parsed)
 
+        if invalid_criterion_ids:
+            return EvaluationPolicyDecision.inconclusive(
+                EvaluationPolicyReason.INVALID_CONFIGURATION,
+                criterion_ids=invalid_criterion_ids,
+            )
         if not applicable:
             return EvaluationPolicyDecision.inconclusive(
-                EvaluationPolicyReason.NO_APPLICABLE_POLICY
+                EvaluationPolicyReason.NO_APPLICABLE_POLICY,
+                criterion_ids=(
+                    configured_criterion_ids
+                    or [criterion.id for criterion in contract.acceptance_criteria]
+                ),
             )
         if len(applicable) != 1:
             return EvaluationPolicyDecision.inconclusive(
-                EvaluationPolicyReason.AMBIGUOUS_POLICY
+                EvaluationPolicyReason.AMBIGUOUS_POLICY,
+                criterion_ids=[policy.criterion_id for policy in applicable],
             )
 
         policy = applicable[0]
         if policy.evaluator != _ARTIFACT_SET_EVALUATOR:
             return EvaluationPolicyDecision.inconclusive(
-                EvaluationPolicyReason.UNSUPPORTED_EVALUATOR
+                EvaluationPolicyReason.UNSUPPORTED_EVALUATOR,
+                criterion_ids=[policy.criterion_id],
             )
         artifact_kinds = {artifact.kind.value for artifact in artifacts}
-        if len(artifacts) < policy.minimum_artifacts or not set(
-            policy.required_artifact_kinds
-        ) <= artifact_kinds:
+        if (
+            len(artifacts) < policy.minimum_artifacts
+            or not set(policy.required_artifact_kinds) <= artifact_kinds
+        ):
             return EvaluationPolicyDecision.inconclusive(
-                EvaluationPolicyReason.ARTIFACT_REQUIREMENTS_NOT_MET
+                EvaluationPolicyReason.ARTIFACT_REQUIREMENTS_NOT_MET,
+                criterion_ids=[policy.criterion_id],
             )
 
         encoded_configuration = json.dumps(
