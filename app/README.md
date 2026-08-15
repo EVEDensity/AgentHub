@@ -70,11 +70,15 @@ boundary. It is not the permanent home of every Agent feature.
   supervisor performs the fenced `LEASED -> RUNNING` start, sends once per
   invocation, renews the lease while polling, and converts timeout, remote
   terminal failure, unsupported input, transport failure, heartbeat loss, and
-  caller cancellation into explicit local failure handling. Remote completion
-  returns only an in-process `RESULT_READY` outcome; it does not register an
-  Artifact or complete the WorkUnit. Production worker composition remains
-  disabled until trusted route resolution and the full result import path are
-  available.
+  caller cancellation into explicit local failure handling. After remote
+  completion it performs a separate trusted `tasks/get`, strictly validates
+  the bounded bundle schema, Base64, sizes, SHA-256 digests, and Evidence-to-
+  Artifact reference closure, then publishes bytes to local CAS. Remote
+  Evidence is preserved only in a local attestation `report` Artifact. All
+  imported Artifacts are registered behind the original lease before the
+  WorkUnit moves to `VERIFYING`; they do not prove local success. Production
+  worker composition remains disabled until the trusted route resolver is
+  composed and Gateway direct dispatch is removed in the same cutover.
   Inbound claimed execution uses a request-scoped execution plan, so its
   Harness is built from the exact Contract, WorkUnit, and attempt rather than
   falling back to Runner's fixed Sandbox Harness. `a2a.receive` remains an

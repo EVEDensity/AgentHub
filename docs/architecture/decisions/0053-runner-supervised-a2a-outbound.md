@@ -71,12 +71,16 @@ origin-specific receiver credentials. Agent Card trust/capability verification
 is injected through a trusted-route boundary rather than copied into Runner. A
 dedicated supervisor now performs the fenced start, one send per invocation,
 lease heartbeat, bounded polling, best-effort remote cancellation, and local
-failure write-back. A remote `COMPLETED` snapshot yields `RESULT_READY` only;
-it cannot register an Artifact or complete the local WorkUnit. Production
-composition remains disabled because trusted route resolution and result
-import are not yet complete. Gateway's direct dispatch remains a compatibility
-path until the supervised worker can handle the full result path end to end.
-The two paths must not both dispatch the same attempt after cutover.
+failure write-back. A remote `COMPLETED` snapshot now triggers a second trusted
+`tasks/get` for the bounded result bundle. The sender validates its strict
+schema, canonical Base64, counts, aggregate bytes, SHA-256 digests, and complete
+Evidence-to-Artifact reference closure before any CAS write. It publishes and
+lease-registers local Artifacts, preserves peer Evidence only inside an
+attestation `report` Artifact, and completes the local WorkUnit to `VERIFYING`.
+Production composition remains disabled because the trusted Agent Card route
+resolver is not yet wired into the worker and Gateway direct dispatch remains
+a compatibility path. The two paths must not both dispatch the same attempt
+after cutover.
 
 Historical unbound outbound WorkUnits are not silently rebound. They require
 an explicit migration or cancellation and resubmission under a new task ID,
@@ -119,5 +123,9 @@ second dispatch path.
 Supervisor tests cover exact start fencing, single dispatch per invocation,
 heartbeat during polling, terminal remote failure mapping, unsupported input,
 timeout, caller cancellation, transport failure redaction, invalid remote task
-identity, and the `RESULT_READY` stop line. They assert that remote completion
-does not register an Artifact, complete the WorkUnit, or create Evidence.
+identity, result import failure, completion failure, and the final transition
+to `VERIFYING`. Import tests cover strict bundle schema, canonical Base64,
+declared and aggregate size, SHA-256, Evidence reference closure, deterministic
+local IDs, CAS metadata, fenced registration responses, and remote Evidence as
+attestation-only report content. No path creates local Evidence from the peer
+bundle or declares the Mission successful.

@@ -116,6 +116,29 @@ class StatelessA2AHTTPTransport:
     ) -> A2ARemoteTaskSnapshot:
         return await self._invoke_reference("tasks/get", reference)
 
+    async def get_result(
+        self,
+        reference: A2ARemoteTaskReference,
+    ) -> Mapping[str, Any]:
+        """Fetch one completed result through the same trusted stateless route."""
+        if not isinstance(reference, A2ARemoteTaskReference):
+            raise TypeError("reference must be an A2ARemoteTaskReference")
+        result = await self._invoke_result_payload(
+            "tasks/get",
+            reference,
+            params=_reference_params(reference),
+            required_capabilities=(),
+        )
+        snapshot = _parse_task_snapshot(
+            result,
+            expected_task_id=reference.task_id,
+        )
+        if snapshot.state != A2ARemoteTaskState.COMPLETED:
+            raise A2ARemoteProtocolError(
+                "remote A2A result fetch requires a completed task"
+            )
+        return result
+
     async def cancel(
         self,
         reference: A2ARemoteTaskReference,
@@ -132,11 +155,7 @@ class StatelessA2AHTTPTransport:
         return await self._invoke(
             method,
             reference,
-            params={
-                "id": reference.task_id,
-                "workspaceId": reference.workspace_id,
-                "sourceAgentUrl": reference.source_agent_url,
-            },
+            params=_reference_params(reference),
             required_capabilities=(),
         )
 
@@ -148,6 +167,22 @@ class StatelessA2AHTTPTransport:
         params: Mapping[str, Any],
         required_capabilities: Sequence[str],
     ) -> A2ARemoteTaskSnapshot:
+        result = await self._invoke_result_payload(
+            method,
+            reference,
+            params=params,
+            required_capabilities=required_capabilities,
+        )
+        return _parse_task_snapshot(result, expected_task_id=reference.task_id)
+
+    async def _invoke_result_payload(
+        self,
+        method: str,
+        reference: A2ARemoteTaskReference,
+        *,
+        params: Mapping[str, Any],
+        required_capabilities: Sequence[str],
+    ) -> Mapping[str, Any]:
         try:
             route = await self._route_resolver.resolve(
                 reference.target_agent_url,
@@ -202,7 +237,7 @@ class StatelessA2AHTTPTransport:
             raise A2ARemoteProtocolError(
                 f"remote A2A endpoint returned HTTP {status_code} without an error"
             )
-        return _parse_task_snapshot(payload, expected_task_id=reference.task_id)
+        return payload
 
     def _resolve_bearer(self, agent_origin: str) -> str:
         if self._credential_provider is None:
@@ -376,6 +411,14 @@ def _parse_task_snapshot(
         raise A2ARemoteProtocolError(
             "remote A2A task has an unsupported status"
         ) from exc
+
+
+def _reference_params(reference: A2ARemoteTaskReference) -> dict[str, str]:
+    return {
+        "id": reference.task_id,
+        "workspaceId": reference.workspace_id,
+        "sourceAgentUrl": reference.source_agent_url,
+    }
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

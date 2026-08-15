@@ -155,6 +155,39 @@ class StatelessA2AHTTPTransportTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_get_result_requires_completed_exact_task(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            result = response_for(request, status="completed")
+            result["result"].update(
+                {
+                    "artifacts": [{"artifactId": "remote-artifact", "parts": []}],
+                    "evidence": [{"evidenceId": "remote-evidence"}],
+                }
+            )
+            return httpx.Response(200, json=result)
+
+        resolver = StaticRouteResolver(peer_route(requires_bearer=False))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            transport = StatelessA2AHTTPTransport(resolver, http_client=client)
+            result = await transport.get_result(task_reference())
+
+        self.assertEqual(result["id"], "remote-task-1")
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["artifacts"][0]["artifactId"], "remote-artifact")
+
+    async def test_get_result_rejects_non_completed_task(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=response_for(request, status="working"))
+
+        resolver = StaticRouteResolver(peer_route(requires_bearer=False))
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            transport = StatelessA2AHTTPTransport(resolver, http_client=client)
+            with self.assertRaisesRegex(
+                A2ARemoteProtocolError,
+                "requires a completed task",
+            ):
+                await transport.get_result(task_reference())
+
     async def test_required_bearer_fails_closed_without_calling_peer(self) -> None:
         peer_called = False
 

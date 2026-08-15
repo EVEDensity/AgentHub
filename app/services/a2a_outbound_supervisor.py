@@ -8,6 +8,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from app.services.a2a_outbound_result import (
+    A2AImportedArtifact,
+    A2AOutboundResultError,
+    A2AOutboundResultImport,
+    A2AOutboundResultImporterPort,
+)
 from app.services.a2a_outbound_runner import (
     A2AOutboundClaimedWork,
     A2AOutboundTransportPort,
@@ -41,9 +47,9 @@ class _RemotePollingTimeout(TimeoutError):
 
 
 class A2AOutboundSupervisionOutcome(str, Enum):
-    """Finite outcomes before remote result import exists."""
+    """Finite outcomes for one supervised remote execution attempt."""
 
-    RESULT_READY = "result_ready"
+    LOCAL_VERIFYING = "local_verifying"
     REMOTE_FAILED = "remote_failed"
     REMOTE_CANCELED = "remote_canceled"
     INPUT_REQUIRED_UNSUPPORTED = "input_required_unsupported"
@@ -57,13 +63,17 @@ class A2AOutboundSupervisionResult:
     remote_task: A2ARemoteTaskSnapshot | None
     poll_count: int
     failure_reason: str | None = None
+    imported_artifacts: tuple[A2AImportedArtifact, ...] = ()
 
     def __post_init__(self) -> None:
         if self.poll_count < 0:
             raise ValueError("poll_count must be non-negative")
         has_failure = self.failure_reason is not None
-        if has_failure == (self.outcome == A2AOutboundSupervisionOutcome.RESULT_READY):
+        succeeded = self.outcome == A2AOutboundSupervisionOutcome.LOCAL_VERIFYING
+        if has_failure == succeeded:
             raise ValueError("supervision outcome and failure reason are inconsistent")
+        if bool(self.imported_artifacts) != succeeded:
+            raise ValueError("supervision outcome and imported Artifacts are inconsistent")
 
 
 class A2AOutboundSupervisor:
@@ -73,6 +83,7 @@ class A2AOutboundSupervisor:
         self,
         control: MissionControlRunnerPort,
         transport: A2AOutboundTransportPort,
+        result_importer: A2AOutboundResultImporterPort,
         *,
         runner_id: str,
         poll_interval_seconds: float = 1.0,
@@ -99,6 +110,7 @@ class A2AOutboundSupervisor:
             )
         self._control = control
         self._transport = transport
+        self._result_importer = result_importer
         self._runner_id = runner_id
         self._poll_interval_seconds = poll_interval_seconds
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
@@ -114,7 +126,7 @@ class A2AOutboundSupervisor:
             raise TypeError("work must be an A2AOutboundClaimedWork")
         if not 1 <= lease_seconds <= 3_600:
             raise ValueError("lease_seconds must be between 1 and 3600")
-        started = await self._start(work)
+        await self._start(work)
         remote_task = asyncio.create_task(self._run_remote_lifecycle(work))
         heartbeat_task = asyncio.create_task(
             self._heartbeat_loop(work, lease_seconds=lease_seconds)
@@ -141,7 +153,7 @@ class A2AOutboundSupervisor:
                     raise _HeartbeatSupervisionFailure(
                         "outbound A2A heartbeat supervision failed"
                     ) from heartbeat_error
-                snapshot, poll_count = remote_task.result()
+                snapshot, poll_count, result_import = remote_task.result()
             except asyncio.CancelledError:
                 remote_task.cancel()
                 await _drain_task(remote_task)
@@ -150,7 +162,11 @@ class A2AOutboundSupervisor:
                     await self._fail(work, "outbound A2A supervision cancelled")
                 raise
             except _RemotePollingTimeout as exc:
-                await self._best_effort_remote_cancel(work)
+                if (
+                    exc.remote_task is None
+                    or exc.remote_task.state != A2ARemoteTaskState.COMPLETED
+                ):
+                    await self._best_effort_remote_cancel(work)
                 reason = "remote A2A task exceeded the WorkUnit time budget"
                 failed = await self._fail(work, reason)
                 return A2AOutboundSupervisionResult(
@@ -162,6 +178,14 @@ class A2AOutboundSupervisor:
                 )
             except _HeartbeatSupervisionFailure:
                 raise
+            except A2AOutboundResultError as exc:
+                await self._fail(
+                    work,
+                    f"outbound A2A result import failed: {type(exc).__name__}",
+                )
+                raise A2AOutboundSupervisionError(
+                    "outbound A2A result import supervision failed"
+                ) from exc
             except Exception as exc:
                 await self._best_effort_remote_cancel(work)
                 await self._fail(
@@ -177,11 +201,17 @@ class A2AOutboundSupervisor:
             await _drain_task(heartbeat_task)
 
         if snapshot.state == A2ARemoteTaskState.COMPLETED:
+            if result_import is None:
+                raise A2AOutboundSupervisionError(
+                    "completed remote A2A task has no imported result"
+                )
+            completed = await self._complete(work, result_import)
             return A2AOutboundSupervisionResult(
-                outcome=A2AOutboundSupervisionOutcome.RESULT_READY,
-                work_unit=started,
+                outcome=A2AOutboundSupervisionOutcome.LOCAL_VERIFYING,
+                work_unit=completed,
                 remote_task=snapshot,
                 poll_count=poll_count,
+                imported_artifacts=result_import.artifacts,
             )
         outcome, reason = _remote_failure(snapshot.state)
         if snapshot.state == A2ARemoteTaskState.INPUT_REQUIRED:
@@ -221,7 +251,11 @@ class A2AOutboundSupervisor:
     async def _run_remote_lifecycle(
         self,
         work: A2AOutboundClaimedWork,
-    ) -> tuple[A2ARemoteTaskSnapshot, int]:
+    ) -> tuple[
+        A2ARemoteTaskSnapshot,
+        int,
+        A2AOutboundResultImport | None,
+    ]:
         poll_count = 0
         snapshot: A2ARemoteTaskSnapshot | None = None
         timeout = asyncio.timeout(work.timeout_seconds)
@@ -237,7 +271,27 @@ class A2AOutboundSupervisor:
                     snapshot = await self._transport.get(work.command.reference)
                     poll_count += 1
                     _assert_remote_snapshot(snapshot, work)
-                return snapshot, poll_count
+                result_import = None
+                if snapshot.state == A2ARemoteTaskState.COMPLETED:
+                    payload = await self._transport.get_result(
+                        work.command.reference
+                    )
+                    try:
+                        result_import = await self._result_importer.import_result(
+                            work,
+                            payload,
+                        )
+                    except A2AOutboundResultError:
+                        raise
+                    except Exception as exc:
+                        raise A2AOutboundResultError(
+                            "outbound A2A result importer failed"
+                        ) from exc
+                    if not isinstance(result_import, A2AOutboundResultImport):
+                        raise A2AOutboundResultError(
+                            "result importer returned an invalid result"
+                        )
+                return snapshot, poll_count, result_import
         except TimeoutError as exc:
             if not timeout.expired():
                 raise
@@ -307,6 +361,31 @@ class A2AOutboundSupervisor:
         _assert_failed_work_unit(failed, work)
         return dict(failed)
 
+    async def _complete(
+        self,
+        work: A2AOutboundClaimedWork,
+        result_import: A2AOutboundResultImport,
+    ) -> dict[str, Any]:
+        try:
+            completed = await self._control.complete_work_unit(
+                work.mission_id,
+                work.work_unit_id,
+                runner_id=self._runner_id,
+                lease_id=work.lease_id,
+                artifact_refs=result_import.artifact_refs,
+            )
+        except Exception as exc:
+            await self._fail(work, "outbound A2A result completion failed")
+            raise A2AOutboundSupervisionError(
+                "Mission Control could not complete outbound WorkUnit"
+            ) from exc
+        if not isinstance(completed, Mapping):
+            raise A2AOutboundSupervisionError(
+                "Mission Control returned an invalid WorkUnit completion response"
+            )
+        _assert_completed_work_unit(completed, work)
+        return dict(completed)
+
 
 def _assert_active_lease(
     payload: Mapping[str, Any],
@@ -347,6 +426,22 @@ def _assert_failed_work_unit(
     ):
         raise A2AOutboundSupervisionError(
             "Mission Control returned an inconsistent WorkUnit failure response"
+        )
+
+
+def _assert_completed_work_unit(
+    payload: Mapping[str, Any],
+    work: A2AOutboundClaimedWork,
+) -> None:
+    if (
+        payload.get("id") != work.work_unit_id
+        or payload.get("missionId") != work.mission_id
+        or payload.get("status") != "VERIFYING"
+        or payload.get("attempt") != work.attempt
+        or payload.get("lease") is not None
+    ):
+        raise A2AOutboundSupervisionError(
+            "Mission Control returned an inconsistent WorkUnit completion response"
         )
 
 

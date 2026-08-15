@@ -85,8 +85,11 @@ remains active. A dedicated Runner supervisor now owns the bounded execution
 loop after resolution: it performs the fenced local start, sends once per
 invocation, renews the lease during polling, attempts remote cancellation on
 timeout or supervision loss, and records terminal failures through Mission
-Control. Remote `COMPLETED` stops at an in-process `RESULT_READY` outcome until
-the result bytes are imported, verified, published, and registered locally.
+Control. Remote `COMPLETED` triggers a separate bounded `tasks/get`; the sender
+validates the complete bundle before side effects, publishes verified bytes to
+its own CAS, registers attempt-local Artifact metadata through Mission Control,
+and completes only to `VERIFYING`. Peer Evidence is retained in a report
+Artifact as a remote attestation and never becomes local Evidence authority.
 
 `tasks/cancel` first cancels the durable Mission task and then best-effort
 forwards cancellation with the same route-field cleanup, Card/origin checks,
@@ -223,8 +226,11 @@ response limits, typed Gateway projection, and all-or-nothing failure.
 Outbound Runner tests cover claim/context identity drift, target-scoped grants,
 local-versus-peer capability separation, request bounds, unsupported Artifact
 inputs, finite transport contracts, supervised lifecycle polling, lease
-heartbeat, timeout, cancellation, failure write-back, and the non-completing
-`RESULT_READY` outcome. Stateless HTTP transport tests cover
+heartbeat, timeout, cancellation, failure write-back, strict result import,
+fenced registration, and completion to `VERIFYING`. Stateless HTTP transport
+tests cover
 receiver-token isolation, route-origin pinning, content-free send/get/cancel,
-same-origin redirects, response limits, JSON-RPC identity, remote errors, and
-unsupported remote states.
+completed-only result fetch, same-origin redirects, response limits, JSON-RPC
+identity, remote errors, and unsupported remote states. Import tests cover
+schema, canonical Base64, aggregate bytes, SHA-256, reference closure, CAS
+metadata, attestation-only Evidence, and registration response fencing.

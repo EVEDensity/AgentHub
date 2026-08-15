@@ -134,6 +134,11 @@ class A2AOutboundTransportPort(Protocol):
         reference: A2ARemoteTaskReference,
     ) -> A2ARemoteTaskSnapshot: ...
 
+    async def get_result(
+        self,
+        reference: A2ARemoteTaskReference,
+    ) -> Mapping[str, Any]: ...
+
     async def cancel(
         self,
         reference: A2ARemoteTaskReference,

@@ -5,6 +5,12 @@ import unittest
 from collections.abc import Sequence
 from typing import Any
 
+from app.domain import ArtifactKind
+from app.services.a2a_outbound_result import (
+    A2AImportedArtifact,
+    A2AOutboundResultError,
+    A2AOutboundResultImport,
+)
 from app.services.a2a_outbound_runner import (
     A2AOutboundClaimedWork,
     A2AOutboundTaskCommand,
@@ -17,6 +23,7 @@ from app.services.a2a_outbound_supervisor import (
     A2AOutboundSupervisionOutcome,
     A2AOutboundSupervisor,
 )
+from app.services.artifact_store_service import PublishedArtifact
 
 
 class FakeControl:
@@ -25,6 +32,8 @@ class FakeControl:
         self.heartbeat_received = asyncio.Event()
         self.heartbeat_error: Exception | None = None
         self.start_updates: dict[str, Any] = {}
+        self.complete_error: Exception | None = None
+        self.complete_updates: dict[str, Any] = {}
 
     def active_work_unit(self, **updates: Any) -> dict[str, Any]:
         payload = {
@@ -66,6 +75,21 @@ class FakeControl:
     ) -> dict[str, Any]:
         self.calls.append(("fail", kwargs))
         return self.active_work_unit(status="FAILED", lease=None)
+
+    async def complete_work_unit(
+        self,
+        _mission_id: str,
+        _work_unit_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append(("complete", kwargs))
+        if self.complete_error is not None:
+            raise self.complete_error
+        return self.active_work_unit(
+            status="VERIFYING",
+            lease=None,
+            **self.complete_updates,
+        )
 
 
 class FakeTransport:
@@ -115,6 +139,43 @@ class FakeTransport:
         self.cancelled.set()
         return remote_snapshot(A2ARemoteTaskState.CANCELED)
 
+    async def get_result(
+        self,
+        _reference: A2ARemoteTaskReference,
+    ) -> dict[str, Any]:
+        self.calls.append("get_result")
+        return {"id": "remote-task-1", "status": "completed"}
+
+
+class FakeResultImporter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[A2AOutboundClaimedWork, dict[str, Any]]] = []
+        self.error: Exception | None = None
+
+    async def import_result(
+        self,
+        work: A2AOutboundClaimedWork,
+        payload: dict[str, Any],
+    ) -> A2AOutboundResultImport:
+        self.calls.append((work, payload))
+        if self.error is not None:
+            raise self.error
+        return A2AOutboundResultImport(
+            artifacts=(
+                A2AImportedArtifact(
+                    artifact_id="artifact-local-1",
+                    remote_artifact_id="artifact-remote-1",
+                    kind=ArtifactKind.REPORT,
+                    media_type="application/json",
+                    published=PublishedArtifact(
+                        digest="sha256:" + "a" * 64,
+                        size_bytes=10,
+                        content_address="local:sha256/" + "a" * 64,
+                    ),
+                ),
+            )
+        )
+
 
 def claimed_work(*, timeout_seconds: float = 1.0) -> A2AOutboundClaimedWork:
     reference = A2ARemoteTaskReference(
@@ -142,8 +203,11 @@ def remote_snapshot(state: A2ARemoteTaskState) -> A2ARemoteTaskSnapshot:
 
 
 class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
-    async def test_starts_sends_once_heartbeats_and_returns_result_ready(self) -> None:
+    async def test_imports_completed_result_and_moves_local_work_to_verifying(
+        self,
+    ) -> None:
         control = FakeControl()
+        importer = FakeResultImporter()
         transport = FakeTransport(
             get_states=(A2ARemoteTaskState.COMPLETED,),
             get_gate=control.heartbeat_received,
@@ -151,6 +215,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
         supervisor = A2AOutboundSupervisor(
             control,
             transport,
+            importer,
             runner_id="runner-1",
             poll_interval_seconds=0.001,
             heartbeat_interval_seconds=0.005,
@@ -158,15 +223,78 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
 
         result = await supervisor.supervise(claimed_work(), lease_seconds=30)
 
-        self.assertEqual(result.outcome, A2AOutboundSupervisionOutcome.RESULT_READY)
+        self.assertEqual(
+            result.outcome,
+            A2AOutboundSupervisionOutcome.LOCAL_VERIFYING,
+        )
+        self.assertEqual(result.work_unit["status"], "VERIFYING")
         self.assertEqual(result.remote_task.state, A2ARemoteTaskState.COMPLETED)
         self.assertEqual(result.poll_count, 1)
-        self.assertEqual(transport.calls, ["send", "get"])
+        self.assertEqual(len(result.imported_artifacts), 1)
+        self.assertEqual(transport.calls, ["send", "get", "get_result"])
+        self.assertEqual(len(importer.calls), 1)
         self.assertEqual(
             [name for name, _ in control.calls],
-            ["start", "heartbeat"],
+            ["start", "heartbeat", "complete"],
+        )
+        self.assertEqual(
+            control.calls[-1][1]["artifact_refs"],
+            [{"id": "artifact-local-1", "digest": "sha256:" + "a" * 64}],
         )
         self.assertNotIn("fail", [name for name, _ in control.calls])
+
+    async def test_result_import_failure_is_recorded_without_remote_recancel(
+        self,
+    ) -> None:
+        control = FakeControl()
+        transport = FakeTransport(send_state=A2ARemoteTaskState.COMPLETED)
+        importer = FakeResultImporter()
+        importer.error = A2AOutboundResultError("invalid remote bundle detail")
+
+        with self.assertRaisesRegex(
+            A2AOutboundSupervisionError,
+            "result import supervision failed",
+        ):
+            await A2AOutboundSupervisor(
+                control,
+                transport,
+                importer,
+                runner_id="runner-1",
+            ).supervise(claimed_work())
+
+        self.assertEqual(transport.calls, ["send", "get_result"])
+        self.assertEqual([name for name, _ in control.calls], ["start", "fail"])
+        self.assertEqual(
+            control.calls[-1][1]["reason"],
+            "outbound A2A result import failed: A2AOutboundResultError",
+        )
+        self.assertNotIn("invalid remote bundle detail", str(control.calls))
+
+    async def test_completion_failure_is_recorded_with_original_lease(self) -> None:
+        control = FakeControl()
+        control.complete_error = RuntimeError("control detail")
+        transport = FakeTransport(send_state=A2ARemoteTaskState.COMPLETED)
+
+        with self.assertRaisesRegex(
+            A2AOutboundSupervisionError,
+            "could not complete outbound WorkUnit",
+        ):
+            await A2AOutboundSupervisor(
+                control,
+                transport,
+                FakeResultImporter(),
+                runner_id="runner-1",
+            ).supervise(claimed_work())
+
+        self.assertEqual(
+            [name for name, _ in control.calls],
+            ["start", "complete", "fail"],
+        )
+        self.assertEqual(
+            control.calls[-1][1]["reason"],
+            "outbound A2A result completion failed",
+        )
+        self.assertNotIn("control detail", str(control.calls))
 
     async def test_remote_terminal_failures_are_recorded_locally(self) -> None:
         cases = (
@@ -193,6 +321,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
                 result = await A2AOutboundSupervisor(
                     control,
                     transport,
+                    FakeResultImporter(),
                     runner_id="runner-1",
                 ).supervise(claimed_work())
 
@@ -213,6 +342,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
         result = await A2AOutboundSupervisor(
             control,
             transport,
+            FakeResultImporter(),
             runner_id="runner-1",
             poll_interval_seconds=0.01,
         ).supervise(claimed_work(timeout_seconds=0.03))
@@ -232,6 +362,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
         supervisor = A2AOutboundSupervisor(
             control,
             transport,
+            FakeResultImporter(),
             runner_id="runner-1",
             poll_interval_seconds=0.001,
             heartbeat_interval_seconds=0.005,
@@ -257,6 +388,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
         supervisor = A2AOutboundSupervisor(
             control,
             transport,
+            FakeResultImporter(),
             runner_id="runner-1",
             poll_interval_seconds=0.001,
         )
@@ -282,6 +414,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
             await A2AOutboundSupervisor(
                 control,
                 transport,
+                FakeResultImporter(),
                 runner_id="runner-1",
             ).supervise(claimed_work())
 
@@ -305,6 +438,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
             await A2AOutboundSupervisor(
                 control,
                 transport,
+                FakeResultImporter(),
                 runner_id="runner-1",
             ).supervise(claimed_work())
 
@@ -336,6 +470,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
             await A2AOutboundSupervisor(
                 control,
                 transport,
+                FakeResultImporter(),
                 runner_id="runner-1",
             ).supervise(claimed_work())
 
@@ -354,6 +489,7 @@ class A2AOutboundSupervisorTests(unittest.IsolatedAsyncioTestCase):
             await A2AOutboundSupervisor(
                 control,
                 transport,
+                FakeResultImporter(),
                 runner_id="runner-1",
             ).supervise(claimed_work())
 

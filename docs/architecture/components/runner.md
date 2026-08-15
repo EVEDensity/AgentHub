@@ -91,11 +91,15 @@ supervisor now starts the claimed attempt through Mission Control, dispatches
 once, heartbeats its lease while polling, and propagates timeout, remote
 failure, unsupported input, transport/heartbeat failure, and caller
 cancellation through fenced local failure handling. A remote `COMPLETED`
-snapshot produces only `RESULT_READY`; it is not an Artifact and does not move
-the local WorkUnit beyond `RUNNING`. There is deliberately no Harness result
-and no production composition yet, so a remote acknowledgement cannot enter
-`WorkUnitRunner` Artifact/completion handling and no second dispatch path
-exists.
+snapshot triggers a separate trusted result fetch. Runner rejects schema,
+Base64, count, byte, digest, and Evidence-reference drift before publishing any
+bytes. It then publishes every remote Artifact to local CAS, registers the
+local metadata behind the active attempt lease, and stores remote Evidence only
+as an attestation `report` Artifact. Completion uses all local references and
+moves the WorkUnit to `VERIFYING`; only an independent local verifier may move
+it to `SUCCEEDED`. This path does not invoke Harness or `WorkUnitRunner`.
+Production composition remains disabled, so Gateway and Runner cannot dispatch
+the same attempt.
 
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,
