@@ -29,17 +29,19 @@ boundary. It is not the permanent home of every Agent feature.
   The Runner uses a replaceable Harness boundary for execution, renews its
   fenced lease, and cancels local work when supervision can no longer prove
   ownership. A bound Runner can atomically claim one ready delegated WorkUnit
-  through Mission Control; claim responses are validated against Mission,
+  or catalog-bound root `a2a.inbound` WorkUnit through Mission Control. Other
+  root kinds remain ineligible. Claim responses are validated against Mission,
   Agent, adapter, lease owner, and attempt before execution. A replaceable
-  resolver must turn WorkUnit ArtifactRefs into bounded execution input, and a
-  missing resolver fails the claimed unit without synthetic success. Harness
+  resolver must turn durable Mission/WorkUnit references into bounded execution
+  input, and a missing resolver fails the claimed unit without synthetic
+  success. Harness
   owns bounded model/tool loops and explicit per-run tool
   grants resolved from Mission Contract and WorkUnit capabilities;
   ModelAdapterPort normalizes provider responses and reports provider usage;
   Harness enforces per-run token and model-cost budgets and emits request-scoped
-  checkpoints; Runner must not write repository state directly. Root
-  `a2a.inbound` WorkUnits are not yet eligible for the delegated-child claim
-  query, so catalog binding does not by itself start local execution.
+  checkpoints; Runner must not write repository state directly. Claiming an
+  inbound root only creates a fenced lease; trusted inbound objective/context
+  resolution remains a separate execution boundary.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

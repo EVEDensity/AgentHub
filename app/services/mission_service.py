@@ -18,6 +18,7 @@ from app.domain import (
     Mission,
     MissionContract,
     MissionSource,
+    MissionSourceType,
     MissionStatus,
     OutputSpec,
     VerifierRef,
@@ -754,7 +755,7 @@ class MissionService:
             await repository.append_event(event)
         return updated
 
-    async def claim_delegated_work_unit(
+    async def claim_bound_work_unit(
         self,
         mission_id: str,
         *,
@@ -764,7 +765,7 @@ class MissionService:
         actor: ActorRef,
         lease_seconds: int,
     ) -> WorkUnit | None:
-        """Atomically claim the next ready delegated unit for one binding."""
+        """Atomically claim the next ready unit for one explicit binding."""
         if not 1 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 1 and 3600")
         async with self._repository.transaction() as repository:
@@ -774,13 +775,31 @@ class MissionService:
             if mission.status != MissionStatus.RUNNING:
                 raise WorkUnitNotReadyError("work units require a RUNNING mission")
 
-            work_unit = await repository.get_delegated_work_unit_for_claim(
+            allow_inbound_root = mission.source.type == MissionSourceType.A2A_INBOUND
+            work_unit = await repository.get_bound_work_unit_for_claim(
                 mission_id,
                 agent_id=agent_id,
                 adapter_type=adapter_type,
+                allow_inbound_root=allow_inbound_root,
             )
             if work_unit is None:
                 return None
+
+            if (
+                work_unit.assigned_agent_id != agent_id
+                or work_unit.assigned_adapter != adapter_type
+            ):
+                raise WorkUnitNotReadyError(
+                    "claim repository returned a WorkUnit for another binding"
+                )
+            if work_unit.parent_work_unit_id is not None:
+                claim_mode = "delegated"
+            elif allow_inbound_root and work_unit.kind == "a2a.inbound":
+                claim_mode = "a2a.inbound"
+            else:
+                raise WorkUnitNotReadyError(
+                    "claim repository returned an ineligible root WorkUnit"
+                )
 
             # Keep the application-level dependency check as a defense-in-depth
             # guard for alternate repository implementations and test doubles.
@@ -830,7 +849,7 @@ class MissionService:
                     "runnerId": lease.runner_id,
                     "attempt": updated.attempt,
                     "expiresAt": lease.expires_at.isoformat(),
-                    "claimMode": "delegated",
+                    "claimMode": claim_mode,
                     "assignedAgentId": updated.assigned_agent_id,
                     "assignedAdapter": updated.assigned_adapter,
                 },

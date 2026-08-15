@@ -61,10 +61,11 @@ a Gateway restart.
 The inbound WorkUnit is now durable and has a controlled local Agent binding.
 Catalog failure or lack of a complete match rejects admission with no new
 Mission state. Existing WorkUnits retain their binding snapshot across retries.
-Root inbound claim support, trusted Runner input resolution, and the resulting
-Artifact/Evidence path remain a separate release gate; the Gateway does not
-fabricate execution. General third-party A2A conformance and remote
-status/artifact synchronization also remain separate release gates.
+Root inbound claim support is implemented by ADR-0042. Trusted Runner input
+resolution and the resulting Artifact/Evidence path remain separate release
+gates; the Gateway does not fabricate execution. General third-party A2A
+conformance and remote status/artifact synchronization also remain separate
+release gates.
 
 ## Alternatives considered
 

@@ -196,11 +196,13 @@ class StaticClaimedWorkResolver:
 
 
 class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runner_claims_matching_delegated_work_and_executes_once(self) -> None:
+    async def test_runner_claims_matching_bound_work_and_executes_once(self) -> None:
         control = FakeControl()
         control.claim_payload = {
             "id": "wu-child",
             "missionId": "mis-1",
+            "kind": "a2a.inbound",
+            "parentWorkUnitId": None,
             "status": "LEASED",
             "attempt": 1,
             "assignedAgentId": "reviewer",
@@ -212,7 +214,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         resolver = StaticClaimedWorkResolver(
-            RunnerExecutionInput(code="print('delegated')", language="python")
+            RunnerExecutionInput(code="print('inbound')", language="python")
         )
         runner = WorkUnitRunner(
             control,

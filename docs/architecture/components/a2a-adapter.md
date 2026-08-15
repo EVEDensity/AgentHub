@@ -68,8 +68,15 @@ received task cannot recursively delegate itself. Inbound identity is
 `(workspace, source agent origin, external task ID)`, so two peers may use the
 same task ID without collision. Inbound `tasks/cancel` must provide the same
 source origin and can only cancel that directionally isolated mapping. The
-current Runner claim path still admits delegated child WorkUnits only; bound
-root `a2a.inbound` work is not automatically claimed yet.
+Mission Control claim path admits a bound root only when both its Mission source
+and WorkUnit kind are `a2a.inbound`. It applies the same exact Agent/adapter
+binding, dependency readiness, row lock, lease, attempt, and event rules used
+for delegated children. Other root kinds remain ineligible.
+
+Claim only transfers fenced execution ownership to Runner. It does not turn the
+peer objective into executable code, produce an Artifact, or prove completion.
+A trusted `ClaimedWorkResolver` and the independent Artifact/Evidence path remain
+separate gates.
 
 ## Security and ownership
 
@@ -137,4 +144,6 @@ non-forwarding, route-field isolation, and a two-Gateway signed/strict-pinned
 submit, cancel, and remote-failure loop without recursive delegation.
 Python adapter tests cover workspace-scoped, capability-complete deterministic
 binding, fail-closed catalog behavior without new persistence side effects, and
-idempotent preservation of the WorkUnit binding snapshot.
+idempotent preservation of the WorkUnit binding snapshot. Mission Control tests
+cover root inbound claim eligibility, source/kind guards, exact binding, atomic
+lease events, and continued delegated-child behavior.

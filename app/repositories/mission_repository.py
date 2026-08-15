@@ -440,14 +440,15 @@ class MissionRepository:
         )
         return self._work_unit_from_row(row) if row is not None else None
 
-    async def get_delegated_work_unit_for_claim(
+    async def get_bound_work_unit_for_claim(
         self,
         mission_id: str,
         *,
         agent_id: str,
         adapter_type: str,
+        allow_inbound_root: bool,
     ) -> WorkUnit | None:
-        """Lock one ready delegated WorkUnit for the requested runner binding."""
+        """Lock one ready, explicitly bound WorkUnit for a Runner."""
         row = await self._fetch_one(
             """SELECT candidate.id, candidate.mission_id,
                       candidate.parent_work_unit_id, candidate.assigned_agent_id,
@@ -457,7 +458,14 @@ class MissionRepository:
                       candidate.attempt, candidate.lease
                FROM work_units AS candidate
                WHERE candidate.mission_id=$1
-                 AND candidate.parent_work_unit_id IS NOT NULL
+                 AND (
+                     candidate.parent_work_unit_id IS NOT NULL
+                     OR (
+                         $4::boolean = TRUE
+                         AND candidate.parent_work_unit_id IS NULL
+                         AND candidate.kind = 'a2a.inbound'
+                     )
+                 )
                  AND candidate.assigned_agent_id=$2
                  AND candidate.assigned_adapter=$3
                  AND candidate.status IN ('PENDING', 'RETRYING')
@@ -476,6 +484,7 @@ class MissionRepository:
             mission_id,
             agent_id,
             adapter_type,
+            allow_inbound_root,
         )
         return self._work_unit_from_row(row) if row is not None else None
 

@@ -353,11 +353,11 @@ async def claim_delegated_work_unit(
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:
-    """Claim one ready delegated WorkUnit for a runner binding."""
+    """Claim one ready WorkUnit for an explicit Runner binding."""
     await _authorized_mission(mission_id, user=user, repository=repository)
     service = MissionService(repository)
     try:
-        claimed = await service.claim_delegated_work_unit(
+        claimed = await service.claim_bound_work_unit(
             mission_id,
             agent_id=request.agent_id,
             adapter_type=request.adapter_type,

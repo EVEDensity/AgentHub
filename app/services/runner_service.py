@@ -426,10 +426,10 @@ class WorkUnitRunner:
         artifact_kind: str = "test-result",
         media_type: str = "text/plain",
     ) -> RunnerRunResult | None:
-        """Claim and execute one delegated WorkUnit for this Runner binding."""
+        """Claim and execute one WorkUnit for this Runner binding."""
         if self._assigned_agent_id is None or self._assigned_adapter is None:
             raise RunnerControlError(
-                "delegated claim requires an assigned agent and adapter binding"
+                "claim requires an assigned agent and adapter binding"
             )
         claimed_payload = await self._control.claim_work_unit(
             mission_id,
