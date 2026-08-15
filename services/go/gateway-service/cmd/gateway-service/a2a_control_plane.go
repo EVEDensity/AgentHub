@@ -44,10 +44,20 @@ type a2aControlSubmit struct {
 	RequiredCapabilities []string `json:"requiredCapabilities,omitempty"`
 }
 
+type a2aControlAccept struct {
+	TaskID               string   `json:"taskId"`
+	WorkspaceID          string   `json:"workspaceId"`
+	Objective            string   `json:"objective"`
+	SourceAgentURL       string   `json:"sourceAgentUrl"`
+	RequiredCapabilities []string `json:"requiredCapabilities,omitempty"`
+}
+
 type a2aControlPlane interface {
 	Submit(context.Context, string, a2aControlSubmit) (*a2aControlTask, error)
+	Accept(context.Context, string, a2aControlAccept) (*a2aControlTask, error)
 	Get(context.Context, string, string, string) (*a2aControlTask, error)
 	Cancel(context.Context, string, string, string) (*a2aControlTask, error)
+	CancelInbound(context.Context, string, string, string, string) (*a2aControlTask, error)
 	Fail(context.Context, string, string, string, string) (*a2aControlTask, error)
 }
 
@@ -86,6 +96,14 @@ func (client *a2aControlPlaneClient) Submit(ctx context.Context, authorization s
 	return &task, nil
 }
 
+func (client *a2aControlPlaneClient) Accept(ctx context.Context, authorization string, input a2aControlAccept) (*a2aControlTask, error) {
+	var task a2aControlTask
+	if err := client.do(ctx, http.MethodPost, "/api/v1/a2a/tasks/inbound", authorization, input, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
 func (client *a2aControlPlaneClient) Get(ctx context.Context, authorization, workspaceID, taskID string) (*a2aControlTask, error) {
 	query := url.Values{"workspaceId": {workspaceID}, "taskId": {taskID}}
 	var task a2aControlTask
@@ -99,6 +117,19 @@ func (client *a2aControlPlaneClient) Cancel(ctx context.Context, authorization, 
 	var task a2aControlTask
 	body := map[string]string{"workspaceId": workspaceID, "taskId": taskID}
 	if err := client.do(ctx, http.MethodPost, "/api/v1/a2a/tasks/cancel", authorization, body, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (client *a2aControlPlaneClient) CancelInbound(ctx context.Context, authorization, workspaceID, sourceAgentURL, taskID string) (*a2aControlTask, error) {
+	var task a2aControlTask
+	body := map[string]string{
+		"workspaceId":    workspaceID,
+		"sourceAgentUrl": sourceAgentURL,
+		"taskId":         taskID,
+	}
+	if err := client.do(ctx, http.MethodPost, "/api/v1/a2a/tasks/inbound/cancel", authorization, body, &task); err != nil {
 		return nil, err
 	}
 	return &task, nil

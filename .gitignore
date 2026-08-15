@@ -54,6 +54,8 @@ docs/AI_COLLABORATION*.md
 # Backup, temporary, and log files
 *.bak
 *.tmp
+.tmp-go-cache/
+.gocache/
 *.swp
 *~
 *.log

@@ -17,7 +17,10 @@ boundary. It is not the permanent home of every Agent feature.
   state stores only the Agent ID, adapter type, and capability snapshot.
   The default binding resolver reads a workspace-scoped, credential-free
   catalog projection; catalog failures fail closed and never fall back to the
-  legacy user-scoped registry.
+  legacy user-scoped registry. Inbound A2A admission uses the same catalog to
+  select one enabled binding that has `a2a.receive` plus every requested
+  capability. The Agent ID and adapter are stored on the WorkUnit as an
+  execution snapshot; retries do not rebind existing work.
   Catalog mutations use workspace authorization and an atomic expected-version
   compare-and-set; request schemas reject provider credentials and raw config.
   Legacy Registry synchronization reads only Agent ID, adapter type,
@@ -34,7 +37,9 @@ boundary. It is not the permanent home of every Agent feature.
   grants resolved from Mission Contract and WorkUnit capabilities;
   ModelAdapterPort normalizes provider responses and reports provider usage;
   Harness enforces per-run token and model-cost budgets and emits request-scoped
-  checkpoints; Runner must not write repository state directly.
+  checkpoints; Runner must not write repository state directly. Root
+  `a2a.inbound` WorkUnits are not yet eligible for the delegated-child claim
+  query, so catalog binding does not by itself start local execution.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

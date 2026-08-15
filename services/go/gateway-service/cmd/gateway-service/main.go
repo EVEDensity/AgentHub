@@ -458,11 +458,42 @@ func main() {
 		log.Printf("a2a: TLS enabled (cert=%s, key=%s, ca=%s, strict=%v)",
 			a2aTLS.CertFile, a2aTLS.KeyFile, a2aTLS.CAFile, a2aTLS.StrictVerify)
 	}
+	a2aTrust, err := a2aTrustPolicyFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A trust policy: %v", err)
+	}
+	log.Printf("a2a: trust policy configured (allow_unsigned=%v, require_pinned_key=%v, pinned_origins=%d)",
+		a2aTrust.AllowUnsigned, a2aTrust.RequirePinnedKey, len(a2aTrust.TrustedKeys))
+	a2aSigner, err := a2aCardSignerFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A Agent Card signer: %v", err)
+	}
+	requireSignedSelfCard, err := a2aRequireSignedSelfCardFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A Agent Card signing requirement: %v", err)
+	}
+	if a2aSigner == nil {
+		if requireSignedSelfCard {
+			log.Fatal("A2A_REQUIRE_SIGNED_SELF_CARD requires A2A_CARD_SIGNING_KEY_FILE or A2A_CARD_SIGNER_URL")
+		}
+		log.Printf("a2a: WARNING AgentHub Agent Card is unsigned; configure a file-backed or remote signer for trusted interoperability")
+	} else {
+		log.Printf("a2a: AgentHub Agent Card signing enabled")
+	}
+	a2aPeerCredentials, err := a2aPeerCredentialsFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A peer credentials: %v", err)
+	}
+	log.Printf("a2a: peer credentials configured (origins=%d)", a2aPeerCredentials.Count())
 	a2aControl := newA2AControlPlaneClient(
 		getenv("MISSION_CONTROL_PLANE_URL", "http://127.0.0.1:8000"),
 		nil,
 	)
-	a2a := newA2AHandler(a2aBaseURL, pool, a2aTLS, a2aControl)
+	a2a, err := newA2AHandlerWithTrustPolicy(a2aBaseURL, pool, a2aTLS, a2aTrust, a2aSigner, a2aPeerCredentials, a2aControl)
+	if err != nil {
+		log.Fatalf("initialize A2A handler: %v", err)
+	}
+	mux.Handle("/.well-known/agent-card.json", a2a)
 	mux.Handle("/platform/a2a/", http.StripPrefix("/platform/a2a", a2a))
 
 	// ── API Keys + Public API ─────────────────────────────────────
@@ -538,7 +569,7 @@ func main() {
 	// against the caller's bucket) and outside the route mux. Public endpoints
 	// (/healthz, /metrics, /profile, /ws) bypass auth; /ws runs its own JWT
 	// check during the WebSocket upgrade.
-	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/api/public/bots/", "/v1/public/"}, func(r *http.Request, reason string) {
+	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/.well-known/agent-card.json", "/api/public/bots/", "/v1/public/"}, func(r *http.Request, reason string) {
 		authDenied.WithLabelValues("unauthorized").Inc()
 	})
 	handler := obs.Middleware("gateway-service", rateLimitMiddleware(rl, authMW(mux)))

@@ -18,7 +18,7 @@
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
-        "type": { "type": "string", "enum": ["manual", "issue", "api", "import"] },
+        "type": { "type": "string", "enum": ["manual", "issue", "api", "a2a", "a2a.inbound", "import"] },
         "reference": { "type": "string", "maxLength": 2048 },
         "externalId": { "type": "string", "maxLength": 255 }
       }

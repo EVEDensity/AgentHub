@@ -17,7 +17,7 @@ API 目标转换为可恢复、可审计、附带 Artifact 和 Evidence 的执�
 | Mission / WorkUnit | 已实现，持续补齐 | 当前唯一推荐的新业务状态模型 |
 | AgentNet / Legacy DAG | 已实现，迁移中 | 兼容现有功能，不再作为新写模型 |
 | MCP Gateway | 原型 | STDIO + SSE 已有，业务无状态化待完成 |
-| A2A | 原型 | Agent Card 和任务接口已有，签名/互操作测试待完成 |
+| A2A | 原型 | Agent Card、能力探测、双向签名信任和 Mission 任务接口已有，完整外部互操作认证待完成 |
 | RAG / Memory | 部分实现 | 检索与记忆组件存在，统一 Context Compiler 待完成 |
 | 沙箱、IAM、审计 | 部分实现 | 部署能力与安全边界按环境逐项验证 |
 

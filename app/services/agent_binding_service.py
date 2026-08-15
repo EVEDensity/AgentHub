@@ -82,6 +82,16 @@ class AgentBindingResolver(Protocol):
         """Resolve one Agent without returning provider credentials."""
 
 
+class AgentBindingSelector(Protocol):
+    async def select(
+        self,
+        *,
+        scope_id: str,
+        required_capabilities: Sequence[str],
+    ) -> AgentBinding | None:
+        """Select one deterministic, enabled binding for all capabilities."""
+
+
 class UnavailableAgentBindingResolver:
     """Fail closed until a durable, scope-aware catalog adapter is installed."""
 
@@ -96,8 +106,27 @@ class UnavailableAgentBindingResolver:
         )
 
 
+class UnavailableAgentBindingSelector:
+    """Fail closed until a scoped catalog selector is installed."""
+
+    async def select(
+        self,
+        *,
+        scope_id: str,
+        required_capabilities: Sequence[str],
+    ) -> AgentBinding | None:
+        del scope_id, required_capabilities
+        raise AgentBindingUnavailableError(
+            "workspace-scoped Agent binding selector is not configured"
+        )
+
+
 AgentCatalogLookup = Callable[
     [str, str], Awaitable[Mapping[str, object] | None]
+]
+
+AgentCatalogSelect = Callable[
+    [str, tuple[str, ...]], Awaitable[Mapping[str, object] | None]
 ]
 
 
@@ -142,6 +171,60 @@ class DatabaseAgentBindingResolver:
 
         if binding.agent_id != agent_id:
             raise AgentBindingUnavailableError("Agent catalog returned invalid binding")
+        return binding
+
+
+async def _select_catalog_binding(
+    scope_id: str,
+    required_capabilities: tuple[str, ...],
+) -> Mapping[str, object] | None:
+    from app.db.session import afetch_one
+
+    return await afetch_one(
+        """
+        SELECT agent_id, adapter_type, capabilities
+        FROM agent_catalog_bindings
+        WHERE scope_id = $1
+          AND enabled = TRUE
+          AND capabilities @> $2::jsonb
+        ORDER BY agent_id ASC, adapter_type ASC
+        LIMIT 1
+        """,
+        scope_id,
+        json.dumps(list(required_capabilities)),
+    )
+
+
+class DatabaseAgentBindingSelector:
+    """Select one enabled, capability-complete binding deterministically."""
+
+    def __init__(self, select: AgentCatalogSelect | None = None) -> None:
+        self._select = select or _select_catalog_binding
+
+    async def select(
+        self,
+        *,
+        scope_id: str,
+        required_capabilities: Sequence[str],
+    ) -> AgentBinding | None:
+        normalized_scope_id = scope_id.strip()
+        if not normalized_scope_id or len(normalized_scope_id) > 255:
+            raise ValueError("Agent catalog scope_id is invalid")
+        capabilities = _normalize_required_capabilities(required_capabilities)
+        try:
+            row = await self._select(normalized_scope_id, capabilities)
+            if row is None:
+                return None
+            binding = AgentBinding.from_mapping(row)
+        except AgentBindingUnavailableError:
+            raise
+        except Exception as exc:
+            raise AgentBindingUnavailableError("Agent catalog selection failed") from exc
+        missing = sorted(set(capabilities) - set(binding.capabilities))
+        if missing:
+            raise AgentBindingUnavailableError(
+                "Agent catalog selected a capability-incomplete binding"
+            )
         return binding
 
 
@@ -313,3 +396,46 @@ class StaticAgentBindingResolver:
         agent_id: str,
     ) -> AgentBinding | None:
         return self._bindings.get((scope_id, agent_id))
+
+
+class StaticAgentBindingSelector:
+    """Deterministic capability selector used by adapter and service tests."""
+
+    def __init__(self, bindings: Mapping[str, Sequence[AgentBinding]]) -> None:
+        self._bindings = {
+            scope_id: tuple(bindings_for_scope)
+            for scope_id, bindings_for_scope in bindings.items()
+        }
+
+    async def select(
+        self,
+        *,
+        scope_id: str,
+        required_capabilities: Sequence[str],
+    ) -> AgentBinding | None:
+        capabilities = set(_normalize_required_capabilities(required_capabilities))
+        eligible = [
+            binding
+            for binding in self._bindings.get(scope_id, ())
+            if capabilities <= set(binding.capabilities)
+        ]
+        if not eligible:
+            return None
+        return min(eligible, key=lambda binding: (binding.agent_id, binding.adapter_type))
+
+
+def _normalize_required_capabilities(
+    required_capabilities: Sequence[str],
+) -> tuple[str, ...]:
+    if isinstance(required_capabilities, (str, bytes, bytearray)):
+        raise TypeError("required capabilities must be an array")
+    if any(not isinstance(capability, str) for capability in required_capabilities):
+        raise TypeError("required capabilities must contain strings")
+    normalized = tuple(
+        sorted({capability.strip() for capability in required_capabilities})
+    )
+    if any(not capability for capability in normalized):
+        raise ValueError("required capabilities must not contain empty values")
+    if len(normalized) > 256 or any(len(capability) > 255 for capability in normalized):
+        raise ValueError("required capabilities exceed catalog limits")
+    return normalized

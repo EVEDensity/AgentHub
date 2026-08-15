@@ -89,6 +89,7 @@ class FakeMissionRepository:
         *,
         source_type: str,
         external_id: str,
+        source_reference: str | None = None,
     ) -> Mission | None:
         mission = self.mission
         if (
@@ -96,6 +97,10 @@ class FakeMissionRepository:
             and mission.workspace_id == workspace_id
             and mission.source.type.value == source_type
             and mission.source.external_id == external_id
+            and (
+                source_reference is None
+                or mission.source.reference == source_reference
+            )
         ):
             return mission
         return None

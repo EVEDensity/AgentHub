@@ -96,6 +96,36 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("source->>'externalId'=$3", sql)
         self.assertEqual(args, ("workspace-1", "a2a", "task-1"))
 
+    async def test_mission_source_lookup_can_bind_source_reference(self) -> None:
+        mission = build_mission(
+            source={
+                "type": "a2a.inbound",
+                "reference": "https://sender.example.test",
+                "externalId": "task-1",
+            }
+        )
+        self.database.one = self.build_mission_row(mission)
+
+        restored = await self.repository.get_mission_by_source(
+            "workspace-1",
+            source_type="a2a.inbound",
+            external_id="task-1",
+            source_reference="https://sender.example.test",
+        )
+
+        self.assertEqual(restored, mission)
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("source->>'reference'=$4", sql)
+        self.assertEqual(
+            args,
+            (
+                "workspace-1",
+                "a2a.inbound",
+                "task-1",
+                "https://sender.example.test",
+            ),
+        )
+
     async def test_list_is_workspace_scoped_and_bounded(self) -> None:
         mission = build_mission()
         self.database.all = [self.build_mission_row(mission)]

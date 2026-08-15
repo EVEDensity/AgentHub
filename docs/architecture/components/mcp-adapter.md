@@ -36,11 +36,16 @@ scope is snapshotted into each call only after authorization.
   Gateway's `/platform/sessions` route; Gateway owns authentication and proxies
   the bounded query to Session Service. Missing identity or required downstream
   credential fails before any network request.
-- Agent delegation: `call_agent` is not advertised by the Registry. Its former
-  implementation published a session message and returned the publish receipt,
-  which did not create a WorkUnit or prove Agent execution. The tool may return
-  only after a durable, ArtifactRef-based Mission Control delegation command is
-  available.
+- Agent delegation: `call_agent` is bound to the `agent.delegate` capability and
+  is a stateless command adapter. It requires a validated Mission/parent
+  WorkUnit context, an active parent lease, a registered `agent_id`, explicit
+  ArtifactRefs, output specifications, and required capabilities. The Gateway
+  forwards the authenticated credential to Mission Control's delegation API and
+  returns the accepted child WorkUnit representation. It never runs a model
+  loop, publishes a chat message, or reports child completion; Scheduler/Runner
+  claim and execute the child through the normal lease, Artifact, and Evidence
+  protocol. Missing context, credentials, malformed inputs, or downstream
+  failures fail closed.
 - Agent catalog projection: `list_agents` forwards the verified tenant and
   credential to Gateway `/platform/agent-registry`. Gateway derives the actor
   from IAM context, requires `agent:read`, reads the existing user-scoped Agent

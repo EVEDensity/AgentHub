@@ -154,6 +154,7 @@ class MissionSourceType(str, Enum):
     ISSUE = "issue"
     API = "api"
     A2A = "a2a"
+    A2A_INBOUND = "a2a.inbound"
     IMPORT = "import"
 
 

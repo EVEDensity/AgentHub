@@ -27,6 +27,8 @@ The detailed target design and migration sequence are stored locally under
 
 - `components/system-boundaries.md`: ownership and request flow summary.
 - `components/harness.md`: Harness loop, checkpoint, and event boundary.
+- `components/a2a-adapter.md`: A2A Agent Card probing and Mission task
+  translation boundary.
 - `components/mcp-adapter.md`: Stateless MCP client and audit boundary.
 - `components/memory.md`: current memory implementation baseline.
 - `components/`: stable component-level architecture.

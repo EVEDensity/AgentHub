@@ -348,6 +348,7 @@ class MissionService:
         required_capabilities: list[str],
         assigned_adapter: str | None,
         actor: ActorRef,
+        assigned_agent_id: str | None = None,
     ) -> WorkUnit:
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
@@ -368,6 +369,8 @@ class MissionService:
                     "work unit requires capabilities outside the mission contract: "
                     + ", ".join(unsupported)
                 )
+            if assigned_agent_id is not None and assigned_adapter is None:
+                raise ValueError("an assigned Agent requires an execution adapter")
             await self._validate_artifact_refs(repository, mission_id, input_refs)
 
             identifier = work_unit_id or new_identifier("wu")
@@ -381,6 +384,7 @@ class MissionService:
             work_unit = WorkUnit(
                 id=identifier,
                 mission_id=mission_id,
+                assigned_agent_id=assigned_agent_id,
                 kind=kind,
                 dependencies=dependencies,
                 input_refs=input_refs,
@@ -391,6 +395,15 @@ class MissionService:
                 attempt=0,
             )
             occurred_at = datetime.now(timezone.utc)
+            event_payload = {
+                "kind": work_unit.kind,
+                "missionId": mission_id,
+                "status": work_unit.status.value,
+            }
+            if work_unit.assigned_agent_id is not None:
+                event_payload["assignedAgentId"] = work_unit.assigned_agent_id
+            if work_unit.assigned_adapter is not None:
+                event_payload["assignedAdapter"] = work_unit.assigned_adapter
             event = EventEnvelope(
                 event_id=new_identifier("evt"),
                 aggregate_type="work_unit",
@@ -400,11 +413,7 @@ class MissionService:
                 actor=actor,
                 occurred_at=occurred_at,
                 correlation_id=mission_id,
-                payload={
-                    "kind": work_unit.kind,
-                    "missionId": mission_id,
-                    "status": work_unit.status.value,
-                },
+                payload=event_payload,
                 schema_version=1,
             )
             await repository.add_work_unit(work_unit)

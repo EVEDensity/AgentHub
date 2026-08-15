@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -22,9 +23,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +36,10 @@ import (
 	"github.com/agenthub/platform/shared/db"
 	"github.com/prometheus/client_golang/prometheus"
 )
+
+const maxAgentCardResponseBytes int64 = 1 << 20
+
+const maxA2ATaskResponseBytes int64 = 1 << 20
 
 // ── A2A Prometheus Metrics ────────────────────────────────────────────
 
@@ -72,6 +80,14 @@ var (
 		},
 		[]string{"method"},
 	)
+
+	a2aAgentTrustDecisions = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "a2a_agent_trust_decisions_total",
+			Help: "A2A Agent Card trust decisions without agent or key labels.",
+		},
+		[]string{"decision"},
+	)
 )
 
 func init() {
@@ -90,6 +106,7 @@ func init() {
 	prometheus.MustRegister(a2aDiscoveryRequests)
 	prometheus.MustRegister(a2aTaskRequests)
 	prometheus.MustRegister(a2aTaskLatency)
+	prometheus.MustRegister(a2aAgentTrustDecisions)
 }
 
 // ── A2A Protocol Types ───────────────────────────────────────────────
@@ -162,6 +179,8 @@ type AuthScheme struct {
 type AgentSecurity struct {
 	PublicKey    string `json:"public_key,omitempty"`
 	KeyAlgorithm string `json:"key_algorithm,omitempty"` // "ed25519", "rsa", etc.
+	KeyID        string `json:"key_id,omitempty"`
+	KeyVersion   string `json:"key_version,omitempty"`
 }
 
 // ── Task API Types (JSON-RPC 2.0) ───────────────────────────────────
@@ -232,6 +251,87 @@ type A2ATLSConfig struct {
 	CAFile       string
 	Enabled      bool
 	StrictVerify bool
+}
+
+// A2ATrustPolicy controls whether Agent Card identity is accepted after
+// cryptographic signature verification. Trusted keys are indexed by origin and
+// may contain multiple keys to support rotation.
+type A2ATrustPolicy struct {
+	AllowUnsigned    bool
+	RequirePinnedKey bool
+	TrustedKeys      map[string]map[string]struct{}
+}
+
+func a2aTrustPolicyFromEnv() (A2ATrustPolicy, error) {
+	allowUnsigned, err := parseA2ABoolEnv("A2A_ALLOW_UNSIGNED_CARDS", false)
+	if err != nil {
+		return A2ATrustPolicy{}, err
+	}
+	requirePinnedKey, err := parseA2ABoolEnv("A2A_REQUIRE_PINNED_KEYS", false)
+	if err != nil {
+		return A2ATrustPolicy{}, err
+	}
+	if allowUnsigned && requirePinnedKey {
+		return A2ATrustPolicy{}, errors.New("A2A_ALLOW_UNSIGNED_CARDS and A2A_REQUIRE_PINNED_KEYS cannot both be true")
+	}
+	policy := A2ATrustPolicy{
+		AllowUnsigned:    allowUnsigned,
+		RequirePinnedKey: requirePinnedKey,
+		TrustedKeys:      make(map[string]map[string]struct{}),
+	}
+	rawPins := strings.TrimSpace(os.Getenv("A2A_TRUSTED_PUBLIC_KEYS_JSON"))
+	if rawPins == "" {
+		if requirePinnedKey {
+			return A2ATrustPolicy{}, errors.New("A2A_REQUIRE_PINNED_KEYS requires A2A_TRUSTED_PUBLIC_KEYS_JSON")
+		}
+		return policy, nil
+	}
+	var configured map[string][]string
+	if err := json.Unmarshal([]byte(rawPins), &configured); err != nil {
+		return A2ATrustPolicy{}, fmt.Errorf("parse A2A_TRUSTED_PUBLIC_KEYS_JSON: %w", err)
+	}
+	if requirePinnedKey && len(configured) == 0 {
+		return A2ATrustPolicy{}, errors.New("A2A_REQUIRE_PINNED_KEYS requires at least one trusted A2A origin")
+	}
+	for rawOrigin, rawKeys := range configured {
+		originURL, err := parseA2AHTTPURL(rawOrigin)
+		if err != nil {
+			return A2ATrustPolicy{}, fmt.Errorf("invalid trusted A2A origin %q: %w", rawOrigin, err)
+		}
+		if (originURL.Path != "" && originURL.Path != "/") || originURL.RawQuery != "" {
+			return A2ATrustPolicy{}, fmt.Errorf("invalid trusted A2A origin %q: origin must not include a path or query", rawOrigin)
+		}
+		origin := strings.ToLower(originURL.Scheme + "://" + originURL.Host)
+		if len(rawKeys) == 0 {
+			return A2ATrustPolicy{}, fmt.Errorf("trusted A2A origin %q has no public keys", rawOrigin)
+		}
+		pins := policy.TrustedKeys[origin]
+		if pins == nil {
+			pins = make(map[string]struct{}, len(rawKeys))
+			policy.TrustedKeys[origin] = pins
+		}
+		for _, rawKey := range rawKeys {
+			key := strings.ToLower(strings.TrimSpace(rawKey))
+			decoded, err := hex.DecodeString(key)
+			if err != nil || len(decoded) != ed25519.PublicKeySize {
+				return A2ATrustPolicy{}, fmt.Errorf("trusted A2A origin %q contains an invalid Ed25519 public key", rawOrigin)
+			}
+			pins[key] = struct{}{}
+		}
+	}
+	return policy, nil
+}
+
+func parseA2ABoolEnv(name string, defaultValue bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean: %w", name, err)
+	}
+	return value, nil
 }
 
 // a2aTLSConfigFromEnv reads TLS configuration from environment variables.
@@ -779,7 +879,7 @@ func buildAgentHubCard(baseURL string) *AgentCard {
 			},
 		},
 		Endpoints: AgentEndpoints{
-			TaskAPI:   strings.TrimRight(baseURL, "/") + "/platform/a2a/tasks",
+			TaskAPI:   strings.TrimRight(baseURL, "/") + "/platform/a2a/inbox",
 			Streaming: strings.TrimRight(baseURL, "/") + "/platform/a2a/stream",
 		},
 		AuthSchemes: []AuthScheme{
@@ -801,14 +901,11 @@ func buildAgentHubCard(baseURL string) *AgentCard {
 // Returns an error if signature verification fails; returns nil when:
 // - No signature field is present (not an error, just unsigned)
 // - Signature is valid against the agent's public key
-//
-// Currently implements a placeholder: logs the verification attempt.
-// Real Ed25519/ECDSA verification requires the agent's public key from
-// the card's security.public_key field.
 func VerifyAgentCardSignature(card *AgentCard) error {
+	if card == nil {
+		return errors.New("agent card is required")
+	}
 	if card.Signature == "" {
-		// Card is not signed — log warning but don't block
-		log.Printf("a2a: WARNING agent card for '%s' (%s) has no signature field", card.Name, card.URL)
 		return nil
 	}
 
@@ -817,54 +914,214 @@ func VerifyAgentCardSignature(card *AgentCard) error {
 		return fmt.Errorf("agent card has signature but no public key in security.public_key")
 	}
 
-	// Serialize the card (without the signature field) for verification
-	signature := card.Signature
-	card.Signature = ""
-	payload, err := json.Marshal(card)
-	card.Signature = signature
+	unsigned := *card
+	unsigned.Signature = ""
+	payload, err := json.Marshal(&unsigned)
 	if err != nil {
 		return fmt.Errorf("failed to marshal card for signature verification: %w", err)
 	}
 
-	keyAlgo := card.Security.KeyAlgorithm
+	keyAlgo := strings.ToLower(strings.TrimSpace(card.Security.KeyAlgorithm))
 	if keyAlgo == "" {
 		keyAlgo = "ed25519"
 	}
-
-	log.Printf("a2a: verifying signature for agent '%s' (alg=%s, key_len=%d, payload_len=%d, sig_len=%d)",
-		card.Name, keyAlgo, len(card.Security.PublicKey), len(payload), len(signature))
-
-	// Placeholder: real verification would use crypto/ed25519 or crypto/ecdsa
-	// based on keyAlgo. For now we accept the signature and log the attempt.
-	// Production implementation should:
-	//   switch keyAlgo {
-	//   case "ed25519":
-	//     pubKey, _ := hex.DecodeString(card.Security.PublicKey)
-	//     sig, _ := hex.DecodeString(card.Signature)
-	//     if !ed25519.Verify(pubKey, payload, sig) { return err }
-	//   }
-
+	if keyAlgo != "ed25519" {
+		return fmt.Errorf("unsupported agent card key algorithm %q", keyAlgo)
+	}
+	publicKey, err := hex.DecodeString(strings.TrimSpace(card.Security.PublicKey))
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return errors.New("agent card Ed25519 public key is invalid")
+	}
+	signature, err := hex.DecodeString(strings.TrimSpace(card.Signature))
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("agent card Ed25519 signature is invalid")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), payload, signature) {
+		return errors.New("agent card signature verification failed")
+	}
 	return nil
+}
+
+func VerifyAgentCardTrust(card *AgentCard, agentURL string, policy A2ATrustPolicy) error {
+	if card == nil {
+		a2aAgentTrustDecisions.WithLabelValues("rejected").Inc()
+		return errors.New("agent card is required")
+	}
+	if card.Signature == "" {
+		if !policy.AllowUnsigned || policy.RequirePinnedKey {
+			a2aAgentTrustDecisions.WithLabelValues("rejected").Inc()
+			return errors.New("unsigned Agent Card rejected by trust policy")
+		}
+		a2aAgentTrustDecisions.WithLabelValues("unsigned_allowed").Inc()
+		log.Printf("a2a: WARNING unsigned Agent Card allowed by compatibility policy for '%s' (%s)", card.Name, agentURL)
+		return nil
+	}
+	if err := VerifyAgentCardSignature(card); err != nil {
+		a2aAgentTrustDecisions.WithLabelValues("rejected").Inc()
+		return err
+	}
+	origin, err := canonicalA2AOrigin(agentURL)
+	if err != nil {
+		a2aAgentTrustDecisions.WithLabelValues("rejected").Inc()
+		return fmt.Errorf("invalid Agent Card trust origin: %w", err)
+	}
+	pins := policy.TrustedKeys[origin]
+	publicKey := strings.ToLower(strings.TrimSpace(card.Security.PublicKey))
+	if len(pins) > 0 {
+		if _, trusted := pins[publicKey]; !trusted {
+			a2aAgentTrustDecisions.WithLabelValues("rejected").Inc()
+			return fmt.Errorf("Agent Card public key is not trusted for origin %s", origin)
+		}
+	} else if policy.RequirePinnedKey {
+		a2aAgentTrustDecisions.WithLabelValues("rejected").Inc()
+		return fmt.Errorf("no trusted Agent Card public key is configured for origin %s", origin)
+	}
+	a2aAgentTrustDecisions.WithLabelValues("verified").Inc()
+	return nil
+}
+
+func probeAgentCard(ctx context.Context, client *http.Client, agentURL string, requiredCapabilities []string, trustPolicy A2ATrustPolicy) (*AgentCard, error) {
+	baseURL, err := parseA2AHTTPURL(agentURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid A2A agent URL: %w", err)
+	}
+	cardURL := &url.URL{Scheme: baseURL.Scheme, Host: baseURL.Host, Path: "/.well-known/agent-card.json"}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cardURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("create Agent Card request: %w", err)
+	}
+	probeClient := *client
+	originalRedirect := client.CheckRedirect
+	probeClient.CheckRedirect = func(redirectRequest *http.Request, via []*http.Request) error {
+		if !sameA2AOrigin(baseURL, redirectRequest.URL) {
+			return errors.New("Agent Card redirect crossed the configured agent origin")
+		}
+		if originalRedirect != nil {
+			return originalRedirect(redirectRequest, via)
+		}
+		return nil
+	}
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("probe Agent Card: %w", err)
+	}
+	defer resp.Body.Close()
+	if !sameA2AOrigin(baseURL, resp.Request.URL) {
+		return nil, errors.New("Agent Card redirect crossed the configured agent origin")
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("Agent Card endpoint returned HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAgentCardResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Agent Card: %w", err)
+	}
+	if int64(len(body)) > maxAgentCardResponseBytes {
+		return nil, fmt.Errorf("Agent Card exceeds %d bytes", maxAgentCardResponseBytes)
+	}
+	var card AgentCard
+	if err := json.Unmarshal(body, &card); err != nil {
+		return nil, fmt.Errorf("decode Agent Card: %w", err)
+	}
+	if !isSupportedA2AProtocolVersion(card.ProtocolVersion) {
+		return nil, fmt.Errorf("unsupported A2A protocol version %q", card.ProtocolVersion)
+	}
+	cardBaseURL, err := parseA2AHTTPURL(card.URL)
+	if err != nil || !sameA2AOrigin(baseURL, cardBaseURL) {
+		return nil, errors.New("Agent Card URL does not match the configured agent origin")
+	}
+	taskURL, err := parseA2AHTTPURL(card.Endpoints.TaskAPI)
+	if err != nil || !sameA2AOrigin(baseURL, taskURL) {
+		return nil, errors.New("Agent Card task endpoint must use the configured agent origin")
+	}
+	if err := VerifyAgentCardTrust(&card, agentURL, trustPolicy); err != nil {
+		return nil, err
+	}
+	if missing := missingAgentCapabilities(&card, requiredCapabilities); len(missing) > 0 {
+		return nil, fmt.Errorf("Agent Card does not provide required capabilities: %s", strings.Join(missing, ", "))
+	}
+	return &card, nil
+}
+
+func isSupportedA2AProtocolVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return false
+	}
+	major, _, _ := strings.Cut(version, ".")
+	return major == "1"
+}
+
+func parseA2AHTTPURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, errors.New("absolute HTTP(S) URL is required")
+	}
+	return parsed, nil
+}
+
+func canonicalA2AOrigin(raw string) (string, error) {
+	parsed, err := parseA2AHTTPURL(raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host), nil
+}
+
+func sameA2AOrigin(left, right *url.URL) bool {
+	return left != nil && right != nil && strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
+}
+
+func missingAgentCapabilities(card *AgentCard, required []string) []string {
+	available := make(map[string]struct{})
+	for _, skill := range card.Skills {
+		if skillID := strings.ToLower(strings.TrimSpace(skill.ID)); skillID != "" {
+			available[skillID] = struct{}{}
+		}
+		for _, tag := range skill.Tags {
+			if normalizedTag := strings.ToLower(strings.TrimSpace(tag)); normalizedTag != "" {
+				available[normalizedTag] = struct{}{}
+			}
+		}
+	}
+	var missing []string
+	for _, capability := range required {
+		if _, ok := available[strings.ToLower(strings.TrimSpace(capability))]; !ok {
+			missing = append(missing, capability)
+		}
+	}
+	return missing
 }
 
 // ── Task Forwarding ─────────────────────────────────────────────────
 
 // forwardTaskToAgent sends a task to a remote A2A agent's task endpoint
 // and returns the response.
-func forwardTaskToAgent(client *http.Client, agentURL, method string, params map[string]any) (*A2ATaskResponse, error) {
-	taskEndpoint := strings.TrimRight(agentURL, "/") + "/tasks"
-
-	// If the agent has a card with a different task endpoint, use that
-	card := a2aReg.getMem(agentURL)
-	if card != nil && card.Endpoints.TaskAPI != "" {
-		taskEndpoint = card.Endpoints.TaskAPI
+func forwardTaskToAgent(ctx context.Context, client *http.Client, agentURL, method string, params map[string]any, requiredCapabilities []string, trustPolicy A2ATrustPolicy, peerCredentials *A2APeerCredentials) (*A2ATaskResponse, error) {
+	card, err := probeAgentCard(ctx, client, agentURL, requiredCapabilities, trustPolicy)
+	if err != nil {
+		return nil, err
+	}
+	taskEndpoint := card.Endpoints.TaskAPI
+	bearerToken := ""
+	if agentCardRequiresBearer(card) {
+		var configured bool
+		bearerToken, configured, err = peerCredentials.bearerFor(agentURL)
+		if err != nil {
+			return nil, err
+		}
+		if !configured {
+			origin, _ := canonicalA2AOrigin(agentURL)
+			return nil, fmt.Errorf("Agent Card requires bearer authentication but no receiver-issued credential is configured for origin %s", origin)
+		}
 	}
 
+	requestID := fmt.Sprintf("%d", time.Now().UnixNano())
 	reqBody := A2ATaskRequest{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
-		ID:      fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:      requestID,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -872,21 +1129,53 @@ func forwardTaskToAgent(client *http.Client, agentURL, method string, params map
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, taskEndpoint, strings.NewReader(string(bodyBytes)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, taskEndpoint, strings.NewReader(string(bodyBytes)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if bearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+bearerToken)
+	}
 
-	resp, err := client.Do(req)
+	taskClient := *client
+	originURL, _ := parseA2AHTTPURL(agentURL)
+	originalRedirect := client.CheckRedirect
+	taskClient.CheckRedirect = func(redirectRequest *http.Request, via []*http.Request) error {
+		if !sameA2AOrigin(originURL, redirectRequest.URL) {
+			return errors.New("A2A task redirect crossed the configured agent origin")
+		}
+		if originalRedirect != nil {
+			return originalRedirect(redirectRequest, via)
+		}
+		return nil
+	}
+	resp, err := taskClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("forward request to %s: %w", taskEndpoint, err)
 	}
 	defer resp.Body.Close()
 
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxA2ATaskResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read response from %s: %w", taskEndpoint, err)
+	}
+	if int64(len(responseBody)) > maxA2ATaskResponseBytes {
+		return nil, fmt.Errorf("remote A2A response exceeds %d bytes", maxA2ATaskResponseBytes)
+	}
 	var taskResp A2ATaskResponse
-	if err := json.NewDecoder(resp.Body).Decode(&taskResp); err != nil {
+	if err := json.Unmarshal(responseBody, &taskResp); err != nil {
 		return nil, fmt.Errorf("decode response from %s: %w", taskEndpoint, err)
+	}
+	if taskResp.JSONRPC != "2.0" {
+		return nil, fmt.Errorf("remote A2A response from %s has unsupported JSON-RPC version %q", taskEndpoint, taskResp.JSONRPC)
+	}
+	responseID, ok := taskResp.ID.(string)
+	if !ok || responseID != requestID {
+		return nil, fmt.Errorf("remote A2A response from %s has mismatched response id", taskEndpoint)
+	}
+	if taskResp.Result == nil && taskResp.Error == nil {
+		return nil, fmt.Errorf("remote A2A response from %s has neither result nor error", taskEndpoint)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		if taskResp.Error != nil {
@@ -898,22 +1187,40 @@ func forwardTaskToAgent(client *http.Client, agentURL, method string, params map
 	return &taskResp, nil
 }
 
+func agentCardRequiresBearer(card *AgentCard) bool {
+	if card == nil {
+		return false
+	}
+	for _, scheme := range card.AuthSchemes {
+		if strings.EqualFold(strings.TrimSpace(scheme.Type), "bearer") {
+			return true
+		}
+	}
+	return false
+}
+
 // ── HTTP Handlers ────────────────────────────────────────────────────
 
 // newA2AHandler returns an http.Handler that serves A2A endpoints.
 // When pool is non-nil, PostgreSQL persistence is used for the agent registry.
 // When pool is nil, an in-memory map serves as fallback.
 // tlsCfg enables TLS/mTLS for outbound calls to external A2A agents.
-func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control a2aControlPlane) http.Handler {
+func newA2AHandlerWithTrustPolicy(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, trustPolicy A2ATrustPolicy, signer A2ACardSigner, peerCredentials *A2APeerCredentials, control a2aControlPlane) (http.Handler, error) {
 	mux := http.NewServeMux()
 
 	selfCard := buildAgentHubCard(baseURL)
+	if signer != nil {
+		if err := SignAgentCard(context.Background(), selfCard, signer); err != nil {
+			return nil, fmt.Errorf("sign AgentHub Agent Card: %w", err)
+		}
+	}
 	a2aReg.pool = pool
 	a2aReg.tlsCfg = tlsCfg
 	a2aReg.selfCard = selfCard
 	a2aReg.register(selfCard)
 
 	client := a2aHTTPClient(tlsCfg)
+	mux.HandleFunc("/inbox", newA2AInboxHandler(selfCard, client, trustPolicy, control))
 
 	// Agent Card endpoint (A2A spec §3.1)
 	mux.HandleFunc("/.well-known/agent-card.json", func(w http.ResponseWriter, r *http.Request) {
@@ -953,11 +1260,10 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 				return
 			}
 
-			// Agent Card signature verification
-			if sigErr := VerifyAgentCardSignature(&card); sigErr != nil {
-				log.Printf("a2a: signature verification FAILED for agent '%s' (%s): %v", card.Name, card.URL, sigErr)
+			if trustErr := VerifyAgentCardTrust(&card, card.URL, trustPolicy); trustErr != nil {
+				log.Printf("a2a: trust verification FAILED for agent '%s' (%s): %v", card.Name, card.URL, trustErr)
 				writeJSON(w, http.StatusBadRequest, map[string]string{
-					"error": "signature verification failed: " + sigErr.Error(),
+					"error": "Agent Card trust verification failed: " + trustErr.Error(),
 				})
 				return
 			}
@@ -1031,6 +1337,19 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 		writeJSON(w, http.StatusOK, status)
 	})
 
+	mux.HandleFunc("/trust-status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allow_unsigned":     trustPolicy.AllowUnsigned,
+			"require_pinned_key": trustPolicy.RequirePinnedKey,
+			"pinned_origins":     len(trustPolicy.TrustedKeys),
+			"self_card_signed":   selfCard.Signature != "",
+		})
+	})
+
 	// Signature verification status endpoint
 	mux.HandleFunc("/registry/verify-signatures", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -1043,15 +1362,15 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 			if agent.Source == "internal" {
 				continue // skip self
 			}
-			err := VerifyAgentCardSignature(agent)
+			err := VerifyAgentCardTrust(agent, agent.URL, trustPolicy)
 			status := "verified"
 			message := "signature valid"
 			if err != nil {
 				status = "invalid"
 				message = err.Error()
 			} else if agent.Signature == "" {
-				status = "unsigned"
-				message = "card has no signature"
+				status = "unsigned_allowed"
+				message = "card has no signature and compatibility policy allows it"
 			}
 			results = append(results, map[string]any{
 				"url":     agent.URL,
@@ -1078,6 +1397,14 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 				JSONRPC: "2.0",
 				Error:   &A2AError{Code: -32700, Message: "Parse error: " + err.Error()},
 				ID:      "null",
+			})
+			return
+		}
+		if req.JSONRPC != "2.0" || strings.TrimSpace(req.Method) == "" {
+			writeJSON(w, http.StatusBadRequest, A2ATaskResponse{
+				JSONRPC: "2.0",
+				Error:   &A2AError{Code: -32600, Message: "Invalid Request: jsonrpc 2.0 and method are required"},
+				ID:      req.ID,
 			})
 			return
 		}
@@ -1118,6 +1445,11 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 				writeA2AInvalidParams(w, req.ID, "message must contain a non-empty text part")
 				return
 			}
+			requiredCapabilities, err := extractRequiredCapabilities(req.Params)
+			if err != nil {
+				writeA2AInvalidParams(w, req.ID, err.Error())
+				return
+			}
 			if control == nil {
 				writeA2AControlError(w, req.ID, taskID, fmt.Errorf("Mission control plane is not configured"))
 				return
@@ -1126,10 +1458,11 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 				r.Context(),
 				r.Header.Get("Authorization"),
 				a2aControlSubmit{
-					TaskID:      taskID,
-					WorkspaceID: workspaceID,
-					Objective:   objective,
-					AgentURL:    agentURL,
+					TaskID:               taskID,
+					WorkspaceID:          workspaceID,
+					Objective:            objective,
+					AgentURL:             agentURL,
+					RequiredCapabilities: requiredCapabilities,
 				},
 			)
 			if err != nil {
@@ -1138,8 +1471,23 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 			}
 
 			forwardParams := cloneA2AParams(req.Params)
+			delete(forwardParams, "agentUrl")
+			delete(forwardParams, "target")
 			forwardParams["id"] = taskID
-			fwdResp, fwdErr := forwardTaskToAgent(client, agentURL, "tasks/send", forwardParams)
+			forwardParams["sourceAgentUrl"] = selfCard.URL
+			if _, hasRequiredCapabilities := req.Params["requiredCapabilities"]; hasRequiredCapabilities {
+				forwardParams["requiredCapabilities"] = requiredCapabilities
+			}
+			fwdResp, fwdErr := forwardTaskToAgent(
+				r.Context(),
+				client,
+				agentURL,
+				"tasks/send",
+				forwardParams,
+				requiredCapabilities,
+				trustPolicy,
+				peerCredentials,
+			)
 			if fwdErr == nil && fwdResp != nil && fwdResp.Error != nil {
 				fwdErr = fmt.Errorf("remote A2A error %d: %s", fwdResp.Error.Code, fwdResp.Error.Message)
 			}
@@ -1233,8 +1581,20 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 			}
 			if controlTask.AgentURL != "" {
 				forwardParams := cloneA2AParams(req.Params)
+				delete(forwardParams, "agentUrl")
+				delete(forwardParams, "target")
 				forwardParams["id"] = taskID
-				if _, forwardErr := forwardTaskToAgent(client, controlTask.AgentURL, "tasks/cancel", forwardParams); forwardErr != nil {
+				forwardParams["sourceAgentUrl"] = selfCard.URL
+				if _, forwardErr := forwardTaskToAgent(
+					r.Context(),
+					client,
+					controlTask.AgentURL,
+					"tasks/cancel",
+					forwardParams,
+					nil,
+					trustPolicy,
+					peerCredentials,
+				); forwardErr != nil {
 					log.Printf("a2a: remote cancellation for %s failed: %v", taskID, forwardErr)
 				}
 			}
@@ -1255,7 +1615,7 @@ func newA2AHandler(baseURL string, pool *db.Pool, tlsCfg *A2ATLSConfig, control 
 		}
 	})
 
-	return mux
+	return mux, nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -1360,6 +1720,36 @@ func extractTextObjective(message *A2AMessage) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func extractRequiredCapabilities(params map[string]any) ([]string, error) {
+	raw, exists := params["requiredCapabilities"]
+	if !exists {
+		return nil, nil
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("requiredCapabilities must be an array of strings")
+	}
+	capabilities := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		capability, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("requiredCapabilities[%d] must be a string", index)
+		}
+		capability = strings.TrimSpace(capability)
+		if capability == "" {
+			return nil, fmt.Errorf("requiredCapabilities[%d] must not be empty", index)
+		}
+		normalized := strings.ToLower(capability)
+		if _, duplicate := seen[normalized]; duplicate {
+			return nil, fmt.Errorf("requiredCapabilities contains duplicate capability %q", capability)
+		}
+		seen[normalized] = struct{}{}
+		capabilities = append(capabilities, capability)
+	}
+	return capabilities, nil
 }
 
 func cloneA2AParams(params map[string]any) map[string]any {

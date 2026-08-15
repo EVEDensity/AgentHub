@@ -9,3 +9,92 @@ Community deployment should not require the full enterprise service topology.
 
 Do not use deployment configuration to silently change domain semantics. A
 feature unavailable in a deployment must fail explicitly and be observable.
+
+## A2A trust policy
+
+Gateway rejects unsigned A2A Agent Cards by default. Development environments
+that intentionally interoperate with unsigned agents must set
+`A2A_ALLOW_UNSIGNED_CARDS=true`; do not use that override in production.
+
+Production deployments can pin one or more Ed25519 public keys to each agent
+origin. Multiple keys allow an old and new key to overlap during rotation:
+
+```text
+A2A_REQUIRE_PINNED_KEYS=true
+A2A_TRUSTED_PUBLIC_KEYS_JSON={"https://agent.example.com":["<hex-ed25519-public-key>","<next-hex-ed25519-public-key>"]}
+```
+
+The JSON keys must be HTTP(S) origins without paths or queries. Invalid
+booleans, origins, JSON, empty key lists, or non-Ed25519 keys prevent Gateway
+startup. `A2A_ALLOW_UNSIGNED_CARDS=true` and
+`A2A_REQUIRE_PINNED_KEYS=true` are mutually exclusive. `GET
+/platform/a2a/trust-status` exposes only policy flags and the number of pinned
+origins; it never exposes key material.
+
+To publish a signed AgentHub Card, mount a persistent installation identity key
+as a read-only Secret and pass only its path to Gateway:
+
+```text
+A2A_REQUIRE_SIGNED_SELF_CARD=true
+A2A_CARD_SIGNING_KEY_FILE=/run/secrets/agenthub_a2a_ed25519
+```
+
+The file must contain a hex-encoded 32-byte Ed25519 seed or 64-byte Ed25519
+private key. A seed can be generated outside the repository with
+`openssl rand -hex 32`; store it in the deployment secret manager, not in an
+environment variable or tracked file. Rotate by pinning the new public key on
+peers before replacing the mounted key and restarting Gateway.
+
+For a non-exportable KMS/HSM key, configure a controlled remote signer instead
+of mounting private key material in Gateway:
+
+```text
+A2A_REQUIRE_SIGNED_SELF_CARD=true
+A2A_CARD_SIGNER_URL=https://signer.internal/v1/a2a-card
+A2A_CARD_SIGNER_KEY_ID=agenthub-production-card
+A2A_CARD_SIGNER_TOKEN_FILE=/run/secrets/agenthub_a2a_signer_token
+```
+
+`A2A_CARD_SIGNER_URL` and `A2A_CARD_SIGNING_KEY_FILE` are mutually exclusive.
+The token file is bounded, must contain one non-empty line, and must be mounted
+read-only. The signer URL must use HTTPS, must not contain credentials, query,
+or fragment, and never follows redirects. For local tests only, loopback HTTP
+can be enabled with `A2A_CARD_SIGNER_ALLOW_INSECURE_HTTP=true`.
+
+The endpoint accepts `POST application/json` with one of these request shapes:
+
+```json
+{"operation":"public_key","purpose":"a2a_agent_card_v1","key_id":"agenthub-production-card"}
+{"operation":"sign","purpose":"a2a_agent_card_v1","key_id":"agenthub-production-card","key_version":"42","payload":"<base64-card-json>"}
+```
+
+Responses use `algorithm`, `key_id`, `key_version`, and either a hex
+`public_key` or hex `signature`. The signer must authorize the fixed purpose,
+caller, and key ID; it must never return private key material. Gateway pins the
+reported version for the startup signing operation, verifies the returned
+signature locally, and publishes only non-secret identity metadata. Rotation
+still follows peer-pin overlap: publish the new public pin, switch signer key
+version and restart Gateway, then remove the old pin.
+
+AgentHub-to-AgentHub delegation also requires a receiver-issued bearer token
+for each peer origin. Mount each token as a separate read-only Secret and map
+the peer origin to the in-container file path; the environment variable carries
+paths only, never token values:
+
+```text
+A2A_PEER_BEARER_TOKEN_FILES_JSON={"https://peer.example.com":"/run/secrets/peer_example_a2a_token"}
+```
+
+Origins use the same exact HTTP(S) origin rules as public-key pins. Token files
+are bounded to 16 KiB and must contain one non-empty line. A peer whose Agent
+Card advertises Bearer authentication cannot receive a task unless its origin
+has a configured token. Gateway never substitutes the caller's Authorization
+header. Peer tokens are loaded at startup, are used only for the matching
+origin, and never enter Agent Cards, Registry data, trust status, Mission,
+WorkUnit, Artifact, Evidence, or logs. Rotation requires replacing the mounted
+Secret and restarting Gateway.
+
+The public Agent Card is served at `/.well-known/agent-card.json`. Local clients
+submit outbound work to the authenticated `/platform/a2a/tasks` endpoint;
+peers call the authenticated `/platform/a2a/inbox` endpoint declared by the
+Card. Do not expose the inbox without Gateway IAM verification.

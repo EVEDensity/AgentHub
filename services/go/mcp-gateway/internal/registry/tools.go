@@ -26,6 +26,7 @@ import (
 var (
 	ErrTenantIdentityRequired       = errors.New("authenticated tenant and actor are required")
 	ErrDownstreamCredentialRequired = errors.New("authenticated downstream credential is required")
+	ErrExecutionContextRequired     = errors.New("mission execution context is required")
 )
 
 // ── Tool Registry ────────────────────────────────────────────────────
@@ -235,6 +236,31 @@ func (r *Registry) registerAgentHubTools() {
 		Handler:    r.listAgentsHandler,
 	})
 
+	// call_agent is a controlled Mission delegation command. It never runs a
+	// model loop in the gateway and never reports completion; Mission Control
+	// creates the child WorkUnit, which a Runner must claim and execute.
+	r.registerTool(RegisteredTool{
+		Definition: protocol.ToolDefinition{
+			Name:        "call_agent",
+			Description: "Delegate a bounded WorkUnit to a registered Agent. The call is accepted only when the parent lease and capability contract are valid; execution is asynchronous.",
+			InputSchema: protocol.ToolInputSchema{
+				Type: "object",
+				Properties: map[string]protocol.SchemaProperty{
+					"id":                    {Type: "string", Description: "Stable child WorkUnit identifier"},
+					"kind":                  {Type: "string", Description: "Child WorkUnit kind", Default: "agent_delegation"},
+					"agent_id":              {Type: "string", Description: "Registered Agent binding identifier"},
+					"lease_id":              {Type: "string", Description: "Active parent WorkUnit lease identifier"},
+					"input_refs":            {Type: "array", Description: "Existing ArtifactRefs supplied as child inputs"},
+					"expected_outputs":      {Type: "array", Description: "Expected output specifications"},
+					"required_capabilities": {Type: "array", Description: "Capabilities required by the child WorkUnit"},
+				},
+				Required: []string{"id", "agent_id", "lease_id", "input_refs", "expected_outputs", "required_capabilities"},
+			},
+		},
+		Capability: "agent.delegate",
+		Handler:    r.callAgentHandler,
+	})
+
 	// ── List Sessions ────────────────────────────────────────────────
 	r.registerTool(RegisteredTool{
 		Definition: protocol.ToolDefinition{
@@ -438,6 +464,81 @@ func (r *Registry) listAgentsHandler(ctx context.Context, _ map[string]any) (*pr
 			{Type: "text", Text: string(data)},
 		},
 	}, nil
+}
+
+func (r *Registry) callAgentHandler(ctx context.Context, args map[string]any) (*protocol.ToolCallResult, error) {
+	execution, scoped := transport.RequestContextFromContext(ctx)
+	if !scoped || strings.TrimSpace(execution.MissionID) == "" || strings.TrimSpace(execution.WorkUnitID) == "" {
+		return nil, ErrExecutionContextRequired
+	}
+	if _, err := tenantPrincipal(ctx); err != nil {
+		return nil, err
+	}
+	authorization, ok := mcpauth.AuthorizationHeaderFromContext(ctx)
+	if !ok {
+		return nil, ErrDownstreamCredentialRequired
+	}
+
+	id := getStringArg(args, "id")
+	agentID := getStringArg(args, "agent_id")
+	leaseID := getStringArg(args, "lease_id")
+	if id == "" || agentID == "" || leaseID == "" {
+		return errorResult("id, agent_id, and lease_id are required"), nil
+	}
+	inputRefs, ok := args["input_refs"].([]any)
+	if !ok || len(inputRefs) == 0 {
+		return errorResult("input_refs must contain at least one existing ArtifactRef"), nil
+	}
+	expectedOutputs, ok := args["expected_outputs"].([]any)
+	if !ok {
+		return errorResult("expected_outputs must be an array"), nil
+	}
+	requiredCapabilities, ok := args["required_capabilities"].([]any)
+	if !ok {
+		return errorResult("required_capabilities must be an array"), nil
+	}
+
+	kind := getStringArg(args, "kind")
+	if kind == "" {
+		kind = "agent_delegation"
+	}
+	body, err := json.Marshal(map[string]any{
+		"id":                    id,
+		"kind":                  kind,
+		"agent_id":              agentID,
+		"input_refs":            inputRefs,
+		"expected_outputs":      expectedOutputs,
+		"required_capabilities": requiredCapabilities,
+		"lease_id":              leaseID,
+	})
+	if err != nil {
+		return errorResult("agent delegation arguments are not JSON serializable"), nil
+	}
+
+	endpoint := strings.TrimRight(r.gatewayURL, "/") + "/api/v1/missions/" + url.PathEscape(execution.MissionID) +
+		"/work-units/" + url.PathEscape(execution.WorkUnitID) + "/delegations"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return errorResult("failed to build agent delegation request"), nil
+	}
+	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return errorResult("agent delegation request failed"), nil
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return errorResult("failed to read agent delegation response"), nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return errorResult(fmt.Sprintf("agent delegation rejected: gateway returned HTTP %d", resp.StatusCode)), nil
+	}
+	if !json.Valid(data) {
+		return errorResult("agent delegation returned invalid JSON"), nil
+	}
+	return &protocol.ToolCallResult{Content: []protocol.ToolContent{{Type: "text", Text: string(data)}}}, nil
 }
 
 func (r *Registry) fetchAgentCatalog(ctx context.Context) ([]byte, error) {

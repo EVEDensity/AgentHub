@@ -4,11 +4,13 @@ import unittest
 from typing import Any
 
 from app.db.migrations import (
+    A2A_INBOUND_SOURCE_MAPPING_DOWN_REVISION,
+    A2A_INBOUND_SOURCE_MAPPING_REVISION,
+    A2A_INBOUND_SOURCE_MAPPING_UPGRADE,
     A2A_SOURCE_MAPPING_UPGRADE,
     AGENT_BINDING_PERSISTENCE_DOWN_REVISION,
     AGENT_BINDING_PERSISTENCE_UPGRADE,
     AGENT_CATALOG_PROJECTION_DOWN_REVISION,
-    AGENT_CATALOG_PROJECTION_REVISION,
     AGENT_CATALOG_PROJECTION_UPGRADE,
     ARTIFACT_PERSISTENCE_DOWN_REVISION,
     ARTIFACT_PERSISTENCE_UPGRADE,
@@ -79,7 +81,9 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_CATALOG_PROJECTION_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        for statement in A2A_INBOUND_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
         self.assertTrue(statements[-1].startswith("INSERT INTO alembic_version"))
 
     async def test_previous_head_is_upgraded_and_versioned_last(self) -> None:
@@ -106,11 +110,13 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_CATALOG_PROJECTION_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        for statement in A2A_INBOUND_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
         self.assertTrue(connection.executed[-1][0].startswith("UPDATE alembic_version"))
 
     async def test_current_head_is_idempotent(self) -> None:
-        connection = FakeConnection(AGENT_CATALOG_PROJECTION_REVISION)
+        connection = FakeConnection(A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
         await apply_startup_migrations(connection)
 
@@ -136,7 +142,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_event_ledger_head_advances_to_work_unit_persistence(self) -> None:
         connection = FakeConnection(MISSION_EVENT_LEDGER_REVISION)
@@ -158,7 +164,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_work_unit_head_advances_through_all_later_revisions(self) -> None:
         connection = FakeConnection(WORK_UNIT_PERSISTENCE_REVISION)
@@ -178,7 +184,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_a2a_head_advances_artifact_and_evidence(self) -> None:
         connection = FakeConnection(ARTIFACT_PERSISTENCE_DOWN_REVISION)
@@ -196,7 +202,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_artifact_head_advances_only_evidence_projection(self) -> None:
         connection = FakeConnection(EVIDENCE_PROJECTION_DOWN_REVISION)
@@ -219,7 +225,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_evidence_head_advances_only_delegation_persistence(self) -> None:
         connection = FakeConnection(EVIDENCE_PROJECTION_REVISION)
@@ -233,7 +239,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_delegation_head_advances_only_agent_binding_persistence(self) -> None:
         connection = FakeConnection(AGENT_BINDING_PERSISTENCE_DOWN_REVISION)
@@ -245,7 +251,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_agent_binding_head_advances_only_catalog_projection(self) -> None:
         connection = FakeConnection(AGENT_CATALOG_PROJECTION_DOWN_REVISION)
@@ -257,7 +263,22 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(statement, statements)
         for statement in AGENT_CATALOG_PROJECTION_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, AGENT_CATALOG_PROJECTION_REVISION)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
+
+    async def test_catalog_head_advances_only_inbound_source_mapping(self) -> None:
+        connection = FakeConnection(A2A_INBOUND_SOURCE_MAPPING_DOWN_REVISION)
+
+        await apply_startup_migrations(connection)
+
+        statements = [sql for sql, _args in connection.executed]
+        for statement in AGENT_CATALOG_PROJECTION_UPGRADE:
+            self.assertNotIn(statement, statements)
+        for statement in A2A_INBOUND_SOURCE_MAPPING_UPGRADE:
+            self.assertIn(statement, statements)
+        inbound_index = A2A_INBOUND_SOURCE_MAPPING_UPGRADE[0]
+        self.assertIn("source->>'reference'", inbound_index)
+        self.assertIn("source->>'externalId'", inbound_index)
+        self.assertEqual(connection.current_revision, A2A_INBOUND_SOURCE_MAPPING_REVISION)
 
     async def test_unknown_upgrade_path_is_not_falsely_stamped(self) -> None:
         connection = FakeConnection("unknown-revision")

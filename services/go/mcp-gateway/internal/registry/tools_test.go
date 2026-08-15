@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,7 @@ func TestBuiltinToolsDeclareStableCapabilities(t *testing.T) {
 	want := map[string]string{
 		"knowledge_search": "knowledge.search",
 		"list_agents":      "agent.read",
+		"call_agent":       "agent.delegate",
 		"list_sessions":    "session.read",
 		"create_workflow":  "workflow.create",
 		"ingest_document":  "document.ingest",
@@ -389,28 +391,82 @@ func TestJSONResourceRejectsDownstreamFailureAndInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestCallAgentIsNotAdvertisedOrDispatched(t *testing.T) {
-	called := false
-	downstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		called = true
+func TestCallAgentDelegatesThroughMissionControl(t *testing.T) {
+	var payload map[string]any
+	var requestPath string
+	var authorization string
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		authorization = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"child-1","status":"PENDING"}`))
 	}))
 	defer downstream.Close()
-	r := New("http://knowledge.test", downstream.URL)
-
-	for _, tool := range r.ListTools() {
-		if tool.Name == "call_agent" {
-			t.Fatal("call_agent must not be advertised without a controlled WorkUnit delegation path")
-		}
-	}
-	_, err := r.CallTool(executionContext("agent.dispatch"), "call_agent", map[string]any{
-		"agent_id": "reviewer",
-		"message":  "review this",
+	identity, _ := authenticatedIdentityContext(t)
+	ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+		MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+		Capability: "agent.delegate", Scope: map[string]any{},
 	})
-	if err == nil || err.Error() != `tool "call_agent" not found` {
-		t.Fatalf("error = %v, want explicit tool not found", err)
+	r := New("http://knowledge.test", downstream.URL)
+	result, err := r.CallTool(ctx, "call_agent", map[string]any{
+		"id":                    "child-1",
+		"agent_id":              "reviewer",
+		"lease_id":              "lease-parent-1",
+		"input_refs":            []any{map[string]any{"id": "artifact-1", "digest": "sha256:abc"}},
+		"expected_outputs":      []any{map[string]any{"kind": "review", "required": true}},
+		"required_capabilities": []any{"repository.read"},
+	})
+	if err != nil {
+		t.Fatalf("call_agent: %v", err)
 	}
-	if called {
-		t.Fatal("unavailable agent delegation must not publish a session message")
+	if result == nil || result.IsError {
+		t.Fatalf("result = %+v, want accepted delegation", result)
+	}
+	if requestPath != "/api/v1/missions/mission-1/work-units/work-unit-1/delegations" {
+		t.Fatalf("request path = %q", requestPath)
+	}
+	if authorization == "" {
+		t.Fatal("delegation must forward authenticated credential")
+	}
+	if payload["lease_id"] != "lease-parent-1" || payload["agent_id"] != "reviewer" {
+		t.Fatalf("payload omitted delegation identity: %+v", payload)
+	}
+	if _, err := r.CallTool(context.Background(), "call_agent", map[string]any{}); !errors.Is(err, ErrExecutionContextRequired) {
+		t.Fatalf("missing execution context error = %v", err)
+	}
+}
+
+func TestCallAgentSurfacesMissionConflictAsMCPError(t *testing.T) {
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"detail":"delegation id already exists with different immutable fields"}`, http.StatusConflict)
+	}))
+	defer downstream.Close()
+	identity, _ := authenticatedIdentityContext(t)
+	ctx := transport.WithRequestContext(identity, transport.MCPRequestContext{
+		MissionID: "mission-1", WorkUnitID: "work-unit-1", Attempt: 1,
+		Capability: "agent.delegate", Scope: map[string]any{},
+	})
+	r := New("http://knowledge.test", downstream.URL)
+	result, err := r.CallTool(ctx, "call_agent", map[string]any{
+		"id":                    "child-1",
+		"agent_id":              "reviewer",
+		"lease_id":              "lease-parent-1",
+		"input_refs":            []any{map[string]any{"id": "artifact-1", "digest": "sha256:abc"}},
+		"expected_outputs":      []any{},
+		"required_capabilities": []any{},
+	})
+	if err != nil {
+		t.Fatalf("call_agent conflict: %v", err)
+	}
+	if result == nil || !result.IsError {
+		t.Fatalf("result = %+v, want MCP error result", result)
+	}
+	if len(result.Content) != 1 || !strings.Contains(result.Content[0].Text, "HTTP 409") {
+		t.Fatalf("conflict content = %+v", result.Content)
 	}
 }
 

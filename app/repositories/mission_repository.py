@@ -136,17 +136,22 @@ class MissionRepository:
         *,
         source_type: str,
         external_id: str,
+        source_reference: str | None = None,
     ) -> Mission | None:
+        reference_filter = (
+            "" if source_reference is None else " AND source->>'reference'=$4"
+        )
         row = await self._fetch_one(
-            """SELECT id, workspace_id, title, objective, source, contract_id,
+            f"""SELECT id, workspace_id, title, objective, source, contract_id,
                       status, plan_version, created_by, created_at, updated_at
                FROM missions
                WHERE workspace_id=$1
                  AND source->>'type'=$2
-                 AND source->>'externalId'=$3""",
+                 AND source->>'externalId'=$3{reference_filter}""",
             workspace_id,
             source_type,
             external_id,
+            *(() if source_reference is None else (source_reference,)),
         )
         return self._mission_from_row(row) if row is not None else None
 
