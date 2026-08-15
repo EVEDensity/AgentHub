@@ -79,6 +79,9 @@ class FakeMissionRepository:
         self.transaction_depth = 0
         self.admission_locks: list[str] = []
         self.tenant_active_count_override: int | None = None
+        self.verification_candidate_calls: list[str] = []
+        self.work_unit_artifact_calls: list[tuple[str, str, int, int]] = []
+        self.list_mission_calls: list[str] = []
 
     @asynccontextmanager
     async def transaction(self):
@@ -243,6 +246,29 @@ class FakeMissionRepository:
         )
         return matching[offset : offset + limit]
 
+    async def list_work_unit_artifacts(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        attempt: int,
+        *,
+        limit: int = 201,
+    ) -> list[Artifact]:
+        self.work_unit_artifact_calls.append(
+            (mission_id, work_unit_id, attempt, limit)
+        )
+        matching = sorted(
+            (
+                artifact
+                for artifact in self.artifacts
+                if artifact.mission_id == mission_id
+                and artifact.work_unit_id == work_unit_id
+                and artifact.attempt == attempt
+            ),
+            key=lambda artifact: (artifact.created_at, artifact.id),
+        )
+        return matching[:limit]
+
     async def list_missions(
         self,
         workspace_id: str,
@@ -250,6 +276,7 @@ class FakeMissionRepository:
         limit: int = 100,
         offset: int = 0,
     ) -> list[Mission]:
+        self.list_mission_calls.append(workspace_id)
         return [
             mission
             for mission in self.list_result
@@ -271,6 +298,31 @@ class FakeMissionRepository:
 
     async def get_work_unit_for_update(self, work_unit_id: str) -> WorkUnit | None:
         return await self.get_work_unit(work_unit_id)
+
+    async def get_workspace_verification_candidate(
+        self,
+        workspace_id: str,
+    ) -> tuple[Mission, WorkUnit] | None:
+        if not self.transaction_depth:
+            raise AssertionError("verification discovery requires a transaction")
+        self.verification_candidate_calls.append(workspace_id)
+        mission = self.mission
+        if (
+            mission is None
+            or mission.workspace_id != workspace_id
+            or mission.status.value not in {"RUNNING", "VERIFYING"}
+        ):
+            return None
+        candidates = sorted(
+            (
+                work_unit
+                for work_unit in self.work_units
+                if work_unit.mission_id == mission.id
+                and work_unit.status.value == "VERIFYING"
+            ),
+            key=lambda work_unit: work_unit.id,
+        )
+        return (mission, candidates[0]) if candidates else None
 
     async def get_bound_work_unit_for_claim(
         self,
@@ -2773,6 +2825,197 @@ class MissionApiTests(unittest.TestCase):
         listed = client.get("/api/v1/missions/mis-1/evidence")
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.json()["evidence"], [body["evidence"]])
+
+    def test_verifier_discovers_only_minimal_current_attempt_context(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=2)]
+        repository.artifacts = [
+            build_artifact(id="artifact-old", attempt=1),
+            build_artifact(id="artifact-current", attempt=2),
+        ]
+        grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer(
+            {("workspace-1", "verifier-1")}
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["discoveryStatus"], "ready")
+        context = body["verificationContext"]
+        self.assertEqual(context["version"], 1)
+        self.assertEqual(
+            context["mission"],
+            {
+                "id": "mis-1",
+                "title": repository.mission.title,
+                "objective": repository.mission.objective,
+            },
+        )
+        self.assertEqual(
+            set(context["contract"]),
+            {"id", "version", "acceptanceCriteria"},
+        )
+        self.assertEqual(
+            set(context["workUnit"]),
+            {"id", "kind", "inputRefs", "expectedOutputs", "status", "attempt"},
+        )
+        self.assertEqual(context["workUnit"]["status"], "VERIFYING")
+        self.assertEqual(
+            [artifact["id"] for artifact in context["artifacts"]],
+            ["artifact-current"],
+        )
+        self.assertNotIn("createdBy", context["artifacts"][0])
+        self.assertNotIn("source", context["mission"])
+        self.assertNotIn("repositoryScopes", context["contract"])
+        self.assertEqual(
+            repository.verification_candidate_calls,
+            ["workspace-1"],
+        )
+        self.assertEqual(
+            repository.work_unit_artifact_calls,
+            [("mis-1", "wu-1", 2, 201)],
+        )
+        self.assertEqual(repository.list_mission_calls, [])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+
+    def test_verifier_discovery_denial_precedes_mission_reads(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Verifier workspace grant required",
+        )
+        self.assertEqual(repository.verification_candidate_calls, [])
+        self.assertEqual(repository.work_unit_artifact_calls, [])
+
+    def test_verifier_discovery_returns_idle_without_listing_missions(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.work_units = [build_work_unit(status="SUCCEEDED", attempt=1)]
+        grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer(
+            {("workspace-1", "verifier-1")}
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {"discoveryStatus": "idle", "verificationContext": None},
+        )
+        self.assertEqual(repository.list_mission_calls, [])
+        self.assertEqual(repository.work_unit_artifact_calls, [])
+
+    def test_verifier_discovery_fails_closed_without_current_artifacts(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=2)]
+        repository.artifacts = [build_artifact(attempt=1)]
+        grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer(
+            {("workspace-1", "verifier-1")}
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("current-attempt Artifacts", response.json()["detail"])
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
+
+    def test_verifier_discovery_rejects_oversized_artifact_context(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.contract = build_contract()
+        repository.work_units = [build_work_unit(status="VERIFYING", attempt=1)]
+        repository.artifacts = [
+            build_artifact(id=f"artifact-{index:03d}") for index in range(201)
+        ]
+        grant_authorizer = FakeVerifierWorkspaceGrantAuthorizer(
+            {("workspace-1", "verifier-1")}
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "verifier-1", "name": "Verifier", "role": "verifier"},
+                verifier_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/verification-work-items/discover",
+            json={"workspaceId": "workspace-1"},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json()["detail"],
+            "verification Artifact count exceeds 200",
+        )
+        self.assertEqual(repository.evidence, [])
+        self.assertEqual(repository.events, [])
 
     def test_explicit_verifier_grant_authorizes_another_workspace(self) -> None:
         repository = FakeMissionRepository()

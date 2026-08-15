@@ -53,6 +53,14 @@ when IAM is unavailable. The authenticated subject must still match the
 Evidence verifier identity. The grant is not workspace read access and does not
 permit Runner claims or self-verification by an executing Agent.
 
+Verifier discovery is a separate, side-effect-free Mission Control projection.
+It returns at most one `VERIFYING` WorkUnit with only the Mission objective,
+acceptance criteria, current-attempt Artifact metadata, and bounded WorkUnit
+shape needed for evaluation. A short transaction lock keeps the returned
+snapshot consistent but is not a verifier lease; `/verify` remains the durable
+state-transition authority. Ordinary Mission listing and Artifact bytes are not
+part of this projection.
+
 ## Migration status
 
 LangGraph and AgentNet remain compatibility surfaces while callers migrate.

@@ -7,6 +7,17 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
+from app.services.mission_service import (
+    VerificationContext,
+    VerificationDiscoveryOutcome,
+)
+from tests.domain.factories import (
+    build_artifact,
+    build_contract,
+    build_mission,
+    build_work_unit,
+)
+
 CONTRACT_DIR = Path(__file__).parents[2] / "platform" / "contracts" / "v1"
 
 
@@ -34,6 +45,7 @@ class PublicContractTests(unittest.TestCase):
                 "mission-contract.schema.json",
                 "work-unit.schema.json",
                 "work-unit-claim-response.schema.json",
+                "verification-work-discovery-response.schema.json",
                 "artifact.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
@@ -98,6 +110,50 @@ class PublicContractTests(unittest.TestCase):
             "work-unit-claim-response.schema.json": {
                 "claimStatus": "idle",
                 "workUnit": None,
+            },
+            "verification-work-discovery-response.schema.json": {
+                "discoveryStatus": "ready",
+                "verificationContext": {
+                    "version": 1,
+                    "mission": {
+                        "id": "mis-1",
+                        "title": "Fix issue 42",
+                        "objective": "Produce a tested, reviewable pull request.",
+                    },
+                    "contract": {
+                        "id": "contract-1",
+                        "version": 1,
+                        "acceptanceCriteria": [
+                            {
+                                "id": "tests",
+                                "kind": "test",
+                                "description": "Tests pass",
+                                "required": True,
+                                "configuration": {},
+                            }
+                        ],
+                    },
+                    "workUnit": {
+                        "id": "wu-1",
+                        "kind": "code_change",
+                        "inputRefs": [],
+                        "expectedOutputs": [{"kind": "diff", "required": True}],
+                        "status": "VERIFYING",
+                        "attempt": 1,
+                    },
+                    "artifacts": [
+                        {
+                            "id": "artifact-1",
+                            "attempt": 1,
+                            "kind": "diff",
+                            "digest": digest,
+                            "contentAddress": "local:sha256/" + "a" * 64,
+                            "mediaType": "text/x-diff",
+                            "sizeBytes": 128,
+                            "sensitivity": "internal",
+                        }
+                    ],
+                },
             },
             "artifact.schema.json": {
                 "id": "artifact-1",
@@ -178,6 +234,41 @@ class PublicContractTests(unittest.TestCase):
         for document in invalid_documents:
             with self.subTest(document=document):
                 self.assertTrue(list(validator.iter_errors(document)))
+
+    def test_verification_discovery_status_matches_payload(self) -> None:
+        validator = Draft202012Validator(
+            self.documents["verification-work-discovery-response.schema.json"],
+            registry=self.registry,
+        )
+        validator.validate(
+            {"discoveryStatus": "idle", "verificationContext": None}
+        )
+        for document in (
+            {"discoveryStatus": "ready", "verificationContext": None},
+            {"discoveryStatus": "idle", "verificationContext": {}},
+            {"discoveryStatus": "unknown", "verificationContext": None},
+        ):
+            with self.subTest(document=document):
+                self.assertTrue(list(validator.iter_errors(document)))
+
+    def test_verification_discovery_producer_matches_contract(self) -> None:
+        validator = Draft202012Validator(
+            self.documents["verification-work-discovery-response.schema.json"],
+            registry=self.registry,
+        )
+        context = VerificationContext(
+            mission=build_mission(status="RUNNING"),
+            contract=build_contract(),
+            work_unit=build_work_unit(status="VERIFYING", attempt=1),
+            artifacts=(build_artifact(),),
+        )
+
+        validator.validate(
+            VerificationDiscoveryOutcome(context=context).to_public_dict()
+        )
+        validator.validate(
+            VerificationDiscoveryOutcome(context=None).to_public_dict()
+        )
 
     def test_event_catalog_is_unique_and_matches_envelope_aggregates(self) -> None:
         catalog = self.documents["event-catalog.json"]

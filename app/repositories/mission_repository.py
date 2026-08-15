@@ -574,6 +574,51 @@ class MissionRepository:
         mission = self._mission_from_claim_row(row)
         return mission, self._work_unit_from_row(row)
 
+    async def get_workspace_verification_candidate(
+        self,
+        workspace_id: str,
+    ) -> tuple[Mission, WorkUnit] | None:
+        """Lock one deterministic VERIFYING unit for a short context read."""
+
+        row = await self._fetch_one(
+            """SELECT
+                      mission.id AS selected_mission_id,
+                      mission.workspace_id AS selected_workspace_id,
+                      mission.title AS selected_title,
+                      mission.objective AS selected_objective,
+                      mission.source AS selected_source,
+                      mission.contract_id AS selected_contract_id,
+                      mission.status AS selected_status,
+                      mission.plan_version AS selected_plan_version,
+                      mission.created_by AS selected_created_by,
+                      mission.created_at AS selected_created_at,
+                      mission.updated_at AS selected_updated_at,
+                      candidate.id, candidate.mission_id,
+                      candidate.parent_work_unit_id, candidate.assigned_agent_id,
+                      candidate.kind, candidate.dependencies, candidate.input_refs,
+                      candidate.expected_outputs, candidate.required_capabilities,
+                      candidate.assigned_adapter, candidate.status,
+                      candidate.attempt, candidate.lease
+               FROM missions AS mission
+               JOIN work_units AS candidate
+                 ON candidate.mission_id=mission.id
+               WHERE mission.workspace_id=$1
+                 AND mission.status IN ('RUNNING', 'VERIFYING')
+                 AND candidate.status='VERIFYING'
+               ORDER BY (
+                   SELECT MAX(verifier_evidence.generated_at)
+                   FROM evidence AS verifier_evidence
+                   WHERE verifier_evidence.work_unit_id=candidate.id
+               ) ASC NULLS FIRST,
+               mission.created_at ASC, mission.id ASC, candidate.id ASC
+               LIMIT 1
+               FOR UPDATE OF mission, candidate SKIP LOCKED""",
+            workspace_id,
+        )
+        if row is None:
+            return None
+        return self._mission_from_claim_row(row), self._work_unit_from_row(row)
+
     async def lock_tenant_claim_admission(self, tenant_id: str) -> None:
         """Serialize bounded claim admission for one tenant transaction."""
 
@@ -619,6 +664,31 @@ class MissionRepository:
             if work_unit.lease is not None
             else None,
         )
+
+    async def list_work_unit_artifacts(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        attempt: int,
+        *,
+        limit: int = 201,
+    ) -> list[Artifact]:
+        if not 1 <= limit <= 201:
+            raise ValueError("limit must be between 1 and 201")
+        rows = await self._fetch_all(
+            """SELECT id, mission_id, work_unit_id, attempt, kind, digest,
+                      content_address, media_type, size_bytes, source_repository,
+                      base_commit, retention, sensitivity, created_by, created_at
+               FROM artifacts
+               WHERE mission_id=$1 AND work_unit_id=$2 AND attempt=$3
+               ORDER BY created_at ASC, id ASC
+               LIMIT $4""",
+            mission_id,
+            work_unit_id,
+            attempt,
+            limit,
+        )
+        return [self._artifact_from_row(row) for row in rows]
 
     async def list_work_units(
         self,

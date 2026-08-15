@@ -127,8 +127,14 @@ boundary. It is not the permanent home of every Agent feature.
   Independent verifier principals use the separate explicit workspace ACL
   permission `mission:verify`. Mission Control checks it before Artifact I/O or
   mutation, fails closed when IAM is unavailable, and still requires the token
-  subject to match `verifierId`. This grant permits only Evidence admission; it
-  does not grant Mission listing, Runner claims, or ordinary workspace access.
+  subject to match `verifierId`. Outside the narrow discovery projection, this
+  grant permits only Evidence admission; it does not grant Mission listing,
+  Runner claims, or ordinary workspace access. The verifier discovery command
+  extends that grant only to one minimal,
+  current-attempt `VERIFYING` context. Its short database lock creates no
+  durable claim, and its projection excludes Mission source, Contract
+  repository/capability grants, execution leases, credentials, and Artifact
+  bytes.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

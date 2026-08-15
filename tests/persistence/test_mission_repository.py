@@ -460,6 +460,76 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FOR UPDATE OF mission, candidate SKIP LOCKED", sql)
         self.assertEqual(args, ("workspace-1", "reviewer", "local_codex"))
 
+    async def test_verification_candidate_is_scoped_ordered_and_short_locked(
+        self,
+    ) -> None:
+        mission = build_mission(workspace_id="workspace-1", status="RUNNING")
+        work_unit = build_work_unit(
+            mission_id=mission.id,
+            status="VERIFYING",
+            attempt=2,
+        )
+        row = self.build_work_unit_row(work_unit)
+        row.update(
+            {
+                f"selected_{'mission_id' if name == 'id' else name}": value
+                for name, value in self.build_mission_row(mission).items()
+            }
+        )
+        self.database.one = row
+
+        selection = await self.repository.get_workspace_verification_candidate(
+            "workspace-1"
+        )
+
+        self.assertEqual(selection, (mission, work_unit))
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("mission.workspace_id=$1", sql)
+        self.assertIn("mission.status IN ('RUNNING', 'VERIFYING')", sql)
+        self.assertIn("candidate.status='VERIFYING'", sql)
+        self.assertIn("MAX(verifier_evidence.generated_at)", sql)
+        self.assertIn("verifier_evidence.work_unit_id=candidate.id", sql)
+        self.assertIn("ASC NULLS FIRST", sql)
+        self.assertIn(
+            "mission.created_at ASC, mission.id ASC, candidate.id ASC",
+            sql,
+        )
+        self.assertIn("FOR UPDATE OF mission, candidate SKIP LOCKED", sql)
+        self.assertEqual(args, ("workspace-1",))
+
+    async def test_work_unit_artifact_read_is_attempt_scoped_and_bounded(
+        self,
+    ) -> None:
+        artifact = build_artifact(attempt=2)
+        self.database.all = [self.build_artifact_row(artifact)]
+
+        restored = await self.repository.list_work_unit_artifacts(
+            artifact.mission_id,
+            artifact.work_unit_id,
+            artifact.attempt,
+            limit=201,
+        )
+
+        self.assertEqual(restored, [artifact])
+        sql, args = self.database.fetched_all[-1]
+        self.assertIn(
+            "WHERE mission_id=$1 AND work_unit_id=$2 AND attempt=$3",
+            sql,
+        )
+        self.assertIn("ORDER BY created_at ASC, id ASC", sql)
+        self.assertIn("LIMIT $4", sql)
+        self.assertEqual(
+            args,
+            (artifact.mission_id, artifact.work_unit_id, artifact.attempt, 201),
+        )
+        with self.assertRaises(ValueError):
+            await self.repository.list_work_unit_artifacts(
+                artifact.mission_id,
+                artifact.work_unit_id,
+                artifact.attempt,
+                limit=202,
+            )
+
     async def test_tenant_claim_admission_uses_transaction_advisory_lock(self) -> None:
         await self.repository.lock_tenant_claim_admission("tenant-1")
 

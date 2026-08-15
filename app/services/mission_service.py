@@ -44,6 +44,21 @@ from app.services.workspace_admission_service import (
 )
 
 _A2A_OUTBOUND_ADAPTER = "a2a.outbound"
+_MAX_VERIFICATION_ARTIFACTS = 200
+_VERIFICATION_ARTIFACT_FIELDS = frozenset(
+    {
+        "id",
+        "attempt",
+        "kind",
+        "digest",
+        "contentAddress",
+        "mediaType",
+        "sizeBytes",
+        "sourceRepository",
+        "baseCommit",
+        "sensitivity",
+    }
+)
 
 
 def build_human_actor(user: dict) -> ActorRef:
@@ -110,6 +125,69 @@ class ClaimedExecutionContext:
             "mission": self.mission.to_public_dict(),
             "contract": self.contract.to_public_dict(),
             "workUnit": self.work_unit.to_public_dict(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationContext:
+    mission: Mission
+    contract: MissionContract
+    work_unit: WorkUnit
+    artifacts: tuple[Artifact, ...]
+
+    def to_public_dict(self) -> dict:
+        return {
+            "version": 1,
+            "mission": {
+                "id": self.mission.id,
+                "title": self.mission.title,
+                "objective": self.mission.objective,
+            },
+            "contract": {
+                "id": self.contract.id,
+                "version": self.contract.version,
+                "acceptanceCriteria": [
+                    criterion.to_public_dict()
+                    for criterion in self.contract.acceptance_criteria
+                ],
+            },
+            "workUnit": {
+                "id": self.work_unit.id,
+                "kind": self.work_unit.kind,
+                "inputRefs": [
+                    artifact_ref.to_public_dict()
+                    for artifact_ref in self.work_unit.input_refs
+                ],
+                "expectedOutputs": [
+                    output.to_public_dict()
+                    for output in self.work_unit.expected_outputs
+                ],
+                "status": self.work_unit.status.value,
+                "attempt": self.work_unit.attempt,
+            },
+            "artifacts": [
+                {
+                    key: value
+                    for key, value in artifact.to_public_dict().items()
+                    if key in _VERIFICATION_ARTIFACT_FIELDS
+                }
+                for artifact in self.artifacts
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationDiscoveryOutcome:
+    """Transient verifier discovery result; it creates no durable claim."""
+
+    context: VerificationContext | None
+
+    def to_public_dict(self) -> dict:
+        return {
+            "discoveryStatus": "ready" if self.context is not None else "idle",
+            "verificationContext": (
+                self.context.to_public_dict() if self.context is not None else None
+            ),
         }
 
 
@@ -1307,6 +1385,80 @@ class MissionService:
             await repository.add_artifact(artifact)
             await repository.append_event(event)
         return artifact
+
+    async def discover_workspace_verification_work(
+        self,
+        workspace_id: str,
+    ) -> VerificationDiscoveryOutcome:
+        """Return one authorized workspace's minimal, consistent verifier input."""
+
+        normalized_workspace_id = workspace_id.strip()
+        if not normalized_workspace_id:
+            raise ValueError("workspace_id must be non-empty")
+        async with self._repository.transaction() as repository:
+            selection = await repository.get_workspace_verification_candidate(
+                normalized_workspace_id
+            )
+            if selection is None:
+                return VerificationDiscoveryOutcome(context=None)
+            mission, work_unit = selection
+            if mission.workspace_id != normalized_workspace_id:
+                raise WorkUnitNotReadyError(
+                    "verification repository returned another workspace"
+                )
+            if mission.status not in {MissionStatus.RUNNING, MissionStatus.VERIFYING}:
+                raise WorkUnitNotReadyError(
+                    "verification requires a RUNNING or VERIFYING mission"
+                )
+            if (
+                work_unit.mission_id != mission.id
+                or work_unit.status != WorkUnitStatus.VERIFYING
+            ):
+                raise WorkUnitNotReadyError(
+                    "verification repository returned an ineligible WorkUnit"
+                )
+            if work_unit.attempt < 1:
+                raise WorkUnitNotReadyError(
+                    "verification requires a positive WorkUnit attempt"
+                )
+            contract = await repository.get_contract(mission.contract_id)
+            if contract is None:
+                raise WorkUnitNotReadyError("mission contract not found")
+            artifacts = await repository.list_work_unit_artifacts(
+                mission.id,
+                work_unit.id,
+                work_unit.attempt,
+                limit=_MAX_VERIFICATION_ARTIFACTS + 1,
+            )
+            if not artifacts:
+                raise WorkUnitNotReadyError(
+                    "verification requires current-attempt Artifacts"
+                )
+            if len(artifacts) > _MAX_VERIFICATION_ARTIFACTS:
+                raise WorkUnitNotReadyError(
+                    "verification Artifact count exceeds 200"
+                )
+            if len({artifact.id for artifact in artifacts}) != len(artifacts):
+                raise WorkUnitNotReadyError(
+                    "verification repository returned duplicate Artifacts"
+                )
+            if any(
+                artifact.mission_id != mission.id
+                or artifact.work_unit_id != work_unit.id
+                or artifact.attempt != work_unit.attempt
+                for artifact in artifacts
+            ):
+                raise WorkUnitNotReadyError(
+                    "verification repository returned unrelated Artifacts"
+                )
+            return VerificationDiscoveryOutcome(
+                context=VerificationContext(
+                    mission=mission,
+                    contract=contract,
+                    work_unit=work_unit,
+                    artifacts=tuple(artifacts),
+                )
+            )
 
     async def _validate_artifact_refs(
         self,

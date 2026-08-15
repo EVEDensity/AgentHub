@@ -10,6 +10,7 @@ from app.repositories import MissionRepository
 from app.schemas.mission import (
     ArtifactCreateRequest,
     MissionCreateRequest,
+    WorkspaceVerificationDiscoveryRequest,
     WorkspaceWorkUnitClaimRequest,
     WorkUnitClaimRequest,
     WorkUnitCompletionRequest,
@@ -181,24 +182,46 @@ async def _authorize_verifier_mission(
     mission = await repository.get_mission(mission_id)
     if mission is None:
         raise HTTPException(status_code=404, detail="Mission not found")
-    if user.get("role") == "admin" or str(user["id"]) == mission.workspace_id:
-        return mission
+    await _authorize_workspace_verification(
+        user,
+        mission.workspace_id,
+        grant_authorizer=grant_authorizer,
+    )
+    return mission
+
+
+async def _authorize_workspace_verification(
+    user: dict,
+    workspace_id: str,
+    *,
+    grant_authorizer: VerifierWorkspaceGrantAuthorizer,
+) -> None:
+    authorize_verifier(user)
+    principal_id = str(user.get("id") or "").strip()
+    normalized_workspace_id = workspace_id.strip()
+    if not normalized_workspace_id:
+        raise HTTPException(status_code=403, detail="Workspace identity required")
+    if user.get("role") == "admin" or principal_id == normalized_workspace_id:
+        return
+    if not principal_id:
+        raise HTTPException(status_code=403, detail="Verifier identity required")
     try:
         granted = await grant_authorizer.has_verify_grant(
-            workspace_id=mission.workspace_id,
-            principal_id=str(user["id"]),
+            workspace_id=normalized_workspace_id,
+            principal_id=principal_id,
         )
     except VerifierWorkspaceGrantUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Verifier workspace authorization is unavailable",
         ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     if not granted:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Verifier workspace grant required",
         )
-    return mission
 
 
 async def _authorize_execution_work_unit(
@@ -485,6 +508,30 @@ async def claim_workspace_work_unit(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return claimed.to_public_dict()
+
+
+@router.post("/verification-work-items/discover")
+async def discover_verification_work(
+    request: WorkspaceVerificationDiscoveryRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    grant_authorizer: VerifierWorkspaceGrantAuthorizerDep,
+) -> dict:
+    """Return one minimal VERIFYING context without creating a durable claim."""
+
+    await _authorize_workspace_verification(
+        user,
+        request.workspace_id,
+        grant_authorizer=grant_authorizer,
+    )
+    service = MissionService(repository)
+    try:
+        discovered = await service.discover_workspace_verification_work(
+            request.workspace_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return discovered.to_public_dict()
 
 
 async def _resolve_workspace_claim_admission(
