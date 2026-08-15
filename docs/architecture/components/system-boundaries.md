@@ -70,6 +70,14 @@ inconclusive. The initial `artifact-set.v1` evaluator establishes only bounded
 Artifact-set presence and byte verifiability; semantic or test correctness
 requires a stronger independently implemented evaluator.
 
+Mission Control executes that deterministic structural evaluator against the
+exact `ArtifactByteVerification` records produced while the Artifact store is
+streamed. The result set must close one-to-one over current-attempt Artifact
+IDs, digests, and sizes. The pure evaluation is repeated inside the admission
+transaction, while raw Artifact content stays in Runner-owned storage. A
+non-throwing storage adapter or caller-supplied verdict is not by itself a PASS
+proof.
+
 ## Migration status
 
 LangGraph and AgentNet remain compatibility surfaces while callers migrate.

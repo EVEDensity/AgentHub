@@ -142,7 +142,12 @@ boundary. It is not the permanent home of every Agent feature.
   again inside the state-transition transaction; unsupported, ambiguous, or
   unsatisfied policies cannot be bypassed through the direct verification API.
   This evaluator proves Artifact-set availability and byte integrity only, not
-  semantic correctness or test execution.
+  semantic correctness or test execution. PASS also runs the controlled
+  `artifact-set.v1` evaluator over the exact byte-verification results before
+  and during transactional admission. Missing, extra, duplicate, wrong-digest,
+  or wrong-size results fail without Evidence or state mutation; successful
+  observations are canonicalized by Artifact ID for the future Evidence
+  integrity envelope.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

@@ -37,7 +37,13 @@ from app.services.artifact_integrity_service import (
     ArtifactBytesUnavailableError,
     ArtifactByteVerifier,
 )
+from app.services.verification_evaluator_service import (
+    StrictVerificationEvaluator,
+    VerificationEvaluationResult,
+    VerificationEvaluator,
+)
 from app.services.verification_policy_service import (
+    ArtifactSetEvaluationPlan,
     EvaluationPolicyDecision,
     StrictVerificationPolicyResolver,
     VerificationPolicyResolver,
@@ -229,12 +235,16 @@ class MissionService:
         artifact_byte_verifier: ArtifactByteVerifier | None = None,
         agent_binding_resolver: AgentBindingResolver | None = None,
         verification_policy_resolver: VerificationPolicyResolver | None = None,
+        verification_evaluator: VerificationEvaluator | None = None,
     ) -> None:
         self._repository = repository or MissionRepository()
         self._artifact_byte_verifier = artifact_byte_verifier
         self._agent_binding_resolver = agent_binding_resolver
         self._verification_policy_resolver = (
             verification_policy_resolver or StrictVerificationPolicyResolver()
+        )
+        self._verification_evaluator = (
+            verification_evaluator or StrictVerificationEvaluator()
         )
 
     async def create_mission(
@@ -1546,6 +1556,7 @@ class MissionService:
             work_unit_id=work_unit_id,
             attempt=verification_attempt,
         )
+        evaluation_plan: ArtifactSetEvaluationPlan | None = None
         if verdict == EvidenceVerdict.PASS:
             mission = await self._repository.get_mission(mission_id)
             if mission is None:
@@ -1553,7 +1564,7 @@ class MissionService:
             contract = await self._repository.get_contract(mission.contract_id)
             if contract is None:
                 raise WorkUnitNotReadyError("mission contract not found")
-            self._admit_pass_evidence(
+            evaluation_plan = self._admit_pass_evidence(
                 contract=contract,
                 work_unit=work_unit,
                 artifacts=tuple(artifacts),
@@ -1564,7 +1575,14 @@ class MissionService:
             raise ArtifactBytesUnavailableError(
                 "artifact byte verifier is not configured"
             )
-        await self._artifact_byte_verifier.verify_all(artifacts)
+        byte_verifications = await self._artifact_byte_verifier.verify_all(artifacts)
+        evaluation_result: VerificationEvaluationResult | None = None
+        if evaluation_plan is not None:
+            evaluation_result = self._verification_evaluator.evaluate(
+                evaluation_plan,
+                tuple(artifacts),
+                tuple(byte_verifications),
+            )
 
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
@@ -1604,13 +1622,22 @@ class MissionService:
                     "artifact metadata changed during byte verification"
                 )
             if verdict == EvidenceVerdict.PASS:
-                self._admit_pass_evidence(
+                current_plan = self._admit_pass_evidence(
                     contract=contract,
                     work_unit=work_unit,
                     artifacts=tuple(current_artifacts),
                     criterion_id=criterion_id,
                     configuration_digest=configuration_digest,
                 )
+                current_evaluation = self._verification_evaluator.evaluate(
+                    current_plan,
+                    tuple(current_artifacts),
+                    tuple(byte_verifications),
+                )
+                if current_evaluation != evaluation_result:
+                    raise WorkUnitNotReadyError(
+                        "verification evaluation changed before Evidence admission"
+                    )
 
             occurred_at = datetime.now(timezone.utc)
             evidence = Evidence(
@@ -1784,7 +1811,7 @@ class MissionService:
         artifacts: tuple[Artifact, ...],
         criterion_id: str,
         configuration_digest: str | None,
-    ) -> None:
+    ) -> ArtifactSetEvaluationPlan:
         decision = self._verification_policy_resolver.resolve(
             contract,
             work_unit,
@@ -1808,6 +1835,7 @@ class MissionService:
             raise WorkUnitNotReadyError(
                 "Evidence configuration digest does not match the evaluation policy"
             )
+        return decision.plan
 
     async def fail_work_unit(
         self,
