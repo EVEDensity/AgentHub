@@ -21,6 +21,8 @@ from app.api.v1.missions import (
 from app.domain import (
     Artifact,
     Decision,
+    DecisionStatus,
+    EvaluationPolicyReason,
     EventEnvelope,
     Evidence,
     Lease,
@@ -91,6 +93,7 @@ class FakeMissionRepository:
         self.verification_candidate_calls: list[str] = []
         self.work_unit_artifact_calls: list[tuple[str, str, int, int]] = []
         self.list_mission_calls: list[str] = []
+        self.workspace_decision_calls: list[tuple[object, ...]] = []
 
     @asynccontextmanager
     async def transaction(self):
@@ -263,6 +266,37 @@ class FakeMissionRepository:
                 decision
                 for decision in self.decisions
                 if decision.mission_id == mission_id
+            ),
+            key=lambda decision: (decision.requested_at, decision.id),
+        )
+        return matching[offset : offset + limit]
+
+    async def list_workspace_decisions(
+        self,
+        workspace_id: str,
+        *,
+        status: DecisionStatus | None = DecisionStatus.PENDING,
+        mission_id: str | None = None,
+        reason_code: EvaluationPolicyReason | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Decision]:
+        self.workspace_decision_calls.append(
+            (workspace_id, status, mission_id, reason_code, limit, offset)
+        )
+        workspace_mission_ids = {
+            mission.id
+            for mission in [self.mission, *self.list_result]
+            if mission is not None and mission.workspace_id == workspace_id
+        }
+        matching = sorted(
+            (
+                decision
+                for decision in self.decisions
+                if decision.mission_id in workspace_mission_ids
+                and (status is None or decision.status == status)
+                and (mission_id is None or decision.mission_id == mission_id)
+                and (reason_code is None or decision.reason_code == reason_code)
             ),
             key=lambda decision: (decision.requested_at, decision.id),
         )
@@ -887,6 +921,116 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(get_response.json()["workspaceId"], "workspace-1")
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(list_response.json()["missions"][0]["id"], mission.id)
+
+    def test_workspace_decision_inbox_applies_controlled_filters(self) -> None:
+        repository = FakeMissionRepository()
+        mission = build_mission(id="mis-1", workspace_id="workspace-1")
+        repository.mission = mission
+        repository.list_result = [
+            mission,
+            build_mission(id="mis-2", workspace_id="workspace-1"),
+            build_mission(id="mis-other", workspace_id="workspace-2"),
+        ]
+        pending = build_decision(id="dec-1", mission_id="mis-1")
+        repository.decisions = [
+            pending,
+            build_decision(id="dec-2", mission_id="mis-2"),
+            build_decision(id="dec-other", mission_id="mis-other"),
+            build_decision(
+                id="dec-resolved",
+                mission_id="mis-1",
+                status="RESOLVED",
+                version=2,
+                resolution="FAIL_MISSION",
+                rationale="The Mission cannot currently be verified.",
+                resolved_by={"type": "human", "id": "user-1"},
+                resolved_at=pending.requested_at,
+            ),
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.get(
+            "/api/v1/missions/decisions",
+            params={
+                "workspaceId": "workspace-1",
+                "status": "PENDING",
+                "missionId": "mis-1",
+                "reasonCode": "no_applicable_policy",
+                "limit": 20,
+                "offset": 0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [decision["id"] for decision in response.json()["decisions"]],
+            ["dec-1"],
+        )
+        self.assertEqual(
+            repository.workspace_decision_calls,
+            [
+                (
+                    "workspace-1",
+                    DecisionStatus.PENDING,
+                    "mis-1",
+                    EvaluationPolicyReason.NO_APPLICABLE_POLICY,
+                    20,
+                    0,
+                )
+            ],
+        )
+
+        all_response = client.get(
+            "/api/v1/missions/decisions",
+            params={"workspaceId": "workspace-1", "status": "ALL"},
+        )
+        self.assertEqual(all_response.status_code, 200)
+        self.assertEqual(
+            {decision["id"] for decision in all_response.json()["decisions"]},
+            {"dec-1", "dec-2", "dec-resolved"},
+        )
+        self.assertIsNone(repository.workspace_decision_calls[-1][1])
+
+        default_response = client.get(
+            "/api/v1/missions/decisions",
+            params={"workspaceId": "workspace-1"},
+        )
+        self.assertEqual(default_response.status_code, 200)
+        self.assertEqual(
+            {decision["id"] for decision in default_response.json()["decisions"]},
+            {"dec-1", "dec-2"},
+        )
+        self.assertEqual(
+            repository.workspace_decision_calls[-1][1], DecisionStatus.PENDING
+        )
+
+    def test_workspace_decision_inbox_denies_before_repository_query(self) -> None:
+        for user, workspace_id in (
+            (
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+                "workspace-2",
+            ),
+            (
+                {"id": "workspace-1", "name": "Verifier", "role": "verifier"},
+                "workspace-1",
+            ),
+        ):
+            with self.subTest(user=user, workspace_id=workspace_id):
+                repository = FakeMissionRepository()
+                client = TestClient(build_app(repository, user))
+
+                response = client.get(
+                    "/api/v1/missions/decisions",
+                    params={"workspaceId": workspace_id},
+                )
+
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(repository.workspace_decision_calls, [])
 
     def test_start_updates_snapshot_and_appends_actor_event(self) -> None:
         repository = FakeMissionRepository()

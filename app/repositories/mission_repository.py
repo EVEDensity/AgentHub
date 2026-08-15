@@ -8,6 +8,8 @@ from typing import Any
 from app.domain import (
     Artifact,
     Decision,
+    DecisionStatus,
+    EvaluationPolicyReason,
     EventEnvelope,
     Evidence,
     Mission,
@@ -319,7 +321,7 @@ class MissionRepository:
             decision.work_unit_id,
             decision.attempt,
             decision.context_digest,
-            decision.reason_code,
+            decision.reason_code.value,
             _encode_json(list(decision.criterion_ids)),
             _encode_json([option.value for option in decision.options]),
             decision.recommended_option.value,
@@ -383,6 +385,51 @@ class MissionRepository:
                ORDER BY requested_at ASC, id ASC
                LIMIT $2 OFFSET $3""",
             mission_id,
+            limit,
+            offset,
+        )
+        return [self._decision_from_row(row) for row in rows]
+
+    async def list_workspace_decisions(
+        self,
+        workspace_id: str,
+        *,
+        status: DecisionStatus | None = DecisionStatus.PENDING,
+        mission_id: str | None = None,
+        reason_code: EvaluationPolicyReason | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Decision]:
+        if not workspace_id:
+            raise ValueError("workspace_id must be non-empty")
+        if mission_id == "":
+            raise ValueError("mission_id must be non-empty when provided")
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        rows = await self._fetch_all(
+            """SELECT decision.id, decision.mission_id, decision.work_unit_id,
+                      decision.attempt, decision.context_digest,
+                      decision.reason_code, decision.criterion_ids,
+                      decision.options, decision.recommended_option,
+                      decision.risk_summary, decision.status, decision.version,
+                      decision.requested_by, decision.requested_at,
+                      decision.expires_at, decision.resolution,
+                      decision.rationale, decision.resolved_by,
+                      decision.resolved_at
+               FROM decisions AS decision
+               JOIN missions AS mission ON mission.id=decision.mission_id
+               WHERE mission.workspace_id=$1
+                 AND ($2::text IS NULL OR decision.status=$2)
+                 AND ($3::text IS NULL OR decision.mission_id=$3)
+                 AND ($4::text IS NULL OR decision.reason_code=$4)
+               ORDER BY decision.requested_at ASC, decision.id ASC
+               LIMIT $5 OFFSET $6""",
+            workspace_id,
+            status.value if status is not None else None,
+            mission_id,
+            reason_code.value if reason_code is not None else None,
             limit,
             offset,
         )

@@ -170,7 +170,10 @@ boundary. It is not the permanent home of every Agent feature.
   owns that Decision during discovery; only a workspace-authorized human can
   resolve it to a budget-checked WorkUnit retry or explicit Mission failure.
   Neither path can create PASS Evidence. Mission cancellation closes pending
-  Decisions in the same transaction.
+  Decisions in the same transaction. The workspace Decision inbox is a
+  read-only projection over that same durable state, defaults to PENDING, and
+  applies status, Mission, and reason filters inside the workspace-scoped
+  database query.
   `verifier_worker.py` supervises one explicit workspace with bounded backoff,
   graceful drain, cancellation propagation, and content-free snapshots. It
   owns no queue or verifier lease; Mission Control's verification transaction

@@ -7,6 +7,8 @@ from typing import Any
 from app.domain import (
     Artifact,
     Decision,
+    DecisionStatus,
+    EvaluationPolicyReason,
     EventEnvelope,
     Evidence,
     Lease,
@@ -279,7 +281,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             decision.work_unit_id,
             decision.attempt,
             decision.context_digest,
-            decision.reason_code,
+            decision.reason_code.value,
         ))
         self.assertEqual(json.loads(insert_args[6]), ["tests"])
         self.assertEqual(
@@ -337,6 +339,52 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             await self.repository.list_decisions("mis-1", limit=0)
         with self.assertRaises(ValueError):
             await self.repository.list_decisions("mis-1", offset=-1)
+
+    async def test_workspace_decision_inbox_is_filtered_in_sql(self) -> None:
+        decision = build_decision()
+        self.database.all = [self.build_decision_row(decision)]
+
+        restored = await self.repository.list_workspace_decisions(
+            "workspace-1",
+            status=DecisionStatus.PENDING,
+            mission_id="mis-1",
+            reason_code=EvaluationPolicyReason.NO_APPLICABLE_POLICY,
+            limit=20,
+            offset=5,
+        )
+
+        self.assertEqual(restored, [decision])
+        sql, args = self.database.fetched_all[-1]
+        self.assertIn("JOIN missions AS mission", sql)
+        self.assertIn("mission.workspace_id=$1", sql)
+        self.assertIn("decision.status=$2", sql)
+        self.assertIn("decision.mission_id=$3", sql)
+        self.assertIn("decision.reason_code=$4", sql)
+        self.assertIn("ORDER BY decision.requested_at ASC, decision.id ASC", sql)
+        self.assertEqual(
+            args,
+            (
+                "workspace-1",
+                "PENDING",
+                "mis-1",
+                "no_applicable_policy",
+                20,
+                5,
+            ),
+        )
+
+        with self.assertRaises(ValueError):
+            await self.repository.list_workspace_decisions("")
+        with self.assertRaises(ValueError):
+            await self.repository.list_workspace_decisions(
+                "workspace-1", mission_id=""
+            )
+        with self.assertRaises(ValueError):
+            await self.repository.list_workspace_decisions("workspace-1", limit=0)
+        with self.assertRaises(ValueError):
+            await self.repository.list_workspace_decisions(
+                "workspace-1", offset=-1
+            )
 
     async def test_artifact_round_trip_and_mission_list(self) -> None:
         artifact = build_artifact()

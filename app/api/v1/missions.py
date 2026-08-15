@@ -8,6 +8,8 @@ from app.api.v1.access import authorize_verifier, authorize_workspace
 from app.domain import (
     ActorRef,
     DecisionResolution,
+    DecisionStatus,
+    EvaluationPolicyReason,
     EvidenceVerdict,
     InvalidStateTransition,
     Mission,
@@ -132,6 +134,23 @@ EvidenceLimit = Annotated[int, Query(ge=1, le=200)]
 EvidenceOffset = Annotated[int, Query(ge=0)]
 DecisionLimit = Annotated[int, Query(ge=1, le=200)]
 DecisionOffset = Annotated[int, Query(ge=0)]
+DecisionStatusFilter = Annotated[
+    Literal["PENDING", "RESOLVED", "CANCELLED", "ALL"],
+    Query(alias="status"),
+]
+DecisionMissionIdFilter = Annotated[
+    str | None,
+    Query(alias="missionId", min_length=1, max_length=255),
+]
+DecisionReasonFilter = Annotated[
+    EvaluationPolicyReason | None,
+    Query(alias="reasonCode"),
+]
+
+
+def _authorize_human_decision_access(user: dict) -> None:
+    if user.get("role") in {"runner", "verifier", "agent", "service"}:
+        raise HTTPException(status_code=403, detail="Human Decision access required")
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -155,6 +174,30 @@ async def create_mission(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return mission.to_public_dict()
+
+
+@router.get("/decisions")
+async def list_workspace_decisions(
+    workspace_id: WorkspaceId,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    decision_status: DecisionStatusFilter = "PENDING",
+    mission_id: DecisionMissionIdFilter = None,
+    reason_code: DecisionReasonFilter = None,
+    limit: DecisionLimit = 100,
+    offset: DecisionOffset = 0,
+) -> dict:
+    authorize_workspace(user, workspace_id)
+    _authorize_human_decision_access(user)
+    decisions = await repository.list_workspace_decisions(
+        workspace_id,
+        status=(None if decision_status == "ALL" else DecisionStatus(decision_status)),
+        mission_id=mission_id,
+        reason_code=reason_code,
+        limit=limit,
+        offset=offset,
+    )
+    return {"decisions": [decision.to_public_dict() for decision in decisions]}
 
 
 @router.get("/{mission_id}")
@@ -374,9 +417,8 @@ async def resolve_decision(
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:
+    _authorize_human_decision_access(user)
     await _authorized_mission(mission_id, user=user, repository=repository)
-    if user.get("role") in {"runner", "verifier", "agent", "service"}:
-        raise HTTPException(status_code=403, detail="Human Decision access required")
     service = MissionService(repository)
     try:
         decision, work_unit, mission = await service.resolve_decision(
