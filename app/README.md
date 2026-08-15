@@ -153,6 +153,18 @@ boundary. It is not the permanent home of every Agent feature.
   summary, and generation time. The request's deprecated `integrityHash` is
   optional and ignored; only the server-generated digest is persisted. This is
   tamper-evident hashing, not verifier authentication or a signature.
+  `verifier_service.py` adds the independent application-layer coordinator and
+  its narrow Mission Control HTTP port. It strictly validates discovery,
+  verifies the projected Artifact bytes, replays only the registered
+  `artifact-set.v1` evaluator, and submits PASS only from that controlled
+  result. It rejects inconclusive policies before submission because the
+  current inconclusive projection has no unambiguous criterion attribution.
+  `verifier_worker.py` supervises one explicit workspace with bounded backoff,
+  graceful drain, cancellation propagation, and content-free snapshots. It
+  owns no queue or verifier lease; Mission Control's verification transaction
+  remains the duplicate-admission and lifecycle authority. These modules are
+  pure runtime boundaries and are not yet composed into a deployable verifier
+  process.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

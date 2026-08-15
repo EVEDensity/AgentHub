@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.domain import Artifact, EvidenceVerdict
+from app.domain import ArtifactKind, EvidenceVerdict
 from app.services.artifact_integrity_service import ArtifactByteVerification
 from app.services.verification_policy_service import ArtifactSetEvaluationPlan
 
@@ -25,11 +25,20 @@ class VerificationEvaluationResult:
     artifact_verifications: tuple[ArtifactByteVerification, ...]
 
 
+class VerificationArtifactMetadata(Protocol):
+    """Artifact fields consumed by deterministic verification evaluators."""
+
+    id: str
+    kind: ArtifactKind
+    digest: str
+    size_bytes: int
+
+
 class VerificationEvaluator(Protocol):
     def evaluate(
         self,
         plan: ArtifactSetEvaluationPlan,
-        artifacts: tuple[Artifact, ...],
+        artifacts: tuple[VerificationArtifactMetadata, ...],
         byte_verifications: tuple[ArtifactByteVerification, ...],
     ) -> VerificationEvaluationResult: ...
 
@@ -40,13 +49,11 @@ class StrictVerificationEvaluator:
     def evaluate(
         self,
         plan: ArtifactSetEvaluationPlan,
-        artifacts: tuple[Artifact, ...],
+        artifacts: tuple[VerificationArtifactMetadata, ...],
         byte_verifications: tuple[ArtifactByteVerification, ...],
     ) -> VerificationEvaluationResult:
         if plan.evaluator != _ARTIFACT_SET_EVALUATOR:
-            raise VerificationEvaluationError(
-                "verification evaluator is not supported"
-            )
+            raise VerificationEvaluationError("verification evaluator is not supported")
         if len(artifacts) < plan.minimum_artifacts:
             raise VerificationEvaluationError(
                 "artifact-set evaluator minimum is not satisfied"
@@ -72,7 +79,7 @@ class StrictVerificationEvaluator:
 
 
 def canonicalize_artifact_byte_verifications(
-    artifacts: tuple[Artifact, ...],
+    artifacts: tuple[VerificationArtifactMetadata, ...],
     byte_verifications: tuple[ArtifactByteVerification, ...],
 ) -> tuple[ArtifactByteVerification, ...]:
     """Require exact byte-result closure and return Artifact-ID order."""
@@ -82,8 +89,7 @@ def canonicalize_artifact_byte_verifications(
             "artifact byte verification requires unique Artifact IDs"
         )
     verifications_by_id = {
-        verification.artifact_id: verification
-        for verification in byte_verifications
+        verification.artifact_id: verification for verification in byte_verifications
     }
     if len(verifications_by_id) != len(byte_verifications):
         raise VerificationEvaluationError(

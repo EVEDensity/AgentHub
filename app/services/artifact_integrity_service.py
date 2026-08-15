@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -10,7 +10,6 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from app.core.config import ArtifactStoreSettings, get_settings
-from app.domain import Artifact
 
 _CHUNK_BYTES = 1024 * 1024
 _LOCAL_PREFIX = "local:sha256/"
@@ -35,15 +34,29 @@ class ArtifactByteVerification:
     size_bytes: int
 
 
+class ArtifactByteDescriptor(Protocol):
+    """Minimum immutable metadata required to verify registered bytes."""
+
+    id: str
+    digest: str
+    content_address: str
+    size_bytes: int
+
+
 class ArtifactByteVerifier(Protocol):
     async def verify_all(
         self,
-        artifacts: list[Artifact],
+        artifacts: Sequence[ArtifactByteDescriptor],
     ) -> list[ArtifactByteVerification]: ...
 
 
 class ArtifactByteExporter(Protocol):
-    async def read_verified(self, artifact: Artifact, *, max_bytes: int) -> bytes: ...
+    async def read_verified(
+        self,
+        artifact: ArtifactByteDescriptor,
+        *,
+        max_bytes: int,
+    ) -> bytes: ...
 
 
 class ContentAddressedArtifactByteVerifier:
@@ -57,25 +70,31 @@ class ContentAddressedArtifactByteVerifier:
     ) -> None:
         self._settings = settings
         self._local_root = settings.local_root.resolve()
-        self._minio_client_factory = (
-            minio_client_factory or self._build_minio_client
-        )
+        self._minio_client_factory = minio_client_factory or self._build_minio_client
         self._minio_client: Any | None = None
 
     async def verify_all(
         self,
-        artifacts: list[Artifact],
+        artifacts: Sequence[ArtifactByteDescriptor],
     ) -> list[ArtifactByteVerification]:
         verified: list[ArtifactByteVerification] = []
         for artifact in artifacts:
             verified.append(await self.verify(artifact))
         return verified
 
-    async def verify(self, artifact: Artifact) -> ArtifactByteVerification:
+    async def verify(
+        self,
+        artifact: ArtifactByteDescriptor,
+    ) -> ArtifactByteVerification:
         result, _content = await self._consume(artifact, collect_bytes=False)
         return result
 
-    async def read_verified(self, artifact: Artifact, *, max_bytes: int) -> bytes:
+    async def read_verified(
+        self,
+        artifact: ArtifactByteDescriptor,
+        *,
+        max_bytes: int,
+    ) -> bytes:
         if max_bytes < 0:
             raise ValueError("max_bytes cannot be negative")
         _result, content = await self._consume(
@@ -89,7 +108,7 @@ class ContentAddressedArtifactByteVerifier:
 
     async def _consume(
         self,
-        artifact: Artifact,
+        artifact: ArtifactByteDescriptor,
         *,
         collect_bytes: bool,
         max_bytes: int | None = None,
@@ -121,7 +140,7 @@ class ContentAddressedArtifactByteVerifier:
 
     def _consume_local(
         self,
-        artifact: Artifact,
+        artifact: ArtifactByteDescriptor,
         byte_limit: int,
         collect_bytes: bool,
     ) -> tuple[ArtifactByteVerification, bytes | None]:
@@ -161,7 +180,7 @@ class ContentAddressedArtifactByteVerifier:
 
     def _consume_minio(
         self,
-        artifact: Artifact,
+        artifact: ArtifactByteDescriptor,
         byte_limit: int,
         collect_bytes: bool,
     ) -> tuple[ArtifactByteVerification, bytes | None]:
@@ -192,7 +211,10 @@ class ContentAddressedArtifactByteVerifier:
             with suppress(Exception):
                 response.release_conn()
 
-    def _parse_minio_address(self, artifact: Artifact) -> tuple[str, str]:
+    def _parse_minio_address(
+        self,
+        artifact: ArtifactByteDescriptor,
+    ) -> tuple[str, str]:
         parsed = urlparse(artifact.content_address)
         if parsed.query or parsed.fragment or parsed.username or parsed.password:
             raise ArtifactBytesUnavailableError(
@@ -218,7 +240,7 @@ class ContentAddressedArtifactByteVerifier:
 
     def _consume_chunks(
         self,
-        artifact: Artifact,
+        artifact: ArtifactByteDescriptor,
         chunks: Iterable[bytes],
         *,
         byte_limit: int,
@@ -275,7 +297,7 @@ class ContentAddressedArtifactByteVerifier:
         )
 
 
-def _digest_hex(artifact: Artifact) -> str:
+def _digest_hex(artifact: ArtifactByteDescriptor) -> str:
     return artifact.digest.removeprefix("sha256:").lower()
 
 
