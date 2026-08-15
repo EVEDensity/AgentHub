@@ -29,6 +29,12 @@ not create a competing Mission or WorkUnit state machine.
   rejects mock model routing, binds Stateless MCP tools per attempt, and
   publishes only sanitized health state. Mission Control discovers and leases
   eligible work; the process is not a global queue or fleet scheduler.
+- The Python Verifier service is an independently authenticated,
+  workspace-scoped process adapter. It reads a mounted verifier token and a
+  read-only shared local Artifact CAS, reproduces only registered deterministic
+  evaluation, and publishes sanitized health state. It owns no verifier lease,
+  queue, Evidence store, or Mission lifecycle state; Mission Control serializes
+  verification admission.
 - MCP and A2A services are protocol boundaries, not business databases.
 - Gateway evaluates external A2A Agent Cards against an immutable startup
   trust policy. Unsigned cards fail closed by default; optional origin-bound
