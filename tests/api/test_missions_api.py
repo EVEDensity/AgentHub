@@ -278,6 +278,75 @@ class FakeMissionRepository:
         )
         return candidates[0] if candidates else None
 
+    async def get_workspace_bound_work_unit_for_claim(
+        self,
+        workspace_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+    ) -> tuple[Mission, WorkUnit] | None:
+        missions = {
+            mission.id: mission
+            for mission in ([self.mission] if self.mission is not None else [])
+            + self.list_result
+        }
+        selections: list[tuple[int, object, str, str, Mission, WorkUnit]] = []
+        for work_unit in self.work_units:
+            mission = missions.get(work_unit.mission_id)
+            if (
+                mission is None
+                or mission.workspace_id != workspace_id
+                or mission.status.value != "RUNNING"
+                or work_unit.assigned_agent_id != agent_id
+                or work_unit.assigned_adapter != adapter_type
+                or work_unit.status.value not in {"PENDING", "RETRYING"}
+            ):
+                continue
+            eligible_shape = work_unit.parent_work_unit_id is not None or (
+                mission.source.type.value == "a2a.inbound"
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == "a2a.inbound"
+            )
+            if not eligible_shape:
+                continue
+            dependencies_ready = all(
+                (
+                    dependency := next(
+                        (
+                            item
+                            for item in self.work_units
+                            if item.id == dependency_id
+                        ),
+                        None,
+                    )
+                )
+                is not None
+                and dependency.mission_id == mission.id
+                and dependency.status.value == "SUCCEEDED"
+                for dependency_id in work_unit.dependencies
+            )
+            if not dependencies_ready:
+                continue
+            active_count = sum(
+                item.mission_id == mission.id
+                and item.status.value in {"LEASED", "RUNNING", "VERIFYING"}
+                for item in self.work_units
+            )
+            selections.append(
+                (
+                    active_count,
+                    mission.created_at,
+                    mission.id,
+                    work_unit.id,
+                    mission,
+                    work_unit,
+                )
+            )
+        if not selections:
+            return None
+        *_, mission, work_unit = min(selections)
+        return mission, work_unit
+
     async def update_work_unit(self, work_unit: WorkUnit) -> None:
         for index, existing in enumerate(self.work_units):
             if existing.id == work_unit.id:
@@ -924,6 +993,135 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(body["lease"]["runnerId"], "user-1")
         self.assertEqual(repository.events[-1].actor.type.value, "runner")
         self.assertEqual(repository.events[-1].payload["claimMode"], "delegated")
+
+    def test_workspace_claim_selects_least_loaded_authorized_mission(self) -> None:
+        repository = FakeMissionRepository()
+        first = build_mission(
+            id="mis-first",
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        second = build_mission(
+            id="mis-second",
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.mission = first
+        repository.list_result = [first, second]
+        repository.work_units = [
+            build_work_unit(
+                id="wu-active",
+                mission_id="mis-first",
+                status="VERIFYING",
+            ),
+            build_work_unit(
+                id="wu-first",
+                mission_id="mis-first",
+                parent_work_unit_id="wu-parent-first",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            ),
+            build_work_unit(
+                id="wu-second",
+                mission_id="mis-second",
+                parent_work_unit_id="wu-parent-second",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            ),
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+                "leaseSeconds": 60,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        claimed = response.json()["workUnit"]
+        self.assertEqual(claimed["id"], "wu-second")
+        self.assertEqual(claimed["missionId"], "mis-second")
+        self.assertEqual(claimed["lease"]["runnerId"], "workspace-1")
+        self.assertEqual(repository.events[-1].correlation_id, "mis-second")
+
+    def test_workspace_claim_rejects_unauthorized_workspace(self) -> None:
+        repository = FakeMissionRepository()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "runner-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-other",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(repository.events, [])
+
+    def test_workspace_claim_rejects_repository_scope_escape(self) -> None:
+        class EscapingRepository(FakeMissionRepository):
+            async def get_workspace_bound_work_unit_for_claim(
+                self,
+                workspace_id: str,
+                *,
+                agent_id: str,
+                adapter_type: str,
+            ) -> tuple[Mission, WorkUnit] | None:
+                del workspace_id, agent_id, adapter_type
+                return self.list_result[0], self.work_units[0]
+
+        repository = EscapingRepository()
+        repository.list_result = [
+            build_mission(
+                id="mis-other",
+                workspace_id="workspace-other",
+                status="RUNNING",
+            )
+        ]
+        repository.work_units = [
+            build_work_unit(
+                id="wu-other",
+                mission_id="mis-other",
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(repository.work_units[0].status.value, "PENDING")
+        self.assertEqual(repository.events, [])
 
     def test_bound_claim_selects_a2a_inbound_root_atomically(self) -> None:
         repository = FakeMissionRepository()

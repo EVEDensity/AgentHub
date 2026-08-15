@@ -104,6 +104,7 @@ left by a process or network failure must expire and enter Mission Control's
 existing retry/failure recovery path; operators must not edit WorkUnit state or
 requeue it in a second store.
 
-The remaining production scale gate is global ready-work discovery owned by
-Mission Control. Until that contract exists, deploy one explicitly assigned
-Mission per process and do not advertise this service as a general Runner pool.
+Mission Control now owns a workspace-scoped atomic ready-work discovery
+contract. This process has not yet switched to it: deploy one explicitly
+assigned Mission per process until the worker and settings consume workspace
+scope, and do not advertise this service as a general Runner pool.

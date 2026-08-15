@@ -50,6 +50,20 @@ through the existing Runner supervision path.
 
 This is a single-Mission deployment candidate, not a production fleet
 scheduler. Its readiness proves a successful Mission Control claim request; it
-does not execute model or tool probes outside a WorkUnit. The next scale gate is
-a workspace-authorized global ready-work discovery contract in Mission Control.
-Runner must adopt that contract instead of adding a local queue.
+does not execute model or tool probes outside a WorkUnit. Mission Control owns
+the workspace ready-work contract described below; the next scale gate is for
+Runner to consume it instead of adding a local queue.
+
+## Ready-work discovery
+
+Mission Control now exposes a workspace-scoped atomic discovery contract. It
+filters by immutable Agent/adapter binding, allows only delegated or eligible
+inbound-root work, checks dependency readiness, orders by least in-flight
+Mission load, and locks the owning Mission plus candidate WorkUnit with
+`SKIP LOCKED`. Authentication supplies the lease owner; callers cannot provide
+one in the request.
+
+The process worker has not yet switched to this endpoint and still requires an
+explicit Mission ID. The next slice is a consumer-only migration: replace the
+worker's fixed-Mission poll input with explicit workspace scope while preserving
+the same backoff, readiness, shutdown, claim validation, and execution path.

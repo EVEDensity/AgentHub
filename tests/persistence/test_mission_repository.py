@@ -412,6 +412,42 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             (work_unit.mission_id, "reviewer", "local_codex", True),
         )
 
+    async def test_workspace_claim_is_scoped_fair_and_locks_both_rows(self) -> None:
+        mission = build_mission(workspace_id="workspace-1", status="RUNNING")
+        work_unit = build_work_unit(
+            id="wu-child",
+            mission_id=mission.id,
+            parent_work_unit_id="wu-parent",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+        )
+        row = self.build_work_unit_row(work_unit)
+        row.update(
+            {
+                f"selected_{'mission_id' if name == 'id' else name}": value
+                for name, value in self.build_mission_row(mission).items()
+            }
+        )
+        self.database.one = row
+
+        selection = await self.repository.get_workspace_bound_work_unit_for_claim(
+            "workspace-1",
+            agent_id="reviewer",
+            adapter_type="local_codex",
+        )
+
+        self.assertEqual(selection, (mission, work_unit))
+        sql, args = self.database.fetched_one[-1]
+        self.assertIn("mission.workspace_id=$1", sql)
+        self.assertIn("mission.status='RUNNING'", sql)
+        self.assertIn("mission.source->>'type' = 'a2a.inbound'", sql)
+        self.assertIn("candidate.assigned_agent_id=$2", sql)
+        self.assertIn("candidate.assigned_adapter=$3", sql)
+        self.assertIn("active_unit.status IN ('LEASED', 'RUNNING', 'VERIFYING')", sql)
+        self.assertIn("mission.created_at ASC", sql)
+        self.assertIn("FOR UPDATE OF mission, candidate SKIP LOCKED", sql)
+        self.assertEqual(args, ("workspace-1", "reviewer", "local_codex"))
+
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:
         return {

@@ -45,6 +45,16 @@ class ClaimedWorkResolutionError(RunnerExecutionError):
 
 
 class MissionControlRunnerPort(Protocol):
+    async def claim_ready_work_unit(
+        self,
+        workspace_id: str,
+        *,
+        runner_id: str,
+        agent_id: str,
+        adapter_type: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]: ...
+
     async def claim_work_unit(
         self,
         mission_id: str,
@@ -275,6 +285,27 @@ class MissionControlRunnerClient:
             "POST",
             f"/api/v1/missions/{mission_id}/work-unit-claims",
             json={
+                "agentId": agent_id,
+                "adapterType": adapter_type,
+                "leaseSeconds": lease_seconds,
+            },
+        )
+
+    async def claim_ready_work_unit(
+        self,
+        workspace_id: str,
+        *,
+        runner_id: str,
+        agent_id: str,
+        adapter_type: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        del runner_id
+        return await self._request(
+            "POST",
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": workspace_id,
                 "agentId": agent_id,
                 "adapterType": adapter_type,
                 "leaseSeconds": lease_seconds,

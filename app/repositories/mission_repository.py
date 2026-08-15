@@ -488,6 +488,79 @@ class MissionRepository:
         )
         return self._work_unit_from_row(row) if row is not None else None
 
+    async def get_workspace_bound_work_unit_for_claim(
+        self,
+        workspace_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+    ) -> tuple[Mission, WorkUnit] | None:
+        """Lock one fairly ordered ready unit and its owning Mission."""
+
+        row = await self._fetch_one(
+            """SELECT
+                      mission.id AS selected_mission_id,
+                      mission.workspace_id AS selected_workspace_id,
+                      mission.title AS selected_title,
+                      mission.objective AS selected_objective,
+                      mission.source AS selected_source,
+                      mission.contract_id AS selected_contract_id,
+                      mission.status AS selected_status,
+                      mission.plan_version AS selected_plan_version,
+                      mission.created_by AS selected_created_by,
+                      mission.created_at AS selected_created_at,
+                      mission.updated_at AS selected_updated_at,
+                      candidate.id, candidate.mission_id,
+                      candidate.parent_work_unit_id, candidate.assigned_agent_id,
+                      candidate.kind, candidate.dependencies, candidate.input_refs,
+                      candidate.expected_outputs, candidate.required_capabilities,
+                      candidate.assigned_adapter, candidate.status,
+                      candidate.attempt, candidate.lease
+               FROM missions AS mission
+               JOIN work_units AS candidate
+                 ON candidate.mission_id=mission.id
+               WHERE mission.workspace_id=$1
+                 AND mission.status='RUNNING'
+                 AND (
+                     candidate.parent_work_unit_id IS NOT NULL
+                     OR (
+                         mission.source->>'type' = 'a2a.inbound'
+                         AND candidate.parent_work_unit_id IS NULL
+                         AND candidate.kind = 'a2a.inbound'
+                     )
+                 )
+                 AND candidate.assigned_agent_id=$2
+                 AND candidate.assigned_adapter=$3
+                 AND candidate.status IN ('PENDING', 'RETRYING')
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM jsonb_array_elements_text(candidate.dependencies) AS dep(id)
+                     LEFT JOIN work_units AS dependency_unit
+                       ON dependency_unit.id=dep.id
+                     WHERE dependency_unit.id IS NULL
+                        OR dependency_unit.mission_id <> candidate.mission_id
+                        OR dependency_unit.status <> 'SUCCEEDED'
+                 )
+               ORDER BY (
+                   SELECT COUNT(*)
+                   FROM work_units AS active_unit
+                   WHERE active_unit.mission_id=mission.id
+                     AND active_unit.status IN ('LEASED', 'RUNNING', 'VERIFYING')
+               ) ASC,
+               mission.created_at ASC,
+               mission.id ASC,
+               candidate.id ASC
+               LIMIT 1
+               FOR UPDATE OF mission, candidate SKIP LOCKED""",
+            workspace_id,
+            agent_id,
+            adapter_type,
+        )
+        if row is None:
+            return None
+        mission = self._mission_from_claim_row(row)
+        return mission, self._work_unit_from_row(row)
+
     async def update_work_unit(self, work_unit: WorkUnit) -> None:
         await self._execute(
             """UPDATE work_units
@@ -549,6 +622,32 @@ class MissionRepository:
         return Mission.model_validate(values)
 
     @staticmethod
+    def _mission_from_claim_row(row: Mapping[str, Any]) -> Mission:
+        values = {
+            field_name: row[f"selected_{field_name}"]
+            for field_name in (
+                "mission_id",
+                "workspace_id",
+                "title",
+                "objective",
+                "source",
+                "contract_id",
+                "status",
+                "plan_version",
+                "created_by",
+                "created_at",
+                "updated_at",
+            )
+        }
+        values["id"] = values.pop("mission_id")
+        values["source"] = _decode_json_object(values["source"], "selected_source")
+        values["created_by"] = _decode_json_object(
+            values["created_by"],
+            "selected_created_by",
+        )
+        return Mission.model_validate(values)
+
+    @staticmethod
     def _event_from_row(row: Mapping[str, Any]) -> EventEnvelope:
         values = dict(row)
         values["actor"] = _decode_json_object(values["actor"], "actor")
@@ -572,7 +671,24 @@ class MissionRepository:
 
     @staticmethod
     def _work_unit_from_row(row: Mapping[str, Any]) -> WorkUnit:
-        values = dict(row)
+        values = {
+            field_name: row[field_name]
+            for field_name in (
+                "id",
+                "mission_id",
+                "parent_work_unit_id",
+                "assigned_agent_id",
+                "kind",
+                "dependencies",
+                "input_refs",
+                "expected_outputs",
+                "required_capabilities",
+                "assigned_adapter",
+                "status",
+                "attempt",
+                "lease",
+            )
+        }
         for field_name in (
             "dependencies",
             "input_refs",

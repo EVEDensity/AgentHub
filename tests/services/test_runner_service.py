@@ -830,6 +830,43 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class MissionControlClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_client_requests_workspace_ready_work_without_mission_scan(
+        self,
+    ) -> None:
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={"workUnit": None})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            control = MissionControlRunnerClient(
+                "http://mission-control",
+                access_token="token-1",
+                http_client=client,
+            )
+            payload = await control.claim_ready_work_unit(
+                "workspace-1",
+                runner_id="runner-1",
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                lease_seconds=120,
+            )
+
+        self.assertEqual(payload, {"workUnit": None})
+        self.assertEqual(
+            str(requests[0].url),
+            "http://mission-control/api/v1/missions/work-unit-claims",
+        )
+        self.assertEqual(requests[0].headers["Authorization"], "Bearer token-1")
+        self.assertEqual(
+            requests[0].read(),
+            (
+                b'{"workspaceId":"workspace-1","agentId":"reviewer",'
+                b'"adapterType":"local_codex","leaseSeconds":120}'
+            ),
+        )
+
     async def test_client_requests_execution_context_with_lease_fence(self) -> None:
         requests: list[httpx.Request] = []
 

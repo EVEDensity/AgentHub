@@ -801,78 +801,151 @@ class MissionService:
             if work_unit is None:
                 return None
 
-            if (
-                work_unit.assigned_agent_id != agent_id
-                or work_unit.assigned_adapter != adapter_type
-            ):
-                raise WorkUnitNotReadyError(
-                    "claim repository returned a WorkUnit for another binding"
-                )
-            if work_unit.parent_work_unit_id is not None:
-                claim_mode = "delegated"
-            elif allow_inbound_root and work_unit.kind == "a2a.inbound":
-                claim_mode = "a2a.inbound"
-            else:
-                raise WorkUnitNotReadyError(
-                    "claim repository returned an ineligible root WorkUnit"
-                )
-
-            # Keep the application-level dependency check as a defense-in-depth
-            # guard for alternate repository implementations and test doubles.
-            for dependency_id in work_unit.dependencies:
-                dependency = await repository.get_work_unit(dependency_id)
-                if dependency is None or dependency.mission_id != mission_id:
-                    raise WorkUnitNotReadyError(
-                        f"work unit dependency is missing: {dependency_id}"
-                    )
-                if dependency.status != WorkUnitStatus.SUCCEEDED:
-                    raise WorkUnitNotReadyError(
-                        f"work unit dependency is not complete: {dependency_id}"
-                    )
-
-            occurred_at = datetime.now(timezone.utc)
-            lease = Lease(
-                id=new_identifier("lease"),
-                runner_id=runner_id,
-                expires_at=occurred_at + timedelta(seconds=lease_seconds),
-            )
-            updated = transition_work_unit(
+            return await self._lease_bound_claim_candidate(
+                repository,
+                mission,
                 work_unit,
-                WorkUnitStatus.LEASED,
-                occurred_at=occurred_at,
-                lease=lease,
-            )
-            sequence = (
-                await repository.get_last_event_sequence(
-                    work_unit.id,
-                    aggregate_type="work_unit",
-                )
-                + 1
-            )
-            event = EventEnvelope(
-                event_id=new_identifier("evt"),
-                aggregate_type="work_unit",
-                aggregate_id=work_unit.id,
-                sequence=sequence,
-                event_type="work_unit.lifecycle.leased",
+                agent_id=agent_id,
+                adapter_type=adapter_type,
+                runner_id=runner_id,
                 actor=actor,
-                occurred_at=occurred_at,
-                correlation_id=mission_id,
-                payload={
-                    "previousStatus": work_unit.status.value,
-                    "status": updated.status.value,
-                    "leaseId": lease.id,
-                    "runnerId": lease.runner_id,
-                    "attempt": updated.attempt,
-                    "expiresAt": lease.expires_at.isoformat(),
-                    "claimMode": claim_mode,
-                    "assignedAgentId": updated.assigned_agent_id,
-                    "assignedAdapter": updated.assigned_adapter,
-                },
-                schema_version=1,
+                lease_seconds=lease_seconds,
             )
-            await repository.update_work_unit(updated)
-            await repository.append_event(event)
+
+    async def claim_workspace_bound_work_unit(
+        self,
+        workspace_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit | None:
+        """Atomically discover and claim one bound unit in a workspace."""
+
+        if not workspace_id.strip():
+            raise ValueError("workspace_id must be non-empty")
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
+        async with self._repository.transaction() as repository:
+            selection = await repository.get_workspace_bound_work_unit_for_claim(
+                workspace_id,
+                agent_id=agent_id,
+                adapter_type=adapter_type,
+            )
+            if selection is None:
+                return None
+            mission, work_unit = selection
+            if mission.workspace_id != workspace_id:
+                raise WorkUnitNotReadyError(
+                    "claim repository returned a Mission from another workspace"
+                )
+            return await self._lease_bound_claim_candidate(
+                repository,
+                mission,
+                work_unit,
+                agent_id=agent_id,
+                adapter_type=adapter_type,
+                runner_id=runner_id,
+                actor=actor,
+                lease_seconds=lease_seconds,
+            )
+
+    async def _lease_bound_claim_candidate(
+        self,
+        repository: MissionRepository,
+        mission: Mission,
+        work_unit: WorkUnit,
+        *,
+        agent_id: str,
+        adapter_type: str,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit:
+        if mission.status != MissionStatus.RUNNING:
+            raise WorkUnitNotReadyError("work units require a RUNNING mission")
+        if work_unit.mission_id != mission.id:
+            raise WorkUnitNotReadyError(
+                "claim repository returned a WorkUnit from another Mission"
+            )
+
+        if (
+            work_unit.assigned_agent_id != agent_id
+            or work_unit.assigned_adapter != adapter_type
+        ):
+            raise WorkUnitNotReadyError(
+                "claim repository returned a WorkUnit for another binding"
+            )
+        if work_unit.parent_work_unit_id is not None:
+            claim_mode = "delegated"
+        elif (
+            mission.source.type == MissionSourceType.A2A_INBOUND
+            and work_unit.kind == "a2a.inbound"
+        ):
+            claim_mode = "a2a.inbound"
+        else:
+            raise WorkUnitNotReadyError(
+                "claim repository returned an ineligible root WorkUnit"
+            )
+
+        # Keep the application-level dependency check as a defense-in-depth
+        # guard for alternate repository implementations and test doubles.
+        for dependency_id in work_unit.dependencies:
+            dependency = await repository.get_work_unit(dependency_id)
+            if dependency is None or dependency.mission_id != mission.id:
+                raise WorkUnitNotReadyError(
+                    f"work unit dependency is missing: {dependency_id}"
+                )
+            if dependency.status != WorkUnitStatus.SUCCEEDED:
+                raise WorkUnitNotReadyError(
+                    f"work unit dependency is not complete: {dependency_id}"
+                )
+
+        occurred_at = datetime.now(timezone.utc)
+        lease = Lease(
+            id=new_identifier("lease"),
+            runner_id=runner_id,
+            expires_at=occurred_at + timedelta(seconds=lease_seconds),
+        )
+        updated = transition_work_unit(
+            work_unit,
+            WorkUnitStatus.LEASED,
+            occurred_at=occurred_at,
+            lease=lease,
+        )
+        sequence = (
+            await repository.get_last_event_sequence(
+                work_unit.id,
+                aggregate_type="work_unit",
+            )
+            + 1
+        )
+        event = EventEnvelope(
+            event_id=new_identifier("evt"),
+            aggregate_type="work_unit",
+            aggregate_id=work_unit.id,
+            sequence=sequence,
+            event_type="work_unit.lifecycle.leased",
+            actor=actor,
+            occurred_at=occurred_at,
+            correlation_id=mission.id,
+            payload={
+                "previousStatus": work_unit.status.value,
+                "status": updated.status.value,
+                "leaseId": lease.id,
+                "runnerId": lease.runner_id,
+                "attempt": updated.attempt,
+                "expiresAt": lease.expires_at.isoformat(),
+                "claimMode": claim_mode,
+                "assignedAgentId": updated.assigned_agent_id,
+                "assignedAdapter": updated.assigned_adapter,
+            },
+            schema_version=1,
+        )
+        await repository.update_work_unit(updated)
+        await repository.append_event(event)
         return updated
 
     async def get_claimed_execution_context(

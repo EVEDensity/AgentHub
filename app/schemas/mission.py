@@ -99,6 +99,10 @@ class WorkUnitClaimRequest(BaseModel):
     lease_seconds: Annotated[int, Field(ge=1, le=3600)] = 300
 
 
+class WorkspaceWorkUnitClaimRequest(WorkUnitClaimRequest):
+    workspace_id: Annotated[str, Field(min_length=1, max_length=255)]
+
+
 class WorkUnitStartRequest(BaseModel):
     model_config = ConfigDict(
         alias_generator=_to_camel,
