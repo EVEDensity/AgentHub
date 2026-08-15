@@ -18,11 +18,12 @@ resources, Artifact byte publication, and sanitized health state.
   HTTP(S) URLs. Redirects are disabled.
 - Mission Control, AI Gateway, and MCP bearer tokens are loaded from separate
   mounted files. The service never accepts plaintext token settings.
-- The current direct Mission Control authorization path requires a non-admin
-  Runner token subject equal to the configured workspace, and `RUNNER_ID` must
-  equal that authenticated subject. Replicas may share this service identity
-  because lease IDs fence individual attempts. Do not use an administrator
-  token; distinct per-Runner workspace grants remain a follow-up IAM boundary.
+- The Mission Control token subject and `RUNNER_ID` identify the same service
+  principal. Grant that principal the explicit `mission:claim` permission in
+  the configured workspace ACL. Distinct replicas should use distinct
+  principals; do not use administrator credentials. A legacy token subject
+  equal to the workspace remains temporarily compatible but is not the target
+  deployment model.
 - The AI Gateway must implement non-streaming OpenAI-compatible
   `/chat/completions`, including `tools`, `tool_calls`, and provider usage. A
   `mock-*` model, malformed tool call, non-JSON body, remote error body, or
@@ -90,7 +91,8 @@ Mission/WorkUnit configuration.
 ## Deployment prerequisites
 
 1. Mission Control exposes the atomic bound-claim and lease-fenced execution
-   context APIs and can authorize the mounted workspace-scoped Runner token.
+   context APIs and can authorize the mounted Runner principal through the
+   workspace ACL `mission:claim` permission.
 2. The configured workspace catalog contains the exact Agent/adapter binding
    used by eligible inbound Missions.
 3. The AI Gateway supports the configured model and OpenAI tool schemas without
@@ -114,3 +116,8 @@ contract. Deploy each process with one explicit workspace and Agent/adapter
 binding. Scaling replicas increases concurrent claim capacity through Mission
 Control row locking; it does not create a Runner-owned queue or provide fleet
 priority, quota, or capacity routing.
+
+Mission Control checks `mission:claim` on every new claim, so removing the
+permission prevents further leases immediately. An already claimed attempt uses
+its lease owner and lease ID as the execution fence and may still report
+heartbeat, Artifact metadata, completion, or failure after grant revocation.

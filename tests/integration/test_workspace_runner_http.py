@@ -10,7 +10,11 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 
-from app.api.v1.missions import get_mission_repository, router
+from app.api.v1.missions import (
+    get_mission_repository,
+    get_runner_workspace_grant_authorizer,
+    router,
+)
 from app.domain import Mission, WorkUnit
 from app.services.artifact_store_service import PublishedArtifact
 from app.services.auth_service import get_current_user
@@ -22,7 +26,10 @@ from app.services.runner_service import (
     WorkUnitRunner,
 )
 from app.services.tools.sandbox_executor import SandboxResult
-from tests.api.test_missions_api import FakeMissionRepository
+from tests.api.test_missions_api import (
+    FakeMissionRepository,
+    FakeRunnerWorkspaceGrantAuthorizer,
+)
 from tests.domain.factories import build_mission, build_work_unit
 
 
@@ -119,6 +126,15 @@ def _build_app(repository: _AtomicMissionRepository) -> FastAPI:
     application = FastAPI()
     application.include_router(router, prefix="/api/v1")
     application.dependency_overrides[get_mission_repository] = lambda: repository
+    grant_authorizer = FakeRunnerWorkspaceGrantAuthorizer(
+        {
+            ("workspace-1", "runner-a"),
+            ("workspace-1", "runner-b"),
+        }
+    )
+    application.dependency_overrides[get_runner_workspace_grant_authorizer] = (
+        lambda: grant_authorizer
+    )
     application.dependency_overrides[get_current_user] = _authenticated_runner
     return application
 
@@ -160,8 +176,8 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             httpx.AsyncClient(transport=transport) as http_a,
             httpx.AsyncClient(transport=transport) as http_b,
         ):
-            runner_a, resolver_a = self._runner(http_a, "workspace-1")
-            runner_b, resolver_b = self._runner(http_b, "workspace-1")
+            runner_a, resolver_a = self._runner(http_a, "runner-a")
+            runner_b, resolver_b = self._runner(http_b, "runner-b")
 
             results = await asyncio.gather(
                 runner_a.claim_ready_and_run("workspace-1"),
@@ -183,7 +199,19 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             for event in repository.events
             if event.event_type == "work_unit.lifecycle.leased"
         }
-        self.assertEqual(leased_by, {"workspace-1"})
+        self.assertEqual(leased_by, {"runner-a", "runner-b"})
+        execution_events = {
+            "work_unit.lifecycle.started",
+            "artifact.lifecycle.registered",
+            "work_unit.lifecycle.completed",
+        }
+        self.assertTrue(
+            all(
+                event.actor.type.value == "runner"
+                for event in repository.events
+                if event.event_type in execution_events
+            )
+        )
 
     async def test_two_runners_cannot_execute_the_same_work_unit(self) -> None:
         repository = _AtomicMissionRepository(
@@ -195,8 +223,8 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             httpx.AsyncClient(transport=transport) as http_a,
             httpx.AsyncClient(transport=transport) as http_b,
         ):
-            runner_a, resolver_a = self._runner(http_a, "workspace-1")
-            runner_b, resolver_b = self._runner(http_b, "workspace-1")
+            runner_a, resolver_a = self._runner(http_a, "runner-a")
+            runner_b, resolver_b = self._runner(http_b, "runner-b")
 
             results = await asyncio.gather(
                 runner_a.claim_ready_and_run("workspace-1"),

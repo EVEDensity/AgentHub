@@ -7,11 +7,11 @@ package iam
 // overrides in platform_role_permissions.
 
 const (
-	RoleSuperAdmin    = "super_admin"     // cross-tenant break-glass; bypasses all checks
-	RoleTenantAdmin   = "tenant_admin"    // tenant-scoped admin: manage members, roles, quotas
-	RoleAgentOperator = "agent_operator"  // P0.3: can execute high-risk tools, cannot manage members
-	RoleMember        = "member"          // standard user: create sessions, run agents, use tools
-	RoleViewer        = "viewer"          // read-only: observe sessions and audit logs
+	RoleSuperAdmin    = "super_admin"    // cross-tenant break-glass; bypasses all checks
+	RoleTenantAdmin   = "tenant_admin"   // tenant-scoped admin: manage members, roles, quotas
+	RoleAgentOperator = "agent_operator" // P0.3: can execute high-risk tools, cannot manage members
+	RoleMember        = "member"         // standard user: create sessions, run agents, use tools
+	RoleViewer        = "viewer"         // read-only: observe sessions and audit logs
 )
 
 // ── Scopes ─────────────────────────────────────────────────────────────
@@ -21,27 +21,28 @@ const (
 // sets at token-issuance time so runtime checks stay local.
 
 const (
-	ScopeAll            = "*" // granted only to super_admin / tenant_admin
-	ScopeSessionRead    = "session:read"
-	ScopeSessionWrite   = "session:write"
-	ScopeSessionCreate  = "session:create"
-	ScopeSessionDelete  = "session:delete"
-	ScopeAgentDispatch  = "agent:dispatch"
-	ScopeAgentRead      = "agent:read"
-	ScopeToolExecute    = "tool:execute"
-	ScopeToolApprove    = "tool:approve"
-	ScopeMemoryRead     = "memory:read"
-	ScopeMemoryWrite    = "memory:write"
-	ScopeDocUpload      = "document:upload"
-	ScopeDocRead        = "document:read"
-	ScopeAuditRead      = "audit:read"
-	ScopeTenantManage   = "tenant:manage"
-	ScopeRoleManage     = "role:manage"
-	ScopeBillingRead    = "billing:read"
+	ScopeAll           = "*" // granted only to super_admin / tenant_admin
+	ScopeSessionRead   = "session:read"
+	ScopeSessionWrite  = "session:write"
+	ScopeSessionCreate = "session:create"
+	ScopeSessionDelete = "session:delete"
+	ScopeAgentDispatch = "agent:dispatch"
+	ScopeAgentRead     = "agent:read"
+	ScopeToolExecute   = "tool:execute"
+	ScopeToolApprove   = "tool:approve"
+	ScopeMemoryRead    = "memory:read"
+	ScopeMemoryWrite   = "memory:write"
+	ScopeDocUpload     = "document:upload"
+	ScopeDocRead       = "document:read"
+	ScopeAuditRead     = "audit:read"
+	ScopeTenantManage  = "tenant:manage"
+	ScopeRoleManage    = "role:manage"
+	ScopeBillingRead   = "billing:read"
 	// ── P0.3: workspace + model management scopes ──
 	ScopeWorkspaceAdmin = "workspace:admin" // manage workspace settings, ACL
 	ScopeWorkspaceRead  = "workspace:read"  // view workspace content
 	ScopeModelManage    = "model:manage"    // configure model providers, quotas
+	ScopeMissionClaim   = "mission:claim"   // claim ready WorkUnits in an explicitly granted workspace
 )
 
 // DefaultRoleScopes maps each built-in role to the scope set it grants. These

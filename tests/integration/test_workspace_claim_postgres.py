@@ -11,7 +11,11 @@ import asyncpg
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 
-from app.api.v1.missions import get_mission_repository, router
+from app.api.v1.missions import (
+    get_mission_repository,
+    get_runner_workspace_grant_authorizer,
+    router,
+)
 from app.db.migrations.mission_control_plane import (
     AGENT_BINDING_PERSISTENCE_UPGRADE,
     DELEGATION_PERSISTENCE_UPGRADE,
@@ -22,6 +26,10 @@ from app.db.migrations.mission_control_plane import (
 from app.repositories import MissionRepository
 from app.services.auth_service import get_current_user
 from app.services.runner_service import MissionControlRunnerClient
+from app.services.workspace_access_service import (
+    DatabaseRunnerWorkspaceGrantAuthorizer,
+    RunnerWorkspaceGrantAuthorizer,
+)
 from tests.domain.factories import build_contract, build_mission, build_work_unit
 
 _POSTGRES_DSN = os.getenv("AGENTHUB_TEST_POSTGRES_DSN")
@@ -84,10 +92,16 @@ async def _authenticated_runner(request: Request) -> dict[str, str]:
     return {"id": token, "name": token, "role": "runner"}
 
 
-def _build_app(repository: MissionRepository) -> FastAPI:
+def _build_app(
+    repository: MissionRepository,
+    grant_authorizer: RunnerWorkspaceGrantAuthorizer,
+) -> FastAPI:
     application = FastAPI()
     application.include_router(router, prefix="/api/v1")
     application.dependency_overrides[get_mission_repository] = lambda: repository
+    application.dependency_overrides[get_runner_workspace_grant_authorizer] = (
+        lambda: grant_authorizer
+    )
     application.dependency_overrides[get_current_user] = _authenticated_runner
     return application
 
@@ -117,6 +131,25 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
         async with self._pool.acquire() as connection:
             for statement in _MIGRATIONS:
                 await connection.execute(statement)
+            await connection.execute(
+                """
+                CREATE TABLE platform_workspace_members (
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    permissions JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    PRIMARY KEY (workspace_id, user_id)
+                )
+                """
+            )
+            await connection.executemany(
+                """
+                INSERT INTO platform_workspace_members (
+                    workspace_id, user_id, role, permissions
+                ) VALUES ($1, $2, 'runner', '["mission:claim"]'::jsonb)
+                """,
+                [("workspace-1", "runner-a"), ("workspace-1", "runner-b")],
+            )
 
         @asynccontextmanager
         async def transaction_factory():
@@ -144,6 +177,30 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             fetch_all=fetch_all,
             transaction_factory=transaction_factory,
             barrier=asyncio.Barrier(2),
+        )
+
+        async def lookup_grant(
+            workspace_id: str,
+            principal_id: str,
+            scope: str,
+        ):
+            async with self._pool.acquire() as connection:
+                return await connection.fetchrow(
+                    """
+                    SELECT 1 AS granted
+                    FROM platform_workspace_members
+                    WHERE workspace_id = $1
+                      AND user_id = $2
+                      AND permissions @> jsonb_build_array($3::text)
+                    LIMIT 1
+                    """,
+                    workspace_id,
+                    principal_id,
+                    scope,
+                )
+
+        self._grant_authorizer = DatabaseRunnerWorkspaceGrantAuthorizer(
+            lookup_grant
         )
         await self._seed_ready_work()
 
@@ -186,33 +243,35 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_skip_locked_claims_distinct_rows_without_duplicate_lease(self) -> None:
-        transport = httpx.ASGITransport(app=_build_app(self._repository))
+        transport = httpx.ASGITransport(
+            app=_build_app(self._repository, self._grant_authorizer)
+        )
         async with (
             httpx.AsyncClient(transport=transport) as http_a,
             httpx.AsyncClient(transport=transport) as http_b,
         ):
             control_a = MissionControlRunnerClient(
                 "http://mission-control.test",
-                access_token="workspace-1",
+                access_token="runner-a",
                 http_client=http_a,
             )
             control_b = MissionControlRunnerClient(
                 "http://mission-control.test",
-                access_token="workspace-1",
+                access_token="runner-b",
                 http_client=http_b,
             )
             claims = await asyncio.wait_for(
                 asyncio.gather(
                     control_a.claim_ready_work_unit(
                         "workspace-1",
-                        runner_id="workspace-1",
+                        runner_id="runner-a",
                         agent_id="reviewer",
                         adapter_type="local_codex",
                         lease_seconds=120,
                     ),
                     control_b.claim_ready_work_unit(
                         "workspace-1",
-                        runner_id="workspace-1",
+                        runner_id="runner-b",
                         agent_id="reviewer",
                         adapter_type="local_codex",
                         lease_seconds=120,
@@ -222,7 +281,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             empty = await control_a.claim_ready_work_unit(
                 "workspace-1",
-                runner_id="workspace-1",
+                runner_id="runner-a",
                 agent_id="reviewer",
                 adapter_type="local_codex",
                 lease_seconds=120,
@@ -236,9 +295,41 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             {unit["lease"]["runnerId"] for unit in claimed_units},
-            {"workspace-1"},
+            {"runner-a", "runner-b"},
         )
         self.assertIsNone(empty["workUnit"])
+
+        async with self._pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE platform_workspace_members
+                SET permissions = '[]'::jsonb
+                WHERE workspace_id = $1 AND user_id = $2
+                """,
+                "workspace-1",
+                "runner-a",
+            )
+        events_before_revocation = await self._repository.list_events(
+            "mission-a",
+            limit=100,
+        )
+        async with httpx.AsyncClient(transport=transport) as revoked_http:
+            revoked = await revoked_http.post(
+                "/api/v1/missions/work-unit-claims",
+                json={
+                    "workspaceId": "workspace-1",
+                    "agentId": "reviewer",
+                    "adapterType": "local_codex",
+                    "leaseSeconds": 120,
+                },
+                headers={"Authorization": "Bearer runner-a"},
+            )
+        self.assertEqual(revoked.status_code, 403)
+        events_after_revocation = await self._repository.list_events(
+            "mission-a",
+            limit=100,
+        )
+        self.assertEqual(events_after_revocation, events_before_revocation)
 
 
 if __name__ == "__main__":

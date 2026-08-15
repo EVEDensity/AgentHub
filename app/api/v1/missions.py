@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.v1.access import authorize_verifier, authorize_workspace
-from app.domain import EvidenceVerdict, InvalidStateTransition, Mission
+from app.domain import ActorRef, EvidenceVerdict, InvalidStateTransition, Mission
 from app.repositories import MissionRepository
 from app.schemas.mission import (
     ArtifactCreateRequest,
@@ -43,6 +43,11 @@ from app.services.mission_service import (
     build_runner_actor,
     build_verifier_actor,
 )
+from app.services.workspace_access_service import (
+    DatabaseRunnerWorkspaceGrantAuthorizer,
+    RunnerWorkspaceGrantAuthorizer,
+    RunnerWorkspaceGrantUnavailableError,
+)
 
 router = APIRouter(prefix="/missions", tags=["missions"])
 
@@ -59,6 +64,10 @@ def get_agent_binding_resolver() -> AgentBindingResolver:
     return DatabaseAgentBindingResolver()
 
 
+def get_runner_workspace_grant_authorizer() -> RunnerWorkspaceGrantAuthorizer:
+    return DatabaseRunnerWorkspaceGrantAuthorizer()
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 MissionRepositoryDep = Annotated[MissionRepository, Depends(get_mission_repository)]
 ArtifactByteVerifierDep = Annotated[
@@ -68,6 +77,10 @@ ArtifactByteVerifierDep = Annotated[
 AgentBindingResolverDep = Annotated[
     AgentBindingResolver,
     Depends(get_agent_binding_resolver),
+]
+RunnerWorkspaceGrantAuthorizerDep = Annotated[
+    RunnerWorkspaceGrantAuthorizer,
+    Depends(get_runner_workspace_grant_authorizer),
 ]
 WorkspaceId = Annotated[str, Query(alias="workspaceId")]
 MissionLimit = Annotated[int, Query(ge=1, le=200)]
@@ -129,6 +142,36 @@ async def _authorized_mission(
         raise HTTPException(status_code=404, detail="Mission not found")
     authorize_workspace(user, mission.workspace_id)
     return mission
+
+
+async def _authorize_execution_work_unit(
+    mission_id: str,
+    work_unit_id: str,
+    *,
+    lease_id: str,
+    user: dict,
+    repository: MissionRepository,
+) -> None:
+    if user.get("role") != "runner":
+        await _authorized_mission(mission_id, user=user, repository=repository)
+    work_unit = await repository.get_work_unit(work_unit_id)
+    if work_unit is None or work_unit.mission_id != mission_id:
+        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    if user.get("role") == "runner" and (
+        work_unit.lease is None
+        or work_unit.lease.id != lease_id
+        or work_unit.lease.runner_id != str(user["id"])
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Active Runner lease ownership required",
+        )
+
+
+def _build_execution_actor(user: dict) -> ActorRef:
+    if user.get("role") == "runner":
+        return build_runner_actor(user)
+    return build_human_actor(user)
 
 
 async def _run_lifecycle_command(
@@ -353,10 +396,15 @@ async def claim_workspace_work_unit(
     request: WorkspaceWorkUnitClaimRequest,
     user: CurrentUser,
     repository: MissionRepositoryDep,
+    grant_authorizer: RunnerWorkspaceGrantAuthorizerDep,
 ) -> dict:
     """Discover and claim one ready WorkUnit in an authorized workspace."""
 
-    authorize_workspace(user, request.workspace_id)
+    await _authorize_workspace_claim(
+        user,
+        request.workspace_id,
+        grant_authorizer=grant_authorizer,
+    )
     service = MissionService(repository)
     try:
         claimed = await service.claim_workspace_bound_work_unit(
@@ -372,6 +420,38 @@ async def claim_workspace_work_unit(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"workUnit": claimed.to_public_dict() if claimed is not None else None}
+
+
+async def _authorize_workspace_claim(
+    user: dict,
+    workspace_id: str,
+    *,
+    grant_authorizer: RunnerWorkspaceGrantAuthorizer,
+) -> None:
+    role = user.get("role")
+    principal_id = str(user.get("id") or "").strip()
+    if role == "admin":
+        return
+    if role != "runner":
+        raise HTTPException(status_code=403, detail="Runner access required")
+    if principal_id == workspace_id:
+        return
+    if not principal_id:
+        raise HTTPException(status_code=403, detail="Runner identity required")
+    try:
+        granted = await grant_authorizer.has_claim_grant(
+            workspace_id=workspace_id,
+            principal_id=principal_id,
+        )
+    except RunnerWorkspaceGrantUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not granted:
+        raise HTTPException(
+            status_code=403,
+            detail="Runner workspace claim grant required",
+        )
 
 
 @router.post("/{mission_id}/work-unit-claims")
@@ -413,7 +493,13 @@ async def get_claimed_execution_context(
     repository: MissionRepositoryDep,
 ) -> dict:
     """Return a lease-fenced context snapshot for an inbound A2A root."""
-    await _authorized_mission(mission_id, user=user, repository=repository)
+    await _authorize_execution_work_unit(
+        mission_id,
+        work_unit_id,
+        lease_id=request.lease_id,
+        user=user,
+        repository=repository,
+    )
     service = MissionService(repository)
     try:
         context = await service.get_claimed_execution_context(
@@ -439,10 +525,13 @@ async def start_work_unit(
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:
-    await _authorized_mission(mission_id, user=user, repository=repository)
-    work_unit = await repository.get_work_unit(work_unit_id)
-    if work_unit is None or work_unit.mission_id != mission_id:
-        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    await _authorize_execution_work_unit(
+        mission_id,
+        work_unit_id,
+        lease_id=request.lease_id,
+        user=user,
+        repository=repository,
+    )
     service = MissionService(repository)
     try:
         started = await service.start_work_unit(
@@ -450,7 +539,7 @@ async def start_work_unit(
             work_unit_id,
             lease_id=request.lease_id,
             runner_id=str(user["id"]),
-            actor=build_human_actor(user),
+            actor=_build_execution_actor(user),
         )
     except MissionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Mission not found") from exc
@@ -469,10 +558,13 @@ async def heartbeat_work_unit(
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:
-    await _authorized_mission(mission_id, user=user, repository=repository)
-    work_unit = await repository.get_work_unit(work_unit_id)
-    if work_unit is None or work_unit.mission_id != mission_id:
-        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    await _authorize_execution_work_unit(
+        mission_id,
+        work_unit_id,
+        lease_id=request.lease_id,
+        user=user,
+        repository=repository,
+    )
     service = MissionService(repository)
     try:
         renewed = await service.heartbeat_work_unit(
@@ -480,7 +572,7 @@ async def heartbeat_work_unit(
             work_unit_id,
             lease_id=request.lease_id,
             runner_id=str(user["id"]),
-            actor=build_human_actor(user),
+            actor=_build_execution_actor(user),
             lease_seconds=request.lease_seconds,
         )
     except MissionNotFoundError as exc:
@@ -503,10 +595,13 @@ async def register_artifact(
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:
-    await _authorized_mission(mission_id, user=user, repository=repository)
-    work_unit = await repository.get_work_unit(work_unit_id)
-    if work_unit is None or work_unit.mission_id != mission_id:
-        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    await _authorize_execution_work_unit(
+        mission_id,
+        work_unit_id,
+        lease_id=request.lease_id,
+        user=user,
+        repository=repository,
+    )
     service = MissionService(repository)
     try:
         artifact = await service.register_artifact(
@@ -524,7 +619,7 @@ async def register_artifact(
             base_commit=request.base_commit,
             retention=request.retention,
             sensitivity=request.sensitivity,
-            actor=build_human_actor(user),
+            actor=_build_execution_actor(user),
         )
     except MissionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Mission not found") from exc
@@ -571,13 +666,16 @@ async def _run_work_unit_execution_command(
     user: dict,
     repository: MissionRepository,
 ) -> dict:
-    await _authorized_mission(mission_id, user=user, repository=repository)
-    work_unit = await repository.get_work_unit(work_unit_id)
-    if work_unit is None or work_unit.mission_id != mission_id:
-        raise HTTPException(status_code=404, detail="WorkUnit not found")
+    await _authorize_execution_work_unit(
+        mission_id,
+        work_unit_id,
+        lease_id=request.lease_id,
+        user=user,
+        repository=repository,
+    )
     service = MissionService(repository)
     runner_id = str(user["id"])
-    actor = build_human_actor(user)
+    actor = _build_execution_actor(user)
     try:
         if command == "complete":
             updated = await service.complete_work_unit(

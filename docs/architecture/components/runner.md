@@ -68,3 +68,12 @@ derives the Mission ID only from the claimed WorkUnit, validates lease owner,
 binding, state, and Mission identity, then reuses the existing context, start,
 heartbeat, cancellation, Artifact, and completion path. Priority, quotas, and
 capacity-aware routing remain future Mission Control policies.
+
+Each independently identifiable Runner principal receives the explicit
+`mission:claim` permission through `platform_workspace_members`; no
+non-break-glass built-in role receives it by default. Mission Control reads
+that ACL on every new claim and fails closed when the authorization store is
+unavailable. Removing the permission blocks the next claim. Commands for an
+already claimed attempt are authorized by the active lease owner and lease ID,
+then rechecked inside the Mission Control transaction. The grant does not allow
+Mission listing or ordinary workspace access.

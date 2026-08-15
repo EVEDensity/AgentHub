@@ -87,7 +87,7 @@ func TestAllRolesReturnsFive(t *testing.T) {
 
 func TestAllScopesIncludesNewScopes(t *testing.T) {
 	scopes := AllScopes()
-	wantScopes := []string{ScopeWorkspaceAdmin, ScopeWorkspaceRead, ScopeModelManage}
+	wantScopes := []string{ScopeWorkspaceAdmin, ScopeWorkspaceRead, ScopeModelManage, ScopeMissionClaim}
 	for _, want := range wantScopes {
 		found := false
 		for _, s := range scopes {
@@ -98,6 +98,15 @@ func TestAllScopesIncludesNewScopes(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("AllScopes should include %s", want)
+		}
+	}
+}
+
+func TestMissionClaimRequiresExplicitWorkspaceGrant(t *testing.T) {
+	p := DefaultPolicy()
+	for _, role := range []string{RoleTenantAdmin, RoleAgentOperator, RoleMember, RoleViewer} {
+		if p.HasScope([]string{role}, ScopeMissionClaim) {
+			t.Fatalf("%s should not receive mission:claim by default", role)
 		}
 	}
 }
@@ -241,7 +250,7 @@ func TestWorkspacePolicyCanExecuteWithPermissions(t *testing.T) {
 	p.SetACL(WorkspaceACL{
 		WorkspaceID: "ws-1",
 		UserID:      "user-1",
-		Role:        RoleViewer, // viewer normally can't execute
+		Role:        RoleViewer,                 // viewer normally can't execute
 		Permissions: []string{ScopeToolExecute}, // but has explicit tool:execute
 	})
 

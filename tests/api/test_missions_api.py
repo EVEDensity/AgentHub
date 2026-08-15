@@ -13,6 +13,7 @@ from app.api.v1.missions import (
     get_agent_binding_resolver,
     get_artifact_byte_verifier,
     get_mission_repository,
+    get_runner_workspace_grant_authorizer,
     router,
 )
 from app.domain import (
@@ -39,6 +40,11 @@ from app.services.artifact_integrity_service import (
     ArtifactIntegrityError,
 )
 from app.services.auth_service import get_current_user
+from app.services.workspace_access_service import (
+    DatabaseRunnerWorkspaceGrantAuthorizer,
+    RunnerWorkspaceGrantAuthorizer,
+    RunnerWorkspaceGrantUnavailableError,
+)
 from tests.domain.factories import (
     build_artifact,
     build_contract,
@@ -67,7 +73,6 @@ class FakeMissionRepository:
             yield self
         finally:
             self.transaction_depth -= 1
-
     async def add_contract(self, contract: MissionContract) -> None:
         self.contract = contract
 
@@ -384,6 +389,29 @@ class FakeMissionRepository:
         self.events.append(event)
 
 
+class FakeRunnerWorkspaceGrantAuthorizer:
+    def __init__(
+        self,
+        grants: set[tuple[str, str]] | None = None,
+        *,
+        error: RunnerWorkspaceGrantUnavailableError | None = None,
+    ) -> None:
+        self.grants = grants or set()
+        self.error = error
+        self.calls: list[tuple[str, str]] = []
+
+    async def has_claim_grant(
+        self,
+        *,
+        workspace_id: str,
+        principal_id: str,
+    ) -> bool:
+        self.calls.append((workspace_id, principal_id))
+        if self.error is not None:
+            raise self.error
+        return (workspace_id, principal_id) in self.grants
+
+
 class FakeArtifactByteVerifier:
     def __init__(
         self,
@@ -423,6 +451,7 @@ def build_app(
     *,
     artifact_byte_verifier: FakeArtifactByteVerifier | None = None,
     agent_binding_resolver: AgentBindingResolver | None = None,
+    runner_workspace_grant_authorizer: RunnerWorkspaceGrantAuthorizer | None = None,
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/api/v1")
@@ -432,6 +461,13 @@ def build_app(
     app.dependency_overrides[get_artifact_byte_verifier] = lambda: verifier
     binding_resolver = agent_binding_resolver or UnavailableAgentBindingResolver()
     app.dependency_overrides[get_agent_binding_resolver] = lambda: binding_resolver
+    grant_authorizer = (
+        runner_workspace_grant_authorizer
+        or FakeRunnerWorkspaceGrantAuthorizer()
+    )
+    app.dependency_overrides[get_runner_workspace_grant_authorizer] = (
+        lambda: grant_authorizer
+    )
     app.dependency_overrides[get_current_user] = lambda: user
     return app
 
@@ -441,6 +477,12 @@ class MissionApiTests(unittest.TestCase):
         self.assertIsInstance(
             get_agent_binding_resolver(),
             DatabaseAgentBindingResolver,
+        )
+
+    def test_default_runner_grant_dependency_uses_workspace_acl(self) -> None:
+        self.assertIsInstance(
+            get_runner_workspace_grant_authorizer(),
+            DatabaseRunnerWorkspaceGrantAuthorizer,
         )
 
     def test_create_mission_derives_actor_and_appends_first_event(self) -> None:
@@ -1055,10 +1097,12 @@ class MissionApiTests(unittest.TestCase):
 
     def test_workspace_claim_rejects_unauthorized_workspace(self) -> None:
         repository = FakeMissionRepository()
+        grant_authorizer = FakeRunnerWorkspaceGrantAuthorizer()
         client = TestClient(
             build_app(
                 repository,
                 {"id": "runner-1", "name": "Runner", "role": "runner"},
+                runner_workspace_grant_authorizer=grant_authorizer,
             )
         )
 
@@ -1072,6 +1116,180 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            grant_authorizer.calls,
+            [("workspace-other", "runner-1")],
+        )
+        self.assertEqual(repository.events, [])
+
+    def test_workspace_claim_accepts_explicit_runner_service_grant(self) -> None:
+        repository = FakeMissionRepository()
+        mission = build_mission(
+            id="mis-granted",
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.mission = mission
+        repository.list_result = [mission]
+        repository.work_units = [
+            build_work_unit(
+                id="wu-granted",
+                mission_id=mission.id,
+                parent_work_unit_id="wu-parent",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+        ]
+        grant_authorizer = FakeRunnerWorkspaceGrantAuthorizer(
+            {("workspace-1", "runner-a")}
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "runner-a", "name": "Runner A", "role": "runner"},
+                runner_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["workUnit"]["id"], "wu-granted")
+        self.assertEqual(
+            response.json()["workUnit"]["lease"]["runnerId"],
+            "runner-a",
+        )
+        self.assertEqual(grant_authorizer.calls, [("workspace-1", "runner-a")])
+
+    def test_workspace_claim_fails_closed_when_grants_are_unavailable(self) -> None:
+        repository = FakeMissionRepository()
+        grant_authorizer = FakeRunnerWorkspaceGrantAuthorizer(
+            error=RunnerWorkspaceGrantUnavailableError("workspace ACL unavailable")
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "runner-a", "name": "Runner A", "role": "runner"},
+                runner_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], "workspace ACL unavailable")
+        self.assertEqual(repository.events, [])
+
+    def test_workspace_claim_rejects_non_runner_even_with_grant(self) -> None:
+        repository = FakeMissionRepository()
+        grant_authorizer = FakeRunnerWorkspaceGrantAuthorizer(
+            {("workspace-1", "user-1")}
+        )
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+                runner_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "Runner access required")
+        self.assertEqual(grant_authorizer.calls, [])
+        self.assertEqual(repository.events, [])
+
+    def test_workspace_claim_denial_precedes_repository_transaction(self) -> None:
+        class RepositoryThatMustNotBeCalled(FakeMissionRepository):
+            @asynccontextmanager
+            async def transaction(self):
+                raise AssertionError("authorization must precede repository access")
+                yield self
+
+        repository = RepositoryThatMustNotBeCalled()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "runner-a", "name": "Runner A", "role": "runner"},
+                runner_workspace_grant_authorizer=(
+                    FakeRunnerWorkspaceGrantAuthorizer()
+                ),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(repository.events, [])
+
+    def test_runner_execution_requires_its_claimed_lease(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        repository.work_units = [
+            build_work_unit(
+                status="LEASED",
+                lease=Lease(
+                    id="lease-a",
+                    runner_id="runner-a",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "runner-b", "name": "Runner B", "role": "runner"},
+                runner_workspace_grant_authorizer=(
+                    FakeRunnerWorkspaceGrantAuthorizer(
+                        {("workspace-1", "runner-b")}
+                    )
+                ),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-1/start",
+            json={"leaseId": "lease-a"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Active Runner lease ownership required",
+        )
+        self.assertEqual(repository.work_units[0].status.value, "LEASED")
         self.assertEqual(repository.events, [])
 
     def test_workspace_claim_rejects_repository_scope_escape(self) -> None:

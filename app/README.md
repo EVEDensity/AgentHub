@@ -54,7 +54,10 @@ boundary. It is not the permanent home of every Agent feature.
   stop. Mission Control authorizes scope, balances ready work by active and
   unverified Mission load, and locks the selected Mission and WorkUnit
   atomically. The worker consumes that claim without persisting a queue,
-  scanning Missions, or replacing lease state.
+  scanning Missions, or replacing lease state. Independent Runner principals
+  receive the explicit workspace ACL permission `mission:claim`; Mission
+  Control reads that grant on every new claim, while an active lease remains
+  the sole authority for subsequent execution commands.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

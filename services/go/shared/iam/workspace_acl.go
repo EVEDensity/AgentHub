@@ -216,5 +216,6 @@ func AllScopes() []string {
 		ScopeWorkspaceAdmin,
 		ScopeWorkspaceRead,
 		ScopeModelManage,
+		ScopeMissionClaim,
 	}
 }

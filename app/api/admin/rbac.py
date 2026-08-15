@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.db.init_db import now
-from app.db.session import afetch_all, afetch_one, aexecute
+from app.db.session import aexecute, afetch_all
 from app.services.auth_service import get_current_user, require_admin, write_audit
 
 router = APIRouter(prefix="/rbac", tags=["admin-rbac"])
@@ -94,6 +94,7 @@ ALL_SCOPES: list[str] = [
     "document:upload", "document:read",
     "audit:read", "tenant:manage", "role:manage", "billing:read",
     "workspace:admin", "workspace:read", "model:manage",
+    "mission:claim",
 ]
 
 # ── Tool risk matrix (mirror services/go/shared/iam/abac.go) ───────────

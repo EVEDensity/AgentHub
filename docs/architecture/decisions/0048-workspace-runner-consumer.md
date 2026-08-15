@@ -5,6 +5,9 @@
 > Date: 2026-08-15  
 > Scope: Runner polling, process configuration, and deployment
 
+The shared-identity authorization limitation described below is replaced by
+[ADR-0049](0049-runner-workspace-grants.md).
+
 ## Context
 
 ADR-0047 added atomic workspace ready-work discovery to Mission Control. The
