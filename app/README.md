@@ -49,13 +49,12 @@ boundary. It is not the permanent home of every Agent feature.
   Contract, WorkUnit, and attempt rather than falling back to Runner's fixed
   Sandbox Harness. `a2a.receive` remains an admission marker; other required
   capabilities must resolve to concrete per-attempt bindings or execution fails.
-  `runner_worker.py` supervises polling for one explicitly configured Mission.
+  `runner_worker.py` supervises polling for one explicitly configured workspace.
   It owns only process-local readiness, bounded idle/error backoff, and graceful
-  stop. It does not persist a queue, discover Missions, or replace lease state.
-  Mission Control now provides a separate workspace-scoped ready-work claim
-  that authorizes scope, balances by active/unverified Mission load, and locks
-  the selected Mission and WorkUnit atomically. The worker has not yet migrated
-  to that endpoint, so fixed-Mission polling remains the deployed behavior.
+  stop. Mission Control authorizes scope, balances ready work by active and
+  unverified Mission load, and locks the selected Mission and WorkUnit
+  atomically. The worker consumes that claim without persisting a queue,
+  scanning Missions, or replacing lease state.
   `mcp_tool_adapter.py` is a stateless MCP client/tool adapter; it forwards
   Mission/WorkUnit/capability context and emits content-free call audit events.
   `build_mcp_capability_binding` composes it with Contract/WorkUnit capability

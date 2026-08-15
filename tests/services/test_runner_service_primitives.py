@@ -27,7 +27,7 @@ def _settings(**overrides: object) -> RunnerServiceSettings:
     root = Path.cwd().resolve()
     values: dict[str, object] = {
         "runner_id": "runner-1",
-        "mission_id": "mission-1",
+        "workspace_id": "workspace-1",
         "assigned_agent_id": "agent-1",
         "assigned_adapter": "local",
         "mission_control_url": "https://control.example.test",
@@ -56,6 +56,7 @@ class RunnerServiceConfigTests(unittest.TestCase):
             {"mcp_endpoint": "https://mcp.test/rpc?token=secret"},
             {"idle_delay_seconds": 5.0, "max_delay_seconds": 1.0},
             {"assigned_adapter": "a2a.outbound"},
+            {"workspace_id": " "},
         ):
             with self.subTest(overrides=overrides), self.assertRaises(
                 ValidationError

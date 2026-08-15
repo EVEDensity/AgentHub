@@ -55,6 +55,10 @@ class FakeControl:
         del mission_id
         return {"workUnit": self.claim_payload}
 
+    async def claim_ready_work_unit(self, workspace_id: str, **kwargs: Any):
+        self.calls.append(("claim_ready", {"workspace_id": workspace_id, **kwargs}))
+        return {"workUnit": self.claim_payload}
+
     async def lease_work_unit(self, mission_id: str, work_unit_id: str, **kwargs: Any):
         self.calls.append(("lease", kwargs))
         return {"id": work_unit_id, "attempt": 1, "lease": {"id": "lease-1"}}
@@ -460,6 +464,57 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             [name for name, _ in control.calls],
             ["claim", "start", "register", "complete"],
         )
+
+    async def test_runner_discovers_workspace_work_and_uses_claimed_mission(self) -> None:
+        control = FakeControl()
+        control.claim_payload = inbound_claim_payload()
+        control.claim_payload["attempt"] = 1
+        control.claim_payload["lease"]["id"] = "lease-1"
+        resolver = StaticClaimedWorkResolver(
+            RunnerExecutionInput(code="process inbound work", language="text")
+        )
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            runner_id="runner-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+            claimed_work_resolver=resolver,
+        )
+
+        result = await runner.claim_ready_and_run(
+            "workspace-1",
+            lease_seconds=120,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            [name for name, _ in control.calls],
+            ["claim_ready", "start", "register", "complete"],
+        )
+        self.assertEqual(resolver.received, [control.claim_payload])
+        self.assertEqual(control.calls[0][1]["workspace_id"], "workspace-1")
+        self.assertEqual(control.calls[0][1]["lease_seconds"], 120)
+
+    async def test_workspace_claim_rejects_missing_mission_before_execution(self) -> None:
+        control = FakeControl()
+        control.claim_payload = inbound_claim_payload()
+        del control.claim_payload["missionId"]
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            runner_id="runner-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+            claimed_work_resolver=StaticClaimedWorkResolver(
+                RunnerExecutionInput(code="must not run", language="text")
+            ),
+        )
+
+        with self.assertRaisesRegex(RunnerControlError, "no Mission id"):
+            await runner.claim_ready_and_run("workspace-1")
+
+        self.assertEqual([name for name, _ in control.calls], ["claim_ready"])
 
     async def test_runner_claim_without_resolver_fails_claimed_unit_honestly(self) -> None:
         control = FakeControl()

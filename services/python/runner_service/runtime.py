@@ -90,7 +90,7 @@ class RunnerServiceRuntime:
 
 
 def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntime:
-    """Compose the strict single-Mission service without runtime fallbacks."""
+    """Compose the strict workspace-scoped service without runtime fallbacks."""
 
     control_token = read_secret_file(settings.mission_control_token_file)
     model_token = read_secret_file(settings.model_gateway_token_file)
@@ -165,7 +165,7 @@ def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntim
     )
     worker = RunnerWorker(
         runner,
-        mission_id=settings.mission_id,
+        workspace_id=settings.workspace_id,
         lease_seconds=settings.lease_seconds,
         idle_delay_seconds=settings.idle_delay_seconds,
         max_delay_seconds=settings.max_delay_seconds,

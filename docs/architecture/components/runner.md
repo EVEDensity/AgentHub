@@ -12,13 +12,14 @@ registration, and completion to VERIFYING. It reports every durable change
 through Mission Control and cannot create Evidence or declare success.
 
 `RunnerWorker` is the process-local polling supervisor. The current minimum
-worker polls one explicitly configured Mission ID through `claim_and_run`. This
-is a deliberate vertical-slice limit, not a durable queue or fleet scheduler.
-Global ready-work discovery remains a Mission Control responsibility.
+worker passes one explicitly configured workspace to `claim_ready_and_run`.
+Mission Control atomically discovers and leases eligible work across Missions;
+Runner neither lists Missions nor retains a ready queue. The Mission-scoped
+`claim_and_run` entry remains a compatibility API, not the process polling path.
 
 ## Inputs and outputs
 
-- Input: a bound `WorkUnitRunner`, explicit Mission ID, lease duration, and
+- Input: a bound `WorkUnitRunner`, explicit workspace ID, lease duration, and
   bounded idle/error delay configuration.
 - Output: lease-fenced Runner commands and a content-minimized in-process status
   snapshot for liveness/readiness adapters.
@@ -48,11 +49,10 @@ bindings per attempt, and exposes sanitized `/healthz` and `/readyz` probes.
 Shutdown drains the active claim until a bounded deadline and then cancels it
 through the existing Runner supervision path.
 
-This is a single-Mission deployment candidate, not a production fleet
+This is a workspace-scoped deployment candidate, not a production fleet
 scheduler. Its readiness proves a successful Mission Control claim request; it
-does not execute model or tool probes outside a WorkUnit. Mission Control owns
-the workspace ready-work contract described below; the next scale gate is for
-Runner to consume it instead of adding a local queue.
+does not execute model or tool probes outside a WorkUnit. Replicas may share a
+workspace and binding because Mission Control owns claim locking and fairness.
 
 ## Ready-work discovery
 
@@ -63,7 +63,8 @@ Mission load, and locks the owning Mission plus candidate WorkUnit with
 `SKIP LOCKED`. Authentication supplies the lease owner; callers cannot provide
 one in the request.
 
-The process worker has not yet switched to this endpoint and still requires an
-explicit Mission ID. The next slice is a consumer-only migration: replace the
-worker's fixed-Mission poll input with explicit workspace scope while preserving
-the same backoff, readiness, shutdown, claim validation, and execution path.
+The process worker consumes this endpoint with explicit workspace scope. It
+derives the Mission ID only from the claimed WorkUnit, validates lease owner,
+binding, state, and Mission identity, then reuses the existing context, start,
+heartbeat, cancellation, Artifact, and completion path. Priority, quotas, and
+capacity-aware routing remain future Mission Control policies.

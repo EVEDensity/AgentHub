@@ -568,28 +568,87 @@ class WorkUnitRunner:
         media_type: str = "text/plain",
     ) -> RunnerRunResult | None:
         """Claim and execute one WorkUnit for this Runner binding."""
+        agent_id, adapter_type = self._claim_binding()
+        claimed_payload = await self._control.claim_work_unit(
+            mission_id,
+            runner_id=self._runner_id,
+            agent_id=agent_id,
+            adapter_type=adapter_type,
+            lease_seconds=lease_seconds,
+        )
+        return await self._run_claimed_payload(
+            claimed_payload,
+            expected_mission_id=mission_id,
+            lease_seconds=lease_seconds,
+            artifact_kind=artifact_kind,
+            media_type=media_type,
+        )
+
+    async def claim_ready_and_run(
+        self,
+        workspace_id: str,
+        *,
+        lease_seconds: int = 300,
+        artifact_kind: str = "test-result",
+        media_type: str = "text/plain",
+    ) -> RunnerRunResult | None:
+        """Discover, claim, and execute one bound WorkUnit in a workspace."""
+
+        if not workspace_id.strip():
+            raise ValueError("workspace_id must be non-empty")
+        agent_id, adapter_type = self._claim_binding()
+        claimed_payload = await self._control.claim_ready_work_unit(
+            workspace_id,
+            runner_id=self._runner_id,
+            agent_id=agent_id,
+            adapter_type=adapter_type,
+            lease_seconds=lease_seconds,
+        )
+        return await self._run_claimed_payload(
+            claimed_payload,
+            expected_mission_id=None,
+            lease_seconds=lease_seconds,
+            artifact_kind=artifact_kind,
+            media_type=media_type,
+        )
+
+    def _claim_binding(self) -> tuple[str, str]:
         if self._assigned_agent_id is None or self._assigned_adapter is None:
             raise RunnerControlError(
                 "claim requires an assigned agent and adapter binding"
             )
-        claimed_payload = await self._control.claim_work_unit(
-            mission_id,
-            runner_id=self._runner_id,
-            agent_id=self._assigned_agent_id,
-            adapter_type=self._assigned_adapter,
-            lease_seconds=lease_seconds,
-        )
+        return self._assigned_agent_id, self._assigned_adapter
+
+    async def _run_claimed_payload(
+        self,
+        claimed_payload: Mapping[str, Any],
+        *,
+        expected_mission_id: str | None,
+        lease_seconds: int,
+        artifact_kind: str,
+        media_type: str,
+    ) -> RunnerRunResult | None:
         work_unit_payload = claimed_payload.get("workUnit")
         if work_unit_payload is None:
             return None
         if not isinstance(work_unit_payload, Mapping):
             raise RunnerControlError("Mission Control claim response has no WorkUnit")
+        mission_id = work_unit_payload.get("missionId")
+        if not isinstance(mission_id, str) or not mission_id.strip():
+            raise RunnerControlError(
+                "Mission Control claim response has no Mission id"
+            )
+        if expected_mission_id is not None and mission_id != expected_mission_id:
+            raise RunnerControlError(
+                "Mission Control returned a WorkUnit for another mission"
+            )
+        agent_id, adapter_type = self._claim_binding()
         _assert_claimed_work_unit(
             work_unit_payload,
             mission_id=mission_id,
             runner_id=self._runner_id,
-            agent_id=self._assigned_agent_id,
-            adapter_type=self._assigned_adapter,
+            agent_id=agent_id,
+            adapter_type=adapter_type,
         )
         work_unit_id = work_unit_payload.get("id")
         if not isinstance(work_unit_id, str) or not work_unit_id:

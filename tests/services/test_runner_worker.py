@@ -14,15 +14,15 @@ class SequenceRunner:
         self.calls: list[tuple[str, int]] = []
         self.called = asyncio.Event()
 
-    async def claim_and_run(
+    async def claim_ready_and_run(
         self,
-        mission_id: str,
+        workspace_id: str,
         *,
         lease_seconds: int = 300,
         **kwargs: Any,
     ) -> RunnerRunResult | None:
         del kwargs
-        self.calls.append((mission_id, lease_seconds))
+        self.calls.append((workspace_id, lease_seconds))
         outcome = self.outcomes.pop(0) if self.outcomes else None
         if not self.outcomes:
             self.called.set()
@@ -38,7 +38,9 @@ class BlockingRunner:
         self.cancelled = False
         self.calls = 0
 
-    async def claim_and_run(self, *args: Any, **kwargs: Any) -> RunnerRunResult:
+    async def claim_ready_and_run(
+        self, *args: Any, **kwargs: Any
+    ) -> RunnerRunResult:
         del args, kwargs
         self.calls += 1
         self.started.set()
@@ -56,7 +58,7 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
         runner = SequenceRunner([None, RuntimeError("control unavailable"), claimed])
         worker = RunnerWorker(
             runner,
-            mission_id="mis-1",
+            workspace_id="workspace-1",
             lease_seconds=120,
             idle_delay_seconds=0.001,
             max_delay_seconds=0.004,
@@ -78,13 +80,13 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.consecutive_failures, 0)
         self.assertEqual(snapshot.current_delay_seconds, 0.001)
         self.assertIsNone(snapshot.last_error_type)
-        self.assertEqual(runner.calls, [("mis-1", 120)] * 3)
+        self.assertEqual(runner.calls, [("workspace-1", 120)] * 3)
 
     async def test_stop_waits_for_active_claim_before_exiting(self) -> None:
         runner = BlockingRunner()
         worker = RunnerWorker(
             runner,
-            mission_id="mis-1",
+            workspace_id="workspace-1",
             idle_delay_seconds=0.001,
         )
 
@@ -103,7 +105,7 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
         runner = BlockingRunner()
         worker = RunnerWorker(
             runner,
-            mission_id="mis-1",
+            workspace_id="workspace-1",
             idle_delay_seconds=0.001,
         )
         task = asyncio.create_task(worker.run())
@@ -121,7 +123,7 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
         runner = BlockingRunner()
         worker = RunnerWorker(
             runner,
-            mission_id="mis-1",
+            workspace_id="workspace-1",
             idle_delay_seconds=0.001,
         )
         task = asyncio.create_task(worker.run())
@@ -138,7 +140,7 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
         runner = SequenceRunner([RuntimeError("provider-secret")])
         worker = RunnerWorker(
             runner,
-            mission_id="mis-1",
+            workspace_id="workspace-1",
             idle_delay_seconds=0.1,
         )
         task = asyncio.create_task(worker.run())
@@ -154,11 +156,11 @@ class RunnerWorkerTests(unittest.IsolatedAsyncioTestCase):
     def test_worker_rejects_invalid_poll_configuration(self) -> None:
         runner = SequenceRunner([])
         invalid = [
-            {"mission_id": ""},
-            {"mission_id": "mis-1", "lease_seconds": 0},
-            {"mission_id": "mis-1", "idle_delay_seconds": 0},
+            {"workspace_id": ""},
+            {"workspace_id": "workspace-1", "lease_seconds": 0},
+            {"workspace_id": "workspace-1", "idle_delay_seconds": 0},
             {
-                "mission_id": "mis-1",
+                "workspace_id": "workspace-1",
                 "idle_delay_seconds": 2,
                 "max_delay_seconds": 1,
             },

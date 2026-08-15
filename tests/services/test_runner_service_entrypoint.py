@@ -22,7 +22,7 @@ def _settings() -> RunnerServiceSettings:
     root = Path.cwd().resolve()
     return RunnerServiceSettings(
         runner_id="runner-1",
-        mission_id="mission-1",
+        workspace_id="workspace-1",
         assigned_agent_id="agent-1",
         assigned_adapter="local",
         mission_control_url="https://control.example.test",
@@ -162,7 +162,7 @@ class RunnerServiceEndpointTests(unittest.TestCase):
             self.assertEqual(ready.status_code, 200)
             self.assertEqual(ready.json()["status"], "ready")
             rendered = ready.text
-            self.assertNotIn("mission-1", rendered)
+            self.assertNotIn("workspace-1", rendered)
             self.assertNotIn("agent-1", rendered)
             self.assertNotIn("control.example", rendered)
 

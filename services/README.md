@@ -18,10 +18,11 @@ not create a competing Mission or WorkUnit state machine.
 - Gateway authenticates and routes; it does not invent task completion.
 - Mission Control owns durable execution state.
 - Harness and Runner own execution attempts, isolation, and evidence capture.
-- The Python Runner service is a strict single-Mission process adapter. It loads
-  control, AI Gateway, and MCP credentials from separate mounted files, rejects
-  mock model routing, binds Stateless MCP tools per attempt, and publishes only
-  sanitized health state. It is not a global queue or fleet scheduler.
+- The Python Runner service is a strict workspace-scoped process adapter. It
+  loads control, AI Gateway, and MCP credentials from separate mounted files,
+  rejects mock model routing, binds Stateless MCP tools per attempt, and
+  publishes only sanitized health state. Mission Control discovers and leases
+  eligible work; the process is not a global queue or fleet scheduler.
 - MCP and A2A services are protocol boundaries, not business databases.
 - Gateway evaluates external A2A Agent Cards against an immutable startup
   trust policy. Unsigned cards fail closed by default; optional origin-bound

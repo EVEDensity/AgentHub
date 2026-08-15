@@ -26,7 +26,7 @@ class RunnerServiceSettings(BaseSettings):
     )
 
     runner_id: str
-    mission_id: str
+    workspace_id: str
     assigned_agent_id: str
     assigned_adapter: str
 
@@ -63,7 +63,7 @@ class RunnerServiceSettings(BaseSettings):
 
     @field_validator(
         "runner_id",
-        "mission_id",
+        "workspace_id",
         "assigned_agent_id",
         "assigned_adapter",
         "model",

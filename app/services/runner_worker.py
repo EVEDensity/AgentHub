@@ -9,9 +9,9 @@ from app.services.runner_service import RunnerRunResult
 
 
 class ClaimingRunnerPort(Protocol):
-    async def claim_and_run(
+    async def claim_ready_and_run(
         self,
-        mission_id: str,
+        workspace_id: str,
         *,
         lease_seconds: int = 300,
         artifact_kind: str = "test-result",
@@ -50,19 +50,19 @@ class RunnerWorkerSnapshot:
 
 
 class RunnerWorker:
-    """Poll one explicit Mission without owning queue or lifecycle truth."""
+    """Poll one workspace without owning queue or lifecycle truth."""
 
     def __init__(
         self,
         runner: ClaimingRunnerPort,
         *,
-        mission_id: str,
+        workspace_id: str,
         lease_seconds: int = 300,
         idle_delay_seconds: float = 0.5,
         max_delay_seconds: float = 10.0,
     ) -> None:
-        if not mission_id.strip():
-            raise ValueError("mission_id must be non-empty")
+        if not workspace_id.strip():
+            raise ValueError("workspace_id must be non-empty")
         if lease_seconds < 1:
             raise ValueError("lease_seconds must be positive")
         if idle_delay_seconds <= 0:
@@ -70,7 +70,7 @@ class RunnerWorker:
         if max_delay_seconds < idle_delay_seconds:
             raise ValueError("max_delay_seconds must not be lower than idle delay")
         self._runner = runner
-        self._mission_id = mission_id
+        self._workspace_id = workspace_id
         self._lease_seconds = lease_seconds
         self._idle_delay_seconds = idle_delay_seconds
         self._max_delay_seconds = max_delay_seconds
@@ -121,8 +121,8 @@ class RunnerWorker:
             last_poll_at=datetime.now(timezone.utc).isoformat(),
         )
         try:
-            result = await self._runner.claim_and_run(
-                self._mission_id,
+            result = await self._runner.claim_ready_and_run(
+                self._workspace_id,
                 lease_seconds=self._lease_seconds,
             )
         except asyncio.CancelledError:

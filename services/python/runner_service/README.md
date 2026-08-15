@@ -4,15 +4,15 @@
 > Owner: execution maintainers  
 > Last reviewed: 2026-08-15
 
-This service hosts the single-Mission `RunnerWorker` behind an operational HTTP
-surface. It is deliberately not a queue, a fleet scheduler, or a verifier.
-Mission Control remains the only durable WorkUnit state owner; the process owns
-only one active claim attempt, request-scoped Harness resources, Artifact byte
-publication, and sanitized health state.
+This service hosts the workspace-scoped `RunnerWorker` behind an operational
+HTTP surface. It is deliberately not a queue, a fleet scheduler, or a verifier.
+Mission Control remains the only durable WorkUnit state and discovery owner;
+the process owns only one active claim attempt, request-scoped Harness
+resources, Artifact byte publication, and sanitized health state.
 
 ## Runtime contract
 
-- All Runner, Mission, Agent, and adapter identities are explicit startup
+- All Runner, workspace, Agent, and adapter identities are explicit startup
   configuration. There is no `default` tenant, Mission, Agent, or provider.
 - Mission Control, AI Gateway, and Stateless MCP URLs are explicit absolute
   HTTP(S) URLs. Redirects are disabled.
@@ -42,7 +42,7 @@ All variables use the `AGENTHUB_RUNNER_` prefix:
 | Variable suffix | Purpose |
 |---|---|
 | `RUNNER_ID` | Stable process identity used for lease ownership |
-| `MISSION_ID` | The one Mission polled by this minimum worker |
+| `WORKSPACE_ID` | Authorized workspace passed to atomic ready-work discovery |
 | `ASSIGNED_AGENT_ID` | Catalog-bound Agent identity accepted by claims |
 | `ASSIGNED_ADAPTER` | Catalog-bound adapter; `a2a.outbound` is forbidden |
 | `MISSION_CONTROL_URL` | Mission Control origin |
@@ -86,8 +86,8 @@ Mission/WorkUnit configuration.
 
 1. Mission Control exposes the atomic bound-claim and lease-fenced execution
    context APIs and can authorize the mounted Runner token.
-2. The workspace catalog already contains the exact Agent/adapter binding used
-   by the target inbound Mission.
+2. The configured workspace catalog contains the exact Agent/adapter binding
+   used by eligible inbound Missions.
 3. The AI Gateway supports the configured model and OpenAI tool schemas without
    a mock fallback.
 4. The Stateless MCP endpoint authenticates the mounted IAM token and enforces
@@ -104,7 +104,8 @@ left by a process or network failure must expire and enter Mission Control's
 existing retry/failure recovery path; operators must not edit WorkUnit state or
 requeue it in a second store.
 
-Mission Control now owns a workspace-scoped atomic ready-work discovery
-contract. This process has not yet switched to it: deploy one explicitly
-assigned Mission per process until the worker and settings consume workspace
-scope, and do not advertise this service as a general Runner pool.
+The worker consumes Mission Control's workspace-scoped atomic ready-work
+contract. Deploy each process with one explicit workspace and Agent/adapter
+binding. Scaling replicas increases concurrent claim capacity through Mission
+Control row locking; it does not create a Runner-owned queue or provide fleet
+priority, quota, or capacity routing.
