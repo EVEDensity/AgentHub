@@ -123,6 +123,16 @@ two lease-fenced Artifact registrations, attestation-only remote Evidence, and
 an idle second claim that cannot resend the task. This is a composition gate;
 it does not enable the outbound adapter in the production process.
 
+The Runner service now also exposes an explicit low-level outbound runtime
+candidate for lifecycle testing. It composes the outbound coordinator with a
+caller-supplied Mission Control port, CAS publisher, loaded strict peer policy,
+peer HTTP client, and resources whose ownership is transferred to the runtime.
+Shutdown first drains the worker, then cancels an over-deadline claim while the
+peer client is still open for cancellation handling, and only then closes peer
+and control resources. Closed or duplicate resources fail before startup. The
+candidate is not referenced by `create_app`; production settings continue to
+reject `a2a.outbound`.
+
 The process worker consumes this endpoint with explicit workspace scope. It
 derives the Mission ID only from the claimed WorkUnit, validates lease owner,
 binding, state, and Mission identity, then reuses the existing context, start,

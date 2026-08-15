@@ -82,8 +82,13 @@ visible ASCII secrets and symbolic links are rejected.
 Loading this manifest produces a strict signed-and-pinned trust policy plus an
 exact-origin credential provider. It does not alter `RunnerServiceSettings`,
 claim `a2a.outbound`, or compose the transport into the worker. The application
-layer now has isolated attempt and single-poll outbound coordinators, but this
-service does not load or invoke them. Runtime settings still reject
+layer now has isolated attempt and single-poll outbound coordinators. A low-level
+`compose_a2a_outbound_runtime_candidate` can combine those coordinators with an
+explicit Mission Control port, CAS publisher, loaded peer policy, peer HTTP
+client, and transferred closeable resources. The candidate drains or cancels
+active work before closing peer/control resources, but it is not called by
+`create_app`, does not read environment settings or secrets, and cannot become
+the default runtime accidentally. Runtime settings still reject
 `a2a.outbound`. Enabling that adapter and removing Gateway request-path dispatch
 remain one atomic cutover; operators must not deploy this file as evidence that
 outbound Runner execution is enabled.

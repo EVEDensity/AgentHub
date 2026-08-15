@@ -174,3 +174,12 @@ coordinator against a signed-and-pinned remote HTTP peer. It verifies
 actual CAS byte integrity, two registered Artifacts, no local peer-derived
 Evidence, and an idle second claim with no duplicate send. The gate does not
 model PostgreSQL locking and does not activate production dispatch.
+
+Process lifecycle tests use a separately named outbound runtime candidate. The
+candidate fixes the claim adapter to `a2a.outbound`, accepts only already loaded
+strict peer policy and explicit process resources, and reuses the existing
+deadline-bound `RunnerServiceRuntime`. Tests prove exact binding, graceful idle
+shutdown, cancellation before peer-client closure, closure of transferred
+resources, and rejection of closed or duplicate clients. It is deliberately
+absent from `create_app` and `RunnerServiceSettings`, which still rejects the
+outbound adapter until the atomic cutover.
