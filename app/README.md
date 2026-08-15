@@ -65,8 +65,12 @@ boundary. It is not the permanent home of every Agent feature.
   `a2a_outbound_transport.py` implements those contracts with strict JSON-RPC,
   bounded request/response bodies, same-origin 307/308 redirects, exact remote
   task identity, and origin-bound receiver credentials. Agent Card trust and
-  capability verification remain an injected route-resolver responsibility;
-  no duplicate trust store is added to Runner. The dedicated outbound
+  capability verification remain an injected route-resolver responsibility.
+  `a2a_peer_route_service.py` provides the standalone implementation with a
+  bounded Card probe, strict schema, protocol/origin checks, Gateway-compatible
+  Ed25519 verification, origin pins with key rotation, and skill/tag matching.
+  Its trust policy is injected and it never loads peer credentials. The
+  dedicated outbound
   supervisor performs the fenced `LEASED -> RUNNING` start, sends once per
   invocation, renews the lease while polling, and converts timeout, remote
   terminal failure, unsupported input, transport failure, heartbeat loss, and

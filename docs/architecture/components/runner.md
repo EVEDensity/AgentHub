@@ -68,8 +68,9 @@ provide one in the request.
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current
 Python process composition intentionally still rejects that adapter until the
-dedicated remote send/poll/cancel/result resolver is complete; claim support is
-not a fallback to the inbound model Harness.
+Gateway-to-Runner dispatch cutover is atomic; claim support is not a fallback
+to the inbound model Harness. The standalone Agent Card route resolver is now
+implemented and tested, but it is not production wiring authority by itself.
 
 The claimed outbound lease owner can retrieve the versioned execution context
 after Mission Control revalidates the complete source/kind/binding/capability

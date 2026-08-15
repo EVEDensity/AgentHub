@@ -77,10 +77,13 @@ schema, canonical Base64, counts, aggregate bytes, SHA-256 digests, and complete
 Evidence-to-Artifact reference closure before any CAS write. It publishes and
 lease-registers local Artifacts, preserves peer Evidence only inside an
 attestation `report` Artifact, and completes the local WorkUnit to `VERIFYING`.
-Production composition remains disabled because the trusted Agent Card route
-resolver is not yet wired into the worker and Gateway direct dispatch remains
-a compatibility path. The two paths must not both dispatch the same attempt
-after cutover.
+A standalone trusted Agent Card route resolver now implements bounded discovery,
+strict Card parsing, protocol/origin validation, Gateway-compatible Ed25519
+verification, exact-origin public-key pins with rotation, capability matching,
+and Bearer-requirement projection without reading credentials. Production
+composition remains disabled because the resolver is not yet wired into the
+worker and Gateway direct dispatch remains a compatibility path. The two paths
+must not both dispatch the same attempt after cutover.
 
 Historical unbound outbound WorkUnits are not silently rebound. They require
 an explicit migration or cancellation and resubmission under a new task ID,
@@ -117,8 +120,10 @@ publication, or lifecycle completion.
 Transport tests cover exact trusted-route origin matching, receiver-only bearer
 use, strict and bounded JSON-RPC responses, duplicate/mismatched identity
 rejection, finite remote states, and safe same-origin redirect handling. The
-transport tests do not claim a production Agent Card resolver or enable the
-second dispatch path.
+route-resolver tests cover signed and pinned Cards, rotation, strict schema,
+protocol and origin isolation, redirect/response bounds, skill/tag completeness,
+Bearer projection, and redacted trust failures. They do not enable the second
+dispatch path.
 
 Supervisor tests cover exact start fencing, single dispatch per invocation,
 heartbeat during polling, terminal remote failure mapping, unsupported input,

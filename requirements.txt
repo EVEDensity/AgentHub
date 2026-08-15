@@ -12,6 +12,7 @@ psycopg2-binary==2.9.12
 
 # ── HTTP / API clients ──────────────────────────────────────────────
 httpx==0.28.1
+cryptography==46.0.3
 minio>=7.2.0,<8
 nats-py>=2.9.0,<3
 tiktoken>=0.8.0,<1

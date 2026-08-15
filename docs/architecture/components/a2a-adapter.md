@@ -79,9 +79,14 @@ state projection are defined. Its HTTP adapter rejects malformed or duplicate
 JSON fields, mismatched request/task IDs, unsupported states, oversized bodies,
 unsafe redirect statuses, cross-origin redirects, and missing receiver-issued
 credentials. Agent Card verification is supplied through a trusted-route port;
-the transport cannot choose or alter the requested peer origin. No production
-route-resolver or worker composition is enabled while Gateway direct dispatch
-remains active. A dedicated Runner supervisor now owns the bounded execution
+the transport cannot choose or alter the requested peer origin. The standalone
+Python resolver performs a bounded `/.well-known/agent-card.json` probe,
+rejects duplicate or unknown fields, enforces protocol major version 1 and
+same-origin Card/task routes, verifies Gateway-compatible Ed25519 signatures,
+applies exact-origin pins with rotation, and checks required skill IDs/tags.
+It projects only route and Bearer-required metadata and never reads credentials.
+No production worker composition is enabled while Gateway direct dispatch
+remains active. A dedicated Runner supervisor owns the bounded execution
 loop after resolution: it performs the fenced local start, sends once per
 invocation, renews the lease during polling, attempts remote cancellation on
 timeout or supervision loss, and records terminal failures through Mission
