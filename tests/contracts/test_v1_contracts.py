@@ -82,6 +82,7 @@ class PublicContractTests(unittest.TestCase):
                     "reference": "https://example.test/issues/42",
                 },
                 "contractId": "contract-1",
+                "contractVersion": 1,
                 "status": "READY",
                 "planVersion": 0,
                 "createdBy": actor,

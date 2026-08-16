@@ -93,10 +93,15 @@ class MissionRepository:
             _encode_json(contract.to_public_dict()),
         )
 
-    async def get_contract(self, contract_id: str) -> MissionContract | None:
+    async def get_contract(
+        self,
+        contract_id: str,
+        contract_version: int,
+    ) -> MissionContract | None:
         row = await self._fetch_one(
-            "SELECT document FROM mission_contracts WHERE id=$1",
+            "SELECT document FROM mission_contracts WHERE id=$1 AND version=$2",
             contract_id,
+            contract_version,
         )
         if row is None:
             return None
@@ -108,9 +113,10 @@ class MissionRepository:
         await self._execute(
             """INSERT INTO missions(
                    id, workspace_id, title, objective, source, contract_id,
+                   contract_version,
                    status, plan_version, created_by, created_at, updated_at
                ) VALUES(
-                   $1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9::jsonb, $10, $11
+                   $1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11, $12
                )""",
             mission.id,
             mission.workspace_id,
@@ -118,6 +124,7 @@ class MissionRepository:
             mission.objective,
             _encode_json(mission.source.to_public_dict()),
             mission.contract_id,
+            mission.contract_version,
             mission.status.value,
             mission.plan_version,
             _encode_json(mission.created_by.to_public_dict()),
@@ -128,7 +135,8 @@ class MissionRepository:
     async def get_mission(self, mission_id: str) -> Mission | None:
         row = await self._fetch_one(
             """SELECT id, workspace_id, title, objective, source, contract_id,
-                      status, plan_version, created_by, created_at, updated_at
+                      contract_version, status, plan_version, created_by,
+                      created_at, updated_at
                FROM missions WHERE id=$1""",
             mission_id,
         )
@@ -147,7 +155,8 @@ class MissionRepository:
         )
         row = await self._fetch_one(
             f"""SELECT id, workspace_id, title, objective, source, contract_id,
-                      status, plan_version, created_by, created_at, updated_at
+                      contract_version, status, plan_version, created_by,
+                      created_at, updated_at
                FROM missions
                WHERE workspace_id=$1
                  AND source->>'type'=$2
@@ -162,7 +171,8 @@ class MissionRepository:
     async def get_mission_for_update(self, mission_id: str) -> Mission | None:
         row = await self._fetch_one(
             """SELECT id, workspace_id, title, objective, source, contract_id,
-                      status, plan_version, created_by, created_at, updated_at
+                      contract_version, status, plan_version, created_by,
+                      created_at, updated_at
                FROM missions WHERE id=$1
                FOR UPDATE""",
             mission_id,
@@ -450,6 +460,7 @@ class MissionRepository:
                       mission.objective AS selected_objective,
                       mission.source AS selected_source,
                       mission.contract_id AS selected_contract_id,
+                      mission.contract_version AS selected_contract_version,
                       mission.status AS selected_status,
                       mission.plan_version AS selected_plan_version,
                       mission.created_by AS selected_created_by,
@@ -590,7 +601,8 @@ class MissionRepository:
             raise ValueError("offset cannot be negative")
         rows = await self._fetch_all(
             """SELECT id, workspace_id, title, objective, source, contract_id,
-                      status, plan_version, created_by, created_at, updated_at
+                      contract_version, status, plan_version, created_by,
+                      created_at, updated_at
                FROM missions
                WHERE workspace_id=$1
                ORDER BY updated_at DESC, id ASC
@@ -724,6 +736,7 @@ class MissionRepository:
                       mission.objective AS selected_objective,
                       mission.source AS selected_source,
                       mission.contract_id AS selected_contract_id,
+                      mission.contract_version AS selected_contract_version,
                       mission.status AS selected_status,
                       mission.plan_version AS selected_plan_version,
                       mission.created_by AS selected_created_by,
@@ -801,6 +814,7 @@ class MissionRepository:
                       mission.objective AS selected_objective,
                       mission.source AS selected_source,
                       mission.contract_id AS selected_contract_id,
+                      mission.contract_version AS selected_contract_version,
                       mission.status AS selected_status,
                       mission.plan_version AS selected_plan_version,
                       mission.created_by AS selected_created_by,
@@ -961,6 +975,7 @@ class MissionRepository:
                 "objective",
                 "source",
                 "contract_id",
+                "contract_version",
                 "status",
                 "plan_version",
                 "created_by",

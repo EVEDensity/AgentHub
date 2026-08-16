@@ -33,6 +33,7 @@ def build_mission(**updates: object) -> Mission:
             type="issue", reference="https://example.test/issues/42"
         ),
         "contract_id": "contract-1",
+        "contract_version": 1,
         "status": "READY",
         "plan_version": 0,
         "created_by": ActorRef(type="human", id="user-1"),

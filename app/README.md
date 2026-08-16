@@ -178,6 +178,10 @@ boundary. It is not the permanent home of every Agent feature.
   database query. New verification Decisions snapshot their response deadline
   from the Mission's immutable Contract governance policy; legacy v1 Contract
   documents resolve to the fixed 24-hour v1 default.
+  Every newly persisted Mission binds both Contract ID and Contract version;
+  Contract reads in Mission Control, Runner, verifier, and A2A paths use that
+  exact immutable revision. Ordinary Mission creation can create only version
+  1 lineages and exposes no Contract rebind operation.
   The stateless expiry command locks one eligible Mission and Decision with
   `SKIP LOCKED`, then atomically marks the Decision EXPIRED and fails the
   blocked WorkUnit and Mission. It is not yet composed into a deployed polling

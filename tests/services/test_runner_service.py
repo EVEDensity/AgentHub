@@ -271,6 +271,7 @@ def inbound_execution_context() -> dict[str, Any]:
                 "externalId": "remote-task-1",
             },
             "contractId": "contract-inbound",
+            "contractVersion": 1,
             "status": "RUNNING",
         },
         "contract": {
@@ -408,6 +409,11 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
                 "contract",
                 lambda context: context["contract"].update(id="other-contract"),
                 "Contract does not match",
+            ),
+            (
+                "contract_version",
+                lambda context: context["contract"].update(version=2),
+                "Contract version does not match",
             ),
             (
                 "capability",

@@ -1053,6 +1053,12 @@ def _compile_a2a_inbound_context(
         raise ClaimedWorkResolutionError("execution context Mission is not RUNNING")
     objective = _required_string(mission, "objective")
     contract_id = _required_string(mission, "contractId")
+    mission_contract_version = _required_non_negative_int(
+        mission,
+        "contractVersion",
+    )
+    if mission_contract_version < 1:
+        raise ClaimedWorkResolutionError("execution context Mission has no Contract version")
     source = _required_mapping(mission, "source")
     if _required_string(source, "type") != "a2a.inbound":
         raise ClaimedWorkResolutionError("execution context source is not inbound A2A")
@@ -1082,6 +1088,10 @@ def _compile_a2a_inbound_context(
     contract_version = _required_non_negative_int(contract, "version")
     if contract_version < 1:
         raise ClaimedWorkResolutionError("execution context Contract has no version")
+    if contract_version != mission_contract_version:
+        raise ClaimedWorkResolutionError(
+            "execution context Contract version does not match Mission"
+        )
 
     budgets = _required_mapping(contract, "budgets")
     time_seconds = _required_non_negative_int(budgets, "timeSeconds")

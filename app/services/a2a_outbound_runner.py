@@ -401,7 +401,10 @@ def _validate_context_identity(
         raise ClaimedWorkResolutionError("execution context Mission is not RUNNING")
     if mission.source.type != MissionSourceType.A2A:
         raise ClaimedWorkResolutionError("execution context source is not outbound A2A")
-    if contract.id != mission.contract_id:
+    if (
+        contract.id != mission.contract_id
+        or contract.version != mission.contract_version
+    ):
         raise ClaimedWorkResolutionError(
             "execution context Contract does not match Mission"
         )

@@ -24,6 +24,7 @@
       }
     },
     "contractId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "contractVersion": { "type": "integer", "minimum": 1 },
     "status": {
       "type": "string",
       "enum": [

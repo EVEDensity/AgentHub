@@ -297,6 +297,7 @@ class MissionService:
             objective=objective,
             source=source,
             contract_id=contract.id,
+            contract_version=contract.version,
             status="READY",
             plan_version=0,
             created_by=actor,
@@ -314,16 +315,26 @@ class MissionService:
             correlation_id=mission.id,
             payload={
                 "contractId": contract.id,
+                "contractVersion": contract.version,
                 "status": mission.status.value,
             },
             schema_version=1,
         )
         async with self._repository.transaction() as repository:
-            existing_contract = await repository.get_contract(contract.id)
+            existing_contract = await repository.get_contract(
+                contract.id,
+                contract.version,
+            )
             if existing_contract is None:
+                if contract.version != 1:
+                    raise ValueError(
+                        "new contract lineages must start at version 1"
+                    )
                 await repository.add_contract(contract)
             elif existing_contract != contract:
-                raise ValueError("contract id already exists with different content")
+                raise ValueError(
+                    "contract revision already exists with different content"
+                )
             await repository.add_mission(mission)
             await repository.append_event(event)
         return mission
@@ -574,7 +585,10 @@ class MissionService:
             if mission.status != MissionStatus.RUNNING:
                 raise ValueError("work units require a RUNNING mission")
 
-            contract = await repository.get_contract(mission.contract_id)
+            contract = await repository.get_contract(
+                mission.contract_id,
+                mission.contract_version,
+            )
             if contract is None:
                 raise ValueError("mission contract not found")
             allowed_capabilities = {
@@ -679,7 +693,9 @@ class MissionService:
             if parent.lease.expires_at <= occurred_at:
                 raise LeaseExpiredError("parent work unit lease has expired")
 
-            contract = await repository.get_contract(mission.contract_id)
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
             if contract is None:
                 raise ValueError("mission contract not found")
             allowed_capabilities = {
@@ -1260,7 +1276,9 @@ class MissionService:
             if work_unit.lease.expires_at <= datetime.now(timezone.utc):
                 raise LeaseExpiredError("work unit lease has expired")
 
-            contract = await repository.get_contract(mission.contract_id)
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
             if contract is None:
                 raise WorkUnitNotReadyError("mission contract not found")
             return ClaimedExecutionContext(
@@ -1512,7 +1530,9 @@ class MissionService:
                 raise WorkUnitNotReadyError(
                     "verification requires a positive WorkUnit attempt"
                 )
-            contract = await repository.get_contract(mission.contract_id)
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
             if contract is None:
                 raise WorkUnitNotReadyError("mission contract not found")
             artifacts = await repository.list_work_unit_artifacts(
@@ -1722,7 +1742,9 @@ class MissionService:
                 )
 
             if resolution == DecisionResolution.RETRY_WORK_UNIT:
-                contract = await repository.get_contract(mission.contract_id)
+                contract = await repository.get_contract(
+                    mission.contract_id, mission.contract_version
+                )
                 if contract is None:
                     raise WorkUnitNotReadyError("mission contract not found")
                 if work_unit.attempt >= contract.budgets.retries + 1:
@@ -2047,7 +2069,9 @@ class MissionService:
             raise WorkUnitNotReadyError(
                 "mission must be RUNNING or VERIFYING to record Evidence"
             )
-        contract = await self._repository.get_contract(mission.contract_id)
+        contract = await self._repository.get_contract(
+            mission.contract_id, mission.contract_version
+        )
         if contract is None:
             raise WorkUnitNotReadyError("mission contract not found")
         if criterion_id not in {
@@ -2107,7 +2131,9 @@ class MissionService:
                     "Evidence can only be recorded for a VERIFYING work unit"
                 )
 
-            contract = await repository.get_contract(mission.contract_id)
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
             if contract is None:
                 raise WorkUnitNotReadyError("mission contract not found")
             if criterion_id not in {
@@ -2434,7 +2460,9 @@ class MissionService:
             if work_unit.lease.expires_at <= occurred_at:
                 raise LeaseExpiredError("work unit lease has expired")
             if target == WorkUnitStatus.RETRYING:
-                contract = await repository.get_contract(mission.contract_id)
+                contract = await repository.get_contract(
+                    mission.contract_id, mission.contract_version
+                )
                 if contract is None:
                     raise WorkUnitNotReadyError("mission contract not found")
                 if work_unit.attempt >= contract.budgets.retries + 1:
@@ -2527,7 +2555,9 @@ class MissionService:
             occurred_at = datetime.now(timezone.utc)
             if work_unit.lease.expires_at > occurred_at:
                 raise LeaseExpiredError("work unit lease has not expired")
-            contract = await repository.get_contract(mission.contract_id)
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
             if contract is None:
                 raise WorkUnitNotReadyError("mission contract not found")
             retry_budget_exhausted = work_unit.attempt >= contract.budgets.retries + 1

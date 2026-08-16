@@ -222,6 +222,7 @@ class Mission(DomainModel):
     objective: Annotated[str, Field(min_length=1, max_length=10000)]
     source: MissionSource
     contract_id: Identifier
+    contract_version: Annotated[int, Field(ge=1)]
     status: MissionStatus
     plan_version: Annotated[int, Field(ge=0)] = 0
     created_by: ActorRef

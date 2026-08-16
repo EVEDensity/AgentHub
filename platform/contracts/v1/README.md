@@ -23,3 +23,7 @@ consumers.
 `mission-contract.schema.json` optionally carries immutable `governance` policy.
 When omitted from a v1 document, Mission Control applies the v1 default of
 86,400 seconds for human Decision response and serializes that resolved value.
+
+New Mission projections include `contractVersion` so internal consumers can
+resolve the exact immutable Contract revision. It remains optional in the v1
+JSON Schema solely so previously emitted Mission documents remain valid.

@@ -87,6 +87,7 @@ def map_legacy_task_to_mission(
             external_id=task.id,
         ),
         contract_id=contract_id,
+        contract_version=1,
         status=LEGACY_MISSION_STATUSES[task.status],
         plan_version=0,
         created_by=created_by,

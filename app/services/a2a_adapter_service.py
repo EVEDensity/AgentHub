@@ -676,7 +676,10 @@ class A2AAdapterService:
             request.workspace_id,
             request.task_id,
         )
-        existing_contract = await self._repository.get_contract(mission.contract_id)
+        existing_contract = await self._repository.get_contract(
+            mission.contract_id,
+            mission.contract_version,
+        )
         expected_contract = self._build_contract(
             request,
             contract_id=contract_id,
@@ -725,7 +728,10 @@ class A2AAdapterService:
                 request.task_id,
             )
         )
-        existing_contract = await self._repository.get_contract(mission.contract_id)
+        existing_contract = await self._repository.get_contract(
+            mission.contract_id,
+            mission.contract_version,
+        )
         expected_contract = self._build_inbound_contract(
             request,
             contract_id=contract_id,

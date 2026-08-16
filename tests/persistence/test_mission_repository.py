@@ -66,8 +66,27 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(args[2]), contract.to_public_dict())
 
         self.database.one = {"document": args[2]}
-        restored = await self.repository.get_contract(contract.id)
+        restored = await self.repository.get_contract(contract.id, contract.version)
         self.assertEqual(restored, contract)
+        _sql, query_args = self.database.fetched_one[-1]
+        self.assertEqual(query_args, (contract.id, contract.version))
+
+    async def test_contract_revisions_share_lineage_without_ambiguous_reads(
+        self,
+    ) -> None:
+        first = build_contract(version=1)
+        second = build_contract(version=2, governance={"decisionTimeoutSeconds": 900})
+
+        await self.repository.add_contract(first)
+        await self.repository.add_contract(second)
+
+        first_args = self.database.executed[-2][1]
+        second_args = self.database.executed[-1][1]
+        self.assertEqual(first_args[:2], (first.id, 1))
+        self.assertEqual(second_args[:2], (first.id, 2))
+        self.database.one = {"document": second_args[2]}
+        restored = await self.repository.get_contract(first.id, 2)
+        self.assertEqual(restored, second)
 
     async def test_mission_round_trip_accepts_decoded_json(self) -> None:
         mission = build_mission()
@@ -75,13 +94,14 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
 
         _sql, args = self.database.executed[-1]
         self.assertEqual(args[0], mission.id)
-        self.assertEqual(args[6], mission.status.value)
+        self.assertEqual(args[6], mission.contract_version)
+        self.assertEqual(args[7], mission.status.value)
         self.database.one = self.build_mission_row(mission)
         restored = await self.repository.get_mission(mission.id)
         self.assertEqual(restored, mission)
 
     async def test_missing_records_return_none(self) -> None:
-        self.assertIsNone(await self.repository.get_contract("missing"))
+        self.assertIsNone(await self.repository.get_contract("missing", 1))
         self.assertIsNone(await self.repository.get_mission("missing"))
         self.assertIsNone(await self.repository.get_evidence("missing"))
         self.assertIsNone(await self.repository.get_decision("missing"))
@@ -734,6 +754,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "objective": mission.objective,
             "source": mission.source.to_public_dict(),
             "contract_id": mission.contract_id,
+            "contract_version": mission.contract_version,
             "status": mission.status.value,
             "plan_version": mission.plan_version,
             "created_by": mission.created_by.to_public_dict(),

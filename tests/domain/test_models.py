@@ -146,6 +146,7 @@ class DomainModelTests(unittest.TestCase):
         restored = Mission.model_validate(document)
         self.assertEqual(restored.workspace_id, "workspace-1")
         self.assertEqual(restored.contract_id, "contract-1")
+        self.assertEqual(restored.contract_version, 1)
 
     def test_models_are_frozen_and_reject_unknown_fields(self) -> None:
         mission = build_mission()

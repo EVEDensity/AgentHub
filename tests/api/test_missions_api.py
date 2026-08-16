@@ -126,8 +126,16 @@ class FakeMissionRepository:
     async def add_contract(self, contract: MissionContract) -> None:
         self.contract = contract
 
-    async def get_contract(self, contract_id: str) -> MissionContract | None:
-        if self.contract and self.contract.id == contract_id:
+    async def get_contract(
+        self,
+        contract_id: str,
+        contract_version: int,
+    ) -> MissionContract | None:
+        if (
+            self.contract
+            and self.contract.id == contract_id
+            and self.contract.version == contract_version
+        ):
             return self.contract
         return None
 
@@ -914,6 +922,7 @@ class MissionApiTests(unittest.TestCase):
             body["createdBy"], {"type": "human", "id": "user-1", "displayName": "Ada"}
         )
         self.assertEqual(body["status"], "READY")
+        self.assertEqual(body["contractVersion"], 1)
         self.assertIsNotNone(repository.mission)
         self.assertIsNotNone(repository.contract)
         self.assertEqual(
@@ -925,6 +934,30 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(event.sequence, 1)
         self.assertEqual(event.event_type, "mission.lifecycle.created")
         self.assertEqual(event.actor.id, "user-1")
+        self.assertEqual(event.payload["contractVersion"], 1)
+
+    def test_create_mission_cannot_create_uncontrolled_contract_revision(
+        self,
+    ) -> None:
+        repository = FakeMissionRepository()
+        user = {"id": "user-1", "name": "Ada", "role": "developer"}
+        client = TestClient(build_app(repository, user))
+
+        response = client.post(
+            "/api/v1/missions",
+            json={
+                "workspaceId": "user-1",
+                "title": "Bypass revision governance",
+                "objective": "Create version two without a revision command.",
+                "source": {"type": "api"},
+                "contract": build_contract(version=2).to_public_dict(),
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("must start at version 1", response.json()["detail"])
+        self.assertIsNone(repository.contract)
+        self.assertIsNone(repository.mission)
 
     def test_non_admin_cannot_access_another_workspace(self) -> None:
         repository = FakeMissionRepository()
