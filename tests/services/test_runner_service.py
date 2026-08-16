@@ -34,6 +34,7 @@ from app.services.runner_service import (
     RunnerExecutionInput,
     RunnerWorkspacePollResult,
     WorkUnitRunner,
+    compile_mission_fork_context,
 )
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
 from app.services.workspace_admission_service import WorkspaceClaimStatus
@@ -318,7 +319,310 @@ def inbound_execution_context() -> dict[str, Any]:
     }
 
 
+def mission_fork_claim_payload() -> dict[str, Any]:
+    return {
+        "id": "wu-fork",
+        "missionId": "mis-fork",
+        "kind": "mission.fork",
+        "parentWorkUnitId": None,
+        "status": "LEASED",
+        "attempt": 1,
+        "assignedAgentId": "reviewer",
+        "assignedAdapter": "local_codex",
+        "lease": {
+            "id": "lease-fork",
+            "runnerId": "runner-1",
+            "expiresAt": "2099-01-01T00:00:00Z",
+        },
+    }
+
+
+def mission_fork_execution_context() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "mission": {
+            "id": "mis-fork",
+            "workspaceId": "workspace-1",
+            "title": "Forked review",
+            "objective": "Review the source result and produce a safer report.",
+            "source": {
+                "type": "mission.fork",
+                "reference": "mis-source",
+                "externalId": "chk-source",
+            },
+            "contractId": "contract-fork",
+            "contractVersion": 3,
+            "status": "RUNNING",
+        },
+        "contract": {
+            "id": "contract-fork",
+            "version": 3,
+            "repositoryScopes": [
+                {"repository": "secret/repo", "baseRef": "main", "paths": ["**"]}
+            ],
+            "allowedCapabilities": [
+                {
+                    "capability": "repository.read",
+                    "scope": {"providerToken": "scope-secret"},
+                }
+            ],
+            "budgets": {"timeSeconds": 120, "modelCost": 2.5, "retries": 1},
+            "acceptanceCriteria": [
+                {
+                    "id": "result",
+                    "kind": "contract",
+                    "description": "Return an independently verifiable result.",
+                    "required": True,
+                    "configuration": {"credential": "criterion-secret"},
+                }
+            ],
+            "decisionGates": [],
+            "forbiddenActions": ["repository.force_push"],
+        },
+        "workUnit": {
+            **mission_fork_claim_payload(),
+            "inputRefs": [
+                {
+                    "id": "artifact-source",
+                    "digest": "sha256:" + "a" * 64,
+                    "contentAddress": "local:must-not-leak",
+                }
+            ],
+            "expectedOutputs": [{"kind": "report", "required": True}],
+            "requiredCapabilities": ["repository.read"],
+        },
+    }
+
+
 class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
+    def test_mission_fork_compiler_emits_bounded_minimal_context(self) -> None:
+        execution_input = compile_mission_fork_context(
+            mission_fork_execution_context(),
+            claimed_work_unit=mission_fork_claim_payload(),
+            runner_id="runner-1",
+            max_timeout_seconds=90,
+        )
+
+        self.assertEqual(execution_input.language, "text")
+        self.assertEqual(execution_input.timeout, 90)
+        compiled = json.loads(execution_input.code)
+        self.assertEqual(compiled["schema"], "agenthub.mission-fork-context.v1")
+        self.assertEqual(compiled["policy"]["objectiveTrust"], "untrusted")
+        self.assertEqual(
+            compiled["mission"]["source"],
+            {
+                "type": "mission.fork",
+                "reference": "mis-source",
+                "externalId": "chk-source",
+            },
+        )
+        self.assertEqual(
+            compiled["workUnit"]["inputRefs"],
+            [{"id": "artifact-source", "digest": "sha256:" + "a" * 64}],
+        )
+        self.assertEqual(
+            compiled["contract"]["allowedCapabilities"],
+            ["repository.read"],
+        )
+        self.assertNotIn("scope-secret", execution_input.code)
+        self.assertNotIn("criterion-secret", execution_input.code)
+        self.assertNotIn("secret/repo", execution_input.code)
+        self.assertNotIn("local:must-not-leak", execution_input.code)
+
+    def test_mission_fork_compiler_rejects_identity_drift(self) -> None:
+        cases = [
+            (
+                "version",
+                lambda context, claim: context.update(version=2),
+                "context version",
+            ),
+            (
+                "source",
+                lambda context, claim: context["mission"]["source"].update(
+                    type="api"
+                ),
+                "source is not Mission fork",
+            ),
+            (
+                "kind",
+                lambda context, claim: context["workUnit"].update(
+                    kind="code_change"
+                ),
+                "WorkUnit is not Mission fork",
+            ),
+            (
+                "parent",
+                lambda context, claim: context["workUnit"].update(
+                    parentWorkUnitId="wu-parent"
+                ),
+                "must be a root",
+            ),
+            (
+                "agent",
+                lambda context, claim: context["workUnit"].update(
+                    assignedAgentId="other-agent"
+                ),
+                "Agent changed",
+            ),
+            (
+                "adapter",
+                lambda context, claim: context["workUnit"].update(
+                    assignedAdapter="other-adapter"
+                ),
+                "adapter changed",
+            ),
+            (
+                "attempt",
+                lambda context, claim: context["workUnit"].update(attempt=2),
+                "attempt changed",
+            ),
+            (
+                "lease",
+                lambda context, claim: context["workUnit"]["lease"].update(
+                    id="other-lease"
+                ),
+                "lease changed",
+            ),
+            (
+                "contract",
+                lambda context, claim: context["contract"].update(
+                    id="other-contract"
+                ),
+                "Contract does not match",
+            ),
+            (
+                "outbound_adapter",
+                lambda context, claim: claim.update(
+                    assignedAdapter="a2a.outbound"
+                ),
+                "outbound A2A adapter",
+            ),
+        ]
+
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                context = mission_fork_execution_context()
+                claim = mission_fork_claim_payload()
+                mutate(context, claim)
+                with self.assertRaisesRegex(ClaimedWorkResolutionError, message):
+                    compile_mission_fork_context(
+                        context,
+                        claimed_work_unit=claim,
+                        runner_id="runner-1",
+                    )
+
+    def test_mission_fork_compiler_requires_complete_ancestry(self) -> None:
+        cases = [
+            (
+                "checkpoint",
+                lambda context: context["mission"]["source"].pop("externalId"),
+                "source.externalId",
+            ),
+            (
+                "source_mission",
+                lambda context: context["mission"]["source"].pop("reference"),
+                "source.reference",
+            ),
+            (
+                "artifacts",
+                lambda context: context["workUnit"].update(inputRefs=[]),
+                "requires ArtifactRefs",
+            ),
+        ]
+
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                context = mission_fork_execution_context()
+                mutate(context)
+                with self.assertRaisesRegex(ClaimedWorkResolutionError, message):
+                    compile_mission_fork_context(
+                        context,
+                        claimed_work_unit=mission_fork_claim_payload(),
+                        runner_id="runner-1",
+                    )
+
+    def test_mission_fork_compiler_enforces_context_bounds(self) -> None:
+        with self.assertRaisesRegex(
+            ClaimedWorkResolutionError, "execution context exceeds limit"
+        ):
+            compile_mission_fork_context(
+                mission_fork_execution_context(),
+                claimed_work_unit=mission_fork_claim_payload(),
+                runner_id="runner-1",
+                max_context_chars=100,
+            )
+
+        cases = [
+            (
+                "capability_grants",
+                lambda context: context["contract"].update(
+                    allowedCapabilities=[
+                        {"capability": f"capability.{index}", "scope": {}}
+                        for index in range(257)
+                    ]
+                ),
+                "too many capability grants",
+            ),
+            (
+                "required_capabilities",
+                lambda context: context["workUnit"].update(
+                    requiredCapabilities=[
+                        f"capability.{index}" for index in range(257)
+                    ]
+                ),
+                "too many required capabilities",
+            ),
+            (
+                "acceptance_criteria",
+                lambda context: context["contract"].update(
+                    acceptanceCriteria=[
+                        {
+                            "id": f"criterion-{index}",
+                            "kind": "contract",
+                            "description": "Verify output.",
+                            "required": True,
+                        }
+                        for index in range(201)
+                    ]
+                ),
+                "too many acceptance criteria",
+            ),
+            (
+                "artifact_refs",
+                lambda context: context["workUnit"].update(
+                    inputRefs=[
+                        {
+                            "id": f"artifact-{index}",
+                            "digest": "sha256:" + f"{index:064x}",
+                        }
+                        for index in range(201)
+                    ]
+                ),
+                "too many ArtifactRefs",
+            ),
+            (
+                "expected_outputs",
+                lambda context: context["workUnit"].update(
+                    expectedOutputs=[
+                        {"kind": f"output-{index}", "required": True}
+                        for index in range(201)
+                    ]
+                ),
+                "too many expected outputs",
+            ),
+        ]
+
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                context = mission_fork_execution_context()
+                mutate(context)
+                with self.assertRaisesRegex(ClaimedWorkResolutionError, message):
+                    compile_mission_fork_context(
+                        context,
+                        claimed_work_unit=mission_fork_claim_payload(),
+                        runner_id="runner-1",
+                    )
+
     async def test_inbound_resolver_compiles_bounded_untrusted_context(self) -> None:
         control = FakeControl()
         control.execution_context_payload = inbound_execution_context()

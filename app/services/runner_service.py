@@ -1079,6 +1079,34 @@ def _sequence_string(value: Any, field: str) -> str:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class _ModelContextProfile:
+    source_type: str
+    work_unit_kind: str
+    label: str
+    schema: str
+    required_capability: str | None = None
+    require_ancestry: bool = False
+    require_input_refs: bool = False
+
+
+_A2A_INBOUND_CONTEXT_PROFILE = _ModelContextProfile(
+    source_type="a2a.inbound",
+    work_unit_kind="a2a.inbound",
+    label="inbound A2A",
+    schema="agenthub.a2a-inbound-context.v1",
+    required_capability="a2a.receive",
+)
+_MISSION_FORK_CONTEXT_PROFILE = _ModelContextProfile(
+    source_type="mission.fork",
+    work_unit_kind="mission.fork",
+    label="Mission fork",
+    schema="agenthub.mission-fork-context.v1",
+    require_ancestry=True,
+    require_input_refs=True,
+)
+
+
 def _compile_a2a_inbound_context(
     context: Mapping[str, Any],
     *,
@@ -1087,11 +1115,68 @@ def _compile_a2a_inbound_context(
     max_context_chars: int,
     max_timeout_seconds: float,
 ) -> tuple[str, float]:
+    return _compile_model_context(
+        context,
+        claimed_work_unit=claimed_work_unit,
+        runner_id=runner_id,
+        max_context_chars=max_context_chars,
+        max_timeout_seconds=max_timeout_seconds,
+        profile=_A2A_INBOUND_CONTEXT_PROFILE,
+    )
+
+
+def compile_mission_fork_context(
+    context: Mapping[str, Any],
+    *,
+    claimed_work_unit: Mapping[str, Any],
+    runner_id: str,
+    max_context_chars: int = 32_768,
+    max_timeout_seconds: float = 300.0,
+) -> RunnerExecutionInput:
+    """Compile a validated fork projection without constructing an executor."""
+    if max_context_chars < 1:
+        raise ValueError("max_context_chars must be positive")
+    if max_timeout_seconds <= 0:
+        raise ValueError("max_timeout_seconds must be positive")
+    prompt, timeout = _compile_model_context(
+        context,
+        claimed_work_unit=claimed_work_unit,
+        runner_id=runner_id,
+        max_context_chars=max_context_chars,
+        max_timeout_seconds=max_timeout_seconds,
+        profile=_MISSION_FORK_CONTEXT_PROFILE,
+    )
+    return RunnerExecutionInput(code=prompt, language="text", timeout=timeout)
+
+
+def _compile_model_context(
+    context: Mapping[str, Any],
+    *,
+    claimed_work_unit: Mapping[str, Any],
+    runner_id: str,
+    max_context_chars: int,
+    max_timeout_seconds: float,
+    profile: _ModelContextProfile,
+) -> tuple[str, float]:
     if type(context.get("version")) is not int or context["version"] != 1:
         raise ClaimedWorkResolutionError("unsupported execution context version")
 
     claimed_mission_id = _required_string(claimed_work_unit, "missionId")
     claimed_work_unit_id = _required_string(claimed_work_unit, "id")
+    if _required_string(claimed_work_unit, "kind") != profile.work_unit_kind:
+        raise ClaimedWorkResolutionError(
+            f"claimed WorkUnit is not {profile.label}"
+        )
+    if claimed_work_unit.get("parentWorkUnitId") is not None:
+        raise ClaimedWorkResolutionError(
+            f"{profile.label} WorkUnit must be a root"
+        )
+    claimed_agent_id = _required_string(claimed_work_unit, "assignedAgentId")
+    claimed_adapter = _required_string(claimed_work_unit, "assignedAdapter")
+    if profile.source_type == "mission.fork" and claimed_adapter == "a2a.outbound":
+        raise ClaimedWorkResolutionError(
+            "Mission fork cannot use the outbound A2A adapter"
+        )
     claimed_attempt = _required_non_negative_int(claimed_work_unit, "attempt")
     if claimed_attempt < 1:
         raise ClaimedWorkResolutionError("claimed WorkUnit has no active attempt")
@@ -1118,8 +1203,10 @@ def _compile_a2a_inbound_context(
     if mission_contract_version < 1:
         raise ClaimedWorkResolutionError("execution context Mission has no Contract version")
     source = _required_mapping(mission, "source")
-    if _required_string(source, "type") != "a2a.inbound":
-        raise ClaimedWorkResolutionError("execution context source is not inbound A2A")
+    if _required_string(source, "type") != profile.source_type:
+        raise ClaimedWorkResolutionError(
+            f"execution context source is not {profile.label}"
+        )
 
     work_unit = _required_mapping(context, "workUnit")
     if _required_string(work_unit, "id") != claimed_work_unit_id:
@@ -1127,9 +1214,22 @@ def _compile_a2a_inbound_context(
     if _required_string(work_unit, "missionId") != mission_id:
         raise ClaimedWorkResolutionError("execution context WorkUnit has another Mission")
     if work_unit.get("parentWorkUnitId") is not None:
-        raise ClaimedWorkResolutionError("inbound A2A WorkUnit must be a root")
-    if _required_string(work_unit, "kind") != "a2a.inbound":
-        raise ClaimedWorkResolutionError("execution context WorkUnit is not inbound A2A")
+        raise ClaimedWorkResolutionError(
+            f"{profile.label} WorkUnit must be a root"
+        )
+    if _required_string(work_unit, "kind") != profile.work_unit_kind:
+        raise ClaimedWorkResolutionError(
+            f"execution context WorkUnit is not {profile.label}"
+        )
+    if _required_string(work_unit, "assignedAgentId") != claimed_agent_id:
+        raise ClaimedWorkResolutionError("execution context WorkUnit Agent changed")
+    context_adapter = _required_string(work_unit, "assignedAdapter")
+    if context_adapter != claimed_adapter:
+        raise ClaimedWorkResolutionError("execution context WorkUnit adapter changed")
+    if profile.source_type == "mission.fork" and context_adapter == "a2a.outbound":
+        raise ClaimedWorkResolutionError(
+            "Mission fork cannot use the outbound A2A adapter"
+        )
     if _required_string(work_unit, "status") != claimed_status:
         raise ClaimedWorkResolutionError("execution context WorkUnit status changed")
     if _required_non_negative_int(work_unit, "attempt") != claimed_attempt:
@@ -1165,8 +1265,13 @@ def _compile_a2a_inbound_context(
     ):
         raise ClaimedWorkResolutionError("execution context has no valid modelCost")
 
+    grant_values = _required_sequence(contract, "allowedCapabilities")
+    if len(grant_values) > 256:
+        raise ClaimedWorkResolutionError(
+            "execution context has too many capability grants"
+        )
     allowed_capabilities: list[str] = []
-    for grant_value in _required_sequence(contract, "allowedCapabilities"):
+    for grant_value in grant_values:
         if not isinstance(grant_value, Mapping):
             raise ClaimedWorkResolutionError(
                 "execution context has an invalid capability grant"
@@ -1177,16 +1282,41 @@ def _compile_a2a_inbound_context(
             "execution context has duplicate capability grants"
         )
 
-    required_capabilities = _string_list(work_unit, "requiredCapabilities")
-    if "a2a.receive" not in required_capabilities:
-        raise ClaimedWorkResolutionError("inbound WorkUnit lacks a2a.receive")
+    required_capability_values = _required_sequence(
+        work_unit,
+        "requiredCapabilities",
+    )
+    if len(required_capability_values) > 256:
+        raise ClaimedWorkResolutionError(
+            "execution context has too many required capabilities"
+        )
+    required_capabilities = [
+        _sequence_string(value, "requiredCapabilities")
+        for value in required_capability_values
+    ]
+    if len(required_capabilities) != len(set(required_capabilities)):
+        raise ClaimedWorkResolutionError(
+            "execution context has duplicate requiredCapabilities"
+        )
+    if (
+        profile.required_capability is not None
+        and profile.required_capability not in required_capabilities
+    ):
+        raise ClaimedWorkResolutionError(
+            f"inbound WorkUnit lacks {profile.required_capability}"
+        )
     if not set(required_capabilities).issubset(allowed_capabilities):
         raise ClaimedWorkResolutionError(
             "WorkUnit capabilities exceed the Mission Contract"
         )
 
+    criterion_values = _required_sequence(contract, "acceptanceCriteria")
+    if len(criterion_values) > 200:
+        raise ClaimedWorkResolutionError(
+            "execution context has too many acceptance criteria"
+        )
     acceptance_criteria: list[dict[str, Any]] = []
-    for criterion_value in _required_sequence(contract, "acceptanceCriteria"):
+    for criterion_value in criterion_values:
         if not isinstance(criterion_value, Mapping):
             raise ClaimedWorkResolutionError(
                 "execution context has an invalid acceptance criterion"
@@ -1207,8 +1337,11 @@ def _compile_a2a_inbound_context(
     if not acceptance_criteria:
         raise ClaimedWorkResolutionError("execution context has no acceptance criteria")
 
+    input_ref_values = _required_sequence(work_unit, "inputRefs")
+    if len(input_ref_values) > 200:
+        raise ClaimedWorkResolutionError("execution context has too many ArtifactRefs")
     input_refs: list[dict[str, str]] = []
-    for ref_value in _required_sequence(work_unit, "inputRefs"):
+    for ref_value in input_ref_values:
         if not isinstance(ref_value, Mapping):
             raise ClaimedWorkResolutionError(
                 "execution context has an invalid ArtifactRef"
@@ -1226,9 +1359,16 @@ def _compile_a2a_inbound_context(
         input_refs.append(
             {"digest": digest.lower(), "id": _required_string(ref_value, "id")}
         )
+    if profile.require_input_refs and not input_refs:
+        raise ClaimedWorkResolutionError("Mission fork requires ArtifactRefs")
 
+    output_values = _required_sequence(work_unit, "expectedOutputs")
+    if len(output_values) > 200:
+        raise ClaimedWorkResolutionError(
+            "execution context has too many expected outputs"
+        )
     expected_outputs: list[dict[str, Any]] = []
-    for output_value in _required_sequence(work_unit, "expectedOutputs"):
+    for output_value in output_values:
         if not isinstance(output_value, Mapping):
             raise ClaimedWorkResolutionError(
                 "execution context has an invalid expected output"
@@ -1242,11 +1382,20 @@ def _compile_a2a_inbound_context(
             {"kind": _required_string(output_value, "kind"), "required": required}
         )
 
-    source_projection: dict[str, str] = {"type": "a2a.inbound"}
-    for key in ("reference", "externalId"):
-        source_value = _optional_string(source, key)
-        if source_value is not None:
+    source_projection: dict[str, str] = {"type": profile.source_type}
+    if profile.require_ancestry:
+        for key in ("reference", "externalId"):
+            source_value = _optional_string(source, key)
+            if source_value is None:
+                raise ClaimedWorkResolutionError(
+                    f"execution context has no valid source.{key}"
+                )
             source_projection[key] = source_value
+    else:
+        for key in ("reference", "externalId"):
+            source_value = _optional_string(source, key)
+            if source_value is not None:
+                source_projection[key] = source_value
 
     prompt_payload = {
         "contract": {
@@ -1278,7 +1427,7 @@ def _compile_a2a_inbound_context(
                 "independently."
             ),
         },
-        "schema": "agenthub.a2a-inbound-context.v1",
+        "schema": profile.schema,
         "workUnit": {
             "expectedOutputs": expected_outputs,
             "id": claimed_work_unit_id,
@@ -1387,5 +1536,6 @@ __all__ = [
     "SandboxPort",
     "WorkUnitRunner",
     "assert_claimed_work_unit",
+    "compile_mission_fork_context",
     "parse_workspace_claim_status",
 ]
