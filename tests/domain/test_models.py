@@ -14,6 +14,7 @@ from app.domain import (
     ArtifactRef,
     Evidence,
     Mission,
+    MissionSource,
     VerifierRef,
 )
 from tests.domain.factories import (
@@ -167,6 +168,34 @@ class DomainModelTests(unittest.TestCase):
         self.assertEqual(restored.workspace_id, "workspace-1")
         self.assertEqual(restored.contract_id, "contract-1")
         self.assertEqual(restored.contract_version, 1)
+
+    def test_mission_fork_source_requires_explicit_checkpoint_ancestry(self) -> None:
+        source = MissionSource(
+            type="mission.fork",
+            reference="mis-source",
+            external_id="chk-source-terminal",
+        )
+        mission = build_mission(source=source)
+
+        self.assert_matches_schema("mission.schema.json", mission)
+        self.assertEqual(
+            mission.to_public_dict()["source"],
+            {
+                "type": "mission.fork",
+                "reference": "mis-source",
+                "externalId": "chk-source-terminal",
+            },
+        )
+        invalid_document = mission.to_public_dict()
+        del invalid_document["source"]["externalId"]
+        validator = Draft202012Validator(
+            self.schemas["mission.schema.json"], registry=self.registry
+        )
+        self.assertFalse(validator.is_valid(invalid_document))
+        with self.assertRaisesRegex(ValidationError, "source Mission reference"):
+            MissionSource(type="mission.fork", external_id="chk-source-terminal")
+        with self.assertRaisesRegex(ValidationError, "ExecutionCheckpoint id"):
+            MissionSource(type="mission.fork", reference="mis-source")
 
     def test_models_are_frozen_and_reject_unknown_fields(self) -> None:
         mission = build_mission()

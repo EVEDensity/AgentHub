@@ -18,10 +18,25 @@
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
-        "type": { "type": "string", "enum": ["manual", "issue", "api", "a2a", "a2a.inbound", "import"] },
+        "type": { "type": "string", "enum": ["manual", "issue", "api", "a2a", "a2a.inbound", "import", "mission.fork"] },
         "reference": { "type": "string", "maxLength": 2048 },
         "externalId": { "type": "string", "maxLength": 255 }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "mission.fork" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["reference", "externalId"],
+            "properties": {
+              "reference": { "minLength": 1, "pattern": "\\S" },
+              "externalId": { "minLength": 1, "pattern": "\\S" }
+            }
+          }
+        }
+      ]
     },
     "contractId": { "$ref": "common.schema.json#/$defs/identifier" },
     "contractVersion": { "type": "integer", "minimum": 1 },

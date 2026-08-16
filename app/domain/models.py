@@ -156,12 +156,23 @@ class MissionSourceType(str, Enum):
     A2A = "a2a"
     A2A_INBOUND = "a2a.inbound"
     IMPORT = "import"
+    MISSION_FORK = "mission.fork"
 
 
 class MissionSource(DomainModel):
     type: MissionSourceType
     reference: Annotated[str, Field(max_length=2048)] | None = None
     external_id: Annotated[str, Field(max_length=255)] | None = None
+
+    @model_validator(mode="after")
+    def validate_fork_ancestry(self) -> MissionSource:
+        if self.type != MissionSourceType.MISSION_FORK:
+            return self
+        if self.reference is None or not self.reference.strip():
+            raise ValueError("mission fork source requires a source Mission reference")
+        if self.external_id is None or not self.external_id.strip():
+            raise ValueError("mission fork source requires an ExecutionCheckpoint id")
+        return self
 
 
 class MissionStatus(str, Enum):
