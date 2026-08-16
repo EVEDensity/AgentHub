@@ -290,6 +290,14 @@ def _read_readiness(port: int) -> dict[str, Any]:
     return payload
 
 
+def _read_metrics(port: int) -> str:
+    with urlopen(f"http://127.0.0.1:{port}/metrics", timeout=5) as response:
+        content_type = response.headers.get("content-type", "")
+        if not content_type.startswith("text/plain; version=0.0.4"):
+            raise TypeError("metrics response has an invalid content type")
+        return response.read().decode("utf-8")
+
+
 def _assert_sanitized_readiness(payload: dict[str, Any]) -> None:
     worker = payload.get("worker")
     if payload.get("status") != "ready" or not isinstance(worker, dict):
@@ -300,6 +308,37 @@ def _assert_sanitized_readiness(payload: dict[str, Any]) -> None:
     for forbidden in (MISSION_ID, WORK_UNIT_ID, DECISION_ID, "postgresql://"):
         if forbidden in rendered:
             raise AssertionError("readiness response exposed sensitive state")
+
+
+def _assert_sanitized_metrics(payload: str) -> None:
+    expected = (
+        "agenthub_decision_expiry_process_healthy 1",
+        "agenthub_decision_expiry_ready 1",
+        "agenthub_decision_expiry_decisions_expired_total 1",
+        "agenthub_decision_expiry_failed_polls_total 0",
+    )
+    for metric in expected:
+        if metric not in payload:
+            raise AssertionError(f"metrics response is missing {metric.split()[0]}")
+    timestamp_line = next(
+        (
+            line
+            for line in payload.splitlines()
+            if line.startswith(
+                "agenthub_decision_expiry_last_success_timestamp_seconds "
+            )
+        ),
+        "",
+    )
+    try:
+        timestamp = float(timestamp_line.rsplit(" ", 1)[1])
+    except (IndexError, ValueError) as exc:
+        raise AssertionError("metrics response has an invalid success timestamp") from exc
+    if timestamp <= 0:
+        raise AssertionError("metrics response did not record a successful poll")
+    for forbidden in (MISSION_ID, WORK_UNIT_ID, DECISION_ID, "postgresql://"):
+        if forbidden in payload:
+            raise AssertionError("metrics response exposed sensitive state")
 
 
 def run_smoke(*, timeout_seconds: int) -> None:
@@ -381,6 +420,7 @@ def run_smoke(*, timeout_seconds: int) -> None:
             )
             asyncio.run(_assert_expiry_closure(host_database_url))
             _assert_sanitized_readiness(_read_readiness(service_port))
+            _assert_sanitized_metrics(_read_metrics(service_port))
             first_event_count = asyncio.run(_event_count(host_database_url))
             time.sleep(1)
             second_event_count = asyncio.run(_event_count(host_database_url))

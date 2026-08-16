@@ -40,8 +40,26 @@ stateless Neon HTTP adapter because expiry requires one real transaction.
 
 The example credentials above are for the bundled local PostgreSQL container
 only. Production must source the mounted file from its secret manager and pass
-only the file path in process configuration. A real direct-PostgreSQL smoke test
-and operational review are still required before production enablement.
+only the file path in process configuration. The isolated direct-PostgreSQL
+smoke test passed on 2026-08-16. Production enablement still requires
+deployment-specific secret, network, scrape, and alert-routing review.
+
+The service exposes Prometheus text on `/metrics`. Because
+`deploy/prometheus.yml` is private local deployment material, each deployment
+must explicitly add the service to discovery. For the checked-in Compose
+network, the equivalent static scrape target is:
+
+```yaml
+- job_name: mission-supervision
+  static_configs:
+    - targets: ["decision-expiry-service:8099"]
+      labels:
+        tier: control
+```
+
+Versioned rules in `deploy/agenthub_rules.yml` alert on sustained poll failures
+and stalled successful polling. Target-down detection and notification routing
+belong to the deployment's Prometheus/Alertmanager configuration.
 
 Stop or roll back supervision without editing durable Mission state:
 

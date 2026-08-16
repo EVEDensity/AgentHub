@@ -9,6 +9,8 @@ from unittest.mock import patch
 import yaml
 
 from scripts.decision_expiry_smoke import (
+    DECISION_ID,
+    _assert_sanitized_metrics,
     _assert_sanitized_readiness,
     _published_port,
     _run,
@@ -96,6 +98,25 @@ class DecisionExpirySmokeAssetTests(unittest.TestCase):
         for payload in invalid_payloads:
             with self.subTest(payload=payload), self.assertRaises(AssertionError):
                 _assert_sanitized_readiness(payload)
+
+    def test_metrics_assertion_accepts_only_sanitized_operational_state(self) -> None:
+        valid = (
+            "agenthub_decision_expiry_process_healthy 1\n"
+            "agenthub_decision_expiry_ready 1\n"
+            "agenthub_decision_expiry_decisions_expired_total 1\n"
+            "agenthub_decision_expiry_failed_polls_total 0\n"
+            "agenthub_decision_expiry_last_success_timestamp_seconds 1.0"
+        )
+        _assert_sanitized_metrics(valid)
+
+        invalid_payloads = (
+            valid.replace("failed_polls_total 0", "failed_polls_total 1"),
+            valid.replace("timestamp_seconds 1.0", "timestamp_seconds 0.0"),
+            valid + "\n" + DECISION_ID,
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaises(AssertionError):
+                _assert_sanitized_metrics(payload)
 
 
 if __name__ == "__main__":

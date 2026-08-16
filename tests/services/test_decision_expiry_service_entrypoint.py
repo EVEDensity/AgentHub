@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -307,8 +308,14 @@ class DecisionExpiryServiceEndpointTests(unittest.TestCase):
         worker = FakeSupervisor()
         worker._snapshot = replace(
             worker.snapshot,
+            polls=5,
             expired=3,
+            idle_polls=1,
+            failed_polls=1,
+            consecutive_failures=0,
+            current_delay_seconds=0.5,
             last_poll_status=DecisionExpiryPollStatus.EXPIRED,
+            last_success_at=datetime(2026, 8, 16, tzinfo=timezone.utc).isoformat(),
         )
         runtime = DecisionExpiryServiceRuntime(
             worker=worker,
@@ -322,6 +329,7 @@ class DecisionExpiryServiceEndpointTests(unittest.TestCase):
         with TestClient(application) as client:
             health = client.get("/healthz")
             ready = client.get("/readyz")
+            metrics = client.get("/metrics")
 
             self.assertEqual(health.status_code, 200)
             self.assertEqual(health.json()["status"], "ok")
@@ -332,7 +340,25 @@ class DecisionExpiryServiceEndpointTests(unittest.TestCase):
                 ready.json()["worker"]["lastPollStatus"],
                 "expired",
             )
-            rendered = ready.text
+            self.assertEqual(metrics.status_code, 200)
+            self.assertTrue(
+                metrics.headers["content-type"].startswith(
+                    "text/plain; version=0.0.4"
+                )
+            )
+            self.assertIn("agenthub_decision_expiry_process_healthy 1", metrics.text)
+            self.assertIn("agenthub_decision_expiry_ready 1", metrics.text)
+            self.assertIn("agenthub_decision_expiry_polls_total 5", metrics.text)
+            self.assertIn(
+                "agenthub_decision_expiry_decisions_expired_total 3",
+                metrics.text,
+            )
+            self.assertIn(
+                "agenthub_decision_expiry_last_success_timestamp_seconds "
+                "1786838400.0",
+                metrics.text,
+            )
+            rendered = ready.text + metrics.text
             self.assertNotIn("mission-", rendered)
             self.assertNotIn("decision-sensitive-id", rendered)
             self.assertNotIn("postgresql://", rendered)

@@ -37,6 +37,7 @@ class DecisionExpirySupervisorSnapshot:
     last_error_type: str | None = None
     last_poll_status: DecisionExpiryPollStatus | None = None
     last_poll_at: str | None = None
+    last_success_at: str | None = None
 
     def to_public_dict(self) -> dict[str, object]:
         return {
@@ -56,6 +57,7 @@ class DecisionExpirySupervisorSnapshot:
                 else None
             ),
             "lastPollAt": self.last_poll_at,
+            "lastSuccessAt": self.last_success_at,
         }
 
 
@@ -146,6 +148,7 @@ class DecisionExpirySupervisor:
                 consecutive_failures=0,
                 last_error_type=None,
                 last_poll_status=DecisionExpiryPollStatus.IDLE,
+                last_success_at=datetime.now(timezone.utc).isoformat(),
             )
             return delay
 
@@ -156,6 +159,7 @@ class DecisionExpirySupervisor:
             consecutive_failures=0,
             last_error_type=None,
             last_poll_status=DecisionExpiryPollStatus.EXPIRED,
+            last_success_at=datetime.now(timezone.utc).isoformat(),
         )
         return 0.0
 

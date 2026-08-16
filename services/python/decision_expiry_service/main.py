@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response, status
 
 from .config import DecisionExpiryServiceSettings
+from .metrics import PROMETHEUS_CONTENT_TYPE, render_metrics
 from .runtime import (
     DecisionExpiryServiceRuntime,
     build_decision_expiry_runtime,
@@ -74,6 +75,17 @@ def create_app(
         if isinstance(runtime, DecisionExpiryServiceRuntime):
             payload["worker"] = runtime.snapshot.to_public_dict()
         return payload
+
+    @application.get("/metrics", response_class=Response)
+    async def metrics() -> Response:
+        runtime = getattr(application.state, "decision_expiry_runtime", None)
+        operational_runtime = (
+            runtime if isinstance(runtime, DecisionExpiryServiceRuntime) else None
+        )
+        return Response(
+            content=render_metrics(operational_runtime),
+            headers={"content-type": PROMETHEUS_CONTENT_TYPE},
+        )
 
     return application
 

@@ -28,6 +28,8 @@ event transitions.
   the configured deadline, then cancels the task and closes the database pool.
 - `/healthz` reports whether the worker task is alive. `/readyz` becomes ready
   only after a real successful expiry command, including an idle result.
+- `/metrics` exposes Prometheus counters and gauges for health, readiness,
+  polls, expiries, failures, backoff, and the latest successful poll.
 - Probes expose only low-cardinality counters, timestamps, status, and exception
   type. They never expose database URLs, Mission IDs, Decision IDs, WorkUnit
   IDs, policy content, or error messages.
@@ -75,10 +77,16 @@ operational port to the host and is not an approved production secret path.
 Before enabling it, run migrations through Alembic head, verify PostgreSQL
 connectivity, exercise health and readiness probes, and confirm expiry counters
 against Mission events. The runtime now enforces mounted-secret database
-composition; production deployment remains blocked on operational review and a
-successful isolated direct-PostgreSQL smoke gate. The gate is available at
-`scripts/decision_expiry_smoke.py` and never targets the repository `.env`
-database.
+composition; production deployment remains blocked on the remaining operational
+review. The isolated direct-PostgreSQL smoke gate passed on 2026-08-16. The gate
+is available at `scripts/decision_expiry_smoke.py` and never targets the
+repository `.env` database.
+
+Prometheus deployments should scrape the service under a dedicated
+`mission-supervision` job. Versioned alert rules detect sustained consecutive
+failures and an alive worker that has stopped completing successful database
+polls. Metrics are process-local and reset on restart; they are not Decision
+backlog, SLA, or durable lifecycle truth.
 
 Rollback by stopping the service. In-flight committed transitions remain
 durable; pending expired Decisions remain eligible for a later replica. Never

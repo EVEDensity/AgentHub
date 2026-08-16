@@ -151,6 +151,31 @@ groups:
           description: "Quota enforcement is rejecting requests. Check which tenants are hitting limits."
           runbook: "Review quota usage per tenant via /iam/quotas/{tenant_id}, adjust plan or notify tenant."
 
+      - alert: DecisionExpiryRepeatedFailures
+        expr: agenthub_decision_expiry_consecutive_failures >= 3
+        for: 2m
+        labels:
+          severity: warning
+          service: decision-expiry-service
+        annotations:
+          summary: "Decision expiry database polling is repeatedly failing"
+          description: "The expiry supervisor has failed at least three consecutive polls for two minutes."
+          runbook: "Check direct PostgreSQL connectivity, pool saturation, migration head, and service logs without editing Decision rows."
+
+      - alert: DecisionExpiryPollStalled
+        expr: |
+          agenthub_decision_expiry_process_healthy == 1
+          and
+          time() - agenthub_decision_expiry_last_success_timestamp_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+          service: decision-expiry-service
+        annotations:
+          summary: "Decision expiry worker has stopped completing polls"
+          description: "The worker task is alive but has not completed a successful database poll within the expected interval."
+          runbook: "Check PostgreSQL locks, pool health, worker logs, and shutdown state; do not mutate Decision lifecycle rows manually."
+
   # ═══════════════════════════════════════════════════════════════════
   # P2 — INFO: acknowledge within 30 minutes
   # ═══════════════════════════════════════════════════════════════════
