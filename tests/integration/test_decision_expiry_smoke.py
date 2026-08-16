@@ -4,7 +4,7 @@ import subprocess
 import unittest
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import yaml
 
@@ -14,7 +14,31 @@ from scripts.decision_expiry_smoke import (
     _assert_sanitized_readiness,
     _published_port,
     _run,
+    _seed_expired_decision,
 )
+
+
+class _FakeTransaction:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class _FakeConnection:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+        self.closed = False
+
+    def transaction(self) -> _FakeTransaction:
+        return _FakeTransaction()
+
+    async def execute(self, sql: str, *args: object) -> None:
+        self.executed.append((sql, args))
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class DecisionExpirySmokeAssetTests(unittest.TestCase):
@@ -117,6 +141,27 @@ class DecisionExpirySmokeAssetTests(unittest.TestCase):
         for payload in invalid_payloads:
             with self.subTest(payload=payload), self.assertRaises(AssertionError):
                 _assert_sanitized_metrics(payload)
+
+
+class DecisionExpirySmokeSeedTests(unittest.IsolatedAsyncioTestCase):
+    async def test_seed_binds_mission_to_exact_contract_revision(self) -> None:
+        connection = _FakeConnection()
+
+        with patch(
+            "scripts.decision_expiry_smoke.asyncpg.connect",
+            new=AsyncMock(return_value=connection),
+        ):
+            await _seed_expired_decision("postgresql://smoke.invalid/database")
+
+        mission_sql, _args = next(
+            statement
+            for statement in connection.executed
+            if "INSERT INTO missions" in statement[0]
+        )
+        self.assertIn("contract_id", mission_sql)
+        self.assertIn("contract_version", mission_sql)
+        self.assertIn("$6, 1", mission_sql)
+        self.assertTrue(connection.closed)
 
 
 if __name__ == "__main__":

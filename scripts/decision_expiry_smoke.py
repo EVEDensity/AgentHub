@@ -130,10 +130,11 @@ async def _seed_expired_decision(database_url: str) -> None:
             await connection.execute(
                 """INSERT INTO missions(
                        id, workspace_id, title, objective, source, contract_id,
-                       status, plan_version, created_by, created_at, updated_at
+                       contract_version, status, plan_version, created_by,
+                       created_at, updated_at
                    ) VALUES(
-                       $1, $2, $3, $4, $5::jsonb, $6, 'WAITING_DECISION', 1,
-                       $7::jsonb, $8, $8
+                       $1, $2, $3, $4, $5::jsonb, $6, 1,
+                       'WAITING_DECISION', 1, $7::jsonb, $8, $8
                    )""",
                 MISSION_ID,
                 "workspace-decision-expiry-smoke",
