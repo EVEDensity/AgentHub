@@ -103,6 +103,25 @@ class MissionControlRunnerPort(Protocol):
         lease_seconds: int,
     ) -> dict[str, Any]: ...
 
+    async def record_execution_checkpoint(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        checkpoint_id: str,
+        sequence: int,
+        phase: str,
+        iteration: int,
+        tool_calls: int,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model_cost: float,
+        terminal: bool,
+        failure_reason: str | None,
+    ) -> dict[str, Any]: ...
+
     async def register_artifact(
         self,
         mission_id: str,
@@ -391,6 +410,45 @@ class MissionControlRunnerClient:
                 "leaseId": lease_id,
                 "leaseSeconds": lease_seconds,
             },
+        )
+
+    async def record_execution_checkpoint(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        checkpoint_id: str,
+        sequence: int,
+        phase: str,
+        iteration: int,
+        tool_calls: int,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model_cost: float,
+        terminal: bool,
+        failure_reason: str | None,
+    ) -> dict[str, Any]:
+        del runner_id
+        payload: dict[str, Any] = {
+            "id": checkpoint_id,
+            "leaseId": lease_id,
+            "sequence": sequence,
+            "phase": phase,
+            "iteration": iteration,
+            "toolCalls": tool_calls,
+            "promptTokens": prompt_tokens,
+            "completionTokens": completion_tokens,
+            "modelCost": model_cost,
+            "terminal": terminal,
+        }
+        if failure_reason is not None:
+            payload["failureReason"] = failure_reason
+        return await self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/checkpoints",
+            json=payload,
         )
 
     async def register_artifact(

@@ -52,8 +52,11 @@ boundary. It is not the permanent home of every Agent feature.
   checkpoints; Runner must not write repository state directly. Mission Control
   now admits a separate content-minimized durable ExecutionCheckpoint behind
   the exact lease and attempt, with idempotent ordering and a server-generated
-  digest. The production Harness adapter is not wired yet, and this record is
-  an ancestry anchor rather than a resume image. Claiming an
+  digest. The inbound Runner composition now injects a request-scoped
+  MissionControlHarnessCheckpointPort bound to the exact lease; it submits only
+  the durable counters and validates the returned identity. Tool results and
+  model content remain in the Harness journal, and this record is an ancestry
+  anchor rather than a resume image. Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
   prompt with the peer objective marked as untrusted intent. Capability scope,

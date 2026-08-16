@@ -13,13 +13,17 @@ from app.services.capability_tools import (
     CapabilityToolBinding,
     CapabilityToolResolver,
 )
-from app.services.harness_checkpoint import HarnessExecutionContext
+from app.services.harness_checkpoint import (
+    HarnessCheckpointPort,
+    HarnessExecutionContext,
+)
 from app.services.harness_service import (
     FunctionCallingHarness,
     FunctionTool,
     HarnessPort,
     ModelPort,
 )
+from app.services.runner_checkpoint import MissionControlHarnessCheckpointFactory
 from app.services.runner_service import (
     A2AInboundClaimedWorkResolver,
     ClaimedWorkResolutionError,
@@ -45,6 +49,17 @@ class CapabilityBindingFactoryPort(Protocol):
     ) -> Sequence[CapabilityToolBinding]: ...
 
 
+class HarnessCheckpointFactoryPort(Protocol):
+    """Build a request-scoped checkpoint port behind one active lease."""
+
+    def build(
+        self,
+        execution: HarnessExecutionContext,
+        *,
+        lease_id: str,
+    ) -> HarnessCheckpointPort: ...
+
+
 class A2AInboundHarnessFactory:
     """Build one capability-scoped model Harness from claimed durable context."""
 
@@ -53,6 +68,7 @@ class A2AInboundHarnessFactory:
         model_factory: HarnessModelFactoryPort,
         binding_factory: CapabilityBindingFactoryPort,
         *,
+        checkpoint_factory: HarnessCheckpointFactoryPort | None = None,
         max_iterations: int = 8,
         max_tool_calls: int = 32,
         max_total_tokens: int | None = None,
@@ -70,6 +86,7 @@ class A2AInboundHarnessFactory:
             raise ValueError("max_model_cost must be non-negative")
         self._model_factory = model_factory
         self._binding_factory = binding_factory
+        self._checkpoint_factory = checkpoint_factory
         self._max_iterations = max_iterations
         self._max_tool_calls = max_tool_calls
         self._max_total_tokens = max_total_tokens
@@ -97,6 +114,13 @@ class A2AInboundHarnessFactory:
             work_unit_id=work_unit.id,
             attempt=work_unit.attempt,
         )
+        checkpoint_port = None
+        if self._checkpoint_factory is not None:
+            assert work_unit.lease is not None
+            checkpoint_port = self._checkpoint_factory.build(
+                execution,
+                lease_id=work_unit.lease.id,
+            )
         try:
             bindings = list(self._binding_factory.build(execution))
         except Exception as exc:
@@ -144,6 +168,7 @@ class A2AInboundHarnessFactory:
                 max_tool_calls=self._max_tool_calls,
                 max_total_tokens=self._max_total_tokens,
                 max_model_cost=model_cost_limit,
+                checkpoint_port=checkpoint_port,
             )
         except ValueError as exc:
             raise ClaimedWorkResolutionError(
@@ -181,6 +206,10 @@ def build_a2a_inbound_runner(
     harness_factory = A2AInboundHarnessFactory(
         model_factory,
         binding_factory,
+        checkpoint_factory=MissionControlHarnessCheckpointFactory(
+            control,
+            runner_id=runner_id,
+        ),
         max_iterations=max_iterations,
         max_tool_calls=max_tool_calls,
         max_total_tokens=max_total_tokens,
@@ -208,6 +237,7 @@ __all__ = [
     "A2A_RECEIVE_CAPABILITY",
     "A2AInboundHarnessFactory",
     "CapabilityBindingFactoryPort",
+    "HarnessCheckpointFactoryPort",
     "HarnessModelFactoryPort",
     "build_a2a_inbound_runner",
 ]

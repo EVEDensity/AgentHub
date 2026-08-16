@@ -1063,6 +1063,44 @@ class MissionControlClientTests(unittest.IsolatedAsyncioTestCase):
             b'{"leaseId":"lease-1","leaseSeconds":120}',
         )
 
+    async def test_client_sends_content_minimized_checkpoint(self) -> None:
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(201, json={"id": "chk-1"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            control = MissionControlRunnerClient(
+                "http://mission-control",
+                http_client=client,
+            )
+            payload = await control.record_execution_checkpoint(
+                "mis-1",
+                "wu-1",
+                runner_id="runner-1",
+                lease_id="lease-1",
+                checkpoint_id="chk-1",
+                sequence=1,
+                phase="harness.execution.started",
+                iteration=0,
+                tool_calls=0,
+                prompt_tokens=2,
+                completion_tokens=3,
+                model_cost=0.01,
+                terminal=False,
+                failure_reason=None,
+            )
+
+        self.assertEqual(payload["id"], "chk-1")
+        self.assertEqual(
+            requests[0].read(),
+            b'{"id":"chk-1","leaseId":"lease-1","sequence":1,'
+            b'"phase":"harness.execution.started","iteration":0,'
+            b'"toolCalls":0,"promptTokens":2,"completionTokens":3,'
+            b'"modelCost":0.01,"terminal":false}',
+        )
+
     async def test_client_maps_control_rejection_to_runner_error(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
             del request

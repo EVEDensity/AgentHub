@@ -32,6 +32,10 @@ resources, Artifact byte publication, and sanitized health state.
   and descriptions. Endpoint and credentials are process configuration and
   cannot appear in the manifest. Every binding captures the exact Mission,
   WorkUnit, and attempt at Harness construction.
+- Each inbound Harness receives a request-scoped Mission Control checkpoint
+  adapter bound to the claimed lease. The adapter forwards only phase, counters,
+  usage, and bounded terminal failure metadata; it never forwards tool results,
+  prompts, model responses, or credentials.
 - Artifact output uses a content-addressed local root. A deployment must mount
   that root on storage readable by the Mission Control verifier.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import unittest
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from app.services.capability_tools import CapabilityToolBinding
@@ -240,6 +241,32 @@ class RunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 self.calls.append("start")
                 return inbound_claim_payload()
 
+            async def record_execution_checkpoint(
+                self,
+                mission_id: str,
+                work_unit_id: str,
+                **kwargs: Any,
+            ):
+                self.calls.append(f"checkpoint:{kwargs['sequence']}")
+                return {
+                    "id": kwargs["checkpoint_id"],
+                    "missionId": mission_id,
+                    "workUnitId": work_unit_id,
+                    "attempt": 2,
+                    "sequence": kwargs["sequence"],
+                    "phase": kwargs["phase"],
+                    "iteration": kwargs["iteration"],
+                    "toolCalls": kwargs["tool_calls"],
+                    "promptTokens": kwargs["prompt_tokens"],
+                    "completionTokens": kwargs["completion_tokens"],
+                    "modelCost": kwargs["model_cost"],
+                    "terminal": kwargs["terminal"],
+                    "failureReason": kwargs.get("failure_reason"),
+                    "stateDigest": "sha256:" + "a" * 64,
+                    "createdBy": {"id": "runner-1", "type": "service"},
+                    "createdAt": datetime.now(timezone.utc).isoformat(),
+                }
+
             async def heartbeat_work_unit(self, *args: Any, **kwargs: Any):
                 del args, kwargs
                 return inbound_claim_payload()
@@ -280,7 +307,18 @@ class RunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(publisher.contents, [b"inbound final output"])
         self.assertEqual(
             control.calls,
-            ["claim", "context", "start", "register", "complete"],
+            [
+                "claim",
+                "context",
+                "start",
+                "checkpoint:1",
+                "checkpoint:2",
+                "checkpoint:3",
+                "checkpoint:4",
+                "checkpoint:5",
+                "register",
+                "complete",
+            ],
         )
         self.assertEqual(model_factory.tool_sets, [[]])
 

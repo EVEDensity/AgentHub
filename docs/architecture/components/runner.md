@@ -2,14 +2,16 @@
 
 > Status: implemented  
 > Owner: execution maintainers  
-> Last reviewed: 2026-08-15
+> Last reviewed: 2026-08-16
 
 ## Responsibility
 
 Runner owns one isolated execution attempt: lease-fenced start and heartbeat,
 request-scoped Harness supervision, Artifact byte publication, metadata
 registration, and completion to VERIFYING. It reports every durable change
-through Mission Control and cannot create Evidence or declare success.
+through Mission Control and cannot create Evidence or declare success. Its
+inbound Harness adapter submits content-minimized execution checkpoints through
+the same lease fence; Runner never persists the request-scoped Harness journal.
 
 `RunnerWorker` is the process-local polling supervisor. The current minimum
 worker passes one explicitly configured workspace to `claim_ready_and_run`.

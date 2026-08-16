@@ -36,9 +36,11 @@ Checkpoint identity survives Runner restart and can be audited without making
 Harness a database owner. Lease loss, attempt drift, sequence gaps, conflicting
 idempotency keys, and writes after terminal state fail without side effects.
 
-The production Harness is not connected to this command in this slice. A
-follow-up adapter must map request-scoped Harness checkpoints to this bounded
-contract and submit them through Mission Control under the Runner lease.
+The inbound Runner composition now maps request-scoped Harness checkpoints to
+this bounded contract through `MissionControlHarnessCheckpointPort`. The adapter
+binds the exact execution and lease, generates deterministic idempotency IDs,
+omits tool/model content, and rejects an invalid or drifting Mission Control
+response. Runner still owns failure recovery when checkpoint admission fails.
 
 ## Alternatives considered
 
@@ -54,4 +56,5 @@ contract and submit them through Mission Control under the Runner lease.
 Domain tests enforce terminal shape. API tests cover lease fencing, idempotency,
 contiguous ordering, terminal closure, and server-generated digests. Repository
 and migration tests cover round trips, latest-sequence lookup, uniqueness,
-bounded phases, and the startup migration chain.
+bounded phases, and the startup migration chain. Runner tests cover content
+minimization, deterministic IDs, response validation, and HTTP serialization.
