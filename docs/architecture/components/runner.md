@@ -72,8 +72,14 @@ root kind plus a non-outbound adapter. The Mission must be explicitly started
 before claim. Its lease owner can read the versioned Contract/Mission/WorkUnit
 projection behind the same lease fence. That projection carries immutable
 ArtifactRefs for ancestry inputs and never reads Artifact bytes or source
-checkpoint content. It is not yet accepted by the inbound A2A Harness compiler;
-fork-specific compilation and process composition remain a separate gate.
+checkpoint content. A separate pure compiler accepts only the exact fork root,
+Agent/adapter binding, attempt, lease, Contract revision, source Mission and
+terminal-checkpoint identifiers, and a non-empty bounded ArtifactRef set. It
+produces the `agenthub.mission-fork-context.v1` JSON model input, caps runtime
+by both the Contract and Runner limit, and excludes repository scopes,
+capability scopes, criterion configuration, content addresses, and bytes. The
+compiler neither creates a Harness nor starts the WorkUnit. Fork-specific
+Harness and process composition remain the next execution gate.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current

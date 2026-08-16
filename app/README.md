@@ -69,8 +69,13 @@ boundary. It is not the permanent home of every Agent feature.
   attempt one. The lease owner can read the same versioned, lease-fenced
   execution projection used by controlled A2A roots; it contains immutable
   ArtifactRefs but does not read Artifact bytes or source checkpoint content.
-  This projection is not executable input: a fork-specific bounded compiler
-  and Harness composition remain separate Runner responsibilities.
+  A pure fork-specific compiler now revalidates the complete claim/projection
+  identity and emits a bounded, content-minimized model input. It preserves
+  source Mission/checkpoint ancestry and Artifact ID/digest pairs while
+  excluding capability scopes, repository scopes, criterion configuration,
+  content addresses, and Artifact bytes. It does not construct a Harness,
+  start execution, or compose the production Runner path; those remain a
+  separate gate.
   Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
