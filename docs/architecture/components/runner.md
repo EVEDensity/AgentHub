@@ -85,7 +85,10 @@ A fork-specific Harness factory now validates the root execution shape,
 resolves every required capability against Contract-scoped callable bindings,
 and binds its checkpoint port to the exact attempt and lease. Missing,
 unauthorized, or duplicate tool bindings fail before model construction.
-Resolver/factory and process composition remain the next execution gates.
+The application-layer fork builder connects this factory and resolver to
+`WorkUnitRunner` for `claim_and_run` on one explicit Mission. Workspace claims
+are disabled on that composition before control-plane I/O. Production
+kind-aware workspace routing remains the next execution gate.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current

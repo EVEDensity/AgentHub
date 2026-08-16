@@ -80,8 +80,10 @@ boundary. It is not the permanent home of every Agent feature.
   The fork Harness factory resolves every required business capability through
   the Contract-scoped binding resolver and binds checkpoints to the exact
   attempt and lease; unlike inbound A2A, it has no protocol marker to discard.
-  Resolver/factory composition and the production worker route remain separate
-  gates.
+  An application-layer composition now connects that factory, the fork
+  resolver, and `WorkUnitRunner` for an explicitly selected Mission. It
+  disables workspace claims in code and is not referenced by the production
+  process. Kind-aware workspace routing remains a separate gate.
   Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON

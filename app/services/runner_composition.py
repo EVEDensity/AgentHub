@@ -29,6 +29,7 @@ from app.services.runner_service import (
     A2AInboundClaimedWorkResolver,
     ClaimedWorkResolutionError,
     MissionControlRunnerPort,
+    MissionForkClaimedWorkResolver,
     WorkUnitRunner,
 )
 
@@ -276,6 +277,24 @@ class MissionForkHarnessFactory(_ClaimedHarnessFactory):
         )
 
 
+def _validate_runner_binding(
+    *,
+    runner_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    label: str,
+) -> None:
+    for name, value in (
+        ("runner_id", runner_id),
+        ("assigned_agent_id", assigned_agent_id),
+        ("assigned_adapter", assigned_adapter),
+    ):
+        if not value.strip():
+            raise ValueError(f"{name} must be non-empty")
+    if assigned_adapter == "a2a.outbound":
+        raise ValueError(f"{label} Runner cannot use the outbound A2A adapter")
+
+
 def build_a2a_inbound_runner(
     control: MissionControlRunnerPort,
     *,
@@ -294,15 +313,12 @@ def build_a2a_inbound_runner(
     heartbeat_interval_seconds: float | None = None,
 ) -> WorkUnitRunner:
     """Compose the inbound claim path without provider or tool fallbacks."""
-    for name, value in (
-        ("runner_id", runner_id),
-        ("assigned_agent_id", assigned_agent_id),
-        ("assigned_adapter", assigned_adapter),
-    ):
-        if not value.strip():
-            raise ValueError(f"{name} must be non-empty")
-    if assigned_adapter == "a2a.outbound":
-        raise ValueError("inbound Runner cannot use the outbound A2A adapter")
+    _validate_runner_binding(
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        label="inbound",
+    )
     harness_factory = A2AInboundHarnessFactory(
         model_factory,
         binding_factory,
@@ -333,6 +349,61 @@ def build_a2a_inbound_runner(
     )
 
 
+def build_mission_fork_runner(
+    control: MissionControlRunnerPort,
+    *,
+    publisher: ArtifactPublisher,
+    model_factory: HarnessModelFactoryPort,
+    binding_factory: CapabilityBindingFactoryPort,
+    runner_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    max_context_chars: int = 32_768,
+    max_timeout_seconds: float = 300.0,
+    max_iterations: int = 8,
+    max_tool_calls: int = 32,
+    max_total_tokens: int | None = None,
+    max_model_cost: float | None = None,
+    heartbeat_interval_seconds: float | None = None,
+) -> WorkUnitRunner:
+    """Compose fork execution restricted to an explicitly selected Mission."""
+    _validate_runner_binding(
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        label="Mission fork",
+    )
+    harness_factory = MissionForkHarnessFactory(
+        model_factory,
+        binding_factory,
+        checkpoint_factory=MissionControlHarnessCheckpointFactory(
+            control,
+            runner_id=runner_id,
+        ),
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+    )
+    resolver = MissionForkClaimedWorkResolver(
+        control,
+        runner_id=runner_id,
+        harness_factory=harness_factory,
+        max_context_chars=max_context_chars,
+        max_timeout_seconds=max_timeout_seconds,
+    )
+    return WorkUnitRunner(
+        control,
+        publisher=publisher,
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        claimed_work_resolver=resolver,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+        workspace_claims_enabled=False,
+    )
+
+
 __all__ = [
     "A2A_RECEIVE_CAPABILITY",
     "A2AInboundHarnessFactory",
@@ -341,4 +412,5 @@ __all__ = [
     "HarnessModelFactoryPort",
     "MissionForkHarnessFactory",
     "build_a2a_inbound_runner",
+    "build_mission_fork_runner",
 ]

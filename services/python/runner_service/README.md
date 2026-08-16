@@ -47,6 +47,12 @@ AI Gateway or every MCP tool, because doing so would execute provider-specific
 operations outside a WorkUnit. Both endpoints exclude tenant, quota, objective,
 prompt, tool, and credential content.
 
+The application layer contains a controlled Mission-fork composition for one
+explicitly selected Mission. That composition disables workspace claims and is
+not called by this service runtime. `build_runner_runtime` remains inbound-only
+until workspace claims can route every eligible WorkUnit kind to its exact
+resolver without claiming and failing unrelated work.
+
 ## Required configuration
 
 All variables use the `AGENTHUB_RUNNER_` prefix:

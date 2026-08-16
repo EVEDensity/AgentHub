@@ -632,6 +632,7 @@ class WorkUnitRunner:
         assigned_adapter: str | None = None,
         claimed_work_resolver: ClaimedWorkResolver | None = None,
         heartbeat_interval_seconds: float | None = None,
+        workspace_claims_enabled: bool = True,
     ) -> None:
         self._control = control
         self._publisher = publisher
@@ -648,6 +649,9 @@ class WorkUnitRunner:
         if heartbeat_interval_seconds is not None and heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be positive")
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        if type(workspace_claims_enabled) is not bool:
+            raise TypeError("workspace_claims_enabled must be a boolean")
+        self._workspace_claims_enabled = workspace_claims_enabled
 
     async def run(
         self,
@@ -717,6 +721,10 @@ class WorkUnitRunner:
     ) -> RunnerWorkspacePollResult:
         """Discover, claim, and execute one bound WorkUnit in a workspace."""
 
+        if not self._workspace_claims_enabled:
+            raise RunnerControlError(
+                "workspace claims are disabled for this Runner composition"
+            )
         if not workspace_id.strip():
             raise ValueError("workspace_id must be non-empty")
         agent_id, adapter_type = self._claim_binding()

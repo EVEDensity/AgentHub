@@ -23,8 +23,9 @@ from app.services.runner_composition import (
     A2AInboundHarnessFactory,
     MissionForkHarnessFactory,
     build_a2a_inbound_runner,
+    build_mission_fork_runner,
 )
-from app.services.runner_service import ClaimedWorkResolutionError
+from app.services.runner_service import ClaimedWorkResolutionError, RunnerControlError
 from tests.services.test_runner_service import (
     FakePublisher,
     inbound_claim_payload,
@@ -147,7 +148,174 @@ class RecordingModelFactory:
         return self.model
 
 
+class MissionForkCompositionControl:
+    def __init__(self, context: dict[str, Any]) -> None:
+        self.context = context
+        self.calls: list[str] = []
+        self.claim_arguments: dict[str, Any] | None = None
+
+    async def claim_work_unit(self, mission_id: str, **kwargs: Any):
+        self.calls.append("claim")
+        self.claim_arguments = {"mission_id": mission_id, **kwargs}
+        return {"workUnit": self.context["workUnit"]}
+
+    async def get_execution_context(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        **kwargs: Any,
+    ):
+        self.calls.append("context")
+        if (
+            mission_id != "mis-fork"
+            or work_unit_id != "wu-fork"
+            or kwargs
+            != {"runner_id": "runner-1", "lease_id": "lease-fork"}
+        ):
+            raise AssertionError("fork context request lost its lease identity")
+        return {"executionContext": self.context}
+
+    async def start_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        **kwargs: Any,
+    ):
+        del mission_id, work_unit_id, kwargs
+        self.calls.append("start")
+        started = copy.deepcopy(self.context["workUnit"])
+        started["status"] = "RUNNING"
+        return started
+
+    async def record_execution_checkpoint(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        **kwargs: Any,
+    ):
+        self.calls.append(f"checkpoint:{kwargs['sequence']}")
+        return {
+            "id": kwargs["checkpoint_id"],
+            "missionId": mission_id,
+            "workUnitId": work_unit_id,
+            "attempt": 1,
+            "sequence": kwargs["sequence"],
+            "phase": kwargs["phase"],
+            "iteration": kwargs["iteration"],
+            "toolCalls": kwargs["tool_calls"],
+            "promptTokens": kwargs["prompt_tokens"],
+            "completionTokens": kwargs["completion_tokens"],
+            "modelCost": kwargs["model_cost"],
+            "terminal": kwargs["terminal"],
+            "failureReason": kwargs.get("failure_reason"),
+            "stateDigest": "sha256:" + "a" * 64,
+            "createdBy": {"id": "runner-1", "type": "service"},
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def heartbeat_work_unit(self, *args: Any, **kwargs: Any):
+        del args, kwargs
+        heartbeat = copy.deepcopy(self.context["workUnit"])
+        heartbeat["status"] = "RUNNING"
+        return heartbeat
+
+    async def register_artifact(self, *args: Any, **kwargs: Any):
+        del args, kwargs
+        self.calls.append("register")
+        return {"id": "artifact-fork-result"}
+
+    async def complete_work_unit(self, *args: Any, **kwargs: Any):
+        del args, kwargs
+        self.calls.append("complete")
+        return {"id": "wu-fork", "status": "VERIFYING"}
+
+    async def fail_work_unit(self, *args: Any, **kwargs: Any):
+        del args, kwargs
+        self.calls.append("fail")
+        return {"id": "wu-fork", "status": "FAILED"}
+
+
 class RunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mission_fork_composition_executes_explicit_mission_once(
+        self,
+    ) -> None:
+        context = valid_mission_fork_context()
+
+        class FinalModel(ToolCallingModel):
+            async def complete(
+                self,
+                request: HarnessRequest,
+                tool_results: tuple[FunctionResult, ...],
+            ) -> ModelResponse:
+                del request, tool_results
+                return ModelResponse(content="fork review output")
+
+        control = MissionForkCompositionControl(context)
+        publisher = FakePublisher()
+        model_factory = RecordingModelFactory(FinalModel())
+        runner = build_mission_fork_runner(
+            control,
+            publisher=publisher,
+            model_factory=model_factory,
+            binding_factory=RecordingBindingFactory([read_binding()]),
+            runner_id="runner-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+        )
+
+        result = await runner.claim_and_run("mis-fork")
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertTrue(result.success)
+        self.assertEqual(result.work_unit["status"], "VERIFYING")
+        self.assertEqual(publisher.contents, [b"fork review output"])
+        self.assertEqual(
+            control.claim_arguments,
+            {
+                "mission_id": "mis-fork",
+                "runner_id": "runner-1",
+                "agent_id": "reviewer",
+                "adapter_type": "local_codex",
+                "lease_seconds": 300,
+            },
+        )
+        self.assertEqual(
+            control.calls,
+            [
+                "claim",
+                "context",
+                "start",
+                "checkpoint:1",
+                "checkpoint:2",
+                "checkpoint:3",
+                "checkpoint:4",
+                "checkpoint:5",
+                "register",
+                "complete",
+            ],
+        )
+        self.assertEqual(
+            [tool.name for tool in model_factory.tool_sets[0]],
+            ["read_file"],
+        )
+        calls_after_mission_run = list(control.calls)
+        with self.assertRaisesRegex(RunnerControlError, "workspace claims are disabled"):
+            await runner.claim_ready_and_run("workspace-1")
+        self.assertEqual(control.calls, calls_after_mission_run)
+
+    def test_mission_fork_composition_rejects_outbound_adapter(self) -> None:
+        with self.assertRaisesRegex(ValueError, "outbound A2A adapter"):
+            build_mission_fork_runner(
+                object(),  # type: ignore[arg-type]
+                publisher=FakePublisher(),
+                model_factory=RecordingModelFactory(),
+                binding_factory=RecordingBindingFactory(),
+                runner_id="runner-1",
+                assigned_agent_id="reviewer",
+                assigned_adapter="a2a.outbound",
+            )
+
     async def test_fork_factory_binds_all_required_capabilities_and_lease(
         self,
     ) -> None:
