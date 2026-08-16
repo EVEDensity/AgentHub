@@ -30,3 +30,7 @@ JSON Schema solely so previously emitted Mission documents remain valid.
 
 `contract.lifecycle.revised` records the source Mission, previous and new
 versions, and the human-supplied reason. The event creates no Mission rebind.
+
+`execution-checkpoint.schema.json` defines the content-minimized durable
+checkpoint projection. Tool/model content is intentionally excluded; terminal
+shape and the server-generated state digest are part of the v1 contract.

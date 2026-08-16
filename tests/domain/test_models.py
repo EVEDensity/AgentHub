@@ -23,6 +23,7 @@ from tests.domain.factories import (
     build_contract,
     build_decision,
     build_event,
+    build_execution_checkpoint,
     build_mission,
     build_work_unit,
 )
@@ -71,6 +72,25 @@ class DomainModelTests(unittest.TestCase):
         self.assert_matches_schema("artifact.schema.json", artifact)
         self.assert_matches_schema("evidence.schema.json", evidence)
         self.assert_matches_schema("decision.schema.json", build_decision())
+        self.assert_matches_schema(
+            "execution-checkpoint.schema.json",
+            build_execution_checkpoint(),
+        )
+
+    def test_execution_checkpoint_terminal_shape_is_strict(self) -> None:
+        build_execution_checkpoint(
+            phase="harness.execution.completed",
+            terminal=True,
+        )
+        build_execution_checkpoint(
+            phase="harness.execution.failed",
+            terminal=True,
+            failure_reason="Provider failed.",
+        )
+        with self.assertRaises(ValidationError):
+            build_execution_checkpoint(terminal=True)
+        with self.assertRaises(ValidationError):
+            build_execution_checkpoint(failure_reason="Unexpected content.")
 
     def test_decision_enforces_pending_and_resolved_lifecycle(self) -> None:
         pending = build_decision()

@@ -9,6 +9,7 @@ from app.domain import (
     ArtifactRef,
     ArtifactRetention,
     ArtifactSensitivity,
+    ExecutionCheckpointPhase,
     MissionContract,
     MissionSource,
     OutputSpec,
@@ -166,6 +167,27 @@ class WorkUnitHeartbeatRequest(BaseModel):
 
     lease_id: Annotated[str, Field(min_length=1, max_length=255)]
     lease_seconds: Annotated[int, Field(ge=1, le=3600)] = 300
+
+
+class ExecutionCheckpointCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        allow_inf_nan=False,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    id: Annotated[str, Field(min_length=1, max_length=255)]
+    lease_id: Annotated[str, Field(min_length=1, max_length=255)]
+    sequence: Annotated[int, Field(ge=1)]
+    phase: ExecutionCheckpointPhase
+    iteration: Annotated[int, Field(ge=0)]
+    tool_calls: Annotated[int, Field(ge=0)]
+    prompt_tokens: Annotated[int, Field(ge=0)]
+    completion_tokens: Annotated[int, Field(ge=0)]
+    model_cost: Annotated[float, Field(ge=0)]
+    terminal: bool = False
+    failure_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
 
 
 class WorkUnitExecutionRequest(BaseModel):

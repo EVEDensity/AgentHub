@@ -342,6 +342,18 @@ class WorkUnitStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class ExecutionCheckpointPhase(str, Enum):
+    EXECUTION_STARTED = "harness.execution.started"
+    ITERATION_STARTED = "harness.iteration.started"
+    MODEL_STARTED = "harness.model.started"
+    MODEL_COMPLETED = "harness.model.completed"
+    TOOL_STARTED = "harness.tool.started"
+    TOOL_COMPLETED = "harness.tool.completed"
+    BUDGET_EXHAUSTED = "harness.budget.exhausted"
+    EXECUTION_COMPLETED = "harness.execution.completed"
+    EXECUTION_FAILED = "harness.execution.failed"
+
+
 class WorkUnit(DomainModel):
     id: Identifier
     mission_id: Identifier
@@ -379,6 +391,40 @@ class WorkUnit(DomainModel):
             and self.lease is not None
         ):
             raise ValueError(f"{self.status.value} work unit cannot retain a lease")
+        return self
+
+
+class ExecutionCheckpoint(DomainModel):
+    id: Identifier
+    mission_id: Identifier
+    work_unit_id: Identifier
+    attempt: Annotated[int, Field(ge=1)]
+    sequence: Annotated[int, Field(ge=1)]
+    phase: ExecutionCheckpointPhase
+    iteration: Annotated[int, Field(ge=0)]
+    tool_calls: Annotated[int, Field(ge=0)]
+    prompt_tokens: Annotated[int, Field(ge=0)]
+    completion_tokens: Annotated[int, Field(ge=0)]
+    model_cost: Annotated[float, Field(ge=0)]
+    terminal: bool = False
+    failure_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+    state_digest: Digest
+    created_by: ActorRef
+    created_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_terminal_state(self) -> ExecutionCheckpoint:
+        terminal_phases = {
+            ExecutionCheckpointPhase.EXECUTION_COMPLETED,
+            ExecutionCheckpointPhase.EXECUTION_FAILED,
+        }
+        if self.terminal != (self.phase in terminal_phases):
+            raise ValueError("checkpoint terminal flag must match its phase")
+        if self.phase == ExecutionCheckpointPhase.EXECUTION_FAILED:
+            if self.failure_reason is None:
+                raise ValueError("failed checkpoint requires a failure reason")
+        elif self.failure_reason is not None:
+            raise ValueError("only a failed checkpoint can carry a failure reason")
         return self
 
 

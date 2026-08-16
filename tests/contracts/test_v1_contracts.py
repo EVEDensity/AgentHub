@@ -54,6 +54,7 @@ class PublicContractTests(unittest.TestCase):
                 "artifact.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
+                "execution-checkpoint.schema.json",
             },
         )
         for name in schema_names:

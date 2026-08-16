@@ -18,6 +18,7 @@
     { "eventType": "work_unit.execution.started", "aggregateType": "work_unit", "payloadRequired": ["attempt"] },
     { "eventType": "work_unit.execution.completed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "artifactRefs"] },
     { "eventType": "work_unit.execution.failed", "aggregateType": "work_unit", "payloadRequired": ["attempt", "reason"] },
+    { "eventType": "work_unit.checkpoint.recorded", "aggregateType": "work_unit", "payloadRequired": ["checkpointId", "attempt", "sequence", "phase", "terminal", "stateDigest"] },
     { "eventType": "work_unit.verification.completed", "aggregateType": "work_unit", "payloadRequired": ["evidenceIds", "verdict"] },
     { "eventType": "work_unit.lifecycle.decision_resolved", "aggregateType": "work_unit", "payloadRequired": ["previousStatus", "status", "decisionId", "resolution"] },
     { "eventType": "work_unit.lifecycle.decision_expired", "aggregateType": "work_unit", "payloadRequired": ["previousStatus", "status", "decisionId"] },

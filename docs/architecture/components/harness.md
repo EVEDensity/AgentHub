@@ -17,6 +17,13 @@ checkpoint implementation. The supplied in-memory port is intended for one
 execution attempt, local supervision, and tests; it is not a durable event
 ledger or a restart recovery mechanism.
 
+Mission Control separately owns content-minimized durable
+`ExecutionCheckpoint` records. Its lease-fenced command persists identity,
+phase, counters, usage, terminal state, and a server-generated digest, but never
+persists Harness tool results or model content. The production adapter is not
+wired yet; durable checkpoints are ancestry anchors and do not claim restart-
+safe model-loop resumption.
+
 ## Inputs
 
 - `HarnessRequest`: code, language, timeout, working directory, and optional

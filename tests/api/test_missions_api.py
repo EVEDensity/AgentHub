@@ -26,6 +26,7 @@ from app.domain import (
     EvaluationPolicyReason,
     EventEnvelope,
     Evidence,
+    ExecutionCheckpoint,
     Lease,
     Mission,
     MissionContract,
@@ -87,6 +88,7 @@ class FakeMissionRepository:
         self.events: list[EventEnvelope] = []
         self.artifacts: list[Artifact] = []
         self.evidence: list[Evidence] = []
+        self.execution_checkpoints: list[ExecutionCheckpoint] = []
         self.decisions: list[Decision] = []
         self.list_result: list[Mission] = []
         self.work_units: list[WorkUnit] = []
@@ -399,6 +401,38 @@ class FakeMissionRepository:
 
     async def add_artifact(self, artifact: Artifact) -> None:
         self.artifacts.append(artifact)
+
+    async def add_execution_checkpoint(
+        self,
+        checkpoint: ExecutionCheckpoint,
+    ) -> None:
+        self.execution_checkpoints.append(checkpoint)
+
+    async def get_execution_checkpoint(
+        self,
+        checkpoint_id: str,
+    ) -> ExecutionCheckpoint | None:
+        return next(
+            (
+                checkpoint
+                for checkpoint in self.execution_checkpoints
+                if checkpoint.id == checkpoint_id
+            ),
+            None,
+        )
+
+    async def get_latest_execution_checkpoint(
+        self,
+        work_unit_id: str,
+        attempt: int,
+    ) -> ExecutionCheckpoint | None:
+        candidates = [
+            checkpoint
+            for checkpoint in self.execution_checkpoints
+            if checkpoint.work_unit_id == work_unit_id
+            and checkpoint.attempt == attempt
+        ]
+        return max(candidates, key=lambda item: item.sequence, default=None)
 
     async def get_artifact(self, artifact_id: str) -> Artifact | None:
         return next(
@@ -3084,6 +3118,86 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(repository.work_units[0].lease.id, "lease-expired")
         self.assertEqual(repository.events, [])
+
+    def test_execution_checkpoint_is_fenced_ordered_and_idempotent(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        repository.work_units = [
+            build_work_unit(
+                status="RUNNING",
+                attempt=1,
+                lease=Lease(
+                    id="lease-running",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+        request = {
+            "id": "chk-1",
+            "leaseId": "lease-running",
+            "sequence": 1,
+            "phase": "harness.execution.started",
+            "iteration": 0,
+            "toolCalls": 0,
+            "promptTokens": 0,
+            "completionTokens": 0,
+            "modelCost": 0,
+            "terminal": False,
+        }
+        url = "/api/v1/missions/mis-1/work-units/wu-1/checkpoints"
+
+        wrong_lease = client.post(url, json={**request, "leaseId": "wrong"})
+        self.assertEqual(wrong_lease.status_code, 409)
+        self.assertEqual(repository.execution_checkpoints, [])
+        self.assertEqual(repository.events, [])
+
+        response = client.post(url, json=request)
+        duplicate = client.post(url, json=request)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(duplicate.status_code, 201)
+        self.assertEqual(response.json(), duplicate.json())
+        self.assertEqual(response.json()["attempt"], 1)
+        self.assertRegex(response.json()["stateDigest"], r"^sha256:[a-f0-9]{64}$")
+        self.assertEqual(len(repository.execution_checkpoints), 1)
+        self.assertEqual(len(repository.events), 1)
+        self.assertEqual(repository.events[0].event_type, "work_unit.checkpoint.recorded")
+
+        conflicting_id = client.post(
+            url,
+            json={**request, "iteration": 1},
+        )
+        self.assertEqual(conflicting_id.status_code, 409)
+        self.assertIn("different content", conflicting_id.json()["detail"])
+
+        gap = client.post(url, json={**request, "id": "chk-3", "sequence": 3})
+        self.assertEqual(gap.status_code, 409)
+        self.assertIn("expected=2, actual=3", gap.json()["detail"])
+
+        terminal = client.post(
+            url,
+            json={
+                **request,
+                "id": "chk-2",
+                "sequence": 2,
+                "phase": "harness.execution.completed",
+                "terminal": True,
+            },
+        )
+        self.assertEqual(terminal.status_code, 201)
+        after_terminal = client.post(
+            url,
+            json={**request, "id": "chk-after", "sequence": 3},
+        )
+        self.assertEqual(after_terminal.status_code, 409)
+        self.assertIn("terminal execution checkpoint", after_terminal.json()["detail"])
 
     def test_expired_lease_is_recovered_to_retrying(self) -> None:
         repository = FakeMissionRepository()

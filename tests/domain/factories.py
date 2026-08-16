@@ -12,6 +12,7 @@ from app.domain import (
     DecisionGate,
     EventEnvelope,
     Evidence,
+    ExecutionCheckpoint,
     Mission,
     MissionContract,
     MissionSource,
@@ -152,3 +153,25 @@ def build_work_unit(**updates: object) -> WorkUnit:
     }
     values.update(updates)
     return WorkUnit.model_validate(values)
+
+
+def build_execution_checkpoint(**updates: object) -> ExecutionCheckpoint:
+    values: dict[str, object] = {
+        "id": "chk-1",
+        "mission_id": "mis-1",
+        "work_unit_id": "wu-1",
+        "attempt": 1,
+        "sequence": 1,
+        "phase": "harness.execution.started",
+        "iteration": 0,
+        "tool_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "model_cost": 0,
+        "terminal": False,
+        "state_digest": "sha256:" + "d" * 64,
+        "created_by": ActorRef(type="runner", id="runner-1"),
+        "created_at": NOW,
+    }
+    values.update(updates)
+    return ExecutionCheckpoint.model_validate(values)

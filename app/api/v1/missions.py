@@ -19,6 +19,7 @@ from app.schemas.mission import (
     ArtifactCreateRequest,
     ContractRevisionRequest,
     DecisionResolutionRequest,
+    ExecutionCheckpointCreateRequest,
     MissionCreateRequest,
     WorkspaceVerificationDiscoveryRequest,
     WorkspaceWorkUnitClaimRequest,
@@ -864,6 +865,52 @@ async def heartbeat_work_unit(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return renewed.to_public_dict()
+
+
+@router.post(
+    "/{mission_id}/work-units/{work_unit_id}/checkpoints",
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_execution_checkpoint(
+    mission_id: str,
+    work_unit_id: str,
+    request: ExecutionCheckpointCreateRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    await _authorize_execution_work_unit(
+        mission_id,
+        work_unit_id,
+        lease_id=request.lease_id,
+        user=user,
+        repository=repository,
+    )
+    service = MissionService(repository)
+    try:
+        checkpoint = await service.record_execution_checkpoint(
+            mission_id,
+            work_unit_id,
+            checkpoint_id=request.id,
+            lease_id=request.lease_id,
+            runner_id=str(user["id"]),
+            sequence=request.sequence,
+            phase=request.phase,
+            iteration=request.iteration,
+            tool_calls=request.tool_calls,
+            prompt_tokens=request.prompt_tokens,
+            completion_tokens=request.completion_tokens,
+            model_cost=request.model_cost,
+            terminal=request.terminal,
+            failure_reason=request.failure_reason,
+            actor=_build_execution_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return checkpoint.to_public_dict()
 
 
 @router.post(

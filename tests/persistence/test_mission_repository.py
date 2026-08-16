@@ -12,6 +12,7 @@ from app.domain import (
     EvaluationPolicyReason,
     EventEnvelope,
     Evidence,
+    ExecutionCheckpoint,
     Lease,
     Mission,
     WorkUnit,
@@ -23,6 +24,7 @@ from tests.domain.factories import (
     build_decision,
     build_event,
     build_evidence,
+    build_execution_checkpoint,
     build_mission,
     build_work_unit,
 )
@@ -527,6 +529,38 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.repository.list_artifacts(artifact.mission_id, offset=-1)
 
+    async def test_execution_checkpoint_round_trip_and_latest_sequence(self) -> None:
+        checkpoint = build_execution_checkpoint(model_cost=0.125)
+
+        await self.repository.add_execution_checkpoint(checkpoint)
+
+        insert_sql, insert_args = self.database.executed[-1]
+        self.assertIn("INSERT INTO execution_checkpoints", insert_sql)
+        self.assertEqual(insert_args[:6], (
+            checkpoint.id,
+            checkpoint.mission_id,
+            checkpoint.work_unit_id,
+            checkpoint.attempt,
+            checkpoint.sequence,
+            checkpoint.phase.value,
+        ))
+        row = self.build_execution_checkpoint_row(checkpoint)
+        self.database.one = row
+        self.assertEqual(
+            await self.repository.get_execution_checkpoint(checkpoint.id),
+            checkpoint,
+        )
+        self.assertEqual(
+            await self.repository.get_latest_execution_checkpoint(
+                checkpoint.work_unit_id,
+                checkpoint.attempt,
+            ),
+            checkpoint,
+        )
+        latest_sql, latest_args = self.database.fetched_one[-1]
+        self.assertIn("ORDER BY sequence DESC LIMIT 1", latest_sql)
+        self.assertEqual(latest_args, (checkpoint.work_unit_id, checkpoint.attempt))
+
     async def test_work_unit_round_trip_and_mission_list(self) -> None:
         work_unit = build_work_unit(parent_work_unit_id="wu-parent")
 
@@ -784,6 +818,29 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("> CURRENT_TIMESTAMP", sql)
         self.assertNotIn("VERIFYING", sql)
         self.assertEqual(args, ("tenant-1",))
+
+    @staticmethod
+    def build_execution_checkpoint_row(
+        checkpoint: ExecutionCheckpoint,
+    ) -> dict[str, Any]:
+        return {
+            "id": checkpoint.id,
+            "mission_id": checkpoint.mission_id,
+            "work_unit_id": checkpoint.work_unit_id,
+            "attempt": checkpoint.attempt,
+            "sequence": checkpoint.sequence,
+            "phase": checkpoint.phase.value,
+            "iteration": checkpoint.iteration,
+            "tool_calls": checkpoint.tool_calls,
+            "prompt_tokens": checkpoint.prompt_tokens,
+            "completion_tokens": checkpoint.completion_tokens,
+            "model_cost": checkpoint.model_cost,
+            "terminal": checkpoint.terminal,
+            "failure_reason": checkpoint.failure_reason,
+            "state_digest": checkpoint.state_digest,
+            "created_by": json.dumps(checkpoint.created_by.to_public_dict()),
+            "created_at": checkpoint.created_at,
+        }
 
     @staticmethod
     def build_mission_row(mission: Mission) -> dict[str, Any]:

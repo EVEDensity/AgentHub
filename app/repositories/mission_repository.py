@@ -13,6 +13,7 @@ from app.domain import (
     EvaluationPolicyReason,
     EventEnvelope,
     Evidence,
+    ExecutionCheckpoint,
     Mission,
     MissionContract,
     WorkUnit,
@@ -598,6 +599,70 @@ class MissionRepository:
             artifact.created_at,
         )
 
+    async def add_execution_checkpoint(
+        self,
+        checkpoint: ExecutionCheckpoint,
+    ) -> None:
+        await self._execute(
+            """INSERT INTO execution_checkpoints(
+                   id, mission_id, work_unit_id, attempt, sequence, phase,
+                   iteration, tool_calls, prompt_tokens, completion_tokens,
+                   model_cost, terminal, failure_reason, state_digest,
+                   created_by, created_at
+               ) VALUES(
+                   $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                   $13, $14, $15::jsonb, $16
+               )""",
+            checkpoint.id,
+            checkpoint.mission_id,
+            checkpoint.work_unit_id,
+            checkpoint.attempt,
+            checkpoint.sequence,
+            checkpoint.phase.value,
+            checkpoint.iteration,
+            checkpoint.tool_calls,
+            checkpoint.prompt_tokens,
+            checkpoint.completion_tokens,
+            checkpoint.model_cost,
+            checkpoint.terminal,
+            checkpoint.failure_reason,
+            checkpoint.state_digest,
+            _encode_json(checkpoint.created_by.to_public_dict()),
+            checkpoint.created_at,
+        )
+
+    async def get_execution_checkpoint(
+        self,
+        checkpoint_id: str,
+    ) -> ExecutionCheckpoint | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, work_unit_id, attempt, sequence, phase,
+                      iteration, tool_calls, prompt_tokens, completion_tokens,
+                      model_cost, terminal, failure_reason, state_digest,
+                      created_by, created_at
+               FROM execution_checkpoints WHERE id=$1""",
+            checkpoint_id,
+        )
+        return self._execution_checkpoint_from_row(row) if row is not None else None
+
+    async def get_latest_execution_checkpoint(
+        self,
+        work_unit_id: str,
+        attempt: int,
+    ) -> ExecutionCheckpoint | None:
+        row = await self._fetch_one(
+            """SELECT id, mission_id, work_unit_id, attempt, sequence, phase,
+                      iteration, tool_calls, prompt_tokens, completion_tokens,
+                      model_cost, terminal, failure_reason, state_digest,
+                      created_by, created_at
+               FROM execution_checkpoints
+               WHERE work_unit_id=$1 AND attempt=$2
+               ORDER BY sequence DESC LIMIT 1""",
+            work_unit_id,
+            attempt,
+        )
+        return self._execution_checkpoint_from_row(row) if row is not None else None
+
     async def get_artifact(self, artifact_id: str) -> Artifact | None:
         row = await self._fetch_one(
             """SELECT id, mission_id, work_unit_id, attempt, kind, digest,
@@ -1001,6 +1066,29 @@ class MissionRepository:
             mission_id,
         )
         return [self._work_unit_from_row(row) for row in rows]
+
+    @staticmethod
+    def _execution_checkpoint_from_row(row: Mapping[str, Any]) -> ExecutionCheckpoint:
+        return ExecutionCheckpoint.model_validate(
+            {
+                "id": row["id"],
+                "mission_id": row["mission_id"],
+                "work_unit_id": row["work_unit_id"],
+                "attempt": row["attempt"],
+                "sequence": row["sequence"],
+                "phase": row["phase"],
+                "iteration": row["iteration"],
+                "tool_calls": row["tool_calls"],
+                "prompt_tokens": row["prompt_tokens"],
+                "completion_tokens": row["completion_tokens"],
+                "model_cost": row["model_cost"],
+                "terminal": row["terminal"],
+                "failure_reason": row["failure_reason"],
+                "state_digest": row["state_digest"],
+                "created_by": _decode_json_object(row["created_by"], "created_by"),
+                "created_at": row["created_at"],
+            }
+        )
 
     @staticmethod
     def _mission_from_row(row: Mapping[str, Any]) -> Mission:

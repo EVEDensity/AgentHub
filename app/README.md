@@ -49,7 +49,11 @@ boundary. It is not the permanent home of every Agent feature.
   grants resolved from Mission Contract and WorkUnit capabilities;
   ModelAdapterPort normalizes provider responses and reports provider usage;
   Harness enforces per-run token and model-cost budgets and emits request-scoped
-  checkpoints; Runner must not write repository state directly. Claiming an
+  checkpoints; Runner must not write repository state directly. Mission Control
+  now admits a separate content-minimized durable ExecutionCheckpoint behind
+  the exact lease and attempt, with idempotent ordering and a server-generated
+  digest. The production Harness adapter is not wired yet, and this record is
+  an ancestry anchor rather than a resume image. Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
   prompt with the peer objective marked as untrusted intent. Capability scope,
