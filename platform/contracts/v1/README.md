@@ -19,3 +19,7 @@ snake_case because they are persisted and transported as ledger records.
 `claimStatus` distinguishes ready-work absence from tenant capacity saturation;
 the existing `workUnit` field remains unchanged for backward-compatible
 consumers.
+
+`mission-contract.schema.json` optionally carries immutable `governance` policy.
+When omitted from a v1 document, Mission Control applies the v1 default of
+86,400 seconds for human Decision response and serializes that resolved value.

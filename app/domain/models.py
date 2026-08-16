@@ -289,6 +289,10 @@ class DecisionGate(DomainModel):
     blocking: bool = True
 
 
+class ContractGovernance(DomainModel):
+    decision_timeout_seconds: Annotated[int, Field(ge=1, le=31_536_000)] = 86_400
+
+
 class MissionContract(DomainModel):
     id: Identifier
     version: Annotated[int, Field(ge=1)]
@@ -298,6 +302,7 @@ class MissionContract(DomainModel):
     acceptance_criteria: Annotated[tuple[AcceptanceCriterion, ...], Field(min_length=1)]
     decision_gates: tuple[DecisionGate, ...]
     forbidden_actions: tuple[Annotated[str, Field(min_length=1, max_length=255)], ...]
+    governance: ContractGovernance = Field(default_factory=ContractGovernance)
     expires_at: AwareDatetime | None = None
 
     @model_validator(mode="after")

@@ -175,7 +175,9 @@ boundary. It is not the permanent home of every Agent feature.
   Decisions in the same transaction. The workspace Decision inbox is a
   read-only projection over that same durable state, defaults to PENDING, and
   applies status, Mission, and reason filters inside the workspace-scoped
-  database query. New verification Decisions store a 24-hour default expiry.
+  database query. New verification Decisions snapshot their response deadline
+  from the Mission's immutable Contract governance policy; legacy v1 Contract
+  documents resolve to the fixed 24-hour v1 default.
   The stateless expiry command locks one eligible Mission and Decision with
   `SKIP LOCKED`, then atomically marks the Decision EXPIRED and fails the
   blocked WorkUnit and Mission. It is not yet composed into a deployed polling

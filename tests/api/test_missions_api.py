@@ -878,6 +878,8 @@ class MissionApiTests(unittest.TestCase):
         repository = FakeMissionRepository()
         user = {"id": "user-1", "name": "Ada", "role": "developer"}
         client = TestClient(build_app(repository, user))
+        legacy_contract = build_contract().to_public_dict()
+        legacy_contract.pop("governance")
 
         response = client.post(
             "/api/v1/missions",
@@ -887,7 +889,7 @@ class MissionApiTests(unittest.TestCase):
                 "title": "Ship Mission API",
                 "objective": "Create the first Mission endpoint.",
                 "source": {"type": "api", "reference": "local-test"},
-                "contract": build_contract().to_public_dict(),
+                "contract": legacy_contract,
                 "createdBy": {"type": "human", "id": "forged"},
             },
         )
@@ -902,7 +904,7 @@ class MissionApiTests(unittest.TestCase):
                 "title": "Ship Mission API",
                 "objective": "Create the first Mission endpoint.",
                 "source": {"type": "api", "reference": "local-test"},
-                "contract": build_contract().to_public_dict(),
+                "contract": legacy_contract,
             },
         )
 
@@ -913,6 +915,11 @@ class MissionApiTests(unittest.TestCase):
         )
         self.assertEqual(body["status"], "READY")
         self.assertIsNotNone(repository.mission)
+        self.assertIsNotNone(repository.contract)
+        self.assertEqual(
+            repository.contract.governance.decision_timeout_seconds,
+            86_400,
+        )
         self.assertEqual(len(repository.events), 1)
         event = repository.events[0]
         self.assertEqual(event.sequence, 1)
@@ -3411,7 +3418,7 @@ class MissionApiTests(unittest.TestCase):
             workspace_id="workspace-1",
             status="RUNNING",
         )
-        repository.contract = build_contract()
+        repository.contract = build_contract(governance={"decisionTimeoutSeconds": 900})
         repository.work_units = [build_work_unit(status="VERIFYING", attempt=2)]
         repository.artifacts = [
             build_artifact(id="artifact-old", attempt=1),
@@ -3494,7 +3501,7 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(decision.recommended_option.value, "FAIL_MISSION")
         self.assertEqual(
             decision.expires_at,
-            decision.requested_at + timedelta(hours=24),
+            decision.requested_at + timedelta(minutes=15),
         )
         self.assertEqual(
             [event.event_type for event in repository.events],
@@ -4864,9 +4871,7 @@ class DecisionExpiryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(repeated.expired)
         self.assertEqual(len(repository.events), 5)
 
-    async def test_expiry_configuration_and_time_are_validated(self) -> None:
-        with self.assertRaisesRegex(ValueError, "decision_timeout must be positive"):
-            MissionService(FakeMissionRepository(), decision_timeout=timedelta(0))
+    async def test_expiry_time_is_validated(self) -> None:
         with self.assertRaisesRegex(ValueError, "timezone-aware"):
             await MissionService(FakeMissionRepository()).expire_next_decision(
                 occurred_at=datetime(2026, 8, 16)  # noqa: DTZ001

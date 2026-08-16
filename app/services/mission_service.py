@@ -66,7 +66,6 @@ from app.services.workspace_admission_service import (
 
 _A2A_OUTBOUND_ADAPTER = "a2a.outbound"
 _MAX_VERIFICATION_ARTIFACTS = 200
-_DEFAULT_DECISION_TIMEOUT = timedelta(hours=24)
 _VERIFICATION_ARTIFACT_FIELDS = frozenset(
     {
         "id",
@@ -265,10 +264,7 @@ class MissionService:
         verification_policy_resolver: VerificationPolicyResolver | None = None,
         verification_evaluator: VerificationEvaluator | None = None,
         evidence_integrity_hasher: EvidenceIntegrityHasher | None = None,
-        decision_timeout: timedelta = _DEFAULT_DECISION_TIMEOUT,
     ) -> None:
-        if decision_timeout <= timedelta(0):
-            raise ValueError("decision_timeout must be positive")
         self._repository = repository or MissionRepository()
         self._artifact_byte_verifier = artifact_byte_verifier
         self._agent_binding_resolver = agent_binding_resolver
@@ -281,7 +277,6 @@ class MissionService:
         self._evidence_integrity_hasher = (
             evidence_integrity_hasher or Sha256EvidenceIntegrityHasher()
         )
-        self._decision_timeout = decision_timeout
 
     async def create_mission(
         self,
@@ -1636,7 +1631,8 @@ class MissionService:
             version=1,
             requested_by=ActorRef(type=ActorType.SERVICE, id="mission-control"),
             requested_at=occurred_at,
-            expires_at=occurred_at + self._decision_timeout,
+            expires_at=occurred_at
+            + timedelta(seconds=contract.governance.decision_timeout_seconds),
         )
         decision_event = EventEnvelope(
             event_id=new_identifier("evt"),

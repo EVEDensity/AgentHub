@@ -175,6 +175,20 @@ class DomainModelTests(unittest.TestCase):
             {"paths": ["app/**"]},
         )
 
+    def test_contract_governance_has_stable_bounded_decision_timeout(self) -> None:
+        default_contract = build_contract()
+        custom_contract = build_contract(governance={"decisionTimeoutSeconds": 900})
+
+        self.assertEqual(default_contract.governance.decision_timeout_seconds, 86_400)
+        self.assertEqual(
+            custom_contract.to_public_dict()["governance"],
+            {"decisionTimeoutSeconds": 900},
+        )
+        with self.assertRaisesRegex(ValidationError, "greater than or equal to 1"):
+            build_contract(governance={"decisionTimeoutSeconds": 0})
+        with self.assertRaisesRegex(ValidationError, "less than or equal to 31536000"):
+            build_contract(governance={"decisionTimeoutSeconds": 31_536_001})
+
     def test_contract_configuration_rejects_non_json_values(self) -> None:
         with self.assertRaisesRegex(ValidationError, "valid JSON value"):
             build_contract(
