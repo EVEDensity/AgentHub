@@ -5,6 +5,7 @@ import hashlib
 import unittest
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -17,18 +18,25 @@ from app.api.v1.missions import (
     get_workspace_claim_admission_policy_resolver,
     router,
 )
-from app.domain import Mission, WorkUnit
+from app.domain import Lease, Mission, WorkUnit
 from app.services.artifact_store_service import PublishedArtifact
 from app.services.auth_service import get_current_user
 from app.services.capability_tools import CapabilityToolBinding
-from app.services.harness_checkpoint import HarnessExecutionContext
+from app.services.harness_checkpoint import (
+    HarnessCheckpoint,
+    HarnessEvent,
+    HarnessEventType,
+    HarnessExecutionContext,
+)
 from app.services.harness_service import (
     FunctionResult,
     FunctionTool,
     HarnessRequest,
     HarnessResult,
     ModelResponse,
+    ModelUsage,
 )
+from app.services.runner_checkpoint import MissionControlHarnessCheckpointPort
 from app.services.runner_composition import build_a2a_inbound_runner
 from app.services.runner_service import (
     ClaimedWorkExecution,
@@ -160,12 +168,13 @@ class _RecordingPublisher:
         )
 
 
-async def _authenticated_runner(request: Request) -> dict[str, str]:
+async def _authenticated_actor(request: Request) -> dict[str, str]:
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail="Authentication required")
-    return {"id": token, "name": token, "role": "runner"}
+    role = "developer" if token == "workspace-1" else "runner"
+    return {"id": token, "name": token, "role": role}
 
 
 def _build_app(repository: _AtomicMissionRepository) -> FastAPI:
@@ -185,7 +194,7 @@ def _build_app(repository: _AtomicMissionRepository) -> FastAPI:
     application.dependency_overrides[get_workspace_claim_admission_policy_resolver] = (
         lambda: admission_resolver
     )
-    application.dependency_overrides[get_current_user] = _authenticated_runner
+    application.dependency_overrides[get_current_user] = _authenticated_actor
     return application
 
 
@@ -340,6 +349,152 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(event.actor.id == "runner-a" for event in checkpoint_events)
         )
+
+    async def test_expired_attempt_is_retried_with_distinct_checkpoint_ancestry(
+        self,
+    ) -> None:
+        mission = _mission("mission-retry-checkpoint")
+        work_unit = _work_unit("mission-retry-checkpoint", "work-retry-checkpoint")
+        repository = _AtomicMissionRepository([mission], [work_unit])
+        repository.mission = mission
+        repository.contract = build_contract(
+            allowed_capabilities=[{"capability": "a2a.receive", "scope": {}}]
+        )
+        transport = httpx.ASGITransport(app=_build_app(repository))
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://mission-control.test",
+        ) as http_client:
+            control = MissionControlRunnerClient(
+                "http://mission-control.test",
+                access_token="runner-a",
+                http_client=http_client,
+            )
+            claimed = await control.claim_ready_work_unit(
+                "workspace-1",
+                runner_id="runner-a",
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                lease_seconds=300,
+            )
+            claimed_work_unit = claimed["workUnit"]
+            attempt_one_lease_id = claimed_work_unit["lease"]["id"]
+            await control.start_work_unit(
+                mission.id,
+                work_unit.id,
+                runner_id="runner-a",
+                lease_id=attempt_one_lease_id,
+            )
+
+            execution = HarnessExecutionContext(mission.id, work_unit.id, 1)
+            checkpoint_port = MissionControlHarnessCheckpointPort(
+                control,
+                execution=execution,
+                runner_id="runner-a",
+                lease_id=attempt_one_lease_id,
+            )
+            usage = ModelUsage()
+            await checkpoint_port.record(
+                HarnessCheckpoint(
+                    sequence=1,
+                    phase=HarnessEventType.EXECUTION_STARTED,
+                    execution=execution,
+                    iteration=0,
+                    tool_calls=0,
+                    usage=usage,
+                    tool_results=(),
+                ),
+                HarnessEvent(
+                    sequence=1,
+                    event_type=HarnessEventType.EXECUTION_STARTED,
+                    execution=execution,
+                    duration_ms=1,
+                    iteration=0,
+                    tool_calls=0,
+                    usage=usage,
+                ),
+            )
+            attempt_one_checkpoint_id = repository.execution_checkpoints[0].id
+
+            running = repository.work_units[0]
+            assert running.lease is not None
+            repository.work_units[0] = running.model_copy(
+                update={
+                    "lease": Lease(
+                        id=running.lease.id,
+                        runner_id=running.lease.runner_id,
+                        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+                    )
+                }
+            )
+            recovered = await http_client.post(
+                (
+                    f"/api/v1/missions/{mission.id}/work-units/"
+                    f"{work_unit.id}/recover"
+                ),
+                headers={"Authorization": "Bearer workspace-1"},
+            )
+            self.assertEqual(recovered.status_code, 200)
+            self.assertEqual(recovered.json()["status"], "RETRYING")
+            self.assertEqual(recovered.json()["attempt"], 1)
+            self.assertNotIn("lease", recovered.json())
+
+            stale_checkpoint = await http_client.post(
+                (
+                    f"/api/v1/missions/{mission.id}/work-units/"
+                    f"{work_unit.id}/checkpoints"
+                ),
+                headers={"Authorization": "Bearer runner-a"},
+                json={
+                    "id": "chk-stale-attempt-one",
+                    "leaseId": attempt_one_lease_id,
+                    "sequence": 2,
+                    "phase": "harness.iteration.started",
+                    "iteration": 1,
+                    "toolCalls": 0,
+                    "promptTokens": 0,
+                    "completionTokens": 0,
+                    "modelCost": 0,
+                    "terminal": False,
+                },
+            )
+            self.assertEqual(stale_checkpoint.status_code, 403)
+
+            runner = build_a2a_inbound_runner(
+                control,
+                publisher=_RecordingPublisher(),
+                model_factory=_FinalModelFactory(),
+                binding_factory=_EmptyBindingFactory(),
+                runner_id="runner-a",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+            result = await runner.claim_ready_and_run("workspace-1")
+
+        self.assertEqual(result.claim_status, WorkspaceClaimStatus.CLAIMED)
+        self.assertIsNotNone(result.run_result)
+        assert result.run_result is not None
+        self.assertTrue(result.run_result.success)
+        self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
+        self.assertEqual(repository.work_units[0].attempt, 2)
+        attempt_one = [
+            checkpoint
+            for checkpoint in repository.execution_checkpoints
+            if checkpoint.attempt == 1
+        ]
+        attempt_two = [
+            checkpoint
+            for checkpoint in repository.execution_checkpoints
+            if checkpoint.attempt == 2
+        ]
+        self.assertEqual([checkpoint.sequence for checkpoint in attempt_one], [1])
+        self.assertEqual(
+            [checkpoint.sequence for checkpoint in attempt_two],
+            [1, 2, 3, 4, 5],
+        )
+        self.assertNotEqual(attempt_one_checkpoint_id, attempt_two[0].id)
+        self.assertEqual(len(repository.execution_checkpoints), 6)
 
     async def test_concurrent_runners_execute_distinct_missions_then_observe_empty(self) -> None:
         repository = _AtomicMissionRepository(
