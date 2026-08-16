@@ -185,8 +185,12 @@ boundary. It is not the permanent home of every Agent feature.
   strict next revision through a workspace-authorized Mission anchor. Mission
   Control serializes that lineage, checks `expectedVersion`, records a Contract
   event, and leaves every existing Mission on its original revision. Lineages
-  already shared across workspaces fail closed for new Mission and revision
-  writes.
+  are owned by one workspace in `mission_contract_lineages`; Contract revisions
+  and Missions reference that materialized owner through database foreign keys,
+  and creation/revision commands no longer derive authorization from Mission
+  history. The ownership migration fails
+  closed for historically shared or orphan lineages instead of guessing an
+  owner.
   The stateless expiry command locks one eligible Mission and Decision with
   `SKIP LOCKED`, then atomically marks the Decision EXPIRED and fails the
   blocked WorkUnit and Mission. It is not yet composed into a deployed polling

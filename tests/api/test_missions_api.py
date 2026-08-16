@@ -93,7 +93,7 @@ class FakeMissionRepository:
         self.transaction_depth = 0
         self.admission_locks: list[str] = []
         self.contract_lineage_locks: list[str] = []
-        self.contract_lineage_workspaces: dict[str, set[str]] = {}
+        self.contract_lineage_workspaces: dict[str, str] = {}
         self.tenant_active_count_override: int | None = None
         self.verification_candidate_calls: list[str] = []
         self.work_unit_artifact_calls: list[tuple[str, str, int, int]] = []
@@ -168,24 +168,21 @@ class FakeMissionRepository:
             candidates.append(self.contract)
         return max(candidates, key=lambda contract: contract.version, default=None)
 
-    async def contract_lineage_workspace_matches(
+    async def add_contract_lineage(
         self,
         contract_id: str,
         workspace_id: str,
-    ) -> bool | None:
-        workspaces = set(self.contract_lineage_workspaces.get(contract_id, set()))
-        if self.mission is not None and self.mission.contract_id == contract_id:
-            workspaces.add(self.mission.workspace_id)
-        if not workspaces:
-            return None
-        return workspaces == {workspace_id}
+    ) -> None:
+        self.contract_lineage_workspaces[contract_id] = workspace_id
+
+    async def get_contract_lineage_workspace(
+        self,
+        contract_id: str,
+    ) -> str | None:
+        return self.contract_lineage_workspaces.get(contract_id)
 
     async def add_mission(self, mission: Mission) -> None:
         self.mission = mission
-        self.contract_lineage_workspaces.setdefault(
-            mission.contract_id,
-            set(),
-        ).add(mission.workspace_id)
 
     async def get_mission(self, mission_id: str) -> Mission | None:
         if self.mission and self.mission.id == mission_id:
@@ -971,6 +968,10 @@ class MissionApiTests(unittest.TestCase):
         self.assertIsNotNone(repository.mission)
         self.assertIsNotNone(repository.contract)
         self.assertEqual(
+            repository.contract_lineage_workspaces,
+            {"contract-1": "user-1"},
+        )
+        self.assertEqual(
             repository.contract.governance.decision_timeout_seconds,
             86_400,
         )
@@ -1008,6 +1009,7 @@ class MissionApiTests(unittest.TestCase):
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="workspace-1")
         repository.contract = build_contract(version=1)
+        repository.contract_lineage_workspaces["contract-1"] = "workspace-1"
         client = TestClient(
             build_app(
                 repository,
@@ -1079,6 +1081,7 @@ class MissionApiTests(unittest.TestCase):
                 repository = FakeMissionRepository()
                 repository.mission = build_mission(workspace_id="workspace-1")
                 repository.contract = build_contract(version=1)
+                repository.contract_lineage_workspaces["contract-1"] = "workspace-1"
                 client = TestClient(
                     build_app(
                         repository,
@@ -1120,6 +1123,7 @@ class MissionApiTests(unittest.TestCase):
                 repository = FakeMissionRepository()
                 repository.mission = build_mission(workspace_id="workspace-1")
                 repository.contract = build_contract(version=1)
+                repository.contract_lineage_workspaces["contract-1"] = "workspace-1"
                 client = TestClient(build_app(repository, user))
 
                 response = client.post(
@@ -1136,10 +1140,36 @@ class MissionApiTests(unittest.TestCase):
                 self.assertEqual(repository.contracts, [])
                 self.assertEqual(repository.events, [])
 
+    def test_contract_revision_fails_when_materialized_owner_is_missing(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="workspace-1")
+        repository.contract = build_contract(version=1)
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/contract/revisions",
+            json={
+                "expectedVersion": 1,
+                "reason": "Owner must be durable.",
+                "contract": build_contract(version=2).to_public_dict(),
+            },
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("workspace ownership is missing", response.json()["detail"])
+        self.assertEqual(repository.contracts, [])
+        self.assertEqual(repository.events, [])
+
     def test_contract_lineage_cannot_cross_workspace_boundaries(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(workspace_id="workspace-1")
         repository.contract = build_contract(version=1)
+        repository.contract_lineage_workspaces["contract-1"] = "workspace-1"
         client = TestClient(
             build_app(
                 repository,
@@ -1164,10 +1194,7 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.contracts, [])
         self.assertEqual(repository.events, [])
 
-        repository.contract_lineage_workspaces["contract-1"] = {
-            "workspace-1",
-            "workspace-2",
-        }
+        repository.contract_lineage_workspaces["contract-1"] = "workspace-2"
         workspace_one_client = TestClient(
             build_app(
                 repository,
@@ -1184,7 +1211,7 @@ class MissionApiTests(unittest.TestCase):
         )
 
         self.assertEqual(revise_response.status_code, 409)
-        self.assertIn("ownership is ambiguous", revise_response.json()["detail"])
+        self.assertIn("belongs to another workspace", revise_response.json()["detail"])
         self.assertEqual(repository.contracts, [])
         self.assertEqual(repository.events, [])
 

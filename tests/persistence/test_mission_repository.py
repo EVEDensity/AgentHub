@@ -106,22 +106,26 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("LIMIT 1", latest_sql)
         self.assertEqual(latest_args, (latest.id,))
 
-        self.database.one = {"workspace_matches": True}
-        matches = await self.repository.contract_lineage_workspace_matches(
+        await self.repository.add_contract_lineage(
             latest.id,
             "workspace-1",
         )
-        self.assertTrue(matches)
-        workspace_sql, workspace_args = self.database.fetched_one[-1]
-        self.assertIn("bool_and(workspace_id=$2)", workspace_sql)
-        self.assertEqual(workspace_args, (latest.id, "workspace-1"))
+        lineage_sql, lineage_args = self.database.executed[-1]
+        self.assertIn("INSERT INTO mission_contract_lineages", lineage_sql)
+        self.assertEqual(lineage_args, (latest.id, "workspace-1"))
 
-        self.database.one = {"workspace_matches": None}
+        self.database.one = {"workspace_id": "workspace-1"}
+        self.assertEqual(
+            await self.repository.get_contract_lineage_workspace(latest.id),
+            "workspace-1",
+        )
+        workspace_sql, workspace_args = self.database.fetched_one[-1]
+        self.assertIn("FROM mission_contract_lineages", workspace_sql)
+        self.assertEqual(workspace_args, (latest.id,))
+
+        self.database.one = None
         self.assertIsNone(
-            await self.repository.contract_lineage_workspace_matches(
-                "new-contract",
-                "workspace-1",
-            )
+            await self.repository.get_contract_lineage_workspace("new-contract")
         )
 
     async def test_mission_round_trip_accepts_decoded_json(self) -> None:

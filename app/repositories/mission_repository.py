@@ -115,6 +115,30 @@ class MissionRepository:
             contract_id,
         )
 
+    async def add_contract_lineage(
+        self,
+        contract_id: str,
+        workspace_id: str,
+    ) -> None:
+        await self._execute(
+            """INSERT INTO mission_contract_lineages(contract_id, workspace_id)
+               VALUES($1, $2)""",
+            contract_id,
+            workspace_id,
+        )
+
+    async def get_contract_lineage_workspace(
+        self,
+        contract_id: str,
+    ) -> str | None:
+        row = await self._fetch_one(
+            """SELECT workspace_id
+               FROM mission_contract_lineages
+               WHERE contract_id=$1""",
+            contract_id,
+        )
+        return str(row["workspace_id"]) if row is not None else None
+
     async def get_latest_contract(self, contract_id: str) -> MissionContract | None:
         row = await self._fetch_one(
             """SELECT document
@@ -129,25 +153,6 @@ class MissionRepository:
         return MissionContract.model_validate(
             _decode_json_object(row["document"], "document")
         )
-
-    async def contract_lineage_workspace_matches(
-        self,
-        contract_id: str,
-        workspace_id: str,
-    ) -> bool | None:
-        row = await self._fetch_one(
-            """SELECT CASE
-                         WHEN count(*) = 0 THEN NULL
-                         ELSE bool_and(workspace_id=$2)
-                      END AS workspace_matches
-               FROM missions
-               WHERE contract_id=$1""",
-            contract_id,
-            workspace_id,
-        )
-        if row is None or row["workspace_matches"] is None:
-            return None
-        return bool(row["workspace_matches"])
 
     async def add_mission(self, mission: Mission) -> None:
         await self._execute(

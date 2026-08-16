@@ -16,8 +16,10 @@ from app.db.migrations.mission_control_plane import (
     ARTIFACT_PERSISTENCE_UPGRADE,
     ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION,
     ARTIFACT_TABLE_OWNERSHIP_UPGRADE,
+    CONTRACT_LINEAGE_OWNERSHIP_DOWN_REVISION,
+    CONTRACT_LINEAGE_OWNERSHIP_REVISION,
+    CONTRACT_LINEAGE_OWNERSHIP_UPGRADE,
     CONTRACT_REVISION_BINDING_DOWN_REVISION,
-    CONTRACT_REVISION_BINDING_REVISION,
     CONTRACT_REVISION_BINDING_UPGRADE,
     DECISION_EXPIRY_DOWN_REVISION,
     DECISION_EXPIRY_UPGRADE,
@@ -55,7 +57,7 @@ async def apply_startup_migrations(
     )
     row = await connection.fetchrow("SELECT version_num FROM alembic_version LIMIT 1")
     current = row["version_num"] if row else None
-    if current == CONTRACT_REVISION_BINDING_REVISION:
+    if current == CONTRACT_LINEAGE_OWNERSHIP_REVISION:
         migration_logger.info("init_db: Alembic already at head (%s)", current)
         return
 
@@ -75,10 +77,11 @@ async def apply_startup_migrations(
         DECISION_EXPIRY_DOWN_REVISION,
         ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION,
         CONTRACT_REVISION_BINDING_DOWN_REVISION,
+        CONTRACT_LINEAGE_OWNERSHIP_DOWN_REVISION,
     }:
         message = (
             "unsupported Alembic upgrade path "
-            f"(current={current}, head={CONTRACT_REVISION_BINDING_REVISION}); "
+            f"(current={current}, head={CONTRACT_LINEAGE_OWNERSHIP_REVISION}); "
             "run 'alembic upgrade head' offline before starting AgentHub"
         )
         migration_logger.error("init_db: %s", message)
@@ -216,30 +219,38 @@ async def apply_startup_migrations(
     if current not in {
         ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION,
         CONTRACT_REVISION_BINDING_DOWN_REVISION,
+        CONTRACT_LINEAGE_OWNERSHIP_DOWN_REVISION,
     }:
         for statement in DECISION_EXPIRY_UPGRADE:
             await connection.execute(statement)
 
-    if current != CONTRACT_REVISION_BINDING_DOWN_REVISION:
+    if current not in {
+        CONTRACT_REVISION_BINDING_DOWN_REVISION,
+        CONTRACT_LINEAGE_OWNERSHIP_DOWN_REVISION,
+    }:
         for statement in ARTIFACT_TABLE_OWNERSHIP_UPGRADE:
             await connection.execute(statement)
 
-    for statement in CONTRACT_REVISION_BINDING_UPGRADE:
+    if current != CONTRACT_LINEAGE_OWNERSHIP_DOWN_REVISION:
+        for statement in CONTRACT_REVISION_BINDING_UPGRADE:
+            await connection.execute(statement)
+
+    for statement in CONTRACT_LINEAGE_OWNERSHIP_UPGRADE:
         await connection.execute(statement)
 
     if current is None:
         await connection.execute(
             "INSERT INTO alembic_version(version_num) VALUES($1)",
-            CONTRACT_REVISION_BINDING_REVISION,
+            CONTRACT_LINEAGE_OWNERSHIP_REVISION,
         )
     else:
         await connection.execute(
             "UPDATE alembic_version SET version_num=$1 WHERE version_num=$2",
-            CONTRACT_REVISION_BINDING_REVISION,
+            CONTRACT_LINEAGE_OWNERSHIP_REVISION,
             current,
         )
     migration_logger.info(
         "init_db: Alembic advanced from %s to %s",
         current or "unversioned",
-        CONTRACT_REVISION_BINDING_REVISION,
+        CONTRACT_LINEAGE_OWNERSHIP_REVISION,
     )

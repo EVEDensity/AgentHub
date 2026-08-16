@@ -332,22 +332,28 @@ class MissionService:
         )
         async with self._repository.transaction() as repository:
             await repository.lock_contract_lineage(contract.id)
-            workspace_matches = await repository.contract_lineage_workspace_matches(
-                contract.id,
-                workspace_id,
+            lineage_workspace = await repository.get_contract_lineage_workspace(
+                contract.id
             )
-            if workspace_matches is False:
-                raise ValueError("contract lineage belongs to another workspace")
             existing_contract = await repository.get_contract(
                 contract.id,
                 contract.version,
             )
-            if existing_contract is None:
+            if lineage_workspace is None:
+                if existing_contract is not None:
+                    raise ValueError("contract lineage workspace ownership is missing")
                 if contract.version != 1:
                     raise ValueError(
                         "new contract lineages must start at version 1"
                     )
+                await repository.add_contract_lineage(contract.id, workspace_id)
                 await repository.add_contract(contract)
+            elif lineage_workspace != workspace_id:
+                raise ValueError("contract lineage belongs to another workspace")
+            elif existing_contract is None:
+                raise ValueError(
+                    "contract revisions require the controlled revision command"
+                )
             elif existing_contract != contract:
                 raise ValueError(
                     "contract revision already exists with different content"
@@ -379,12 +385,13 @@ class MissionService:
                 raise ValueError("contract revision lineage does not match Mission")
 
             await repository.lock_contract_lineage(mission.contract_id)
-            workspace_matches = await repository.contract_lineage_workspace_matches(
-                mission.contract_id,
-                mission.workspace_id,
+            lineage_workspace = await repository.get_contract_lineage_workspace(
+                mission.contract_id
             )
-            if workspace_matches is not True:
-                raise ValueError("contract lineage workspace ownership is ambiguous")
+            if lineage_workspace is None:
+                raise ValueError("contract lineage workspace ownership is missing")
+            if lineage_workspace != mission.workspace_id:
+                raise ValueError("contract lineage belongs to another workspace")
             latest = await repository.get_latest_contract(mission.contract_id)
             if latest is None:
                 raise ValueError("mission contract lineage not found")

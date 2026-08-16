@@ -10,6 +10,7 @@ from typing import Any
 import asyncpg
 
 from app.db.migrations.mission_control_plane import (
+    CONTRACT_LINEAGE_OWNERSHIP_UPGRADE,
     CONTRACT_REVISION_BINDING_UPGRADE,
     MISSION_CONTROL_PLANE_UPGRADE,
     MISSION_EVENT_LEDGER_UPGRADE,
@@ -27,6 +28,7 @@ _MIGRATIONS = (
     MISSION_CONTROL_PLANE_UPGRADE
     + MISSION_EVENT_LEDGER_UPGRADE
     + CONTRACT_REVISION_BINDING_UPGRADE
+    + CONTRACT_LINEAGE_OWNERSHIP_UPGRADE
 )
 
 
@@ -112,6 +114,7 @@ class ContractRevisionPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase)
             barrier=asyncio.Barrier(2),
         )
         initial = build_contract(version=1)
+        await self._repository.add_contract_lineage(initial.id, "workspace-1")
         await self._repository.add_contract(initial)
         await self._repository.add_mission(
             build_mission(

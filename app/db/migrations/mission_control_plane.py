@@ -28,6 +28,8 @@ ARTIFACT_TABLE_OWNERSHIP_REVISION = "d3a7b8c9e0f1"
 ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION = DECISION_EXPIRY_REVISION
 CONTRACT_REVISION_BINDING_REVISION = "e4b8c9d0f1a2"
 CONTRACT_REVISION_BINDING_DOWN_REVISION = ARTIFACT_TABLE_OWNERSHIP_REVISION
+CONTRACT_LINEAGE_OWNERSHIP_REVISION = "f5c9d0e1a2b3"
+CONTRACT_LINEAGE_OWNERSHIP_DOWN_REVISION = CONTRACT_REVISION_BINDING_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -778,4 +780,103 @@ CONTRACT_REVISION_BINDING_DOWNGRADE = (
         FOREIGN KEY (contract_id) REFERENCES mission_contracts(id),
     DROP COLUMN contract_version
     """,
+)
+
+CONTRACT_LINEAGE_OWNERSHIP_UPGRADE = (
+    """
+    CREATE TABLE IF NOT EXISTS mission_contract_lineages (
+        contract_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL CHECK (
+            length(workspace_id) BETWEEN 1 AND 255
+        ),
+        UNIQUE (contract_id, workspace_id)
+    )
+    """,
+    """
+    DO $migration$
+    BEGIN
+        IF EXISTS (
+            SELECT contract_id
+            FROM missions
+            GROUP BY contract_id
+            HAVING count(DISTINCT workspace_id) > 1
+        ) THEN
+            RAISE EXCEPTION
+                'cannot assign Contract lineage shared across workspaces';
+        END IF;
+    END
+    $migration$
+    """,
+    """
+    DO $migration$
+    BEGIN
+        IF EXISTS (
+            SELECT contract.id
+            FROM mission_contracts AS contract
+            LEFT JOIN missions AS mission ON mission.contract_id = contract.id
+            WHERE mission.id IS NULL
+        ) THEN
+            RAISE EXCEPTION
+                'cannot assign orphan Contract lineage to a workspace';
+        END IF;
+    END
+    $migration$
+    """,
+    """
+    INSERT INTO mission_contract_lineages(contract_id, workspace_id)
+    SELECT contract_id, min(workspace_id)
+    FROM missions
+    GROUP BY contract_id
+    ON CONFLICT (contract_id) DO NOTHING
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_mission_contract_lineages_workspace
+    ON mission_contract_lineages(workspace_id, contract_id)
+    """,
+    """
+    DO $migration$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conrelid = 'mission_contracts'::regclass
+              AND conname = 'mission_contracts_lineage_fkey'
+        ) THEN
+            ALTER TABLE mission_contracts
+            ADD CONSTRAINT mission_contracts_lineage_fkey
+                FOREIGN KEY (id)
+                REFERENCES mission_contract_lineages(contract_id);
+        END IF;
+    END
+    $migration$
+    """,
+    """
+    DO $migration$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conrelid = 'missions'::regclass
+              AND conname = 'missions_contract_lineage_workspace_fkey'
+        ) THEN
+            ALTER TABLE missions
+            ADD CONSTRAINT missions_contract_lineage_workspace_fkey
+                FOREIGN KEY (contract_id, workspace_id)
+                REFERENCES mission_contract_lineages(contract_id, workspace_id);
+        END IF;
+    END
+    $migration$
+    """,
+)
+
+CONTRACT_LINEAGE_OWNERSHIP_DOWNGRADE = (
+    """
+    ALTER TABLE missions
+    DROP CONSTRAINT IF EXISTS missions_contract_lineage_workspace_fkey
+    """,
+    """
+    ALTER TABLE mission_contracts
+    DROP CONSTRAINT IF EXISTS mission_contracts_lineage_fkey
+    """,
+    "DROP TABLE IF EXISTS mission_contract_lineages",
 )
