@@ -21,6 +21,7 @@ from app.schemas.mission import (
     DecisionResolutionRequest,
     ExecutionCheckpointCreateRequest,
     MissionCreateRequest,
+    MissionForkRequest,
     WorkspaceVerificationDiscoveryRequest,
     WorkspaceWorkUnitClaimRequest,
     WorkUnitClaimRequest,
@@ -161,6 +162,11 @@ def _authorize_human_contract_access(user: dict) -> None:
         raise HTTPException(status_code=403, detail="Human Contract access required")
 
 
+def _authorize_human_fork_access(user: dict) -> None:
+    if user.get("role") in {"runner", "verifier", "agent", "service"}:
+        raise HTTPException(status_code=403, detail="Human Mission fork access required")
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_mission(
     request: MissionCreateRequest,
@@ -182,6 +188,62 @@ async def create_mission(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return mission.to_public_dict()
+
+
+@router.post(
+    "/{source_mission_id}/forks",
+    status_code=status.HTTP_201_CREATED,
+)
+async def fork_mission(
+    source_mission_id: str,
+    request: MissionForkRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    artifact_byte_verifier: ArtifactByteVerifierDep,
+    agent_binding_resolver: AgentBindingResolverDep,
+) -> dict:
+    _authorize_human_fork_access(user)
+    await _authorized_mission(
+        source_mission_id,
+        user=user,
+        repository=repository,
+    )
+    service = MissionService(
+        repository,
+        artifact_byte_verifier=artifact_byte_verifier,
+        agent_binding_resolver=agent_binding_resolver,
+    )
+    try:
+        outcome = await service.fork_mission(
+            source_mission_id,
+            mission_id=request.id,
+            work_unit_id=request.work_unit_id,
+            title=request.title,
+            objective=request.objective,
+            checkpoint_id=request.checkpoint_id,
+            artifact_refs=request.artifact_refs,
+            expected_outputs=request.expected_outputs,
+            required_capabilities=request.required_capabilities,
+            agent_id=request.agent_id,
+            actor=build_human_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except AgentBindingUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except ArtifactBytesUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_424_FAILED_DEPENDENCY,
+            detail=str(exc),
+        ) from exc
+    except (AgentBindingNotFoundError, ArtifactIntegrityError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return outcome.to_public_dict()
 
 
 @router.get("/decisions")

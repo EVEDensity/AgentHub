@@ -56,7 +56,15 @@ boundary. It is not the permanent home of every Agent feature.
   MissionControlHarnessCheckpointPort bound to the exact lease; it submits only
   the durable counters and validates the returned identity. Tool results and
   model content remain in the Harness journal, and this record is an ancestry
-  anchor rather than a resume image. Claiming an
+  anchor rather than a resume image. Mission Control now owns a controlled
+  Mission fork service command behind that anchor. It accepts only a successful
+  terminal checkpoint from an independently `SUCCEEDED` source WorkUnit,
+  exact-attempt ArtifactRefs with verified bytes, and a credential-free
+  workspace Agent binding. It then atomically creates a new `READY` Mission plus
+  `PENDING` root WorkUnit on the source Contract revision; it never copies
+  checkpoints, Evidence, leases, or attempts. The human-only HTTP command is
+  exposed after source-workspace authorization; the fork-root claim path is
+  not exposed yet. Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
   prompt with the peer objective marked as untrusted intent. Capability scope,

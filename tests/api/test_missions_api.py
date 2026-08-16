@@ -70,11 +70,13 @@ from app.services.workspace_admission_service import (
     WorkspaceClaimAdmissionUnavailableError,
 )
 from tests.domain.factories import (
+    DIGEST,
     build_artifact,
     build_contract,
     build_decision,
     build_event,
     build_evidence,
+    build_execution_checkpoint,
     build_mission,
     build_work_unit,
 )
@@ -798,6 +800,71 @@ class FakeArtifactByteVerifier:
         ]
 
 
+class ForkMissionRepository(FakeMissionRepository):
+    """Multi-Mission fake scoped to the fork command's ancestry behavior."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        source = build_mission(status="SUCCEEDED")
+        self.missions = {source.id: source}
+        self.contract = build_contract()
+        self.contracts = [self.contract]
+        self.contract_lineage_workspaces = {self.contract.id: source.workspace_id}
+        self.work_units = [build_work_unit(status="SUCCEEDED", attempt=1)]
+        self.execution_checkpoints = [
+            build_execution_checkpoint(
+                sequence=5,
+                phase="harness.execution.completed",
+                terminal=True,
+            )
+        ]
+        self.artifacts = [build_artifact()]
+
+    async def add_mission(self, mission: Mission) -> None:
+        if mission.id in self.missions:
+            raise ValueError("Mission already exists")
+        self.missions[mission.id] = mission
+
+    async def get_mission(self, mission_id: str) -> Mission | None:
+        return self.missions.get(mission_id)
+
+    async def get_mission_for_update(self, mission_id: str) -> Mission | None:
+        return self.missions.get(mission_id)
+
+    async def update_mission(self, mission: Mission) -> None:
+        if mission.id not in self.missions:
+            raise AssertionError("Mission update requires an existing row")
+        self.missions[mission.id] = mission
+
+
+def mission_fork_request(**updates: object) -> dict[str, object]:
+    request: dict[str, object] = {
+        "id": "mis-fork",
+        "workUnitId": "wu-fork",
+        "title": "Continue from verified output",
+        "objective": "Use verified artifacts as bounded input.",
+        "checkpointId": "chk-1",
+        "artifactRefs": [{"id": "artifact-1", "digest": DIGEST}],
+        "expectedOutputs": [{"kind": "report", "required": True}],
+        "requiredCapabilities": ["repository.write"],
+        "agentId": "reviewer",
+    }
+    request.update(updates)
+    return request
+
+
+def mission_fork_binding_resolver() -> StaticAgentBindingResolver:
+    return StaticAgentBindingResolver(
+        {
+            ("workspace-1", "reviewer"): AgentBinding(
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                capabilities=("repository.write",),
+            )
+        }
+    )
+
+
 def artifact_set_criterion(
     *,
     criterion_id: str = "tests",
@@ -939,6 +1006,201 @@ class MissionApiTests(unittest.TestCase):
             get_agent_binding_resolver(),
             DatabaseAgentBindingResolver,
         )
+
+    def test_human_can_fork_verified_mission_idempotently(self) -> None:
+        repository = ForkMissionRepository()
+        verifier = FakeArtifactByteVerifier()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+                artifact_byte_verifier=verifier,
+                agent_binding_resolver=mission_fork_binding_resolver(),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/forks",
+            json=mission_fork_request(),
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["mission"]["id"], "mis-fork")
+        self.assertEqual(response.json()["mission"]["source"]["type"], "mission.fork")
+        self.assertEqual(response.json()["workUnit"]["id"], "wu-fork")
+        self.assertEqual(response.json()["workUnit"]["status"], "PENDING")
+        self.assertEqual(len(repository.events), 2)
+        self.assertEqual(len(verifier.calls), 1)
+
+        replay = client.post(
+            "/api/v1/missions/mis-1/forks",
+            json=mission_fork_request(),
+        )
+
+        self.assertEqual(replay.status_code, 201)
+        self.assertEqual(replay.json(), response.json())
+        self.assertEqual(len(repository.events), 2)
+        self.assertEqual(len(verifier.calls), 1)
+
+    def test_non_human_roles_cannot_fork_before_artifact_io(self) -> None:
+        for role in ("runner", "verifier", "agent", "service"):
+            with self.subTest(role=role):
+                repository = ForkMissionRepository()
+                verifier = FakeArtifactByteVerifier()
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {"id": "workspace-1", "name": role, "role": role},
+                        artifact_byte_verifier=verifier,
+                        agent_binding_resolver=mission_fork_binding_resolver(),
+                    )
+                )
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/forks",
+                    json=mission_fork_request(),
+                )
+
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(verifier.calls, [])
+                self.assertEqual(repository.events, [])
+
+    def test_fork_requires_source_workspace_access_before_artifact_io(self) -> None:
+        repository = ForkMissionRepository()
+        verifier = FakeArtifactByteVerifier()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "other-workspace", "name": "Ada", "role": "developer"},
+                artifact_byte_verifier=verifier,
+                agent_binding_resolver=mission_fork_binding_resolver(),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/forks",
+            json=mission_fork_request(),
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(verifier.calls, [])
+        self.assertEqual(repository.events, [])
+
+    def test_fork_rejects_invalid_source_before_artifact_io(self) -> None:
+        repository = ForkMissionRepository()
+        repository.execution_checkpoints[0] = build_execution_checkpoint(
+            phase="harness.model.completed",
+            terminal=False,
+        )
+        verifier = FakeArtifactByteVerifier()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+                artifact_byte_verifier=verifier,
+                agent_binding_resolver=mission_fork_binding_resolver(),
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/forks",
+            json=mission_fork_request(),
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("successful terminal checkpoint", response.json()["detail"])
+        self.assertEqual(verifier.calls, [])
+        self.assertEqual(repository.events, [])
+
+    def test_fork_maps_catalog_failures_without_artifact_io(self) -> None:
+        cases = (
+            (UnavailableAgentBindingResolver(), 503, "not configured"),
+            (StaticAgentBindingResolver({}), 409, "not available"),
+        )
+        for resolver, expected_status, detail in cases:
+            with self.subTest(expected_status=expected_status):
+                repository = ForkMissionRepository()
+                verifier = FakeArtifactByteVerifier()
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {
+                            "id": "workspace-1",
+                            "name": "Ada",
+                            "role": "developer",
+                        },
+                        artifact_byte_verifier=verifier,
+                        agent_binding_resolver=resolver,
+                    )
+                )
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/forks",
+                    json=mission_fork_request(),
+                )
+
+                self.assertEqual(response.status_code, expected_status)
+                self.assertIn(detail, response.json()["detail"])
+                self.assertEqual(verifier.calls, [])
+                self.assertEqual(repository.events, [])
+
+    def test_fork_maps_artifact_storage_failures(self) -> None:
+        cases = (
+            (ArtifactBytesUnavailableError("artifact store unavailable"), 424),
+            (ArtifactIntegrityError("artifact byte digest does not match"), 409),
+        )
+        for error, expected_status in cases:
+            with self.subTest(expected_status=expected_status):
+                repository = ForkMissionRepository()
+                verifier = FakeArtifactByteVerifier(error=error)
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {
+                            "id": "workspace-1",
+                            "name": "Ada",
+                            "role": "developer",
+                        },
+                        artifact_byte_verifier=verifier,
+                        agent_binding_resolver=mission_fork_binding_resolver(),
+                    )
+                )
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/forks",
+                    json=mission_fork_request(),
+                )
+
+                self.assertEqual(response.status_code, expected_status)
+                self.assertEqual(response.json()["detail"], str(error))
+                self.assertEqual(len(verifier.calls), 1)
+                self.assertEqual(repository.events, [])
+
+    def test_fork_request_rejects_empty_artifacts_and_unknown_fields(self) -> None:
+        repository = ForkMissionRepository()
+        verifier = FakeArtifactByteVerifier()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+                artifact_byte_verifier=verifier,
+                agent_binding_resolver=mission_fork_binding_resolver(),
+            )
+        )
+
+        for request in (
+            mission_fork_request(artifactRefs=[]),
+            mission_fork_request(workspaceId="forged-workspace"),
+        ):
+            with self.subTest(request=request):
+                response = client.post(
+                    "/api/v1/missions/mis-1/forks",
+                    json=request,
+                )
+                self.assertEqual(response.status_code, 422)
+
+        self.assertEqual(verifier.calls, [])
+        self.assertEqual(repository.events, [])
 
     def test_default_runner_grant_dependency_uses_workspace_acl(self) -> None:
         self.assertIsInstance(

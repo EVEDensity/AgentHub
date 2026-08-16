@@ -36,6 +36,29 @@ class MissionCreateRequest(BaseModel):
     contract: MissionContract
 
 
+class MissionForkRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    id: Annotated[str, Field(min_length=1, max_length=255)]
+    work_unit_id: Annotated[str, Field(min_length=1, max_length=255)]
+    title: Annotated[str, Field(min_length=1, max_length=255)]
+    objective: Annotated[str, Field(min_length=1, max_length=10000)]
+    checkpoint_id: Annotated[str, Field(min_length=1, max_length=255)]
+    artifact_refs: Annotated[list[ArtifactRef], Field(min_length=1, max_length=200)]
+    expected_outputs: Annotated[list[OutputSpec], Field(max_length=200)] = Field(
+        default_factory=list
+    )
+    required_capabilities: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=255)]],
+        Field(max_length=256),
+    ] = Field(default_factory=list)
+    agent_id: Annotated[str, Field(min_length=1, max_length=255)]
+
+
 class ContractRevisionRequest(BaseModel):
     model_config = ConfigDict(
         alias_generator=_to_camel,
