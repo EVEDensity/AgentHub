@@ -76,7 +76,9 @@ Before enabling it, run migrations through Alembic head, verify PostgreSQL
 connectivity, exercise health and readiness probes, and confirm expiry counters
 against Mission events. The runtime now enforces mounted-secret database
 composition; production deployment remains blocked on operational review and a
-real direct-PostgreSQL smoke test.
+successful isolated direct-PostgreSQL smoke gate. The gate is available at
+`scripts/decision_expiry_smoke.py` and never targets the repository `.env`
+database.
 
 Rollback by stopping the service. In-flight committed transitions remain
 durable; pending expired Decisions remain eligible for a later replica. Never

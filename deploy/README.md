@@ -52,6 +52,33 @@ docker compose -f deploy/docker-compose.platform.yml --profile mission-supervisi
 A committed expiry transaction remains authoritative. Any still-pending expired
 Decision remains eligible when a compatible supervisor starts again.
 
+### Isolated expiry smoke gate
+
+The smoke gate uses a dedicated Compose topology, random loopback ports, a
+generated password, and a DSN file under the operating-system temporary
+directory. It does not load the repository `.env` or use the platform Compose
+database. The script migrates the temporary PostgreSQL database, inserts one
+valid expired Decision, builds and starts the supervisor, and verifies:
+
+- Decision `PENDING -> EXPIRED` with service resolution metadata;
+- WorkUnit `VERIFYING -> FAILED` and Mission `WAITING_DECISION -> FAILED`;
+- exactly three causally linked aggregate events;
+- no Evidence and no duplicate events after subsequent idle polls;
+- sanitized readiness counters with exactly one expiry.
+
+Docker and the repository Python dependencies are prerequisites. Run from the
+repository root:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/decision_expiry_smoke.py
+```
+
+The script assigns a unique Compose project and executes `down --volumes` in a
+`finally` block. A cleanup failure fails an otherwise successful run. If the
+test itself fails and cleanup also fails, the original failure is preserved and
+the cleanup error type is reported so the operator can remove that exact smoke
+project without touching other containers.
+
 ## A2A trust policy
 
 Gateway rejects unsigned A2A Agent Cards by default. Development environments

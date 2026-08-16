@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: agenthub
+      POSTGRES_PASSWORD: "${AGENTHUB_SMOKE_POSTGRES_PASSWORD:?required}"
+      POSTGRES_DB: agenthub
+    ports:
+      - "127.0.0.1::5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agenthub -d agenthub"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 3s
+
+  decision-expiry-service:
+    build:
+      context: ..
+      dockerfile: services/python/decision_expiry_service/Dockerfile
+    environment:
+      AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE: "/run/secrets/decision-expiry-database-url"
+      AGENTHUB_DECISION_EXPIRY_IDLE_DELAY_SECONDS: "0.1"
+      AGENTHUB_DECISION_EXPIRY_MAX_DELAY_SECONDS: "0.5"
+      AGENTHUB_DECISION_EXPIRY_SHUTDOWN_TIMEOUT_SECONDS: "10.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1::8099"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    secrets:
+      - decision-expiry-database-url
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/readyz', timeout=2).read()"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+secrets:
+  decision-expiry-database-url:
+    file: "${AGENTHUB_SMOKE_DATABASE_URL_FILE:?required}"

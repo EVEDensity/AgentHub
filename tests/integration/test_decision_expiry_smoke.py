@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from scripts.decision_expiry_smoke import (
+    _assert_sanitized_readiness,
+    _published_port,
+)
+
+
+class DecisionExpirySmokeAssetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        compose_path = Path("deploy/docker-compose.decision-expiry-smoke.yml")
+        document = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            raise TypeError("smoke Compose document must be an object")
+        cls.document: dict[str, Any] = document
+        cls.services: dict[str, Any] = document["services"]
+
+    def test_topology_contains_only_ephemeral_postgres_and_supervisor(self) -> None:
+        self.assertEqual(
+            set(self.services),
+            {"postgres", "decision-expiry-service"},
+        )
+        self.assertNotIn("volumes", self.document)
+        self.assertNotIn("volumes", self.services["postgres"])
+        self.assertNotIn("volumes", self.services["decision-expiry-service"])
+
+    def test_ports_are_random_and_loopback_only(self) -> None:
+        self.assertEqual(self.services["postgres"]["ports"], ["127.0.0.1::5432"])
+        self.assertEqual(
+            self.services["decision-expiry-service"]["ports"],
+            ["127.0.0.1::8099"],
+        )
+
+    def test_supervisor_uses_secret_and_real_readiness(self) -> None:
+        service = self.services["decision-expiry-service"]
+        environment = service["environment"]
+        self.assertNotIn("DATABASE_URL", environment)
+        self.assertEqual(
+            environment["AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE"],
+            "/run/secrets/decision-expiry-database-url",
+        )
+        self.assertEqual(service["secrets"], ["decision-expiry-database-url"])
+        self.assertIn("/readyz", " ".join(service["healthcheck"]["test"]))
+        self.assertEqual(
+            service["depends_on"]["postgres"]["condition"],
+            "service_healthy",
+        )
+
+    def test_published_port_parser_rejects_non_loopback_or_invalid_values(self) -> None:
+        self.assertEqual(_published_port("127.0.0.1:49152\n"), 49152)
+        for output in ("", "example.test:1234", "127.0.0.1:0", "invalid"):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                _published_port(output)
+
+    def test_readiness_assertion_accepts_only_one_sanitized_expiry(self) -> None:
+        valid = {
+            "status": "ready",
+            "worker": {"expired": 1, "failedPolls": 0},
+        }
+        _assert_sanitized_readiness(valid)
+
+        invalid_payloads = (
+            {"status": "not-ready", "worker": {}},
+            {"status": "ready", "worker": {"expired": 2, "failedPolls": 0}},
+            {
+                "status": "ready",
+                "worker": {
+                    "expired": 1,
+                    "failedPolls": 0,
+                    "decision": "dec-decision-expiry-smoke",
+                },
+            },
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaises(AssertionError):
+                _assert_sanitized_readiness(payload)
+
+
+if __name__ == "__main__":
+    unittest.main()
