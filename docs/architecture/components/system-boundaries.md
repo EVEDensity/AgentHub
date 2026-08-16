@@ -32,6 +32,7 @@ Mission Control
 | Harness | model loop, function calling, tool use, checkpoints | durable Mission truth |
 | Context Compiler | request-scoped context manifest | WorkUnit status or acceptance |
 | Verifier | independent checks and Evidence | the Agent's internal reasoning |
+| Decision expiry supervisor | stateless polling and process health | Decision, WorkUnit, or Mission state |
 | A2A Adapter | external Agent Card and task translation | internal scheduling and task tables |
 | MCP Adapter | tool/resource protocol and request auth | business sessions and Mission state |
 | Frontend | user projection and commands | fallback success or durable state |

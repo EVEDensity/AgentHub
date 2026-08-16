@@ -35,6 +35,11 @@ not create a competing Mission or WorkUnit state machine.
   evaluation, and publishes sanitized health state. It owns no verifier lease,
   queue, Evidence store, or Mission lifecycle state; Mission Control serializes
   verification admission.
+- The Python Decision expiry service is a Mission Control maintenance process.
+  It drains persisted expiry eligibility directly through the existing
+  transactional command, owns no queue or cursor, and publishes only sanitized
+  operational state. Its process configuration cannot revise the durable
+  `expiresAt` selected when a Decision was created.
 - MCP and A2A services are protocol boundaries, not business databases.
 - Gateway evaluates external A2A Agent Cards against an immutable startup
   trust policy. Unsigned cards fail closed by default; optional origin-bound
