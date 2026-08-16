@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import unittest
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from starlette.responses import JSONResponse
 
 from app.api.v1.missions import (
     get_mission_repository,
@@ -19,10 +20,20 @@ from app.api.v1.missions import (
 from app.domain import Mission, WorkUnit
 from app.services.artifact_store_service import PublishedArtifact
 from app.services.auth_service import get_current_user
-from app.services.harness_service import HarnessRequest, HarnessResult
+from app.services.capability_tools import CapabilityToolBinding
+from app.services.harness_checkpoint import HarnessExecutionContext
+from app.services.harness_service import (
+    FunctionResult,
+    FunctionTool,
+    HarnessRequest,
+    HarnessResult,
+    ModelResponse,
+)
+from app.services.runner_composition import build_a2a_inbound_runner
 from app.services.runner_service import (
     ClaimedWorkExecution,
     MissionControlRunnerClient,
+    RunnerExecutionError,
     RunnerExecutionInput,
     WorkUnitRunner,
 )
@@ -33,7 +44,7 @@ from tests.api.test_missions_api import (
     FakeRunnerWorkspaceGrantAuthorizer,
     FakeWorkspaceClaimAdmissionPolicyResolver,
 )
-from tests.domain.factories import build_mission, build_work_unit
+from tests.domain.factories import build_contract, build_mission, build_work_unit
 
 
 class _AtomicMissionRepository(FakeMissionRepository):
@@ -103,6 +114,38 @@ class _StaticResolver:
         )
 
 
+class _FinalModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+    ) -> ModelResponse:
+        del request, tool_results
+        self.calls += 1
+        return ModelResponse(content="checkpointed result")
+
+
+class _FinalModelFactory:
+    def __init__(self) -> None:
+        self.model = _FinalModel()
+
+    def build(self, tools: Sequence[FunctionTool]) -> _FinalModel:
+        del tools
+        return self.model
+
+
+class _EmptyBindingFactory:
+    def build(
+        self,
+        execution: HarnessExecutionContext,
+    ) -> Sequence[CapabilityToolBinding]:
+        del execution
+        return ()
+
+
 class _RecordingPublisher:
     def __init__(self) -> None:
         self.contents: list[bytes] = []
@@ -170,6 +213,134 @@ def _work_unit(mission_id: str, work_unit_id: str) -> WorkUnit:
 
 
 class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_checkpoint_rejection_fails_before_model_and_recovers_work(
+        self,
+    ) -> None:
+        mission = _mission("mission-rejected")
+        work_unit = _work_unit("mission-rejected", "work-rejected")
+        repository = _AtomicMissionRepository([mission], [work_unit])
+        repository.mission = mission
+        repository.contract = build_contract(
+            allowed_capabilities=[{"capability": "a2a.receive", "scope": {}}]
+        )
+        application = _build_app(repository)
+
+        @application.middleware("http")
+        async def reject_checkpoint(request: Request, call_next: Any):
+            if request.url.path.endswith("/checkpoints"):
+                return JSONResponse(
+                    status_code=409,
+                    content={"detail": "checkpoint admission rejected"},
+                )
+            return await call_next(request)
+
+        model_factory = _FinalModelFactory()
+        publisher = _RecordingPublisher()
+        transport = httpx.ASGITransport(app=application)
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            control = MissionControlRunnerClient(
+                "http://mission-control.test",
+                access_token="runner-a",
+                http_client=http_client,
+            )
+            runner = build_a2a_inbound_runner(
+                control,
+                publisher=publisher,
+                model_factory=model_factory,
+                binding_factory=_EmptyBindingFactory(),
+                runner_id="runner-a",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+            with self.assertRaisesRegex(
+                RunnerExecutionError,
+                "Harness execution failed",
+            ):
+                await runner.claim_ready_and_run("workspace-1")
+
+        self.assertEqual(model_factory.model.calls, 0)
+        self.assertEqual(publisher.contents, [])
+        self.assertEqual(repository.execution_checkpoints, [])
+        self.assertEqual(repository.work_units[0].status.value, "FAILED")
+        failed_events = [
+            event
+            for event in repository.events
+            if event.event_type == "work_unit.lifecycle.failed"
+        ]
+        self.assertEqual(len(failed_events), 1)
+        self.assertNotIn("checkpoint admission rejected", str(failed_events[0].payload))
+
+    async def test_production_inbound_runner_persists_checkpoints_over_http(
+        self,
+    ) -> None:
+        mission = _mission("mission-checkpoint")
+        work_unit = _work_unit("mission-checkpoint", "work-checkpoint")
+        repository = _AtomicMissionRepository([mission], [work_unit])
+        repository.mission = mission
+        repository.contract = build_contract(
+            allowed_capabilities=[{"capability": "a2a.receive", "scope": {}}]
+        )
+        transport = httpx.ASGITransport(app=_build_app(repository))
+
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            control = MissionControlRunnerClient(
+                "http://mission-control.test",
+                access_token="runner-a",
+                http_client=http_client,
+            )
+            runner = build_a2a_inbound_runner(
+                control,
+                publisher=_RecordingPublisher(),
+                model_factory=_FinalModelFactory(),
+                binding_factory=_EmptyBindingFactory(),
+                runner_id="runner-a",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+            result = await runner.claim_ready_and_run("workspace-1")
+
+        self.assertEqual(result.claim_status, WorkspaceClaimStatus.CLAIMED)
+        self.assertIsNotNone(result.run_result)
+        assert result.run_result is not None
+        self.assertTrue(result.run_result.success)
+        self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
+        self.assertEqual(
+            [checkpoint.sequence for checkpoint in repository.execution_checkpoints],
+            [1, 2, 3, 4, 5],
+        )
+        self.assertEqual(
+            [checkpoint.phase.value for checkpoint in repository.execution_checkpoints],
+            [
+                "harness.execution.started",
+                "harness.iteration.started",
+                "harness.model.started",
+                "harness.model.completed",
+                "harness.execution.completed",
+            ],
+        )
+        checkpoint_events = [
+            event
+            for event in repository.events
+            if event.event_type == "work_unit.checkpoint.recorded"
+        ]
+        self.assertEqual(len(checkpoint_events), 5)
+        self.assertTrue(
+            all("toolResults" not in event.payload for event in checkpoint_events)
+        )
+        self.assertTrue(
+            all(
+                event.payload["stateDigest"].startswith("sha256:")
+                for event in checkpoint_events
+            )
+        )
+        self.assertEqual(
+            [event.payload["sequence"] for event in checkpoint_events],
+            [1, 2, 3, 4, 5],
+        )
+        self.assertTrue(
+            all(event.actor.id == "runner-a" for event in checkpoint_events)
+        )
+
     async def test_concurrent_runners_execute_distinct_missions_then_observe_empty(self) -> None:
         repository = _AtomicMissionRepository(
             [_mission("mission-a"), _mission("mission-b")],
