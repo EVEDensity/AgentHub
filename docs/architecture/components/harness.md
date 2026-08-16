@@ -39,6 +39,11 @@ and validates every response identity.
 - Claimed inbound work supplies a request-scoped Harness as part of one
   execution plan. Its model factory receives the exact resolved `FunctionTool`
   set, and its binding factory receives Mission, WorkUnit, and attempt identity.
+- Controlled Mission forks use the same bounded Harness policy through a
+  fork-specific factory. Every required capability must resolve to a callable
+  Contract-scoped binding; the factory preserves all fork capabilities and
+  binds checkpoints to the exact attempt lease. This differs from inbound A2A,
+  where `a2a.receive` is an admission marker and is not a model tool.
 - Optional `HarnessCheckpointPort`: atomic checkpoint/event recording.
 
 ## Outputs
@@ -77,4 +82,6 @@ return both bounded input and a valid request-scoped Harness. The protocol-only
 `a2a.receive` admission capability is never exposed as a model function; every
 other required capability must have a concrete binding. The model factory must
 receive those resolved tools so provider tool schemas and executable handlers
-cannot drift.
+cannot drift. Mission-fork Harness construction similarly rejects another
+WorkUnit kind, child work, a missing execution binding, the outbound adapter,
+unauthorized capabilities, missing bindings, and duplicate function names.

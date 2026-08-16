@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -34,6 +35,26 @@ from app.services.runner_service import (
 A2A_RECEIVE_CAPABILITY = "a2a.receive"
 
 
+@dataclass(frozen=True, slots=True)
+class _HarnessProfile:
+    label: str
+    work_unit_kind: str
+    admission_capability: str | None = None
+    forbidden_adapter: str | None = None
+
+
+_A2A_INBOUND_HARNESS_PROFILE = _HarnessProfile(
+    label="inbound",
+    work_unit_kind="a2a.inbound",
+    admission_capability=A2A_RECEIVE_CAPABILITY,
+)
+_MISSION_FORK_HARNESS_PROFILE = _HarnessProfile(
+    label="Mission fork",
+    work_unit_kind="mission.fork",
+    forbidden_adapter="a2a.outbound",
+)
+
+
 class HarnessModelFactoryPort(Protocol):
     """Build a request-scoped model adapter with the exact resolved tool set."""
 
@@ -60,14 +81,15 @@ class HarnessCheckpointFactoryPort(Protocol):
     ) -> HarnessCheckpointPort: ...
 
 
-class A2AInboundHarnessFactory:
-    """Build one capability-scoped model Harness from claimed durable context."""
+class _ClaimedHarnessFactory:
+    """Build one capability-scoped Harness from a claimed execution context."""
 
     def __init__(
         self,
         model_factory: HarnessModelFactoryPort,
         binding_factory: CapabilityBindingFactoryPort,
         *,
+        profile: _HarnessProfile,
         checkpoint_factory: HarnessCheckpointFactoryPort | None = None,
         max_iterations: int = 8,
         max_tool_calls: int = 32,
@@ -86,6 +108,7 @@ class A2AInboundHarnessFactory:
             raise ValueError("max_model_cost must be non-negative")
         self._model_factory = model_factory
         self._binding_factory = binding_factory
+        self._profile = profile
         self._checkpoint_factory = checkpoint_factory
         self._max_iterations = max_iterations
         self._max_tool_calls = max_tool_calls
@@ -101,14 +124,39 @@ class A2AInboundHarnessFactory:
                 "claimed execution context failed domain validation"
             ) from exc
 
-        if A2A_RECEIVE_CAPABILITY not in work_unit.required_capabilities:
+        if work_unit.kind != self._profile.work_unit_kind:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit has another kind"
+            )
+        if work_unit.parent_work_unit_id is not None:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit must be a root"
+            )
+        if work_unit.assigned_agent_id is None or work_unit.assigned_adapter is None:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit has no execution binding"
+            )
+        if work_unit.assigned_adapter == self._profile.forbidden_adapter:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit cannot use "
+                f"{self._profile.forbidden_adapter}"
+            )
+        admission_capability = self._profile.admission_capability
+        if (
+            admission_capability is not None
+            and admission_capability not in work_unit.required_capabilities
+        ):
             raise ClaimedWorkResolutionError(
                 "inbound WorkUnit lacks the A2A admission capability"
             )
         if work_unit.attempt < 1:
-            raise ClaimedWorkResolutionError("inbound WorkUnit has no active attempt")
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit has no active attempt"
+            )
         if work_unit.status.value not in {"LEASED", "RUNNING"}:
-            raise ClaimedWorkResolutionError("inbound WorkUnit is not actively leased")
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit is not actively leased"
+            )
         execution = HarnessExecutionContext(
             mission_id=work_unit.mission_id,
             work_unit_id=work_unit.id,
@@ -133,7 +181,7 @@ class A2AInboundHarnessFactory:
                 "required_capabilities": tuple(
                     capability
                     for capability in work_unit.required_capabilities
-                    if capability != A2A_RECEIVE_CAPABILITY
+                    if capability != admission_capability
                 )
             }
         )
@@ -172,8 +220,60 @@ class A2AInboundHarnessFactory:
             )
         except ValueError as exc:
             raise ClaimedWorkResolutionError(
-                "inbound Harness policy configuration is invalid"
+                f"{self._profile.label} Harness policy configuration is invalid"
             ) from exc
+
+
+class A2AInboundHarnessFactory(_ClaimedHarnessFactory):
+    """Build one capability-scoped inbound A2A Harness."""
+
+    def __init__(
+        self,
+        model_factory: HarnessModelFactoryPort,
+        binding_factory: CapabilityBindingFactoryPort,
+        *,
+        checkpoint_factory: HarnessCheckpointFactoryPort | None = None,
+        max_iterations: int = 8,
+        max_tool_calls: int = 32,
+        max_total_tokens: int | None = None,
+        max_model_cost: float | None = None,
+    ) -> None:
+        super().__init__(
+            model_factory,
+            binding_factory,
+            profile=_A2A_INBOUND_HARNESS_PROFILE,
+            checkpoint_factory=checkpoint_factory,
+            max_iterations=max_iterations,
+            max_tool_calls=max_tool_calls,
+            max_total_tokens=max_total_tokens,
+            max_model_cost=max_model_cost,
+        )
+
+
+class MissionForkHarnessFactory(_ClaimedHarnessFactory):
+    """Build one capability-scoped Harness for a controlled Mission fork."""
+
+    def __init__(
+        self,
+        model_factory: HarnessModelFactoryPort,
+        binding_factory: CapabilityBindingFactoryPort,
+        *,
+        checkpoint_factory: HarnessCheckpointFactoryPort | None = None,
+        max_iterations: int = 8,
+        max_tool_calls: int = 32,
+        max_total_tokens: int | None = None,
+        max_model_cost: float | None = None,
+    ) -> None:
+        super().__init__(
+            model_factory,
+            binding_factory,
+            profile=_MISSION_FORK_HARNESS_PROFILE,
+            checkpoint_factory=checkpoint_factory,
+            max_iterations=max_iterations,
+            max_tool_calls=max_tool_calls,
+            max_total_tokens=max_total_tokens,
+            max_model_cost=max_model_cost,
+        )
 
 
 def build_a2a_inbound_runner(
@@ -239,5 +339,6 @@ __all__ = [
     "CapabilityBindingFactoryPort",
     "HarnessCheckpointFactoryPort",
     "HarnessModelFactoryPort",
+    "MissionForkHarnessFactory",
     "build_a2a_inbound_runner",
 ]

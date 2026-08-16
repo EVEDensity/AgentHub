@@ -7,7 +7,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.capability_tools import CapabilityToolBinding
-from app.services.harness_checkpoint import HarnessExecutionContext
+from app.services.harness_checkpoint import (
+    HarnessExecutionContext,
+    InMemoryHarnessCheckpointPort,
+)
 from app.services.harness_service import (
     FunctionCall,
     FunctionResult,
@@ -18,6 +21,7 @@ from app.services.harness_service import (
 )
 from app.services.runner_composition import (
     A2AInboundHarnessFactory,
+    MissionForkHarnessFactory,
     build_a2a_inbound_runner,
 )
 from app.services.runner_service import ClaimedWorkResolutionError
@@ -25,6 +29,7 @@ from tests.services.test_runner_service import (
     FakePublisher,
     inbound_claim_payload,
     inbound_execution_context,
+    mission_fork_execution_context,
 )
 
 
@@ -32,6 +37,16 @@ def valid_execution_context() -> dict[str, Any]:
     context = copy.deepcopy(inbound_execution_context())
     context["workUnit"]["dependencies"] = []
     del context["workUnit"]["inputRefs"][0]["contentAddress"]
+    return context
+
+
+def valid_mission_fork_context() -> dict[str, Any]:
+    context = copy.deepcopy(mission_fork_execution_context())
+    context["workUnit"]["dependencies"] = []
+    del context["workUnit"]["inputRefs"][0]["contentAddress"]
+    context["contract"]["allowedCapabilities"][0]["scope"] = {
+        "path": "app/**"
+    }
     return context
 
 
@@ -81,6 +96,21 @@ class RecordingBindingFactory:
         return self.bindings
 
 
+class RecordingCheckpointFactory:
+    def __init__(self) -> None:
+        self.calls: list[tuple[HarnessExecutionContext, str]] = []
+        self.port = InMemoryHarnessCheckpointPort()
+
+    def build(
+        self,
+        execution: HarnessExecutionContext,
+        *,
+        lease_id: str,
+    ) -> InMemoryHarnessCheckpointPort:
+        self.calls.append((execution, lease_id))
+        return self.port
+
+
 class ToolCallingModel:
     def __init__(self, *, usage: ModelUsage | None = None) -> None:
         self.usage = usage or ModelUsage()
@@ -118,6 +148,136 @@ class RecordingModelFactory:
 
 
 class RunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fork_factory_binds_all_required_capabilities_and_lease(
+        self,
+    ) -> None:
+        binding_factory = RecordingBindingFactory([read_binding()])
+        checkpoint_factory = RecordingCheckpointFactory()
+        model_factory = RecordingModelFactory()
+        harness = MissionForkHarnessFactory(
+            model_factory,
+            binding_factory,
+            checkpoint_factory=checkpoint_factory,
+        ).build(valid_mission_fork_context())
+
+        execution = HarnessExecutionContext(
+            mission_id="mis-fork",
+            work_unit_id="wu-fork",
+            attempt=1,
+        )
+        result = await harness.execute(
+            HarnessRequest(
+                code="bounded Mission fork context",
+                language="text",
+                timeout=5,
+                execution=execution,
+            )
+        )
+
+        self.assertTrue(result.sandbox.success)
+        self.assertEqual(result.sandbox.stdout, "verified model result")
+        self.assertEqual(binding_factory.executions, [execution])
+        self.assertEqual(
+            checkpoint_factory.calls,
+            [(execution, "lease-fork")],
+        )
+        self.assertTrue(checkpoint_factory.port.checkpoints)
+        self.assertTrue(
+            all(
+                checkpoint.execution == execution
+                for checkpoint in checkpoint_factory.port.checkpoints
+            )
+        )
+        self.assertEqual(
+            [tool.name for tool in model_factory.tool_sets[0]],
+            ["read_file"],
+        )
+        self.assertEqual(
+            model_factory.model.tool_results[1][0].content,
+            "read:app/**:app/**",
+        )
+
+    def test_fork_factory_fails_when_capability_has_no_binding(self) -> None:
+        with self.assertRaisesRegex(
+            ClaimedWorkResolutionError,
+            "claimed capability requirements could not be resolved",
+        ):
+            MissionForkHarnessFactory(
+                RecordingModelFactory(),
+                RecordingBindingFactory(),
+            ).build(valid_mission_fork_context())
+
+    def test_fork_factory_rejects_unauthorized_or_duplicate_tools(self) -> None:
+        cases = [
+            (
+                "unauthorized",
+                lambda context: context["workUnit"].update(
+                    requiredCapabilities=["repository.read", "shell.admin"]
+                ),
+                [read_binding()],
+            ),
+            (
+                "duplicate_function",
+                lambda context: None,
+                [read_binding(), read_binding()],
+            ),
+        ]
+
+        for name, mutate, bindings in cases:
+            with self.subTest(name=name):
+                context = valid_mission_fork_context()
+                mutate(context)
+                model_factory = RecordingModelFactory()
+                with self.assertRaisesRegex(
+                    ClaimedWorkResolutionError,
+                    "claimed capability requirements could not be resolved",
+                ):
+                    MissionForkHarnessFactory(
+                        model_factory,
+                        RecordingBindingFactory(bindings),
+                    ).build(context)
+                self.assertEqual(model_factory.tool_sets, [])
+
+    def test_fork_factory_rejects_another_execution_shape(self) -> None:
+        cases = [
+            (
+                "kind",
+                lambda context: context["workUnit"].update(kind="a2a.inbound"),
+                "another kind",
+            ),
+            (
+                "parent",
+                lambda context: context["workUnit"].update(
+                    parentWorkUnitId="wu-parent"
+                ),
+                "must be a root",
+            ),
+            (
+                "binding",
+                lambda context: context["workUnit"].update(
+                    assignedAgentId=None
+                ),
+                "no execution binding",
+            ),
+            (
+                "adapter",
+                lambda context: context["workUnit"].update(
+                    assignedAdapter="a2a.outbound"
+                ),
+                "cannot use a2a.outbound",
+            ),
+        ]
+
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                context = valid_mission_fork_context()
+                mutate(context)
+                with self.assertRaisesRegex(ClaimedWorkResolutionError, message):
+                    MissionForkHarnessFactory(
+                        RecordingModelFactory(),
+                        RecordingBindingFactory([read_binding()]),
+                    ).build(context)
+
     async def test_factory_binds_only_callable_capabilities_for_one_attempt(
         self,
     ) -> None:

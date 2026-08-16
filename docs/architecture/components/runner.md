@@ -81,8 +81,11 @@ capability scopes, criterion configuration, content addresses, and bytes. The
 compiler neither creates a Harness nor starts the WorkUnit. Fork-specific
 claimed-work resolution now binds one exact lease-fenced context read to the
 compiler and an injected request-scoped Harness without starting the WorkUnit.
-The fork Harness factory and process composition remain the next execution
-gates.
+A fork-specific Harness factory now validates the root execution shape,
+resolves every required capability against Contract-scoped callable bindings,
+and binds its checkpoint port to the exact attempt and lease. Missing,
+unauthorized, or duplicate tool bindings fail before model construction.
+Resolver/factory and process composition remain the next execution gates.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current
