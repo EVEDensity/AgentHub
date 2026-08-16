@@ -20,6 +20,8 @@ providing automatic expiry.
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic upgrade head
+New-Item -ItemType Directory -Force deploy/secrets
+Set-Content -NoNewline deploy/secrets/decision-expiry-database-url "postgresql://agenthub:agenthub@postgres:5432/agenthub"
 docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision up -d --build postgres decision-expiry-service
 docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision ps decision-expiry-service
 ```
@@ -30,11 +32,16 @@ network, not published to the host. The container runs with no Linux
 capabilities, a read-only root filesystem, bounded temporary filesystems, and no
 durable volume. Mission Control PostgreSQL remains the only persistence layer.
 
-`AGENTHUB_DECISION_EXPIRY_DATABASE_URL` overrides the bundled local-development
-DSN. The default credentials in this Compose file are for the bundled local
-PostgreSQL container only. This environment-variable path is not an approved
-production secret-distribution mechanism; production enablement requires a
-mounted-secret database composition and separate operational review.
+Compose mounts `deploy/secrets/decision-expiry-database-url` by default. Set
+`AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE` to select a different host-side
+file. The directory is excluded from Git and the Docker build context. The DSN
+must use PostgreSQL wire protocol; the supervisor deliberately does not use the
+stateless Neon HTTP adapter because expiry requires one real transaction.
+
+The example credentials above are for the bundled local PostgreSQL container
+only. Production must source the mounted file from its secret manager and pass
+only the file path in process configuration. A real direct-PostgreSQL smoke test
+and operational review are still required before production enablement.
 
 Stop or roll back supervision without editing durable Mission state:
 

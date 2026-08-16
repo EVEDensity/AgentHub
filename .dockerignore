@@ -22,6 +22,7 @@ data
 .vscode
 docs/internal
 docs/generated
+deploy/secrets
 *.log
 *.tmp
 .tmp-go-cache

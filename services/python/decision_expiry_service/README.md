@@ -11,8 +11,12 @@ event transitions.
 
 ## Runtime contract
 
-- The process uses the same required `DATABASE_URL` as Mission Control and
-  performs a real connectivity check before starting its worker.
+- The process reads its PostgreSQL DSN from one required, absolute
+  `DATABASE_URL_FILE` and performs a real connectivity check before starting
+  its worker. A plaintext DSN setting is not supported.
+- Expiry uses a process-owned PostgreSQL wire pool and one real connection-level
+  transaction. Stateless Neon HTTP transaction emulation is not supported;
+  Neon deployments must supply a direct PostgreSQL DSN.
 - A successful expiry is polled again immediately. An idle result or transient
   failure uses bounded exponential backoff.
 - The worker owns no queue, cursor, schedule, workspace projection, or durable
@@ -30,11 +34,11 @@ event transitions.
 
 ## Configuration
 
-The shared `DATABASE_URL` is required. Process-only settings use the
-`AGENTHUB_DECISION_EXPIRY_` prefix:
+All settings use the `AGENTHUB_DECISION_EXPIRY_` prefix:
 
 | Variable suffix | Default | Purpose |
 |---|---:|---|
+| `DATABASE_URL_FILE` | required | Absolute path to a mounted, single-line PostgreSQL DSN |
 | `HOST` | `0.0.0.0` | Operational HTTP bind host |
 | `PORT` | `8099` | Operational HTTP port |
 | `IDLE_DELAY_SECONDS` | `0.5` | Initial idle/error backoff |
@@ -46,9 +50,10 @@ immutable Contract revision and Decision creation, not expiry supervision.
 
 ## Run
 
-From the repository root with `DATABASE_URL` configured:
+From the repository root with an absolute secret-file path configured:
 
 ```powershell
+$env:AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE = "D:\secrets\agenthub-database-url"
 .\.venv\Scripts\python.exe -m services.python.decision_expiry_service
 ```
 
@@ -58,9 +63,9 @@ Build from the repository root:
 docker build -f services/python/decision_expiry_service/Dockerfile -t agenthub-decision-expiry .
 ```
 
-The image runs as non-root UID `10003`. Supply the database credential through
-the deployment secret mechanism used by Mission Control. Do not bake it into
-the image or a tracked environment file.
+The image runs as non-root UID `10003`. Mount the database credential read-only
+and pass only its in-container path. Do not bake the DSN into the image,
+environment, command line, or a tracked file.
 
 ## Deployment status and rollback
 
@@ -69,8 +74,9 @@ The checked-in platform Compose offers a default-disabled
 operational port to the host and is not an approved production secret path.
 Before enabling it, run migrations through Alembic head, verify PostgreSQL
 connectivity, exercise health and readiness probes, and confirm expiry counters
-against Mission events. Production deployment remains blocked on mounted-secret
-database composition and operational review.
+against Mission events. The runtime now enforces mounted-secret database
+composition; production deployment remains blocked on operational review and a
+real direct-PostgreSQL smoke test.
 
 Rollback by stopping the service. In-flight committed transitions remain
 durable; pending expired Decisions remain eligible for a later replica. Never

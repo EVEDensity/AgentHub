@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
+from contextlib import asynccontextmanager
 from dataclasses import replace
-from unittest.mock import patch
+from pathlib import Path
+from types import TracebackType
+from typing import Any
 
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -15,12 +19,22 @@ from app.services.decision_expiry_supervisor import (
 )
 from services.python.decision_expiry_service.config import (
     DecisionExpiryServiceSettings,
+    read_database_url_file,
 )
 from services.python.decision_expiry_service.main import create_app
 from services.python.decision_expiry_service.runtime import (
+    DecisionExpiryDatabase,
     DecisionExpiryServiceRuntime,
     build_decision_expiry_runtime,
 )
+
+
+def _settings(**updates: Any) -> DecisionExpiryServiceSettings:
+    values: dict[str, Any] = {
+        "database_url_file": Path.cwd().resolve() / "database-url.secret",
+    }
+    values.update(updates)
+    return DecisionExpiryServiceSettings(**values)
 
 
 class FakeSupervisor:
@@ -65,6 +79,56 @@ class LifecycleRecorder:
         self.closed += 1
 
 
+class FailingLifecycleRecorder(LifecycleRecorder):
+    async def initialize(self) -> object:
+        self.initialized += 1
+        raise RuntimeError("database unavailable")
+
+
+class RecordingTransaction:
+    def __init__(self, connection: RecordingConnection) -> None:
+        self.connection = connection
+
+    async def __aenter__(self) -> RecordingConnection:
+        self.connection.transaction_enters += 1
+        return self.connection
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc, traceback
+        self.connection.transaction_exits += 1
+
+
+class RecordingConnection:
+    def __init__(self) -> None:
+        self.transaction_enters = 0
+        self.transaction_exits = 0
+
+    def transaction(self) -> RecordingTransaction:
+        return RecordingTransaction(self)
+
+
+class RecordingPool:
+    def __init__(self) -> None:
+        self.initialized_urls: list[str] = []
+        self.closed = 0
+        self.connection = RecordingConnection()
+
+    async def initialize(self, database_url: str) -> None:
+        self.initialized_urls.append(database_url)
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self.connection
+
+    async def close(self) -> None:
+        self.closed += 1
+
+
 class FailingSupervisor(FakeSupervisor):
     async def run(self) -> None:
         raise RuntimeError("startup failed")
@@ -79,28 +143,92 @@ class DecisionExpiryServiceConfigurationTests(unittest.TestCase):
             {"shutdown_timeout_seconds": 0},
         )
         for values in invalid:
+            values = {"database_url_file": Path.cwd().resolve() / "db", **values}
             with self.subTest(values=values), self.assertRaises(ValidationError):
                 DecisionExpiryServiceSettings(**values)
 
-    def test_composition_requires_the_control_plane_database(self) -> None:
-        settings = DecisionExpiryServiceSettings()
-        with patch(
-            "services.python.decision_expiry_service.runtime.DATABASE_URL",
-            "",
-        ), self.assertRaisesRegex(ValueError, "DATABASE_URL"):
-            build_decision_expiry_runtime(settings)
+    def test_requires_an_absolute_database_url_file(self) -> None:
+        with self.assertRaises(ValidationError):
+            DecisionExpiryServiceSettings(database_url_file=Path("database.url"))
+
+    def test_plaintext_database_url_cannot_replace_the_secret_file(self) -> None:
+        with self.assertRaises(ValidationError):
+            DecisionExpiryServiceSettings(  # type: ignore[call-arg]
+                database_url="postgresql://user:secret@database/agenthub"
+            )
+
+    def test_database_url_file_is_bounded_single_line_and_postgresql(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            valid = root / "valid.secret"
+            valid.write_text(
+                "postgresql://user:secret@database/agenthub?sslmode=require\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_database_url_file(valid),
+                "postgresql://user:secret@database/agenthub?sslmode=require",
+            )
+
+            multiline = root / "multiline.secret"
+            multiline.write_text("first\nsecond", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "one non-empty value"):
+                read_database_url_file(multiline)
+
+            invalid_urls = (
+                "https://database/agenthub",
+                "postgresql:///agenthub",
+                "postgresql://database",
+                "postgresql://database/agenthub#fragment",
+                "postgresql://database:not-a-port/agenthub",
+                "postgresql://database:0/agenthub",
+                "postgresql://database/agent hub",
+            )
+            for index, value in enumerate(invalid_urls):
+                path = root / f"invalid-{index}.secret"
+                path.write_text(value, encoding="utf-8")
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    read_database_url_file(path)
 
     def test_composition_uses_mission_service_without_local_state(self) -> None:
-        settings = DecisionExpiryServiceSettings()
-        with patch(
-            "services.python.decision_expiry_service.runtime.DATABASE_URL",
-            "postgresql://configured",
-        ):
-            runtime = build_decision_expiry_runtime(settings)
+        with tempfile.TemporaryDirectory() as directory:
+            secret = Path(directory).resolve() / "database.secret"
+            secret.write_text(
+                "postgresql://user:secret@database/agenthub",
+                encoding="utf-8",
+            )
+            pool = RecordingPool()
+            runtime = build_decision_expiry_runtime(
+                _settings(database_url_file=secret),
+                pool=pool,
+            )
 
         self.assertIsInstance(runtime.worker, DecisionExpirySupervisor)
         self.assertIsNotNone(runtime.initialize_database)
         self.assertIsNotNone(runtime.close_database)
+
+
+class DecisionExpiryDatabaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_one_pool_connection_for_the_real_transaction_scope(self) -> None:
+        pool = RecordingPool()
+        database = DecisionExpiryDatabase(
+            "postgresql://user:secret@database/agenthub",
+            pool=pool,
+        )
+
+        await database.initialize()
+        async with database.transaction() as connection:
+            self.assertIs(connection, pool.connection)
+            self.assertEqual(pool.connection.transaction_enters, 1)
+            self.assertEqual(pool.connection.transaction_exits, 0)
+        await database.close()
+
+        self.assertEqual(
+            pool.initialized_urls,
+            ["postgresql://user:secret@database/agenthub"],
+        )
+        self.assertEqual(pool.connection.transaction_exits, 1)
+        self.assertEqual(pool.closed, 1)
 
 
 class DecisionExpiryServiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -157,6 +285,22 @@ class DecisionExpiryServiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(lifecycle.initialized, 1)
         self.assertEqual(lifecycle.closed, 1)
 
+    async def test_failed_database_initialization_still_closes_resources(self) -> None:
+        lifecycle = FailingLifecycleRecorder()
+        runtime = DecisionExpiryServiceRuntime(
+            worker=FakeSupervisor(),
+            shutdown_timeout_seconds=1,
+            initialize_database=lifecycle.initialize,
+            close_database=lifecycle.close,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+            await runtime.start()
+        await runtime.stop()
+
+        self.assertEqual(lifecycle.initialized, 1)
+        self.assertEqual(lifecycle.closed, 1)
+
 
 class DecisionExpiryServiceEndpointTests(unittest.TestCase):
     def test_health_and_readiness_expose_only_sanitized_counters(self) -> None:
@@ -171,7 +315,7 @@ class DecisionExpiryServiceEndpointTests(unittest.TestCase):
             shutdown_timeout_seconds=1,
         )
         application = create_app(
-            DecisionExpiryServiceSettings(),
+            _settings(),
             runtime_factory=lambda _: runtime,
         )
 

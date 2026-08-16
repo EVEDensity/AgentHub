@@ -375,7 +375,7 @@ services:
       dockerfile: services/python/decision_expiry_service/Dockerfile
     environment:
       AGENTHUB_ENV: "development"
-      DATABASE_URL: "${AGENTHUB_DECISION_EXPIRY_DATABASE_URL:-postgresql://agenthub:agenthub@postgres:5432/agenthub}"
+      AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE: "/run/secrets/decision-expiry-database-url"
       AGENTHUB_DECISION_EXPIRY_IDLE_DELAY_SECONDS: "${AGENTHUB_DECISION_EXPIRY_IDLE_DELAY_SECONDS:-0.5}"
       AGENTHUB_DECISION_EXPIRY_MAX_DELAY_SECONDS: "${AGENTHUB_DECISION_EXPIRY_MAX_DELAY_SECONDS:-10.0}"
       AGENTHUB_DECISION_EXPIRY_SHUTDOWN_TIMEOUT_SECONDS: "30.0"
@@ -391,6 +391,8 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: ["ALL"]
+    secrets:
+      - decision-expiry-database-url
     restart: unless-stopped
     stop_grace_period: 35s
     healthcheck:
@@ -561,3 +563,7 @@ services:
 # ── Named volumes ──────────────────────────────────────────────────────
 volumes:
   loki-data:
+
+secrets:
+  decision-expiry-database-url:
+    file: "${AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE:-./secrets/decision-expiry-database-url}"

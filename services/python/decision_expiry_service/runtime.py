@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
-from app.config import DATABASE_URL
-from app.db.session import aclose_pool, aget_pool
+from app.db.asyncpg_pool import AsyncPgPool
 from app.repositories import MissionRepository
 from app.services.decision_expiry_supervisor import (
     DecisionExpirySupervisor,
@@ -14,10 +14,63 @@ from app.services.decision_expiry_supervisor import (
 )
 from app.services.mission_service import MissionService
 
-from .config import DecisionExpiryServiceSettings
+from .config import DecisionExpiryServiceSettings, read_database_url_file
 
 AsyncStartupHook = Callable[[], Awaitable[object]]
 AsyncShutdownHook = Callable[[], Awaitable[None]]
+
+
+class DatabaseConnectionPort(Protocol):
+    async def execute(self, sql: str, *args: Any) -> Any: ...
+
+    async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]: ...
+
+    async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None: ...
+
+    def transaction(self) -> AbstractAsyncContextManager[Any]: ...
+
+
+class DatabasePoolPort(Protocol):
+    async def initialize(self, database_url: str) -> None: ...
+
+    def acquire(self) -> AbstractAsyncContextManager[DatabaseConnectionPort]: ...
+
+    async def close(self) -> None: ...
+
+
+class DecisionExpiryDatabase:
+    """Own a direct PostgreSQL pool with real connection-level transactions."""
+
+    def __init__(self, database_url: str, *, pool: DatabasePoolPort | None = None):
+        self._database_url = database_url
+        self._pool = pool or AsyncPgPool()
+        self._initialization_attempted = False
+
+    async def initialize(self) -> None:
+        if self._initialization_attempted:
+            raise RuntimeError("Decision expiry database initialization was repeated")
+        self._initialization_attempted = True
+        await self._pool.initialize(self._database_url)
+
+    async def close(self) -> None:
+        await self._pool.close()
+
+    async def execute(self, sql: str, *args: Any) -> None:
+        async with self._pool.acquire() as connection:
+            await connection.execute(sql, *args)
+
+    async def fetch_one(self, sql: str, *args: Any) -> dict[str, Any] | None:
+        async with self._pool.acquire() as connection:
+            return await connection.fetchrow(sql, *args)
+
+    async def fetch_all(self, sql: str, *args: Any) -> list[dict[str, Any]]:
+        async with self._pool.acquire() as connection:
+            return await connection.fetch(sql, *args)
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._pool.acquire() as connection, connection.transaction():
+            yield connection
 
 
 class DecisionExpirySupervisorPort(Protocol):
@@ -59,8 +112,8 @@ class DecisionExpiryServiceRuntime:
             raise RuntimeError("Decision expiry service runtime is already started")
         try:
             if self.initialize_database is not None:
-                await self.initialize_database()
                 self._database_initialized = True
+                await self.initialize_database()
             self._worker_task = asyncio.create_task(
                 self.worker.run(),
                 name="agenthub-decision-expiry-supervisor",
@@ -99,12 +152,22 @@ class DecisionExpiryServiceRuntime:
 
 def build_decision_expiry_runtime(
     settings: DecisionExpiryServiceSettings,
+    *,
+    pool: DatabasePoolPort | None = None,
 ) -> DecisionExpiryServiceRuntime:
     """Compose the supervisor directly over Mission Control persistence."""
 
-    if not DATABASE_URL.strip():
-        raise ValueError("DATABASE_URL must be configured for Decision expiry")
-    command = MissionService(MissionRepository())
+    database = DecisionExpiryDatabase(
+        read_database_url_file(settings.database_url_file),
+        pool=pool,
+    )
+    repository = MissionRepository(
+        execute=database.execute,
+        fetch_one=database.fetch_one,
+        fetch_all=database.fetch_all,
+        transaction_factory=database.transaction,
+    )
+    command = MissionService(repository)
     worker = DecisionExpirySupervisor(
         command,
         idle_delay_seconds=settings.idle_delay_seconds,
@@ -113,12 +176,13 @@ def build_decision_expiry_runtime(
     return DecisionExpiryServiceRuntime(
         worker=worker,
         shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
-        initialize_database=aget_pool,
-        close_database=aclose_pool,
+        initialize_database=database.initialize,
+        close_database=database.close,
     )
 
 
 __all__ = [
+    "DecisionExpiryDatabase",
     "DecisionExpiryServiceRuntime",
     "build_decision_expiry_runtime",
 ]

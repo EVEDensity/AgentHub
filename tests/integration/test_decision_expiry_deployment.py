@@ -17,6 +17,7 @@ class DecisionExpiryDeploymentContractTests(unittest.TestCase):
         cls.document: dict[str, Any] = document
         cls.services: dict[str, Any] = document["services"]
         cls.service: dict[str, Any] = cls.services["decision-expiry-service"]
+        cls.secrets: dict[str, Any] = document["secrets"]
 
     def test_service_is_opt_in_and_uses_the_dedicated_image(self) -> None:
         self.assertEqual(self.service["profiles"], ["mission-supervision"])
@@ -56,11 +57,27 @@ class DecisionExpiryDeploymentContractTests(unittest.TestCase):
             "30.0",
         )
 
-    def test_local_database_setting_is_explicitly_overrideable(self) -> None:
-        database_url = self.service["environment"]["DATABASE_URL"]
-        self.assertIn("AGENTHUB_DECISION_EXPIRY_DATABASE_URL", database_url)
-        self.assertIn("@postgres:5432/agenthub", database_url)
+    def test_database_credential_is_mounted_without_plaintext_environment(self) -> None:
+        environment = self.service["environment"]
+        self.assertNotIn("DATABASE_URL", environment)
+        self.assertEqual(
+            environment["AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE"],
+            "/run/secrets/decision-expiry-database-url",
+        )
+        self.assertEqual(
+            self.service["secrets"],
+            ["decision-expiry-database-url"],
+        )
+        secret_file = self.secrets["decision-expiry-database-url"]["file"]
+        self.assertIn("AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE", secret_file)
+        self.assertNotIn("postgresql://", secret_file)
         self.assertEqual(self.service["environment"]["AGENTHUB_ENV"], "development")
+
+    def test_local_secret_directory_is_excluded_from_source_and_build(self) -> None:
+        gitignore = Path(".gitignore").read_text(encoding="utf-8")
+        dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
+        self.assertIn("deploy/secrets/", gitignore.splitlines())
+        self.assertIn("deploy/secrets", dockerignore.splitlines())
 
 
 if __name__ == "__main__":
