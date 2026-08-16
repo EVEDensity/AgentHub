@@ -17,6 +17,7 @@ from app.domain import (
 from app.repositories import MissionRepository
 from app.schemas.mission import (
     ArtifactCreateRequest,
+    ContractRevisionRequest,
     DecisionResolutionRequest,
     MissionCreateRequest,
     WorkspaceVerificationDiscoveryRequest,
@@ -46,6 +47,7 @@ from app.services.artifact_integrity_service import (
 from app.services.auth_service import get_current_user
 from app.services.mission_service import (
     AgentBindingNotFoundError,
+    ContractRevisionConflictError,
     DecisionConflictError,
     DecisionNotFoundError,
     MissionNotFoundError,
@@ -153,6 +155,11 @@ def _authorize_human_decision_access(user: dict) -> None:
         raise HTTPException(status_code=403, detail="Human Decision access required")
 
 
+def _authorize_human_contract_access(user: dict) -> None:
+    if user.get("role") in {"runner", "verifier", "agent", "service"}:
+        raise HTTPException(status_code=403, detail="Human Contract access required")
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_mission(
     request: MissionCreateRequest,
@@ -211,6 +218,36 @@ async def get_mission(
         raise HTTPException(status_code=404, detail="Mission not found")
     authorize_workspace(user, mission.workspace_id)
     return mission.to_public_dict()
+
+
+@router.post(
+    "/{mission_id}/contract/revisions",
+    status_code=status.HTTP_201_CREATED,
+)
+async def revise_contract(
+    mission_id: str,
+    request: ContractRevisionRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    _authorize_human_contract_access(user)
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    service = MissionService(repository)
+    try:
+        contract = await service.revise_contract(
+            mission_id,
+            expected_version=request.expected_version,
+            contract=request.contract,
+            reason=request.reason,
+            actor=build_human_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except ContractRevisionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return contract.to_public_dict()
 
 
 async def _authorized_mission(

@@ -19,6 +19,7 @@ from app.api.v1.missions import (
     router,
 )
 from app.domain import (
+    ActorRef,
     Artifact,
     Decision,
     DecisionStatus,
@@ -81,6 +82,7 @@ from tests.domain.factories import (
 class FakeMissionRepository:
     def __init__(self) -> None:
         self.contract: MissionContract | None = None
+        self.contracts: list[MissionContract] = []
         self.mission: Mission | None = None
         self.events: list[EventEnvelope] = []
         self.artifacts: list[Artifact] = []
@@ -90,6 +92,8 @@ class FakeMissionRepository:
         self.work_units: list[WorkUnit] = []
         self.transaction_depth = 0
         self.admission_locks: list[str] = []
+        self.contract_lineage_locks: list[str] = []
+        self.contract_lineage_workspaces: dict[str, set[str]] = {}
         self.tenant_active_count_override: int | None = None
         self.verification_candidate_calls: list[str] = []
         self.work_unit_artifact_calls: list[tuple[str, str, int, int]] = []
@@ -125,22 +129,63 @@ class FakeMissionRepository:
 
     async def add_contract(self, contract: MissionContract) -> None:
         self.contract = contract
+        self.contracts.append(contract)
 
     async def get_contract(
         self,
         contract_id: str,
         contract_version: int,
     ) -> MissionContract | None:
+        candidates = [*self.contracts]
+        if self.contract is not None and self.contract not in candidates:
+            candidates.append(self.contract)
+        return next(
+            (
+                contract
+                for contract in candidates
+                if contract.id == contract_id
+                and contract.version == contract_version
+            ),
+            None,
+        )
+
+    async def lock_contract_lineage(self, contract_id: str) -> None:
+        if not self.transaction_depth:
+            raise AssertionError("Contract lineage lock requires a transaction")
+        self.contract_lineage_locks.append(contract_id)
+
+    async def get_latest_contract(self, contract_id: str) -> MissionContract | None:
+        candidates = [
+            contract
+            for contract in self.contracts
+            if contract.id == contract_id
+        ]
         if (
-            self.contract
+            self.contract is not None
             and self.contract.id == contract_id
-            and self.contract.version == contract_version
+            and self.contract not in candidates
         ):
-            return self.contract
-        return None
+            candidates.append(self.contract)
+        return max(candidates, key=lambda contract: contract.version, default=None)
+
+    async def contract_lineage_workspace_matches(
+        self,
+        contract_id: str,
+        workspace_id: str,
+    ) -> bool | None:
+        workspaces = set(self.contract_lineage_workspaces.get(contract_id, set()))
+        if self.mission is not None and self.mission.contract_id == contract_id:
+            workspaces.add(self.mission.workspace_id)
+        if not workspaces:
+            return None
+        return workspaces == {workspace_id}
 
     async def add_mission(self, mission: Mission) -> None:
         self.mission = mission
+        self.contract_lineage_workspaces.setdefault(
+            mission.contract_id,
+            set(),
+        ).add(mission.workspace_id)
 
     async def get_mission(self, mission_id: str) -> Mission | None:
         if self.mission and self.mission.id == mission_id:
@@ -958,6 +1003,190 @@ class MissionApiTests(unittest.TestCase):
         self.assertIn("must start at version 1", response.json()["detail"])
         self.assertIsNone(repository.contract)
         self.assertIsNone(repository.mission)
+
+    def test_contract_revision_is_fenced_and_does_not_rebind_mission(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="workspace-1")
+        repository.contract = build_contract(version=1)
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+            )
+        )
+        revised_contract = build_contract(
+            version=2,
+            governance={"decisionTimeoutSeconds": 1800},
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/contract/revisions",
+            json={
+                "expectedVersion": 1,
+                "reason": "Extend the human review window.",
+                "contract": revised_contract.to_public_dict(),
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["version"], 2)
+        self.assertEqual(repository.contract, revised_contract)
+        self.assertEqual(repository.mission.contract_version, 1)
+        self.assertEqual(repository.contract_lineage_locks, ["contract-1"])
+        self.assertEqual(len(repository.events), 1)
+        event = repository.events[0]
+        self.assertEqual(event.aggregate_type.value, "mission_contract")
+        self.assertEqual(event.aggregate_id, "contract-1")
+        self.assertEqual(event.event_type, "contract.lifecycle.revised")
+        self.assertEqual(
+            event.payload,
+            {
+                "sourceMissionId": "mis-1",
+                "previousVersion": 1,
+                "version": 2,
+                "reason": "Extend the human review window.",
+            },
+        )
+
+        stale = client.post(
+            "/api/v1/missions/mis-1/contract/revisions",
+            json={
+                "expectedVersion": 1,
+                "reason": "Attempt a concurrent overwrite.",
+                "contract": build_contract(version=2).to_public_dict(),
+            },
+        )
+        self.assertEqual(stale.status_code, 409)
+        self.assertIn("expected=1, current=2", stale.json()["detail"])
+        self.assertEqual(len(repository.contracts), 1)
+        self.assertEqual(len(repository.events), 1)
+        self.assertEqual(repository.mission.contract_version, 1)
+
+    def test_contract_revision_rejects_lineage_and_version_drift(self) -> None:
+        for name, contract, message in (
+            (
+                "lineage",
+                build_contract(id="other-contract", version=2),
+                "lineage does not match",
+            ),
+            (
+                "version",
+                build_contract(version=3),
+                "increment version by one",
+            ),
+        ):
+            with self.subTest(name=name):
+                repository = FakeMissionRepository()
+                repository.mission = build_mission(workspace_id="workspace-1")
+                repository.contract = build_contract(version=1)
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {
+                            "id": "workspace-1",
+                            "name": "Ada",
+                            "role": "developer",
+                        },
+                    )
+                )
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/contract/revisions",
+                    json={
+                        "expectedVersion": 1,
+                        "reason": "Invalid revision.",
+                        "contract": contract.to_public_dict(),
+                    },
+                )
+
+                self.assertEqual(response.status_code, 409)
+                self.assertIn(message, response.json()["detail"])
+                self.assertEqual(repository.contracts, [])
+                self.assertEqual(repository.events, [])
+                self.assertEqual(repository.mission.contract_version, 1)
+
+    def test_contract_revision_authorization_precedes_lineage_lock(self) -> None:
+        for name, user in (
+            (
+                "cross_workspace",
+                {"id": "other-user", "name": "Mallory", "role": "developer"},
+            ),
+            (
+                "service",
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+            ),
+        ):
+            with self.subTest(name=name):
+                repository = FakeMissionRepository()
+                repository.mission = build_mission(workspace_id="workspace-1")
+                repository.contract = build_contract(version=1)
+                client = TestClient(build_app(repository, user))
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/contract/revisions",
+                    json={
+                        "expectedVersion": 1,
+                        "reason": "Unauthorized revision.",
+                        "contract": build_contract(version=2).to_public_dict(),
+                    },
+                )
+
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(repository.contract_lineage_locks, [])
+                self.assertEqual(repository.contracts, [])
+                self.assertEqual(repository.events, [])
+
+    def test_contract_lineage_cannot_cross_workspace_boundaries(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="workspace-1")
+        repository.contract = build_contract(version=1)
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-2", "name": "Bob", "role": "developer"},
+            )
+        )
+
+        create_response = client.post(
+            "/api/v1/missions",
+            json={
+                "workspaceId": "workspace-2",
+                "title": "Cross-workspace reuse",
+                "objective": "Attempt to reuse another workspace lineage.",
+                "source": {"type": "api"},
+                "contract": build_contract(version=1).to_public_dict(),
+            },
+        )
+
+        self.assertEqual(create_response.status_code, 409)
+        self.assertIn("belongs to another workspace", create_response.json()["detail"])
+        self.assertEqual(repository.mission.workspace_id, "workspace-1")
+        self.assertEqual(repository.contracts, [])
+        self.assertEqual(repository.events, [])
+
+        repository.contract_lineage_workspaces["contract-1"] = {
+            "workspace-1",
+            "workspace-2",
+        }
+        workspace_one_client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Ada", "role": "developer"},
+            )
+        )
+        revise_response = workspace_one_client.post(
+            "/api/v1/missions/mis-1/contract/revisions",
+            json={
+                "expectedVersion": 1,
+                "reason": "Attempt to revise a shared lineage.",
+                "contract": build_contract(version=2).to_public_dict(),
+            },
+        )
+
+        self.assertEqual(revise_response.status_code, 409)
+        self.assertIn("ownership is ambiguous", revise_response.json()["detail"])
+        self.assertEqual(repository.contracts, [])
+        self.assertEqual(repository.events, [])
 
     def test_non_admin_cannot_access_another_workspace(self) -> None:
         repository = FakeMissionRepository()
@@ -4843,6 +5072,24 @@ class MissionApiTests(unittest.TestCase):
         )
         self.assertEqual(exhausted.status_code, 409)
         self.assertEqual(len(repository.events), before_events)
+
+
+class ContractRevisionServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_non_human_actor_is_rejected_before_repository_access(self) -> None:
+        class RepositoryThatMustNotBeCalled(FakeMissionRepository):
+            @asynccontextmanager
+            async def transaction(self):
+                raise AssertionError("actor validation must precede repository access")
+                yield self
+
+        with self.assertRaisesRegex(ValueError, "only human actors"):
+            await MissionService(RepositoryThatMustNotBeCalled()).revise_contract(
+                "mis-1",
+                expected_version=1,
+                contract=build_contract(version=2),
+                reason="Runner must not revise policy.",
+                actor=ActorRef(type="runner", id="runner-1"),
+            )
 
 
 class DecisionExpiryServiceTests(unittest.IsolatedAsyncioTestCase):

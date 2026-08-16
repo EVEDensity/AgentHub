@@ -181,7 +181,12 @@ boundary. It is not the permanent home of every Agent feature.
   Every newly persisted Mission binds both Contract ID and Contract version;
   Contract reads in Mission Control, Runner, verifier, and A2A paths use that
   exact immutable revision. Ordinary Mission creation can create only version
-  1 lineages and exposes no Contract rebind operation.
+  1 lineages and exposes no Contract rebind operation. A human can create the
+  strict next revision through a workspace-authorized Mission anchor. Mission
+  Control serializes that lineage, checks `expectedVersion`, records a Contract
+  event, and leaves every existing Mission on its original revision. Lineages
+  already shared across workspaces fail closed for new Mission and revision
+  writes.
   The stateless expiry command locks one eligible Mission and Decision with
   `SKIP LOCKED`, then atomically marks the Decision EXPIRED and fails the
   blocked WorkUnit and Mission. It is not yet composed into a deployed polling

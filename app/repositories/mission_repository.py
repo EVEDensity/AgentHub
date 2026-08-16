@@ -109,6 +109,46 @@ class MissionRepository:
             _decode_json_object(row["document"], "document")
         )
 
+    async def lock_contract_lineage(self, contract_id: str) -> None:
+        await self._fetch_one(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            contract_id,
+        )
+
+    async def get_latest_contract(self, contract_id: str) -> MissionContract | None:
+        row = await self._fetch_one(
+            """SELECT document
+               FROM mission_contracts
+               WHERE id=$1
+               ORDER BY version DESC
+               LIMIT 1""",
+            contract_id,
+        )
+        if row is None:
+            return None
+        return MissionContract.model_validate(
+            _decode_json_object(row["document"], "document")
+        )
+
+    async def contract_lineage_workspace_matches(
+        self,
+        contract_id: str,
+        workspace_id: str,
+    ) -> bool | None:
+        row = await self._fetch_one(
+            """SELECT CASE
+                         WHEN count(*) = 0 THEN NULL
+                         ELSE bool_and(workspace_id=$2)
+                      END AS workspace_matches
+               FROM missions
+               WHERE contract_id=$1""",
+            contract_id,
+            workspace_id,
+        )
+        if row is None or row["workspace_matches"] is None:
+            return None
+        return bool(row["workspace_matches"])
+
     async def add_mission(self, mission: Mission) -> None:
         await self._execute(
             """INSERT INTO missions(

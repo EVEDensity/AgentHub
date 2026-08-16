@@ -35,6 +35,18 @@ class MissionCreateRequest(BaseModel):
     contract: MissionContract
 
 
+class ContractRevisionRequest(BaseModel):
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    expected_version: Annotated[int, Field(ge=1)]
+    reason: Annotated[str, Field(min_length=1, max_length=2000)]
+    contract: MissionContract
+
+
 class MissionListResponse(BaseModel):
     missions: list[dict]
 

@@ -88,6 +88,42 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         restored = await self.repository.get_contract(first.id, 2)
         self.assertEqual(restored, second)
 
+    async def test_contract_lineage_lock_and_latest_revision_query_are_explicit(
+        self,
+    ) -> None:
+        latest = build_contract(version=3)
+
+        await self.repository.lock_contract_lineage(latest.id)
+        lock_sql, lock_args = self.database.fetched_one[-1]
+        self.assertIn("pg_advisory_xact_lock", lock_sql)
+        self.assertEqual(lock_args, (latest.id,))
+
+        self.database.one = {"document": latest.to_public_dict()}
+        restored = await self.repository.get_latest_contract(latest.id)
+        self.assertEqual(restored, latest)
+        latest_sql, latest_args = self.database.fetched_one[-1]
+        self.assertIn("ORDER BY version DESC", latest_sql)
+        self.assertIn("LIMIT 1", latest_sql)
+        self.assertEqual(latest_args, (latest.id,))
+
+        self.database.one = {"workspace_matches": True}
+        matches = await self.repository.contract_lineage_workspace_matches(
+            latest.id,
+            "workspace-1",
+        )
+        self.assertTrue(matches)
+        workspace_sql, workspace_args = self.database.fetched_one[-1]
+        self.assertIn("bool_and(workspace_id=$2)", workspace_sql)
+        self.assertEqual(workspace_args, (latest.id, "workspace-1"))
+
+        self.database.one = {"workspace_matches": None}
+        self.assertIsNone(
+            await self.repository.contract_lineage_workspace_matches(
+                "new-contract",
+                "workspace-1",
+            )
+        )
+
     async def test_mission_round_trip_accepts_decoded_json(self) -> None:
         mission = build_mission()
         await self.repository.add_mission(mission)

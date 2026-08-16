@@ -142,6 +142,16 @@ class DecisionConflictError(ValueError):
     pass
 
 
+class ContractRevisionConflictError(ValueError):
+    def __init__(self, *, expected_version: int, current_version: int) -> None:
+        self.expected_version = expected_version
+        self.current_version = current_version
+        super().__init__(
+            "contract revision version conflict "
+            f"(expected={expected_version}, current={current_version})"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ClaimedExecutionContext:
     mission: Mission
@@ -321,6 +331,13 @@ class MissionService:
             schema_version=1,
         )
         async with self._repository.transaction() as repository:
+            await repository.lock_contract_lineage(contract.id)
+            workspace_matches = await repository.contract_lineage_workspace_matches(
+                contract.id,
+                workspace_id,
+            )
+            if workspace_matches is False:
+                raise ValueError("contract lineage belongs to another workspace")
             existing_contract = await repository.get_contract(
                 contract.id,
                 contract.version,
@@ -338,6 +355,75 @@ class MissionService:
             await repository.add_mission(mission)
             await repository.append_event(event)
         return mission
+
+    async def revise_contract(
+        self,
+        mission_id: str,
+        *,
+        expected_version: int,
+        contract: MissionContract,
+        reason: str,
+        actor: ActorRef,
+    ) -> MissionContract:
+        if actor.type != ActorType.HUMAN:
+            raise ValueError("only human actors can revise Contracts")
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            raise ValueError("contract revision reason is required")
+
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if contract.id != mission.contract_id:
+                raise ValueError("contract revision lineage does not match Mission")
+
+            await repository.lock_contract_lineage(mission.contract_id)
+            workspace_matches = await repository.contract_lineage_workspace_matches(
+                mission.contract_id,
+                mission.workspace_id,
+            )
+            if workspace_matches is not True:
+                raise ValueError("contract lineage workspace ownership is ambiguous")
+            latest = await repository.get_latest_contract(mission.contract_id)
+            if latest is None:
+                raise ValueError("mission contract lineage not found")
+            if latest.version != expected_version:
+                raise ContractRevisionConflictError(
+                    expected_version=expected_version,
+                    current_version=latest.version,
+                )
+            if contract.version != latest.version + 1:
+                raise ValueError("contract revision must increment version by one")
+
+            await repository.add_contract(contract)
+            sequence = (
+                await repository.get_last_event_sequence(
+                    contract.id,
+                    aggregate_type="mission_contract",
+                )
+                + 1
+            )
+            await repository.append_event(
+                EventEnvelope(
+                    event_id=new_identifier("evt"),
+                    aggregate_type="mission_contract",
+                    aggregate_id=contract.id,
+                    sequence=sequence,
+                    event_type="contract.lifecycle.revised",
+                    actor=actor,
+                    occurred_at=datetime.now(timezone.utc),
+                    correlation_id=mission.id,
+                    payload={
+                        "sourceMissionId": mission.id,
+                        "previousVersion": latest.version,
+                        "version": contract.version,
+                        "reason": normalized_reason,
+                    },
+                    schema_version=1,
+                )
+            )
+        return contract
 
     async def start_mission(self, mission_id: str, *, actor: ActorRef) -> Mission:
         return await self._transition_mission(

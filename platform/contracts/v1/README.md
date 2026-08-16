@@ -27,3 +27,6 @@ When omitted from a v1 document, Mission Control applies the v1 default of
 New Mission projections include `contractVersion` so internal consumers can
 resolve the exact immutable Contract revision. It remains optional in the v1
 JSON Schema solely so previously emitted Mission documents remain valid.
+
+`contract.lifecycle.revised` records the source Mission, previous and new
+versions, and the human-supplied reason. The event creates no Mission rebind.

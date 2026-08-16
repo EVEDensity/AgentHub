@@ -2,6 +2,7 @@
   "catalogVersion": 1,
   "events": [
     { "eventType": "mission.lifecycle.created", "aggregateType": "mission", "payloadRequired": ["contractId", "status"] },
+    { "eventType": "contract.lifecycle.revised", "aggregateType": "mission_contract", "payloadRequired": ["sourceMissionId", "previousVersion", "version", "reason"] },
     { "eventType": "mission.lifecycle.started", "aggregateType": "mission", "payloadRequired": ["planVersion"] },
     { "eventType": "mission.lifecycle.cancelled", "aggregateType": "mission", "payloadRequired": ["reason"] },
     { "eventType": "mission.verification.started", "aggregateType": "mission", "payloadRequired": [] },
