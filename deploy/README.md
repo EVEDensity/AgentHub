@@ -10,6 +10,41 @@ Community deployment should not require the full enterprise service topology.
 Do not use deployment configuration to silently change domain semantics. A
 feature unavailable in a deployment must fail explicitly and be observable.
 
+## Local Decision expiry supervision
+
+The Decision expiry supervisor is available only through the explicit
+`mission-supervision` profile. Normal platform startup does not run it. Before
+enabling the profile, migrate the local PostgreSQL database to the current
+Alembic head; otherwise the process remains not ready and must not be treated as
+providing automatic expiry.
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision up -d --build postgres decision-expiry-service
+docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision ps decision-expiry-service
+```
+
+The profile waits for PostgreSQL health and probes the supervisor's `/readyz`
+endpoint inside the container. Port `8099` is exposed only to the Compose
+network, not published to the host. The container runs with no Linux
+capabilities, a read-only root filesystem, bounded temporary filesystems, and no
+durable volume. Mission Control PostgreSQL remains the only persistence layer.
+
+`AGENTHUB_DECISION_EXPIRY_DATABASE_URL` overrides the bundled local-development
+DSN. The default credentials in this Compose file are for the bundled local
+PostgreSQL container only. This environment-variable path is not an approved
+production secret-distribution mechanism; production enablement requires a
+mounted-secret database composition and separate operational review.
+
+Stop or roll back supervision without editing durable Mission state:
+
+```powershell
+docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision stop decision-expiry-service
+```
+
+A committed expiry transaction remains authoritative. Any still-pending expired
+Decision remains eligible when a compatible supervisor starts again.
+
 ## A2A trust policy
 
 Gateway rejects unsigned A2A Agent Cards by default. Development environments

@@ -64,10 +64,13 @@ the image or a tracked environment file.
 
 ## Deployment status and rollback
 
-This stage intentionally does not enable the service in a checked-in Compose or
-production manifest. Before enabling it, run migrations through Alembic head,
-verify PostgreSQL connectivity from the service identity, exercise health and
-readiness probes, and confirm expiry counters against Mission events.
+The checked-in platform Compose offers a default-disabled
+`mission-supervision` profile for local validation. It does not publish the
+operational port to the host and is not an approved production secret path.
+Before enabling it, run migrations through Alembic head, verify PostgreSQL
+connectivity, exercise health and readiness probes, and confirm expiry counters
+against Mission events. Production deployment remains blocked on mounted-secret
+database composition and operational review.
 
 Rollback by stopping the service. In-flight committed transitions remain
 durable; pending expired Decisions remain eligible for a later replica. Never
