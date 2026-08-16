@@ -74,8 +74,10 @@ boundary. It is not the permanent home of every Agent feature.
   source Mission/checkpoint ancestry and Artifact ID/digest pairs while
   excluding capability scopes, repository scopes, criterion configuration,
   content addresses, and Artifact bytes. It does not construct a Harness,
-  start execution, or compose the production Runner path; those remain a
-  separate gate.
+  start execution, or compose the production Runner path. A fork-specific
+  claimed-work resolver now retrieves that projection through the exact lease,
+  invokes the compiler, and accepts only an injected request-scoped Harness.
+  The fork Harness factory and production worker route remain separate gates.
   Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON

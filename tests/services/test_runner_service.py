@@ -29,6 +29,7 @@ from app.services.runner_service import (
     ClaimedWorkExecution,
     ClaimedWorkResolutionError,
     MissionControlRunnerClient,
+    MissionForkClaimedWorkResolver,
     RunnerControlError,
     RunnerExecutionError,
     RunnerExecutionInput,
@@ -395,6 +396,69 @@ def mission_fork_execution_context() -> dict[str, Any]:
 
 
 class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mission_fork_resolver_reads_exact_lease_context_once(self) -> None:
+        control = FakeControl()
+        context = mission_fork_execution_context()
+        control.execution_context_payload = context
+        harness_factory = StaticClaimedHarnessFactory()
+        resolver = MissionForkClaimedWorkResolver(
+            control,
+            runner_id="runner-1",
+            harness_factory=harness_factory,
+            max_timeout_seconds=90,
+        )
+
+        execution = await resolver.resolve(mission_fork_claim_payload())
+
+        self.assertEqual(execution.execution_input.language, "text")
+        self.assertEqual(execution.execution_input.timeout, 90)
+        self.assertEqual(
+            json.loads(execution.execution_input.code)["schema"],
+            "agenthub.mission-fork-context.v1",
+        )
+        self.assertIs(execution.harness, harness_factory.harness)
+        self.assertEqual(harness_factory.contexts, [context])
+        self.assertEqual(
+            control.calls,
+            [
+                (
+                    "context",
+                    {"runner_id": "runner-1", "lease_id": "lease-fork"},
+                )
+            ],
+        )
+
+    async def test_mission_fork_resolver_rejects_non_root_before_context_read(
+        self,
+    ) -> None:
+        cases = [
+            (
+                "kind",
+                lambda claim: claim.update(kind="code_change"),
+                "claimed WorkUnit is not Mission fork",
+            ),
+            (
+                "parent",
+                lambda claim: claim.update(parentWorkUnitId="wu-parent"),
+                "must be a root",
+            ),
+        ]
+
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                control = FakeControl()
+                claim = mission_fork_claim_payload()
+                mutate(claim)
+                resolver = MissionForkClaimedWorkResolver(
+                    control,
+                    runner_id="runner-1",
+                    harness_factory=StaticClaimedHarnessFactory(),
+                )
+
+                with self.assertRaisesRegex(ClaimedWorkResolutionError, message):
+                    await resolver.resolve(claim)
+                self.assertEqual(control.calls, [])
+
     def test_mission_fork_compiler_emits_bounded_minimal_context(self) -> None:
         execution_input = compile_mission_fork_context(
             mission_fork_execution_context(),

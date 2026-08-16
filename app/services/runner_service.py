@@ -199,8 +199,8 @@ class ClaimedWorkResolver(Protocol):
     ) -> ClaimedWorkExecution: ...
 
 
-class A2AInboundClaimedWorkResolver:
-    """Compile a bounded model prompt from lease-fenced Mission context."""
+class _ClaimedModelWorkResolver:
+    """Resolve one exact claimed root into model input and a scoped Harness."""
 
     def __init__(
         self,
@@ -208,6 +208,7 @@ class A2AInboundClaimedWorkResolver:
         *,
         runner_id: str,
         harness_factory: ClaimedHarnessFactoryPort,
+        profile: _ModelContextProfile,
         max_context_chars: int = 32_768,
         max_timeout_seconds: float = 300.0,
     ) -> None:
@@ -218,6 +219,7 @@ class A2AInboundClaimedWorkResolver:
         self._control = control
         self._runner_id = runner_id
         self._harness_factory = harness_factory
+        self._profile = profile
         self._max_context_chars = max_context_chars
         self._max_timeout_seconds = max_timeout_seconds
 
@@ -227,10 +229,14 @@ class A2AInboundClaimedWorkResolver:
     ) -> ClaimedWorkExecution:
         mission_id = _required_string(work_unit, "missionId")
         work_unit_id = _required_string(work_unit, "id")
-        if work_unit.get("kind") != "a2a.inbound":
-            raise ClaimedWorkResolutionError("claimed WorkUnit is not inbound A2A")
+        if work_unit.get("kind") != self._profile.work_unit_kind:
+            raise ClaimedWorkResolutionError(
+                f"claimed WorkUnit is not {self._profile.label}"
+            )
         if work_unit.get("parentWorkUnitId") is not None:
-            raise ClaimedWorkResolutionError("inbound A2A WorkUnit must be a root")
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit must be a root"
+            )
         lease = _required_mapping(work_unit, "lease")
         lease_id = _required_string(lease, "id")
 
@@ -241,12 +247,13 @@ class A2AInboundClaimedWorkResolver:
             lease_id=lease_id,
         )
         context = _required_mapping(payload, "executionContext")
-        prompt, timeout = _compile_a2a_inbound_context(
+        prompt, timeout = _compile_model_context(
             context,
             claimed_work_unit=work_unit,
             runner_id=self._runner_id,
             max_context_chars=self._max_context_chars,
             max_timeout_seconds=self._max_timeout_seconds,
+            profile=self._profile,
         )
         harness = self._harness_factory.build(context)
         if not callable(getattr(harness, "execute", None)):
@@ -260,6 +267,50 @@ class A2AInboundClaimedWorkResolver:
                 timeout=timeout,
             ),
             harness=harness,
+        )
+
+
+class A2AInboundClaimedWorkResolver(_ClaimedModelWorkResolver):
+    """Compile a bounded inbound prompt from lease-fenced Mission context."""
+
+    def __init__(
+        self,
+        control: MissionControlRunnerPort,
+        *,
+        runner_id: str,
+        harness_factory: ClaimedHarnessFactoryPort,
+        max_context_chars: int = 32_768,
+        max_timeout_seconds: float = 300.0,
+    ) -> None:
+        super().__init__(
+            control,
+            runner_id=runner_id,
+            harness_factory=harness_factory,
+            profile=_A2A_INBOUND_CONTEXT_PROFILE,
+            max_context_chars=max_context_chars,
+            max_timeout_seconds=max_timeout_seconds,
+        )
+
+
+class MissionForkClaimedWorkResolver(_ClaimedModelWorkResolver):
+    """Resolve a claimed Mission fork without starting its WorkUnit."""
+
+    def __init__(
+        self,
+        control: MissionControlRunnerPort,
+        *,
+        runner_id: str,
+        harness_factory: ClaimedHarnessFactoryPort,
+        max_context_chars: int = 32_768,
+        max_timeout_seconds: float = 300.0,
+    ) -> None:
+        super().__init__(
+            control,
+            runner_id=runner_id,
+            harness_factory=harness_factory,
+            profile=_MISSION_FORK_CONTEXT_PROFILE,
+            max_context_chars=max_context_chars,
+            max_timeout_seconds=max_timeout_seconds,
         )
 
 
@@ -1107,24 +1158,6 @@ _MISSION_FORK_CONTEXT_PROFILE = _ModelContextProfile(
 )
 
 
-def _compile_a2a_inbound_context(
-    context: Mapping[str, Any],
-    *,
-    claimed_work_unit: Mapping[str, Any],
-    runner_id: str,
-    max_context_chars: int,
-    max_timeout_seconds: float,
-) -> tuple[str, float]:
-    return _compile_model_context(
-        context,
-        claimed_work_unit=claimed_work_unit,
-        runner_id=runner_id,
-        max_context_chars=max_context_chars,
-        max_timeout_seconds=max_timeout_seconds,
-        profile=_A2A_INBOUND_CONTEXT_PROFILE,
-    )
-
-
 def compile_mission_fork_context(
     context: Mapping[str, Any],
     *,
@@ -1527,6 +1560,7 @@ __all__ = [
     "ClaimedWorkResolutionError",
     "MissionControlRunnerClient",
     "MissionControlRunnerPort",
+    "MissionForkClaimedWorkResolver",
     "RunnerControlError",
     "RunnerError",
     "RunnerExecutionError",

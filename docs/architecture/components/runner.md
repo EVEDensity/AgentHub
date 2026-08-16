@@ -79,7 +79,10 @@ produces the `agenthub.mission-fork-context.v1` JSON model input, caps runtime
 by both the Contract and Runner limit, and excludes repository scopes,
 capability scopes, criterion configuration, content addresses, and bytes. The
 compiler neither creates a Harness nor starts the WorkUnit. Fork-specific
-Harness and process composition remain the next execution gate.
+claimed-work resolution now binds one exact lease-fenced context read to the
+compiler and an injected request-scoped Harness without starting the WorkUnit.
+The fork Harness factory and process composition remain the next execution
+gates.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current
