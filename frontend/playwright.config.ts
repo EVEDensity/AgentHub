@@ -1,5 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
+const browserChannel = process.env.AGENTHUB_PLAYWRIGHT_CHANNEL;
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30000,
@@ -8,6 +10,7 @@ export default defineConfig({
     baseURL: 'http://localhost:3000',
     headless: true,
     screenshot: 'only-on-failure',
+    ...(browserChannel ? { channel: browserChannel } : {}),
   },
   webServer: {
     command: 'npx next start -p 3000',

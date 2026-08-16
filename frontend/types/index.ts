@@ -1860,6 +1860,46 @@ export interface WorkspaceOpEvent {
   timestamp: string;
 }
 
+// Mission Control decision contracts
+export type DecisionResolution = 'RETRY_WORK_UNIT' | 'FAIL_MISSION';
+
+export interface MissionDecision {
+  id: string;
+  missionId: string;
+  workUnitId: string;
+  attempt: number;
+  contextDigest: string;
+  reasonCode:
+    | 'no_applicable_policy'
+    | 'ambiguous_policy'
+    | 'invalid_configuration'
+    | 'unsupported_evaluator'
+    | 'artifact_requirements_not_met';
+  criterionIds: string[];
+  options: DecisionResolution[];
+  recommendedOption: DecisionResolution;
+  riskSummary: string;
+  status: 'PENDING' | 'RESOLVED' | 'CANCELLED' | 'EXPIRED';
+  version: number;
+  requestedBy: { type: string; id: string; displayName?: string };
+  requestedAt: string;
+  expiresAt?: string;
+  resolution?: DecisionResolution;
+  rationale?: string;
+  resolvedBy?: { type: string; id: string; displayName?: string };
+  resolvedAt?: string;
+}
+
+export interface DecisionListResponse {
+  decisions: MissionDecision[];
+}
+
+export interface DecisionResolutionResponse {
+  decision: MissionDecision;
+  workUnit: Record<string, unknown>;
+  mission: Record<string, unknown>;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // MCP Dashboard Types
 // ═══════════════════════════════════════════════════════════════════════
