@@ -274,7 +274,21 @@ class MissionForkPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(claim.work_unit.status.value, "LEASED")
         self.assertEqual(claim.work_unit.attempt, 1)
         self.assertEqual(claim.work_unit.input_refs[0].id, "artifact-1")
+        self.assertIsNotNone(claim.work_unit.lease)
+        assert claim.work_unit.lease is not None
         self.assertEqual(await self._fork_counts(), (1, 1, 4, 1, 1))
+
+        context = await self._service.get_claimed_execution_context(
+            "mis-fork",
+            "wu-fork",
+            lease_id=claim.work_unit.lease.id,
+            runner_id="runner-1",
+        )
+        self.assertEqual(context.mission.source.type.value, "mission.fork")
+        self.assertEqual(context.mission.source.reference, "mis-1")
+        self.assertEqual(context.mission.source.external_id, "chk-1")
+        self.assertEqual(context.work_unit.input_refs[0].id, "artifact-1")
+        self.assertEqual(context.work_unit.attempt, 1)
 
         source_work_unit = await self._repository.get_work_unit("wu-1")
         self.assertIsNotNone(source_work_unit)

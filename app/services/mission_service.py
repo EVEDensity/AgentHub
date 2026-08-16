@@ -1561,7 +1561,7 @@ class MissionService:
         lease_id: str,
         runner_id: str,
     ) -> ClaimedExecutionContext:
-        """Read a controlled A2A root snapshot behind the active lease fence."""
+        """Read a controlled root snapshot behind the active lease fence."""
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
             if mission is None:
@@ -1587,9 +1587,18 @@ class MissionService:
                 and work_unit.assigned_adapter == _A2A_OUTBOUND_ADAPTER
                 and "a2a.send" in work_unit.required_capabilities
             )
-            if not (is_inbound_root or is_outbound_root):
+            is_mission_fork_root = (
+                mission.source.type == MissionSourceType.MISSION_FORK
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == "mission.fork"
+                and work_unit.assigned_agent_id is not None
+                and work_unit.assigned_adapter is not None
+                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+                and bool(work_unit.input_refs)
+            )
+            if not (is_inbound_root or is_outbound_root or is_mission_fork_root):
                 raise WorkUnitNotReadyError(
-                    "execution context is only available for controlled A2A roots"
+                    "execution context is only available for controlled roots"
                 )
             if work_unit.status not in {
                 WorkUnitStatus.LEASED,

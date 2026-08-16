@@ -66,7 +66,12 @@ boundary. It is not the permanent home of every Agent feature.
   exposed after source-workspace authorization. After an explicit human Mission
   start, the existing claim commands admit only the exact `mission.fork` root
   bound to a non-outbound adapter; claiming creates only a fenced lease and
-  attempt one. Claiming an
+  attempt one. The lease owner can read the same versioned, lease-fenced
+  execution projection used by controlled A2A roots; it contains immutable
+  ArtifactRefs but does not read Artifact bytes or source checkpoint content.
+  This projection is not executable input: a fork-specific bounded compiler
+  and Harness composition remain separate Runner responsibilities.
+  Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
   prompt with the peer objective marked as untrusted intent. Capability scope,

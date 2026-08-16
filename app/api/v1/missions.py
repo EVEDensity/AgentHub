@@ -837,7 +837,7 @@ async def get_claimed_execution_context(
     user: CurrentUser,
     repository: MissionRepositoryDep,
 ) -> dict:
-    """Return a lease-fenced context snapshot for a controlled A2A root."""
+    """Return a lease-fenced context snapshot for a controlled root."""
     await _authorize_execution_work_unit(
         mission_id,
         work_unit_id,

@@ -61,11 +61,19 @@ workspace and binding because Mission Control owns claim locking and fairness.
 ## Ready-work discovery
 
 Mission Control now exposes a workspace-scoped atomic discovery contract. It
-filters by immutable Agent/adapter binding, allows only delegated or eligible
-inbound/outbound A2A root work, checks dependency readiness, orders by least
-in-flight Mission load, and locks the owning Mission plus candidate WorkUnit
-with `SKIP LOCKED`. Authentication supplies the lease owner; callers cannot
-provide one in the request.
+filters by immutable Agent/adapter binding, allows only delegated work or an
+exact eligible inbound A2A, outbound A2A, or Mission-fork root, checks dependency
+readiness, orders by least in-flight Mission load, and locks the owning Mission
+plus candidate WorkUnit with `SKIP LOCKED`. Authentication supplies the lease
+owner; callers cannot provide one in the request.
+
+Mission-fork eligibility requires the exact `mission.fork` Mission source and
+root kind plus a non-outbound adapter. The Mission must be explicitly started
+before claim. Its lease owner can read the versioned Contract/Mission/WorkUnit
+projection behind the same lease fence. That projection carries immutable
+ArtifactRefs for ancestry inputs and never reads Artifact bytes or source
+checkpoint content. It is not yet accepted by the inbound A2A Harness compiler;
+fork-specific compilation and process composition remain a separate gate.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current

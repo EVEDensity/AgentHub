@@ -3214,6 +3214,140 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(repository.work_units[0], before_work_unit)
         self.assertEqual(repository.events, [])
 
+    def test_execution_context_returns_reference_only_mission_fork_snapshot(
+        self,
+    ) -> None:
+        class NoAncestryIORepository(FakeMissionRepository):
+            async def get_execution_checkpoint(
+                self,
+                checkpoint_id: str,
+            ) -> ExecutionCheckpoint | None:
+                del checkpoint_id
+                raise AssertionError("fork context read source checkpoint content")
+
+            async def get_artifact(self, artifact_id: str) -> Artifact | None:
+                del artifact_id
+                raise AssertionError("fork context read Artifact metadata or bytes")
+
+        repository = NoAncestryIORepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            objective="Continue from the independently verified diff.",
+            source=MissionSource(
+                type="mission.fork",
+                reference="mis-source",
+                external_id="chk-source",
+            ),
+        )
+        repository.contract = build_contract()
+        repository.work_units = [
+            build_work_unit(
+                id="wu-fork",
+                kind="mission.fork",
+                status="LEASED",
+                attempt=1,
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+                input_refs=[{"id": "artifact-source", "digest": DIGEST}],
+                lease=Lease(
+                    id="lease-fork",
+                    runner_id="user-1",
+                    expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+                ),
+            )
+        ]
+        before_work_unit = repository.work_units[0]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/work-units/wu-fork/execution-context",
+            json={"leaseId": "lease-fork"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        context = response.json()["executionContext"]
+        self.assertEqual(context["version"], 1)
+        self.assertEqual(context["mission"]["source"]["type"], "mission.fork")
+        self.assertEqual(context["mission"]["source"]["reference"], "mis-source")
+        self.assertEqual(
+            context["mission"]["source"]["externalId"],
+            "chk-source",
+        )
+        self.assertEqual(
+            context["workUnit"]["inputRefs"],
+            [{"id": "artifact-source", "digest": DIGEST}],
+        )
+        self.assertNotIn("contentAddress", context["workUnit"]["inputRefs"][0])
+        self.assertEqual(context["workUnit"]["lease"]["id"], "lease-fork")
+        self.assertEqual(repository.work_units[0], before_work_unit)
+        self.assertEqual(repository.events, [])
+
+    def test_execution_context_rejects_invalid_mission_fork_root_shape(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(
+            workspace_id="user-1",
+            status="RUNNING",
+            source=MissionSource(
+                type="mission.fork",
+                reference="mis-source",
+                external_id="chk-source",
+            ),
+        )
+        repository.contract = build_contract()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Runner", "role": "runner"},
+            )
+        )
+        invalid_shapes = (
+            {"kind": "code_change"},
+            {"parent_work_unit_id": "wu-parent"},
+            {"assigned_agent_id": None},
+            {"assigned_adapter": "a2a.outbound"},
+            {"input_refs": []},
+        )
+
+        for updates in invalid_shapes:
+            with self.subTest(updates=updates):
+                repository.work_units = [
+                    build_work_unit(
+                        **{
+                            "id": "wu-fork",
+                            "kind": "mission.fork",
+                            "status": "LEASED",
+                            "attempt": 1,
+                            "assigned_agent_id": "reviewer",
+                            "assigned_adapter": "local_codex",
+                            "input_refs": [
+                                {"id": "artifact-source", "digest": DIGEST}
+                            ],
+                            "lease": Lease(
+                                id="lease-fork",
+                                runner_id="user-1",
+                                expires_at=(
+                                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                                ),
+                            ),
+                            **updates,
+                        }
+                    )
+                ]
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/work-units/wu-fork/execution-context",
+                    json={"leaseId": "lease-fork"},
+                )
+
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(repository.events, [])
+
     def test_execution_context_rejects_invalid_outbound_root_shape(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(
