@@ -63,8 +63,10 @@ boundary. It is not the permanent home of every Agent feature.
   workspace Agent binding. It then atomically creates a new `READY` Mission plus
   `PENDING` root WorkUnit on the source Contract revision; it never copies
   checkpoints, Evidence, leases, or attempts. The human-only HTTP command is
-  exposed after source-workspace authorization; the fork-root claim path is
-  not exposed yet. Claiming an
+  exposed after source-workspace authorization. After an explicit human Mission
+  start, the existing claim commands admit only the exact `mission.fork` root
+  bound to a non-outbound adapter; claiming creates only a fenced lease and
+  attempt one. Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
   prompt with the peer objective marked as untrusted intent. Capability scope,

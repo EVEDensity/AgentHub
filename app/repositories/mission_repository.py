@@ -804,6 +804,8 @@ class MissionRepository:
                               AND candidate.assigned_adapter <> 'a2a.outbound')
                              OR ($4 = 'a2a.delegate'
                                  AND candidate.assigned_adapter = 'a2a.outbound')
+                             OR ($4 = 'mission.fork'
+                                 AND candidate.assigned_adapter <> 'a2a.outbound')
                          )
                      )
                  )
@@ -876,6 +878,12 @@ class MissionRepository:
                          AND candidate.parent_work_unit_id IS NULL
                          AND candidate.kind = 'a2a.delegate'
                          AND candidate.assigned_adapter = 'a2a.outbound'
+                     )
+                     OR (
+                         mission.source->>'type' = 'mission.fork'
+                         AND candidate.parent_work_unit_id IS NULL
+                         AND candidate.kind = 'mission.fork'
+                         AND candidate.assigned_adapter <> 'a2a.outbound'
                      )
                  )
                  AND candidate.assigned_agent_id=$2

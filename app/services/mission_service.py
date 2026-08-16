@@ -438,6 +438,10 @@ class MissionService:
             raise AgentBindingNotFoundError(
                 f"Agent is not available in the Mission scope: {agent_id}"
             )
+        if binding.adapter_type == _A2A_OUTBOUND_ADAPTER:
+            raise WorkUnitNotReadyError(
+                "Mission fork requires a non-outbound execution adapter"
+            )
         missing_binding_capabilities = sorted(
             set(required_capabilities) - set(binding.capabilities)
         )
@@ -1339,6 +1343,7 @@ class MissionService:
             allowed_root_kind = {
                 MissionSourceType.A2A_INBOUND: "a2a.inbound",
                 MissionSourceType.A2A: "a2a.delegate",
+                MissionSourceType.MISSION_FORK: "mission.fork",
             }.get(mission.source.type)
             work_unit = await repository.get_bound_work_unit_for_claim(
                 mission_id,
@@ -1479,6 +1484,12 @@ class MissionService:
             and work_unit.assigned_adapter == _A2A_OUTBOUND_ADAPTER
         ):
             claim_mode = "a2a.outbound"
+        elif (
+            mission.source.type == MissionSourceType.MISSION_FORK
+            and work_unit.kind == "mission.fork"
+            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+        ):
+            claim_mode = "mission.fork"
         else:
             raise WorkUnitNotReadyError(
                 "claim repository returned an ineligible root WorkUnit"

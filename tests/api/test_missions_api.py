@@ -543,19 +543,25 @@ class FakeMissionRepository:
         adapter_type: str,
         allowed_root_kind: str | None,
     ) -> WorkUnit | None:
+        def root_is_eligible(work_unit: WorkUnit) -> bool:
+            if work_unit.parent_work_unit_id is not None:
+                return True
+            if work_unit.kind != allowed_root_kind:
+                return False
+            return (
+                allowed_root_kind in {"a2a.inbound", "mission.fork"}
+                and work_unit.assigned_adapter != "a2a.outbound"
+            ) or (
+                allowed_root_kind == "a2a.delegate"
+                and work_unit.assigned_adapter == "a2a.outbound"
+            )
+
         candidates = sorted(
             (
                 work_unit
                 for work_unit in self.work_units
                 if work_unit.mission_id == mission_id
-                and (
-                    work_unit.parent_work_unit_id is not None
-                    or (
-                        allowed_root_kind is not None
-                        and work_unit.parent_work_unit_id is None
-                        and work_unit.kind == allowed_root_kind
-                    )
-                )
+                and root_is_eligible(work_unit)
                 and work_unit.assigned_agent_id == agent_id
                 and work_unit.assigned_adapter == adapter_type
                 and work_unit.status.value in {"PENDING", "RETRYING"}
@@ -617,6 +623,12 @@ class FakeMissionRepository:
                     and work_unit.parent_work_unit_id is None
                     and work_unit.kind == "a2a.delegate"
                     and work_unit.assigned_adapter == "a2a.outbound"
+                )
+                or (
+                    mission.source.type.value == "mission.fork"
+                    and work_unit.parent_work_unit_id is None
+                    and work_unit.kind == "mission.fork"
+                    and work_unit.assigned_adapter != "a2a.outbound"
                 )
             )
             if not eligible_shape:
@@ -1116,6 +1128,19 @@ class MissionApiTests(unittest.TestCase):
         cases = (
             (UnavailableAgentBindingResolver(), 503, "not configured"),
             (StaticAgentBindingResolver({}), 409, "not available"),
+            (
+                StaticAgentBindingResolver(
+                    {
+                        ("workspace-1", "reviewer"): AgentBinding(
+                            agent_id="reviewer",
+                            adapter_type="a2a.outbound",
+                            capabilities=("repository.write",),
+                        )
+                    }
+                ),
+                409,
+                "non-outbound execution adapter",
+            ),
         )
         for resolver, expected_status, detail in cases:
             with self.subTest(expected_status=expected_status):
@@ -2787,6 +2812,104 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(body["attempt"], 1)
         self.assertEqual(body["lease"]["runnerId"], "user-1")
         self.assertEqual(repository.events[-1].payload["claimMode"], "a2a.outbound")
+
+    def test_bound_claim_selects_started_mission_fork_root(self) -> None:
+        for path in (
+            "/api/v1/missions/mis-1/work-unit-claims",
+            "/api/v1/missions/work-unit-claims",
+        ):
+            with self.subTest(path=path):
+                repository = FakeMissionRepository()
+                repository.mission = build_mission(
+                    workspace_id="user-1",
+                    status="RUNNING",
+                    source=MissionSource(
+                        type="mission.fork",
+                        reference="mis-source",
+                        external_id="chk-source",
+                    ),
+                )
+                repository.work_units = [
+                    build_work_unit(
+                        id="wu-fork",
+                        kind="mission.fork",
+                        assigned_agent_id="reviewer",
+                        assigned_adapter="local_codex",
+                        input_refs=[{"id": "artifact-source", "digest": DIGEST}],
+                    )
+                ]
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {"id": "user-1", "name": "Runner", "role": "runner"},
+                    )
+                )
+                request: dict[str, object] = {
+                    "agentId": "reviewer",
+                    "adapterType": "local_codex",
+                }
+                if path.endswith("/missions/work-unit-claims"):
+                    request["workspaceId"] = "user-1"
+
+                response = client.post(path, json=request)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["claimStatus"], "claimed")
+                self.assertEqual(response.json()["workUnit"]["id"], "wu-fork")
+                self.assertEqual(response.json()["workUnit"]["status"], "LEASED")
+                self.assertEqual(response.json()["workUnit"]["attempt"], 1)
+                self.assertEqual(
+                    repository.events[-1].payload["claimMode"],
+                    "mission.fork",
+                )
+
+    def test_bound_claim_rejects_mismatched_or_outbound_fork_root(self) -> None:
+        cases = (
+            ("issue", "mission.fork", "local_codex"),
+            ("mission.fork", "code_change", "local_codex"),
+            ("mission.fork", "mission.fork", "a2a.outbound"),
+        )
+        for source_type, kind, adapter in cases:
+            with self.subTest(source_type=source_type, kind=kind, adapter=adapter):
+                repository = FakeMissionRepository()
+                source = (
+                    MissionSource(
+                        type="mission.fork",
+                        reference="mis-source",
+                        external_id="chk-source",
+                    )
+                    if source_type == "mission.fork"
+                    else MissionSource(type="issue", reference="issue-1")
+                )
+                repository.mission = build_mission(
+                    workspace_id="user-1",
+                    status="RUNNING",
+                    source=source,
+                )
+                repository.work_units = [
+                    build_work_unit(
+                        id="wu-fork",
+                        kind=kind,
+                        assigned_agent_id="reviewer",
+                        assigned_adapter=adapter,
+                    )
+                ]
+                client = TestClient(
+                    build_app(
+                        repository,
+                        {"id": "user-1", "name": "Runner", "role": "runner"},
+                    )
+                )
+
+                response = client.post(
+                    "/api/v1/missions/mis-1/work-unit-claims",
+                    json={"agentId": "reviewer", "adapterType": adapter},
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["claimStatus"], "idle")
+                self.assertIsNone(response.json()["workUnit"])
+                self.assertEqual(repository.events, [])
 
     def test_bound_claim_does_not_admit_other_root_kind(self) -> None:
         repository = FakeMissionRepository()
