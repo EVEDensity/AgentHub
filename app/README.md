@@ -8,6 +8,8 @@ boundary. It is not the permanent home of every Agent feature.
 - `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
   transition models.
 - `repositories/`: persistence and transaction boundaries.
+  Legacy session file versions remain in `artifacts`; Mission Control owns
+  immutable execution metadata in the separate `mission_artifacts` table.
 - `services/`: application use cases, compatibility adapters, and storage ports.
   Artifact byte verification reads Runner-owned content through this boundary;
   Mission Control retains only immutable Artifact metadata.

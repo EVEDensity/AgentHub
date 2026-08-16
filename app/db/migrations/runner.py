@@ -14,8 +14,10 @@ from app.db.migrations.mission_control_plane import (
     AGENT_CATALOG_PROJECTION_UPGRADE,
     ARTIFACT_PERSISTENCE_DOWN_REVISION,
     ARTIFACT_PERSISTENCE_UPGRADE,
+    ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION,
+    ARTIFACT_TABLE_OWNERSHIP_REVISION,
+    ARTIFACT_TABLE_OWNERSHIP_UPGRADE,
     DECISION_EXPIRY_DOWN_REVISION,
-    DECISION_EXPIRY_REVISION,
     DECISION_EXPIRY_UPGRADE,
     DECISION_PERSISTENCE_DOWN_REVISION,
     DECISION_PERSISTENCE_UPGRADE,
@@ -51,7 +53,7 @@ async def apply_startup_migrations(
     )
     row = await connection.fetchrow("SELECT version_num FROM alembic_version LIMIT 1")
     current = row["version_num"] if row else None
-    if current == DECISION_EXPIRY_REVISION:
+    if current == ARTIFACT_TABLE_OWNERSHIP_REVISION:
         migration_logger.info("init_db: Alembic already at head (%s)", current)
         return
 
@@ -69,10 +71,11 @@ async def apply_startup_migrations(
         A2A_INBOUND_SOURCE_MAPPING_DOWN_REVISION,
         DECISION_PERSISTENCE_DOWN_REVISION,
         DECISION_EXPIRY_DOWN_REVISION,
+        ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION,
     }:
         message = (
             "unsupported Alembic upgrade path "
-            f"(current={current}, head={DECISION_EXPIRY_REVISION}); "
+            f"(current={current}, head={ARTIFACT_TABLE_OWNERSHIP_REVISION}); "
             "run 'alembic upgrade head' offline before starting AgentHub"
         )
         migration_logger.error("init_db: %s", message)
@@ -207,22 +210,26 @@ async def apply_startup_migrations(
         for statement in DECISION_PERSISTENCE_UPGRADE:
             await connection.execute(statement)
 
-    for statement in DECISION_EXPIRY_UPGRADE:
+    if current != ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION:
+        for statement in DECISION_EXPIRY_UPGRADE:
+            await connection.execute(statement)
+
+    for statement in ARTIFACT_TABLE_OWNERSHIP_UPGRADE:
         await connection.execute(statement)
 
     if current is None:
         await connection.execute(
             "INSERT INTO alembic_version(version_num) VALUES($1)",
-            DECISION_EXPIRY_REVISION,
+            ARTIFACT_TABLE_OWNERSHIP_REVISION,
         )
     else:
         await connection.execute(
             "UPDATE alembic_version SET version_num=$1 WHERE version_num=$2",
-            DECISION_EXPIRY_REVISION,
+            ARTIFACT_TABLE_OWNERSHIP_REVISION,
             current,
         )
     migration_logger.info(
         "init_db: Alembic advanced from %s to %s",
         current or "unversioned",
-        DECISION_EXPIRY_REVISION,
+        ARTIFACT_TABLE_OWNERSHIP_REVISION,
     )

@@ -517,7 +517,7 @@ class MissionRepository:
 
     async def add_artifact(self, artifact: Artifact) -> None:
         await self._execute(
-            """INSERT INTO artifacts(
+            """INSERT INTO mission_artifacts(
                    id, mission_id, work_unit_id, attempt, kind, digest,
                    content_address, media_type, size_bytes, source_repository,
                    base_commit, retention, sensitivity, created_by, created_at
@@ -547,7 +547,7 @@ class MissionRepository:
             """SELECT id, mission_id, work_unit_id, attempt, kind, digest,
                       content_address, media_type, size_bytes, source_repository,
                       base_commit, retention, sensitivity, created_by, created_at
-               FROM artifacts WHERE id=$1""",
+               FROM mission_artifacts WHERE id=$1""",
             artifact_id,
         )
         return self._artifact_from_row(row) if row is not None else None
@@ -567,7 +567,7 @@ class MissionRepository:
             """SELECT id, mission_id, work_unit_id, attempt, kind, digest,
                       content_address, media_type, size_bytes, source_repository,
                       base_commit, retention, sensitivity, created_by, created_at
-               FROM artifacts
+               FROM mission_artifacts
                WHERE mission_id=$1
                ORDER BY created_at ASC, id ASC
                LIMIT $2 OFFSET $3""",
@@ -892,7 +892,7 @@ class MissionRepository:
             """SELECT id, mission_id, work_unit_id, attempt, kind, digest,
                       content_address, media_type, size_bytes, source_repository,
                       base_commit, retention, sensitivity, created_by, created_at
-               FROM artifacts
+               FROM mission_artifacts
                WHERE mission_id=$1 AND work_unit_id=$2 AND attempt=$3
                ORDER BY created_at ASC, id ASC
                LIMIT $4""",

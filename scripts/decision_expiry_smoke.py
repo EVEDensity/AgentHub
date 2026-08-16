@@ -59,20 +59,23 @@ def _run(
         env=environment,
         check=False,
         capture_output=True,
-        text=True,
         timeout=timeout,
     )
+    stdout = _decode_process_output(completed.stdout)
+    stderr = _decode_process_output(completed.stderr)
     if completed.returncode != 0:
         output = "\n".join(
-            part.strip()
-            for part in (completed.stdout, completed.stderr)
-            if part.strip()
+            part.strip() for part in (stdout, stderr) if part.strip()
         )
         raise RuntimeError(
             f"command failed with exit code {completed.returncode}: "
             f"{' '.join(command[:3])}\n{output}"
         )
-    return completed.stdout.strip()
+    return stdout.strip()
+
+
+def _decode_process_output(output: bytes | None) -> str:
+    return output.decode("utf-8", errors="replace") if output is not None else ""
 
 
 def _published_port(output: str) -> int:

@@ -430,7 +430,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         await self.repository.add_artifact(artifact)
 
         insert_sql, insert_args = self.database.executed[-1]
-        self.assertIn("INSERT INTO artifacts", insert_sql)
+        self.assertIn("INSERT INTO mission_artifacts", insert_sql)
         self.assertEqual(
             insert_args[0:6],
             (

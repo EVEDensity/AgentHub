@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import yaml
 
 from scripts.decision_expiry_smoke import (
     _assert_sanitized_readiness,
     _published_port,
+    _run,
 )
 
 
@@ -58,6 +61,18 @@ class DecisionExpirySmokeAssetTests(unittest.TestCase):
         for output in ("", "example.test:1234", "127.0.0.1:0", "invalid"):
             with self.subTest(output=output), self.assertRaises(ValueError):
                 _published_port(output)
+
+    def test_command_output_is_decoded_independently_of_windows_locale(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["docker"],
+            returncode=0,
+            stdout=b"built \x81 image\n",
+            stderr=b"",
+        )
+        with patch("scripts.decision_expiry_smoke.subprocess.run", return_value=completed):
+            output = _run(["docker", "compose"], environment={}, timeout=30)
+
+        self.assertEqual(output, "built \ufffd image")
 
     def test_readiness_assertion_accepts_only_one_sanitized_expiry(self) -> None:
         valid = {

@@ -24,6 +24,8 @@ DECISION_PERSISTENCE_REVISION = "b1e5f6a7c8d9"
 DECISION_PERSISTENCE_DOWN_REVISION = A2A_INBOUND_SOURCE_MAPPING_REVISION
 DECISION_EXPIRY_REVISION = "c2f6a7b8d9e0"
 DECISION_EXPIRY_DOWN_REVISION = DECISION_PERSISTENCE_REVISION
+ARTIFACT_TABLE_OWNERSHIP_REVISION = "d3a7b8c9e0f1"
+ARTIFACT_TABLE_OWNERSHIP_DOWN_REVISION = DECISION_EXPIRY_REVISION
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -151,21 +153,9 @@ A2A_SOURCE_MAPPING_DOWNGRADE = (
     "DROP INDEX IF EXISTS uq_missions_a2a_external_task",
 )
 
-ARTIFACT_PERSISTENCE_UPGRADE = (
+MISSION_ARTIFACT_TABLE_UPGRADE = (
     """
-    ALTER TABLE mission_events
-    DROP CONSTRAINT IF EXISTS mission_events_aggregate_type_check
-    """,
-    """
-    ALTER TABLE mission_events
-    ADD CONSTRAINT mission_events_aggregate_type_check CHECK (
-        aggregate_type IN (
-            'mission', 'mission_contract', 'work_unit', 'artifact', 'evidence'
-        )
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS artifacts (
+    CREATE TABLE IF NOT EXISTS mission_artifacts (
         id TEXT PRIMARY KEY,
         mission_id TEXT NOT NULL REFERENCES missions(id),
         work_unit_id TEXT NOT NULL REFERENCES work_units(id),
@@ -195,17 +185,33 @@ ARTIFACT_PERSISTENCE_UPGRADE = (
     )
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_artifacts_mission_created
-    ON artifacts(mission_id, created_at, id)
+    CREATE INDEX IF NOT EXISTS idx_mission_artifacts_mission_created
+    ON mission_artifacts(mission_id, created_at, id)
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_artifacts_work_unit_attempt
-    ON artifacts(work_unit_id, attempt, id)
+    CREATE INDEX IF NOT EXISTS idx_mission_artifacts_work_unit_attempt
+    ON mission_artifacts(work_unit_id, attempt, id)
     """,
 )
 
+ARTIFACT_PERSISTENCE_UPGRADE = (
+    """
+    ALTER TABLE mission_events
+    DROP CONSTRAINT IF EXISTS mission_events_aggregate_type_check
+    """,
+    """
+    ALTER TABLE mission_events
+    ADD CONSTRAINT mission_events_aggregate_type_check CHECK (
+        aggregate_type IN (
+            'mission', 'mission_contract', 'work_unit', 'artifact', 'evidence'
+        )
+    )
+    """,
+    *MISSION_ARTIFACT_TABLE_UPGRADE,
+)
+
 ARTIFACT_PERSISTENCE_DOWNGRADE = (
-    "DROP TABLE IF EXISTS artifacts",
+    "DROP TABLE IF EXISTS mission_artifacts",
     """
     ALTER TABLE mission_events
     DROP CONSTRAINT IF EXISTS mission_events_aggregate_type_check
@@ -567,4 +573,85 @@ DECISION_EXPIRY_DOWNGRADE = (
     )
     """,
     "DROP INDEX IF EXISTS idx_decisions_pending_expiry",
+)
+
+ARTIFACT_TABLE_OWNERSHIP_UPGRADE = (
+    """
+    DO $migration$
+    DECLARE
+        legacy_table REGCLASS := to_regclass('artifacts');
+        mission_table REGCLASS := to_regclass('mission_artifacts');
+        artifacts_is_mission_owned BOOLEAN := FALSE;
+    BEGIN
+        IF legacy_table IS NOT NULL THEN
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_attribute
+                WHERE attrelid = legacy_table
+                  AND attname IN ('mission_id', 'work_unit_id')
+                  AND NOT attisdropped
+                GROUP BY attrelid
+                HAVING count(*) = 2
+            ) INTO artifacts_is_mission_owned;
+        END IF;
+
+        IF mission_table IS NOT NULL AND artifacts_is_mission_owned THEN
+            RAISE EXCEPTION
+                'ambiguous Artifact ownership: both Mission Artifact tables exist';
+        END IF;
+
+        IF mission_table IS NULL AND artifacts_is_mission_owned THEN
+            ALTER TABLE artifacts RENAME TO mission_artifacts;
+            IF EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'mission_artifacts'::regclass
+                  AND conname = 'artifacts_pkey'
+            ) THEN
+                ALTER TABLE mission_artifacts
+                RENAME CONSTRAINT artifacts_pkey TO mission_artifacts_pkey;
+            END IF;
+            IF to_regclass('idx_artifacts_mission_created') IS NOT NULL THEN
+                ALTER INDEX idx_artifacts_mission_created
+                RENAME TO idx_mission_artifacts_mission_created;
+            END IF;
+            IF to_regclass('idx_artifacts_work_unit_attempt') IS NOT NULL THEN
+                ALTER INDEX idx_artifacts_work_unit_attempt
+                RENAME TO idx_mission_artifacts_work_unit_attempt;
+            END IF;
+        END IF;
+    END
+    $migration$
+    """,
+    *MISSION_ARTIFACT_TABLE_UPGRADE,
+)
+
+ARTIFACT_TABLE_OWNERSHIP_DOWNGRADE = (
+    """
+    DO $migration$
+    BEGIN
+        IF to_regclass('artifacts') IS NULL
+           AND to_regclass('mission_artifacts') IS NOT NULL THEN
+            ALTER TABLE mission_artifacts RENAME TO artifacts;
+            IF EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'artifacts'::regclass
+                  AND conname = 'mission_artifacts_pkey'
+            ) THEN
+                ALTER TABLE artifacts
+                RENAME CONSTRAINT mission_artifacts_pkey TO artifacts_pkey;
+            END IF;
+            IF to_regclass('idx_mission_artifacts_mission_created') IS NOT NULL THEN
+                ALTER INDEX idx_mission_artifacts_mission_created
+                RENAME TO idx_artifacts_mission_created;
+            END IF;
+            IF to_regclass('idx_mission_artifacts_work_unit_attempt') IS NOT NULL THEN
+                ALTER INDEX idx_mission_artifacts_work_unit_attempt
+                RENAME TO idx_artifacts_work_unit_attempt;
+            END IF;
+        END IF;
+    END
+    $migration$
+    """,
 )
