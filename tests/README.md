@@ -15,3 +15,11 @@ New execution features should include a domain test first, then persistence and
 API coverage as the blast radius requires. A successful response is not enough:
 tests must verify honest failure, restart recovery, idempotency, and evidence
 requirements where applicable.
+
+For the root Python suite, install the versioned development dependencies before
+running tests:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+```
