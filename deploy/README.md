@@ -126,9 +126,20 @@ $env:AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE = "D:\secrets\model-gateway-token"
 $env:AGENTHUB_RUNNER_MCP_TOKEN_FILE = "D:\secrets\mcp-token"
 $env:AGENTHUB_RUNNER_MCP_BINDINGS_FILE = "D:\config\runner-mcp-bindings.json"
 $env:AGENTHUB_RUNNER_ARTIFACT_HOST_PATH = "D:\agenthub-artifacts"
+.\.venv\Scripts\python.exe scripts/runner_deployment_preflight.py
 docker compose -f deploy/docker-compose.platform.yml --profile mission-runner up -d --build runner-service
 docker compose -f deploy/docker-compose.platform.yml --profile mission-runner ps runner-service
 ```
+
+The preflight performs no writes. It validates the process identity and
+endpoint configuration, mounted-secret source files, credential-free MCP
+manifest, existing writable Artifact root, and TCP reachability of the three
+external endpoints. Use `--skip-network` only for an offline configuration
+review; it cannot prove endpoint availability or authorization.
+
+The container runs as UID `10001`. Ensure the mounted Artifact root is writable
+by that container identity; host-side writability from preflight does not prove
+the container mount's ownership or SELinux policy.
 
 The container has no published host port, runs with a read-only root filesystem,
 and mounts only `/tmp`, the read-write Artifact root, three Docker secrets, and
