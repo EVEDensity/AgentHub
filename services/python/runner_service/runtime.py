@@ -10,7 +10,7 @@ import httpx
 from app.core.config import ArtifactStoreSettings
 from app.services.artifact_store_service import ContentAddressedArtifactPublisher
 from app.services.mcp_tool_adapter import StatelessMCPClient
-from app.services.runner_composition import build_a2a_inbound_runner
+from app.services.runner_composition import build_kind_aware_workspace_runner
 from app.services.runner_service import MissionControlRunnerClient
 from app.services.runner_worker import RunnerWorker, RunnerWorkerSnapshot
 
@@ -147,7 +147,7 @@ def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntim
             publish_max_bytes=settings.max_artifact_bytes,
         )
     )
-    runner = build_a2a_inbound_runner(
+    runner = build_kind_aware_workspace_runner(
         control,
         publisher=publisher,
         model_factory=model_factory,

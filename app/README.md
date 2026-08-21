@@ -85,7 +85,8 @@ boundary. It is not the permanent home of every Agent feature.
   disables workspace claims in code and is not referenced by the production
   process. A separate kind-aware workspace composition now registers inbound
   and fork resolvers together and derives its claim capability set from that
-  exact registry. It remains outside the production process wiring.
+  exact registry. The Python Runner service selects this composition; its
+  outbound transport path remains separate and disabled from that process.
   Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON

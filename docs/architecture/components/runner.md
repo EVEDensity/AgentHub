@@ -2,7 +2,7 @@
 
 > Status: implemented  
 > Owner: execution maintainers  
-> Last reviewed: 2026-08-16
+> Last reviewed: 2026-08-21
 
 ## Responsibility
 
@@ -98,8 +98,9 @@ are disabled on that composition before control-plane I/O. A separate
 kind-aware workspace composition registers the inbound and fork resolvers by
 their durable WorkUnit kind and derives its claim capability set from the same
 immutable registry. An unsupported kind cannot dispatch through a fallback
-resolver. This composition has an ASGI mixed-kind gate but is not yet selected
-by the production process builder.
+resolver. This composition has an ASGI mixed-kind gate and is selected by the
+Python Runner service process builder. The service still excludes outbound A2A
+from this model/Harness execution path.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current

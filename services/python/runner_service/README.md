@@ -2,7 +2,7 @@
 
 > Status: minimum deployment candidate  
 > Owner: execution maintainers  
-> Last reviewed: 2026-08-15
+> Last reviewed: 2026-08-21
 
 This service hosts the workspace-scoped `RunnerWorker` behind an operational
 HTTP surface. It is deliberately not a queue, a fleet scheduler, or a verifier.
@@ -32,13 +32,15 @@ resources, Artifact byte publication, and sanitized health state.
   and descriptions. Endpoint and credentials are process configuration and
   cannot appear in the manifest. Every binding captures the exact Mission,
   WorkUnit, and attempt at Harness construction.
-- Each inbound Harness receives a request-scoped Mission Control checkpoint
+- Each model-backed Harness receives a request-scoped Mission Control checkpoint
   adapter bound to the claimed lease. The adapter forwards only phase, counters,
   usage, and bounded terminal failure metadata; it never forwards tool results,
   prompts, model responses, or credentials.
-- The inbound process declares only `a2a.inbound` in workspace claim requests.
-  Mission Control filters unsupported WorkUnit kinds before locking or leasing;
-  the process cannot opt into another kind through environment configuration.
+- The process declares exactly `a2a.inbound` and `mission.fork` in workspace
+  claim requests. The set comes from the compiled resolver registry, not an
+  environment setting. Each kind has its own context compiler and Harness
+  policy; Mission Control filters unsupported WorkUnit kinds before locking or
+  leasing. `a2a.delegate` and `a2a.outbound` remain outside this runtime.
 - Artifact output uses a content-addressed local root. A deployment must mount
   that root on storage readable by the Mission Control verifier.
 
@@ -50,11 +52,11 @@ AI Gateway or every MCP tool, because doing so would execute provider-specific
 operations outside a WorkUnit. Both endpoints exclude tenant, quota, objective,
 prompt, tool, and credential content.
 
-The application layer contains a controlled Mission-fork composition for one
-explicitly selected Mission. That composition disables workspace claims and is
-not called by this service runtime. `build_runner_runtime` remains inbound-only
-until workspace claims can route every eligible WorkUnit kind to its exact
-resolver without claiming and failing unrelated work.
+The application layer retains a controlled Mission-fork composition for one
+explicitly selected Mission as a narrow integration surface. The service
+runtime uses the separate kind-aware workspace composition, whose mixed-kind
+ASGI gate proves both eligible model-backed roots resolve through their exact
+compiler and lease-fenced execution path.
 
 ## Required configuration
 
@@ -133,7 +135,7 @@ Mission/WorkUnit configuration.
    context APIs and can authorize the mounted Runner principal through the
    workspace ACL `mission:claim` permission.
 2. The configured workspace catalog contains the exact Agent/adapter binding
-   used by eligible inbound Missions.
+   used by eligible inbound and Mission-fork Missions.
 3. The workspace belongs to an active IAM tenant with a valid plan quota or
    numeric `max_concurrent` override. `0` explicitly means unlimited; missing
    or malformed admission policy prevents new claims.

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -76,6 +77,51 @@ class CloseRecorder:
 
 
 class RunnerServiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_strict_composition_selects_kind_aware_workspace_runner(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            for name in ("control.token", "model.token", "mcp.token"):
+                (root / name).write_text(f"{name}-value\n", encoding="utf-8")
+            (root / "bindings.json").write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": "agenthub.runner.mcp-bindings.v1",
+                        "bindings": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = _settings().model_copy(
+                update={
+                    "mission_control_token_file": root / "control.token",
+                    "model_gateway_token_file": root / "model.token",
+                    "mcp_token_file": root / "mcp.token",
+                    "mcp_bindings_file": root / "bindings.json",
+                    "artifact_local_root": root / "artifacts",
+                }
+            )
+            composed_runner = object()
+            with patch(
+                "services.python.runner_service.runtime."
+                "build_kind_aware_workspace_runner",
+                return_value=composed_runner,
+            ) as builder:
+                runtime = build_runner_runtime(settings)
+
+            self.assertIs(runtime.worker._runner, composed_runner)
+            self.assertEqual(builder.call_args.kwargs["runner_id"], "runner-1")
+            self.assertEqual(
+                builder.call_args.kwargs["assigned_agent_id"],
+                "agent-1",
+            )
+            self.assertEqual(
+                builder.call_args.kwargs["assigned_adapter"],
+                "local",
+            )
+            await runtime.stop()
+
     async def test_strict_composition_loads_file_backed_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
