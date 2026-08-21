@@ -4,12 +4,19 @@ import asyncio
 import json
 import tempfile
 import unittest
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.services.harness_service import (
+    FunctionTool,
+    HarnessRequest,
+    ModelResponse,
+)
 from app.services.runner_worker import RunnerWorkerSnapshot
 from app.services.workspace_admission_service import WorkspaceClaimStatus
 from services.python.runner_service.config import RunnerServiceSettings
@@ -17,6 +24,11 @@ from services.python.runner_service.main import create_app
 from services.python.runner_service.runtime import (
     RunnerServiceRuntime,
     build_runner_runtime,
+    compose_kind_aware_runner_runtime,
+)
+from tests.services.test_runner_service import (
+    FakePublisher,
+    mission_fork_execution_context,
 )
 
 
@@ -76,7 +88,156 @@ class CloseRecorder:
         self.closed = True
 
 
+class _ForkWorkspaceControl:
+    def __init__(self, context: dict[str, Any]) -> None:
+        self.context = context
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.completed = asyncio.Event()
+        self.claimed = False
+
+    async def claim_ready_work_unit(self, workspace_id: str, **kwargs: Any):
+        self.calls.append(("claim", {"workspace_id": workspace_id, **kwargs}))
+        if self.claimed:
+            return {"claimStatus": "idle", "workUnit": None}
+        self.claimed = True
+        return {"claimStatus": "claimed", "workUnit": self.context["workUnit"]}
+
+    async def get_execution_context(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append(("context", kwargs))
+        if (mission_id, work_unit_id) != ("mis-fork", "wu-fork"):
+            raise AssertionError("fork execution context identity drifted")
+        return {"executionContext": self.context}
+
+    async def start_work_unit(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args
+        self.calls.append(("start", kwargs))
+        started = dict(self.context["workUnit"])
+        started["status"] = "RUNNING"
+        return started
+
+    async def record_execution_checkpoint(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append(("checkpoint", kwargs))
+        return {
+            "id": kwargs["checkpoint_id"],
+            "missionId": mission_id,
+            "workUnitId": work_unit_id,
+            "attempt": 1,
+            "sequence": kwargs["sequence"],
+            "phase": kwargs["phase"],
+            "iteration": kwargs["iteration"],
+            "toolCalls": kwargs["tool_calls"],
+            "promptTokens": kwargs["prompt_tokens"],
+            "completionTokens": kwargs["completion_tokens"],
+            "modelCost": kwargs["model_cost"],
+            "terminal": kwargs["terminal"],
+            "failureReason": kwargs.get("failure_reason"),
+            "stateDigest": "sha256:" + "a" * 64,
+            "createdBy": {"id": "runner-1", "type": "service"},
+            "createdAt": "2026-08-21T00:00:00+00:00",
+        }
+
+    async def heartbeat_work_unit(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        heartbeat = dict(self.context["workUnit"])
+        heartbeat["status"] = "RUNNING"
+        return heartbeat
+
+    async def register_artifact(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args
+        self.calls.append(("register", kwargs))
+        return {"id": kwargs["artifact_id"]}
+
+    async def complete_work_unit(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args
+        self.calls.append(("complete", kwargs))
+        self.completed.set()
+        return {"id": "wu-fork", "status": "VERIFYING"}
+
+    async def fail_work_unit(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args
+        self.calls.append(("fail", kwargs))
+        return {"id": "wu-fork", "status": "FAILED"}
+
+
+class _FinalForkModel:
+    async def complete(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[object, ...],
+    ) -> ModelResponse:
+        del request, tool_results
+        return ModelResponse(content="fork runtime result")
+
+
+class _FinalForkModelFactory:
+    def build(self, tools: Sequence[FunctionTool]) -> _FinalForkModel:
+        del tools
+        return _FinalForkModel()
+
+
+class _EmptyBindingFactory:
+    def build(self, execution: object) -> Sequence[object]:
+        del execution
+        return ()
+
+
 class RunnerServiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_kind_aware_runtime_smoke_executes_mission_fork(self) -> None:
+        context = mission_fork_execution_context()
+        context["workUnit"]["dependencies"] = []
+        context["workUnit"]["requiredCapabilities"] = []
+        del context["workUnit"]["inputRefs"][0]["contentAddress"]
+        control = _ForkWorkspaceControl(context)
+        publisher = FakePublisher()
+        runtime = compose_kind_aware_runner_runtime(
+            control,  # type: ignore[arg-type]
+            publisher=publisher,
+            model_factory=_FinalForkModelFactory(),
+            binding_factory=_EmptyBindingFactory(),
+            runner_id="runner-1",
+            workspace_id="workspace-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+            idle_delay_seconds=0.01,
+            max_delay_seconds=0.02,
+        )
+
+        await runtime.start()
+        try:
+            await asyncio.wait_for(control.completed.wait(), timeout=1)
+        finally:
+            await runtime.stop()
+
+        claim = control.calls[0]
+        self.assertEqual(claim[0], "claim")
+        self.assertEqual(claim[1]["workspace_id"], "workspace-1")
+        self.assertEqual(
+            claim[1]["supported_work_unit_kinds"],
+            ("a2a.inbound", "mission.fork"),
+        )
+        self.assertEqual([name for name, _ in control.calls][1:], [
+            "context",
+            "start",
+            "checkpoint",
+            "checkpoint",
+            "checkpoint",
+            "checkpoint",
+            "checkpoint",
+            "register",
+            "complete",
+        ])
+        self.assertEqual(publisher.contents, [b"fork runtime result"])
+
     async def test_strict_composition_selects_kind_aware_workspace_runner(
         self,
     ) -> None:

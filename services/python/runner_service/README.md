@@ -58,6 +58,13 @@ runtime uses the separate kind-aware workspace composition, whose mixed-kind
 ASGI gate proves both eligible model-backed roots resolve through their exact
 compiler and lease-fenced execution path.
 
+The runtime smoke test also starts a real `RunnerWorker` over the same
+composition and drives one `mission.fork` root through workspace claim,
+lease-fenced context, controlled start, five checkpoints, content-addressed
+Artifact publication, registration, and completion to `VERIFYING`. It uses
+in-process Mission Control and model ports only; it is not a substitute for a
+deployment-specific network, mounted-secret, or external AI Gateway check.
+
 ## Required configuration
 
 All variables use the `AGENTHUB_RUNNER_` prefix:

@@ -100,7 +100,10 @@ their durable WorkUnit kind and derives its claim capability set from the same
 immutable registry. An unsupported kind cannot dispatch through a fallback
 resolver. This composition has an ASGI mixed-kind gate and is selected by the
 Python Runner service process builder. The service still excludes outbound A2A
-from this model/Harness execution path.
+from this model/Harness execution path. A runtime smoke starts a real
+`RunnerWorker` over this composition and proves the fork root reaches
+`VERIFYING` after its context, checkpoint, Artifact, and registration path;
+deployment-specific external dependency checks remain separate.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current

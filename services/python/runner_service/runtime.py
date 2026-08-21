@@ -8,10 +8,20 @@ from typing import Protocol
 import httpx
 
 from app.core.config import ArtifactStoreSettings
-from app.services.artifact_store_service import ContentAddressedArtifactPublisher
+from app.services.artifact_store_service import (
+    ArtifactPublisher,
+    ContentAddressedArtifactPublisher,
+)
 from app.services.mcp_tool_adapter import StatelessMCPClient
-from app.services.runner_composition import build_kind_aware_workspace_runner
-from app.services.runner_service import MissionControlRunnerClient
+from app.services.runner_composition import (
+    CapabilityBindingFactoryPort,
+    HarnessModelFactoryPort,
+    build_kind_aware_workspace_runner,
+)
+from app.services.runner_service import (
+    MissionControlRunnerClient,
+    MissionControlRunnerPort,
+)
 from app.services.runner_worker import RunnerWorker, RunnerWorkerSnapshot
 
 from .bindings import LoggingMCPAuditPort, PerAttemptMCPBindingFactory
@@ -89,8 +99,66 @@ class RunnerServiceRuntime:
                 await closeable.aclose()
 
 
+def compose_kind_aware_runner_runtime(
+    control: MissionControlRunnerPort,
+    *,
+    publisher: ArtifactPublisher,
+    model_factory: HarnessModelFactoryPort,
+    binding_factory: CapabilityBindingFactoryPort,
+    runner_id: str,
+    workspace_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    owned_closeables: Sequence[AsyncClosePort] = (),
+    lease_seconds: int = 300,
+    idle_delay_seconds: float = 0.5,
+    max_delay_seconds: float = 10.0,
+    shutdown_timeout_seconds: float = 30.0,
+    max_context_chars: int = 32_768,
+    max_work_unit_timeout_seconds: float = 300.0,
+    max_iterations: int = 8,
+    max_tool_calls: int = 32,
+    max_total_tokens: int | None = None,
+    max_model_cost: float | None = None,
+    heartbeat_interval_seconds: float | None = None,
+) -> RunnerServiceRuntime:
+    """Compose one kind-aware model Runner with explicit resource ownership."""
+
+    transferred = tuple(owned_closeables)
+    if any(not callable(getattr(item, "aclose", None)) for item in transferred):
+        raise TypeError("owned_closeables must provide aclose")
+    runner = build_kind_aware_workspace_runner(
+        control,
+        publisher=publisher,
+        model_factory=model_factory,
+        binding_factory=binding_factory,
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        max_context_chars=max_context_chars,
+        max_timeout_seconds=max_work_unit_timeout_seconds,
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+    )
+    worker = RunnerWorker(
+        runner,
+        workspace_id=workspace_id,
+        lease_seconds=lease_seconds,
+        idle_delay_seconds=idle_delay_seconds,
+        max_delay_seconds=max_delay_seconds,
+    )
+    return RunnerServiceRuntime(
+        worker=worker,
+        shutdown_timeout_seconds=shutdown_timeout_seconds,
+        closeables=transferred,
+    )
+
+
 def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntime:
-    """Compose the strict workspace-scoped service without runtime fallbacks."""
+    """Load file-backed dependencies and compose the strict workspace service."""
 
     control_token = read_secret_file(settings.mission_control_token_file)
     model_token = read_secret_file(settings.model_gateway_token_file)
@@ -147,34 +215,32 @@ def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntim
             publish_max_bytes=settings.max_artifact_bytes,
         )
     )
-    runner = build_kind_aware_workspace_runner(
+    return compose_kind_aware_runner_runtime(
         control,
         publisher=publisher,
         model_factory=model_factory,
         binding_factory=binding_factory,
         runner_id=settings.runner_id,
+        workspace_id=settings.workspace_id,
         assigned_agent_id=settings.assigned_agent_id,
         assigned_adapter=settings.assigned_adapter,
+        owned_closeables=(control_http, model_http, mcp_http),
+        lease_seconds=settings.lease_seconds,
+        idle_delay_seconds=settings.idle_delay_seconds,
+        max_delay_seconds=settings.max_delay_seconds,
+        shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
         max_context_chars=settings.max_context_chars,
-        max_timeout_seconds=settings.max_work_unit_timeout_seconds,
+        max_work_unit_timeout_seconds=settings.max_work_unit_timeout_seconds,
         max_iterations=settings.max_iterations,
         max_tool_calls=settings.max_tool_calls,
         max_total_tokens=settings.max_total_tokens,
         max_model_cost=settings.max_model_cost,
         heartbeat_interval_seconds=settings.heartbeat_interval_seconds,
     )
-    worker = RunnerWorker(
-        runner,
-        workspace_id=settings.workspace_id,
-        lease_seconds=settings.lease_seconds,
-        idle_delay_seconds=settings.idle_delay_seconds,
-        max_delay_seconds=settings.max_delay_seconds,
-    )
-    return RunnerServiceRuntime(
-        worker=worker,
-        shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
-        closeables=(control_http, model_http, mcp_http),
-    )
 
 
-__all__ = ["RunnerServiceRuntime", "build_runner_runtime"]
+__all__ = [
+    "RunnerServiceRuntime",
+    "build_runner_runtime",
+    "compose_kind_aware_runner_runtime",
+]
