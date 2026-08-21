@@ -702,6 +702,7 @@ async def claim_workspace_work_unit(
             request.workspace_id,
             agent_id=request.agent_id,
             adapter_type=request.adapter_type,
+            supported_work_unit_kinds=request.supported_work_unit_kinds,
             runner_id=str(user["id"]),
             actor=build_runner_actor(user),
             lease_seconds=request.lease_seconds,

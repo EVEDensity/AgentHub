@@ -1377,6 +1377,7 @@ class MissionService:
         *,
         agent_id: str,
         adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
         runner_id: str,
         actor: ActorRef,
         lease_seconds: int,
@@ -1386,6 +1387,20 @@ class MissionService:
 
         if not workspace_id.strip():
             raise ValueError("workspace_id must be non-empty")
+        if not supported_work_unit_kinds:
+            raise ValueError("supported_work_unit_kinds must be non-empty")
+        if len(supported_work_unit_kinds) > 32:
+            raise ValueError("supported_work_unit_kinds exceeds limit")
+        if len(supported_work_unit_kinds) != len(set(supported_work_unit_kinds)):
+            raise ValueError("supported_work_unit_kinds must be unique")
+        if any(
+            not isinstance(kind, str)
+            or not kind.strip()
+            or kind != kind.strip()
+            or len(kind) > 255
+            for kind in supported_work_unit_kinds
+        ):
+            raise ValueError("supported_work_unit_kinds is invalid")
         if not 1 <= lease_seconds <= 3600:
             raise ValueError("lease_seconds must be between 1 and 3600")
         async with self._repository.transaction() as repository:
@@ -1401,6 +1416,7 @@ class MissionService:
                 workspace_id,
                 agent_id=agent_id,
                 adapter_type=adapter_type,
+                supported_work_unit_kinds=supported_work_unit_kinds,
             )
             if selection is None:
                 return WorkUnitClaimOutcome(

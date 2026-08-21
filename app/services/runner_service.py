@@ -53,6 +53,7 @@ class MissionControlRunnerPort(Protocol):
         runner_id: str,
         agent_id: str,
         adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
         lease_seconds: int,
     ) -> dict[str, Any]: ...
 
@@ -197,6 +198,47 @@ class ClaimedWorkResolver(Protocol):
         self,
         work_unit: Mapping[str, Any],
     ) -> ClaimedWorkExecution: ...
+
+
+class KindAwareClaimedWorkResolver:
+    """Route claimed work through the resolver registered for its durable kind."""
+
+    def __init__(self, resolvers: Mapping[str, ClaimedWorkResolver]) -> None:
+        if not resolvers:
+            raise ValueError("claimed WorkUnit resolvers must be non-empty")
+        if len(resolvers) > 32:
+            raise ValueError("claimed WorkUnit resolver count exceeds limit")
+        if any(
+            not isinstance(kind, str)
+            or not kind.strip()
+            or kind != kind.strip()
+            or len(kind) > 255
+            for kind in resolvers
+        ):
+            raise ValueError("claimed WorkUnit resolver kind is invalid")
+        if any(
+            not callable(getattr(resolver, "resolve", None))
+            for resolver in resolvers.values()
+        ):
+            raise TypeError("claimed WorkUnit resolver is invalid")
+        self._resolvers = dict(resolvers)
+        self._supported_work_unit_kinds = tuple(sorted(self._resolvers))
+
+    @property
+    def supported_work_unit_kinds(self) -> tuple[str, ...]:
+        return self._supported_work_unit_kinds
+
+    async def resolve(
+        self,
+        work_unit: Mapping[str, Any],
+    ) -> ClaimedWorkExecution:
+        kind = _required_string(work_unit, "kind")
+        resolver = self._resolvers.get(kind)
+        if resolver is None:
+            raise ClaimedWorkResolutionError(
+                f"claimed WorkUnit kind is not supported: {kind}"
+            )
+        return await resolver.resolve(work_unit)
 
 
 class _ClaimedModelWorkResolver:
@@ -382,6 +424,7 @@ class MissionControlRunnerClient:
         runner_id: str,
         agent_id: str,
         adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
         lease_seconds: int,
     ) -> dict[str, Any]:
         del runner_id
@@ -392,6 +435,7 @@ class MissionControlRunnerClient:
                 "workspaceId": workspace_id,
                 "agentId": agent_id,
                 "adapterType": adapter_type,
+                "supportedWorkUnitKinds": list(supported_work_unit_kinds),
                 "leaseSeconds": lease_seconds,
             },
         )
@@ -633,6 +677,7 @@ class WorkUnitRunner:
         claimed_work_resolver: ClaimedWorkResolver | None = None,
         heartbeat_interval_seconds: float | None = None,
         workspace_claims_enabled: bool = True,
+        supported_work_unit_kinds: tuple[str, ...] | None = None,
     ) -> None:
         self._control = control
         self._publisher = publisher
@@ -652,6 +697,22 @@ class WorkUnitRunner:
         if type(workspace_claims_enabled) is not bool:
             raise TypeError("workspace_claims_enabled must be a boolean")
         self._workspace_claims_enabled = workspace_claims_enabled
+        if supported_work_unit_kinds is not None:
+            if not supported_work_unit_kinds:
+                raise ValueError("supported_work_unit_kinds must be non-empty")
+            if len(supported_work_unit_kinds) > 32:
+                raise ValueError("supported_work_unit_kinds exceeds limit")
+            if len(supported_work_unit_kinds) != len(set(supported_work_unit_kinds)):
+                raise ValueError("supported_work_unit_kinds must be unique")
+            if any(
+                not isinstance(kind, str)
+                or not kind.strip()
+                or kind != kind.strip()
+                or len(kind) > 255
+                for kind in supported_work_unit_kinds
+            ):
+                raise ValueError("supported_work_unit_kinds is invalid")
+        self._supported_work_unit_kinds = supported_work_unit_kinds
 
     async def run(
         self,
@@ -725,6 +786,10 @@ class WorkUnitRunner:
             raise RunnerControlError(
                 "workspace claims are disabled for this Runner composition"
             )
+        if self._supported_work_unit_kinds is None:
+            raise RunnerControlError(
+                "workspace claims require explicit supported WorkUnit kinds"
+            )
         if not workspace_id.strip():
             raise ValueError("workspace_id must be non-empty")
         agent_id, adapter_type = self._claim_binding()
@@ -733,6 +798,7 @@ class WorkUnitRunner:
             runner_id=self._runner_id,
             agent_id=agent_id,
             adapter_type=adapter_type,
+            supported_work_unit_kinds=self._supported_work_unit_kinds,
             lease_seconds=lease_seconds,
         )
         claim_status = parse_workspace_claim_status(claimed_payload)
@@ -1566,6 +1632,7 @@ __all__ = [
     "ClaimedHarnessFactoryPort",
     "ClaimedWorkExecution",
     "ClaimedWorkResolutionError",
+    "KindAwareClaimedWorkResolver",
     "MissionControlRunnerClient",
     "MissionControlRunnerPort",
     "MissionForkClaimedWorkResolver",

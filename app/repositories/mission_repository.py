@@ -837,6 +837,7 @@ class MissionRepository:
         *,
         agent_id: str,
         adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
     ) -> tuple[Mission, WorkUnit] | None:
         """Lock one fairly ordered ready unit and its owning Mission."""
 
@@ -888,6 +889,7 @@ class MissionRepository:
                  )
                  AND candidate.assigned_agent_id=$2
                  AND candidate.assigned_adapter=$3
+                 AND candidate.kind = ANY($4::text[])
                  AND candidate.status IN ('PENDING', 'RETRYING')
                  AND NOT EXISTS (
                      SELECT 1
@@ -912,6 +914,7 @@ class MissionRepository:
             workspace_id,
             agent_id,
             adapter_type,
+            list(supported_work_unit_kinds),
         )
         if row is None:
             return None

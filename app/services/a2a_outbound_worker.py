@@ -84,6 +84,7 @@ class A2AOutboundWorkspaceRunner:
             runner_id=self._runner_id,
             agent_id=self._assigned_agent_id,
             adapter_type=A2A_OUTBOUND_ADAPTER,
+            supported_work_unit_kinds=("a2a.delegate",),
             lease_seconds=lease_seconds,
         )
         claim_status = parse_workspace_claim_status(claimed_payload)

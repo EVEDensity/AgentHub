@@ -707,6 +707,7 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             "workspace-1",
             agent_id="reviewer",
             adapter_type="local_codex",
+            supported_work_unit_kinds=("code_change",),
         )
 
         self.assertEqual(selection, (mission, work_unit))
@@ -719,13 +720,18 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("candidate.assigned_adapter = 'a2a.outbound'", sql)
         self.assertIn("mission.source->>'type' = 'mission.fork'", sql)
         self.assertIn("candidate.kind = 'mission.fork'", sql)
+        self.assertIn("candidate.kind = ANY($4::text[])", sql)
+        self.assertEqual(args[3], ["code_change"])
         self.assertIn("candidate.assigned_adapter <> 'a2a.outbound'", sql)
         self.assertIn("candidate.assigned_agent_id=$2", sql)
         self.assertIn("candidate.assigned_adapter=$3", sql)
         self.assertIn("active_unit.status IN ('LEASED', 'RUNNING', 'VERIFYING')", sql)
         self.assertIn("mission.created_at ASC", sql)
         self.assertIn("FOR UPDATE OF mission, candidate SKIP LOCKED", sql)
-        self.assertEqual(args, ("workspace-1", "reviewer", "local_codex"))
+        self.assertEqual(
+            args,
+            ("workspace-1", "reviewer", "local_codex", ["code_change"]),
+        )
 
     async def test_verification_candidate_is_scoped_ordered_and_short_locked(
         self,

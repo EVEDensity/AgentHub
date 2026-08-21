@@ -28,6 +28,7 @@ from app.services.runner_service import (
     A2AInboundClaimedWorkResolver,
     ClaimedWorkExecution,
     ClaimedWorkResolutionError,
+    KindAwareClaimedWorkResolver,
     MissionControlRunnerClient,
     MissionForkClaimedWorkResolver,
     RunnerControlError,
@@ -396,6 +397,54 @@ def mission_fork_execution_context() -> dict[str, Any]:
 
 
 class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_kind_aware_resolver_routes_only_registered_kinds(self) -> None:
+        inbound = StaticClaimedWorkResolver(RunnerExecutionInput(code="inbound"))
+        fork = StaticClaimedWorkResolver(RunnerExecutionInput(code="fork"))
+        resolver = KindAwareClaimedWorkResolver(
+            {"mission.fork": fork, "a2a.inbound": inbound}
+        )
+
+        inbound_claim = inbound_claim_payload()
+        fork_claim = mission_fork_claim_payload()
+        inbound_execution = await resolver.resolve(inbound_claim)
+        fork_execution = await resolver.resolve(fork_claim)
+
+        self.assertEqual(
+            resolver.supported_work_unit_kinds,
+            ("a2a.inbound", "mission.fork"),
+        )
+        self.assertEqual(inbound_execution.execution_input.code, "inbound")
+        self.assertEqual(fork_execution.execution_input.code, "fork")
+        self.assertEqual(inbound.received, [inbound_claim])
+        self.assertEqual(fork.received, [fork_claim])
+
+    async def test_kind_aware_resolver_rejects_unknown_kind_without_dispatch(
+        self,
+    ) -> None:
+        inbound = StaticClaimedWorkResolver(RunnerExecutionInput(code="inbound"))
+        resolver = KindAwareClaimedWorkResolver({"a2a.inbound": inbound})
+        claim = inbound_claim_payload()
+        claim["kind"] = "mission.fork"
+
+        with self.assertRaisesRegex(
+            ClaimedWorkResolutionError,
+            "kind is not supported: mission.fork",
+        ):
+            await resolver.resolve(claim)
+        self.assertEqual(inbound.received, [])
+
+    def test_kind_aware_resolver_rejects_invalid_registry(self) -> None:
+        resolver = StaticClaimedWorkResolver(RunnerExecutionInput(code="unused"))
+        cases = (
+            ({}, ValueError),
+            ({" a2a.inbound": resolver}, ValueError),
+            ({"a2a.inbound": object()}, TypeError),
+        )
+
+        for registry, error in cases:
+            with self.subTest(registry=registry), self.assertRaises(error):
+                KindAwareClaimedWorkResolver(registry)  # type: ignore[arg-type]
+
     async def test_mission_fork_resolver_reads_exact_lease_context_once(self) -> None:
         control = FakeControl()
         context = mission_fork_execution_context()
@@ -835,6 +884,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             assigned_agent_id="reviewer",
             assigned_adapter="local_codex",
             claimed_work_resolver=resolver,
+            supported_work_unit_kinds=("a2a.inbound",),
         )
 
         result = await runner.claim_and_run("mis-1")
@@ -863,6 +913,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             assigned_agent_id="reviewer",
             assigned_adapter="local_codex",
             claimed_work_resolver=resolver,
+            supported_work_unit_kinds=("a2a.inbound",),
         )
 
         result = await runner.claim_ready_and_run(
@@ -880,6 +931,30 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolver.received, [control.claim_payload])
         self.assertEqual(control.calls[0][1]["workspace_id"], "workspace-1")
         self.assertEqual(control.calls[0][1]["lease_seconds"], 120)
+        self.assertEqual(
+            control.calls[0][1]["supported_work_unit_kinds"],
+            ("a2a.inbound",),
+        )
+
+    async def test_workspace_claim_requires_explicit_supported_kinds(self) -> None:
+        control = FakeControl()
+        runner = WorkUnitRunner(
+            control,
+            publisher=FakePublisher(),
+            runner_id="runner-1",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+            claimed_work_resolver=StaticClaimedWorkResolver(
+                RunnerExecutionInput(code="must not run", language="text")
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            RunnerControlError,
+            "require explicit supported WorkUnit kinds",
+        ):
+            await runner.claim_ready_and_run("workspace-1")
+        self.assertEqual(control.calls, [])
 
     async def test_workspace_claim_rejects_missing_mission_before_execution(self) -> None:
         control = FakeControl()
@@ -894,6 +969,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             claimed_work_resolver=StaticClaimedWorkResolver(
                 RunnerExecutionInput(code="must not run", language="text")
             ),
+            supported_work_unit_kinds=("a2a.inbound",),
         )
 
         with self.assertRaisesRegex(RunnerControlError, "no Mission id"):
@@ -926,6 +1002,7 @@ class RunnerServiceTests(unittest.IsolatedAsyncioTestCase):
             claimed_work_resolver=StaticClaimedWorkResolver(
                 RunnerExecutionInput(code="must not run", language="text")
             ),
+            supported_work_unit_kinds=("a2a.inbound",),
         )
 
         with self.assertRaisesRegex(RunnerControlError, "inconsistent"):
@@ -1322,6 +1399,7 @@ class MissionControlClientTests(unittest.IsolatedAsyncioTestCase):
                 runner_id="runner-1",
                 agent_id="reviewer",
                 adapter_type="local_codex",
+                supported_work_unit_kinds=("a2a.inbound",),
                 lease_seconds=120,
             )
 
@@ -1335,7 +1413,8 @@ class MissionControlClientTests(unittest.IsolatedAsyncioTestCase):
             requests[0].read(),
             (
                 b'{"workspaceId":"workspace-1","agentId":"reviewer",'
-                b'"adapterType":"local_codex","leaseSeconds":120}'
+                b'"adapterType":"local_codex","supportedWorkUnitKinds":'
+                b'["a2a.inbound"],"leaseSeconds":120}'
             ),
         )
 

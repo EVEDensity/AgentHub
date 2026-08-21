@@ -83,7 +83,9 @@ boundary. It is not the permanent home of every Agent feature.
   An application-layer composition now connects that factory, the fork
   resolver, and `WorkUnitRunner` for an explicitly selected Mission. It
   disables workspace claims in code and is not referenced by the production
-  process. Kind-aware workspace routing remains a separate gate.
+  process. A separate kind-aware workspace composition now registers inbound
+  and fork resolvers together and derives its claim capability set from that
+  exact registry. It remains outside the production process wiring.
   Claiming an
   inbound root only creates a fenced lease. The inbound resolver reads a
   lease-fenced Mission/Contract/WorkUnit projection and compiles a bounded JSON
@@ -151,7 +153,10 @@ boundary. It is not the permanent home of every Agent feature.
   It owns only process-local readiness, bounded idle/error backoff, and graceful
   stop. Mission Control authorizes scope, balances ready work by active and
   unverified Mission load, and locks the selected Mission and WorkUnit
-  atomically. The worker consumes that claim without persisting a queue,
+  atomically. Each workspace request carries the Runner composition's explicit
+  bounded WorkUnit-kind capability set; Mission Control filters by that set
+  before locking or leasing, and never persists it. The worker consumes that
+  claim without persisting a queue,
   scanning Missions, or replacing lease state. Independent Runner principals
   receive the explicit workspace ACL permission `mission:claim`; Mission
   Control reads that grant on every new claim, while an active lease remains

@@ -592,6 +592,7 @@ class FakeMissionRepository:
         *,
         agent_id: str,
         adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
     ) -> tuple[Mission, WorkUnit] | None:
         missions = {
             mission.id: mission
@@ -607,6 +608,7 @@ class FakeMissionRepository:
                 or mission.status.value != "RUNNING"
                 or work_unit.assigned_agent_id != agent_id
                 or work_unit.assigned_adapter != adapter_type
+                or work_unit.kind not in supported_work_unit_kinds
                 or work_unit.status.value not in {"PENDING", "RETRYING"}
             ):
                 continue
@@ -2309,6 +2311,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
                 "leaseSeconds": 60,
             },
         )
@@ -2321,6 +2324,99 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(claimed["lease"]["runnerId"], "workspace-1")
         self.assertEqual(repository.events[-1].correlation_id, "mis-second")
         self.assertEqual(repository.admission_locks, [])
+
+    def test_workspace_claim_skips_unsupported_work_unit_kind(self) -> None:
+        first = build_mission(
+            id="mis-first",
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        second = build_mission(
+            id="mis-second",
+            workspace_id="workspace-1",
+            status="RUNNING",
+        )
+        unsupported = build_work_unit(
+            id="wu-unsupported",
+            mission_id="mis-first",
+            parent_work_unit_id="wu-parent-first",
+            kind="analysis",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+        )
+        supported = build_work_unit(
+            id="wu-supported",
+            mission_id="mis-second",
+            parent_work_unit_id="wu-parent-second",
+            kind="code_change",
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+        )
+        repository = FakeMissionRepository()
+        repository.mission = first
+        repository.list_result = [first, second]
+        repository.work_units = [unsupported, supported]
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "workspace-1", "name": "Runner", "role": "runner"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/work-unit-claims",
+            json={
+                "workspaceId": "workspace-1",
+                "agentId": "reviewer",
+                "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["workUnit"]["id"], "wu-supported")
+        statuses = {unit.id: unit.status.value for unit in repository.work_units}
+        self.assertEqual(statuses["wu-unsupported"], "PENDING")
+        self.assertEqual(statuses["wu-supported"], "LEASED")
+
+    def test_workspace_claim_requires_bounded_unique_supported_kinds(self) -> None:
+        repository = FakeMissionRepository()
+        grant_authorizer = FakeRunnerWorkspaceGrantAuthorizer()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "runner-1", "name": "Runner", "role": "runner"},
+                runner_workspace_grant_authorizer=grant_authorizer,
+            )
+        )
+        cases = (
+            {},
+            {"supportedWorkUnitKinds": []},
+            {"supportedWorkUnitKinds": ["code_change", "code_change"]},
+            {"supportedWorkUnitKinds": [" code_change"]},
+            {"supportedWorkUnitKinds": [" "]},
+            {
+                "supportedWorkUnitKinds": [
+                    f"kind-{index}" for index in range(33)
+                ]
+            },
+        )
+
+        for override in cases:
+            with self.subTest(override=override):
+                response = client.post(
+                    "/api/v1/missions/work-unit-claims",
+                    json={
+                        "workspaceId": "workspace-1",
+                        "agentId": "reviewer",
+                        "adapterType": "local_codex",
+                        **override,
+                    },
+                )
+                self.assertEqual(response.status_code, 422)
+
+        self.assertEqual(grant_authorizer.calls, [])
+        self.assertEqual(repository.events, [])
 
     def test_workspace_claim_stops_at_tenant_concurrency_limit(self) -> None:
         repository = FakeMissionRepository()
@@ -2359,6 +2455,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2403,6 +2500,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2432,6 +2530,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2469,6 +2568,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2496,6 +2596,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-other",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2541,6 +2642,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2571,6 +2673,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2597,6 +2700,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2629,6 +2733,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2682,8 +2787,14 @@ class MissionApiTests(unittest.TestCase):
                 *,
                 agent_id: str,
                 adapter_type: str,
+                supported_work_unit_kinds: tuple[str, ...],
             ) -> tuple[Mission, WorkUnit] | None:
-                del workspace_id, agent_id, adapter_type
+                del (
+                    workspace_id,
+                    agent_id,
+                    adapter_type,
+                    supported_work_unit_kinds,
+                )
                 return self.list_result[0], self.work_units[0]
 
         repository = EscapingRepository()
@@ -2716,6 +2827,7 @@ class MissionApiTests(unittest.TestCase):
                 "workspaceId": "workspace-1",
                 "agentId": "reviewer",
                 "adapterType": "local_codex",
+                "supportedWorkUnitKinds": ["code_change"],
             },
         )
 
@@ -2850,6 +2962,7 @@ class MissionApiTests(unittest.TestCase):
                 }
                 if path.endswith("/missions/work-unit-claims"):
                     request["workspaceId"] = "user-1"
+                    request["supportedWorkUnitKinds"] = ["mission.fork"]
 
                 response = client.post(path, json=request)
 

@@ -67,6 +67,13 @@ readiness, orders by least in-flight Mission load, and locks the owning Mission
 plus candidate WorkUnit with `SKIP LOCKED`. Authentication supplies the lease
 owner; callers cannot provide one in the request.
 
+Every workspace claim also declares a bounded, non-empty set of supported
+WorkUnit kinds. Mission Control applies this transient Runner capability before
+candidate ordering and row locking. Missing or malformed declarations fail
+before repository access, and unsupported work remains unleased. The kind set
+does not replace Agent/adapter binding, Contract capabilities, or authorization
+and is not persisted.
+
 Mission-fork eligibility requires the exact `mission.fork` Mission source and
 root kind plus a non-outbound adapter. The Mission must be explicitly started
 before claim. Its lease owner can read the versioned Contract/Mission/WorkUnit
@@ -87,8 +94,12 @@ and binds its checkpoint port to the exact attempt and lease. Missing,
 unauthorized, or duplicate tool bindings fail before model construction.
 The application-layer fork builder connects this factory and resolver to
 `WorkUnitRunner` for `claim_and_run` on one explicit Mission. Workspace claims
-are disabled on that composition before control-plane I/O. Production
-kind-aware workspace routing remains the next execution gate.
+are disabled on that composition before control-plane I/O. A separate
+kind-aware workspace composition registers the inbound and fork resolvers by
+their durable WorkUnit kind and derives its claim capability set from the same
+immutable registry. An unsupported kind cannot dispatch through a fallback
+resolver. This composition has an ASGI mixed-kind gate but is not yet selected
+by the production process builder.
 
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current

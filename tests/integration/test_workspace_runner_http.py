@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import unittest
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -37,7 +38,10 @@ from app.services.harness_service import (
     ModelUsage,
 )
 from app.services.runner_checkpoint import MissionControlHarnessCheckpointPort
-from app.services.runner_composition import build_a2a_inbound_runner
+from app.services.runner_composition import (
+    build_a2a_inbound_runner,
+    build_kind_aware_workspace_runner,
+)
 from app.services.runner_service import (
     ClaimedWorkExecution,
     MissionControlRunnerClient,
@@ -145,6 +149,30 @@ class _FinalModelFactory:
         return self.model
 
 
+class _RoutingModel:
+    def __init__(self) -> None:
+        self.schemas: list[str] = []
+
+    async def complete(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+    ) -> ModelResponse:
+        del tool_results
+        schema = json.loads(request.code)["schema"]
+        self.schemas.append(schema)
+        return ModelResponse(content=schema)
+
+
+class _RoutingModelFactory:
+    def __init__(self) -> None:
+        self.model = _RoutingModel()
+
+    def build(self, tools: Sequence[FunctionTool]) -> _RoutingModel:
+        del tools
+        return self.model
+
+
 class _EmptyBindingFactory:
     def build(
         self,
@@ -222,6 +250,92 @@ def _work_unit(mission_id: str, work_unit_id: str) -> WorkUnit:
 
 
 class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_kind_aware_runner_routes_inbound_and_fork_roots_over_http(
+        self,
+    ) -> None:
+        missions = [
+            _mission("mission-a-inbound"),
+            build_mission(
+                id="mission-b-fork",
+                status="RUNNING",
+                objective="Continue from verified source artifacts.",
+                source={
+                    "type": "mission.fork",
+                    "reference": "mission-source",
+                    "externalId": "checkpoint-source",
+                },
+            ),
+        ]
+        work_units = [
+            _work_unit("mission-a-inbound", "work-inbound"),
+            build_work_unit(
+                id="work-fork",
+                mission_id="mission-b-fork",
+                kind="mission.fork",
+                input_refs=[
+                    {"id": "artifact-source", "digest": "sha256:" + "a" * 64}
+                ],
+                expected_outputs=[{"kind": "report", "required": True}],
+                required_capabilities=[],
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            ),
+        ]
+        repository = _AtomicMissionRepository(missions, work_units)
+        repository.contract = build_contract(
+            allowed_capabilities=[{"capability": "a2a.receive", "scope": {}}]
+        )
+        model_factory = _RoutingModelFactory()
+        publisher = _RecordingPublisher()
+        transport = httpx.ASGITransport(app=_build_app(repository))
+
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            control = MissionControlRunnerClient(
+                "http://mission-control.test",
+                access_token="runner-a",
+                http_client=http_client,
+            )
+            runner = build_kind_aware_workspace_runner(
+                control,
+                publisher=publisher,
+                model_factory=model_factory,
+                binding_factory=_EmptyBindingFactory(),
+                runner_id="runner-a",
+                assigned_agent_id="reviewer",
+                assigned_adapter="local_codex",
+            )
+            results = [
+                await runner.claim_ready_and_run("workspace-1"),
+                await runner.claim_ready_and_run("workspace-1"),
+            ]
+
+        self.assertTrue(
+            all(
+                result.claim_status == WorkspaceClaimStatus.CLAIMED
+                and result.run_result is not None
+                and result.run_result.success
+                for result in results
+            )
+        )
+        self.assertEqual(
+            model_factory.model.schemas,
+            [
+                "agenthub.a2a-inbound-context.v1",
+                "agenthub.mission-fork-context.v1",
+            ],
+        )
+        self.assertEqual(
+            publisher.contents,
+            [
+                b"agenthub.a2a-inbound-context.v1",
+                b"agenthub.mission-fork-context.v1",
+            ],
+        )
+        self.assertEqual(
+            {work_unit.status.value for work_unit in repository.work_units},
+            {"VERIFYING"},
+        )
+
     async def test_checkpoint_rejection_fails_before_model_and_recovers_work(
         self,
     ) -> None:
@@ -376,6 +490,7 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 runner_id="runner-a",
                 agent_id="reviewer",
                 adapter_type="local_codex",
+                supported_work_unit_kinds=("a2a.inbound",),
                 lease_seconds=300,
             )
             claimed_work_unit = claimed["workUnit"]
@@ -607,6 +722,7 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 assigned_agent_id="reviewer",
                 assigned_adapter="local_codex",
                 claimed_work_resolver=resolver,
+                supported_work_unit_kinds=("a2a.inbound",),
             ),
             resolver,
         )

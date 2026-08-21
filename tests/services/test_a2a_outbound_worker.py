@@ -110,6 +110,7 @@ class A2AOutboundWorkspaceRunnerTests(unittest.IsolatedAsyncioTestCase):
                         "runner_id": "runner-1",
                         "agent_id": "outbound-dispatcher",
                         "adapter_type": "a2a.outbound",
+                        "supported_work_unit_kinds": ("a2a.delegate",),
                         "lease_seconds": 120,
                     },
                 )

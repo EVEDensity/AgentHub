@@ -28,6 +28,7 @@ from app.services.runner_checkpoint import MissionControlHarnessCheckpointFactor
 from app.services.runner_service import (
     A2AInboundClaimedWorkResolver,
     ClaimedWorkResolutionError,
+    KindAwareClaimedWorkResolver,
     MissionControlRunnerPort,
     MissionForkClaimedWorkResolver,
     WorkUnitRunner,
@@ -346,6 +347,7 @@ def build_a2a_inbound_runner(
         assigned_adapter=assigned_adapter,
         claimed_work_resolver=resolver,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
+        supported_work_unit_kinds=("a2a.inbound",),
     )
 
 
@@ -401,6 +403,84 @@ def build_mission_fork_runner(
         claimed_work_resolver=resolver,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         workspace_claims_enabled=False,
+        supported_work_unit_kinds=("mission.fork",),
+    )
+
+
+def build_kind_aware_workspace_runner(
+    control: MissionControlRunnerPort,
+    *,
+    publisher: ArtifactPublisher,
+    model_factory: HarnessModelFactoryPort,
+    binding_factory: CapabilityBindingFactoryPort,
+    runner_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    max_context_chars: int = 32_768,
+    max_timeout_seconds: float = 300.0,
+    max_iterations: int = 8,
+    max_tool_calls: int = 32,
+    max_total_tokens: int | None = None,
+    max_model_cost: float | None = None,
+    heartbeat_interval_seconds: float | None = None,
+) -> WorkUnitRunner:
+    """Compose workspace execution for every registered model-backed root kind."""
+
+    _validate_runner_binding(
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        label="kind-aware workspace",
+    )
+    checkpoint_factory = MissionControlHarnessCheckpointFactory(
+        control,
+        runner_id=runner_id,
+    )
+    inbound_factory = A2AInboundHarnessFactory(
+        model_factory,
+        binding_factory,
+        checkpoint_factory=checkpoint_factory,
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+    )
+    fork_factory = MissionForkHarnessFactory(
+        model_factory,
+        binding_factory,
+        checkpoint_factory=checkpoint_factory,
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+    )
+    resolver = KindAwareClaimedWorkResolver(
+        {
+            "a2a.inbound": A2AInboundClaimedWorkResolver(
+                control,
+                runner_id=runner_id,
+                harness_factory=inbound_factory,
+                max_context_chars=max_context_chars,
+                max_timeout_seconds=max_timeout_seconds,
+            ),
+            "mission.fork": MissionForkClaimedWorkResolver(
+                control,
+                runner_id=runner_id,
+                harness_factory=fork_factory,
+                max_context_chars=max_context_chars,
+                max_timeout_seconds=max_timeout_seconds,
+            ),
+        }
+    )
+    return WorkUnitRunner(
+        control,
+        publisher=publisher,
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        claimed_work_resolver=resolver,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+        supported_work_unit_kinds=resolver.supported_work_unit_kinds,
     )
 
 
@@ -412,5 +492,6 @@ __all__ = [
     "HarnessModelFactoryPort",
     "MissionForkHarnessFactory",
     "build_a2a_inbound_runner",
+    "build_kind_aware_workspace_runner",
     "build_mission_fork_runner",
 ]

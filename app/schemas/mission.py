@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain import (
     ArtifactKind,
@@ -137,6 +137,22 @@ class WorkUnitClaimRequest(BaseModel):
 
 class WorkspaceWorkUnitClaimRequest(WorkUnitClaimRequest):
     workspace_id: Annotated[str, Field(min_length=1, max_length=255)]
+    supported_work_unit_kinds: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=255)], ...],
+        Field(min_length=1, max_length=32),
+    ]
+
+    @field_validator("supported_work_unit_kinds")
+    @classmethod
+    def validate_supported_work_unit_kinds(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(kind != kind.strip() for kind in value):
+            raise ValueError("supported WorkUnit kinds must not contain whitespace")
+        if len(value) != len(set(value)):
+            raise ValueError("supported WorkUnit kinds must be unique")
+        return value
 
 
 class WorkspaceVerificationDiscoveryRequest(BaseModel):

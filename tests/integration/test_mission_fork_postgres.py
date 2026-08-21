@@ -259,6 +259,7 @@ class MissionForkPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "workspace-1",
             agent_id="reviewer",
             adapter_type="local_codex",
+            supported_work_unit_kinds=("mission.fork",),
             runner_id="runner-1",
             actor=ActorRef(type="runner", id="runner-1"),
             lease_seconds=60,

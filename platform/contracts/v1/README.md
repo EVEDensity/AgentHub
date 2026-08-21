@@ -20,6 +20,11 @@ snake_case because they are persisted and transported as ledger records.
 the existing `workUnit` field remains unchanged for backward-compatible
 consumers.
 
+Workspace claim requests require a bounded `supportedWorkUnitKinds` capability
+declaration. Mission Control applies it before candidate locking and leasing;
+it is transient process capability and is never persisted as WorkUnit truth.
+Mission-scoped claim requests are unchanged.
+
 `mission-contract.schema.json` optionally carries immutable `governance` policy.
 When omitted from a v1 document, Mission Control applies the v1 default of
 86,400 seconds for human Decision response and serializes that resolved value.

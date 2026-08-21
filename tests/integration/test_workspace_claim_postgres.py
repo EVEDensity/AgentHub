@@ -78,11 +78,13 @@ class _BarrierMissionRepository(MissionRepository):
         *,
         agent_id: str,
         adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
     ):
         selection = await super().get_workspace_bound_work_unit_for_claim(
             workspace_id,
             agent_id=agent_id,
             adapter_type=adapter_type,
+            supported_work_unit_kinds=supported_work_unit_kinds,
         )
         if selection is not None:
             await asyncio.wait_for(self._barrier.wait(), timeout=5)
@@ -356,6 +358,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-a",
                         agent_id="reviewer",
                         adapter_type="local_codex",
+                        supported_work_unit_kinds=("code_change",),
                         lease_seconds=120,
                     ),
                     control_b.claim_ready_work_unit(
@@ -363,6 +366,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-b",
                         agent_id="reviewer",
                         adapter_type="local_codex",
+                        supported_work_unit_kinds=("code_change",),
                         lease_seconds=120,
                     ),
                 ),
@@ -373,6 +377,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 runner_id="runner-a",
                 agent_id="reviewer",
                 adapter_type="local_codex",
+                supported_work_unit_kinds=("code_change",),
                 lease_seconds=120,
             )
 
@@ -392,6 +397,49 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(empty["workUnit"])
         self.assertEqual(empty["claimStatus"], "idle")
+
+    async def test_kind_filter_leaves_unsupported_rows_unleased(self) -> None:
+        transport = httpx.ASGITransport(
+            app=_build_app(
+                self._plain_repository,
+                self._grant_authorizer,
+                self._admission_policy_resolver,
+            )
+        )
+        async with httpx.AsyncClient(transport=transport) as http_client:
+            control = MissionControlRunnerClient(
+                "http://mission-control.test",
+                access_token="runner-a",
+                http_client=http_client,
+            )
+            unsupported = await control.claim_ready_work_unit(
+                "workspace-1",
+                runner_id="runner-a",
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                supported_work_unit_kinds=("code_change",),
+                lease_seconds=120,
+            )
+            supported = await control.claim_ready_work_unit(
+                "workspace-1",
+                runner_id="runner-a",
+                agent_id="reviewer",
+                adapter_type="local_codex",
+                supported_work_unit_kinds=("a2a.inbound",),
+                lease_seconds=120,
+            )
+
+        self.assertEqual(unsupported["claimStatus"], "idle")
+        self.assertIsNone(unsupported["workUnit"])
+        self.assertEqual(supported["claimStatus"], "claimed")
+        async with self._pool.acquire() as connection:
+            rows = await connection.fetch(
+                "SELECT id, status, attempt FROM work_units ORDER BY id"
+            )
+        statuses = {row["id"]: (row["status"], row["attempt"]) for row in rows}
+        self.assertEqual(statuses[supported["workUnit"]["id"]], ("LEASED", 1))
+        pending = [state for work_id, state in statuses.items() if work_id != supported["workUnit"]["id"]]
+        self.assertEqual(pending, [("PENDING", 0)])
 
         async with self._pool.acquire() as connection:
             await connection.execute(
@@ -414,6 +462,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                     "workspaceId": "workspace-1",
                     "agentId": "reviewer",
                     "adapterType": "local_codex",
+                    "supportedWorkUnitKinds": ["code_change"],
                     "leaseSeconds": 120,
                 },
                 headers={"Authorization": "Bearer runner-a"},
@@ -462,6 +511,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-a",
                         agent_id="reviewer",
                         adapter_type="local_codex",
+                        supported_work_unit_kinds=("code_change",),
                         lease_seconds=120,
                     ),
                     control_b.claim_ready_work_unit(
@@ -469,6 +519,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-b",
                         agent_id="reviewer",
                         adapter_type="local_codex",
+                        supported_work_unit_kinds=("code_change",),
                         lease_seconds=120,
                     ),
                 ),

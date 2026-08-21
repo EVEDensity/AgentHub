@@ -36,6 +36,9 @@ resources, Artifact byte publication, and sanitized health state.
   adapter bound to the claimed lease. The adapter forwards only phase, counters,
   usage, and bounded terminal failure metadata; it never forwards tool results,
   prompts, model responses, or credentials.
+- The inbound process declares only `a2a.inbound` in workspace claim requests.
+  Mission Control filters unsupported WorkUnit kinds before locking or leasing;
+  the process cannot opt into another kind through environment configuration.
 - Artifact output uses a content-addressed local root. A deployment must mount
   that root on storage readable by the Mission Control verifier.
 
