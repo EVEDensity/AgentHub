@@ -97,6 +97,53 @@ test itself fails and cleanup also fails, the original failure is preserved and
 the cleanup error type is reported so the operator can remove that exact smoke
 project without touching other containers.
 
+## Model Runner profile
+
+The model-backed workspace Runner is available only through the explicit
+`mission-runner` profile. It executes the registered `a2a.inbound` and
+`mission.fork` roots through the kind-aware model/Harness path. It does not
+enable outbound A2A transport execution.
+
+Before startup, provide a distinct Runner principal with `mission:claim` in
+the selected workspace, three single-line token files, a credential-free MCP
+binding manifest, writable Artifact storage shared with the verifier, and
+reachable Mission Control, AI Gateway, and Stateless MCP endpoints. Compose
+allows its normal platform profile to parse without these variables, but the
+Runner fails startup when any identity or endpoint is empty; set every value
+before enabling this profile.
+
+```powershell
+$env:AGENTHUB_RUNNER_RUNNER_ID = "runner-local-1"
+$env:AGENTHUB_RUNNER_WORKSPACE_ID = "workspace-1"
+$env:AGENTHUB_RUNNER_ASSIGNED_AGENT_ID = "reviewer"
+$env:AGENTHUB_RUNNER_ASSIGNED_ADAPTER = "local_codex"
+$env:AGENTHUB_RUNNER_MISSION_CONTROL_URL = "https://mission-control.example.test"
+$env:AGENTHUB_RUNNER_MODEL_GATEWAY_URL = "https://ai-gateway.example.test/v1"
+$env:AGENTHUB_RUNNER_MODEL = "production-model"
+$env:AGENTHUB_RUNNER_MCP_ENDPOINT = "https://mcp.example.test/mcp/rpc"
+$env:AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE = "D:\secrets\mission-control-token"
+$env:AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE = "D:\secrets\model-gateway-token"
+$env:AGENTHUB_RUNNER_MCP_TOKEN_FILE = "D:\secrets\mcp-token"
+$env:AGENTHUB_RUNNER_MCP_BINDINGS_FILE = "D:\config\runner-mcp-bindings.json"
+$env:AGENTHUB_RUNNER_ARTIFACT_HOST_PATH = "D:\agenthub-artifacts"
+docker compose -f deploy/docker-compose.platform.yml --profile mission-runner up -d --build runner-service
+docker compose -f deploy/docker-compose.platform.yml --profile mission-runner ps runner-service
+```
+
+The container has no published host port, runs with a read-only root filesystem,
+and mounts only `/tmp`, the read-write Artifact root, three Docker secrets, and
+the read-only MCP manifest. Its health check calls `/readyz` inside the
+container. Roll back by stopping the profile service; do not alter Mission or
+WorkUnit state manually:
+
+```powershell
+docker compose -f deploy/docker-compose.platform.yml --profile mission-runner stop runner-service
+```
+
+Stopping prevents new polls. An active lease drains until the 30-second Runner
+shutdown deadline, then uses the existing cancellation/failure path; a process
+failure is recovered only through Mission Control lease expiry and retry policy.
+
 ## A2A trust policy
 
 Gateway rejects unsigned A2A Agent Cards by default. Development environments

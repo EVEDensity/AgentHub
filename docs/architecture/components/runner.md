@@ -105,6 +105,14 @@ from this model/Harness execution path. A runtime smoke starts a real
 `VERIFYING` after its context, checkpoint, Artifact, and registration path;
 deployment-specific external dependency checks remain separate.
 
+The versioned platform Compose file exposes the Runner only through the
+opt-in `mission-runner` profile. It accepts explicit external Mission Control,
+AI Gateway, and MCP endpoints, mounts three file-backed credentials and a
+read-only MCP binding manifest, and writes only to the shared Artifact root.
+It has no published host port and no dependency edge that would imply those
+external services are locally owned. Empty configuration fails during Runner
+startup validation; the profile never enables outbound A2A.
+
 Outbound eligibility requires the exact `a2a` Mission source,
 `a2a.delegate` root kind, and `a2a.outbound` adapter combination. The current
 Python process composition intentionally still rejects that adapter until the

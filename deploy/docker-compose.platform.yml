@@ -406,6 +406,67 @@ services:
       retries: 6
       start_period: 10s
 
+  # Model-backed workspace Runner. This profile requires externally supplied
+  # Mission Control, AI Gateway, and Stateless MCP endpoints; it does not
+  # enable the separate outbound A2A transport runtime.
+  runner-service:
+    profiles: ["mission-runner"]
+    build:
+      context: ..
+      dockerfile: services/python/runner_service/Dockerfile
+    environment:
+      AGENTHUB_RUNNER_RUNNER_ID: "${AGENTHUB_RUNNER_RUNNER_ID:-}"
+      AGENTHUB_RUNNER_WORKSPACE_ID: "${AGENTHUB_RUNNER_WORKSPACE_ID:-}"
+      AGENTHUB_RUNNER_ASSIGNED_AGENT_ID: "${AGENTHUB_RUNNER_ASSIGNED_AGENT_ID:-}"
+      AGENTHUB_RUNNER_ASSIGNED_ADAPTER: "${AGENTHUB_RUNNER_ASSIGNED_ADAPTER:-}"
+      AGENTHUB_RUNNER_MISSION_CONTROL_URL: "${AGENTHUB_RUNNER_MISSION_CONTROL_URL:-}"
+      AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE: "/run/secrets/runner-mission-control-token"
+      AGENTHUB_RUNNER_MODEL_GATEWAY_URL: "${AGENTHUB_RUNNER_MODEL_GATEWAY_URL:-}"
+      AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE: "/run/secrets/runner-model-gateway-token"
+      AGENTHUB_RUNNER_MODEL: "${AGENTHUB_RUNNER_MODEL:-}"
+      AGENTHUB_RUNNER_MCP_ENDPOINT: "${AGENTHUB_RUNNER_MCP_ENDPOINT:-}"
+      AGENTHUB_RUNNER_MCP_TOKEN_FILE: "/run/secrets/runner-mcp-token"
+      AGENTHUB_RUNNER_MCP_BINDINGS_FILE: "/run/configs/runner-mcp-bindings.json"
+      AGENTHUB_RUNNER_ARTIFACT_LOCAL_ROOT: "/var/lib/agenthub/artifacts"
+      AGENTHUB_RUNNER_SHUTDOWN_TIMEOUT_SECONDS: "30.0"
+    expose: ["8097"]
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    volumes:
+      - type: bind
+        source: "${AGENTHUB_RUNNER_ARTIFACT_HOST_PATH:-./secrets/runner-artifacts}"
+        target: /var/lib/agenthub/artifacts
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${AGENTHUB_RUNNER_MCP_BINDINGS_FILE:-./secrets/runner-mcp-bindings.json}"
+        target: /run/configs/runner-mcp-bindings.json
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    secrets:
+      - runner-mission-control-token
+      - runner-model-gateway-token
+      - runner-mcp-token
+    restart: unless-stopped
+    stop_grace_period: 35s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8097/readyz', timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
   # ═══════════════════════════════════════════════════════════════════
   #  RUST HIGH-PERFORMANCE CORES
   # ═══════════════════════════════════════════════════════════════════
@@ -567,3 +628,9 @@ volumes:
 secrets:
   decision-expiry-database-url:
     file: "${AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE:-./secrets/decision-expiry-database-url}"
+  runner-mission-control-token:
+    file: "${AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE:-./secrets/runner-mission-control-token}"
+  runner-model-gateway-token:
+    file: "${AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE:-./secrets/runner-model-gateway-token}"
+  runner-mcp-token:
+    file: "${AGENTHUB_RUNNER_MCP_TOKEN_FILE:-./secrets/runner-mcp-token}"
