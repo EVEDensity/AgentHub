@@ -131,6 +131,12 @@ docker compose -f deploy/docker-compose.platform.yml --profile mission-runner up
 docker compose -f deploy/docker-compose.platform.yml --profile mission-runner ps runner-service
 ```
 
+Each token path and the MCP binding path must already be a regular file, not a
+directory or symbolic link. Docker Desktop can create a directory when a
+default bind source was absent on an earlier Compose attempt; remove an empty
+unexpected directory and recreate the required regular file before retrying.
+The preflight rejects this condition when run with the selected host paths.
+
 The preflight performs no writes. It validates the process identity and
 endpoint configuration, mounted-secret source files, credential-free MCP
 manifest, existing writable Artifact root, and TCP reachability of the three
