@@ -33,7 +33,9 @@ class RunnerServiceDeploymentContractTests(unittest.TestCase):
         self.assertTrue(self.service["read_only"])
         self.assertEqual(self.service["cap_drop"], ["ALL"])
         self.assertIn("no-new-privileges:true", self.service["security_opt"])
-        self.assertIn("/tmp", " ".join(self.service["tmpfs"]))
+        tmpfs = " ".join(self.service["tmpfs"])
+        self.assertIn("/tmp", tmpfs)
+        self.assertIn("/srv/agenthub/data", tmpfs)
         artifact_mount = self.service["volumes"][0]
         self.assertEqual(artifact_mount["type"], "bind")
         self.assertIn("AGENTHUB_RUNNER_ARTIFACT_HOST_PATH", artifact_mount["source"])

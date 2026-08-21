@@ -142,8 +142,10 @@ by that container identity; host-side writability from preflight does not prove
 the container mount's ownership or SELinux policy.
 
 The container has no published host port, runs with a read-only root filesystem,
-and mounts only `/tmp`, the read-write Artifact root, three Docker secrets, and
-the read-only MCP manifest. Its health check calls `/readyz` inside the
+and mounts only transient `/tmp` and `/srv/agenthub/data` tmpfs directories, the
+read-write Artifact root, three Docker secrets, and the read-only MCP manifest.
+The data tmpfs satisfies framework import-time initialization; it is not
+durable Runner or Mission storage. Its health check calls `/readyz` inside the
 container. Roll back by stopping the profile service; do not alter Mission or
 WorkUnit state manually:
 

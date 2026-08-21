@@ -434,6 +434,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=16m
+      # app.core.config initializes this directory at import time. It is
+      # transient runtime state, never Runner or Mission persistence.
+      - /srv/agenthub/data:rw,noexec,nosuid,size=1m
     volumes:
       - type: bind
         source: "${AGENTHUB_RUNNER_ARTIFACT_HOST_PATH:-./secrets/runner-artifacts}"
