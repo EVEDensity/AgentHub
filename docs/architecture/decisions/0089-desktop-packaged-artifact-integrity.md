@@ -30,6 +30,8 @@ passes.
 - Build hosts can verify the core desktop artifact without claiming installer
   success.
 - The smoke is deterministic and does not require Docker or server services.
+- The packaging command can explicitly use `-NoInstaller` for this artifact
+  gate; the default command still requires an installer backend.
 
 ## Verification
 

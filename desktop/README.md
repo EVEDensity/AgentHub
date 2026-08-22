@@ -69,6 +69,14 @@ The command fails before bundling when the Tauri CLI is unavailable or the
 sidecar does not match the host target. Installing the CLI is a developer or
 CI prerequisite; it is not a product runtime dependency.
 
+When installer backends are unavailable on a development host, use
+`-NoInstaller` to build and verify the release application and packaged
+sidecar without claiming an MSI or NSIS installer:
+
+```powershell
+.\package-windows.ps1 -NoInstaller
+```
+
 After a successful Tauri build, the artifact smoke verifies that the release
 application exists and that the bundled `agenthub-runtime.exe` has the same
 SHA-256 as the staged target sidecar. It does not claim that an installer was

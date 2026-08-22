@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$TargetTriple
+    [string]$TargetTriple,
+    [switch]$NoInstaller
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,7 +64,12 @@ Write-Output "Building the Tauri bundle."
 $tauriDirectory = Split-Path -Parent $manifest
 Push-Location $tauriDirectory
 try {
-    & cargo +1.88.0 tauri build --target $TargetTriple --ci
+    $buildArguments = @("tauri", "build", "--target", $TargetTriple, "--ci")
+    if ($NoInstaller) {
+        $buildArguments += "--no-bundle"
+        Write-Output "Installer generation disabled; validating the release application only."
+    }
+    & cargo +1.88.0 @buildArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri bundle build failed."
     }
@@ -83,4 +89,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "Packaged runtime smoke failed."
 }
 
-Write-Output "Windows desktop bundle completed for $TargetTriple."
+if ($NoInstaller) {
+    Write-Output "Windows desktop application build completed for $TargetTriple."
+} else {
+    Write-Output "Windows desktop bundle completed for $TargetTriple."
+}
