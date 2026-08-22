@@ -99,6 +99,13 @@ process. It does not start the desktop GUI, Docker, or any server service.
 The packaging command prints the absolute release application, sidecar, and
 any generated MSI/NSIS installer paths when it finishes.
 
+Each successful package also writes `bundle/AgentHub-<target>-release.json`.
+This release manifest records the product version, target, source commit, UTC
+generation time, file sizes, and SHA-256 digests for the verified application,
+sidecar, portable ZIP, and any installers. It contains no credentials or
+Mission state. The Windows CI workflow runs the installer and portable gates
+and uploads the artifacts with this manifest.
+
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the
 native layer may start only the packaged `agenthub-runtime.exe` sidecar from
@@ -128,6 +135,11 @@ startup remains blocked until the configured sidecar is available. The native
 supervisor reports `starting` while probing the loopback readiness endpoint and
 only reports `ready` for HTTP 200 with the current protocol version and a
 `ready` status. Process liveness alone is never treated as readiness.
+The supervisor reaps the sidecar on explicit stop and application teardown. It
+fails closed when the loopback health port is occupied, and stops a child that
+does not become ready within the bounded startup timeout. These diagnostics are
+fixed, redacted lifecycle messages; sidecar output and credentials are never
+returned to the UI.
 
 When a validated Mission Control endpoint is configured, the desktop can open
 it in the system browser through a native command. The desktop does not embed

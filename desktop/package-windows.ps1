@@ -12,6 +12,7 @@ $buildScript = Join-Path $sidecarDirectory "build-windows.ps1"
 $preflightScript = Join-Path $sidecarDirectory "packaging-preflight.ps1"
 $artifactSmokeScript = Join-Path $desktopDirectory "packaged-artifact-smoke.ps1"
 $runtimeSmokeScript = Join-Path $desktopDirectory "packaged-runtime-smoke.ps1"
+$releaseManifestScript = Join-Path $desktopDirectory "release-manifest.ps1"
 $manifest = Join-Path $desktopDirectory "src-tauri\Cargo.toml"
 
 if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
@@ -25,6 +26,9 @@ if (-not (Test-Path -LiteralPath $artifactSmokeScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $runtimeSmokeScript -PathType Leaf)) {
     throw "Packaged runtime smoke was not found at $runtimeSmokeScript."
+}
+if (-not (Test-Path -LiteralPath $releaseManifestScript -PathType Leaf)) {
+    throw "Release manifest script was not found at $releaseManifestScript."
 }
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
     throw "Tauri manifest was not found at $manifest."
@@ -109,6 +113,11 @@ if ($Portable) {
     $packagedSidecar = Join-Path $releaseDirectory "agenthub-runtime.exe"
     Compress-Archive -LiteralPath @($application, $packagedSidecar) -DestinationPath $portableArchive -Force
     Write-Output "Portable package: $portableArchive"
+}
+$releaseManifestPath = Join-Path $installerDirectory "AgentHub-$TargetTriple-release.json"
+& $releaseManifestScript -TargetTriple $TargetTriple -OutputPath $releaseManifestPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Release manifest generation failed."
 }
 Write-Output "Release application: $(Join-Path $releaseDirectory 'agenthub-desktop.exe')"
 Write-Output "Packaged sidecar: $(Join-Path $releaseDirectory 'agenthub-runtime.exe')"

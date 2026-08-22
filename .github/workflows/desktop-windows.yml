@@ -1,0 +1,52 @@
+name: Desktop Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['desktop-v*']
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package Windows desktop
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/runtime-sidecar/target
+            desktop/src-tauri/target
+          key: desktop-windows-${{ runner.os }}-${{ hashFiles('desktop/**/Cargo.lock', 'desktop/**/Cargo.toml') }}
+      - name: Install pinned Tauri CLI
+        run: cargo install tauri-cli --version 2.11.4 --locked
+      - name: Build and verify installer package
+        run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc
+      - name: Build and verify portable package
+        run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -Portable
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-windows-${{ github.sha }}
+          path: |
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-desktop.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-runtime.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
+          if-no-files-found: error
