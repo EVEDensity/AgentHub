@@ -1,16 +1,17 @@
 use crate::protocol::{RuntimeReadiness, RuntimeSnapshot, RuntimeStatus, RUNTIME_PROTOCOL_VERSION};
 use serde::Deserialize;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use url::Url;
 
 const SIDECAR_FILE_NAME: &str = "agenthub-runtime.exe";
 const RUNTIME_HEALTH_ENDPOINT: &str = "http://127.0.0.1:18097/readyz";
 const HEALTH_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_HEALTH_RESPONSE_BYTES: u64 = 8 * 1024;
 
 #[derive(Clone, Debug)]
@@ -55,6 +56,7 @@ enum ProbeOutcome {
 struct RuntimeState {
     child: Option<Child>,
     failure: Option<String>,
+    started_at: Option<Instant>,
 }
 
 pub struct LocalRuntime {
@@ -68,6 +70,7 @@ impl LocalRuntime {
             state: Mutex::new(RuntimeState {
                 child: None,
                 failure: None,
+                started_at: None,
             }),
             launch_spec: None,
         }
@@ -78,6 +81,7 @@ impl LocalRuntime {
             state: Mutex::new(RuntimeState {
                 child: None,
                 failure: None,
+                started_at: None,
             }),
             launch_spec: Some(RuntimeLaunchSpec::from_resource_dir(resource_dir)),
         }
@@ -94,11 +98,31 @@ impl LocalRuntime {
         let process_id = process.id();
         match process.try_wait() {
             Ok(None) => {
-                drop(state);
                 let (readiness, detail) = self.probe_readiness();
+                if readiness != RuntimeReadiness::Ready
+                    && state
+                        .started_at
+                        .is_some_and(|started_at| started_at.elapsed() >= STARTUP_TIMEOUT)
+                {
+                    let mut process = state.child.take().expect("runtime child exists");
+                    let _ = process.kill();
+                    let _ = process.wait();
+                    let detail =
+                        "Local Runtime did not become ready within 15 seconds and was stopped."
+                            .to_owned();
+                    state.failure = Some(detail.clone());
+                    state.started_at = None;
+                    return Self::failed_snapshot(&detail);
+                }
                 RuntimeSnapshot {
                     protocol_version: RUNTIME_PROTOCOL_VERSION,
-                    status: RuntimeStatus::Running,
+                    status: if readiness == RuntimeReadiness::Ready {
+                        RuntimeStatus::Running
+                    } else if state.started_at.is_some() {
+                        RuntimeStatus::Starting
+                    } else {
+                        RuntimeStatus::Running
+                    },
                     readiness,
                     process_id: Some(process_id),
                     exit_code: None,
@@ -107,6 +131,7 @@ impl LocalRuntime {
             }
             Ok(Some(exit_status)) => {
                 state.child = None;
+                state.started_at = None;
                 RuntimeSnapshot {
                     protocol_version: RUNTIME_PROTOCOL_VERSION,
                     status: RuntimeStatus::Stopped,
@@ -145,12 +170,22 @@ impl LocalRuntime {
         if !spec.executable.is_file() {
             return self.record_failure("Local Runtime sidecar is not installed.");
         }
+        if !is_port_available(&spec.health_endpoint) {
+            let port = spec
+                .health_endpoint
+                .port_or_known_default()
+                .unwrap_or_default();
+            return self.record_failure(&format!(
+                "Local Runtime port {port} is already in use. Stop the existing process before starting AgentHub."
+            ));
+        }
         match Command::new(&spec.executable).args(&spec.args).spawn() {
             Ok(child) => {
                 let process_id = child.id();
                 let mut state = self.state.lock().expect("local Runtime lock poisoned");
                 state.child = Some(child);
                 state.failure = None;
+                state.started_at = Some(Instant::now());
                 RuntimeSnapshot {
                     protocol_version: RUNTIME_PROTOCOL_VERSION,
                     status: RuntimeStatus::Starting,
@@ -170,9 +205,11 @@ impl LocalRuntime {
         let mut state = self.state.lock().expect("local Runtime lock poisoned");
         let Some(mut process) = state.child.take() else {
             state.failure = None;
+            state.started_at = None;
             return Self::stopped_snapshot();
         };
         state.failure = None;
+        state.started_at = None;
         match process.kill().and_then(|_| process.wait()) {
             Ok(_) => Self::stopped_snapshot(),
             Err(error) => RuntimeSnapshot {
@@ -261,6 +298,7 @@ impl LocalRuntime {
             state: Mutex::new(RuntimeState {
                 child: Some(child),
                 failure: None,
+                started_at: None,
             }),
             launch_spec: None,
         }
@@ -315,6 +353,13 @@ fn probe_endpoint(endpoint: &Url) -> ProbeOutcome {
     parse_health_response(&response)
 }
 
+fn is_port_available(endpoint: &Url) -> bool {
+    let Some(port) = endpoint.port_or_known_default() else {
+        return false;
+    };
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
 fn parse_health_response(response: &[u8]) -> ProbeOutcome {
     let Ok(response) = std::str::from_utf8(response) else {
         return ProbeOutcome::Unhealthy;
@@ -352,6 +397,21 @@ impl Default for LocalRuntime {
     }
 }
 
+impl Drop for LocalRuntime {
+    fn drop(&mut self) {
+        let Ok(state) = self.state.get_mut() else {
+            return;
+        };
+        let Some(mut process) = state.child.take() else {
+            return;
+        };
+        if process.try_wait().ok().flatten().is_none() {
+            let _ = process.kill();
+        }
+        let _ = process.wait();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{LocalRuntime, RuntimeLaunchSpec, RuntimeState, RUNTIME_HEALTH_ENDPOINT};
@@ -368,6 +428,7 @@ mod tests {
             state: Mutex::new(RuntimeState {
                 child: None,
                 failure: None,
+                started_at: None,
             }),
             launch_spec: Some(spec),
         }
@@ -411,6 +472,23 @@ mod tests {
         assert_eq!(started.status, RuntimeStatus::Starting);
         assert!(started.process_id.is_some());
         assert_eq!(runtime.stop().status, RuntimeStatus::Stopped);
+    }
+
+    #[test]
+    fn configured_start_fails_when_runtime_port_is_occupied() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("health port binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let executable = std::env::var_os("COMSPEC")
+            .map(PathBuf::from)
+            .expect("Windows command processor path");
+        let runtime = runtime(RuntimeLaunchSpec::new(
+            executable,
+            vec!["/C".into(), "exit 0".into()],
+            Url::parse(&format!("http://127.0.0.1:{port}/readyz")).expect("health endpoint"),
+        ));
+        let snapshot = runtime.start(true);
+        assert_eq!(snapshot.status, RuntimeStatus::Failed);
+        assert!(snapshot.detail.contains("already in use"));
     }
 
     #[test]
@@ -486,5 +564,24 @@ mod tests {
         assert_eq!(snapshot.status, RuntimeStatus::Stopped);
         assert_eq!(snapshot.readiness, RuntimeReadiness::Unhealthy);
         assert_eq!(snapshot.exit_code, Some(7));
+    }
+
+    #[test]
+    fn dropping_runtime_reaps_a_running_child() {
+        let child = Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 > NUL"])
+            .spawn()
+            .expect("test child starts");
+        let process_id = child.id();
+        {
+            let runtime = LocalRuntime::with_child(child);
+            assert_eq!(runtime.snapshot().status, RuntimeStatus::Running);
+        }
+        let probe = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {process_id}"), "/NH"])
+            .output()
+            .expect("tasklist runs");
+        let output = String::from_utf8_lossy(&probe.stdout);
+        assert!(!output.contains(&process_id.to_string()));
     }
 }
