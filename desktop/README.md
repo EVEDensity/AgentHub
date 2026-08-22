@@ -11,9 +11,11 @@ Decision, or Outcome state.
 
 ## First vertical slice
 
-The Tauri shell serves a small static control view. It can read local Runtime
-status and request start or stop through typed native commands. A start request
-fails explicitly until secure Runtime onboarding is implemented; it never starts
+The Tauri shell is a launcher, not a second Mission dashboard. Its first view
+shows the Mission Control entry point, local Runtime status, and concise
+connection feedback. Missions, approvals, artifacts, evidence, and other
+business workflows remain in the management backend. A start request fails
+explicitly until secure Runtime onboarding is implemented; it never starts
 Docker, a mock provider, or an unconfigured Runner.
 
 ## Layout
@@ -50,6 +52,10 @@ The native commands expose configuration status and secret set/clear
 operations. Status reports only `configured`, `missing`, or `unavailable` for
 each credential and never returns its value. Runtime startup remains blocked
 until the later onboarding and sidecar stages consume this boundary.
+
+When a validated Mission Control endpoint is configured, the desktop can open
+it in the system browser through a native command. The desktop does not embed
+or duplicate the management workflows.
 
 ## Runtime sidecar contract
 

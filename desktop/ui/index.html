@@ -3,39 +3,62 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AgentHub Desktop</title>
+    <title>AgentHub</title>
     <link rel="icon" href="./favicon.ico" sizes="any" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="shell" aria-labelledby="page-title">
-      <header class="masthead">
-        <div class="brand"><span class="brand-mark">AH</span> AgentHub</div>
-        <span class="release">DESKTOP PREVIEW</span>
-      </header>
-      <section class="intro">
-        <p class="eyebrow">LOCAL CONTROL</p>
-        <h1 id="page-title">把运行环境留在应用里。</h1>
-        <p>桌面端负责本地生命周期和诊断；任务、结果与审批仍由 Mission Control 管理。</p>
-      </section>
-      <section class="runtime" aria-label="Local Runtime">
-        <div>
-          <p class="label">LOCAL RUNTIME</p>
-          <div class="runtime-line"><span id="state-dot" class="dot stopped"></span><strong id="runtime-status">检查中</strong></div>
-          <p id="runtime-detail" class="detail">正在读取本地状态。</p>
-          <p id="runtime-readiness" class="readiness">就绪状态：检查中</p>
+      <header class="topbar">
+        <div class="brand" aria-label="AgentHub">
+          <span class="brand-mark" aria-hidden="true">AH</span>
+          <span>AgentHub</span>
         </div>
-        <div class="actions">
+        <div class="topbar-actions">
+          <span class="local-state"><span class="dot local" aria-hidden="true"></span>本地桌面</span>
           <button id="refresh" class="icon-button" type="button" title="刷新状态" aria-label="刷新状态">&#8635;</button>
-          <button id="start" class="primary" type="button">启动本地运行环境</button>
-          <button id="stop" class="secondary" type="button">停止</button>
+        </div>
+      </header>
+
+      <section class="launcher" aria-labelledby="page-title">
+        <div class="launcher-copy">
+          <p class="eyebrow">WORKSPACE</p>
+          <h1 id="page-title">进入管理后台</h1>
+          <p>任务、审批和执行证据在管理后台完成。</p>
+        </div>
+
+        <section class="launch-surface" aria-labelledby="control-plane-title">
+          <div class="surface-meta">
+            <span class="surface-label">MISSION CONTROL</span>
+            <span id="control-state" class="state-chip missing">未配置</span>
+          </div>
+          <h2 id="control-plane-title">还没有连接工作区</h2>
+          <p id="control-detail">完成连接配置后，从这里打开管理后台。</p>
+          <button id="open-console" class="primary" type="button" disabled>
+            打开管理后台 <span aria-hidden="true">&#8599;</span>
+          </button>
+        </section>
+      </section>
+
+      <section class="runtime-strip" aria-label="Local Runtime">
+        <div class="runtime-summary">
+          <span id="state-dot" class="dot stopped" aria-hidden="true"></span>
+          <div>
+            <p class="surface-label">LOCAL RUNTIME</p>
+            <div class="runtime-line">
+              <strong id="runtime-status">检查中</strong>
+              <span id="runtime-readiness" class="readiness">就绪状态：检查中</span>
+            </div>
+            <p id="runtime-detail" class="detail">正在读取本地状态。</p>
+          </div>
+        </div>
+        <div class="runtime-actions">
+          <button id="start" class="secondary" type="button">启动</button>
+          <button id="stop" class="tertiary" type="button">停止</button>
         </div>
       </section>
-      <section class="notes" aria-label="Desktop boundaries">
-        <article><span>01</span><h2>无需 Docker</h2><p>桌面端将托管本地服务，而不是要求用户运行部署栈。</p></article>
-        <article><span>02</span><h2>真实状态</h2><p>未完成配置时，应用会明确提示，不会伪造服务已就绪。</p></article>
-        <article><span>03</span><h2>可审计边界</h2><p>本地状态不是 Mission 事实；任务生命周期仍在控制面中执行。</p></article>
-      </section>
+
+      <p id="feedback" class="feedback" role="status" aria-live="polite">正在检查连接状态</p>
     </main>
     <script src="./main.js"></script>
   </body>

@@ -9,6 +9,7 @@ use config::{
 };
 use protocol::RuntimeSnapshot;
 use runtime::LocalRuntime;
+use std::process::Command;
 use tauri::{Manager, State};
 
 #[tauri::command]
@@ -63,6 +64,20 @@ fn clear_configuration_secret(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn open_control_plane(configuration: State<'_, ConfigurationStore>) -> Result<(), String> {
+    let endpoint = configuration
+        .mission_control_endpoint()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Mission Control endpoint is not configured".to_owned())?;
+
+    Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", endpoint.as_str()])
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "Unable to open Mission Control in the default browser".to_owned())
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(LocalRuntime::new())
@@ -78,7 +93,8 @@ fn main() {
             configuration_status,
             save_configuration,
             set_configuration_secret,
-            clear_configuration_secret
+            clear_configuration_secret,
+            open_control_plane
         ])
         .run(tauri::generate_context!())
         .expect("AgentHub desktop shell failed");

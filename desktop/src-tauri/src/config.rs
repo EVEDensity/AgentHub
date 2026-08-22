@@ -158,6 +158,7 @@ impl ConfigurationStore {
         }
     }
 
+    #[cfg(test)]
     fn with_secret_store(config_dir: PathBuf, secrets: Arc<dyn SecretStore>) -> Self {
         Self {
             path: config_dir.join(CONFIG_FILE_NAME),
@@ -234,6 +235,10 @@ impl ConfigurationStore {
         self.secrets
             .get(kind)
             .map_err(|_| ConfigurationError::SecretStoreUnavailable)
+    }
+
+    pub(crate) fn mission_control_endpoint(&self) -> Result<Option<String>, ConfigurationError> {
+        Ok(self.load_config()?.mission_control_endpoint)
     }
 
     fn load_config(&self) -> Result<DesktopConfig, ConfigurationError> {
