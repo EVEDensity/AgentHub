@@ -19,8 +19,15 @@ fn runtime_status(runtime: State<'_, LocalRuntime>) -> RuntimeSnapshot {
 }
 
 #[tauri::command]
-fn start_runtime(runtime: State<'_, LocalRuntime>) -> RuntimeSnapshot {
-    runtime.start()
+fn start_runtime(
+    runtime: State<'_, LocalRuntime>,
+    configuration: State<'_, ConfigurationStore>,
+) -> Result<RuntimeSnapshot, String> {
+    let configuration_ready = configuration
+        .status()
+        .map_err(|error| error.to_string())?
+        .ready_for_runtime;
+    Ok(runtime.start(configuration_ready))
 }
 
 #[tauri::command]
@@ -88,10 +95,11 @@ fn open_control_plane(configuration: State<'_, ConfigurationStore>) -> Result<()
 
 fn main() {
     tauri::Builder::default()
-        .manage(LocalRuntime::new())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(ConfigurationStore::new(config_dir));
+            let resource_dir = app.path().resource_dir()?;
+            app.manage(LocalRuntime::from_resource_dir(resource_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
