@@ -43,7 +43,14 @@ the sidecar for the current Windows target:
 
 ```powershell
 .\runtime-sidecar\build-windows.ps1
+.\runtime-sidecar\packaging-preflight.ps1
 ```
+
+The preflight parses `tauri.conf.json` and fails closed when the configured
+sidecar name, target-specific staged executable, or file type is incorrect. It
+does not start the application or any server dependency. A full bundle still
+requires the Tauri CLI; the preflight is the local packaging gate when that
+optional developer tool is unavailable.
 
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the
