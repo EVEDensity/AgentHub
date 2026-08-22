@@ -54,6 +54,11 @@ const DecisionInbox = dynamic(() => import('../../components/admin/DecisionInbox
     </div>
   ),
 });
+const MissionControlPanel = dynamic(() => import('../../components/admin/MissionControlPanel'), {
+  ssr: false, loading: () => (
+    <div className="flex justify-center py-12"><div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-200 border-t-primary-500" /></div>
+  ),
+});
 const ServiceProviderModule = dynamic(() => import('../../components/admin/ServiceProviderModule'), {
   ssr: false, loading: () => (
     <div className="flex justify-center py-12">
@@ -409,6 +414,8 @@ export default function AdminPage(): JSX.Element {
   // ── Module renderer ─────────────────────────────────────────────
   function renderModuleContent(): JSX.Element {
     switch (activeMenu) {
+      case 'Mission Control':
+        return <MissionControlPanel authHeaders={authHeaders} setNotice={setNotice} fmtErr={fmtErr} />;
       case '服务商':
         return (
           <ServiceProviderModule
