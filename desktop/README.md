@@ -28,6 +28,8 @@ credential store.
 - `package-windows.ps1`: one-command Windows build and installer gate.
 - `packaged-artifact-smoke.ps1`: verifies the built application and sidecar
   digest without starting the desktop process.
+- `packaged-runtime-smoke.ps1`: starts only the packaged sidecar and verifies
+  its loopback readiness contract.
 - `ui/`: dependency-free shell UI served by the desktop application.
 
 ## Development
@@ -71,6 +73,10 @@ After a successful Tauri build, the artifact smoke verifies that the release
 application exists and that the bundled `agenthub-runtime.exe` has the same
 SHA-256 as the staged target sidecar. It does not claim that an installer was
 created when WiX or NSIS cannot run on the build host.
+
+The runtime smoke then starts the bundled sidecar with the fixed readiness
+endpoint, validates protocol version `1` and `ready`, and terminates that test
+process. It does not start the desktop GUI, Docker, or any server service.
 
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the

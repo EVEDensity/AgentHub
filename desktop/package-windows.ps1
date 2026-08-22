@@ -9,6 +9,7 @@ $sidecarDirectory = Join-Path $desktopDirectory "runtime-sidecar"
 $buildScript = Join-Path $sidecarDirectory "build-windows.ps1"
 $preflightScript = Join-Path $sidecarDirectory "packaging-preflight.ps1"
 $artifactSmokeScript = Join-Path $desktopDirectory "packaged-artifact-smoke.ps1"
+$runtimeSmokeScript = Join-Path $desktopDirectory "packaged-runtime-smoke.ps1"
 $manifest = Join-Path $desktopDirectory "src-tauri\Cargo.toml"
 
 if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
@@ -19,6 +20,9 @@ if (-not (Test-Path -LiteralPath $preflightScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $artifactSmokeScript -PathType Leaf)) {
     throw "Packaged artifact smoke was not found at $artifactSmokeScript."
+}
+if (-not (Test-Path -LiteralPath $runtimeSmokeScript -PathType Leaf)) {
+    throw "Packaged runtime smoke was not found at $runtimeSmokeScript."
 }
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
     throw "Tauri manifest was not found at $manifest."
@@ -71,6 +75,12 @@ Write-Output "Checking packaged artifacts."
 & $artifactSmokeScript -TargetTriple $TargetTriple
 if ($LASTEXITCODE -ne 0) {
     throw "Packaged artifact smoke failed."
+}
+
+Write-Output "Checking packaged runtime readiness."
+& $runtimeSmokeScript -TargetTriple $TargetTriple
+if ($LASTEXITCODE -ne 0) {
+    throw "Packaged runtime smoke failed."
 }
 
 Write-Output "Windows desktop bundle completed for $TargetTriple."
