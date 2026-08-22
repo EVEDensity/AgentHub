@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod protocol;
 mod runtime;
 
-use runtime::{LocalRuntime, RuntimeSnapshot};
+use protocol::RuntimeSnapshot;
+use runtime::LocalRuntime;
 use tauri::State;
 
 #[tauri::command]

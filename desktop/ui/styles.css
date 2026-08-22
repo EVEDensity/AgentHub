@@ -15,6 +15,7 @@ h1 { font-family: Georgia, "Noto Serif SC", serif; font-size: clamp(38px, 6vw, 6
 .label { margin: 0 0 13px; }
 .runtime-line { display: flex; align-items: center; gap: 10px; font-size: 22px; }
 .detail { color: #aeb9c3; margin: 10px 0 0; line-height: 1.5; max-width: 530px; }
+.readiness { color: #8d9aa6; font-size: 13px; margin: 8px 0 0; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: #64717c; box-shadow: 0 0 0 4px #222a31; }
 .dot.running { background: #36d399; box-shadow: 0 0 0 4px #173b2c; }
 .dot.configuration_required { background: #fbbd23; box-shadow: 0 0 0 4px #44370d; }

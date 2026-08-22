@@ -34,3 +34,13 @@ cargo tauri dev --manifest-path src-tauri/Cargo.toml
 
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane.
+
+## Runtime sidecar contract
+
+The native layer exposes a versioned `RuntimeSnapshot` contract. `status`
+describes process lifecycle, while `readiness` describes whether the sidecar
+has passed its health probe. These are intentionally separate: an alive process
+is not evidence that the Runtime is ready to execute work. A terminated child
+reports its exit code and an unhealthy readiness state. The contract contains
+no Mission or WorkUnit data and is safe to evolve independently from the
+control-plane API.
