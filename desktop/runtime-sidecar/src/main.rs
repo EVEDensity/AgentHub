@@ -41,9 +41,14 @@ fn main() -> Result<(), String> {
 
 fn parse_endpoint() -> Result<SocketAddr, String> {
     let mut endpoint = DEFAULT_ENDPOINT.to_owned();
+    let mut explicit_endpoint = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--health-endpoint" {
+            if explicit_endpoint {
+                return Err("--health-endpoint was supplied more than once".to_owned());
+            }
+            explicit_endpoint = true;
             endpoint = args
                 .next()
                 .ok_or_else(|| "--health-endpoint requires a value".to_owned())?;
@@ -52,7 +57,11 @@ fn parse_endpoint() -> Result<SocketAddr, String> {
         }
     }
 
-    let parsed = Url::parse(&endpoint).map_err(|_| "endpoint is not a URL".to_owned())?;
+    parse_endpoint_value(&endpoint)
+}
+
+fn parse_endpoint_value(endpoint: &str) -> Result<SocketAddr, String> {
+    let parsed = Url::parse(endpoint).map_err(|_| "endpoint is not a URL".to_owned())?;
     if parsed.scheme() != "http"
         || parsed.host_str() != Some("127.0.0.1")
         || parsed.path() != "/readyz"
@@ -115,7 +124,7 @@ fn handle_request(stream: &mut TcpStream) -> Result<(), String> {
         status: "ready",
     })
     .map_err(|error| error.to_string())?;
-    write_response(stream, 200, "ok", Some(&body))
+    write_response(stream, 200, "OK", Some(&body))
 }
 
 fn write_response(
@@ -137,12 +146,54 @@ fn write_response(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_endpoint;
+    use super::{handle_request, parse_endpoint, parse_endpoint_value};
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
 
     #[test]
     fn endpoint_defaults_to_loopback_ready_path() {
         let endpoint = parse_endpoint().expect("default endpoint");
         assert_eq!(endpoint.ip().to_string(), "127.0.0.1");
         assert_eq!(endpoint.port(), 18097);
+    }
+
+    #[test]
+    fn endpoint_rejects_remote_hosts_and_wrong_paths() {
+        for endpoint in [
+            "https://127.0.0.1:18097/readyz",
+            "http://localhost:18097/readyz",
+            "http://192.168.1.20:18097/readyz",
+            "http://127.0.0.1:18097/health",
+        ] {
+            assert!(
+                parse_endpoint_value(endpoint).is_err(),
+                "accepted {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn readiness_request_returns_versioned_json() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener binds");
+        let address = listener.local_addr().expect("listener address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client connects");
+            handle_request(&mut stream).expect("request handles");
+        });
+        let mut client = TcpStream::connect(address).expect("client connects");
+        client
+            .write_all(b"GET /readyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .expect("request writes");
+        let mut response = String::new();
+        client
+            .read_to_string(&mut response)
+            .expect("response reads");
+        server.join().expect("server joins");
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "response: {response:?}"
+        );
+        assert!(response.contains("\"protocolVersion\":1"));
+        assert!(response.contains("\"status\":\"ready\""));
     }
 }
