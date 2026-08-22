@@ -197,7 +197,7 @@ impl LocalRuntime {
         match probe_endpoint(&spec.health_endpoint) {
             ProbeOutcome::Ready => (
                 RuntimeReadiness::Ready,
-                "Local Runtime is ready to accept work.".into(),
+                "Local Runtime bootstrap is ready for lifecycle supervision.".into(),
             ),
             ProbeOutcome::Probing => (
                 RuntimeReadiness::Probing,

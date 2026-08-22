@@ -23,6 +23,7 @@
   },
   "bundle": {
     "active": false,
+    "externalBin": ["../runtime-sidecar/target/release/agenthub-runtime"],
     "icon": ["icons/icon.png"]
   }
 }

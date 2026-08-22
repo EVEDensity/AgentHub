@@ -51,6 +51,7 @@ docs/AI_COLLABORATION*.md
 *.so
 *.dylib
 desktop/src-tauri/target/
+desktop/runtime-sidecar/target/
 desktop/.runtime/
 
 # Backup, temporary, and log files

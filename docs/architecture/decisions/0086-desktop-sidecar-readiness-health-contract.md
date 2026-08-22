@@ -7,10 +7,10 @@
 
 ## Context
 
-An alive child process does not prove that the local Runtime can accept work.
-The desktop needs a bounded, local-only readiness signal before it enables the
-Runtime as usable. The signal must not create a second Mission or WorkUnit
-state model.
+An alive child process does not prove that the local Runtime bootstrap is
+healthy. The desktop needs a bounded, local-only readiness signal before it
+marks the lifecycle process usable. The signal must not create a second Mission
+or WorkUnit state model or imply business execution success.
 
 ## Decision
 
@@ -21,11 +21,13 @@ The response is HTTP 200 with a JSON body shaped as:
 {"protocolVersion":1,"status":"ready"}
 ```
 
-`status` may be `starting` while dependencies are still initializing. The
-desktop accepts `ready` only when `protocolVersion` equals the desktop runtime
-protocol version. Connection refusal is `probing`; malformed responses,
-non-200 responses, non-loopback endpoints, and protocol mismatches are
-`unhealthy`. The request and response are bounded and have short timeouts.
+`status` may be `starting` while the bootstrap process is still initializing.
+The desktop accepts `ready` only when `protocolVersion` equals the desktop
+runtime protocol version. Connection refusal is `probing`; malformed
+responses, non-200 responses, non-loopback endpoints, and protocol mismatches
+are `unhealthy`. The request and response are bounded and have short timeouts.
+This readiness means only that the local lifecycle boundary is healthy; it is
+not Mission Control, Runner, Artifact, Evidence, or WorkUnit success.
 
 The endpoint is fixed in the packaged launch specification and is never read
 from renderer input or remote configuration. Mission Control and Runner

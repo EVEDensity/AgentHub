@@ -23,6 +23,8 @@ credential store.
 ## Layout
 
 - `src-tauri/`: Tauri application, local process boundary, and native tests.
+- `runtime-sidecar/`: standalone Rust bootstrap process and packaging staging
+  script. It owns only local readiness, not Mission execution.
 - `ui/`: dependency-free shell UI served by the desktop application.
 
 ## Development
@@ -36,12 +38,20 @@ cargo install tauri-cli --version "^2"
 cargo tauri dev --manifest-path src-tauri/Cargo.toml
 ```
 
+Before a Tauri bundle or dev session that enables the external binary, stage
+the sidecar for the current Windows target:
+
+```powershell
+.\runtime-sidecar\build-windows.ps1
+```
+
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the
 native layer may start only the packaged `agenthub-runtime.exe` sidecar from
 the application resource directory; a missing sidecar fails explicitly. The
-sidecar must expose `http://127.0.0.1:18097/readyz` and return the current
-runtime protocol version before the desktop reports it ready.
+bootstrap sidecar must expose `http://127.0.0.1:18097/readyz` and return the
+current runtime protocol version before the desktop reports it ready. It is a
+lifecycle process, not the Python Mission Runner.
 
 ## Configuration and credentials
 
