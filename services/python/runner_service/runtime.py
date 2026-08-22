@@ -54,6 +54,7 @@ class RunnerServiceRuntime:
     shutdown_timeout_seconds: float
     closeables: Sequence[AsyncClosePort] = ()
     _worker_task: asyncio.Task[None] | None = field(default=None, init=False)
+    _resources_closed: bool = field(default=False, init=False)
 
     @property
     def snapshot(self) -> RunnerWorkerSnapshot:
@@ -70,6 +71,8 @@ class RunnerServiceRuntime:
         return self.healthy and snapshot.running and snapshot.ready
 
     async def start(self) -> None:
+        if self._resources_closed:
+            raise RuntimeError("Runner service runtime has been stopped")
         if self._worker_task is not None:
             raise RuntimeError("Runner service runtime is already started")
         self._worker_task = asyncio.create_task(
@@ -82,6 +85,8 @@ class RunnerServiceRuntime:
             raise RuntimeError("Runner worker stopped during startup")
 
     async def stop(self) -> None:
+        if self._resources_closed:
+            return
         task = self._worker_task
         try:
             if task is not None:
@@ -95,6 +100,8 @@ class RunnerServiceRuntime:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
         finally:
+            self._worker_task = None
+            self._resources_closed = True
             for closeable in reversed(tuple(self.closeables)):
                 await closeable.aclose()
 

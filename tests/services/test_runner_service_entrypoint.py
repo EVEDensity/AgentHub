@@ -348,6 +348,24 @@ class RunnerServiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(worker.cancelled)
         self.assertFalse(runtime.healthy)
 
+    async def test_stop_is_idempotent_and_closed_runtime_cannot_restart(self) -> None:
+        worker = FakeWorker()
+        closeable = CloseRecorder()
+        runtime = RunnerServiceRuntime(
+            worker=worker,
+            shutdown_timeout_seconds=1,
+            closeables=(closeable,),
+        )
+
+        await runtime.start()
+        await runtime.stop()
+        await runtime.stop()
+
+        self.assertEqual(worker.stop_requests, 1)
+        self.assertTrue(closeable.closed)
+        with self.assertRaisesRegex(RuntimeError, "has been stopped"):
+            await runtime.start()
+
 
 class RunnerServiceEndpointTests(unittest.TestCase):
     def test_health_and_readiness_expose_only_operational_state(self) -> None:
