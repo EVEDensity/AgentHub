@@ -35,6 +35,22 @@ cargo tauri dev --manifest-path src-tauri/Cargo.toml
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane.
 
+## Configuration and credentials
+
+Desktop configuration is split by sensitivity. The app configuration file
+contains only validated Mission Control and MCP endpoints, the local Artifact
+directory, and a schema version. Mission Control tokens, MCP tokens, and model
+API keys are stored through the operating system credential store and are
+never serialized into that file, returned by a Tauri command, placed in an
+environment variable, or written to diagnostics. The current release targets
+Windows Credential Manager first; unsupported targets fail closed until their
+native credential-store adapter is implemented.
+
+The native commands expose configuration status and secret set/clear
+operations. Status reports only `configured`, `missing`, or `unavailable` for
+each credential and never returns its value. Runtime startup remains blocked
+until the later onboarding and sidecar stages consume this boundary.
+
 ## Runtime sidecar contract
 
 The native layer exposes a versioned `RuntimeSnapshot` contract. `status`
