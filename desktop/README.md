@@ -52,6 +52,18 @@ does not start the application or any server dependency. A full bundle still
 requires the Tauri CLI; the preflight is the local packaging gate when that
 optional developer tool is unavailable.
 
+For a complete Windows package, use the repository script. It builds the
+target-specific sidecar, runs the same preflight, verifies the Tauri CLI, and
+only then invokes the bundle command:
+
+```powershell
+.\package-windows.ps1
+```
+
+The command fails before bundling when the Tauri CLI is unavailable or the
+sidecar does not match the host target. Installing the CLI is a developer or
+CI prerequisite; it is not a product runtime dependency.
+
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the
 native layer may start only the packaged `agenthub-runtime.exe` sidecar from
