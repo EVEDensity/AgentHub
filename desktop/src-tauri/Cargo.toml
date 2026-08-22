@@ -1,0 +1,17 @@
+[package]
+name = "agenthub-desktop"
+version = "0.1.0"
+description = "AgentHub native desktop shell"
+edition = "2021"
+rust-version = "1.88"
+
+[build-dependencies]
+tauri-build = "2.6.3"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = "2.11.5"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

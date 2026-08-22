@@ -50,6 +50,8 @@ docs/AI_COLLABORATION*.md
 *.dll
 *.so
 *.dylib
+desktop/src-tauri/target/
+desktop/.runtime/
 
 # Backup, temporary, and log files
 *.bak

@@ -55,6 +55,7 @@ The root `AGENTS.md` is the AI and reviewer entry point. Major implementation
 areas also contain a local `README.md` describing ownership and placement:
 
 - `app/README.md`
+- `desktop/README.md`
 - `services/README.md`
 - `frontend/README.md`
 - `platform/README.md`
