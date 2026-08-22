@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$TargetTriple,
-    [switch]$NoInstaller
+    [switch]$NoInstaller,
+    [switch]$Portable
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,9 +66,13 @@ $tauriDirectory = Split-Path -Parent $manifest
 Push-Location $tauriDirectory
 try {
     $buildArguments = @("tauri", "build", "--target", $TargetTriple, "--ci")
-    if ($NoInstaller) {
+    if ($NoInstaller -or $Portable) {
         $buildArguments += "--no-bundle"
-        Write-Output "Installer generation disabled; validating the release application only."
+        if ($Portable) {
+            Write-Output "Installer generation disabled; building a portable desktop package."
+        } else {
+            Write-Output "Installer generation disabled; validating the release application only."
+        }
     }
     & cargo +1.88.0 @buildArguments
     if ($LASTEXITCODE -ne 0) {
@@ -89,8 +94,33 @@ if ($LASTEXITCODE -ne 0) {
     throw "Packaged runtime smoke failed."
 }
 
-if ($NoInstaller) {
+if ($NoInstaller -or $Portable) {
     Write-Output "Windows desktop application build completed for $TargetTriple."
 } else {
     Write-Output "Windows desktop bundle completed for $TargetTriple."
+}
+
+$releaseDirectory = Join-Path $desktopDirectory "src-tauri\target\$TargetTriple\release"
+$installerDirectory = Join-Path $releaseDirectory "bundle"
+if ($Portable) {
+    New-Item -ItemType Directory -Force -Path $installerDirectory | Out-Null
+    $portableArchive = Join-Path $installerDirectory "AgentHub-$TargetTriple-portable.zip"
+    $application = Join-Path $releaseDirectory "agenthub-desktop.exe"
+    $packagedSidecar = Join-Path $releaseDirectory "agenthub-runtime.exe"
+    Compress-Archive -LiteralPath @($application, $packagedSidecar) -DestinationPath $portableArchive -Force
+    Write-Output "Portable package: $portableArchive"
+}
+Write-Output "Release application: $(Join-Path $releaseDirectory 'agenthub-desktop.exe')"
+Write-Output "Packaged sidecar: $(Join-Path $releaseDirectory 'agenthub-runtime.exe')"
+if (Test-Path -LiteralPath $installerDirectory -PathType Container) {
+    $installers = @(Get-ChildItem -LiteralPath $installerDirectory -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @('.msi', '.exe') })
+    if ($installers.Count -gt 0) {
+        foreach ($installer in $installers) {
+            Write-Output "Installer: $($installer.FullName)"
+        }
+    } else {
+        Write-Output "Installer directory: $installerDirectory (no MSI/NSIS artifact found)"
+    }
+} else {
+    Write-Output "Installer directory: $installerDirectory (not created)"
 }
