@@ -8,6 +8,7 @@ $desktopDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sidecarDirectory = Join-Path $desktopDirectory "runtime-sidecar"
 $buildScript = Join-Path $sidecarDirectory "build-windows.ps1"
 $preflightScript = Join-Path $sidecarDirectory "packaging-preflight.ps1"
+$artifactSmokeScript = Join-Path $desktopDirectory "packaged-artifact-smoke.ps1"
 $manifest = Join-Path $desktopDirectory "src-tauri\Cargo.toml"
 
 if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
@@ -15,6 +16,9 @@ if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $preflightScript -PathType Leaf)) {
     throw "Packaging preflight was not found at $preflightScript."
+}
+if (-not (Test-Path -LiteralPath $artifactSmokeScript -PathType Leaf)) {
+    throw "Packaged artifact smoke was not found at $artifactSmokeScript."
 }
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
     throw "Tauri manifest was not found at $manifest."
@@ -52,9 +56,21 @@ if ($LASTEXITCODE -ne 0) {
 Write-Output "Using $($tauriVersion -join ' ')."
 
 Write-Output "Building the Tauri bundle."
-& cargo +1.88.0 tauri build --manifest-path $manifest --target $TargetTriple
+$tauriDirectory = Split-Path -Parent $manifest
+Push-Location $tauriDirectory
+try {
+    & cargo +1.88.0 tauri build --target $TargetTriple --ci
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tauri bundle build failed."
+    }
+} finally {
+    Pop-Location
+}
+
+Write-Output "Checking packaged artifacts."
+& $artifactSmokeScript -TargetTriple $TargetTriple
 if ($LASTEXITCODE -ne 0) {
-    throw "Tauri bundle build failed."
+    throw "Packaged artifact smoke failed."
 }
 
 Write-Output "Windows desktop bundle completed for $TargetTriple."

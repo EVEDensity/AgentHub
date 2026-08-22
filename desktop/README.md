@@ -25,6 +25,9 @@ credential store.
 - `src-tauri/`: Tauri application, local process boundary, and native tests.
 - `runtime-sidecar/`: standalone Rust bootstrap process and packaging staging
   script. It owns only local readiness, not Mission execution.
+- `package-windows.ps1`: one-command Windows build and installer gate.
+- `packaged-artifact-smoke.ps1`: verifies the built application and sidecar
+  digest without starting the desktop process.
 - `ui/`: dependency-free shell UI served by the desktop application.
 
 ## Development
@@ -63,6 +66,11 @@ only then invokes the bundle command:
 The command fails before bundling when the Tauri CLI is unavailable or the
 sidecar does not match the host target. Installing the CLI is a developer or
 CI prerequisite; it is not a product runtime dependency.
+
+After a successful Tauri build, the artifact smoke verifies that the release
+application exists and that the bundled `agenthub-runtime.exe` has the same
+SHA-256 as the staged target sidecar. It does not claim that an installer was
+created when WiX or NSIS cannot run on the build host.
 
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the
