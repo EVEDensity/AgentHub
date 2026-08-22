@@ -39,7 +39,9 @@ cargo tauri dev --manifest-path src-tauri/Cargo.toml
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the
 native layer may start only the packaged `agenthub-runtime.exe` sidecar from
-the application resource directory; a missing sidecar fails explicitly.
+the application resource directory; a missing sidecar fails explicitly. The
+sidecar must expose `http://127.0.0.1:18097/readyz` and return the current
+runtime protocol version before the desktop reports it ready.
 
 ## Configuration and credentials
 
@@ -58,9 +60,10 @@ endpoints and the Artifact path; status reports only `configured`, `missing`,
 or `unavailable` for each credential and never returns its value. The launcher
 settings dialog writes ordinary configuration first and then non-empty secrets
 independently, keeping the dialog open when either operation fails. Runtime
-startup remains blocked until the configured sidecar is available. The current
-process slice reports `starting` and probes readiness through the versioned
-runtime contract; the concrete health endpoint is a follow-up sidecar slice.
+startup remains blocked until the configured sidecar is available. The native
+supervisor reports `starting` while probing the loopback readiness endpoint and
+only reports `ready` for HTTP 200 with the current protocol version and a
+`ready` status. Process liveness alone is never treated as readiness.
 
 When a validated Mission Control endpoint is configured, the desktop can open
 it in the system browser through a native command. The desktop does not embed

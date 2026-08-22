@@ -23,9 +23,9 @@ or failed process launch returns `failed`. A successfully spawned process is
 reported as `starting` with `probing` readiness, and stop kills and reaps only
 the tracked child.
 
-This slice intentionally does not invent a health port or claim readiness from
-process liveness. The concrete sidecar health endpoint and packaged binary are
-separate release gates.
+The sidecar health endpoint is specified separately by ADR-0086. This process
+supervisor does not claim readiness from process liveness; it delegates that
+decision to the bounded loopback probe.
 
 ## Consequences
 
@@ -34,7 +34,7 @@ separate release gates.
   mock or server deployment process.
 - Runtime configuration remains owned by `ConfigurationStore`; Mission state
   remains outside the desktop.
-- A future sidecar can implement the existing versioned readiness contract
+- A future packaged sidecar can implement the versioned readiness contract
   without changing the launcher ownership boundary.
 
 ## Verification

@@ -1,28 +1,55 @@
 use crate::protocol::{RuntimeReadiness, RuntimeSnapshot, RuntimeStatus, RUNTIME_PROTOCOL_VERSION};
+use serde::Deserialize;
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use std::time::Duration;
+use url::Url;
 
 const SIDECAR_FILE_NAME: &str = "agenthub-runtime.exe";
+const RUNTIME_HEALTH_ENDPOINT: &str = "http://127.0.0.1:18097/readyz";
+const HEALTH_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
+const MAX_HEALTH_RESPONSE_BYTES: u64 = 8 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct RuntimeLaunchSpec {
     executable: PathBuf,
     args: Vec<String>,
+    health_endpoint: Url,
 }
 
 impl RuntimeLaunchSpec {
     pub fn from_resource_dir(resource_dir: PathBuf) -> Self {
         Self {
             executable: resource_dir.join(SIDECAR_FILE_NAME),
-            args: Vec::new(),
+            args: vec!["--health-endpoint".into(), RUNTIME_HEALTH_ENDPOINT.into()],
+            health_endpoint: Url::parse(RUNTIME_HEALTH_ENDPOINT).expect("valid health endpoint"),
         }
     }
 
     #[cfg(test)]
-    fn new(executable: PathBuf, args: Vec<String>) -> Self {
-        Self { executable, args }
+    fn new(executable: PathBuf, args: Vec<String>, health_endpoint: Url) -> Self {
+        Self {
+            executable,
+            args,
+            health_endpoint,
+        }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthResponse {
+    protocol_version: u16,
+    status: String,
+}
+
+enum ProbeOutcome {
+    Ready,
+    Probing,
+    Unhealthy,
 }
 
 struct RuntimeState {
@@ -64,15 +91,20 @@ impl LocalRuntime {
                 .as_deref()
                 .map_or_else(Self::stopped_snapshot, Self::failed_snapshot);
         };
+        let process_id = process.id();
         match process.try_wait() {
-            Ok(None) => RuntimeSnapshot {
-                protocol_version: RUNTIME_PROTOCOL_VERSION,
-                status: RuntimeStatus::Running,
-                readiness: RuntimeReadiness::Probing,
-                process_id: Some(process.id()),
-                exit_code: None,
-                detail: "Local Runtime process is active; readiness is being probed.".into(),
-            },
+            Ok(None) => {
+                drop(state);
+                let (readiness, detail) = self.probe_readiness();
+                RuntimeSnapshot {
+                    protocol_version: RUNTIME_PROTOCOL_VERSION,
+                    status: RuntimeStatus::Running,
+                    readiness,
+                    process_id: Some(process_id),
+                    exit_code: None,
+                    detail,
+                }
+            }
             Ok(Some(exit_status)) => {
                 state.child = None;
                 RuntimeSnapshot {
@@ -154,6 +186,30 @@ impl LocalRuntime {
         }
     }
 
+    fn probe_readiness(&self) -> (RuntimeReadiness, String) {
+        let Some(spec) = self.launch_spec.as_ref() else {
+            return (
+                RuntimeReadiness::Probing,
+                "Local Runtime process is active; readiness is being probed.".into(),
+            );
+        };
+
+        match probe_endpoint(&spec.health_endpoint) {
+            ProbeOutcome::Ready => (
+                RuntimeReadiness::Ready,
+                "Local Runtime is ready to accept work.".into(),
+            ),
+            ProbeOutcome::Probing => (
+                RuntimeReadiness::Probing,
+                "Local Runtime process is active; readiness probe is pending.".into(),
+            ),
+            ProbeOutcome::Unhealthy => (
+                RuntimeReadiness::Unhealthy,
+                "Local Runtime readiness response is invalid.".into(),
+            ),
+        }
+    }
+
     fn clear_failure(&self) {
         self.state
             .lock()
@@ -211,6 +267,85 @@ impl LocalRuntime {
     }
 }
 
+fn probe_endpoint(endpoint: &Url) -> ProbeOutcome {
+    if endpoint.scheme() != "http"
+        || endpoint.host_str() != Some("127.0.0.1")
+        || endpoint.port_or_known_default().is_none()
+        || endpoint.path() != "/readyz"
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+    {
+        return ProbeOutcome::Unhealthy;
+    }
+
+    let port = endpoint
+        .port_or_known_default()
+        .expect("validated health endpoint port");
+    let address = format!("127.0.0.1:{port}");
+    let Some(socket_address) = address
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addresses| addresses.next())
+    else {
+        return ProbeOutcome::Probing;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&socket_address, HEALTH_CONNECT_TIMEOUT) else {
+        return ProbeOutcome::Probing;
+    };
+    let _ = stream.set_read_timeout(Some(HEALTH_CONNECT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(HEALTH_CONNECT_TIMEOUT));
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n",
+        endpoint.path()
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return ProbeOutcome::Probing;
+    }
+
+    let mut response = Vec::new();
+    if stream
+        .take(MAX_HEALTH_RESPONSE_BYTES)
+        .read_to_end(&mut response)
+        .is_err()
+    {
+        return ProbeOutcome::Probing;
+    }
+    parse_health_response(&response)
+}
+
+fn parse_health_response(response: &[u8]) -> ProbeOutcome {
+    let Ok(response) = std::str::from_utf8(response) else {
+        return ProbeOutcome::Unhealthy;
+    };
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return ProbeOutcome::Unhealthy;
+    };
+    let Some(status_code) = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse::<u16>().ok())
+    else {
+        return ProbeOutcome::Unhealthy;
+    };
+    if status_code != 200 {
+        return ProbeOutcome::Unhealthy;
+    }
+    let Ok(health) = serde_json::from_str::<HealthResponse>(body) else {
+        return ProbeOutcome::Unhealthy;
+    };
+    if health.protocol_version != RUNTIME_PROTOCOL_VERSION {
+        return ProbeOutcome::Unhealthy;
+    }
+    match health.status.as_str() {
+        "ready" => ProbeOutcome::Ready,
+        "starting" => ProbeOutcome::Probing,
+        _ => ProbeOutcome::Unhealthy,
+    }
+}
+
 impl Default for LocalRuntime {
     fn default() -> Self {
         Self::new()
@@ -219,11 +354,14 @@ impl Default for LocalRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalRuntime, RuntimeLaunchSpec, RuntimeState};
+    use super::{LocalRuntime, RuntimeLaunchSpec, RuntimeState, RUNTIME_HEALTH_ENDPOINT};
     use crate::protocol::{RuntimeReadiness, RuntimeStatus, RUNTIME_PROTOCOL_VERSION};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::path::PathBuf;
     use std::process::Command;
     use std::sync::Mutex;
+    use url::Url;
 
     fn runtime(spec: RuntimeLaunchSpec) -> LocalRuntime {
         LocalRuntime {
@@ -250,6 +388,7 @@ mod tests {
         let runtime = runtime(RuntimeLaunchSpec::new(
             std::env::temp_dir().join("agenthub-missing-runtime.exe"),
             Vec::new(),
+            Url::parse(RUNTIME_HEALTH_ENDPOINT).expect("health endpoint"),
         ));
         let snapshot = runtime.start(true);
         assert_eq!(snapshot.status, RuntimeStatus::Failed);
@@ -266,11 +405,59 @@ mod tests {
         let runtime = runtime(RuntimeLaunchSpec::new(
             executable,
             vec!["/C".into(), "ping -n 3 127.0.0.1 > NUL".into()],
+            Url::parse(RUNTIME_HEALTH_ENDPOINT).expect("health endpoint"),
         ));
         let started = runtime.start(true);
         assert_eq!(started.status, RuntimeStatus::Starting);
         assert!(started.process_id.is_some());
         assert_eq!(runtime.stop().status, RuntimeStatus::Stopped);
+    }
+
+    #[test]
+    fn ready_health_response_requires_current_protocol() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: application/json\r\n",
+            "\r\n",
+            "{\"protocolVersion\":1,\"status\":\"ready\"}"
+        );
+        assert!(matches!(
+            super::parse_health_response(response.as_bytes()),
+            super::ProbeOutcome::Ready
+        ));
+
+        let incompatible = response.replace("\"protocolVersion\":1", "\"protocolVersion\":2");
+        assert!(matches!(
+            super::parse_health_response(incompatible.as_bytes()),
+            super::ProbeOutcome::Unhealthy
+        ));
+    }
+
+    #[test]
+    fn loopback_probe_accepts_a_ready_sidecar_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("health listener binds");
+        let port = listener.local_addr().expect("listener address").port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("health request arrives");
+            let mut request = [0_u8; 512];
+            let _ = stream.read(&mut request);
+            let body = r#"{"protocolVersion":1,"status":"ready"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("health response writes");
+        });
+        let endpoint =
+            Url::parse(&format!("http://127.0.0.1:{port}/readyz")).expect("health endpoint");
+        assert!(matches!(
+            super::probe_endpoint(&endpoint),
+            super::ProbeOutcome::Ready
+        ));
+        server.join().expect("health server joins");
     }
 
     #[test]
