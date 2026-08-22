@@ -16,6 +16,7 @@
         </div>
         <div class="topbar-actions">
           <span class="local-state"><span class="dot local" aria-hidden="true"></span>本地桌面</span>
+          <button id="settings" class="icon-button" type="button" title="打开连接设置" aria-label="打开连接设置">&#9881;</button>
           <button id="refresh" class="icon-button" type="button" title="刷新状态" aria-label="刷新状态">&#8635;</button>
         </div>
       </header>
@@ -60,6 +61,29 @@
 
       <p id="feedback" class="feedback" role="status" aria-live="polite">正在检查连接状态</p>
     </main>
+    <dialog id="configuration-dialog" class="configuration-dialog" aria-labelledby="configuration-title">
+      <form id="configuration-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">CONNECTION</p>
+            <h2 id="configuration-title">连接设置</h2>
+          </div>
+          <button id="close-configuration" class="icon-button" type="button" title="关闭设置" aria-label="关闭设置">&#10005;</button>
+        </div>
+        <p class="dialog-intro">配置管理后台和本地 Artifact 目录。凭据仅保存在系统凭据库。</p>
+        <label>Mission Control 地址<input id="mission-control-endpoint" name="missionControlEndpoint" type="url" placeholder="https://control.example.com" /></label>
+        <label>MCP 地址<input id="mcp-endpoint" name="mcpEndpoint" type="url" placeholder="https://mcp.example.com" /></label>
+        <label>Artifact 目录<input id="artifact-directory" name="artifactDirectory" type="text" placeholder="C:\\AgentHub\\artifacts" /></label>
+        <div class="secret-status" id="secret-status">凭据状态读取中</div>
+        <label>Mission Control Token<input id="mission-control-token" name="missionControlToken" type="password" autocomplete="new-password" placeholder="留空以保留已保存凭据" /></label>
+        <label>MCP Token<input id="mcp-token" name="mcpToken" type="password" autocomplete="new-password" placeholder="留空以保留已保存凭据" /></label>
+        <label>Model API Key<input id="model-api-key" name="modelApiKey" type="password" autocomplete="new-password" placeholder="留空以保留已保存凭据" /></label>
+        <div class="dialog-actions">
+          <button id="cancel-configuration" class="tertiary" type="button">取消</button>
+          <button id="save-configuration" class="primary" type="submit">保存设置</button>
+        </div>
+      </form>
+    </dialog>
     <script src="./main.js"></script>
   </body>
 </html>

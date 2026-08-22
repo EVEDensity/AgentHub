@@ -5,7 +5,7 @@
 > Last reviewed: 2026-08-22
 
 `desktop/` is the native, user-facing entry point for AgentHub. It owns local
-Runtime lifecycle, redacted diagnostics, OS integration, and future credential
+Runtime lifecycle, redacted diagnostics, OS integration, and secure credential
 storage. It does not own Mission, Contract, WorkUnit, Artifact, Evidence,
 Decision, or Outcome state.
 
@@ -15,8 +15,10 @@ The Tauri shell is a launcher, not a second Mission dashboard. Its first view
 shows the Mission Control entry point, local Runtime status, and concise
 connection feedback. Missions, approvals, artifacts, evidence, and other
 business workflows remain in the management backend. A start request fails
-explicitly until secure Runtime onboarding is implemented; it never starts
-Docker, a mock provider, or an unconfigured Runner.
+explicitly until the configured Runtime sidecar is available; it never starts
+Docker, a mock provider, or an unconfigured Runner. Connection onboarding is
+available from the launcher settings dialog and keeps credentials in the OS
+credential store.
 
 ## Layout
 
@@ -48,10 +50,13 @@ environment variable, or written to diagnostics. The current release targets
 Windows Credential Manager first; unsupported targets fail closed until their
 native credential-store adapter is implemented.
 
-The native commands expose configuration status and secret set/clear
-operations. Status reports only `configured`, `missing`, or `unavailable` for
-each credential and never returns its value. Runtime startup remains blocked
-until the later onboarding and sidecar stages consume this boundary.
+The native commands expose redacted configuration details, configuration
+status, and secret set/clear operations. Details return only validated
+endpoints and the Artifact path; status reports only `configured`, `missing`,
+or `unavailable` for each credential and never returns its value. The launcher
+settings dialog writes ordinary configuration first and then non-empty secrets
+independently, keeping the dialog open when either operation fails. Runtime
+startup remains blocked until the configured sidecar is available.
 
 When a validated Mission Control endpoint is configured, the desktop can open
 it in the system browser through a native command. The desktop does not embed

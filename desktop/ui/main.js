@@ -11,6 +11,19 @@ const elements = {
   stop: document.querySelector('#stop'),
   refresh: document.querySelector('#refresh'),
   feedback: document.querySelector('#feedback'),
+  settings: document.querySelector('#settings'),
+  dialog: document.querySelector('#configuration-dialog'),
+  form: document.querySelector('#configuration-form'),
+  closeConfiguration: document.querySelector('#close-configuration'),
+  cancelConfiguration: document.querySelector('#cancel-configuration'),
+  saveConfiguration: document.querySelector('#save-configuration'),
+  missionControlEndpoint: document.querySelector('#mission-control-endpoint'),
+  mcpEndpoint: document.querySelector('#mcp-endpoint'),
+  artifactDirectory: document.querySelector('#artifact-directory'),
+  missionControlToken: document.querySelector('#mission-control-token'),
+  mcpToken: document.querySelector('#mcp-token'),
+  modelApiKey: document.querySelector('#model-api-key'),
+  secretStatus: document.querySelector('#secret-status'),
 };
 
 const runtimeLabels = {
@@ -46,6 +59,16 @@ function nativeInvoke(command, args) {
       missionControlEndpointConfigured: false,
       readyForRuntime: false,
       missionControlToken: 'missing',
+    });
+  }
+  if (command === 'configuration_details') {
+    return Promise.resolve({
+      missionControlEndpoint: null,
+      mcpEndpoint: null,
+      artifactDirectory: null,
+      missionControlToken: 'missing',
+      mcpToken: 'missing',
+      modelApiKey: 'missing',
     });
   }
   return Promise.reject(new Error('桌面命令不可用'));
@@ -115,8 +138,74 @@ async function openConsole() {
   }
 }
 
+function secretLabel(value) {
+  return value === 'configured' ? '已保存' : value === 'unavailable' ? '不可用' : '未配置';
+}
+
+function renderConfigurationDetails(details) {
+  elements.missionControlEndpoint.value = details.missionControlEndpoint ?? '';
+  elements.mcpEndpoint.value = details.mcpEndpoint ?? '';
+  elements.artifactDirectory.value = details.artifactDirectory ?? '';
+  elements.missionControlToken.value = '';
+  elements.mcpToken.value = '';
+  elements.modelApiKey.value = '';
+  elements.secretStatus.textContent = `凭据：Mission Control ${secretLabel(details.missionControlToken)} · MCP ${secretLabel(details.mcpToken)} · Model API ${secretLabel(details.modelApiKey)}`;
+}
+
+async function openConfiguration() {
+  elements.settings.disabled = true;
+  elements.feedback.textContent = '正在读取连接设置';
+  try {
+    renderConfigurationDetails(await nativeInvoke('configuration_details'));
+    elements.dialog.showModal();
+  } catch (error) {
+    elements.feedback.textContent = error instanceof Error ? error.message : '设置读取失败';
+  } finally {
+    elements.settings.disabled = false;
+  }
+}
+
+function closeConfiguration() {
+  if (elements.dialog.open) elements.dialog.close();
+}
+
+async function saveConfiguration(event) {
+  event.preventDefault();
+  elements.saveConfiguration.disabled = true;
+  elements.feedback.textContent = '正在保存连接设置';
+  try {
+    await nativeInvoke('save_configuration', {
+      input: {
+        missionControlEndpoint: elements.missionControlEndpoint.value,
+        mcpEndpoint: elements.mcpEndpoint.value,
+        artifactDirectory: elements.artifactDirectory.value,
+      },
+    });
+    const secrets = [
+      ['missionControlToken', 'mission_control_token'],
+      ['mcpToken', 'mcp_token'],
+      ['modelApiKey', 'model_api_key'],
+    ];
+    for (const [field, kind] of secrets) {
+      const value = elements[field].value;
+      if (value) await nativeInvoke('set_configuration_secret', { input: { kind, value } });
+    }
+    closeConfiguration();
+    await refresh();
+    elements.feedback.textContent = '连接设置已保存';
+  } catch (error) {
+    elements.feedback.textContent = error instanceof Error ? error.message : '设置保存失败，可重试';
+  } finally {
+    elements.saveConfiguration.disabled = false;
+  }
+}
+
 elements.refresh.addEventListener('click', refresh);
 elements.start.addEventListener('click', () => invokeRuntime('start_runtime'));
 elements.stop.addEventListener('click', () => invokeRuntime('stop_runtime'));
 elements.openConsole.addEventListener('click', openConsole);
+elements.settings.addEventListener('click', openConfiguration);
+elements.closeConfiguration.addEventListener('click', closeConfiguration);
+elements.cancelConfiguration.addEventListener('click', closeConfiguration);
+elements.form.addEventListener('submit', saveConfiguration);
 refresh();

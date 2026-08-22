@@ -77,6 +77,18 @@ pub struct ConfigurationStatus {
     pub ready_for_runtime: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurationDetails {
+    pub schema_version: u16,
+    pub mission_control_endpoint: Option<String>,
+    pub mcp_endpoint: Option<String>,
+    pub artifact_directory: Option<String>,
+    pub mission_control_token: SecretAvailability,
+    pub mcp_token: SecretAvailability,
+    pub model_api_key: SecretAvailability,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SecretStoreError {
     Unavailable,
@@ -184,6 +196,19 @@ impl ConfigurationStore {
             mcp_token,
             model_api_key,
             ready_for_runtime,
+        })
+    }
+
+    pub fn details(&self) -> Result<ConfigurationDetails, ConfigurationError> {
+        let config = self.load_config()?;
+        Ok(ConfigurationDetails {
+            schema_version: config.schema_version,
+            mission_control_endpoint: config.mission_control_endpoint,
+            mcp_endpoint: config.mcp_endpoint,
+            artifact_directory: config.artifact_directory,
+            mission_control_token: self.secret_status(SecretKind::MissionControlToken),
+            mcp_token: self.secret_status(SecretKind::McpToken),
+            model_api_key: self.secret_status(SecretKind::ModelApiKey),
         })
     }
 
@@ -417,6 +442,47 @@ mod tests {
             .clear_secret(SecretKind::McpToken)
             .expect("secret clears");
         assert_eq!(status.mcp_token, SecretAvailability::Missing);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn details_returns_non_sensitive_config_and_redacted_secret_status() {
+        let (store, dir) = test_store();
+        let artifact_dir = std::env::temp_dir().to_string_lossy().into_owned();
+        store
+            .save_config(DesktopConfigInput {
+                mission_control_endpoint: Some("https://control.example.test".into()),
+                mcp_endpoint: Some("https://mcp.example.test".into()),
+                artifact_directory: Some(artifact_dir.clone()),
+            })
+            .expect("config saves");
+        store
+            .set_secret(SecretInput {
+                kind: SecretKind::MissionControlToken,
+                value: "never-returned-token".into(),
+            })
+            .expect("secret saves");
+
+        let details = store.details().expect("details read");
+        assert_eq!(
+            details.mission_control_endpoint.as_deref(),
+            Some("https://control.example.test")
+        );
+        assert_eq!(
+            details.mcp_endpoint.as_deref(),
+            Some("https://mcp.example.test")
+        );
+        assert_eq!(
+            details.artifact_directory.as_deref(),
+            Some(artifact_dir.as_str())
+        );
+        assert_eq!(
+            details.mission_control_token,
+            SecretAvailability::Configured
+        );
+        assert_eq!(details.mcp_token, SecretAvailability::Missing);
+        let encoded = serde_json::to_string(&details).expect("details encode");
+        assert!(!encoded.contains("never-returned-token"));
         let _ = fs::remove_dir_all(dir);
     }
 }

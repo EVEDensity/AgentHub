@@ -5,7 +5,8 @@ mod protocol;
 mod runtime;
 
 use config::{
-    ConfigurationStatus, ConfigurationStore, DesktopConfigInput, SecretInput, SecretKind,
+    ConfigurationDetails, ConfigurationStatus, ConfigurationStore, DesktopConfigInput, SecretInput,
+    SecretKind,
 };
 use protocol::RuntimeSnapshot;
 use runtime::LocalRuntime;
@@ -32,6 +33,13 @@ fn configuration_status(
     configuration: State<'_, ConfigurationStore>,
 ) -> Result<ConfigurationStatus, String> {
     configuration.status().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn configuration_details(
+    configuration: State<'_, ConfigurationStore>,
+) -> Result<ConfigurationDetails, String> {
+    configuration.details().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -91,6 +99,7 @@ fn main() {
             start_runtime,
             stop_runtime,
             configuration_status,
+            configuration_details,
             save_configuration,
             set_configuration_secret,
             clear_configuration_secret,
