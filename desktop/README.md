@@ -109,8 +109,12 @@ and uploads the artifacts with this manifest.
 Formal installer mode also runs `installer-artifact-smoke.ps1`. It fails when
 the bundle contains no non-empty MSI/NSIS installer or when installer digests
 do not match the release manifest. This gate validates artifact presence and
-integrity; it does not claim that installation, shortcut creation, uninstall,
-or GUI startup passed.
+integrity. On the disposable Windows CI runner, `AGENTHUB_INSTALLER_LIFECYCLE_SMOKE=1`
+also runs `installer-install-smoke.ps1`: it installs the preferred MSI (or the
+NSIS fallback), verifies the installed executable and sidecar, resolves an OS
+shortcut, detects immediate GUI/WebView2 startup failure, and uninstalls through
+the registered Windows command. This mutating check is opt-in locally and is
+enabled by the Windows workflow.
 
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the

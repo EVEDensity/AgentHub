@@ -13,6 +13,7 @@ $preflightScript = Join-Path $sidecarDirectory "packaging-preflight.ps1"
 $artifactSmokeScript = Join-Path $desktopDirectory "packaged-artifact-smoke.ps1"
 $runtimeSmokeScript = Join-Path $desktopDirectory "packaged-runtime-smoke.ps1"
 $installerSmokeScript = Join-Path $desktopDirectory "installer-artifact-smoke.ps1"
+$installLifecycleSmokeScript = Join-Path $desktopDirectory "installer-install-smoke.ps1"
 $releaseManifestScript = Join-Path $desktopDirectory "release-manifest.ps1"
 $manifest = Join-Path $desktopDirectory "src-tauri\Cargo.toml"
 
@@ -30,6 +31,9 @@ if (-not (Test-Path -LiteralPath $runtimeSmokeScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $installerSmokeScript -PathType Leaf)) {
     throw "Installer artifact smoke was not found at $installerSmokeScript."
+}
+if (-not (Test-Path -LiteralPath $installLifecycleSmokeScript -PathType Leaf)) {
+    throw "Installer lifecycle smoke was not found at $installLifecycleSmokeScript."
 }
 if (-not (Test-Path -LiteralPath $releaseManifestScript -PathType Leaf)) {
     throw "Release manifest script was not found at $releaseManifestScript."
@@ -141,5 +145,11 @@ if (-not $NoInstaller -and -not $Portable) {
     & $installerSmokeScript -TargetTriple $TargetTriple
     if ($LASTEXITCODE -ne 0) {
         throw "Installer artifact smoke failed."
+    }
+    if ($env:AGENTHUB_INSTALLER_LIFECYCLE_SMOKE -eq '1') {
+        & $installLifecycleSmokeScript -TargetTriple $TargetTriple
+        if ($LASTEXITCODE -ne 0) { throw "Installer lifecycle smoke failed." }
+    } else {
+        Write-Output "Installer lifecycle smoke skipped; set AGENTHUB_INSTALLER_LIFECYCLE_SMOKE=1 on an isolated Windows runner to install/uninstall."
     }
 }

@@ -38,6 +38,8 @@ jobs:
         run: cargo install tauri-cli --version 2.11.4 --locked
       - name: Build and verify installer package
         run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc
+        env:
+          AGENTHUB_INSTALLER_LIFECYCLE_SMOKE: '1'
       - name: Build and verify portable package
         run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -Portable
       - name: Upload release artifacts
@@ -52,3 +54,10 @@ jobs:
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error
+      - name: Upload installer lifecycle logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-installer-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/agenthub-installer-smoke-*
+          if-no-files-found: ignore
