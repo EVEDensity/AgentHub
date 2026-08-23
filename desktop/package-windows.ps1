@@ -15,6 +15,7 @@ $runtimeSmokeScript = Join-Path $desktopDirectory "packaged-runtime-smoke.ps1"
 $installerSmokeScript = Join-Path $desktopDirectory "installer-artifact-smoke.ps1"
 $installLifecycleSmokeScript = Join-Path $desktopDirectory "installer-install-smoke.ps1"
 $releaseManifestScript = Join-Path $desktopDirectory "release-manifest.ps1"
+$updaterConfigTemplate = Join-Path $desktopDirectory "src-tauri\tauri.conf.json"
 $manifest = Join-Path $desktopDirectory "src-tauri\Cargo.toml"
 
 if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
@@ -78,6 +79,25 @@ $tauriDirectory = Split-Path -Parent $manifest
 Push-Location $tauriDirectory
 try {
     $buildArguments = @("tauri", "build", "--target", $TargetTriple, "--ci")
+    $generatedUpdaterConfig = $null
+    if ($env:AGENTHUB_UPDATE_ENABLED -eq '1') {
+        $requiredUpdaterValues = @($env:AGENTHUB_UPDATE_PUBLIC_KEY, $env:AGENTHUB_UPDATE_ENDPOINT, $env:TAURI_SIGNING_PRIVATE_KEY)
+        if ($requiredUpdaterValues | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+            throw "Signed updater build requires public key, endpoint, and TAURI_SIGNING_PRIVATE_KEY."
+        }
+        $config = Get-Content -LiteralPath $updaterConfigTemplate -Raw | ConvertFrom-Json
+        $config.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $true -Force
+        $config | Add-Member -NotePropertyName plugins -NotePropertyValue ([pscustomobject]@{}) -Force
+        $config.plugins | Add-Member -NotePropertyName updater -NotePropertyValue ([pscustomobject]@{}) -Force
+        $config.plugins.updater | Add-Member -NotePropertyName pubkey -NotePropertyValue $null -Force
+        $config.plugins.updater | Add-Member -NotePropertyName endpoints -NotePropertyValue @() -Force
+        $config.plugins.updater.pubkey = $env:AGENTHUB_UPDATE_PUBLIC_KEY
+        $config.plugins.updater.endpoints = @($env:AGENTHUB_UPDATE_ENDPOINT)
+        $generatedUpdaterConfig = Join-Path ([IO.Path]::GetTempPath()) ("agenthub-tauri-config-" + [guid]::NewGuid().ToString('N') + '.json')
+        $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $generatedUpdaterConfig -Encoding utf8
+        $buildArguments += @('--config', $generatedUpdaterConfig)
+        Write-Output 'Signed updater artifact generation enabled.'
+    }
     if ($NoInstaller -or $Portable) {
         $buildArguments += "--no-bundle"
         if ($Portable) {
@@ -92,6 +112,9 @@ try {
     }
 } finally {
     Pop-Location
+    if ($generatedUpdaterConfig -and (Test-Path -LiteralPath $generatedUpdaterConfig)) {
+        Remove-Item -LiteralPath $generatedUpdaterConfig -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Output "Checking packaged artifacts."

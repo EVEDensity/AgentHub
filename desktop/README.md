@@ -35,6 +35,8 @@ credential store.
   on an isolated Windows runner.
 - `webview2-gui-smoke.ps1`: runs the CLI-first shell regression and writes
   screenshots under `output/playwright/`.
+- `updater-rollback-smoke.ps1`: verifies signed updater artifacts and restores
+  the previous ready sidecar after a failed candidate launch.
 - `updater-rollback-smoke.ps1`: verifies signed updater metadata and rehearses
   restoring the previous ready sidecar after a failed candidate launch.
 - `ui/`: dependency-free shell UI served by the desktop application.
@@ -117,6 +119,12 @@ The Windows workflow also runs the GUI smoke after packaging. It verifies first
 render, the connection settings dialog, and screenshot capture. Native
 WebView2 availability remains covered by the installed-app startup check in
 `installer-install-smoke.ps1`.
+
+Signed updater artifacts are generated only for `desktop-v*` tags when
+`AGENTHUB_UPDATE_ENABLED=1`, a public key, endpoint, and
+`TAURI_SIGNING_PRIVATE_KEY` are supplied by CI secrets. Manual builds remain
+unsigned internal artifacts. The updater plugin is included in the native
+shell and its generated permissions are tracked under `src-tauri/gen/`.
 
 Formal installer mode also runs `installer-artifact-smoke.ps1`. It fails when
 the bundle contains no non-empty MSI/NSIS installer or when installer digests

@@ -43,14 +43,24 @@ jobs:
           AGENTHUB_WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.AGENTHUB_WINDOWS_SIGNING_CERT_BASE64 }}
           AGENTHUB_WINDOWS_SIGNING_PASSWORD: ${{ secrets.AGENTHUB_WINDOWS_SIGNING_PASSWORD }}
           AGENTHUB_UPDATE_PRIVATE_KEY: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY }}
+          AGENTHUB_UPDATE_PUBLIC_KEY: ${{ secrets.AGENTHUB_UPDATE_PUBLIC_KEY }}
+          AGENTHUB_UPDATE_ENDPOINT: ${{ secrets.AGENTHUB_UPDATE_ENDPOINT }}
       - name: Build and verify installer package
         run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc
         env:
           AGENTHUB_INSTALLER_LIFECYCLE_SMOKE: '1'
+          AGENTHUB_UPDATE_ENABLED: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && '1' || '0' }}
+          AGENTHUB_UPDATE_PUBLIC_KEY: ${{ secrets.AGENTHUB_UPDATE_PUBLIC_KEY }}
+          AGENTHUB_UPDATE_ENDPOINT: ${{ secrets.AGENTHUB_UPDATE_ENDPOINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD }}
       - name: Build and verify portable package
         run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -Portable
       - name: Run WebView2 GUI smoke
         run: .\webview2-gui-smoke.ps1
+      - name: Verify updater signatures and rollback
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: .\updater-rollback-smoke.ps1 -TargetTriple x86_64-pc-windows-msvc
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -61,7 +71,6 @@ jobs:
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.msi
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
-            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.sig
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error
       - name: Upload installer lifecycle logs
@@ -78,6 +87,15 @@ jobs:
           name: agenthub-desktop-webview2-${{ github.sha }}
           path: output/playwright
           if-no-files-found: ignore
+      - name: Upload signed updater artifacts
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-updater-${{ github.sha }}
+          path: |
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.sig
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
+          if-no-files-found: error
 
   external-integration:
     name: External service opt-in integration

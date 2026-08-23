@@ -95,6 +95,7 @@ fn open_control_plane(configuration: State<'_, ConfigurationStore>) -> Result<()
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             app.manage(ConfigurationStore::new(config_dir));
