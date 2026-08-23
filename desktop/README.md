@@ -30,6 +30,11 @@ credential store.
   digest without starting the desktop process.
 - `packaged-runtime-smoke.ps1`: starts only the packaged sidecar and verifies
   its loopback readiness contract.
+- `installer-install-smoke.ps1`: installs the generated MSI/NSIS package,
+  validates shortcuts and sidecar placement, starts the shell, and uninstalls
+  on an isolated Windows runner.
+- `webview2-gui-smoke.ps1`: runs the CLI-first shell regression and writes
+  screenshots under `output/playwright/`.
 - `ui/`: dependency-free shell UI served by the desktop application.
 
 ## Development
@@ -105,6 +110,11 @@ generation time, file sizes, and SHA-256 digests for the verified application,
 sidecar, portable ZIP, and any installers. It contains no credentials or
 Mission state. The Windows CI workflow runs the installer and portable gates
 and uploads the artifacts with this manifest.
+
+The Windows workflow also runs the GUI smoke after packaging. It verifies first
+render, the connection settings dialog, and screenshot capture. Native
+WebView2 availability remains covered by the installed-app startup check in
+`installer-install-smoke.ps1`.
 
 Formal installer mode also runs `installer-artifact-smoke.ps1`. It fails when
 the bundle contains no non-empty MSI/NSIS installer or when installer digests

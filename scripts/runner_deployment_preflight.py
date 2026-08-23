@@ -48,6 +48,7 @@ def validate_runner_deployment(
     environment: Mapping[str, str],
     *,
     check_network: bool,
+    check_http: bool = False,
     connect_timeout_seconds: float,
 ) -> list[str]:
     """Return sanitized validation failures without reading secret values."""
@@ -58,6 +59,8 @@ def validate_runner_deployment(
     failures.extend(_validate_artifact_root(environment))
     if check_network:
         failures.extend(_validate_endpoint_connectivity(environment, connect_timeout_seconds))
+    if check_http:
+        failures.extend(_validate_endpoint_http(environment, connect_timeout_seconds))
     return failures
 
 
@@ -153,6 +156,35 @@ def _validate_endpoint_connectivity(
     return failures
 
 
+def _validate_endpoint_http(
+    environment: Mapping[str, str], connect_timeout_seconds: float
+) -> list[str]:
+    failures: list[str] = []
+    token_variables = {
+        "AGENTHUB_RUNNER_MISSION_CONTROL_URL": "AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE",
+        "AGENTHUB_RUNNER_MODEL_GATEWAY_URL": "AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE",
+        "AGENTHUB_RUNNER_MCP_ENDPOINT": "AGENTHUB_RUNNER_MCP_TOKEN_FILE",
+    }
+    for name in _ENDPOINT_VARIABLES:
+        value = environment.get(name, "").strip()
+        token_variable = token_variables[name]
+        if not value or not environment.get(token_variable, "").strip():
+            continue
+        try:
+            token_path = Path(environment[token_variable])
+            response = httpx.get(
+                value.rstrip("/") + "/healthz",
+                headers={"Authorization": "Bearer " + read_secret_file(token_path)},
+                timeout=connect_timeout_seconds,
+                follow_redirects=False,
+            )
+            if not 200 <= response.status_code < 300:
+                failures.append(f"{name} health probe returned HTTP {response.status_code}")
+        except (httpx.HTTPError, OSError, ValueError, KeyError):
+            failures.append(f"{name} health probe failed")
+    return failures
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate prerequisites for the mission-runner Compose profile."
@@ -167,6 +199,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=5.0,
     )
+    parser.add_argument(
+        "--http-probe",
+        action="store_true",
+        help="Perform authenticated GET /healthz probes against all external endpoints.",
+    )
     arguments = parser.parse_args(argv)
     if arguments.connect_timeout_seconds <= 0:
         parser.error("--connect-timeout-seconds must be positive")
@@ -174,6 +211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     failures = validate_runner_deployment(
         os.environ,
         check_network=not arguments.skip_network,
+        check_http=arguments.http_probe,
         connect_timeout_seconds=arguments.connect_timeout_seconds,
     )
     if failures:

@@ -36,12 +36,21 @@ jobs:
           key: desktop-windows-${{ runner.os }}-${{ hashFiles('desktop/**/Cargo.lock', 'desktop/**/Cargo.toml') }}
       - name: Install pinned Tauri CLI
         run: cargo install tauri-cli --version 2.11.4 --locked
+      - name: Enforce public release signing policy
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: .\release-policy.ps1 -PublicRelease
+        env:
+          AGENTHUB_WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.AGENTHUB_WINDOWS_SIGNING_CERT_BASE64 }}
+          AGENTHUB_WINDOWS_SIGNING_PASSWORD: ${{ secrets.AGENTHUB_WINDOWS_SIGNING_PASSWORD }}
+          AGENTHUB_UPDATE_PRIVATE_KEY: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY }}
       - name: Build and verify installer package
         run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc
         env:
           AGENTHUB_INSTALLER_LIFECYCLE_SMOKE: '1'
       - name: Build and verify portable package
         run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -Portable
+      - name: Run WebView2 GUI smoke
+        run: .\webview2-gui-smoke.ps1
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -60,4 +69,11 @@ jobs:
         with:
           name: agenthub-desktop-installer-smoke-${{ github.sha }}
           path: ${{ runner.temp }}/agenthub-installer-smoke-*
+          if-no-files-found: ignore
+      - name: Upload WebView2 GUI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-webview2-${{ github.sha }}
+          path: output/playwright
           if-no-files-found: ignore
