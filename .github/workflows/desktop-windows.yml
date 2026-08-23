@@ -47,6 +47,8 @@ jobs:
           path: |
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-desktop.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-runtime.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.msi
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error

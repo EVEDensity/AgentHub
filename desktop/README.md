@@ -106,6 +106,12 @@ sidecar, portable ZIP, and any installers. It contains no credentials or
 Mission state. The Windows CI workflow runs the installer and portable gates
 and uploads the artifacts with this manifest.
 
+Formal installer mode also runs `installer-artifact-smoke.ps1`. It fails when
+the bundle contains no non-empty MSI/NSIS installer or when installer digests
+do not match the release manifest. This gate validates artifact presence and
+integrity; it does not claim that installation, shortcut creation, uninstall,
+or GUI startup passed.
+
 The initial shell intentionally has no Docker dependency. It is a lifecycle
 surface, not a replacement control plane. Once configuration is ready, the
 native layer may start only the packaged `agenthub-runtime.exe` sidecar from
