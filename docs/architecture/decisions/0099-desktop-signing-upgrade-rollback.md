@@ -1,6 +1,6 @@
 # ADR-0099: Desktop Signing, Upgrade, and Rollback Policy
 
-> Status: policy defined  
+> Status: policy defined, implementation blocked on locked updater dependency
 > Owner: desktop maintainers  
 > Date: 2026-08-23
 
@@ -26,7 +26,11 @@ as an in-place updater.
 
 ## Verification
 
-`desktop/release-policy.ps1 -PublicRelease` is a release gate. It only checks
-that the required secret channels exist; signing and updater integration must be
-performed by the Windows release runner and recorded as CI artifacts. No local
+`desktop/release-policy.ps1 -PublicRelease` is a release gate. It currently
+blocks public tags until certificate and updater key channels are configured.
+The Tauri updater plugin and rollback runner are intentionally not enabled yet:
+the current environment could not update the pinned `Cargo.lock` over crates.io,
+so enabling them would create an unbuildable release. A Windows runner with
+network access must first update and commit the lockfile, then add the Tauri
+updater config and rollback rehearsal as one verified change. No local
 developer build may claim public release readiness without that job evidence.

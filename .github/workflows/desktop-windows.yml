@@ -61,6 +61,7 @@ jobs:
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.msi
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.sig
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error
       - name: Upload installer lifecycle logs
@@ -77,3 +78,66 @@ jobs:
           name: agenthub-desktop-webview2-${{ github.sha }}
           path: output/playwright
           if-no-files-found: ignore
+
+  external-integration:
+    name: External service opt-in integration
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install integration probe dependency
+        run: python -m pip install httpx pydantic pydantic-settings
+      - name: Probe configured external services
+        shell: pwsh
+        env:
+          MC_URL: ${{ secrets.AGENTHUB_INTEGRATION_MISSION_CONTROL_URL }}
+          MC_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_MISSION_CONTROL_TOKEN }}
+          GW_URL: ${{ secrets.AGENTHUB_INTEGRATION_AI_GATEWAY_URL }}
+          GW_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_AI_GATEWAY_TOKEN }}
+          MCP_URL: ${{ secrets.AGENTHUB_INTEGRATION_MCP_URL }}
+          MCP_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_MCP_TOKEN }}
+          ARTIFACT_URL: ${{ secrets.AGENTHUB_INTEGRATION_ARTIFACT_URL }}
+          ARTIFACT_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_ARTIFACT_TOKEN }}
+        run: |
+          $required = @($env:MC_URL, $env:MC_TOKEN, $env:GW_URL, $env:GW_TOKEN, $env:MCP_URL, $env:MCP_TOKEN, $env:ARTIFACT_URL, $env:ARTIFACT_TOKEN)
+          if ($required | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+            Write-Output 'External integration skipped: required service secrets are not configured.'
+            exit 0
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'agenthub-runner-integration'
+          New-Item -ItemType Directory -Force -Path $root, (Join-Path $root 'artifacts') | Out-Null
+          Set-Content -LiteralPath (Join-Path $root 'mission-control.token') -Value $env:MC_TOKEN -NoNewline
+          Set-Content -LiteralPath (Join-Path $root 'gateway.token') -Value $env:GW_TOKEN -NoNewline
+          Set-Content -LiteralPath (Join-Path $root 'mcp.token') -Value $env:MCP_TOKEN -NoNewline
+          Set-Content -LiteralPath (Join-Path $root 'bindings.json') -Value '{"schemaVersion":"agenthub.runner.mcp-bindings.v1","bindings":[]}' -NoNewline
+          $env:AGENTHUB_RUNNER_RUNNER_ID = 'ci-external-integration'
+          $env:AGENTHUB_RUNNER_WORKSPACE_ID = 'ci-workspace'
+          $env:AGENTHUB_RUNNER_ASSIGNED_AGENT_ID = 'ci-agent'
+          $env:AGENTHUB_RUNNER_ASSIGNED_ADAPTER = 'mcp'
+          $env:AGENTHUB_RUNNER_MODEL = 'external-ci-model'
+          $env:AGENTHUB_RUNNER_MISSION_CONTROL_URL = $env:MC_URL
+          $env:AGENTHUB_RUNNER_MODEL_GATEWAY_URL = $env:GW_URL
+          $env:AGENTHUB_RUNNER_MCP_ENDPOINT = $env:MCP_URL
+          $env:AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE = Join-Path $root 'mission-control.token'
+          $env:AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE = Join-Path $root 'gateway.token'
+          $env:AGENTHUB_RUNNER_MCP_TOKEN_FILE = Join-Path $root 'mcp.token'
+          $env:AGENTHUB_RUNNER_MCP_BINDINGS_FILE = Join-Path $root 'bindings.json'
+          $env:AGENTHUB_RUNNER_ARTIFACT_HOST_PATH = Join-Path $root 'artifacts'
+          python scripts/runner_deployment_preflight.py --http-probe
+          $artifactHeaders = @{ Authorization = "Bearer $env:ARTIFACT_TOKEN" }
+          $artifactHealth = Invoke-WebRequest -Uri ($env:ARTIFACT_URL.TrimEnd('/') + '/healthz') -Headers $artifactHeaders -Method Get -UseBasicParsing
+          if ($artifactHealth.StatusCode -lt 200 -or $artifactHealth.StatusCode -ge 300) { throw "Artifact storage health probe returned HTTP $($artifactHealth.StatusCode)." }
+          $payload = [Text.Encoding]::UTF8.GetBytes('agenthub-ci-artifact-roundtrip-v1')
+          $sha = [Security.Cryptography.SHA256]::Create().ComputeHash($payload)
+          $digest = ([BitConverter]::ToString($sha) -replace '-', '').ToLowerInvariant()
+          $casUri = $env:ARTIFACT_URL.TrimEnd('/') + '/' + $digest
+          Invoke-WebRequest -Uri $casUri -Headers $artifactHeaders -Method Put -Body $payload -ContentType 'application/octet-stream' -UseBasicParsing | Out-Null
+          $downloadPath = Join-Path $root 'artifact-download.bin'
+          Invoke-WebRequest -Uri $casUri -Headers $artifactHeaders -Method Get -OutFile $downloadPath -UseBasicParsing
+          $downloadDigest = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($downloadDigest -ne $digest) { throw 'Artifact CAS read-back digest mismatch.' }
+          Invoke-WebRequest -Uri $casUri -Headers $artifactHeaders -Method Delete -UseBasicParsing | Out-Null

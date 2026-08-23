@@ -9,7 +9,9 @@ if (-not $PublicRelease) {
 $required = @(
     'AGENTHUB_WINDOWS_SIGNING_CERT_BASE64',
     'AGENTHUB_WINDOWS_SIGNING_PASSWORD',
-    'AGENTHUB_UPDATE_PRIVATE_KEY'
+    'AGENTHUB_UPDATE_PRIVATE_KEY',
+    'AGENTHUB_UPDATE_PUBLIC_KEY',
+    'AGENTHUB_UPDATE_ENDPOINT'
 )
 $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
 if ($missing.Count -gt 0) {

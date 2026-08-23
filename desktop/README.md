@@ -35,6 +35,8 @@ credential store.
   on an isolated Windows runner.
 - `webview2-gui-smoke.ps1`: runs the CLI-first shell regression and writes
   screenshots under `output/playwright/`.
+- `updater-rollback-smoke.ps1`: verifies signed updater metadata and rehearses
+  restoring the previous ready sidecar after a failed candidate launch.
 - `ui/`: dependency-free shell UI served by the desktop application.
 
 ## Development
