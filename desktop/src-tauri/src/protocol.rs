@@ -33,3 +33,21 @@ pub struct RuntimeSnapshot {
     pub exit_code: Option<i32>,
     pub detail: String,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlPlaneReachability {
+    NotConfigured,
+    Unreachable,
+    Unauthorized,
+    Unhealthy,
+    Reachable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlPlaneSnapshot {
+    pub reachability: ControlPlaneReachability,
+    pub endpoint_configured: bool,
+    pub detail: String,
+}

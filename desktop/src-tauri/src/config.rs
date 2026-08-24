@@ -255,7 +255,6 @@ impl ConfigurationStore {
         self.status()
     }
 
-    #[allow(dead_code)]
     pub fn secret(&self, kind: SecretKind) -> Result<Option<String>, ConfigurationError> {
         self.secrets
             .get(kind)

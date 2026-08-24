@@ -2,7 +2,7 @@
 
 > Status: minimum desktop shell
 > Owner: desktop maintainers
-> Last reviewed: 2026-08-22
+> Last reviewed: 2026-08-24
 
 `desktop/` is the native, user-facing entry point for AgentHub. It owns local
 Runtime lifecycle, redacted diagnostics, OS integration, and secure credential
@@ -156,15 +156,25 @@ Windows Credential Manager first; unsupported targets fail closed until their
 native credential-store adapter is implemented.
 
 The native commands expose redacted configuration details, configuration
-status, and secret set/clear operations. Details return only validated
-endpoints and the Artifact path; status reports only `configured`, `missing`,
-or `unavailable` for each credential and never returns its value. The launcher
+status, secret set/clear operations, and a Mission Control reachability probe.
+Details return only validated endpoints and the Artifact path; status reports
+only `configured`, `missing`, or `unavailable` for each credential and never
+returns its value. Refresh probes `GET /api/health` on the saved origin with a
+two-second timeout, no redirects, and a bounded response. The launcher reports
+`not_configured`, `unreachable`, `unauthorized`, `unhealthy`, or `reachable`
+and never treats a saved URL as proof that Mission Control is live. The probe
+may attach the stored Mission Control token only for HTTPS or loopback HTTP;
+the token and response body never leave the native layer. The launcher
 settings dialog writes ordinary configuration first and then non-empty secrets
 independently, keeping the dialog open when either operation fails. Runtime
-startup remains blocked until the configured sidecar is available. The native
-supervisor reports `starting` while probing the loopback readiness endpoint and
-only reports `ready` for HTTP 200 with the current protocol version and a
-`ready` status. Process liveness alone is never treated as readiness.
+startup remains blocked until the configured sidecar is available. Opening
+Mission Control in the browser stays available whenever an endpoint is saved,
+even if the health probe currently fails.
+
+The native supervisor reports `starting` while probing the loopback readiness
+endpoint and only reports `ready` for HTTP 200 with the current protocol
+version and a `ready` status. Process liveness alone is never treated as
+readiness.
 The supervisor reaps the sidecar on explicit stop and application teardown. It
 fails closed when the loopback health port is occupied, and stops a child that
 does not become ready within the bounded startup timeout. These diagnostics are

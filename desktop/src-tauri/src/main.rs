@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod probe;
 mod protocol;
 mod runtime;
 
@@ -8,7 +9,8 @@ use config::{
     ConfigurationDetails, ConfigurationStatus, ConfigurationStore, DesktopConfigInput, SecretInput,
     SecretKind,
 };
-use protocol::RuntimeSnapshot;
+use probe::probe_control_plane as probe_saved_control_plane;
+use protocol::{ControlPlaneSnapshot, RuntimeSnapshot};
 use runtime::LocalRuntime;
 use std::process::Command;
 use tauri::{Manager, State};
@@ -80,6 +82,22 @@ fn clear_configuration_secret(
 }
 
 #[tauri::command]
+fn probe_control_plane(
+    configuration: State<'_, ConfigurationStore>,
+) -> Result<ControlPlaneSnapshot, String> {
+    let endpoint = configuration
+        .mission_control_endpoint()
+        .map_err(|error| error.to_string())?;
+    let token = configuration
+        .secret(SecretKind::MissionControlToken)
+        .map_err(|error| error.to_string())?;
+    Ok(probe_saved_control_plane(
+        endpoint.as_deref(),
+        token.as_deref(),
+    ))
+}
+
+#[tauri::command]
 fn open_control_plane(configuration: State<'_, ConfigurationStore>) -> Result<(), String> {
     let endpoint = configuration
         .mission_control_endpoint()
@@ -112,6 +130,7 @@ fn main() {
             save_configuration,
             set_configuration_secret,
             clear_configuration_secret,
+            probe_control_plane,
             open_control_plane
         ])
         .run(tauri::generate_context!())

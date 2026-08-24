@@ -54,6 +54,13 @@ function nativeInvoke(command, args) {
       detail: '该页面需要在 AgentHub 桌面应用中打开。',
     });
   }
+  if (command === 'probe_control_plane') {
+    return Promise.resolve({
+      reachability: 'not_configured',
+      endpointConfigured: false,
+      detail: '该页面需要在 AgentHub 桌面应用中打开。',
+    });
+  }
   if (command === 'configuration_status') {
     return Promise.resolve({
       missionControlEndpointConfigured: false,
@@ -74,6 +81,39 @@ function nativeInvoke(command, args) {
   return Promise.reject(new Error('桌面命令不可用'));
 }
 
+const reachabilityCopy = {
+  not_configured: {
+    chip: '未配置',
+    chipClass: 'missing',
+    title: '还没有连接工作区',
+    detail: '完成连接配置后，从这里打开管理后台。',
+  },
+  reachable: {
+    chip: '已连接',
+    chipClass: 'reachable',
+    title: '工作区已连接',
+    detail: '从这里进入管理后台，继续处理当前工作。',
+  },
+  unreachable: {
+    chip: '无法连接',
+    chipClass: 'unreachable',
+    title: '工作区无法连接',
+    detail: '已保存地址，但管理后台没有响应。',
+  },
+  unauthorized: {
+    chip: '认证失败',
+    chipClass: 'unauthorized',
+    title: '凭据被拒绝',
+    detail: '请更新 Mission Control Token 后重试。',
+  },
+  unhealthy: {
+    chip: '响应无效',
+    chipClass: 'unhealthy',
+    title: '不是可用的管理后台',
+    detail: '该地址没有返回 Mission Control 健康接口。',
+  },
+};
+
 function renderRuntime(snapshot) {
   elements.runtimeStatus.textContent = runtimeLabels[snapshot.status] ?? '未知状态';
   elements.runtimeDetail.textContent = snapshot.detail;
@@ -83,30 +123,26 @@ function renderRuntime(snapshot) {
   elements.stop.disabled = ['stopped', 'configuration_required'].includes(snapshot.status);
 }
 
-function renderConfiguration(configuration) {
-  const connected = configuration.missionControlEndpointConfigured === true;
-  elements.controlState.textContent = connected ? '已配置' : '未配置';
-  elements.controlState.className = `state-chip ${connected ? 'configured' : 'missing'}`;
-  elements.controlTitle.textContent = connected ? '工作区已准备好' : '还没有连接工作区';
-  elements.controlDetail.textContent = connected
-    ? '从这里进入管理后台，继续处理当前工作。'
-    : '完成连接配置后，从这里打开管理后台。';
-  elements.openConsole.disabled = !connected;
+function renderControlPlane(snapshot) {
+  const copy = reachabilityCopy[snapshot.reachability] ?? reachabilityCopy.not_configured;
+  elements.controlState.textContent = copy.chip;
+  elements.controlState.className = `state-chip ${copy.chipClass}`;
+  elements.controlTitle.textContent = copy.title;
+  elements.controlDetail.textContent = copy.detail;
+  elements.openConsole.disabled = snapshot.endpointConfigured !== true;
 }
 
 async function refresh() {
   elements.refresh.disabled = true;
   elements.feedback.textContent = '正在检查连接状态';
   try {
-    const [runtime, configuration] = await Promise.all([
+    const [runtime, controlPlane] = await Promise.all([
       nativeInvoke('runtime_status'),
-      nativeInvoke('configuration_status'),
+      nativeInvoke('probe_control_plane'),
     ]);
     renderRuntime(runtime);
-    renderConfiguration(configuration);
-    elements.feedback.textContent = configuration.missionControlEndpointConfigured
-      ? '状态已更新'
-      : '需要完成连接配置';
+    renderControlPlane(controlPlane);
+    elements.feedback.textContent = controlPlane.detail;
   } catch (error) {
     elements.feedback.textContent = error instanceof Error ? error.message : '状态读取失败';
   } finally {
