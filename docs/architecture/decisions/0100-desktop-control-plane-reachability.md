@@ -53,8 +53,8 @@ does not list Missions, WorkUnits, or other business state.
 - Saved configuration and a live control plane are distinct user-visible
   facts.
 - A malicious or mistaken URL cannot be used as an open redirect fetcher.
-- Health currently requires no authentication; a bad token may still show
-  `reachable` until a later authenticated session probe exists.
+- Health-only success is no longer sufficient for `reachable`; see ADR-0101 for
+  the authenticated session probe.
 - Desktop now depends on a small HTTP client for this native command.
 
 ## Alternatives considered

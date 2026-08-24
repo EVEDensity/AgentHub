@@ -29,7 +29,14 @@ fn start_runtime(
         .status()
         .map_err(|error| error.to_string())?
         .ready_for_runtime;
-    Ok(runtime.start(configuration_ready))
+    let artifact_directory = configuration
+        .details()
+        .map_err(|error| error.to_string())?
+        .artifact_directory;
+    Ok(runtime.start(
+        configuration_ready,
+        artifact_directory.as_deref(),
+    ))
 }
 
 #[tauri::command]

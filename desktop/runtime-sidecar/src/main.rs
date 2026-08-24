@@ -1,7 +1,9 @@
 use serde::Serialize;
 use std::env;
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
 
@@ -10,17 +12,31 @@ const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:18097/readyz";
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 4 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ArtifactRootStatus {
+    NotConfigured,
+    Ready,
+    Unavailable,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HealthResponse {
     protocol_version: u16,
     status: &'static str,
+    artifact_root_status: ArtifactRootStatus,
+}
+
+struct RuntimeConfig {
+    endpoint: SocketAddr,
+    artifact_root_status: ArtifactRootStatus,
 }
 
 fn main() -> Result<(), String> {
-    let endpoint = parse_endpoint().map_err(|error| format!("invalid health endpoint: {error}"))?;
+    let config = parse_config().map_err(|error| format!("invalid runtime config: {error}"))?;
     let listener =
-        TcpListener::bind(endpoint).map_err(|error| format!("health bind failed: {error}"))?;
+        TcpListener::bind(config.endpoint).map_err(|error| format!("health bind failed: {error}"))?;
     listener
         .set_nonblocking(false)
         .map_err(|error| format!("health listener setup failed: {error}"))?;
@@ -28,7 +44,7 @@ fn main() -> Result<(), String> {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                if let Err(error) = handle_request(&mut stream) {
+                if let Err(error) = handle_request(&mut stream, &config) {
                     let _ = write_response(&mut stream, 400, "bad request", None);
                     eprintln!("runtime request rejected: {error}");
                 }
@@ -39,25 +55,63 @@ fn main() -> Result<(), String> {
     Ok(())
 }
 
-fn parse_endpoint() -> Result<SocketAddr, String> {
+fn parse_config() -> Result<RuntimeConfig, String> {
     let mut endpoint = DEFAULT_ENDPOINT.to_owned();
     let mut explicit_endpoint = false;
+    let mut artifact_root: Option<PathBuf> = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--health-endpoint" {
-            if explicit_endpoint {
-                return Err("--health-endpoint was supplied more than once".to_owned());
+        match arg.as_str() {
+            "--health-endpoint" => {
+                if explicit_endpoint {
+                    return Err("--health-endpoint was supplied more than once".to_owned());
+                }
+                explicit_endpoint = true;
+                endpoint = args
+                    .next()
+                    .ok_or_else(|| "--health-endpoint requires a value".to_owned())?;
             }
-            explicit_endpoint = true;
-            endpoint = args
-                .next()
-                .ok_or_else(|| "--health-endpoint requires a value".to_owned())?;
-        } else {
-            return Err(format!("unsupported argument {arg}"));
+            "--artifact-root" => {
+                if artifact_root.is_some() {
+                    return Err("--artifact-root was supplied more than once".to_owned());
+                }
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--artifact-root requires a value".to_owned())?;
+                artifact_root = Some(PathBuf::from(value));
+            }
+            other => return Err(format!("unsupported argument {other}")),
         }
     }
 
-    parse_endpoint_value(&endpoint)
+    let artifact_root_status = match artifact_root {
+        None => ArtifactRootStatus::NotConfigured,
+        Some(path) => evaluate_artifact_root(&path),
+    };
+
+    Ok(RuntimeConfig {
+        endpoint: parse_endpoint_value(&endpoint)?,
+        artifact_root_status,
+    })
+}
+
+fn evaluate_artifact_root(path: &Path) -> ArtifactRootStatus {
+    if !path.is_absolute() {
+        return ArtifactRootStatus::Unavailable;
+    }
+    if fs::create_dir_all(path).is_err() {
+        return ArtifactRootStatus::Unavailable;
+    }
+    let probe = path.join(".agenthub-artifact-root-probe");
+    match OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&probe)
+        .and_then(|_| fs::remove_file(&probe))
+    {
+        Ok(()) => ArtifactRootStatus::Ready,
+        Err(_) => ArtifactRootStatus::Unavailable,
+    }
 }
 
 fn parse_endpoint_value(endpoint: &str) -> Result<SocketAddr, String> {
@@ -81,7 +135,7 @@ fn parse_endpoint_value(endpoint: &str) -> Result<SocketAddr, String> {
     Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
 }
 
-fn handle_request(stream: &mut TcpStream) -> Result<(), String> {
+fn handle_request(stream: &mut TcpStream, config: &RuntimeConfig) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(|error| error.to_string())?;
@@ -122,6 +176,7 @@ fn handle_request(stream: &mut TcpStream) -> Result<(), String> {
     let body = serde_json::to_vec(&HealthResponse {
         protocol_version: PROTOCOL_VERSION,
         status: "ready",
+        artifact_root_status: config.artifact_root_status,
     })
     .map_err(|error| error.to_string())?;
     write_response(stream, 200, "OK", Some(&body))
@@ -146,13 +201,28 @@ fn write_response(
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_request, parse_endpoint, parse_endpoint_value};
+    use super::{
+        evaluate_artifact_root, handle_request, parse_config, parse_endpoint_value,
+        ArtifactRootStatus,
+    };
+    use std::path::Path;
+    use std::fs;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_artifact_root() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("agenthub-artifact-root-{suffix}"))
+    }
 
     #[test]
     fn endpoint_defaults_to_loopback_ready_path() {
-        let endpoint = parse_endpoint().expect("default endpoint");
+        let endpoint = parse_config().expect("default config").endpoint;
         assert_eq!(endpoint.ip().to_string(), "127.0.0.1");
         assert_eq!(endpoint.port(), 18097);
     }
@@ -173,12 +243,27 @@ mod tests {
     }
 
     #[test]
-    fn readiness_request_returns_versioned_json() {
+    fn artifact_root_must_be_absolute_and_writable() {
+        let root = temp_artifact_root();
+        assert_eq!(evaluate_artifact_root(&root), ArtifactRootStatus::Ready);
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(
+            evaluate_artifact_root(Path::new("relative/path")),
+            ArtifactRootStatus::Unavailable
+        );
+    }
+
+    #[test]
+    fn readiness_request_returns_versioned_json_with_artifact_status() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener binds");
         let address = listener.local_addr().expect("listener address");
+        let config = super::RuntimeConfig {
+            endpoint: address,
+            artifact_root_status: ArtifactRootStatus::Ready,
+        };
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("client connects");
-            handle_request(&mut stream).expect("request handles");
+            handle_request(&mut stream, &config).expect("request handles");
         });
         let mut client = TcpStream::connect(address).expect("client connects");
         client
@@ -195,5 +280,6 @@ mod tests {
         );
         assert!(response.contains("\"protocolVersion\":1"));
         assert!(response.contains("\"status\":\"ready\""));
+        assert!(response.contains("\"artifactRootStatus\":\"ready\""));
     }
 }

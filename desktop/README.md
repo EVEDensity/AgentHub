@@ -102,8 +102,9 @@ SHA-256 as the staged target sidecar. It does not claim that an installer was
 created when WiX or NSIS cannot run on the build host.
 
 The runtime smoke then starts the bundled sidecar with the fixed readiness
-endpoint, validates protocol version `1` and `ready`, and terminates that test
-process. It does not start the desktop GUI, Docker, or any server service.
+endpoint, validates protocol version `1`, `ready`, and—when an Artifact root is
+supplied—`artifactRootStatus: ready`, then terminates that test process. It
+does not start the desktop GUI, Docker, or any server service.
 
 The packaging command prints the absolute release application, sidecar, and
 any generated MSI/NSIS installer paths when it finishes.
@@ -159,12 +160,16 @@ The native commands expose redacted configuration details, configuration
 status, secret set/clear operations, and a Mission Control reachability probe.
 Details return only validated endpoints and the Artifact path; status reports
 only `configured`, `missing`, or `unavailable` for each credential and never
-returns its value. Refresh probes `GET /api/health` on the saved origin with a
-two-second timeout, no redirects, and a bounded response. The launcher reports
-`not_configured`, `unreachable`, `unauthorized`, `unhealthy`, or `reachable`
-and never treats a saved URL as proof that Mission Control is live. The probe
-may attach the stored Mission Control token only for HTTPS or loopback HTTP;
-the token and response body never leave the native layer. The launcher
+returns its value. Refresh probes `GET /api/health` and then `GET /api/auth/me` on the saved
+origin with a two-second timeout, no redirects, and a bounded response. The
+launcher reports `not_configured`, `unreachable`, `unauthorized`, `unhealthy`,
+or `reachable` and never treats a saved URL as proof that Mission Control is
+live. `reachable` requires both a valid health contract and an authenticated
+session JSON with a non-empty `id`. When the endpoint is configured but the
+Mission Control token is missing, the probe reports `unauthorized` without
+calling `/api/auth/me`. The probe may attach the stored Mission Control token
+only for HTTPS or loopback HTTP; the token and response body never leave the
+native layer. The launcher
 settings dialog writes ordinary configuration first and then non-empty secrets
 independently, keeping the dialog open when either operation fails. Runtime
 startup remains blocked until the configured sidecar is available. Opening
@@ -173,8 +178,12 @@ even if the health probe currently fails.
 
 The native supervisor reports `starting` while probing the loopback readiness
 endpoint and only reports `ready` for HTTP 200 with the current protocol
-version and a `ready` status. Process liveness alone is never treated as
-readiness.
+version, a `ready` status, and—when an Artifact directory is configured—a
+matching `artifactRootStatus` of `ready`. Process liveness alone is never
+treated as readiness. When configuration includes an Artifact directory, the
+supervisor passes it to the sidecar through the fixed `--artifact-root`
+argument; the path is validated at sidecar startup and is not echoed in the
+readiness JSON.
 The supervisor reaps the sidecar on explicit stop and application teardown. It
 fails closed when the loopback health port is occupied, and stops a child that
 does not become ready within the bounded startup timeout. These diagnostics are

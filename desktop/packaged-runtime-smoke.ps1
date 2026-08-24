@@ -30,6 +30,8 @@ if (-not (Test-Path -LiteralPath $sidecar -PathType Leaf)) {
 }
 
 $endpoint = "http://127.0.0.1:18097/readyz"
+$artifactRoot = Join-Path ([IO.Path]::GetTempPath()) ("agenthub-runtime-smoke-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 $startInfo = [Diagnostics.ProcessStartInfo]::new()
 $startInfo.FileName = $sidecar
 $startInfo.WorkingDirectory = $releaseDirectory
@@ -39,6 +41,8 @@ $startInfo.RedirectStandardError = $true
 $startInfo.RedirectStandardOutput = $true
 $startInfo.ArgumentList.Add("--health-endpoint")
 $startInfo.ArgumentList.Add($endpoint)
+$startInfo.ArgumentList.Add("--artifact-root")
+$startInfo.ArgumentList.Add($artifactRoot)
 
 $process = [Diagnostics.Process]::new()
 $process.StartInfo = $startInfo
@@ -71,6 +75,9 @@ try {
                 if ($payload.protocolVersion -ne 1 -or $payload.status -ne "ready") {
                     throw "Unexpected readiness payload: $body"
                 }
+                if ($payload.artifactRootStatus -ne "ready") {
+                    throw "Artifact root was not ready: $body"
+                }
                 $ready = $true
                 break
             }
@@ -87,7 +94,11 @@ try {
     Write-Output "Packaged runtime smoke passed."
     Write-Output "Sidecar: $sidecar"
     Write-Output "Endpoint: $endpoint"
+    Write-Output "Artifact root: $artifactRoot"
 } finally {
+    if (Test-Path -LiteralPath $artifactRoot -PathType Container) {
+        Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if ($process -and -not $process.HasExited) {
         $process.Kill()
         $process.WaitForExit()

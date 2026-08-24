@@ -5,12 +5,18 @@ use std::time::Duration;
 use url::Url;
 
 const HEALTH_PATH: &str = "/api/health";
+const SESSION_PATH: &str = "/api/auth/me";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_BODY_BYTES: u64 = 8 * 1024;
 
 #[derive(Deserialize)]
 struct HealthBody {
     status: String,
+}
+
+#[derive(Deserialize)]
+struct SessionBody {
+    id: Option<String>,
 }
 
 pub fn probe_control_plane(endpoint: Option<&str>, token: Option<&str>) -> ControlPlaneSnapshot {
@@ -20,39 +26,70 @@ pub fn probe_control_plane(endpoint: Option<&str>, token: Option<&str>) -> Contr
     let Ok(origin) = Url::parse(endpoint) else {
         return snapshot(ControlPlaneReachability::Unhealthy);
     };
-    let Ok(health_url) = health_url(&origin) else {
-        return snapshot(ControlPlaneReachability::Unhealthy);
+
+    let health_url = match join_origin_path(&origin, HEALTH_PATH) {
+        Ok(url) => url,
+        Err(()) => return snapshot(ControlPlaneReachability::Unhealthy),
+    };
+    let health = probe_url(&health_url, None, classify_health);
+    if health.reachability != ControlPlaneReachability::Reachable {
+        return health;
+    }
+
+    let Some(token) = token.filter(|value| !value.is_empty()) else {
+        return ControlPlaneSnapshot {
+            endpoint_configured: true,
+            reachability: ControlPlaneReachability::Unauthorized,
+            detail: "Mission Control token is not configured.".to_owned(),
+        };
     };
 
+    let session_url = match join_origin_path(&origin, SESSION_PATH) {
+        Ok(url) => url,
+        Err(()) => return snapshot(ControlPlaneReachability::Unhealthy),
+    };
+    probe_url(&session_url, Some(token), classify_session)
+}
+
+fn probe_url<F>(url: &Url, token: Option<&str>, classify: F) -> ControlPlaneSnapshot
+where
+    F: FnOnce(u16, &str) -> ControlPlaneReachability,
+{
     let agent = ureq::AgentBuilder::new()
         .timeout(PROBE_TIMEOUT)
         .redirects(0)
         .user_agent("AgentHub-Desktop/0.1")
         .build();
-    let mut request = agent.get(health_url.as_str());
+    let mut request = agent.get(url.as_str());
     if let Some(token) = token.filter(|value| !value.is_empty()) {
-        if may_attach_token(&health_url) {
+        if may_attach_token(url) {
             request = request.set("Authorization", &format!("Bearer {token}"));
         }
     }
 
     match request.call() {
-        Ok(response) => classify_response(response),
-        Err(ureq::Error::Status(_, response)) => classify_response(response),
+        Ok(response) => {
+            let status = response.status();
+            let body = read_body(response);
+            snapshot(classify(status, &body))
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            snapshot(classify(status, &read_body(response)))
+        }
         Err(ureq::Error::Transport(_)) => snapshot(ControlPlaneReachability::Unreachable),
     }
 }
 
-fn health_url(origin: &Url) -> Result<Url, ()> {
-    let mut health = origin.clone();
-    health.set_path(HEALTH_PATH);
-    health.set_query(None);
-    health.set_fragment(None);
-    if !health.username().is_empty() {
-        let _ = health.set_username("");
+fn join_origin_path(origin: &Url, path: &str) -> Result<Url, ()> {
+    let mut url = origin.clone();
+    url.set_path(path);
+    url.set_query(None);
+    url.set_fragment(None);
+    if !url.username().is_empty() {
+        let _ = url.set_username("");
     }
-    let _ = health.set_password(None);
-    Ok(health)
+    let _ = url.set_password(None);
+    Ok(url)
 }
 
 fn may_attach_token(url: &Url) -> bool {
@@ -60,15 +97,20 @@ fn may_attach_token(url: &Url) -> bool {
         || matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
 }
 
-fn classify_response(response: ureq::Response) -> ControlPlaneSnapshot {
-    let status = response.status();
-    let body = read_body(response);
-    let reachability = match status {
+fn classify_health(status: u16, body: &str) -> ControlPlaneReachability {
+    match status {
         401 | 403 => ControlPlaneReachability::Unauthorized,
-        200 if is_healthy_contract(&body) => ControlPlaneReachability::Reachable,
+        200 if is_healthy_contract(body) => ControlPlaneReachability::Reachable,
         _ => ControlPlaneReachability::Unhealthy,
-    };
-    snapshot(reachability)
+    }
+}
+
+fn classify_session(status: u16, body: &str) -> ControlPlaneReachability {
+    match status {
+        401 | 403 => ControlPlaneReachability::Unauthorized,
+        200 if is_authenticated_session(body) => ControlPlaneReachability::Reachable,
+        _ => ControlPlaneReachability::Unhealthy,
+    }
 }
 
 fn read_body(response: ureq::Response) -> String {
@@ -84,6 +126,13 @@ fn is_healthy_contract(body: &str) -> bool {
     serde_json::from_str::<HealthBody>(body)
         .ok()
         .is_some_and(|health| matches!(health.status.as_str(), "ok" | "ready" | "healthy"))
+}
+
+fn is_authenticated_session(body: &str) -> bool {
+    serde_json::from_str::<SessionBody>(body)
+        .ok()
+        .and_then(|session| session.id)
+        .is_some_and(|id| !id.is_empty())
 }
 
 fn snapshot(reachability: ControlPlaneReachability) -> ControlPlaneSnapshot {
@@ -104,18 +153,24 @@ fn detail(reachability: ControlPlaneReachability) -> &'static str {
             "Mission Control rejected the stored credentials."
         }
         ControlPlaneReachability::Unhealthy => {
-            "Mission Control did not return a valid health contract."
+            "Mission Control did not return a valid health or session contract."
         }
-        ControlPlaneReachability::Reachable => "Mission Control health endpoint is reachable.",
+        ControlPlaneReachability::Reachable => {
+            "Mission Control health and session probes succeeded."
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{health_url, may_attach_token, probe_control_plane};
+    use super::{
+        classify_health, classify_session, join_origin_path, may_attach_token,
+        probe_control_plane,
+    };
     use crate::protocol::ControlPlaneReachability;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
     use url::Url;
@@ -131,6 +186,70 @@ mod tests {
             let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
             let _ = stream.write_all(response.as_bytes());
             request
+        });
+        (
+            Url::parse(&format!("http://127.0.0.1:{}", address.port())).expect("loopback origin"),
+            handle,
+        )
+    }
+
+    fn start_routing_server(
+        routes: Vec<(&'static str, String)>,
+    ) -> (Url, thread::JoinHandle<Vec<String>>) {
+        let routes = Arc::new(Mutex::new(
+            routes
+                .into_iter()
+                .map(|(path, response)| (path.to_owned(), response))
+                .collect::<Vec<_>>(),
+        ));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("probe listener binds");
+        let address = listener.local_addr().expect("listener address");
+        let routes_for_thread = Arc::clone(&routes);
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            let route_count = routes_for_thread.lock().expect("routes lock").len();
+            while requests.len() < route_count {
+                let (mut stream, _) = listener.accept().expect("probe request arrives");
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let mut buffer = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                loop {
+                    if requests.len() >= route_count {
+                        break;
+                    }
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(read) => {
+                            buffer.extend_from_slice(&chunk[..read]);
+                            if !buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                                continue;
+                            }
+                            let request = String::from_utf8_lossy(&buffer).into_owned();
+                            requests.push(request.clone());
+                            let path = request
+                                .lines()
+                                .next()
+                                .and_then(|line| line.split_whitespace().nth(1))
+                                .unwrap_or_default()
+                                .to_owned();
+                            let response = routes_for_thread
+                                .lock()
+                                .expect("routes lock")
+                                .iter()
+                                .find(|(route, _)| route == &path)
+                                .map(|(_, response)| response.clone())
+                                .unwrap_or_else(|| {
+                                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                        .to_owned()
+                                });
+                            let _ = stream.write_all(response.as_bytes());
+                            buffer.clear();
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            requests
         });
         (
             Url::parse(&format!("http://127.0.0.1:{}", address.port())).expect("loopback origin"),
@@ -161,8 +280,16 @@ mod tests {
     fn health_url_uses_origin_and_fixed_path() {
         let origin = Url::parse("https://control.example.test:8443/console").expect("origin");
         assert_eq!(
-            health_url(&origin).expect("health url").as_str(),
+            join_origin_path(&origin, "/api/health")
+                .expect("health url")
+                .as_str(),
             "https://control.example.test:8443/api/health"
+        );
+        assert_eq!(
+            join_origin_path(&origin, "/api/auth/me")
+                .expect("session url")
+                .as_str(),
+            "https://control.example.test:8443/api/auth/me"
         );
     }
 
@@ -180,14 +307,36 @@ mod tests {
     }
 
     #[test]
-    fn reachable_health_contract_is_accepted_without_leaking_secrets() {
-        let body = r#"{"status":"ok","service":"AgentHub","token":"secret-from-body"}"#;
+    fn configured_endpoint_without_token_is_unauthorized() {
+        let body = r#"{"status":"ok","service":"AgentHub"}"#;
         let (endpoint, server) = start_server(http_response("HTTP/1.1 200 OK", body));
+        let snapshot = probe_control_plane(Some(endpoint.as_str()), None);
+        let _ = server.join();
+        assert_eq!(snapshot.reachability, ControlPlaneReachability::Unauthorized);
+        assert!(snapshot.detail.contains("token is not configured"));
+    }
+
+    #[test]
+    fn reachable_session_contract_is_accepted_without_leaking_secrets() {
+        let (endpoint, server) = start_routing_server(vec![
+            (
+                "/api/health",
+                http_response("HTTP/1.1 200 OK", r#"{"status":"ok"}"#),
+            ),
+            (
+                "/api/auth/me",
+                http_response(
+                    "HTTP/1.1 200 OK",
+                    r#"{"id":"user-1","name":"operator","token":"secret-from-body"}"#,
+                ),
+            ),
+        ]);
         let snapshot = probe_control_plane(Some(endpoint.as_str()), Some("secret-token"));
-        let request = server.join().expect("server joins");
+        let requests = server.join().expect("server joins");
         assert_eq!(snapshot.reachability, ControlPlaneReachability::Reachable);
-        assert!(request.contains("GET /api/health"));
-        assert!(request.contains("Authorization: Bearer secret-token"));
+        assert!(requests[0].contains("GET /api/health"));
+        assert!(requests[1].contains("GET /api/auth/me"));
+        assert!(requests[1].contains("Authorization: Bearer secret-token"));
         let encoded = serde_json::to_string(&snapshot).expect("snapshot encodes");
         assert!(!encoded.contains("secret-token"));
         assert!(!encoded.contains("secret-from-body"));
@@ -204,11 +353,20 @@ mod tests {
     }
 
     #[test]
-    fn unauthorized_status_does_not_copy_response_body() {
-        let (endpoint, server) = start_server(http_response(
-            "HTTP/1.1 401 Unauthorized",
-            r#"{"error":"not the token"}"#,
-        ));
+    fn unauthorized_session_status_does_not_copy_response_body() {
+        let (endpoint, server) = start_routing_server(vec![
+            (
+                "/api/health",
+                http_response("HTTP/1.1 200 OK", r#"{"status":"ok"}"#),
+            ),
+            (
+                "/api/auth/me",
+                http_response(
+                    "HTTP/1.1 401 Unauthorized",
+                    r#"{"error":"not the token"}"#,
+                ),
+            ),
+        ]);
         let snapshot = probe_control_plane(Some(endpoint.as_str()), Some("secret-token"));
         let _ = server.join();
         assert_eq!(snapshot.reachability, ControlPlaneReachability::Unauthorized);
@@ -223,7 +381,7 @@ mod tests {
             "HTTP/1.1 200 OK",
             "<html>Mission Control</html>",
         ));
-        let snapshot = probe_control_plane(Some(endpoint.as_str()), None);
+        let snapshot = probe_control_plane(Some(endpoint.as_str()), Some("secret-token"));
         let _ = server.join();
         assert_eq!(snapshot.reachability, ControlPlaneReachability::Unhealthy);
     }
@@ -239,5 +397,21 @@ mod tests {
         assert_eq!(snapshot.reachability, ControlPlaneReachability::Unhealthy);
         assert!(request.contains("GET /api/health"));
         assert!(!request.contains("/steal"));
+    }
+
+    #[test]
+    fn health_and_session_classifiers_are_explicit() {
+        assert_eq!(
+            classify_health(200, r#"{"status":"ok"}"#),
+            ControlPlaneReachability::Reachable
+        );
+        assert_eq!(
+            classify_session(200, r#"{"id":"user-1"}"#),
+            ControlPlaneReachability::Reachable
+        );
+        assert_eq!(
+            classify_session(200, r#"{"name":"missing-id"}"#),
+            ControlPlaneReachability::Unhealthy
+        );
     }
 }

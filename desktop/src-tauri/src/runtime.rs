@@ -17,25 +17,55 @@ const MAX_HEALTH_RESPONSE_BYTES: u64 = 8 * 1024;
 #[derive(Clone, Debug)]
 pub struct RuntimeLaunchSpec {
     executable: PathBuf,
-    args: Vec<String>,
     health_endpoint: Url,
+    #[cfg(test)]
+    override_args: Option<Vec<String>>,
 }
 
 impl RuntimeLaunchSpec {
     pub fn from_resource_dir(resource_dir: PathBuf) -> Self {
         Self {
             executable: resource_dir.join(SIDECAR_FILE_NAME),
-            args: vec!["--health-endpoint".into(), RUNTIME_HEALTH_ENDPOINT.into()],
             health_endpoint: Url::parse(RUNTIME_HEALTH_ENDPOINT).expect("valid health endpoint"),
+            #[cfg(test)]
+            override_args: None,
         }
     }
 
+    fn resolved_launch_args(
+        &self,
+        artifact_directory: Option<&str>,
+    ) -> (Vec<String>, bool) {
+        #[cfg(test)]
+        if let Some(args) = &self.override_args {
+            return (args.clone(), false);
+        }
+
+        let mut args = vec![
+            "--health-endpoint".into(),
+            self.health_endpoint.to_string(),
+        ];
+        let require_artifact_root =
+            if let Some(path) = artifact_directory.filter(|value| !value.is_empty()) {
+                args.push("--artifact-root".into());
+                args.push(path.to_owned());
+                true
+            } else {
+                false
+            };
+        (args, require_artifact_root)
+    }
+
     #[cfg(test)]
-    fn new(executable: PathBuf, args: Vec<String>, health_endpoint: Url) -> Self {
+    fn with_test_args(
+        executable: PathBuf,
+        override_args: Vec<String>,
+        health_endpoint: Url,
+    ) -> Self {
         Self {
             executable,
-            args,
             health_endpoint,
+            override_args: Some(override_args),
         }
     }
 }
@@ -45,18 +75,20 @@ impl RuntimeLaunchSpec {
 struct HealthResponse {
     protocol_version: u16,
     status: String,
-}
-
-enum ProbeOutcome {
-    Ready,
-    Probing,
-    Unhealthy,
+    artifact_root_status: Option<String>,
 }
 
 struct RuntimeState {
     child: Option<Child>,
     failure: Option<String>,
     started_at: Option<Instant>,
+    require_artifact_root: bool,
+}
+
+enum ProbeOutcome {
+    Ready,
+    Probing,
+    Unhealthy,
 }
 
 pub struct LocalRuntime {
@@ -71,6 +103,7 @@ impl LocalRuntime {
                 child: None,
                 failure: None,
                 started_at: None,
+                require_artifact_root: false,
             }),
             launch_spec: None,
         }
@@ -82,6 +115,7 @@ impl LocalRuntime {
                 child: None,
                 failure: None,
                 started_at: None,
+                require_artifact_root: false,
             }),
             launch_spec: Some(RuntimeLaunchSpec::from_resource_dir(resource_dir)),
         }
@@ -152,7 +186,11 @@ impl LocalRuntime {
         }
     }
 
-    pub fn start(&self, configuration_ready: bool) -> RuntimeSnapshot {
+    pub fn start(
+        &self,
+        configuration_ready: bool,
+        artifact_directory: Option<&str>,
+    ) -> RuntimeSnapshot {
         let current = self.snapshot();
         if matches!(
             current.status,
@@ -179,13 +217,15 @@ impl LocalRuntime {
                 "Local Runtime port {port} is already in use. Stop the existing process before starting AgentHub."
             ));
         }
-        match Command::new(&spec.executable).args(&spec.args).spawn() {
+        let (args, require_artifact_root) = spec.resolved_launch_args(artifact_directory);
+        match Command::new(&spec.executable).args(&args).spawn() {
             Ok(child) => {
                 let process_id = child.id();
                 let mut state = self.state.lock().expect("local Runtime lock poisoned");
                 state.child = Some(child);
                 state.failure = None;
                 state.started_at = Some(Instant::now());
+                state.require_artifact_root = require_artifact_root;
                 RuntimeSnapshot {
                     protocol_version: RUNTIME_PROTOCOL_VERSION,
                     status: RuntimeStatus::Starting,
@@ -210,6 +250,7 @@ impl LocalRuntime {
         };
         state.failure = None;
         state.started_at = None;
+        state.require_artifact_root = false;
         match process.kill().and_then(|_| process.wait()) {
             Ok(_) => Self::stopped_snapshot(),
             Err(error) => RuntimeSnapshot {
@@ -231,10 +272,21 @@ impl LocalRuntime {
             );
         };
 
-        match probe_endpoint(&spec.health_endpoint) {
+        let require_artifact_root = self
+            .state
+            .lock()
+            .expect("local Runtime lock poisoned")
+            .require_artifact_root;
+
+        match probe_endpoint(&spec.health_endpoint, require_artifact_root) {
             ProbeOutcome::Ready => (
                 RuntimeReadiness::Ready,
-                "Local Runtime bootstrap is ready for lifecycle supervision.".into(),
+                if require_artifact_root {
+                    "Local Runtime bootstrap and artifact root are ready for lifecycle supervision."
+                        .into()
+                } else {
+                    "Local Runtime bootstrap is ready for lifecycle supervision.".into()
+                },
             ),
             ProbeOutcome::Probing => (
                 RuntimeReadiness::Probing,
@@ -242,7 +294,11 @@ impl LocalRuntime {
             ),
             ProbeOutcome::Unhealthy => (
                 RuntimeReadiness::Unhealthy,
-                "Local Runtime readiness response is invalid.".into(),
+                if require_artifact_root {
+                    "Local Runtime readiness or artifact root status is invalid.".into()
+                } else {
+                    "Local Runtime readiness response is invalid.".into()
+                },
             ),
         }
     }
@@ -299,13 +355,14 @@ impl LocalRuntime {
                 child: Some(child),
                 failure: None,
                 started_at: None,
+                require_artifact_root: false,
             }),
             launch_spec: None,
         }
     }
 }
 
-fn probe_endpoint(endpoint: &Url) -> ProbeOutcome {
+fn probe_endpoint(endpoint: &Url, require_artifact_root: bool) -> ProbeOutcome {
     if endpoint.scheme() != "http"
         || endpoint.host_str() != Some("127.0.0.1")
         || endpoint.port_or_known_default().is_none()
@@ -350,7 +407,7 @@ fn probe_endpoint(endpoint: &Url) -> ProbeOutcome {
     {
         return ProbeOutcome::Probing;
     }
-    parse_health_response(&response)
+    parse_health_response(&response, require_artifact_root)
 }
 
 fn is_port_available(endpoint: &Url) -> bool {
@@ -360,7 +417,7 @@ fn is_port_available(endpoint: &Url) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-fn parse_health_response(response: &[u8]) -> ProbeOutcome {
+fn parse_health_response(response: &[u8], require_artifact_root: bool) -> ProbeOutcome {
     let Ok(response) = std::str::from_utf8(response) else {
         return ProbeOutcome::Unhealthy;
     };
@@ -385,7 +442,14 @@ fn parse_health_response(response: &[u8]) -> ProbeOutcome {
         return ProbeOutcome::Unhealthy;
     }
     match health.status.as_str() {
-        "ready" => ProbeOutcome::Ready,
+        "ready" => {
+            if require_artifact_root
+                && health.artifact_root_status.as_deref() != Some("ready")
+            {
+                return ProbeOutcome::Unhealthy;
+            }
+            ProbeOutcome::Ready
+        }
         "starting" => ProbeOutcome::Probing,
         _ => ProbeOutcome::Unhealthy,
     }
@@ -429,6 +493,7 @@ mod tests {
                 child: None,
                 failure: None,
                 started_at: None,
+                require_artifact_root: false,
             }),
             launch_spec: Some(spec),
         }
@@ -437,7 +502,7 @@ mod tests {
     #[test]
     fn unconfigured_start_fails_without_claiming_runtime_is_running() {
         let runtime = LocalRuntime::new();
-        let snapshot = runtime.start(false);
+        let snapshot = runtime.start(false, None);
         assert_eq!(snapshot.protocol_version, RUNTIME_PROTOCOL_VERSION);
         assert_eq!(snapshot.status, RuntimeStatus::ConfigurationRequired);
         assert_eq!(snapshot.readiness, RuntimeReadiness::Unknown);
@@ -446,12 +511,12 @@ mod tests {
 
     #[test]
     fn configured_start_fails_closed_when_sidecar_is_missing() {
-        let runtime = runtime(RuntimeLaunchSpec::new(
+        let runtime = runtime(RuntimeLaunchSpec::with_test_args(
             std::env::temp_dir().join("agenthub-missing-runtime.exe"),
             Vec::new(),
             Url::parse(RUNTIME_HEALTH_ENDPOINT).expect("health endpoint"),
         ));
-        let snapshot = runtime.start(true);
+        let snapshot = runtime.start(true, None);
         assert_eq!(snapshot.status, RuntimeStatus::Failed);
         assert_eq!(snapshot.readiness, RuntimeReadiness::Unhealthy);
         assert!(snapshot.detail.contains("not installed"));
@@ -463,12 +528,12 @@ mod tests {
         let executable = std::env::var_os("COMSPEC")
             .map(PathBuf::from)
             .expect("Windows command processor path");
-        let runtime = runtime(RuntimeLaunchSpec::new(
+        let runtime = runtime(RuntimeLaunchSpec::with_test_args(
             executable,
             vec!["/C".into(), "ping -n 3 127.0.0.1 > NUL".into()],
             Url::parse(RUNTIME_HEALTH_ENDPOINT).expect("health endpoint"),
         ));
-        let started = runtime.start(true);
+        let started = runtime.start(true, None);
         assert_eq!(started.status, RuntimeStatus::Starting);
         assert!(started.process_id.is_some());
         assert_eq!(runtime.stop().status, RuntimeStatus::Stopped);
@@ -481,12 +546,12 @@ mod tests {
         let executable = std::env::var_os("COMSPEC")
             .map(PathBuf::from)
             .expect("Windows command processor path");
-        let runtime = runtime(RuntimeLaunchSpec::new(
+        let runtime = runtime(RuntimeLaunchSpec::with_test_args(
             executable,
             vec!["/C".into(), "exit 0".into()],
             Url::parse(&format!("http://127.0.0.1:{port}/readyz")).expect("health endpoint"),
         ));
-        let snapshot = runtime.start(true);
+        let snapshot = runtime.start(true, None);
         assert_eq!(snapshot.status, RuntimeStatus::Failed);
         assert!(snapshot.detail.contains("already in use"));
     }
@@ -500,14 +565,38 @@ mod tests {
             "{\"protocolVersion\":1,\"status\":\"ready\"}"
         );
         assert!(matches!(
-            super::parse_health_response(response.as_bytes()),
+            super::parse_health_response(response.as_bytes(), false),
             super::ProbeOutcome::Ready
         ));
 
         let incompatible = response.replace("\"protocolVersion\":1", "\"protocolVersion\":2");
         assert!(matches!(
-            super::parse_health_response(incompatible.as_bytes()),
+            super::parse_health_response(incompatible.as_bytes(), false),
             super::ProbeOutcome::Unhealthy
+        ));
+    }
+
+    #[test]
+    fn ready_health_response_requires_artifact_root_when_configured() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: application/json\r\n",
+            "\r\n",
+            "{\"protocolVersion\":1,\"status\":\"ready\",\"artifactRootStatus\":\"unavailable\"}"
+        );
+        assert!(matches!(
+            super::parse_health_response(response.as_bytes(), true),
+            super::ProbeOutcome::Unhealthy
+        ));
+        assert!(matches!(
+            super::parse_health_response(response.as_bytes(), false),
+            super::ProbeOutcome::Ready
+        ));
+
+        let ready = response.replace("\"unavailable\"", "\"ready\"");
+        assert!(matches!(
+            super::parse_health_response(ready.as_bytes(), true),
+            super::ProbeOutcome::Ready
         ));
     }
 
@@ -532,7 +621,7 @@ mod tests {
         let endpoint =
             Url::parse(&format!("http://127.0.0.1:{port}/readyz")).expect("health endpoint");
         assert!(matches!(
-            super::probe_endpoint(&endpoint),
+            super::probe_endpoint(&endpoint, false),
             super::ProbeOutcome::Ready
         ));
         server.join().expect("health server joins");
