@@ -60,7 +60,14 @@ jobs:
             echo "::endgroup::"
           done
       # test all modules (skip integration tests that need infra)
-      - run: go test -short -race -count=1 ./...
+      - name: go test (all modules)
+        run: |
+          set -e
+          for mod in $(find . -name go.mod -not -path '*/testdata/*' | sed 's|/go.mod||'); do
+            echo "::group::go test $mod"
+            (cd "$mod" && go test -short -race -count=1 ./...)
+            echo "::endgroup::"
+          done
 
   # ═══════════════════════════════════════════════════════════════════
   # Rust — all crates

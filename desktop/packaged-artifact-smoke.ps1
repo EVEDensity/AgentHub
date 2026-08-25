@@ -8,11 +8,15 @@ $desktopDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $sidecarDirectory = Join-Path $desktopDirectory "runtime-sidecar"
 
 if ([string]::IsNullOrWhiteSpace($TargetTriple)) {
-    $rustcInfo = & rustc +1.88.0 -vV
+    # rust-toolchain.toml pins the compiler; avoid a second toolchain selector here.
+    $rustcInfo = & rustc -vV
     if ($LASTEXITCODE -ne 0) {
         throw "Unable to inspect the pinned Rust toolchain."
     }
     $hostLine = $rustcInfo | Where-Object { $_ -like "host:*" } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($hostLine)) {
+        throw "Rust compiler output did not contain a host target."
+    }
     $TargetTriple = ($hostLine -split ":", 2)[1].Trim()
 }
 

@@ -3,7 +3,7 @@
 //! 算法基于 **Reciprocal Rank Fusion (RRF)** + 加权 + freshness 衰减 + rerank 混合：
 //!
 //! 1. **RRF**：对每个来源，`rrf_score(d) = 1 / (k + rank(d))`，k=60（标准值）。
-//! 2. **加权**：`weighted(d) = Σ w_source * rrf_source(d) / Σ w_source`（仅计入有该候选的来源）。
+//! 2. **加权**：`weighted(d) = Σ w_source * rrf_source(d)`，权重总和已在配置入口归一化。
 //! 3. **Freshness**：`freshness(d) = exp(-age_days / half_life)`，half_life=30 天。
 //!    最终 `boosted(d) = weighted(d) * (1 + w_freshness * freshness(d))`。
 //! 4. **Rerank 混合**（若可用）：`final(d) = w_rerank * rerank(d) + (1 - w_rerank) * boosted(d)`。
@@ -14,7 +14,6 @@
 //! 权重可通过环境变量 `RETRIEVAL_WEIGHT_BM25` / `_DENSE` / `_RERANK` / `_FRESHNESS`
 //! 配置；未设置时使用默认值。运行时也可通过 `POST /weights` 动态调整。
 
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
@@ -63,7 +62,12 @@ impl DynamicWeights {
         let (bm25, dense, rerank, freshness) = if total <= 0.0 {
             (0.30, 0.35, 0.25, 0.10)
         } else {
-            (bm25, dense, rerank, freshness)
+            (
+                bm25 / total,
+                dense / total,
+                rerank / total,
+                freshness / total,
+            )
         };
         Self {
             bm25: AtomicF64::new(bm25),
@@ -239,12 +243,10 @@ impl FusionEngine {
                      out: &mut HashMap<String, FusedCandidate>| {
             // 加权 RRF：仅计入有该候选的来源。
             let mut weighted_sum = 0.0_f32;
-            let mut weight_sum = 0.0_f32;
 
             let bm25_score = if let Some(rank) = bm25_rank {
                 let rrf = 1.0 / (k + rank as f32);
                 weighted_sum += w.bm25 * rrf;
-                weight_sum += w.bm25;
                 Some(rrf)
             } else {
                 None
@@ -253,21 +255,14 @@ impl FusionEngine {
             let dense_score = if let Some(rank) = dense_rank {
                 let rrf = 1.0 / (k + rank as f32);
                 weighted_sum += w.dense * rrf;
-                weight_sum += w.dense;
                 Some(rrf)
             } else {
                 None
             };
 
-            if weight_sum == 0.0 {
-                return;
-            }
-
-            let normalized = weighted_sum / weight_sum;
-
             // Freshness 衰减。
             let freshness = self.freshness_score(c.timestamp);
-            let boosted = normalized * (1.0 + w.freshness * freshness);
+            let boosted = weighted_sum * (1.0 + w.freshness * freshness);
 
             // Rerank 混合。
             let rerank_score = rerank_scores.and_then(|m| m.get(&c.source_id).copied());
