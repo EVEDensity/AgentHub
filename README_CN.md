@@ -25,9 +25,9 @@
 
 ## 这是什么？
 
-AgentHub 让你一键拉起一个真正协作的 AI 智能体团队 — Router 拆解任务，Executor 执行，Critic 审查，Summarizer 汇总。不是那种"给聊天机器人挂几个工具"的玩具，是实打实的分工协作。
+AgentHub 让你一键拉起一个真正协作的 AI 智能体团队 — Orchestrator 拆解任务并调度领域角色，代码审查与验证智能体把关，Implement/Deploy 落盘交付。不是那种"给聊天机器人挂几个工具"的玩具，是实打实的分工协作。
 
-每个智能体在 11 态的 ReAct 循环中运行，你可以实时看到它们在干什么。一切流式输出，一切留日志，一切跑在你自己的机器上。
+每个智能体在受控、可观测的执行循环中运行，你可以实时看到它们在干什么。一切流式输出，一切留日志，一切跑在你自己的机器上。
 
 ## 为什么选它？
 
@@ -69,7 +69,7 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 
 ## 有什么能力
 
-**智能体编排** — 6 种角色（Router、Planner、Executor、Critic、Summarizer、Search），预算感知的 ReAct 循环，Redis 持久化状态，重启不丢。默认流式输出，WebSocket + SSE 加回放。
+**智能体编排** — 7 个领域角色（Orchestrator、Architect、CodeGen、Review、Test、Implement、Deploy），受控工具调用循环，状态持久化于 PostgreSQL，重启不丢。默认流式输出，WebSocket + SSE 加回放。角色清单见 `app/services/agent_service.py`（`DEFAULT_AGENTS`）。
 
 **安全** — JWT 认证、RBAC + ABAC、敏感工具二次确认、租户数据隔离。正经生产环境用的，不是 demo。
 

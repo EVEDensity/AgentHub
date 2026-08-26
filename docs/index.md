@@ -35,7 +35,9 @@ API 目标转换为可恢复、可审计、附带 Artifact 和 Evidence 的执�
 ## Documentation map
 
 - [Architecture boundaries](./architecture/)
+- [Delivery roadmap（重构与交付路线图）](./roadmaps/reconstruction-roadmap.md)
 - [Documentation governance](./governance/documentation-standard.md)
+- [Code quality standard（代码质量与审查机制）](./governance/code-quality-standard.md)
 - [Chinese user and API guides](./zh/)
 - Detailed private target architecture is kept locally in `docs/internal/` and
   is intentionally excluded from releases.

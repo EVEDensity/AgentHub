@@ -29,7 +29,7 @@ AgentHub 采用**双轨制**：
 
 ## 二、Hook 规范（4 个 hookspec）
 
-定义在 [app/services/tools/plugin_spec.py](../app/services/tools/plugin_spec.py)：
+定义在 [app/services/tools/plugin_spec.py](../../app/services/tools/plugin_spec.py)：
 
 ### 2.1 `pre_tool_use`
 
@@ -153,7 +153,7 @@ PLUGINS_PATH=plugins/ python -m uvicorn app.main:app
 
 ## 五、内置插件
 
-AgentHub 自带 3 个内置插件，在 [app/services/tools/plugins/](../app/services/tools/plugins/) 目录：
+AgentHub 自带 3 个内置插件，在 [app/services/tools/plugins/](../../app/services/tools/plugins/) 目录：
 
 | 插件 | 注册名 | Hook | 行为 |
 |---|---|---|---|
@@ -163,7 +163,7 @@ AgentHub 自带 3 个内置插件，在 [app/services/tools/plugins/](../app/ser
 
 ### PermissionPlugin 风险矩阵
 
-镜像 Go 侧 [iam/abac.go](../services/go/shared/iam/abac.go) 的 `BuiltinToolRisk`：
+镜像 Go 侧 [iam/abac.go](../../services/go/shared/iam/abac.go) 的 `BuiltinToolRisk`：
 
 | 风险 | 工具示例 | 所需 scope |
 |---|---|---|

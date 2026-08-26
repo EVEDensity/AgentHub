@@ -25,9 +25,9 @@
 
 ## What is this?
 
-AgentHub lets you spin up a team of AI agents that actually work together — Router figures out what needs doing, Executor does it, Critic checks the work, Summarizer ties it all up. Not a single-agent-with-tools trick. A real team.
+AgentHub lets you spin up a team of AI agents that actually work together — the Orchestrator decomposes your goal and dispatches roles, code-review and verification agents check the work, and deploy/implementation agents finish it. Not a single-agent-with-tools trick. A real team.
 
-Each agent runs through an 11-state ReAct loop that you can watch in real time. Everything streams. Everything logs. Everything's on your hardware.
+Each agent runs under a bounded, observable loop that you can watch in real time. Everything streams. Everything logs. Everything's on your hardware.
 
 ## Why?
 
@@ -69,7 +69,7 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 
 ## What's inside
 
-**Agent orchestration** — 6 roles (Router, Planner, Executor, Critic, Summarizer, Search) running a budget-aware ReAct loop with Redis-backed state that survives restarts. Streaming by default via WebSocket + SSE.
+**Agent orchestration** — 7 domain roles (Orchestrator, Architect, CodeGen, Review, Test, Implement, Deploy) running a bounded tool-call loop. State is persisted in PostgreSQL; streaming is delivered via WebSocket + SSE. Role roster is defined in `app/services/agent_service.py` (`DEFAULT_AGENTS`).
 
 **Security** — JWT auth, RBAC + ABAC, sensitive-tool gating, per-tenant data isolation. Built for production, not just demos.
 

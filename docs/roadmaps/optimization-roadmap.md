@@ -1,9 +1,11 @@
 # AgentHub Optimization Roadmap
 
-> Status: legacy implementation roadmap  
-> Last reviewed: 2026-08-08  
-> The Mission-centric sequence in local `docs/internal/roadmaps/12-week-refactor.md`
-> supersedes this document for architecture and execution priorities.
+> Status: superseded
+> Replaced by: `docs/roadmaps/reconstruction-roadmap.md`
+> Last reviewed: 2026-08-08 (resuperseded 2026-08-26)
+> The reconstruction roadmap supersedes this document for code-debt reduction,
+> architecture convergence, and delivery sequencing. Keep this file for
+> historical context; do not implement new changes from it.
 
 ## 0. Current Position
 

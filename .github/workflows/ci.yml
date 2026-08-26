@@ -12,6 +12,24 @@ concurrency:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════
+  # Docs & benchmark gates (R1) — doc-link integrity + claim discipline
+  # ═══════════════════════════════════════════════════════════════════
+  docs-gates:
+    name: 'Docs & Benchmark Gates'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check doc links resolve
+        run: python benchmarks/gates.py check-links
+      - name: Check claim discipline (no oversold performance claims)
+        run: python benchmarks/gates.py check-docs
+      - name: Scaffold gates run (R4 fills real measurement)
+        run: python benchmarks/gates.py run --name token_compaction_ratio
+
+  # ═══════════════════════════════════════════════════════════════════
   # Frontend
   # ═══════════════════════════════════════════════════════════════════
   frontend:
