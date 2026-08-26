@@ -996,3 +996,87 @@ func TestA2ATrustStatusDoesNotExposePublicKeys(t *testing.T) {
 		t.Fatalf("unexpected trust status: %#v", status)
 	}
 }
+
+func TestA2ADispatchModeDefaultIsGateway(t *testing.T) {
+	// Default is the legacy compatibility path; an invalid value fails closed.
+	for _, value := range []string{"", "invalid", "GATEWAY"} {
+		t.Setenv("A2A_DISPATCH_MODE", value)
+		if !a2aGatewayDispatchEnabled() {
+			t.Fatalf("A2A_DISPATCH_MODE=%q must resolve to gateway dispatch", value)
+		}
+	}
+}
+
+func TestA2ADispatchModeRunnerDisablesGatewayDispatch(t *testing.T) {
+	t.Setenv("A2A_DISPATCH_MODE", "runner")
+	if a2aGatewayDispatchEnabled() {
+		t.Fatal("A2A_DISPATCH_MODE=runner must disable Gateway dispatch")
+	}
+}
+
+func TestA2ATaskSendRunnerModeDoesNotForwardRemoteTask(t *testing.T) {
+	t.Setenv("A2A_DISPATCH_MODE", "runner")
+	control := newFakeA2AControlPlane()
+	// Any remote task request fails the test: the Runner outbound worker owns
+	// remote dispatch after the ADR-0053 cutover, never the Gateway.
+	remote := newA2ATestAgentServer(t, nil, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("runner mode must not forward a remote task: %s %s", r.Method, r.URL.Path)
+		http.Error(w, "unexpected remote dispatch", http.StatusInternalServerError)
+	})
+	handler := newTestA2AHandler(control)
+
+	recorder, response := callA2ATaskAPI(t, handler, A2ATaskRequest{
+		JSONRPC: "2.0",
+		Method:  "tasks/send",
+		Params: map[string]any{
+			"id":          "task-runner",
+			"workspaceId": "workspace-1",
+			"agentUrl":    remote.URL,
+			"requiredCapabilities": []any{"repository.read"},
+			"message": map[string]any{"role": "user", "parts": []any{
+				map[string]any{"type": "text", "text": "review"},
+			}},
+		},
+		ID: int64(44),
+	}, "Bearer test-token")
+
+	if recorder.Code != http.StatusOK || response.Error != nil {
+		t.Fatalf("expected submission accepted without forward, status=%d response=%#v", recorder.Code, response)
+	}
+	if len(control.submits) != 1 {
+		t.Fatalf("expected one Mission Control submit, got %d", len(control.submits))
+	}
+	result, ok := response.Result.(map[string]any)
+	if !ok || result["id"] != "task-runner" || result["status"] != "submitted" {
+		t.Fatalf("expected durable submitted projection, got %#v", response.Result)
+	}
+}
+
+func TestA2ATaskCancelRunnerModeDoesNotForwardRemoteCancel(t *testing.T) {
+	t.Setenv("A2A_DISPATCH_MODE", "runner")
+	control := newFakeA2AControlPlane()
+	control.tasks["task-cancel"] = &a2aControlTask{
+		TaskID:   "task-cancel",
+		AgentURL: "https://receiver.example.test",
+		State:    "cancelled",
+	}
+	handler := newTestA2AHandler(control)
+
+	recorder, response := callA2ATaskAPI(t, handler, A2ATaskRequest{
+		JSONRPC: "2.0",
+		Method:  "tasks/cancel",
+		Params: map[string]any{
+			"id":          "task-cancel",
+			"workspaceId": "workspace-1",
+		},
+		ID: int64(45),
+	}, "Bearer test-token")
+
+	if recorder.Code != http.StatusOK || response.Error != nil {
+		t.Fatalf("expected cancellation accepted without forward, status=%d response=%#v", recorder.Code, response)
+	}
+	result, ok := response.Result.(map[string]any)
+	if !ok || result["id"] != "task-cancel" || result["status"] != "canceled" {
+		t.Fatalf("expected canceled projection, got %#v", response.Result)
+	}
+}

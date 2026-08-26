@@ -41,6 +41,22 @@ const maxAgentCardResponseBytes int64 = 1 << 20
 
 const maxA2ATaskResponseBytes int64 = 1 << 20
 
+// a2aDispatchModeFromEnv resolves the outbound dispatch ownership. `gateway`
+// (default) keeps the legacy request-path forwarding for compatibility;
+// `runner` delegates the remote dispatch to a Runner-supervised outbound A2A
+// worker (ADR-0053) so the Gateway never dispatches the same attempt twice.
+func a2aDispatchModeFromEnv() string {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("A2A_DISPATCH_MODE")))
+	if mode != "gateway" && mode != "runner" {
+		return "gateway"
+	}
+	return mode
+}
+
+func a2aGatewayDispatchEnabled() bool {
+	return a2aDispatchModeFromEnv() == "gateway"
+}
+
 // ── A2A Prometheus Metrics ────────────────────────────────────────────
 
 var (
@@ -1502,31 +1518,36 @@ func newA2AHandlerWithTrustPolicy(baseURL string, pool *db.Pool, tlsCfg *A2ATLSC
 			if _, hasRequiredCapabilities := req.Params["requiredCapabilities"]; hasRequiredCapabilities {
 				forwardParams["requiredCapabilities"] = requiredCapabilities
 			}
-			fwdResp, fwdErr := forwardTaskToAgent(
-				r.Context(),
-				client,
-				agentURL,
-				"tasks/send",
-				forwardParams,
-				requiredCapabilities,
-				trustPolicy,
-				peerCredentials,
-			)
-			if fwdErr == nil && fwdResp != nil && fwdResp.Error != nil {
-				fwdErr = fmt.Errorf("remote A2A error %d: %s", fwdResp.Error.Code, fwdResp.Error.Message)
-			}
-			if fwdErr != nil {
-				log.Printf("a2a: task forward to %s failed: %v", agentURL, fwdErr)
-				controlTask, err = control.Fail(
+			// ADR-0053 cutover: with A2A_DISPATCH_MODE=runner the Gateway only
+			// submits the Mission and defers remote dispatch to the outbound
+			// Runner worker. The two paths must never dispatch the same attempt.
+			if a2aGatewayDispatchEnabled() {
+				fwdResp, fwdErr := forwardTaskToAgent(
 					r.Context(),
-					r.Header.Get("Authorization"),
-					workspaceID,
-					taskID,
-					truncateA2AReason(fwdErr.Error()),
+					client,
+					agentURL,
+					"tasks/send",
+					forwardParams,
+					requiredCapabilities,
+					trustPolicy,
+					peerCredentials,
 				)
-				if err != nil {
-					writeA2AControlError(w, req.ID, taskID, fmt.Errorf("record dispatch failure: %w", err))
-					return
+				if fwdErr == nil && fwdResp != nil && fwdResp.Error != nil {
+					fwdErr = fmt.Errorf("remote A2A error %d: %s", fwdResp.Error.Code, fwdResp.Error.Message)
+				}
+				if fwdErr != nil {
+					log.Printf("a2a: task forward to %s failed: %v", agentURL, fwdErr)
+					controlTask, err = control.Fail(
+						r.Context(),
+						r.Header.Get("Authorization"),
+						workspaceID,
+						taskID,
+						truncateA2AReason(fwdErr.Error()),
+					)
+					if err != nil {
+						writeA2AControlError(w, req.ID, taskID, fmt.Errorf("record dispatch failure: %w", err))
+						return
+					}
 				}
 			}
 			task := controlTask.toA2ATask()
@@ -1603,7 +1624,7 @@ func newA2AHandlerWithTrustPolicy(baseURL string, pool *db.Pool, tlsCfg *A2ATLSC
 				writeA2AControlError(w, req.ID, taskID, err)
 				return
 			}
-			if controlTask.AgentURL != "" {
+			if controlTask.AgentURL != "" && a2aGatewayDispatchEnabled() {
 				forwardParams := cloneA2AParams(req.Params)
 				delete(forwardParams, "agentUrl")
 				delete(forwardParams, "target")

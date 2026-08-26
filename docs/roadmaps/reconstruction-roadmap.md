@@ -85,11 +85,14 @@ demoted to target/prototype.
 
 ### Phase R2: Converge execution paths  (weeks 2-8)
 
+> Status: implemented (2026-08-26). Runbook:
+> `docs/operations/r2-a2a-langgraph-cutover.md`.
+
 | Task | Debt | Acceptance criteria |
 |---|---|---|
-| Remove Gateway direct dispatch; enable Runner-supervised outbound A2A (ADR-0053 cutover) | D6 | ASGI + workspace integration gate green in production wiring; no double dispatch |
-| Deprecate legacy LangGraph route selection; migrate remaining chat/DAG flows to Mission/WorkUnit paths | D5 | Existing `tests/` green; legacy paths feature-flagged off; no new writes to legacy task tables |
-| Normalize test placement | D8 | `pytest tests/` discovers all; packaging smoke does not regress |
+| Remove Gateway direct dispatch; enable Runner-supervised outbound A2A (ADR-0053 cutover) | D6 | `A2A_DISPATCH_MODE=runner` disables Gateway forwarding (tested); Runner `build_runner_runtime` composes outbound candidate with strict peer manifest; no double dispatch |
+| Deprecate legacy LangGraph route selection; migrate remaining chat/DAG flows to Mission/WorkUnit paths | D5 | `route_message` bypasses LangGraph by default; `AGENTHUB_ENABLE_LEGACY_LANGGRAPH` flag keeps migration window; no new writes to legacy task tables by default |
+| Normalize test placement | D8 | `app/` tests moved under `tests/` (`tests/persistence/`, `tests/api/`); `pytest tests/` collects 600+ tests green |
 
 **Stop condition:** no new business state written through legacy Task/DAG unless
 a documented compat shim retains it, and the A2A outbound gate is the only

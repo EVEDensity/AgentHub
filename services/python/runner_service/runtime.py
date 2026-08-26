@@ -165,12 +165,15 @@ def compose_kind_aware_runner_runtime(
 
 
 def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntime:
-    """Load file-backed dependencies and compose the strict workspace service."""
+    """Load file-backed dependencies and compose the strict workspace service.
+
+    A process configured with the ``a2a.outbound`` adapter composes the
+    Runner-supervised outbound runtime (ADR-0053 cutover); every other adapter
+    composes the kind-aware model Runner. Both paths fail closed when required
+    file-backed configuration is missing.
+    """
 
     control_token = read_secret_file(settings.mission_control_token_file)
-    model_token = read_secret_file(settings.model_gateway_token_file)
-    mcp_token = read_secret_file(settings.mcp_token_file)
-    manifest = load_mcp_binding_manifest(settings.mcp_bindings_file)
 
     timeout = httpx.Timeout(settings.http_timeout_seconds)
     limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
@@ -179,6 +182,58 @@ def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntim
         limits=limits,
         follow_redirects=False,
     )
+
+    control = MissionControlRunnerClient(
+        settings.mission_control_url,
+        access_token=control_token,
+        http_client=control_http,
+    )
+
+    # ── Outbound A2A: Runner-supervised transport (ADR-0053) ─────────
+    # The outbound process owns no model loop or MCP binding; it only needs the
+    # Mission Control credential, the peer trust manifest, and an Artifact root.
+    if settings.assigned_adapter == "a2a.outbound":
+        from .a2a_peers import load_a2a_runner_peers
+        from .outbound_runtime import compose_a2a_outbound_runtime_candidate
+
+        assert settings.a2a_peers_file is not None
+        assert settings.source_agent_url is not None
+        peers = load_a2a_runner_peers(settings.a2a_peers_file)
+        peer_http = httpx.AsyncClient(
+            timeout=timeout,
+            limits=limits,
+            follow_redirects=False,
+        )
+        publisher = ContentAddressedArtifactPublisher(
+            ArtifactStoreSettings(
+                backend="local",
+                local_root=settings.artifact_local_root,
+                publish_max_bytes=settings.max_artifact_bytes,
+            )
+        )
+        return compose_a2a_outbound_runtime_candidate(
+            control,
+            publisher=publisher,
+            peer_http=peer_http,
+            peers=peers,
+            runner_id=settings.runner_id,
+            workspace_id=settings.workspace_id,
+            assigned_agent_id=settings.assigned_agent_id,
+            source_agent_url=settings.source_agent_url,
+            owned_closeables=(control_http,),
+            lease_seconds=settings.lease_seconds,
+            idle_delay_seconds=settings.idle_delay_seconds,
+            max_delay_seconds=settings.max_delay_seconds,
+            shutdown_timeout_seconds=settings.shutdown_timeout_seconds,
+            poll_interval_seconds=settings.poll_interval_seconds,
+            heartbeat_interval_seconds=settings.heartbeat_interval_seconds,
+        )
+
+    # ── Model Runner: kind-aware workspace service ───────────────────
+    model_token = read_secret_file(settings.model_gateway_token_file)
+    mcp_token = read_secret_file(settings.mcp_token_file)
+    manifest = load_mcp_binding_manifest(settings.mcp_bindings_file)
+
     model_http = httpx.AsyncClient(
         timeout=timeout,
         limits=limits,
@@ -190,11 +245,6 @@ def build_runner_runtime(settings: RunnerServiceSettings) -> RunnerServiceRuntim
         follow_redirects=False,
     )
 
-    control = MissionControlRunnerClient(
-        settings.mission_control_url,
-        access_token=control_token,
-        http_client=control_http,
-    )
     model_factory = OpenAICompatibleModelFactory(
         model_http,
         endpoint=settings.model_gateway_url,

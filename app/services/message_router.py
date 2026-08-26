@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 
+from app.core.config import get_settings
 from app.services.agent_service import call_agent, stream_agent_response
-from app.services.langgraph_workflow import agent_workflow
+
+# Legacy LangGraph orchestration is gated by AGENTHUB_ENABLE_LEGACY_LANGGRAPH
+# (default False, R2 decommission). When disabled, route_message calls the
+# bounded tool loop directly and the legacy DAG engines are not invoked; the
+# enterprise Mission/WorkUnit path remains the execution-of-record.
+_use_legacy_langgraph = get_settings().enable_legacy_langgraph
 
 
 async def route_message(
@@ -14,10 +20,20 @@ async def route_message(
     attachments: list[dict] | None = None,
     on_tool_event=None,
 ) -> dict:
-    return await agent_workflow.run(
-        session_id=session_id,
-        content=content,
-        sender=sender,
+    if _use_legacy_langgraph:
+        from app.services.langgraph_workflow import agent_workflow
+
+        return await agent_workflow.run(
+            session_id=session_id,
+            content=content,
+            sender=sender,
+            user_id=user_id,
+            attachments=attachments or [],
+            on_tool_event=on_tool_event,
+        )
+    return await call_agent(
+        session_id,
+        content,
         user_id=user_id,
         attachments=attachments or [],
         on_tool_event=on_tool_event,

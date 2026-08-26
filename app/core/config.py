@@ -236,6 +236,15 @@ class Settings(BaseSettings):
         alias="AGENTHUB_ENABLE_REAL_LLM",
         description="When False, all agent calls use MockAdapter",
     )
+    # Legacy LangGraph orchestration. Defaults to False: the production chat
+    # path routes directly through agent_service, eliminating the second
+    # execution engine. Set True only to keep the legacy DAG orchestration
+    # during a controlled migration window (R2 Phase decommission).
+    enable_legacy_langgraph: bool = Field(
+        default=False,
+        alias="AGENTHUB_ENABLE_LEGACY_LANGGRAPH",
+        description="When False, route_message bypasses LangGraph orchestration",
+    )
 
     # ── Identity ───────────────────────────────────────────────────────
     default_session_id: str = "session-1"

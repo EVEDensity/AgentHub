@@ -40,11 +40,19 @@ class RunnerServiceSettings(BaseSettings):
     mcp_bindings_file: Path
     artifact_local_root: Path
 
+    # Outbound A2A (Runner-supervised). Required only when the process claims
+    # through the `a2a.outbound` adapter after the ADR-0053 cutover. The peer
+    # manifest is strict signed-and-pinned; the source Agent URL identifies
+    # this process as the local sender.
+    a2a_peers_file: Path | None = None
+    source_agent_url: str | None = None
+
     host: str = "0.0.0.0"
     port: int = Field(default=8097, ge=1, le=65535)
     lease_seconds: int = Field(default=300, ge=1, le=3600)
     idle_delay_seconds: float = Field(default=0.5, gt=0)
     max_delay_seconds: float = Field(default=10.0, gt=0)
+    poll_interval_seconds: float = Field(default=1.0, gt=0)
     heartbeat_interval_seconds: float | None = Field(default=None, gt=0)
     shutdown_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
     http_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
@@ -88,6 +96,33 @@ class RunnerServiceSettings(BaseSettings):
             raise ValueError("URL must not contain a query or fragment")
         return normalized.rstrip("/")
 
+    @field_validator("source_agent_url")
+    @classmethod
+    def _validate_source_agent_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        parsed = httpx.URL(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.host:
+            raise ValueError("source_agent_url must be an absolute HTTP(S) URL")
+        if parsed.username or parsed.password:
+            raise ValueError("source_agent_url must not contain credentials")
+        return normalized.rstrip("/")
+
+    @field_validator("a2a_peers_file", mode="before")
+    @classmethod
+    def _empty_peers_file_is_unset(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
+
+    @field_validator("source_agent_url")
+    @classmethod
+    def _empty_source_agent_url_is_unset(cls, value: object) -> object:
+        if value == "":
+            return None
+        return value
+
     @field_validator("model")
     @classmethod
     def _reject_mock_model(cls, value: str) -> str:
@@ -111,7 +146,18 @@ class RunnerServiceSettings(BaseSettings):
     @model_validator(mode="after")
     def _validate_process_policy(self) -> RunnerServiceSettings:
         if self.assigned_adapter == "a2a.outbound":
-            raise ValueError("Runner service cannot claim through a2a.outbound")
+            if self.a2a_peers_file is None:
+                raise ValueError(
+                    "a2a.outbound Runner requires a2a_peers_file"
+                )
+            if self.source_agent_url is None:
+                raise ValueError(
+                    "a2a.outbound Runner requires source_agent_url"
+                )
+        elif self.a2a_peers_file is not None or self.source_agent_url is not None:
+            raise ValueError(
+                "a2a outbound settings require assigned_adapter=a2a.outbound"
+            )
         if self.max_delay_seconds < self.idle_delay_seconds:
             raise ValueError("max delay must not be lower than idle delay")
         return self
