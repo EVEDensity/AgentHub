@@ -21,10 +21,10 @@ import json
 import os
 import time
 import uuid
-from typing import Any, AsyncGenerator
+from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from prometheus_client import Counter, Histogram, make_asgi_app
 from pydantic import BaseModel
@@ -593,6 +593,26 @@ class VLLMProvider(OpenAICompatibleProvider):
 
 
 # ---------------------------------------------------------------------------
+# NewAPIProvider  (new-api / one-api unified gateway — optional supplier layer;
+# configured via NEWAPI_BASE_URL / NEWAPI_API_KEY, OpenAI-compatible protocol)
+# ---------------------------------------------------------------------------
+
+class NewAPIProvider(OpenAICompatibleProvider):
+    """new-api unified LLM gateway provider.
+
+    When ``NEWAPI_BASE_URL`` is set, chat models route through the gateway's
+    OpenAI-compatible entry; new-api owns channel selection, retry/failover,
+    quotas and billing. Local embedding/rerank (bge) and mock stay local.
+    """
+
+    name = "newapi"
+
+    def __init__(self) -> None:
+        self.api_key = os.getenv("NEWAPI_API_KEY") or "not-needed"
+        self.base_url = os.getenv("NEWAPI_BASE_URL") or "http://127.0.0.1:3000/v1"
+
+
+# ---------------------------------------------------------------------------
 # Provider registry
 # ---------------------------------------------------------------------------
 
@@ -609,6 +629,7 @@ def _init_providers() -> dict[str, Any]:
     _providers["bge"] = BGEEmbeddingProvider()
     _providers["openai-compatible"] = OpenAICompatibleProvider()
     _providers["vllm"] = VLLMProvider()
+    _providers["newapi"] = NewAPIProvider()
     return _providers
 
 
@@ -647,6 +668,9 @@ def get_provider(model: str) -> Any:
         if os.getenv("OPENAI_COMPATIBLE_BASE_URL"):
             return providers["openai-compatible"]
         return providers["mock"]
+    # ── new-api unified gateway (optional supplier layer) ───────────
+    if os.getenv("NEWAPI_BASE_URL"):
+        return providers["newapi"]
     # Generic fallback: prefer vllm if VLLM_BASE_URL set, else openai-compatible
     if os.getenv("VLLM_BASE_URL"):
         return providers["vllm"]

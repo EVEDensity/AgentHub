@@ -45,6 +45,21 @@ class LLMKeys(BaseSettings):
         default="http://127.0.0.1:11434",
         description="Ollama server URL",
     )
+    # Optional unified LLM gateway (new-api / one-api style). Empty (default)
+    # keeps the self-hosted per-provider adapters; "newapi" fans every remote
+    # provider model out through the single OpenAI-compatible gateway entry.
+    llm_gateway: str = Field(
+        default="", alias="AGENTHUB_LLM_GATEWAY",
+        description="LLM supplier layer: '' (self-hosted adapters) or 'newapi'",
+    )
+    newapi_base_url: str = Field(
+        default="http://127.0.0.1:3000/v1", alias="AGENTHUB_NEWAPI_BASE_URL",
+        description="new-api OpenAI-compatible entry (used when llm_gateway=newapi)",
+    )
+    newapi_api_key: str = Field(
+        default="", alias="AGENTHUB_NEWAPI_API_KEY",
+        description="new-api master/sub token (used when llm_gateway=newapi)",
+    )
 
 
 class OrchestratorSettings(BaseSettings):

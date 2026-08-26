@@ -40,6 +40,9 @@ DEFAULT_USER_ID = _cfg.default_user_id
 OPENAI_API_KEY = _cfg.llm.openai_api_key
 ANTHROPIC_API_KEY = _cfg.llm.anthropic_api_key
 OLLAMA_BASE_URL = _cfg.llm.ollama_base_url
+LLM_GATEWAY = _cfg.llm.llm_gateway
+NEWAPI_BASE_URL = _cfg.llm.newapi_base_url
+NEWAPI_API_KEY = _cfg.llm.newapi_api_key
 
 # ── Search ────────────────────────────────────────────────────────────
 WEB_SEARCH_MODE = _cfg.search.web_search_mode

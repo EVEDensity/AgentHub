@@ -3,14 +3,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
-import time as _time_module
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
 
-from app.config import ANTHROPIC_API_KEY, ENABLE_REAL_LLM, OLLAMA_BASE_URL, OPENAI_API_KEY, REQUEST_TIMEOUT_SECONDS
+from app.config import (
+    ANTHROPIC_API_KEY,
+    ENABLE_REAL_LLM,
+    LLM_GATEWAY,
+    NEWAPI_API_KEY,
+    NEWAPI_BASE_URL,
+    OLLAMA_BASE_URL,
+    OPENAI_API_KEY,
+    REQUEST_TIMEOUT_SECONDS,
+)
 
 logger = logging.getLogger("agenthub.adapter")
 
@@ -345,9 +354,7 @@ class MockAdapter(BaseAdapter):
 
             for line in lines[1:]:
                 line = line.strip()
-                if line.startswith('- 分类:'):
-                    section = 'meta'
-                elif line.startswith('- 风险等级:'):
+                if line.startswith('- 分类:') or line.startswith('- 风险等级:'):
                     section = 'meta'
                 elif line.startswith('- 描述:'):
                     desc = line.replace('- 描述:', '').strip()
@@ -1055,6 +1062,20 @@ class OllamaAdapter(BaseAdapter):
         return f"Ollama 连接正常，可用模型 {count} 个"
 
 
+class NewAPIGatewayAdapter(OpenAICompatibleAdapter):
+    """Unified adapter for the new-api LLM gateway (optional supplier layer).
+
+    When ``AGENTHUB_LLM_GATEWAY=newapi``, every remote provider/model call
+    fans out through one OpenAI-compatible entry (new-api ``/v1``). new-api
+    owns channel selection, retry/failover, quotas and billing; the
+    self-hosted per-provider adapters remain the default (fallback) path.
+    """
+
+    default_base_url = NEWAPI_BASE_URL
+    env_api_key = NEWAPI_API_KEY
+    default_model = "mock-llm"
+
+
 class AdapterManager:
     def __init__(self) -> None:
         self.adapters = {
@@ -1071,8 +1092,20 @@ class AdapterManager:
             "kimi": KimiAdapter(),
         }
 
+    @property
+    def _gateway_enabled(self) -> bool:
+        return (LLM_GATEWAY or "").strip().lower() == "newapi"
+
     def get_adapter(self, provider: str) -> BaseAdapter:
         key = (provider or "mock").lower()
+        # new-api gateway mode: one OpenAI-compatible entry for all remote
+        # providers; local adapters (mock/CLI/cloud) keep their own path.
+        if self._gateway_enabled and key not in {
+            "mock", "local_claude", "local_codex", "local_openclaw", "cloud_code",
+        }:
+            if "newapi" not in self.adapters:
+                self.adapters["newapi"] = NewAPIGatewayAdapter()
+            return self.adapters["newapi"]
         # cloud_code is lazy-loaded to avoid circular imports
         # (CloudCodeAdapter imports from this module for BaseAdapter/MockAdapter)
         if key == "cloud_code":

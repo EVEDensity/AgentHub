@@ -1,0 +1,64 @@
+name: agenthub-newapi
+
+# new-api LLM aggregation gateway — optional LLM supplier layer.
+#
+# Brings up two services:
+#   mock-llm   — local OpenAI-compatible upstream used for offline rollout
+#                verification (no provider keys required).
+#   new-api    — unified OpenAI-compatible entry (/v1). Channels point at
+#                real providers OR at mock-llm for canary/testing.
+#
+# AgentHub keeps this stack OPTIONAL: the application defaults to the
+# self-hosted per-provider adapters (LLM_GATEWAY="" ). Set
+#   AGENTHUB_LLM_GATEWAY=newapi
+#   AGENTHUB_NEWAPI_BASE_URL=http://127.0.0.1:3000/v1
+#   AGENTHUB_NEWAPI_API_KEY=sk-agenthub-<token>
+# to route the LLM layer through new-api.
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.newapi.yml up -d --build
+#   docker compose -f deploy/docker-compose.newapi.yml down
+
+services:
+  new-api:
+    image: caloskao/new-api:latest
+    container_name: new-api
+    restart: unless-stopped
+    ports:
+      - "${NEWAPI_PORT:-3000}:3000"
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      SESSION_SECRET: "${NEWAPI_SESSION_SECRET:-change-me-in-production}"
+      SQL_DSN: "${NEWAPI_SQL_DSN:-agenthub_newapi.db}"
+      # Master key for the OpenAI-compatible entry; AgentHub uses it as the
+      # gateway key (or a scoped sub-token created in the admin console).
+      INITIAL_ROOT_TOKEN: "${NEWAPI_ROOT_TOKEN:-sk-agenthub-root}"
+    volumes:
+      - newapi-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  mock-llm:
+    build:
+      context: ./newapi
+      dockerfile: Dockerfile.mock-llm
+    container_name: agenthub-mock-llm
+    restart: unless-stopped
+    environment:
+      MOCK_MODEL: "${MOCK_MODEL:-mock-llm}"
+      MOCK_LATENCY_MS: "${MOCK_LATENCY_MS:-0}"
+    ports:
+      - "${MOCK_LLM_PORT:-8099}:8099"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/v1/models')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  newapi-data:
