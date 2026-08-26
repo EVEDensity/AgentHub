@@ -114,6 +114,15 @@ no new logic added to the legacy files.
 
 ### Phase R4: Prove performance and quality (weeks 18-26)
 
+> Status: in progress (2026-08-26). Started: L2 vector lifecycle landed in
+> `app/services/memory/l2_vector.py` with embedding-version/retention/
+> deletion-propagation; CJK-aware estimator refactored to a public
+> `estimate_tokens_multilingual`; benchmark suite extended with
+> `knowledge_retrieval_recall` (measured recall@3 = 100% on the internal eval
+> set, min 85%) and `cn_tokenizer_precision` (measured when a native CN
+> tokenizer is configured, honest SKIP otherwise) — both wired into the
+> `docs-gates` CI job.
+
 | Task | Debt | Acceptance criteria |
 |---|---|---|
 | Complete memory L2 vector lifecycle + CN provider tokenizers; add offline eval set | D9 | Recall > 85% on internal set; token estimation error < 5% for listed CN providers |

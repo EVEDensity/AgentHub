@@ -12,7 +12,6 @@ from app.services.memory.models import (
     MemoryType,
 )
 
-
 _LAZY_EXPORTS = {
     "MemoryStorage": ("app.services.memory.storage", "MemoryStorage"),
     "MemoryScanner": ("app.services.memory.scanner", "MemoryScanner"),
@@ -41,16 +40,32 @@ def __getattr__(name: str) -> Any:
 if TYPE_CHECKING:
     from app.services.memory.consolidator import MemoryConsolidator
     from app.services.memory.extractor import MemoryExtractor
+    from app.services.memory.l2_vector import (
+        EmbeddingVersion,
+        L2VectorEntry,
+        L2VectorIndex,
+        LocalHashEmbedder,
+    )
+    from app.services.memory.procedural_memory import (
+        ProceduralMemoryCatalog,
+        ProceduralMemoryRecord,
+    )
     from app.services.memory.scanner import MemoryScanner
+    from app.services.memory.semantic_memory import (
+        SemanticMemoryRecord,
+        SemanticMemoryStore,
+    )
     from app.services.memory.session_memory import SessionMemoryManager
     from app.services.memory.session_store import SessionMemoryInfo, SessionMemoryStore
     from app.services.memory.storage import MemoryStorage
-    from app.services.memory.semantic_memory import SemanticMemoryRecord, SemanticMemoryStore
-    from app.services.memory.procedural_memory import ProceduralMemoryCatalog, ProceduralMemoryRecord
 
 
 __all__ = [
     "CognitiveMemoryType",
+    "EmbeddingVersion",
+    "L2VectorEntry",
+    "L2VectorIndex",
+    "LocalHashEmbedder",
     "MemoryConsolidator",
     "MemoryDocument",
     "MemoryExtractor",
@@ -60,11 +75,11 @@ __all__ = [
     "MemoryScope",
     "MemoryStorage",
     "MemoryType",
+    "ProceduralMemoryCatalog",
+    "ProceduralMemoryRecord",
+    "SemanticMemoryRecord",
+    "SemanticMemoryStore",
     "SessionMemoryInfo",
     "SessionMemoryManager",
     "SessionMemoryStore",
-    "SemanticMemoryRecord",
-    "SemanticMemoryStore",
-    "ProceduralMemoryCatalog",
-    "ProceduralMemoryRecord",
 ]

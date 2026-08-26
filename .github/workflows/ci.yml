@@ -12,7 +12,8 @@ concurrency:
 
 jobs:
   # ═══════════════════════════════════════════════════════════════════
-  # Docs & benchmark gates (R1) — doc-link integrity + claim discipline
+  # Docs & benchmark gates (R1/R4) — doc-link integrity + claim discipline
+  # + measured perf gates
   # ═══════════════════════════════════════════════════════════════════
   docs-gates:
     name: 'Docs & Benchmark Gates'
@@ -22,12 +23,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - run: pip install -r requirements.txt
+        continue-on-error: true
       - name: Check doc links resolve
         run: python benchmarks/gates.py check-links
       - name: Check claim discipline (no oversold performance claims)
         run: python benchmarks/gates.py check-docs
-      - name: Scaffold gates run (R4 fills real measurement)
+      - name: Real token-compaction gate (measured against production helpers)
         run: python benchmarks/gates.py run --name token_compaction_ratio
+      - name: L2 retrieval recall gate (offline eval set, recall > 85%)
+        run: python benchmarks/gates.py run --name knowledge_retrieval_recall
+      - name: CN tokenizer precision gate (skips until a native tokenizer is configured)
+        run: python benchmarks/gates.py run --name cn_tokenizer_precision
 
   # ═══════════════════════════════════════════════════════════════════
   # Frontend

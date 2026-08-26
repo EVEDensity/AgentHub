@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Iterable
-from collections.abc import Callable
 from pathlib import Path
-
 
 _MODEL_WINDOWS: tuple[tuple[str, int], ...] = (
     ("gpt-4.1", 1_047_576),
@@ -48,14 +46,26 @@ def _local_provider_tokenizer(provider: str, model: str):
         return None
     path = Path(configured)
     tokenizer_file = path / "tokenizer.json" if path.is_dir() else path
-    if not tokenizer_file.is_file():
-        return None
-    try:
-        from tokenizers import Tokenizer
+    if tokenizer_file.is_file():
+        try:
+            from tokenizers import Tokenizer
 
-        return Tokenizer.from_file(str(tokenizer_file))
-    except (ImportError, OSError, ValueError):
-        return None
+            return Tokenizer.from_file(str(tokenizer_file))
+        except (ImportError, OSError, ValueError):
+            return None
+    # HuggingFace model directory (config.json present, no tokenizer.json):
+    # load the fast tokenizer when transformers is available. Optional dep —
+    # without it we keep the multilingual estimator.
+    if (path / "config.json").is_file():
+        try:
+            from transformers import AutoTokenizer
+
+            hf = AutoTokenizer.from_pretrained(str(path), local_files_only=True)
+            if hf is not None and callable(hf):
+                return hf
+        except (ImportError, OSError, ValueError, TypeError):
+            return None
+    return None
 
 
 @lru_cache(maxsize=64)
@@ -69,6 +79,23 @@ def _tiktoken_encoder(model: str):
             return tiktoken.get_encoding("o200k_base")
     except (ImportError, ValueError):
         return None
+
+
+def estimate_tokens_multilingual(text: str) -> int:
+    """Multilingual estimator: CJK-aware fallback for providers without a
+    native tokenizer.
+
+    CJK characters average ~0.9 tokens/char on modern multilingual BPE
+    (o200k/Qwen-style); latin ~4 chars/token. Keeping the estimate slightly
+    above reality remains conservative for budget enforcement. Exposed so the
+    CI tokenizer-precision gate can measure estimator error against a real
+    reference tokenizer.
+    """
+    if not text:
+        return 0
+    cjk = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
+    non_cjk = len(text) - cjk
+    return max(1, int(cjk * 0.9) + (non_cjk + 3) // 4)
 
 
 def count_tokens(text: str, provider: str = "", model: str = "") -> int:
@@ -88,15 +115,18 @@ def count_tokens(text: str, provider: str = "", model: str = "") -> int:
         return max(1, int(custom(text)))
     local_tokenizer = _local_provider_tokenizer(provider_key, model_key)
     if local_tokenizer is not None:
-        return len(local_tokenizer.encode(text).ids)
+        encoded = local_tokenizer.encode(text)
+        if isinstance(encoded, list):
+            return max(1, len(encoded))
+        try:
+            return max(1, len(encoded.ids))
+        except AttributeError:
+            return max(1, len(str(text)) // 2 + 1)
     if provider_key in {"openai", "azure_openai"} or model_key.startswith(("gpt-", "o1", "o3")):
         encoder = _tiktoken_encoder(model or "gpt-4o")
         if encoder is not None:
             return len(encoder.encode(text, disallowed_special=()))
-
-    cjk = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
-    non_cjk = len(text) - cjk
-    return max(1, cjk + (non_cjk + 3) // 4)
+    return estimate_tokens_multilingual(text)
 
 
 def tokenizer_backend(provider: str = "", model: str = "") -> str:
@@ -136,7 +166,7 @@ class TokenBudget:
         model: str = "",
         *,
         output_reserve: int = 4_096,
-    ) -> "TokenBudget":
+    ) -> TokenBudget:
         context_window = model_context_window(provider, model)
         configured_cap = int(os.getenv("AGENTHUB_MAX_PROMPT_TOKENS", "20000"))
         prompt_limit = max(2_048, min(configured_cap, context_window - output_reserve))

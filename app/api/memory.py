@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.config import AUTO_MEMORY_ENABLED, MEMORY_DIR
+from app.db.session import afetch_all
+from app.services.auth.service import get_current_user
+from app.services.auth.session_guard import check_session_access
 from app.services.memory import (
     CognitiveMemoryType,
     MemoryDocument,
-    MemoryHeader,
     MemoryScanner,
     MemoryScope,
     MemoryStorage,
@@ -19,12 +19,9 @@ from app.services.memory import (
 )
 from app.services.memory.consolidator import MemoryConsolidator
 from app.services.memory.extractor import MemoryExtractor
-from app.services.memory.session_memory import SessionMemoryManager
-from app.services.memory.semantic_memory import SemanticMemoryStore
 from app.services.memory.procedural_memory import ProceduralMemoryCatalog
-from app.services.auth.service import get_current_user
-from app.services.auth.session_guard import check_session_access
-from app.db.session import afetch_all
+from app.services.memory.semantic_memory import SemanticMemoryStore
+from app.services.memory.session_memory import SessionMemoryManager
 from app.utils.async_file import aexists, aread_text
 
 router = APIRouter(prefix="/api/memory", tags=["memory"])
@@ -38,9 +35,9 @@ _extractors: dict[str, MemoryExtractor] = {}
 _consolidators: dict[str, MemoryConsolidator] = {}
 _session_mgrs: dict[str, SessionMemoryManager] = {}
 # Shared (non-user-scoped) singletons for backward compat
-_storage_shared: Optional[MemoryStorage] = None
-_scanner_shared: Optional[MemoryScanner] = None
-_session_mgr_shared: Optional[SessionMemoryManager] = None
+_storage_shared: MemoryStorage | None = None
+_scanner_shared: MemoryScanner | None = None
+_session_mgr_shared: SessionMemoryManager | None = None
 
 
 def _get_user_memory_dir(user_id: str) -> Path:
@@ -102,7 +99,15 @@ def _get_session_mgr(user_id: str = "") -> SessionMemoryManager:
 
 
 def _get_semantic_store(user_id: str) -> SemanticMemoryStore:
-    return SemanticMemoryStore(_get_user_memory_dir(user_id or "local-admin"))
+    # Default L2 embedder is the deterministic local hashing embedder — no
+    # network/model dependency; swap for a model-based EmbeddingProvider when
+    # a remote embedding endpoint is configured.
+    from app.services.memory.l2_vector import LocalHashEmbedder
+
+    return SemanticMemoryStore(
+        _get_user_memory_dir(user_id or "local-admin"),
+        embedder=LocalHashEmbedder(),
+    )
 
 
 def _get_procedural_catalog(user_id: str) -> ProceduralMemoryCatalog:
@@ -117,20 +122,20 @@ class MemoryCreateRequest(BaseModel):
     description: str = Field("", max_length=512, description="一行描述")
     type: MemoryType = Field(MemoryType.REFERENCE, description="记忆类型")
     body: str = Field("", description="记忆内容正文（Markdown）")
-    filename: Optional[str] = Field(None, description="可选：指定文件名，默认从 name 自动生成")
+    filename: str | None = Field(None, description="可选：指定文件名，默认从 name 自动生成")
     memory_type: CognitiveMemoryType = CognitiveMemoryType.SEMANTIC
     scope: MemoryScope = MemoryScope.USER
     source: str = Field("manual", min_length=1, max_length=128)
 
 
 class MemoryUpdateRequest(BaseModel):
-    name: Optional[str] = Field(None, max_length=128)
-    description: Optional[str] = Field(None, max_length=512)
-    type: Optional[MemoryType] = None
-    body: Optional[str] = None
-    memory_type: Optional[CognitiveMemoryType] = None
-    scope: Optional[MemoryScope] = None
-    source: Optional[str] = Field(None, min_length=1, max_length=128)
+    name: str | None = Field(None, max_length=128)
+    description: str | None = Field(None, max_length=512)
+    type: MemoryType | None = None
+    body: str | None = None
+    memory_type: CognitiveMemoryType | None = None
+    scope: MemoryScope | None = None
+    source: str | None = Field(None, min_length=1, max_length=128)
 
 
 class MemoryFileInfo(BaseModel):
@@ -213,8 +218,8 @@ async def list_procedural_memories(
 
 @router.get("/files", response_model=list[MemoryFileInfo])
 async def list_memories(
-    type_filter: Optional[str] = Query(None, alias="type"),
-    memory_type_filter: Optional[str] = Query(None, alias="memory_type"),
+    type_filter: str | None = Query(None, alias="type"),
+    memory_type_filter: str | None = Query(None, alias="memory_type"),
     user: dict = Depends(get_current_user),
 ):
     """List all memory files with headers, optionally filtered by type."""
@@ -616,7 +621,7 @@ async def get_extraction_status(user: dict = Depends(get_current_user)):
 
 
 @router.post("/extraction/backfill")
-async def backfill_extraction(session_id: Optional[str] = Query(None), user: dict = Depends(get_current_user)):
+async def backfill_extraction(session_id: str | None = Query(None), user: dict = Depends(get_current_user)):
     """Extract memories from existing sessions.
 
     If session_id is provided, extract only from that session.
@@ -642,7 +647,7 @@ async def backfill_extraction(session_id: Optional[str] = Query(None), user: dic
 
 
 @router.post("/extraction/reset")
-async def reset_extraction(session_id: Optional[str] = Query(None), user: dict = Depends(get_current_user)):
+async def reset_extraction(session_id: str | None = Query(None), user: dict = Depends(get_current_user)):
     """Reset extraction cursors.
 
     If session_id is provided, reset only that session.
@@ -948,7 +953,6 @@ async def refresh_global_summary(user: dict = Depends(get_current_user)):
 @router.post("/sessions/reset/{session_id}")
 async def reset_session_memory(session_id: str, user: dict = Depends(get_current_user)):
     """Reset cursor and delete summary for a session. Only the session owner can do this."""
-    from app.services.auth.session_guard import SessionRole, require_session_role
     # Only the session owner can reset memory
     access = await check_session_access(session_id, user)
     if not access.can_manage:

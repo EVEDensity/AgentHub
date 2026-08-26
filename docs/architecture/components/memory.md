@@ -153,9 +153,18 @@ Strengths:
 Remaining gaps:
 
 1. Native tokenizers are not yet available for every Chinese provider. The
-   fallback is safe for limits but cannot guarantee exact billing parity.
-2. L2 lacks a unified embedding version, retention policy, provenance model,
-   and deletion propagation across vector and file stores.
+   fallback is safe for limits but cannot guarantee exact billing parity. The
+   `cn_tokenizer_precision` bench gate measures estimator error against a
+   configured reference tokenizer (`AGENTHUB_CN_TOKENIZER_PROVIDER` /
+   `AGENTHUB_TOKENIZER_<PROVIDER>_PATH`) and reports an honest SKIP until one
+   is provisioned.
+2. L2 now has a unified embedding version, retention policy, provenance
+   model, and deletion propagation (`app/services/memory/l2_vector.py`,
+   integrated into `SemanticMemoryStore`). Remaining: swap the default local
+   hashing embedder for a model-based one once a remote embedding endpoint is
+   configured, and offline retrieval recall is enforced by the
+   `knowledge_retrieval_recall` gate (recall@3 > 85% on the internal eval set
+   in `benchmarks/gates.py`).
 3. L3 global summaries do not yet distinguish durable facts, preferences,
    hypotheses, and expired information.
 4. Summary quality is a heuristic operational signal, not an evaluator-model
@@ -169,7 +178,9 @@ Remaining gaps:
 
 ### Short term
 
-- Add Qwen, DeepSeek, Doubao, GLM, and Claude native tokenizer adapters.
+- Add Qwen, DeepSeek, Doubao, GLM, and Claude native tokenizer adapters
+  (load path exists via `AGENTHUB_TOKENIZER_<PROVIDER>_PATH`; parity enforced
+  by the `cn_tokenizer_precision` gate once a reference is provisioned).
 - Include covered message sequence ranges in summary state and reject stale
   write-back events.
 - Add integration tests with NATS, Rust core, summarization-service, and the
@@ -181,7 +192,9 @@ Remaining gaps:
 
 - Introduce a memory record schema containing tenant, session, source,
   provenance, confidence, sensitivity, TTL, embedding version, and tombstone.
-- Build L2 vector indexing with deletion propagation and tenant filters.
+  (L2 lifecycle — embedding version, TTL, tombstone, deletion propagation —
+  is implemented in `app/services/memory/l2_vector.py`; sensitivity and
+  team-scoped multi-tenant write paths remain.)
 - Split L3 into durable facts, user/team preferences, decisions, and expired
   candidates; refresh incrementally instead of regenerating all summaries.
 - Move cache versions and summary checkpoints to Redis/PostgreSQL for replicas.
