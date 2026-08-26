@@ -4,6 +4,6 @@ WORKDIR /srv
 RUN pip install --no-cache-dir fastapi uvicorn
 
 COPY mock_llm.py /srv/mock_llm.py
-EXPOSE 8099
+EXPOSE 8101
 
-CMD ["uvicorn", "mock_llm:app", "--host", "0.0.0.0", "--port", "8099"]
+CMD ["uvicorn", "mock_llm:app", "--host", "0.0.0.0", "--port", "8101"]

@@ -16,16 +16,22 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 import uuid
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 app = FastAPI(title="mock-llm", version="1.0.0")
 
 MODEL = os.getenv("MOCK_MODEL", "mock-llm").strip()
 LATENCY_MS = int(os.getenv("MOCK_LATENCY_MS", "0"))
+
+
+@app.get("/__health")
+async def health() -> dict:
+    return {"ok": True, "model": MODEL, "latency_ms": LATENCY_MS}
 
 
 @app.get("/v1/models")
@@ -52,9 +58,17 @@ def _echo_body(payload: dict) -> dict:
 
 @app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(request: Request):
-    if LATENCY_MS:
-        await asyncio.sleep(LATENCY_MS / 1000.0)
     payload = await request.json()
+    # ── test hooks (async so the loop stays responsive) ─────────────
+    first_msg = (payload.get("messages") or [{}])[0]
+    content = str(first_msg.get("content", ""))
+    model = str(payload.get("model", ""))
+    if "agenthub.error:503" in content:
+        raise HTTPException(status_code=503, detail="mock error injection")
+    if model.startswith("mock-llm-ttft") and "mode:PING" in content:
+        match = re.search(r"agenthub:latency:(\d+)", content)
+        if match:
+            await asyncio.sleep(int(match.group(1)) / 1000.0)
     if payload.get("stream"):
         async def stream():
             body = _echo_body(payload)

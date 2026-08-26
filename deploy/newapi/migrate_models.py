@@ -363,7 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         # so the pipeline is testable end-to-end without provider keys.
         # NOTE: new-api auto-appends /v1 to the channel base_url, so the canary
         # base must NOT carry a /v1 suffix (else requests double into /v1/v1).
-        canary_url = os.getenv("MOCK_LLM_URL", "http://127.0.0.1:8099")
+        canary_url = os.getenv("MOCK_LLM_URL", "http://127.0.0.1:8101")
         channels.append(MigratedChannel(
             provider="openai", name="agenthub-mock-canary", type=1,
             base_url=canary_url, models=["mock-llm"],

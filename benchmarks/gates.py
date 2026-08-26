@@ -34,12 +34,14 @@ PERFORMANCE_CLAIMS: dict[str, str] = {
     "knowledge_retrieval_p95": "docs/zh/advanced/performance.md (P95 < 80ms target)",
     "knowledge_retrieval_recall": "docs/architecture/components/memory.md (L2 recall > 85%)",
     "cn_tokenizer_precision": "docs/architecture/components/memory.md (CN token parity < 5%)",
+    "streaming_ttft": "docs/zh/advanced/performance.md (streaming first token)",
 }
 
 # Hard thresholds (ms). Raise gates as hardware/CI evolves.
 DEFAULT_THRESHOLDS_MS: dict[str, float] = {
     "api_latency_p95": 200.0,
     "knowledge_retrieval_p95": 80.0,
+    "streaming_ttft": 3_000.0,
 }
 
 
@@ -186,6 +188,8 @@ def run_gate(name: str, threshold_ms: float, addr: str | None) -> GateResult:
         return _measure_knowledge_retrieval_recall()
     if name == "cn_tokenizer_precision":
         return _measure_cn_tokenizer_precision()
+    if name == "streaming_ttft":
+        return _measure_streaming_ttft(threshold_ms)
     return GateResult(name=name, passed=False, detail=f"unknown gate: {name}")
 
 
@@ -344,6 +348,78 @@ def _measure_cn_tokenizer_precision(max_error: float = 0.05) -> GateResult:
         detail=f"estimator p95 error={p95:.1%} threshold={max_error:.0%} "
                f"provider={provider} samples={len(errors)} backend={backend}",
     )
+
+
+def _measure_streaming_ttft(max_ms: float = 3_000.0, samples: int = 6) -> GateResult:
+    """Measure client-observed streaming time-to-first-token.
+
+    Boots the repo's OpenAI-compatible mock upstream (deterministic, offline)
+    and times the first SSE chunk over a POOLED connection — the same path the
+    app's streaming executor consumes. A persistent client with
+    ``trust_env=False`` avoids proxy buffering artifacts, so the number is the
+    incremental streaming cost (not TCP setup), which is what the
+    "streaming first token" claim in performance.md should guard.
+    """
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    import httpx
+
+    def free_port() -> int:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+
+    port = free_port()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "mock_llm:app", "--host", "127.0.0.1",
+         "--port", str(port), "--app-dir", str(ROOT / "deploy" / "newapi")],
+        env={**__import__("os").environ, "MOCK_MODEL": "mock-llm-ttft"},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    base = f"http://127.0.0.1:{port}"
+    try:
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                httpx.get(f"{base}/__health", timeout=1.0, trust_env=False)
+                break
+            except Exception:  # noqa: BLE001 — wait-for-ready loop
+                time.sleep(0.3)
+
+        with httpx.Client(trust_env=False, timeout=15) as client:
+            client.get(f"{base}/__health")  # warm the pooled connection
+            first_tokens: list[float] = []
+            for _ in range(samples):
+                start = time.perf_counter()
+                # Time until the FIRST SSE data line — do not read the whole body.
+                with client.stream("POST", f"{base}/v1/chat/completions",
+                                   json={"model": "mock-llm-ttft", "stream": True,
+                                         "messages": [{"role": "user", "content": "mode:PING"}]}) as resp:
+                    assert resp.status_code == 200
+                    for line in resp.iter_lines():
+                        if line.startswith("data:") and "[DONE]" not in line:
+                            break
+                first_tokens.append((time.perf_counter() - start) * 1000.0)
+
+        first_tokens.sort()
+        p95 = first_tokens[min(samples - 1, int(samples * 0.95) - 1)]
+        passed = p95 <= max_ms
+        return GateResult(
+            name="streaming_ttft",
+            passed=passed,
+            detail=f"first-token p95={p95:.0f}ms threshold={max_ms:.0f}ms "
+                   f"samples={samples} min={min(first_tokens):.0f}ms",
+            measured_ms=p95,
+        )
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def main(argv: list[str] | None = None) -> int:

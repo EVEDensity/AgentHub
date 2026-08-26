@@ -33,6 +33,8 @@ jobs:
         run: python benchmarks/gates.py run --name token_compaction_ratio
       - name: L2 retrieval recall gate (offline eval set, recall > 85%)
         run: python benchmarks/gates.py run --name knowledge_retrieval_recall
+      - name: Streaming first-token (TTFT) gate (pooled local mock, < 3s)
+        run: python benchmarks/gates.py run --name streaming_ttft
       - name: CN tokenizer precision gate (skips until a native tokenizer is configured)
         run: python benchmarks/gates.py run --name cn_tokenizer_precision
 

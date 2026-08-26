@@ -19,6 +19,7 @@ API 目标转换为可恢复、可审计、附带 Artifact 和 Evidence 的执�
 | MCP Gateway | 原型 | STDIO + SSE 已有，业务无状态化待完成 |
 | A2A | 原型 | Agent Card、能力探测、双向签名信任和 Mission 任务接口已有，完整外部互操作认证待完成 |
 | RAG / Memory | 部分实现 | 检索与记忆组件存在，统一 Context Compiler 待完成 |
+| LLM 网关（new-api，可选） | 条件可用 | `AGENTHUB_LLM_GATEWAY=newapi` 启用，通道/迁移/验证脚本见 [deploy/newapi](../deploy/newapi/README.md)，决策 [ADR-0104](architecture/decisions/0104-optional-newapi-llm-gateway.md) |
 | 沙箱、IAM、审计 | 部分实现 | 部署能力与安全边界按环境逐项验证 |
 
 ### 技术栈

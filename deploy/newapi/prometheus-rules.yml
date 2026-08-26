@@ -1,0 +1,75 @@
+# new-api LLM gateway — Prometheus alerting rules (M1/M3).
+#
+# Scrape target (new-api exposes Prometheus /metrics on :3000):
+#   - job_name: new-api
+#     static_configs: [{ targets: ["host.docker.internal:3000"] }]
+#
+# Load this file into your existing Prometheus (see
+# deploy/docker-compose.platform.yml's prometheus service) and route
+# alerts to your notification channel.
+
+groups:
+  - name: new-api-gateway
+    rules:
+      # M3-1: gateway 5xx rate (relay/backend errors) above threshold.
+      - alert: NewAPI5xxRateHigh
+        expr: |
+          sum(rate(relay_requests_total{status=~"5.."}[5m])) /
+          clamp_min(sum(rate(relay_requests_total[5m])), 1e-6) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: new-api
+        annotations:
+          summary: "new-api 5xx 占比超 5%（近5分钟）"
+          description: "网关 5xx 占比达到 {{ $value | humanizePercentage }}，请检查上游渠道与网关健康。"
+
+      # M3-2: gateway down / unresponsive (probe of /api/status).
+      - alert: NewAPIProbeDown
+        expr: probe_success{job="new-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: new-api
+        annotations:
+          summary: "new-api 探活失败（/api/status）"
+          description: "网关持续不可达超过 2 分钟，LLM 链路将中断；请优先回滚 AGENTHUB_LLM_GATEWAY。"
+
+      # M3-3: request error rate (4xx + 5xx) high — quota / key / price issues.
+      - alert: NewAPIErrorRateHigh
+        expr: |
+          sum(rate(relay_requests_total{status=~"4..|5.."}[10m])) /
+          clamp_min(sum(rate(relay_requests_total[10m])), 1e-6) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          component: new-api
+        annotations:
+          summary: "new-api 请求错误率超 10%"
+          description: "4xx/5xx 合计占比 {{ $value | humanizePercentage }}，常见于 key 失效/配额耗尽/模型价格未配置。"
+
+      # M3-4: latency regression — relay p95 above the SLO (2s).
+      - alert: NewAPILatencySLO
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(relay_request_duration_seconds_bucket[10m])) by (le)
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          component: new-api
+        annotations:
+          summary: "new-api 转发 p95 延迟超过 2s"
+          description: "p95 延迟 {{ $value }}s，检查上游渠道响应与网关背压。"
+
+      # M3-5: balance/quota exhaustion — a channel key likely to fail next.
+      # Populated by the usage exporter (M2) as a synthetic series.
+      - alert: NewAPIChannelKeyBalanceLow
+        expr: agenthub_newapi_channel_min_balance < 1e6
+        for: 30m
+        labels:
+          severity: critical
+          component: new-api
+        annotations:
+          summary: "new-api 渠道 key 余额偏低"
+          description: "最低渠道余额 {{ $value }}，请补充渠道 key 或配额，避免转发全部失败。"

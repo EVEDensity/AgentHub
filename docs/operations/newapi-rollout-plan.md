@@ -5,6 +5,13 @@
 > Last reviewed: 2026-08-26
 > 前置：ADR-0104 已实施（`AGENTHUB_LLM_GATEWAY=newapi` 开关、迁移脚本、
 > compose 栈、mock 链路验证通过）。本文排布"替换完成之后"的落地任务。
+>
+> 执行状态（2026-08-26）：T1-T5（e2e 矩阵/迁移回归/回滚演练/安全卫生）
+> 单测与真实 new-api 矩阵已落地；P1 `streaming_ttft` 门禁已接入 CI；
+> P2 连接池/超时对齐验证通过；P4 tokenizer 门禁可测量性测试通过
+> （无原生 tokenizer 时仍诚实 SKIP）；M1/M3 告警规则、M2 用量导出脚本、
+> U1 管理台手册（docs/operations/newapi-admin-guide.md）已落地；
+> D1-D5 文档已更新。剩余：真实供应商渠道 e2e 需团队提供 key 后补跑。
 
 ## 0. 当前基线（已完成，2026-08-26）
 

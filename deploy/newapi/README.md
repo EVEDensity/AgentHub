@@ -9,6 +9,9 @@ AgentHub 默认使用自研按供应商适配器。`AGENTHUB_LLM_GATEWAY=newapi`
 - `Dockerfile.mock-llm` / `mock_llm.py` — OpenAI 兼容 mock 上游（离线验证用）
 - `migrate_models.py` — 将 `model_configs` 表与环境变量 key 迁移为 new-api 渠道
 - `verify_newapi.py` — 上线后一键验证全链路
+- `export_usage.py` — 日级用量导出（M2）+ Prometheus textfile 指标
+- `prometheus-rules.yml` — 网关告警规则（M3）
+- 控制台操作手册：[docs/operations/newapi-admin-guide.md](../../docs/operations/newapi-admin-guide.md)
 
 ## 启动（服务器 / 有 Docker 的环境）
 
@@ -67,7 +70,7 @@ python deploy/newapi/verify_newapi.py \
   否则 `/v1/chat/completions` 返回 `model_price_error`。
 - **渠道 base_url 不带 `/v1`**：new-api 会自动向渠道 `base_url` 追加
   `/v1`，若配置里写了 `.../v1` 会请求变成 `/v1/v1` 返回 404。mock 渠道应
-  用 `http://127.0.0.1:8099`（不带 `/v1`）。
+  用 `http://127.0.0.1:8101`（不带 `/v1`）。
 - **token key 掩码**：new-api 的 API 响应对 token key 全程掩码（仅创建
   时提示一次）。自用可本地读 sqlite（`tokens.key`，文件默认
   `one-api.db`）；多机部署请从管理台复制并注入密钥管理。迁移脚本不会把

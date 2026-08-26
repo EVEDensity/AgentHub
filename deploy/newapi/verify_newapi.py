@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="verify new-api gateway is callable")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--root-token", default="sk-agenthub-root")
-    parser.add_argument("--mock-url", default="http://127.0.0.1:8099")
+    parser.add_argument("--mock-url", default="http://127.0.0.1:8101")
     parser.add_argument("--gateway-key", default="")
     parser.add_argument("--sqlite-db", default="one-api.db")
     args = parser.parse_args(argv)

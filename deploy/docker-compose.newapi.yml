@@ -52,9 +52,9 @@ services:
       MOCK_MODEL: "${MOCK_MODEL:-mock-llm}"
       MOCK_LATENCY_MS: "${MOCK_LATENCY_MS:-0}"
     ports:
-      - "${MOCK_LLM_PORT:-8099}:8099"
+      - "${MOCK_LLM_PORT:-8101}:8101"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/v1/models')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8101/v1/models')"]
       interval: 10s
       timeout: 5s
       retries: 5
