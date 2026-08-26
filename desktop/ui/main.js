@@ -1,247 +1,190 @@
 const elements = {
-  controlState: document.querySelector('#control-state'),
-  controlTitle: document.querySelector('#control-plane-title'),
-  controlDetail: document.querySelector('#control-detail'),
-  openConsole: document.querySelector('#open-console'),
-  runtimeStatus: document.querySelector('#runtime-status'),
-  runtimeDetail: document.querySelector('#runtime-detail'),
-  runtimeReadiness: document.querySelector('#runtime-readiness'),
-  runtimeDot: document.querySelector('#state-dot'),
-  start: document.querySelector('#start'),
-  stop: document.querySelector('#stop'),
-  refresh: document.querySelector('#refresh'),
-  feedback: document.querySelector('#feedback'),
-  settings: document.querySelector('#settings'),
-  dialog: document.querySelector('#configuration-dialog'),
-  form: document.querySelector('#configuration-form'),
-  closeConfiguration: document.querySelector('#close-configuration'),
-  cancelConfiguration: document.querySelector('#cancel-configuration'),
-  saveConfiguration: document.querySelector('#save-configuration'),
-  missionControlEndpoint: document.querySelector('#mission-control-endpoint'),
-  mcpEndpoint: document.querySelector('#mcp-endpoint'),
-  artifactDirectory: document.querySelector('#artifact-directory'),
-  missionControlToken: document.querySelector('#mission-control-token'),
-  mcpToken: document.querySelector('#mcp-token'),
-  modelApiKey: document.querySelector('#model-api-key'),
-  secretStatus: document.querySelector('#secret-status'),
-};
-
-const runtimeLabels = {
-  stopped: '已停止',
-  starting: '启动中',
-  running: '运行中',
-  configuration_required: '需要配置',
-  failed: '启动失败',
-};
-
-const readinessLabels = {
-  unknown: '未知',
-  probing: '探测中',
-  ready: '已就绪',
-  unhealthy: '不健康',
+  workspaceState: document.querySelector('#workspace-state'), serviceList: document.querySelector('#service-list'), refresh: document.querySelector('#refresh'), feedback: document.querySelector('#feedback'), taskInput: document.querySelector('#task-input'), startTask: document.querySelector('#start-task'), openConsole: document.querySelector('#open-console'), openConsoleNav: document.querySelector('#open-console-nav'), openConsoleCard: document.querySelector('#open-console-card'), navHome: document.querySelector('#nav-home'), homeView: document.querySelector('#home-view'), adminView: document.querySelector('#admin-view'), settingsView: document.querySelector('#settings-view'), settings: document.querySelector('#settings'), settingsNav: document.querySelector('#settings-nav'), mainNav: document.querySelector('#main-nav'), settingsBack: document.querySelector('#settings-back'), settingsItems: document.querySelectorAll('[data-settings-section]'), settingsPanels: document.querySelectorAll('[data-settings-panel]'), settingsTitle: document.querySelector('#settings-title'), adminRefresh: document.querySelector('#admin-refresh'), adminFeedback: document.querySelector('#admin-feedback'), modelForm: document.querySelector('#model-form'), modelProvider: document.querySelector('#model-provider'), modelName: document.querySelector('#model-name'), modelBaseUrl: document.querySelector('#model-base-url'), modelApiKey: document.querySelector('#model-api-key'), modelList: document.querySelector('#model-list'), agentList: document.querySelector('#agent-list'), mcpEndpointLabel: document.querySelector('#mcp-endpoint-label'), adminTabs: document.querySelectorAll('[data-admin-tab]'), dialog: document.querySelector('#configuration-dialog'), form: document.querySelector('#configuration-form'), closeConfiguration: document.querySelector('#close-configuration'), cancelConfiguration: document.querySelector('#cancel-configuration'), saveConfiguration: document.querySelector('#save-configuration'), missionControlEndpoint: document.querySelector('#mission-control-endpoint'), mcpEndpoint: document.querySelector('#mcp-endpoint'), artifactDirectory: document.querySelector('#artifact-directory'), missionControlToken: document.querySelector('#mission-control-token'), mcpToken: document.querySelector('#mcp-token'), secretStatus: document.querySelector('#secret-status'), taskResult: document.querySelector('#task-result'), resultStatus: document.querySelector('#result-status'), resultSummary: document.querySelector('#result-summary'), resultItems: document.querySelector('#result-items'), configurationModelApiKey: document.querySelector('#configuration-model-api-key'), adminFrame: document.querySelector('#admin-frame'),
 };
 
 function nativeInvoke(command, args) {
   const invoke = window.__TAURI__?.core?.invoke;
-  if (invoke) {
-    return invoke(command, args);
-  }
-
-  if (command === 'runtime_status') {
-    return Promise.resolve({
-      status: 'configuration_required',
-      readiness: 'unknown',
-      detail: '该页面需要在 AgentHub 桌面应用中打开。',
-    });
-  }
-  if (command === 'probe_control_plane') {
-    return Promise.resolve({
-      reachability: 'not_configured',
-      endpointConfigured: false,
-      detail: '该页面需要在 AgentHub 桌面应用中打开。',
-    });
-  }
-  if (command === 'configuration_status') {
-    return Promise.resolve({
-      missionControlEndpointConfigured: false,
-      readyForRuntime: false,
-      missionControlToken: 'missing',
-    });
-  }
-  if (command === 'configuration_details') {
-    return Promise.resolve({
-      missionControlEndpoint: null,
-      mcpEndpoint: null,
-      artifactDirectory: null,
-      missionControlToken: 'missing',
-      mcpToken: 'missing',
-      modelApiKey: 'missing',
-    });
-  }
+  if (invoke) return invoke(command, args);
+  if (command === 'service_status') return Promise.resolve([]);
+  if (command === 'runtime_status') return Promise.resolve({ status: 'stopped', readiness: 'unknown', detail: '请在 AgentHub 桌面应用中打开。' });
+  if (command === 'probe_control_plane') return Promise.resolve({ reachability: 'not_configured', endpointConfigured: false, detail: '请在 AgentHub 桌面应用中打开。' });
+  if (command === 'configuration_details') return Promise.resolve({ missionControlEndpoint: null, mcpEndpoint: null, artifactDirectory: null, missionControlToken: 'missing', mcpToken: 'missing', modelApiKey: 'missing' });
+  if (command === 'local_service_endpoint') return Promise.resolve('http://127.0.0.1:28000');
+  if (command === 'frontend_endpoint') return Promise.resolve('http://127.0.0.1:28004');
   return Promise.reject(new Error('桌面命令不可用'));
 }
 
-const reachabilityCopy = {
-  not_configured: {
-    chip: '未配置',
-    chipClass: 'missing',
-    title: '还没有连接工作区',
-    detail: '完成连接配置后，从这里打开管理后台。',
-  },
-  reachable: {
-    chip: '已连接',
-    chipClass: 'reachable',
-    title: '工作区已连接',
-    detail: '从这里进入管理后台，继续处理当前工作。',
-  },
-  unreachable: {
-    chip: '无法连接',
-    chipClass: 'unreachable',
-    title: '工作区无法连接',
-    detail: '已保存地址，但管理后台没有响应。',
-  },
-  unauthorized: {
-    chip: '认证失败',
-    chipClass: 'unauthorized',
-    title: '凭据被拒绝',
-    detail: '请更新 Mission Control Token 后重试。',
-  },
-  unhealthy: {
-    chip: '响应无效',
-    chipClass: 'unhealthy',
-    title: '不是可用的管理后台',
-    detail: '该地址没有返回 Mission Control 健康接口。',
-  },
-};
+const serviceLabels = { 'mission-control': 'Mission Control', gateway: 'Gateway', 'mcp-gateway': 'MCP Gateway' };
+const localMissionControl = { endpoint: 'http://127.0.0.1:28000', workspaceId: 'local-admin', token: null };
+const statusClass = (status) => String(status || 'unknown').toLowerCase();
+const statusText = (status) => ({ missing: '未打包', stopped: '已停止', starting: '启动中', ready: '已就绪', failed: '失败' }[statusClass(status)] || '未知');
 
-function renderRuntime(snapshot) {
-  elements.runtimeStatus.textContent = runtimeLabels[snapshot.status] ?? '未知状态';
-  elements.runtimeDetail.textContent = snapshot.detail;
-  elements.runtimeReadiness.textContent = `就绪状态：${readinessLabels[snapshot.readiness] ?? '未知'}`;
-  elements.runtimeDot.className = `dot ${snapshot.status}`;
-  elements.start.disabled = ['running', 'starting'].includes(snapshot.status);
-  elements.stop.disabled = ['stopped', 'configuration_required'].includes(snapshot.status);
+function renderServices(services) {
+  if (!Array.isArray(services) || services.length === 0) {
+    elements.serviceList.innerHTML = '<div class="service-row"><span class="service-dot failed"></span><span class="service-name">本地服务</span><span class="service-detail">未返回服务状态</span></div>';
+    return;
+  }
+  elements.serviceList.replaceChildren(...services.map((service) => {
+    const row = document.createElement('div'); row.className = 'service-row';
+    row.innerHTML = `<span class="service-dot ${statusClass(service.status)}"></span><span class="service-name">${serviceLabels[service.name] || service.name}</span><span class="service-detail">${statusText(service.status)}${service.detail ? ` · ${service.detail}` : ''}</span>`;
+    return row;
+  }));
 }
 
-function renderControlPlane(snapshot) {
-  const copy = reachabilityCopy[snapshot.reachability] ?? reachabilityCopy.not_configured;
-  elements.controlState.textContent = copy.chip;
-  elements.controlState.className = `state-chip ${copy.chipClass}`;
-  elements.controlTitle.textContent = copy.title;
-  elements.controlDetail.textContent = copy.detail;
-  elements.openConsole.disabled = snapshot.endpointConfigured !== true;
+function renderWorkspaceState(services, controlPlane) {
+  const states = Array.isArray(services) ? services.map((item) => statusClass(item.status)) : [];
+  const failed = states.some((state) => ['failed', 'missing'].includes(state));
+  const ready = states.length > 0 && states.every((state) => state === 'ready');
+  const starting = states.some((state) => state === 'starting');
+  const label = failed ? '服务异常' : ready ? '本地工作区已就绪' : starting ? '正在启动本地服务' : '正在检查本地服务';
+  elements.workspaceState.innerHTML = `<span class="dot ${failed ? 'failed' : ready ? 'ready' : 'starting'}"></span>${label}`;
+  const canOpen = controlPlane?.endpointConfigured === true;
+  for (const button of [elements.openConsole, elements.openConsoleNav, elements.openConsoleCard]) button.disabled = !canOpen;
 }
 
 async function refresh() {
-  elements.refresh.disabled = true;
-  elements.feedback.textContent = '正在检查连接状态';
+  elements.refresh.disabled = true; elements.feedback.textContent = '正在启动本地工作区…';
   try {
-    const [runtime, controlPlane] = await Promise.all([
-      nativeInvoke('runtime_status'),
-      nativeInvoke('probe_control_plane'),
-    ]);
-    renderRuntime(runtime);
-    renderControlPlane(controlPlane);
-    elements.feedback.textContent = controlPlane.detail;
+    await nativeInvoke('start_runtime');
+    localMissionControl.endpoint = await nativeInvoke('local_service_endpoint');
+    const [services, controlPlane] = await Promise.all([nativeInvoke('service_status'), nativeInvoke('probe_control_plane')]);
+    renderServices(services); renderWorkspaceState(services, controlPlane);
+    const mcp = services.find((service) => service.name === 'mcp-gateway');
+    elements.mcpEndpointLabel.textContent = mcp?.detail || '本地服务状态读取中';
+    elements.feedback.textContent = controlPlane?.detail || '本地服务状态已更新';
+  } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '本地工作区启动失败'; renderWorkspaceState([], { endpointConfigured: false }); }
+  finally { elements.refresh.disabled = false; }
+}
+
+function switchView(view) {
+  const settings = view === 'settings';
+  elements.homeView.hidden = settings; elements.adminView.hidden = true; elements.settingsView.hidden = !settings;
+  elements.mainNav.hidden = settings; elements.settingsNav.hidden = !settings;
+  elements.navHome.classList.toggle('active', !settings);
+  if (settings) selectSettingsSection('general');
+}
+
+async function openAdminFrame() {
+  try {
+    const endpoint = await nativeInvoke('frontend_endpoint');
+    elements.adminFrame.src = `${endpoint}/admin?menu=通用`;
   } catch (error) {
-    elements.feedback.textContent = error instanceof Error ? error.message : '状态读取失败';
-  } finally {
-    elements.refresh.disabled = false;
+    elements.settingsTitle.textContent = '配置';
+    elements.adminFrame.replaceWith(Object.assign(document.createElement('p'), { textContent: error instanceof Error ? error.message : '完整管理后台启动失败', className: 'settings-description' }));
   }
 }
 
-async function invokeRuntime(command) {
-  elements.refresh.disabled = true;
+function selectSettingsSection(section) {
+  for (const item of elements.settingsItems) item.classList.toggle('active', item.dataset.settingsSection === section);
+  for (const panel of elements.settingsPanels) panel.hidden = panel.dataset.settingsPanel !== section;
+  const active = [...elements.settingsItems].find((item) => item.dataset.settingsSection === section);
+  elements.settingsTitle.textContent = active?.textContent?.trim() || '设置';
+  if (section === 'configuration') openAdminFrame();
+}
+
+async function loadAdmin() {
+  elements.adminFeedback.textContent = '正在读取管理数据…';
   try {
-    renderRuntime(await nativeInvoke(command));
-  } catch (error) {
-    elements.feedback.textContent = error instanceof Error ? error.message : '操作失败';
-  } finally {
-    elements.refresh.disabled = false;
-  }
+    const [models, agents] = await Promise.all([localApi('/api/admin/models'), localApi('/api/agent/registry')]);
+    elements.modelList.replaceChildren(...(Array.isArray(models) && models.length ? models : [{ modelName: '暂无模型配置', provider: '', baseUrl: '' }]).map((model) => {
+      const row = document.createElement('div'); row.className = 'admin-list-row';
+      row.innerHTML = `<strong>${model.modelName || '未命名模型'}</strong><span>${model.provider || ''}${model.baseUrl ? ` · ${model.baseUrl}` : ''}</span>`; return row;
+    }));
+    elements.agentList.replaceChildren(...(Array.isArray(agents) && agents.length ? agents : [{ agentId: '暂无 Agent 配置', adapterType: '', baseModelName: '' }]).map((agent) => {
+      const row = document.createElement('div'); row.className = 'admin-list-row';
+      row.innerHTML = `<strong>${agent.displayName || agent.agentId || '未命名 Agent'}</strong><span>${agent.adapterType || ''}${agent.baseModelName ? ` · ${agent.baseModelName}` : ''}</span>`; return row;
+    }));
+    elements.adminFeedback.textContent = '管理数据已更新';
+  } catch (error) { elements.adminFeedback.textContent = error instanceof Error ? error.message : '管理数据读取失败'; }
+}
+
+async function saveModel(event) {
+  event.preventDefault();
+  try {
+    await localApi('/api/admin/models', { method: 'POST', body: JSON.stringify({ provider: elements.modelProvider.value.trim(), modelName: elements.modelName.value.trim(), baseUrl: elements.modelBaseUrl.value.trim(), apiKey: elements.modelApiKey.value }) });
+    elements.modelForm.reset(); await loadAdmin(); elements.adminFeedback.textContent = '模型配置已保存';
+  } catch (error) { elements.adminFeedback.textContent = error instanceof Error ? error.message : '模型配置保存失败'; }
 }
 
 async function openConsole() {
-  elements.openConsole.disabled = true;
-  elements.feedback.textContent = '正在打开管理后台';
-  try {
-    await nativeInvoke('open_control_plane');
-    elements.feedback.textContent = '已在默认浏览器打开管理后台';
-  } catch (error) {
-    elements.feedback.textContent = error instanceof Error ? error.message : '管理后台打开失败';
-  } finally {
-    elements.openConsole.disabled = false;
+  elements.feedback.textContent = '正在打开工作区…';
+  try { switchView('settings'); selectSettingsSection('configuration'); elements.feedback.textContent = '已打开本地完整管理后台'; }
+  catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '工作区打开失败'; }
+}
+
+async function localApi(path, options = {}) {
+  if (!localMissionControl.token) {
+    const login = await fetch(`${localMissionControl.endpoint}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'admin', password: 'admin123' }) });
+    if (!login.ok) throw new Error('本地 Mission Control 登录失败，请检查服务状态');
+    localMissionControl.token = (await login.json()).accessToken;
+  }
+  const response = await fetch(`${localMissionControl.endpoint}${path}`, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localMissionControl.token}`, ...(options.headers || {}) } });
+  if (response.status === 401) { localMissionControl.token = null; return localApi(path, options); }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Mission Control 请求失败 (${response.status})`);
+  return body;
+}
+
+function renderTaskResult(mission, details = {}) {
+  elements.taskResult.hidden = false;
+  elements.resultStatus.textContent = mission.status || '处理中';
+  elements.resultSummary.textContent = mission.objective || '';
+  const items = [...(details.workUnits || []), ...(details.artifacts || []), ...(details.evidence || [])];
+  elements.resultItems.innerHTML = items.length ? items.map((item) => `<div class="result-item"><strong>${item.id || item.kind || '结果'}</strong><span>${item.status || item.verdict || item.summary || '已记录'}</span></div>`).join('') : '<div class="result-item"><span>任务已创建，等待执行服务产生结果。</span></div>';
+}
+
+async function pollMission(missionId) {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const mission = (await localApi(`/api/v1/missions/${encodeURIComponent(missionId)}`)).mission || await localApi(`/api/v1/missions/${encodeURIComponent(missionId)}`);
+    const [workUnits, artifacts, evidence] = await Promise.all([
+      localApi(`/api/v1/missions/${missionId}/work-units`), localApi(`/api/v1/missions/${missionId}/artifacts`), localApi(`/api/v1/missions/${missionId}/evidence`),
+    ]);
+    renderTaskResult(mission, { workUnits: workUnits.workUnits, artifacts: artifacts.artifacts, evidence: evidence.evidence });
+    if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(mission.status)) return;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 }
 
-function secretLabel(value) {
-  return value === 'configured' ? '已保存' : value === 'unavailable' ? '不可用' : '未配置';
+async function startTask() {
+  const prompt = elements.taskInput.value.trim();
+  if (!prompt) { elements.feedback.textContent = '请先描述要完成的任务'; elements.taskInput.focus(); return; }
+  elements.startTask.disabled = true; elements.feedback.textContent = '正在创建 Mission…';
+  try {
+    const contract = { id: `desktop-${Date.now()}`, version: 1, repositoryScopes: [], allowedCapabilities: [], budgets: { timeSeconds: 300, modelCost: 1, retries: 0 }, acceptanceCriteria: [{ id: 'desktop-review', kind: 'manual', description: '桌面端用户审核 Mission 输出。', required: true, configuration: {} }], decisionGates: [], forbiddenActions: [] };
+    const created = await localApi('/api/v1/missions', { method: 'POST', body: JSON.stringify({ workspaceId: localMissionControl.workspaceId, title: prompt.slice(0, 80), objective: prompt, source: { type: 'manual' }, contract }) });
+    const mission = created.mission || created;
+    renderTaskResult(mission); elements.feedback.textContent = 'Mission 已创建，正在启动…';
+    await localApi(`/api/v1/missions/${encodeURIComponent(mission.id)}/start`, { method: 'POST' });
+    elements.feedback.textContent = 'Mission 已启动，正在更新执行结果…';
+    await pollMission(mission.id);
+    elements.feedback.textContent = 'Mission 状态已更新';
+  } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '任务创建失败'; }
+  finally { elements.startTask.disabled = false; }
 }
 
+const secretLabel = (value) => value === 'configured' ? '已保存' : value === 'unavailable' ? '不可用' : '未配置';
 function renderConfigurationDetails(details) {
-  elements.missionControlEndpoint.value = details.missionControlEndpoint ?? '';
-  elements.mcpEndpoint.value = details.mcpEndpoint ?? '';
-  elements.artifactDirectory.value = details.artifactDirectory ?? '';
-  elements.missionControlToken.value = '';
-  elements.mcpToken.value = '';
-  elements.modelApiKey.value = '';
+  elements.missionControlEndpoint.value = details.missionControlEndpoint ?? ''; elements.mcpEndpoint.value = details.mcpEndpoint ?? ''; elements.artifactDirectory.value = details.artifactDirectory ?? '';
+  elements.missionControlToken.value = ''; elements.mcpToken.value = ''; elements.configurationModelApiKey.value = '';
   elements.secretStatus.textContent = `凭据：Mission Control ${secretLabel(details.missionControlToken)} · MCP ${secretLabel(details.mcpToken)} · Model API ${secretLabel(details.modelApiKey)}`;
 }
-
-async function openConfiguration() {
-  elements.settings.disabled = true;
-  elements.feedback.textContent = '正在读取连接设置';
-  try {
-    renderConfigurationDetails(await nativeInvoke('configuration_details'));
-    elements.dialog.showModal();
-  } catch (error) {
-    elements.feedback.textContent = error instanceof Error ? error.message : '设置读取失败';
-  } finally {
-    elements.settings.disabled = false;
-  }
-}
-
-function closeConfiguration() {
-  if (elements.dialog.open) elements.dialog.close();
-}
-
+async function openConfiguration() { try { renderConfigurationDetails(await nativeInvoke('configuration_details')); elements.dialog.showModal(); } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '设置读取失败'; } }
+function closeConfiguration() { if (elements.dialog.open) elements.dialog.close(); }
 async function saveConfiguration(event) {
-  event.preventDefault();
-  elements.saveConfiguration.disabled = true;
-  elements.feedback.textContent = '正在保存连接设置';
+  event.preventDefault(); elements.saveConfiguration.disabled = true;
   try {
-    await nativeInvoke('save_configuration', {
-      input: {
-        missionControlEndpoint: elements.missionControlEndpoint.value,
-        mcpEndpoint: elements.mcpEndpoint.value,
-        artifactDirectory: elements.artifactDirectory.value,
-      },
-    });
-    const secrets = [
-      ['missionControlToken', 'mission_control_token'],
-      ['mcpToken', 'mcp_token'],
-      ['modelApiKey', 'model_api_key'],
-    ];
-    for (const [field, kind] of secrets) {
-      const value = elements[field].value;
-      if (value) await nativeInvoke('set_configuration_secret', { input: { kind, value } });
-    }
-    closeConfiguration();
-    await refresh();
-    elements.feedback.textContent = '连接设置已保存';
-  } catch (error) {
-    elements.feedback.textContent = error instanceof Error ? error.message : '设置保存失败，可重试';
-  } finally {
-    elements.saveConfiguration.disabled = false;
-  }
+    await nativeInvoke('save_configuration', { input: { missionControlEndpoint: elements.missionControlEndpoint.value, mcpEndpoint: elements.mcpEndpoint.value, artifactDirectory: elements.artifactDirectory.value } });
+    for (const [field, kind] of [['missionControlToken', 'mission_control_token'], ['mcpToken', 'mcp_token'], ['configurationModelApiKey', 'model_api_key']]) if (elements[field].value) await nativeInvoke('set_configuration_secret', { input: { kind, value: elements[field].value } });
+    closeConfiguration(); await refresh(); elements.feedback.textContent = '高级设置已保存';
+  } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '设置保存失败'; }
+  finally { elements.saveConfiguration.disabled = false; }
 }
 
-elements.refresh.addEventListener('click', refresh);
-elements.start.addEventListener('click', () => invokeRuntime('start_runtime'));
-elements.stop.addEventListener('click', () => invokeRuntime('stop_runtime'));
-elements.openConsole.addEventListener('click', openConsole);
-elements.settings.addEventListener('click', openConfiguration);
-elements.closeConfiguration.addEventListener('click', closeConfiguration);
-elements.cancelConfiguration.addEventListener('click', closeConfiguration);
-elements.form.addEventListener('submit', saveConfiguration);
+elements.refresh.addEventListener('click', refresh); elements.startTask.addEventListener('click', startTask);
+elements.navHome.addEventListener('click', () => switchView('home')); elements.adminRefresh.addEventListener('click', loadAdmin); elements.modelForm.addEventListener('submit', saveModel);
+for (const tab of elements.adminTabs) tab.addEventListener('click', () => { for (const item of elements.adminTabs) item.classList.toggle('active', item === tab); for (const section of document.querySelectorAll('.admin-section')) section.hidden = section.id !== `admin-${tab.dataset.adminTab}`; });
+document.querySelector('#open-mcp-settings').addEventListener('click', openConfiguration);
+for (const button of [elements.openConsole, elements.openConsoleNav, elements.openConsoleCard]) button.addEventListener('click', openConsole);
+for (const card of document.querySelectorAll('[data-prompt]')) card.addEventListener('click', () => { elements.taskInput.value = card.dataset.prompt; elements.taskInput.focus(); });
+elements.settings.addEventListener('click', () => switchView('settings')); elements.settingsBack.addEventListener('click', () => switchView('home')); for (const item of elements.settingsItems) item.addEventListener('click', () => selectSettingsSection(item.dataset.settingsSection)); elements.closeConfiguration.addEventListener('click', closeConfiguration); elements.cancelConfiguration.addEventListener('click', closeConfiguration); elements.form.addEventListener('submit', saveConfiguration);
 refresh();

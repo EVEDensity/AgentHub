@@ -15,6 +15,7 @@ const goGatewayUrl = process.env.GO_GATEWAY_URL || 'http://127.0.0.1:8081';
 const apiDestination = apiBackend === 'go' ? goGatewayUrl : legacyUrl;
 
 const nextConfig = {
+  output: 'standalone',
   distDir: process.env.NEXT_DIST_DIR || '.next',
   reactStrictMode: true,
   swcMinify: true,

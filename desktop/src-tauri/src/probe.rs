@@ -37,6 +37,9 @@ pub fn probe_control_plane(endpoint: Option<&str>, token: Option<&str>) -> Contr
     }
 
     let Some(token) = token.filter(|value| !value.is_empty()) else {
+        if is_loopback_origin(&origin) {
+            return health;
+        }
         return ControlPlaneSnapshot {
             endpoint_configured: true,
             reachability: ControlPlaneReachability::Unauthorized,
@@ -49,6 +52,11 @@ pub fn probe_control_plane(endpoint: Option<&str>, token: Option<&str>) -> Contr
         Err(()) => return snapshot(ControlPlaneReachability::Unhealthy),
     };
     probe_url(&session_url, Some(token), classify_session)
+}
+
+fn is_loopback_origin(origin: &Url) -> bool {
+    matches!(origin.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+        && origin.port_or_known_default().is_some_and(|port| (28_000..=28_999).contains(&port))
 }
 
 fn probe_url<F>(url: &Url, token: Option<&str>, classify: F) -> ControlPlaneSnapshot
@@ -314,6 +322,12 @@ mod tests {
         let _ = server.join();
         assert_eq!(snapshot.reachability, ControlPlaneReachability::Unauthorized);
         assert!(snapshot.detail.contains("token is not configured"));
+    }
+
+    #[test]
+    fn local_endpoint_without_token_uses_health_contract() {
+        let snapshot = probe_control_plane(Some("http://127.0.0.1:1"), None);
+        assert!(matches!(snapshot.reachability, ControlPlaneReachability::Unreachable));
     }
 
     #[test]

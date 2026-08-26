@@ -35,5 +35,10 @@ The detailed target design and migration sequence are stored locally under
 - `components/`: stable component-level architecture.
 - `decisions/`: accepted and proposed Architecture Decision Records.
 
+The desktop delivery boundary is defined by
+`decisions/0103-single-entry-desktop-orchestration.md`: `AgentHub.exe` is the
+user entry point, while bundled local services remain supervised implementation
+details. This is a target decision until its implementation gates are complete.
+
 Add a new top-level architecture boundary only through an ADR. Component docs
 must identify inputs, outputs, owned data, failure behavior, and dependencies.

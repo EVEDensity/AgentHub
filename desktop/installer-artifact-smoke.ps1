@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $bundleDirectory -PathType Container)) {
 }
 
 $installers = @(Get-ChildItem -LiteralPath $bundleDirectory -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Extension.ToLowerInvariant() -in @('.msi', '.exe') -and $_.Name -notlike '*-release.json' })
+    Where-Object { $_.Extension -ieq '.msi' -or ($_.Extension -ieq '.exe' -and $_.Name -like '*-setup.exe') })
 if ($installers.Count -eq 0) {
     throw "No MSI or NSIS installer was generated in $bundleDirectory."
 }
@@ -34,7 +34,7 @@ if ($manifestInstallers.Count -ne $installers.Count) {
 }
 foreach ($installer in $installers) {
     $digest = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    $relativePath = [IO.Path]::GetRelativePath($desktopDirectory, $installer.FullName)
+    $relativePath = [Uri]::new($desktopDirectory.TrimEnd('\') + '\').MakeRelativeUri([Uri]::new($installer.FullName)).ToString().Replace('/', '\')
     $entry = @($manifestInstallers | Where-Object { $_.path -eq $relativePath }) | Select-Object -First 1
     if ($null -eq $entry -or $entry.sha256 -ne $digest) {
         throw "Installer manifest digest mismatch for $($installer.FullName)."

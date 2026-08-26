@@ -36,8 +36,9 @@ if ([string]::IsNullOrWhiteSpace($commit)) { $commit = "unknown" }
 
 function Get-Artifact([string]$Path) {
     $item = Get-Item -LiteralPath $Path
+    $relativePath = [Uri]::new($desktopDirectory.TrimEnd('\') + '\').MakeRelativeUri([Uri]::new($Path)).ToString().Replace('/', '\')
     [pscustomobject]@{
-        path = [IO.Path]::GetRelativePath($desktopDirectory, $Path)
+        path = $relativePath
         sizeBytes = [int64]$item.Length
         sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     }
@@ -49,7 +50,7 @@ $artifacts = [ordered]@{
 }
 $portable = Get-ChildItem -LiteralPath $bundleDirectory -Filter "AgentHub-$TargetTriple-portable.zip" -File -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($null -ne $portable) { $artifacts.portableZip = Get-Artifact $portable.FullName }
-$installers = @(Get-ChildItem -LiteralPath $bundleDirectory -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @('.msi', '.exe') -and $_.Name -ne $portable.Name })
+$installers = @(Get-ChildItem -LiteralPath $bundleDirectory -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq '.msi' -or ($_.Extension -ieq '.exe' -and $_.Name -like '*-setup.exe') })
 if ($installers.Count -gt 0) { $artifacts.installers = @($installers | ForEach-Object { Get-Artifact $_.FullName }) }
 
 $manifest = [ordered]@{

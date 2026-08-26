@@ -92,8 +92,14 @@ type PublishResult struct {
 }
 
 func main() {
-	natsURL := getenv("NATS_URL", "nats://127.0.0.1:4222")
-	bus, err := eventbus.Connect(natsURL)
+	localMode := os.Getenv("GATEWAY_LOCAL_MODE") == "true"
+	var bus *eventbus.Client
+	var err error
+	if localMode {
+		bus = eventbus.ConnectLocal()
+	} else {
+		bus, err = eventbus.Connect(getenv("NATS_URL", "nats://127.0.0.1:4222"))
+	}
 	if err != nil {
 		log.Fatalf("connect event bus: %v", err)
 	}
@@ -214,7 +220,7 @@ func main() {
 				pgOK = false
 			}
 		}
-		natsOK := bus.Conn().IsConnected()
+		natsOK := bus.IsConnected()
 		status := http.StatusOK
 		health := map[string]any{"status": "ok", "pg": pgOK, "nats": natsOK}
 		if !pgOK || !natsOK {
@@ -228,7 +234,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		ready := map[string]any{"status": "ready", "pg": "connected", "nats": bus.Conn().IsConnected()}
+		ready := map[string]any{"status": "ready", "pg": "connected", "nats": bus.IsConnected(), "local": localMode}
 		code := http.StatusOK
 		if pool != nil {
 			if err := pool.Ping(ctx); err != nil {
@@ -239,7 +245,7 @@ func main() {
 		} else {
 			ready["pg"] = "disabled"
 		}
-		if !bus.Conn().IsConnected() {
+		if !bus.IsConnected() {
 			ready["nats"] = false
 			ready["status"] = "not_ready"
 			code = http.StatusServiceUnavailable

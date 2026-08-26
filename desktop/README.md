@@ -1,6 +1,6 @@
 # AgentHub Desktop
 
-> Status: minimum desktop shell
+> Status: implemented shell; single-entry local orchestration planned
 > Owner: desktop maintainers
 > Last reviewed: 2026-08-24
 
@@ -9,16 +9,18 @@ Runtime lifecycle, redacted diagnostics, OS integration, and secure credential
 storage. It does not own Mission, Contract, WorkUnit, Artifact, Evidence,
 Decision, or Outcome state.
 
-## First vertical slice
+## Product Boundary
 
-The Tauri shell is a launcher, not a second Mission dashboard. Its first view
-shows the Mission Control entry point, local Runtime status, and concise
-connection feedback. Missions, approvals, artifacts, evidence, and other
-business workflows remain in the management backend. A start request fails
-explicitly until the configured Runtime sidecar is available; it never starts
-Docker, a mock provider, or an unconfigured Runner. Connection onboarding is
-available from the launcher settings dialog and keeps credentials in the OS
-credential store.
+The Tauri shell is the user's single entry point, not a second Mission
+dashboard. Missions, approvals, artifacts, evidence, and other business
+workflows remain owned by Mission Control. The current release packages the
+desktop shell and Runtime sidecar; it does not package the server deployment.
+
+The desktop experience is one `AgentHub.exe`: it owns the lifecycle of bundled
+Mission Control, Gateway, MCP Gateway, Runtime, and the standalone Next.js
+admin frontend. It creates local data directories, starts health-checked
+services, and opens `/admin` without requiring Node, Go, Rust, Python, or
+Docker. Docker Compose remains the server/private-deployment path.
 
 ## Layout
 
@@ -35,8 +37,6 @@ credential store.
   on an isolated Windows runner.
 - `webview2-gui-smoke.ps1`: runs the CLI-first shell regression and writes
   screenshots under `output/playwright/`.
-- `updater-rollback-smoke.ps1`: verifies signed updater artifacts and restores
-  the previous ready sidecar after a failed candidate launch.
 - `updater-rollback-smoke.ps1`: verifies signed updater metadata and rehearses
   restoring the previous ready sidecar after a failed candidate launch.
 - `ui/`: dependency-free shell UI served by the desktop application.
@@ -137,13 +137,30 @@ shortcut, detects immediate GUI/WebView2 startup failure, and uninstalls through
 the registered Windows command. This mutating check is opt-in locally and is
 enabled by the Windows workflow.
 
-The initial shell intentionally has no Docker dependency. It is a lifecycle
-surface, not a replacement control plane. Once configuration is ready, the
-native layer may start only the packaged `agenthub-runtime.exe` sidecar from
-the application resource directory; a missing sidecar fails explicitly. The
-bootstrap sidecar must expose `http://127.0.0.1:18097/readyz` and return the
-current runtime protocol version before the desktop reports it ready. It is a
-lifecycle process, not the Python Mission Runner.
+The current shell has no Docker dependency. It owns only local Runtime
+lifecycle and redacted diagnostics. On first launch it creates local defaults
+and an Artifact directory; remote endpoints and credentials remain optional
+advanced configuration. The next product slice adds a local service
+orchestrator behind the same entry point. It must not duplicate Mission state
+or introduce a synthetic success path.
+
+## Delivery Plan
+
+1. Keep the current shell and sidecar contracts green as the release baseline.
+2. Add a native service orchestrator that starts bundled Gateway, Mission
+   Control, and MCP components as hidden child processes.
+3. Use an embedded SQLite database and per-user Artifact directory for the
+   local mode; keep server PostgreSQL/Compose unchanged.
+4. Add bounded startup, health checks, shutdown, crash diagnostics, and
+   versioned resource directories for upgrade and rollback.
+5. Make `AgentHub.exe` the only documented user action in Portable and MSI
+   packages; move endpoint and token fields to an advanced deployment mode.
+6. Validate a clean Windows machine with no Docker, Go, Rust, or repository
+   checkout installed.
+
+This plan is not yet implemented. The current package still contains only the
+desktop shell and Runtime sidecar, so it is not a self-contained local
+Mission Control deployment.
 
 ## Configuration and credentials
 

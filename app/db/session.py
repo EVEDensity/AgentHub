@@ -21,20 +21,13 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
-from app.config import DATABASE_URL
-from app.db.neon_http import (
-    NeonHttpPool,
-    get_neon_http_pool,
-)
-from app.db.asyncpg_pool import (
-    AsyncPgPool,
-    get_asyncpg_pool,
-)
+from app.config import DATABASE_URL, DB_BACKEND, SQLITE_PATH
+from app.db.sqlite_pool import SQLitePool
 
 logger = logging.getLogger("agenthub.db")
 
 # Union type for the pool
-PoolType = NeonHttpPool | AsyncPgPool
+PoolType = Any
 
 # ═══════════════════════════════════════════════════════════════════════
 # Auto-detection
@@ -65,6 +58,7 @@ def _is_neon_cloud(url: str) -> bool:
 # ═══════════════════════════════════════════════════════════════════════
 
 _pool: PoolType | None = None
+_sqlite_pool: SQLitePool | None = None
 _pool_lock = asyncio.Lock()
 
 
@@ -74,7 +68,19 @@ async def aget_pool() -> PoolType:
     Auto-detects local vs Neon cloud based on DATABASE_URL.
     Raises RuntimeError if DATABASE_URL is not configured.
     """
-    global _pool
+    global _pool, _sqlite_pool
+
+    use_sqlite = DB_BACKEND == "sqlite" or (
+        DB_BACKEND == "auto" and not DATABASE_URL
+    )
+    if use_sqlite:
+        if _sqlite_pool is None:
+            _sqlite_pool = SQLitePool(SQLITE_PATH)
+            await _sqlite_pool.initialize()
+        return _sqlite_pool  # type: ignore[return-value]
+
+    from app.db.asyncpg_pool import get_asyncpg_pool
+    from app.db.neon_http import get_neon_http_pool
 
     if not DATABASE_URL:
         raise RuntimeError(
@@ -105,7 +111,10 @@ async def aget_pool() -> PoolType:
 
 async def aclose_pool() -> None:
     """Close the database pool gracefully (call during app shutdown)."""
-    global _pool
+    global _pool, _sqlite_pool
+    if _sqlite_pool is not None:
+        await _sqlite_pool.close()
+        _sqlite_pool = None
     if _pool is not None:
         logger.info("db: closing pool...")
         await _pool.close()

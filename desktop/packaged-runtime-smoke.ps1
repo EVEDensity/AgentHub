@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Net.Http
 $desktopDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if ([string]::IsNullOrWhiteSpace($TargetTriple)) {
@@ -43,16 +44,13 @@ $startInfo.UseShellExecute = $false
 $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardError = $true
 $startInfo.RedirectStandardOutput = $true
-$startInfo.ArgumentList.Add("--health-endpoint")
-$startInfo.ArgumentList.Add($endpoint)
-$startInfo.ArgumentList.Add("--artifact-root")
-$startInfo.ArgumentList.Add($artifactRoot)
+$startInfo.Arguments = '--health-endpoint "{0}" --artifact-root "{1}"' -f $endpoint, $artifactRoot
 
 $process = [Diagnostics.Process]::new()
 $process.StartInfo = $startInfo
-$handler = [Net.Http.HttpClientHandler]::new()
+$handler = New-Object System.Net.Http.HttpClientHandler
 $handler.UseProxy = $false
-$client = [Net.Http.HttpClient]::new($handler)
+$client = New-Object System.Net.Http.HttpClient -ArgumentList $handler
 $client.Timeout = [TimeSpan]::FromMilliseconds(250)
 $ready = $false
 $lastError = "readiness endpoint did not respond"

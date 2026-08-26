@@ -27,6 +27,8 @@ SKILLS_DIR_PROJECT = _cfg.skills_dir_project
 
 # ── Database ──────────────────────────────────────────────────────────
 DATABASE_URL = _cfg.DATABASE_URL
+DB_BACKEND = _cfg.db_backend
+SQLITE_PATH = _cfg.sqlite_path
 
 # ── Application ───────────────────────────────────────────────────────
 APP_NAME = _cfg.app_name

@@ -8,82 +8,62 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="shell" aria-labelledby="page-title">
-      <header class="topbar">
-        <div class="brand" aria-label="AgentHub">
-          <span class="brand-mark" aria-hidden="true">AH</span>
-          <span>AgentHub</span>
-        </div>
-        <div class="topbar-actions">
-          <span class="local-state"><span class="dot local" aria-hidden="true"></span>本地桌面</span>
-          <button id="settings" class="icon-button" type="button" title="打开连接设置" aria-label="打开连接设置">&#9881;</button>
-          <button id="refresh" class="icon-button" type="button" title="刷新状态" aria-label="刷新状态">&#8635;</button>
-        </div>
-      </header>
-
-      <section class="launcher" aria-labelledby="page-title">
-        <div class="launcher-copy">
-          <p class="eyebrow">WORKSPACE</p>
-          <h1 id="page-title">进入管理后台</h1>
-          <p>任务、审批和执行证据在管理后台完成。</p>
-        </div>
-
-        <section class="launch-surface" aria-labelledby="control-plane-title">
-          <div class="surface-meta">
-            <span class="surface-label">MISSION CONTROL</span>
-            <span id="control-state" class="state-chip missing">未配置</span>
-          </div>
-          <h2 id="control-plane-title">还没有连接工作区</h2>
-          <p id="control-detail">完成连接配置后，从这里打开管理后台。</p>
-          <button id="open-console" class="primary" type="button" disabled>
-            打开管理后台 <span aria-hidden="true">&#8599;</span>
-          </button>
-        </section>
-      </section>
-
-      <section class="runtime-strip" aria-label="Local Runtime">
-        <div class="runtime-summary">
-          <span id="state-dot" class="dot stopped" aria-hidden="true"></span>
-          <div>
-            <p class="surface-label">LOCAL RUNTIME</p>
-            <div class="runtime-line">
-              <strong id="runtime-status">检查中</strong>
-              <span id="runtime-readiness" class="readiness">就绪状态：检查中</span>
-            </div>
-            <p id="runtime-detail" class="detail">正在读取本地状态。</p>
-          </div>
-        </div>
-        <div class="runtime-actions">
-          <button id="start" class="secondary" type="button">启动</button>
-          <button id="stop" class="tertiary" type="button">停止</button>
-        </div>
-      </section>
-
-      <p id="feedback" class="feedback" role="status" aria-live="polite">正在检查连接状态</p>
-    </main>
-    <dialog id="configuration-dialog" class="configuration-dialog" aria-labelledby="configuration-title">
-      <form id="configuration-form" method="dialog">
-        <div class="dialog-header">
-          <div>
-            <p class="eyebrow">CONNECTION</p>
-            <h2 id="configuration-title">连接设置</h2>
-          </div>
-          <button id="close-configuration" class="icon-button" type="button" title="关闭设置" aria-label="关闭设置">&#10005;</button>
-        </div>
-        <p class="dialog-intro">配置管理后台和本地 Artifact 目录。凭据仅保存在系统凭据库。</p>
-        <label>Mission Control 地址<input id="mission-control-endpoint" name="missionControlEndpoint" type="url" placeholder="https://control.example.com" /></label>
-        <label>MCP 地址<input id="mcp-endpoint" name="mcpEndpoint" type="url" placeholder="https://mcp.example.com" /></label>
-        <label>Artifact 目录<input id="artifact-directory" name="artifactDirectory" type="text" placeholder="C:\\AgentHub\\artifacts" /></label>
-        <div class="secret-status" id="secret-status">凭据状态读取中</div>
-        <label>Mission Control Token<input id="mission-control-token" name="missionControlToken" type="password" autocomplete="new-password" placeholder="留空以保留已保存凭据" /></label>
-        <label>MCP Token<input id="mcp-token" name="mcpToken" type="password" autocomplete="new-password" placeholder="留空以保留已保存凭据" /></label>
-        <label>Model API Key<input id="model-api-key" name="modelApiKey" type="password" autocomplete="new-password" placeholder="留空以保留已保存凭据" /></label>
-        <div class="dialog-actions">
-          <button id="cancel-configuration" class="tertiary" type="button">取消</button>
-          <button id="save-configuration" class="primary" type="submit">保存设置</button>
-        </div>
-      </form>
-    </dialog>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand"><span class="brand-mark">AH</span><span>AgentHub</span></div>
+        <nav id="main-nav" class="nav-list"><button id="nav-home" class="nav-item active" type="button"><span class="nav-icon">+</span>新任务</button><button id="open-console-nav" class="nav-item" type="button"><span class="nav-icon">□</span>工作区</button></nav>
+        <nav id="settings-nav" class="settings-nav" hidden aria-label="设置分类">
+          <button id="settings-back" class="settings-back" type="button"><span class="nav-icon">‹</span><span>返回工作区</span></button>
+          <p class="settings-caption">设置</p>
+          <button class="settings-item active" data-settings-section="general" type="button"><span class="settings-icon">⚙</span>常规</button>
+          <button class="settings-item" data-settings-section="import" type="button"><span class="settings-icon">↓</span>导入</button>
+          <button class="settings-item" data-settings-section="appearance" type="button"><span class="settings-icon">☼</span>外观</button>
+          <button class="settings-item" data-settings-section="voice" type="button"><span class="settings-icon">♩</span>语音</button>
+          <button class="settings-item" data-settings-section="configuration" type="button"><span class="settings-icon">⌘</span>配置</button>
+          <button class="settings-item" data-settings-section="personalization" type="button"><span class="settings-icon">◉</span>个性化</button>
+          <button class="settings-item" data-settings-section="companions" type="button"><span class="settings-icon">◌</span>智能伙伴</button>
+          <button class="settings-item" data-settings-section="shortcuts" type="button"><span class="settings-icon">⌨</span>键盘快捷键</button>
+          <button class="settings-item" data-settings-section="account" type="button"><span class="settings-icon">◎</span>账户</button>
+          <p class="settings-group-label">集成</p>
+          <button class="settings-item" data-settings-section="computer-use" type="button"><span class="settings-icon">✧</span>电脑操控</button>
+          <button class="settings-item" data-settings-section="plugins" type="button"><span class="settings-icon">◌</span>插件</button>
+          <button class="settings-item" data-settings-section="monitoring" type="button"><span class="settings-icon">▣</span>监视器</button>
+        </nav>
+        <div class="sidebar-bottom"><button id="settings" class="nav-item" type="button"><span class="nav-icon">⚙</span>设置</button><div class="account-line"><span class="avatar">A</span><span><strong>本地桌面</strong><small>AgentHub Desktop</small></span></div></div>
+      </aside>
+      <main id="home-view" class="workspace" aria-labelledby="page-title">
+        <header class="workspace-header"><div><p class="breadcrumb">本地工作区 / 新任务</p><h1 id="page-title">今天要完成什么？</h1></div><div class="header-actions"><span id="workspace-state" class="connection-state"><span class="dot starting"></span>正在启动</span><button id="refresh" class="icon-button" type="button" title="刷新状态" aria-label="刷新状态">↻</button></div></header>
+        <section class="composer" aria-label="创建任务"><div class="composer-top"><span class="composer-label">任务</span><span class="composer-hint">本地服务自动运行</span></div><textarea id="task-input" rows="5" placeholder="描述你想完成的任务，例如：整理这份资料并生成一份摘要…"></textarea><div class="composer-footer"><span class="composer-note">任务将在本地工作区中执行，结果和数据保存在本机。</span><button id="start-task" class="primary" type="button">开始任务 <span aria-hidden="true">↗</span></button></div></section>
+        <section class="quick-start" aria-label="快捷入口"><button class="quick-card" data-prompt="分析当前项目并列出最重要的下一步。"><span class="quick-icon">⌁</span><span><strong>分析项目</strong><small>获取结构和下一步建议</small></span><span class="quick-arrow">→</span></button><button class="quick-card" data-prompt="检查当前工作区的运行状态和错误。"><span class="quick-icon">✓</span><span><strong>检查工作区</strong><small>查看服务和运行状态</small></span><span class="quick-arrow">→</span></button><button id="open-console-card" class="quick-card"><span class="quick-icon">□</span><span><strong>打开管理后台</strong><small>进入完整任务和证据视图</small></span><span class="quick-arrow">→</span></button></section>
+        <section class="status-panel" aria-labelledby="status-title"><div class="section-heading"><div><p class="section-kicker">SYSTEM</p><h2 id="status-title">本地服务</h2></div><button id="open-console" class="text-button" type="button">打开工作区 ↗</button></div><div id="service-list" class="service-list"><div class="service-row"><span class="service-dot starting"></span><span class="service-name">正在读取本地服务状态</span><span class="service-detail">请稍候</span></div></div></section>
+        <section id="task-result" class="result-panel" hidden aria-labelledby="result-title"><div class="section-heading"><div><p class="section-kicker">MISSION</p><h2 id="result-title">任务结果</h2></div><span id="result-status" class="result-status">准备中</span></div><p id="result-summary" class="result-summary"></p><div id="result-items" class="result-items"></div></section>
+        <p id="feedback" class="feedback" role="status" aria-live="polite">正在启动本地工作区…</p>
+      </main>
+      <main id="admin-view" class="workspace admin-view" hidden aria-labelledby="admin-title">
+        <header class="workspace-header"><div><p class="breadcrumb">本地工作区 / 管理后台</p><h1 id="admin-title">管理与配置</h1></div><div class="header-actions"><span class="connection-state"><span class="dot ready"></span>本地数据</span><button id="admin-refresh" class="icon-button" type="button" title="刷新管理数据" aria-label="刷新管理数据">↻</button></div></header>
+        <nav class="admin-tabs" aria-label="管理模块"><button class="admin-tab active" data-admin-tab="models" type="button">模型与 API Key</button><button class="admin-tab" data-admin-tab="agents" type="button">Agent 管理</button><button class="admin-tab" data-admin-tab="mcp" type="button">MCP 服务</button></nav>
+        <section id="admin-models" class="admin-section"><div class="section-heading"><div><p class="section-kicker">MODEL PROVIDERS</p><h2>模型与 API Key</h2></div></div><form id="model-form" class="admin-form"><label>服务商<input id="model-provider" required placeholder="openai / deepseek / anthropic" /></label><label>模型名称<input id="model-name" required placeholder="gpt-4o-mini" /></label><label>Base URL<input id="model-base-url" placeholder="https://api.openai.com/v1" /></label><label>API Key<input id="model-api-key" type="password" autocomplete="new-password" required placeholder="输入后由本地服务加密保存" /></label><button class="primary" type="submit">保存模型配置</button></form><div id="model-list" class="admin-list"><p class="admin-muted">正在读取模型配置…</p></div></section>
+        <section id="admin-agents" class="admin-section" hidden><div class="section-heading"><div><p class="section-kicker">AGENT REGISTRY</p><h2>Agent 管理</h2></div></div><div id="agent-list" class="admin-list"><p class="admin-muted">正在读取 Agent…</p></div></section>
+        <section id="admin-mcp" class="admin-section" hidden><div class="section-heading"><div><p class="section-kicker">MODEL CONTEXT PROTOCOL</p><h2>MCP 服务</h2></div></div><div class="mcp-summary"><span class="service-dot starting"></span><strong>本地 MCP Gateway</strong><span id="mcp-endpoint-label">端口分配中</span></div><p class="admin-muted">MCP 服务器连接、工具发现和调用审计由本地 MCP Gateway 管理。高级远程 MCP 配置可在设置中修改。</p><button id="open-mcp-settings" class="tertiary" type="button">打开高级设置</button></section>
+        <p id="admin-feedback" class="feedback" role="status" aria-live="polite"></p>
+      </main>
+      <main id="settings-view" class="workspace settings-view" hidden aria-labelledby="settings-title">
+        <header class="workspace-header"><div><p class="breadcrumb">AgentHub / 设置</p><h1 id="settings-title">常规</h1></div><div class="header-actions"><span class="connection-state"><span class="dot ready"></span>本地设置</span></div></header>
+        <section class="settings-panel" data-settings-panel="general"><p class="section-kicker">GENERAL</p><h2>常规</h2><p class="settings-description">管理桌面应用的启动行为、本地数据和服务状态。</p><div class="settings-card"><div><strong>启动时自动运行本地服务</strong><small>AgentHub 启动后自动启动 Mission Control、Gateway、MCP Gateway 和本地后台。</small></div><input class="settings-toggle" type="checkbox" checked disabled aria-label="启动时自动运行本地服务" /></div><div class="settings-card"><div><strong>本地数据目录</strong><small>%LOCALAPPDATA%\AgentHub\data</small></div><span class="settings-value">SQLite</span></div></section>
+        <section class="settings-panel" data-settings-panel="configuration" hidden><p class="section-kicker">CONFIGURATION</p><h2>配置</h2><p class="settings-description">完整的 AgentHub 管理后台，包括 Agent、模型、API Key、MCP、工作流、权限、记忆和运维模块。</p><iframe id="admin-frame" class="admin-frame" title="AgentHub 完整管理后台"></iframe></section>
+        <section class="settings-panel" data-settings-panel="import" hidden><p class="section-kicker">IMPORT</p><h2>导入</h2><p class="settings-description">导入已有的 AgentHub 配置、Agent 定义和本地数据。</p><button class="tertiary" type="button" disabled>选择导入文件</button></section>
+        <section class="settings-panel" data-settings-panel="appearance" hidden><p class="section-kicker">APPEARANCE</p><h2>外观</h2><p class="settings-description">主题和界面密度设置将在此处管理。</p></section>
+        <section class="settings-panel" data-settings-panel="voice" hidden><p class="section-kicker">VOICE</p><h2>语音</h2><p class="settings-description">配置语音输入、输出和本地语音服务。</p></section>
+        <section class="settings-panel" data-settings-panel="personalization" hidden><p class="section-kicker">PERSONALIZATION</p><h2>个性化</h2><p class="settings-description">调整默认工作区和任务偏好。</p></section>
+        <section class="settings-panel" data-settings-panel="companions" hidden><p class="section-kicker">COMPANIONS</p><h2>智能伙伴</h2><p class="settings-description">管理默认 Agent 和协作偏好。</p></section>
+        <section class="settings-panel" data-settings-panel="shortcuts" hidden><p class="section-kicker">SHORTCUTS</p><h2>键盘快捷键</h2><p class="settings-description">查看和管理桌面操作快捷键。</p></section>
+        <section class="settings-panel" data-settings-panel="account" hidden><p class="section-kicker">ACCOUNT</p><h2>账户</h2><p class="settings-description">本地桌面账户和身份设置。</p></section>
+        <section class="settings-panel" data-settings-panel="computer-use" hidden><p class="section-kicker">INTEGRATION</p><h2>电脑操控</h2><p class="settings-description">电脑操控和沙箱能力配置。</p></section>
+        <section class="settings-panel" data-settings-panel="plugins" hidden><p class="section-kicker">INTEGRATION</p><h2>插件</h2><p class="settings-description">插件安装、权限和生命周期管理。</p></section>
+        <section class="settings-panel" data-settings-panel="monitoring" hidden><p class="section-kicker">INTEGRATION</p><h2>监视器</h2><p class="settings-description">查看本地服务和运行日志。</p></section>
+      </main>
+    </div>
+    <dialog id="configuration-dialog" class="configuration-dialog" aria-labelledby="configuration-title"><form id="configuration-form" method="dialog"><div class="dialog-header"><div><p class="section-kicker">ADVANCED</p><h2 id="configuration-title">高级设置</h2></div><button id="close-configuration" class="icon-button" type="button" title="关闭设置" aria-label="关闭设置">×</button></div><p class="dialog-intro">普通桌面使用不需要修改这些设置。远程部署地址和凭据仅在高级场景使用。</p><label>Mission Control 地址<input id="mission-control-endpoint" name="missionControlEndpoint" type="url" /></label><label>MCP 地址<input id="mcp-endpoint" name="mcpEndpoint" type="url" /></label><label>Artifact 目录<input id="artifact-directory" name="artifactDirectory" type="text" /></label><div class="secret-status" id="secret-status">凭据状态读取中</div><label>Mission Control Token<input id="mission-control-token" name="missionControlToken" type="password" autocomplete="new-password" /></label><label>MCP Token<input id="mcp-token" name="mcpToken" type="password" autocomplete="new-password" /></label><label>Model API Key<input id="configuration-model-api-key" name="modelApiKey" type="password" autocomplete="new-password" /></label><div class="dialog-actions"><button id="cancel-configuration" class="tertiary" type="button">取消</button><button id="save-configuration" class="primary" type="submit">保存设置</button></div></form></dialog>
     <script src="./main.js"></script>
   </body>
 </html>

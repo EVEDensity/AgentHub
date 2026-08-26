@@ -18,11 +18,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -36,10 +39,21 @@ import (
 func main() {
 	// ── Configuration ────────────────────────────────────────────────
 	transportMode := getenv("MCP_TRANSPORT", "sse")
+	localMode := os.Getenv("MCP_LOCAL_MODE") == "true"
 	addr := getenv("MCP_ADDR", ":8099")
+	if localMode {
+		addr = getenv("MCP_ADDR", "127.0.0.1:8099")
+	}
 	knowledgeURL := getenv("KNOWLEDGE_URL", "http://127.0.0.1:8092")
 	gatewayURL := getenv("GATEWAY_URL", "http://127.0.0.1:8081")
 	jwtSecret := os.Getenv("JWT_SECRET")
+	if localMode && jwtSecret == "" {
+		var err error
+		jwtSecret, err = localJWTSecret()
+		if err != nil {
+			log.Fatalf("local JWT secret: %v", err)
+		}
+	}
 
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[mcp-gateway] ")
@@ -187,6 +201,32 @@ func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandle
 		log.Fatalf("SSE server error: %v", err)
 	}
 	log.Println("MCP Gateway stopped")
+}
+
+func localJWTSecret() (string, error) {
+	root := os.Getenv("AGENTHUB_LOCAL_DATA")
+	if root == "" {
+		if base, err := os.UserConfigDir(); err == nil {
+			root = filepath.Join(base, "AgentHub", "data")
+		} else {
+			root = ".agenthub-data"
+		}
+	}
+	path := filepath.Join(root, "mcp-jwt.secret")
+	if data, err := os.ReadFile(path); err == nil && len(data) >= 32 {
+		return string(data), nil
+	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(hex.EncodeToString(secret)), 0600); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(secret), nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

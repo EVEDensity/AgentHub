@@ -2,7 +2,8 @@
 param(
     [string]$TargetTriple,
     [switch]$NoInstaller,
-    [switch]$Portable
+    [switch]$Portable,
+    [switch]$LocalServices
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,7 @@ $runtimeSmokeScript = Join-Path $desktopDirectory "packaged-runtime-smoke.ps1"
 $installerSmokeScript = Join-Path $desktopDirectory "installer-artifact-smoke.ps1"
 $installLifecycleSmokeScript = Join-Path $desktopDirectory "installer-install-smoke.ps1"
 $releaseManifestScript = Join-Path $desktopDirectory "release-manifest.ps1"
+$localServicesBuildScript = Join-Path $desktopDirectory "local-services\build-windows.ps1"
 $updaterConfigTemplate = Join-Path $desktopDirectory "src-tauri\tauri.conf.json"
 $manifest = Join-Path $desktopDirectory "src-tauri\Cargo.toml"
 
@@ -41,6 +43,11 @@ if (-not (Test-Path -LiteralPath $releaseManifestScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
     throw "Tauri manifest was not found at $manifest."
+}
+if ($LocalServices) {
+    if (-not (Test-Path -LiteralPath $localServicesBuildScript -PathType Leaf)) { throw "Local service build script was not found." }
+    & $localServicesBuildScript
+    if ($LASTEXITCODE -ne 0) { throw "Local service staging failed." }
 }
 
 if ([string]::IsNullOrWhiteSpace($TargetTriple)) {
@@ -80,6 +87,13 @@ Push-Location $tauriDirectory
 try {
     $buildArguments = @("tauri", "build", "--target", $TargetTriple, "--ci")
     $generatedUpdaterConfig = $null
+    if ($LocalServices) {
+        $config = Get-Content -LiteralPath $updaterConfigTemplate -Raw | ConvertFrom-Json
+        $config.bundle | Add-Member -NotePropertyName resources -NotePropertyValue @("local-services/**/*") -Force
+        $generatedUpdaterConfig = Join-Path ([IO.Path]::GetTempPath()) ("agenthub-tauri-config-" + [guid]::NewGuid().ToString('N') + '.json')
+        $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $generatedUpdaterConfig -Encoding utf8
+        $buildArguments += @('--config', $generatedUpdaterConfig)
+    }
     if ($env:AGENTHUB_UPDATE_ENABLED -eq '1') {
         $requiredUpdaterValues = @($env:AGENTHUB_UPDATE_PUBLIC_KEY, $env:AGENTHUB_UPDATE_ENDPOINT, $env:TAURI_SIGNING_PRIVATE_KEY)
         if ($requiredUpdaterValues | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
@@ -142,7 +156,33 @@ if ($Portable) {
     $portableArchive = Join-Path $installerDirectory "AgentHub-$TargetTriple-portable.zip"
     $application = Join-Path $releaseDirectory "agenthub-desktop.exe"
     $packagedSidecar = Join-Path $releaseDirectory "agenthub-runtime.exe"
-    Compress-Archive -LiteralPath @($application, $packagedSidecar) -DestinationPath $portableArchive -Force
+    $portableEntries = @($application, $packagedSidecar)
+    if ($LocalServices) {
+        $stagedServices = Join-Path $tauriDirectory 'local-services'
+        $releaseServices = Join-Path $releaseDirectory 'local-services'
+        if (-not (Test-Path -LiteralPath $stagedServices -PathType Container)) { throw "Local service resources were not staged." }
+        if (Test-Path -LiteralPath $releaseServices) { Remove-Item -LiteralPath $releaseServices -Recurse -Force }
+        New-Item -ItemType Directory -Force -Path $releaseServices | Out-Null
+        Get-ChildItem -LiteralPath $stagedServices -Force | Copy-Item -Destination $releaseServices -Recurse -Force
+        $portableEntries += $releaseServices
+    }
+    $portableStage = Join-Path ([IO.Path]::GetTempPath()) ("agenthub-portable-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $portableStage | Out-Null
+    try {
+        Copy-Item -LiteralPath $application -Destination (Join-Path $portableStage 'agenthub-desktop.exe') -Force
+        Copy-Item -LiteralPath $packagedSidecar -Destination (Join-Path $portableStage 'agenthub-runtime.exe') -Force
+        if ($LocalServices) { Copy-Item -LiteralPath $releaseServices -Destination (Join-Path $portableStage 'local-services') -Recurse -Force }
+        $portableFiles = @(Get-ChildItem -LiteralPath $portableStage -Force)
+        if ($portableFiles.Count -eq 0) { throw "Portable staging directory is empty: $portableStage" }
+        Compress-Archive -LiteralPath $portableFiles.FullName -DestinationPath $portableArchive -Force
+        $archiveEntries = @(tar.exe -tf $portableArchive)
+        $longestEntry = ($archiveEntries | Sort-Object Length -Descending | Select-Object -First 1)
+        if ($longestEntry -and $longestEntry.Length -gt 180) {
+            throw "Portable archive contains a path of $($longestEntry.Length) characters. Extract it to a short directory such as C:\AgentHub."
+        }
+    } finally {
+        if (Test-Path -LiteralPath $portableStage) { Remove-Item -LiteralPath $portableStage -Recurse -Force -ErrorAction SilentlyContinue }
+    }
     Write-Output "Portable package: $portableArchive"
 }
 $releaseManifestPath = Join-Path $installerDirectory "AgentHub-$TargetTriple-release.json"
@@ -153,7 +193,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Output "Release application: $(Join-Path $releaseDirectory 'agenthub-desktop.exe')"
 Write-Output "Packaged sidecar: $(Join-Path $releaseDirectory 'agenthub-runtime.exe')"
 if (Test-Path -LiteralPath $installerDirectory -PathType Container) {
-    $installers = @(Get-ChildItem -LiteralPath $installerDirectory -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in @('.msi', '.exe') })
+    $installers = @(Get-ChildItem -LiteralPath $installerDirectory -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq '.msi' -or ($_.Extension -ieq '.exe' -and $_.Name -like '*-setup.exe') })
     if ($installers.Count -gt 0) {
         foreach ($installer in $installers) {
             Write-Output "Installer: $($installer.FullName)"

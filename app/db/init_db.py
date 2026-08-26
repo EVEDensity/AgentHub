@@ -321,12 +321,52 @@ _PG_DDL = [
 
 
 async def ainit_db() -> None:
-    """Create all tables and seed data on PostgreSQL (idempotent).
+    """Create all tables and seed data on the configured backend.
 
     Order: (1) Alembic migrations, (2) legacy DDL (idempotent fallback),
     (3) seed data.
     """
-    await _ainit_postgresql()
+    from app.config import DB_BACKEND, DATABASE_URL
+
+    if DB_BACKEND == "sqlite" or (DB_BACKEND == "auto" and not DATABASE_URL):
+        await _ainit_sqlite()
+    else:
+        await _ainit_postgresql()
+
+
+async def _ainit_sqlite() -> None:
+    """Initialize the local profile without PostgreSQL-only migrations."""
+    from app.db.session import aget_pool
+
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        for ddl in _PG_DDL:
+            normalized = ddl.strip().upper()
+            if normalized.startswith(("ALTER TABLE", "DO $$", "CREATE EXTENSION")):
+                continue
+            sqlite_ddl = (
+                ddl.replace("SERIAL", "INTEGER")
+                .replace("BIGSERIAL", "INTEGER")
+                .replace("BOOLEAN", "INTEGER")
+                .replace("BYTEA", "BLOB")
+            )
+            try:
+                await conn.execute(sqlite_ddl)
+            except Exception as exc:
+                logger.warning("init_db SQLite DDL skipped: %s — %s", exc, ddl[:80])
+
+        await _seed_users_pg(conn)
+        await _seed_session_pg(conn)
+        await _seed_agents_pg(conn)
+        await _seed_templates_pg(conn)
+        await _seed_agent_routes_pg(conn)
+        await _seed_model_configs_pg(conn)
+        await conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES($1, $2)",
+            1,
+            now(),
+        )
+    logger.info("init_db: SQLite local database initialized")
 
 
 # ═══════════════════════════════════════════════════════════════════════

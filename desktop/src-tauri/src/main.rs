@@ -4,6 +4,7 @@ mod config;
 mod probe;
 mod protocol;
 mod runtime;
+mod services;
 
 use config::{
     ConfigurationDetails, ConfigurationStatus, ConfigurationStore, DesktopConfigInput, SecretInput,
@@ -12,6 +13,7 @@ use config::{
 use probe::probe_control_plane as probe_saved_control_plane;
 use protocol::{ControlPlaneSnapshot, RuntimeSnapshot};
 use runtime::LocalRuntime;
+use services::{ServiceSnapshot, ServiceSupervisor};
 use std::process::Command;
 use tauri::{Manager, State};
 
@@ -24,7 +26,9 @@ fn runtime_status(runtime: State<'_, LocalRuntime>) -> RuntimeSnapshot {
 fn start_runtime(
     runtime: State<'_, LocalRuntime>,
     configuration: State<'_, ConfigurationStore>,
+    supervisor: State<'_, ServiceSupervisor>,
 ) -> Result<RuntimeSnapshot, String> {
+    let _ = supervisor.start_all();
     let configuration_ready = configuration
         .status()
         .map_err(|error| error.to_string())?
@@ -40,9 +44,13 @@ fn start_runtime(
 }
 
 #[tauri::command]
-fn stop_runtime(runtime: State<'_, LocalRuntime>) -> RuntimeSnapshot {
+fn stop_runtime(runtime: State<'_, LocalRuntime>, supervisor: State<'_, ServiceSupervisor>) -> RuntimeSnapshot {
+    supervisor.stop_all();
     runtime.stop()
 }
+
+#[tauri::command]
+fn service_status(supervisor: State<'_, ServiceSupervisor>) -> Vec<ServiceSnapshot> { supervisor.snapshots() }
 
 #[tauri::command]
 fn configuration_status(
@@ -89,8 +97,19 @@ fn clear_configuration_secret(
 }
 
 #[tauri::command]
+fn local_service_endpoint(supervisor: State<'_, ServiceSupervisor>) -> Result<String, String> {
+    supervisor.mission_control_endpoint().ok_or_else(|| "No free AgentHub local port group is available.".to_owned())
+}
+
+#[tauri::command]
+fn frontend_endpoint(supervisor: State<'_, ServiceSupervisor>) -> Result<String, String> {
+    supervisor.frontend_endpoint().ok_or_else(|| "No free AgentHub local port group is available.".to_owned())
+}
+
+#[tauri::command]
 fn probe_control_plane(
     configuration: State<'_, ConfigurationStore>,
+    supervisor: State<'_, ServiceSupervisor>,
 ) -> Result<ControlPlaneSnapshot, String> {
     let endpoint = configuration
         .mission_control_endpoint()
@@ -98,6 +117,9 @@ fn probe_control_plane(
     let token = configuration
         .secret(SecretKind::MissionControlToken)
         .map_err(|error| error.to_string())?;
+    let endpoint = if endpoint.as_deref() == Some("http://127.0.0.1:8080") {
+        supervisor.mission_control_endpoint().or(endpoint)
+    } else { endpoint };
     Ok(probe_saved_control_plane(
         endpoint.as_deref(),
         token.as_deref(),
@@ -105,11 +127,15 @@ fn probe_control_plane(
 }
 
 #[tauri::command]
-fn open_control_plane(configuration: State<'_, ConfigurationStore>) -> Result<(), String> {
-    let endpoint = configuration
+fn open_control_plane(configuration: State<'_, ConfigurationStore>, supervisor: State<'_, ServiceSupervisor>) -> Result<(), String> {
+    let configured = configuration
         .mission_control_endpoint()
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "Mission Control endpoint is not configured".to_owned())?;
+        .map_err(|error| error.to_string())?;
+    let endpoint = if configured.as_deref().is_none() || configured.as_deref() == Some("http://127.0.0.1:8080") {
+        supervisor.frontend_endpoint().or(configured)
+    } else {
+        configured
+    }.ok_or_else(|| "Mission Control endpoint is not configured".to_owned())?;
 
     Command::new("rundll32.exe")
         .args(["url.dll,FileProtocolHandler", endpoint.as_str()])
@@ -123,21 +149,34 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
-            app.manage(ConfigurationStore::new(config_dir));
+            let configuration = ConfigurationStore::new(config_dir);
+            configuration
+                .ensure_defaults()
+                .map_err(|error| error.to_string())?;
+            app.manage(configuration);
             let resource_dir = app.path().resource_dir()?;
-            app.manage(LocalRuntime::from_resource_dir(resource_dir));
+            let supervisor = ServiceSupervisor::from_resource_dir(resource_dir.clone());
+            let runtime = supervisor.runtime_port().map_or_else(
+                || LocalRuntime::from_resource_dir(resource_dir.clone()),
+                |port| LocalRuntime::from_resource_dir_with_port(resource_dir.clone(), port),
+            );
+            app.manage(runtime);
+            app.manage(supervisor);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             runtime_status,
             start_runtime,
             stop_runtime,
+            service_status,
             configuration_status,
             configuration_details,
             save_configuration,
             set_configuration_secret,
             clear_configuration_secret,
             probe_control_plane,
+            local_service_endpoint,
+            frontend_endpoint,
             open_control_plane
         ])
         .run(tauri::generate_context!())

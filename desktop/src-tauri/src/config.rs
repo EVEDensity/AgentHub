@@ -13,6 +13,8 @@ use url::Url;
 pub const CONFIG_SCHEMA_VERSION: u16 = 1;
 const CONFIG_FILE_NAME: &str = "config.json";
 const KEYRING_SERVICE: &str = "com.agenthub.desktop";
+const DEFAULT_MISSION_CONTROL_ENDPOINT: &str = "http://127.0.0.1:8080";
+const DEFAULT_MCP_ENDPOINT: &str = "http://127.0.0.1:8099";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,15 +185,14 @@ impl ConfigurationStore {
         let mission_control_token = self.secret_status(SecretKind::MissionControlToken);
         let mcp_token = self.secret_status(SecretKind::McpToken);
         let model_api_key = self.secret_status(SecretKind::ModelApiKey);
-        let ready_for_runtime = config.mission_control_endpoint.is_some()
-            && config.artifact_directory.is_some()
-            && mission_control_token == SecretAvailability::Configured;
+        let ready_for_runtime = config.mission_control_endpoint.as_deref().map(str::trim).is_some_and(|value| !value.is_empty())
+            && config.artifact_directory.as_deref().map(str::trim).is_some_and(|value| !value.is_empty());
 
         Ok(ConfigurationStatus {
             schema_version: config.schema_version,
-            mission_control_endpoint_configured: config.mission_control_endpoint.is_some(),
-            mcp_endpoint_configured: config.mcp_endpoint.is_some(),
-            artifact_directory_configured: config.artifact_directory.is_some(),
+            mission_control_endpoint_configured: config.mission_control_endpoint.as_deref().map(str::trim).is_some_and(|value| !value.is_empty()),
+            mcp_endpoint_configured: config.mcp_endpoint.as_deref().map(str::trim).is_some_and(|value| !value.is_empty()),
+            artifact_directory_configured: config.artifact_directory.as_deref().map(str::trim).is_some_and(|value| !value.is_empty()),
             mission_control_token,
             mcp_token,
             model_api_key,
@@ -210,6 +211,45 @@ impl ConfigurationStore {
             mcp_token: self.secret_status(SecretKind::McpToken),
             model_api_key: self.secret_status(SecretKind::ModelApiKey),
         })
+    }
+
+    pub fn ensure_defaults(&self) -> Result<(), ConfigurationError> {
+        let default_artifact_directory = self
+            .path
+            .parent()
+            .ok_or(ConfigurationError::Io)?
+            .join("artifacts");
+        fs::create_dir_all(&default_artifact_directory).map_err(|_| ConfigurationError::Io)?;
+        let mut config = if self.path.exists() {
+            self.load_config()?
+        } else {
+            DesktopConfig {
+                schema_version: CONFIG_SCHEMA_VERSION,
+                ..DesktopConfig::default()
+            }
+        };
+        let mut changed = false;
+        if config.mission_control_endpoint.as_deref().map(str::trim).unwrap_or_default().is_empty() {
+            config.mission_control_endpoint = Some(DEFAULT_MISSION_CONTROL_ENDPOINT.to_owned());
+            changed = true;
+        }
+        if config.mcp_endpoint.as_deref().map(str::trim).unwrap_or_default().is_empty() {
+            config.mcp_endpoint = Some(DEFAULT_MCP_ENDPOINT.to_owned());
+            changed = true;
+        }
+        if config.artifact_directory.as_deref().map(str::trim).unwrap_or_default().is_empty() {
+            config.artifact_directory = Some(default_artifact_directory.to_string_lossy().into_owned());
+            changed = true;
+        }
+        if !changed && self.path.exists() {
+            return Ok(());
+        }
+        let mut encoded =
+            serde_json::to_vec_pretty(&config).map_err(|_| ConfigurationError::Serialization)?;
+        encoded.push(b'\n');
+        let parent = self.path.parent().ok_or(ConfigurationError::Io)?;
+        fs::create_dir_all(parent).map_err(|_| ConfigurationError::Io)?;
+        fs::write(&self.path, encoded).map_err(|_| ConfigurationError::Io)
     }
 
     pub fn save_config(
@@ -332,10 +372,11 @@ fn validate_artifact_directory(
 mod tests {
     use super::{
         ConfigurationStore, DesktopConfigInput, SecretAvailability, SecretInput, SecretKind,
-        SecretStore, SecretStoreError,
+        SecretStore, SecretStoreError, DEFAULT_MCP_ENDPOINT, DEFAULT_MISSION_CONTROL_ENDPOINT,
     };
     use std::collections::HashMap;
     use std::fs;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -408,6 +449,36 @@ mod tests {
             store.status().expect("status reads").mission_control_token,
             SecretAvailability::Configured
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn first_run_defaults_create_local_endpoints_and_artifacts() {
+        let (store, dir) = test_store();
+        store.ensure_defaults().expect("defaults save");
+        let details = store.details().expect("details read");
+        assert_eq!(details.mission_control_endpoint.as_deref(), Some(DEFAULT_MISSION_CONTROL_ENDPOINT));
+        assert_eq!(details.mcp_endpoint.as_deref(), Some(DEFAULT_MCP_ENDPOINT));
+        let artifact_directory = details.artifact_directory.expect("artifact directory");
+        assert!(Path::new(&artifact_directory).is_dir());
+        assert!(store.status().expect("status reads").ready_for_runtime);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn existing_partial_config_is_upgraded_with_local_defaults() {
+        let (store, dir) = test_store();
+        fs::create_dir_all(&dir).expect("config directory");
+        fs::write(
+            dir.join("config.json"),
+            r#"{"schemaVersion":1,"missionControlEndpoint":null,"mcpEndpoint":null,"artifactDirectory":null}"#,
+        )
+        .expect("partial config writes");
+        store.ensure_defaults().expect("defaults upgrade");
+        let details = store.details().expect("details read");
+        assert_eq!(details.mission_control_endpoint.as_deref(), Some(DEFAULT_MISSION_CONTROL_ENDPOINT));
+        assert_eq!(details.mcp_endpoint.as_deref(), Some(DEFAULT_MCP_ENDPOINT));
+        assert!(details.artifact_directory.is_some());
         let _ = fs::remove_dir_all(dir);
     }
 

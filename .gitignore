@@ -15,6 +15,7 @@ frontend/out/
 frontend/.env*.local
 frontend/tsconfig.tsbuildinfo
 frontend/test-results/
+frontend/.next-codex/
 
 # Environment and secrets
 .env
@@ -55,12 +56,15 @@ docs/AI_COLLABORATION*.md
 desktop/src-tauri/target/
 desktop/runtime-sidecar/target/
 desktop/.runtime/
+desktop/src-tauri/local-services/
 services/rust/target/
+.venv-check/
 
 # Backup, temporary, and log files
 *.bak
 *.tmp
 .tmp-go-cache/
+.tmp/
 .gocache/
 *.swp
 *~

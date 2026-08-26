@@ -24,9 +24,13 @@ pub struct RuntimeLaunchSpec {
 
 impl RuntimeLaunchSpec {
     pub fn from_resource_dir(resource_dir: PathBuf) -> Self {
+        Self::from_resource_dir_with_port(resource_dir, 18_097)
+    }
+
+    pub fn from_resource_dir_with_port(resource_dir: PathBuf, port: u16) -> Self {
         Self {
             executable: resource_dir.join(SIDECAR_FILE_NAME),
-            health_endpoint: Url::parse(RUNTIME_HEALTH_ENDPOINT).expect("valid health endpoint"),
+            health_endpoint: Url::parse(&format!("http://127.0.0.1:{port}/readyz")).expect("valid health endpoint"),
             #[cfg(test)]
             override_args: None,
         }
@@ -110,6 +114,10 @@ impl LocalRuntime {
     }
 
     pub fn from_resource_dir(resource_dir: PathBuf) -> Self {
+        Self::from_resource_dir_with_port(resource_dir, 18_097)
+    }
+
+    pub fn from_resource_dir_with_port(resource_dir: PathBuf, port: u16) -> Self {
         Self {
             state: Mutex::new(RuntimeState {
                 child: None,
@@ -117,7 +125,7 @@ impl LocalRuntime {
                 started_at: None,
                 require_artifact_root: false,
             }),
-            launch_spec: Some(RuntimeLaunchSpec::from_resource_dir(resource_dir)),
+            launch_spec: Some(RuntimeLaunchSpec::from_resource_dir_with_port(resource_dir, port)),
         }
     }
 

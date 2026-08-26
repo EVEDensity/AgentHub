@@ -205,12 +205,23 @@ class Settings(BaseSettings):
         default="",
         description="PostgreSQL connection URL (postgresql://...)",
     )
+    db_backend: Literal["auto", "postgres", "sqlite"] = Field(
+        default="auto", alias="AGENTHUB_DB_BACKEND"
+    )
+    sqlite_path: Path = Field(
+        default=_DATA_DIR / "agenthub.db", alias="AGENTHUB_SQLITE_PATH"
+    )
     db_pool_min: int = Field(default=2, alias="AGENTHUB_DB_POOL_MIN")
     db_pool_max: int = Field(default=20, alias="AGENTHUB_DB_POOL_MAX")
 
     # ── Network ────────────────────────────────────────────────────────
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"],
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "tauri://localhost",
+            "http://tauri.localhost",
+        ],
         alias="AGENTHUB_CORS_ORIGINS",
         description="Comma-separated CORS allowed origins",
     )
@@ -279,7 +290,7 @@ class Settings(BaseSettings):
             return [o.strip() for o in v.split(",") if o.strip()]
         if isinstance(v, list):
             return v
-        return ["http://localhost:3000", "http://127.0.0.1:3000"]
+        return ["http://localhost:3000", "http://127.0.0.1:3000", "tauri://localhost", "http://tauri.localhost"]
 
     @field_validator("DATABASE_URL")
     @classmethod
