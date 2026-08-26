@@ -1,5 +1,9 @@
 # new-api LLM gateway — Prometheus alerting rules (M1/M3).
 #
+# NOTE: for the full AgentHub stack these rules are already merged into
+# deploy/agenthub_rules.yml (mounted by docker-compose.platform.yml). This
+# standalone file is for isolated new-api-only stacks.
+#
 # Scrape target (new-api exposes Prometheus /metrics on :3000):
 #   - job_name: new-api
 #     static_configs: [{ targets: ["host.docker.internal:3000"] }]

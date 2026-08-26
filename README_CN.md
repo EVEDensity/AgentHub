@@ -55,6 +55,16 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 ```
 
+可选：把全部供应商统一收敛到 new-api 网关（多 key 故障切换、配额与用量统计）：
+
+```bash
+export AGENTHUB_LLM_GATEWAY=newapi
+export AGENTHUB_NEWAPI_BASE_URL=http://127.0.0.1:3000/v1
+export AGENTHUB_NEWAPI_API_KEY=sk-agenthub-xxxx
+```
+
+部署、迁移与验证见 [deploy/newapi/README.md](deploy/newapi/README.md)（ADR-0104）。
+
 然后：
 
 ```bash

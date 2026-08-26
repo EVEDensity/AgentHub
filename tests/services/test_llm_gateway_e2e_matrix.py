@@ -227,6 +227,37 @@ def test_matrix_tool_calls_shape_roundtrip(newapi, mock_upstream_url) -> None:
 
 
 @pytest.mark.skipif(not Path(EXE).is_file(), reason="new-api binary not available")
+def test_matrix_concurrent_streams(newapi, mock_upstream_url) -> None:
+    """T4 — 10 concurrent SSE streams through the gateway stay healthy."""
+    import asyncio
+
+    key = _canary_key(newapi, mock_upstream_url)
+    base, headers = newapi.base, {"Authorization": f"Bearer {key}"}
+
+    async def one_stream(i: int) -> tuple[int, bool]:
+        async with httpx.AsyncClient(trust_env=False, timeout=15, base_url=base,  # noqa: SIM117 — nested contexts clearer here
+                                     headers=headers) as client:
+            async with client.stream("POST", "/v1/chat/completions",
+                                     json={"model": "mock-llm", "stream": True,
+                                           "messages": [{"role": "user", "content": f"并发-{i}"}]}) as resp:
+                if resp.status_code != 200:
+                    return resp.status_code, False
+                got = False
+                async for line in resp.aiter_lines():
+                    if line.startswith("data:") and "[DONE]" in line:
+                        got = True
+                        break
+                return resp.status_code, got
+
+    async def run() -> list[tuple[int, bool]]:
+        return await asyncio.gather(*(one_stream(i) for i in range(10)))
+
+    results = asyncio.run(run())
+    assert all(status == 200 for status, _ in results), results[:3]
+    assert all(got for _, got in results), results[:3]
+
+
+@pytest.mark.skipif(not Path(EXE).is_file(), reason="new-api binary not available")
 def test_matrix_rerank_stays_on_selfhosted_service(tmp_path, monkeypatch) -> None:
     # T1 acceptance: enabling the gateway must NOT move rerank; the adapter
     # service keeps serving /v1/rerank via the local bge/mock path.

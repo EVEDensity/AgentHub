@@ -55,6 +55,18 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 ```
 
+Optionally route all providers through a unified gateway (new-api / one-api
+style) for multi-key failover, quotas and usage analytics:
+
+```bash
+export AGENTHUB_LLM_GATEWAY=newapi
+export AGENTHUB_NEWAPI_BASE_URL=http://127.0.0.1:3000/v1
+export AGENTHUB_NEWAPI_API_KEY=sk-agenthub-xxxx
+```
+
+See [deploy/newapi/README.md](deploy/newapi/README.md) for deployment,
+migration and verification (ADR-0104).
+
 Then:
 
 ```bash

@@ -53,7 +53,7 @@ L3 知识图谱 → PostgreSQL (实体关系图)
 | 能力 | AgentHub | Dify | CrewAI | n8n |
 |------|----------|------|--------|-----|
 | 多 Agent 协作 | ✅ DAG + 涌现通信 | ❌ 单一 Agent | ⚠️ 顺序执行 | ❌ |
-| Rust 性能核心 | 原型（P95 < 80ms 为目标值，基准门禁待建） | ❌ | ❌ | ❌ |
+| Rust 性能核心 | 目标（P95 < 80ms；基准门禁已接入 CI：`benchmarks/gates.py` 的 `api_latency_p95`/`streaming_ttft`） | ❌ | ❌ | ❌ |
 | 4 层记忆 | ⚠️ L0/L1 已实现，L2/L3 进行中 | ❌ | ❌ | ❌ |
 | MCP 协议 | ✅ HTTP JSON-RPC + 兼容 SSE/STDIO | ⚠️ 基础 | ❌ | ❌ |
 | A2A 协议 | 原型（能力探测、签名信任已有；外部互操作认证进行中） | ❌ | ❌ | ❌ |

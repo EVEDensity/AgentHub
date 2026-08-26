@@ -306,3 +306,55 @@ groups:
           summary: "Monthly billing cycle may need closing"
           description: "Check if billing cycles need to be closed for end-of-month processing."
           runbook: "Run POST /iam/billing/{tenant_id}/close for each active tenant."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # new-api LLM 网关（可选；M1/M3，未启用 LLM_GATEWAY 时无数据则静默）
+  # 抓取目标：new-api 的 /metrics（:3000），如
+  #   - job_name: new-api
+  #     static_configs: [{ targets: ["127.0.0.1:3000"] }]
+  # ═══════════════════════════════════════════════════════════════════
+  - name: newapi_gateway
+    rules:
+      - alert: NewAPI5xxRateHigh
+        expr: |
+          (sum(rate(relay_requests_total{status=~"5.."}[5m]))
+           / clamp_min(sum(rate(relay_requests_total[5m])), 1e-6)) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: new-api
+        annotations:
+          summary: "new-api 5xx 占比超 5%（近5分钟）"
+          description: "网关 5xx 占比达到 {{ $value | humanizePercentage }}，请检查上游渠道与网关健康。"
+
+      - alert: NewAPIProbeDown
+        expr: up{job="new-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: new-api
+        annotations:
+          summary: "new-api 探活失败"
+          description: "网关持续不可达超过 2 分钟，LLM 链路将中断；请优先回滚 AGENTHUB_LLM_GATEWAY。"
+
+      - alert: NewAPIErrorRateHigh
+        expr: |
+          (sum(rate(relay_requests_total{status=~"4..|5.."}[10m]))
+           / clamp_min(sum(rate(relay_requests_total[10m])), 1e-6)) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          component: new-api
+        annotations:
+          summary: "new-api 请求错误率超 10%"
+          description: "4xx/5xx 合计占比 {{ $value | humanizePercentage }}，常见于 key 失效/配额耗尽/模型价格未配置。"
+
+      - alert: NewAPIChannelKeyBalanceLow
+        expr: agenthub_newapi_channel_min_balance < 1e6
+        for: 30m
+        labels:
+          severity: critical
+          component: new-api
+        annotations:
+          summary: "new-api 渠道 key 余额偏低"
+          description: "最低渠道余额 {{ $value }}，请补充渠道 key 或配额。使用 deploy/newapi/export_usage.py --prometheus-gauge 生成该指标。"
