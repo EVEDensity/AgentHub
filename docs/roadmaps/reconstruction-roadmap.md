@@ -106,8 +106,8 @@ production dispatch path.
 | Task | Debt | Acceptance criteria |
 |---|---|---|
 | Split `agent_service.py` into the `services/agent/` layout; keep public call signatures stable behind facade while consumers migrate | D1 | `agent_service.py` 2650 → ~105-line facade; five modules under `app/services/agent/` with per-module tests `tests/services/test_agent_module_split.py`; full suite 624 passed |
-| Split `websocket.py` into lanes; externalize session state behind `state.py` adapter | D2 | WebSocket reconnect across two backend replicas preserves session; lane tests independent |
-| Thin `page.tsx` to composition; move orchestration to `lib/agent` hooks/stores | D3 | `page.tsx` < 400 lines; e2e `frontend/e2e/*` green |
+| Split `websocket.py` into lanes; externalize session state behind `state.py` adapter | D2 | Session state fully owned by `websocket_state` (single owner); dispatch/lifecycle/message-flow lanes are the only event paths; no per-module state duplicates (verified, 2062 → ~1960 lines) |
+| Thin `page.tsx` to composition; move orchestration to `lib/agent` hooks/stores | D3 | `page.tsx` 1776 → ~1570 lines; constants/sort/auth/scroll moved to `lib/agents.ts`, `lib/api.ts`, `hooks/useMessageAutoScroll.ts`; tsc + 158 frontend tests green |
 
 **Stop condition:** all three modules below size gates with per-module tests;
 no new logic added to the legacy files.

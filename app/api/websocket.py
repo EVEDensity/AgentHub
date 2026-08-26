@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import copy
@@ -31,66 +31,28 @@ logger = logging.getLogger("agenthub.websocket")
 _memory_extractors: dict[str, object] = {}  # user_id → MemoryExtractor
 _session_mgrs: dict[str, object] = {}       # user_id → SessionMemoryManager
 _session_stores: dict[str, object] = {}     # user_id → SessionMemoryStore
-# Per-session throttle: {session_id: last_run_timestamp}
-_throttle_state: dict[str, float] = {}
-_THROTTLE_SECONDS = 30  # min interval between background memory tasks per session
 
-# ── Permission request state (session-scoped async Events) ─────────
-# {session_id: {request_id: {"event": asyncio.Event, "decision": str}}}
-_permission_state: dict[str, dict[str, dict]] = {}
-
-# ── Exec permission mode per session ───────────────────────────────
-# 1 = 询问 (ask), 2 = 跳过 (bypass), 3 = 计划 (plan/read-only)
-_session_exec_permission: dict[str, int] = {}
-
-# ── Solution selection state (session-scoped async Events) ──────────
-# When the Orchestrator proposes solutions, it sets an Event here and
-# waits.  The frontend sends "solution_selection" to resolve it.
-# {session_id: asyncio.Event}
-_solution_selection_events: dict[str, asyncio.Event] = {}
-# {session_id: {"solutionId": "...", "autoSelected": bool}}
-_solution_selection_results: dict[str, dict] = {}
+# All session-scoped mutable state (exec permission, permission requests,
+# auto-name throttle, task previews, solution selection, PM interactions,
+# memory-task throttle, resolved interactions) lives in websocket_state.
+# R3/R4: do not reintroduce per-module state duplicates here.
 
 
 def get_session_exec_permission(session_id: str) -> int:
     """Return the exec_permission for a session (default 1 = ask)."""
-    return _session_exec_permission.get(session_id, 1)
+    return ws_state.get_session_exec_permission(session_id)
 
 
 def set_session_exec_permission(session_id: str, mode: int) -> None:
     """Set the exec_permission for a session."""
-    if mode in (1, 2, 3):
-        _session_exec_permission[session_id] = mode
+    ws_state.set_session_exec_permission(session_id, mode)
 
-# Auto-name throttle: separate from memory tasks — fires more aggressively
-# for the first few messages, then backs off
-_auto_name_state: dict[str, tuple[float, int]] = {}
-_AUTO_NAME_INITIAL_SECONDS = 15  # quick check after first messages
-_AUTO_NAME_BACKOFF_SECONDS = 120  # slower after initial attempts
-_AUTO_NAME_MAX_ATTEMPTS = 5  # stop trying after this many attempts
+# Auto-name throttle lives in websocket_state (shared, single owner).
 
 
 def _should_auto_name(session_id: str) -> bool:
-    """Return True if we should attempt auto-naming for this session.
-
-    Always fires on the very first attempt (attempts == 0) so that
-    new sessions get named immediately after the first agent response.
-    Subsequent attempts are throttled.
-    """
-    import time
-    now_ts = time.monotonic()
-    last_ts, attempts = _auto_name_state.get(session_id, (0.0, 0))
-    if attempts >= _AUTO_NAME_MAX_ATTEMPTS:
-        return False
-    # Always allow the very first attempt — no throttle
-    if attempts == 0:
-        _auto_name_state[session_id] = (now_ts, 1)
-        return True
-    interval = _AUTO_NAME_INITIAL_SECONDS if attempts < 2 else _AUTO_NAME_BACKOFF_SECONDS
-    if now_ts - last_ts >= interval:
-        _auto_name_state[session_id] = (now_ts, attempts + 1)
-        return True
-    return False
+    """Return True if we should attempt auto-naming for this session."""
+    return ws_state._should_auto_name(session_id)
 
 
 async def _request_tool_permission(
@@ -154,17 +116,10 @@ def _handle_permission_response(session_id: str, request_id: str, decision: str)
     return False
 
 
-# ── PM/PMO interaction response handlers ───────────────────────────────
-# Store pending PM interaction state so the agent can await user responses.
-
-# {session_id: {message_id: {"event": asyncio.Event, "response": dict}}}
-_pm_pending_questions: dict[str, dict[str, dict]] = {}
-_pm_pending_warnings: dict[str, dict[str, dict]] = {}
-_pm_pending_todos: dict[str, dict[str, dict]] = {}
-
-# ── Task preview confirmation wait ─────────────────────────────────
-# {session_id: {preview_msg_id: {"event": asyncio.Event, "decision": str, "modifications": str}}}
-_pending_task_previews: dict[str, dict[str, dict]] = {}
+# PM/PMO interaction response handlers.
+# Pending PM interaction state (questions/warnings/todos) and task-preview
+# confirmation waits live in websocket_state — single owner, shared with the
+# dispatch lane.
 
 
 async def _wait_for_task_confirmation(
@@ -176,48 +131,21 @@ async def _wait_for_task_confirmation(
     to confirm or cancel the DAG.  Members can vote/comment but their
     decisions are treated as advisory — they don't block the flow.
 
-    Returns ``(decision, modifications)`` where *decision* is one of
-    ``"confirm"``, ``"cancel"``, ``"modify"`` or ``"timeout"``.
+    Returns ``(decision, modifications)``.
+    Ownership of the pending-preview state is websocket_state.
     """
-    event = asyncio.Event()
-    _pending_task_previews.setdefault(session_id, {})[preview_msg_id] = {
-        "event": event,
-        "decision": "confirm",
-        "modifications": "",
-        "owner_id": user_id,
-        "member_votes": {} if user_id else None,  # user_id → decision
-    }
-
-    try:
-        await asyncio.wait_for(event.wait(), timeout=300)
-    except asyncio.TimeoutError:
-        _pending_task_previews.get(session_id, {}).pop(preview_msg_id, None)
-        logger.info(
-            "task_preview_wait timeout session=%s preview=%s — proceeding with execution",
-            session_id, preview_msg_id,
-        )
-        return "confirm", ""
-
-    if token and token.cancelled:
-        return "cancel", ""
-
-    entry = _pending_task_previews.get(session_id, {}).pop(preview_msg_id, None)
-    if entry:
-        return entry["decision"], entry.get("modifications", "")
-    return "confirm", ""
+    return await ws_state.wait_for_task_confirmation(
+        session_id, preview_msg_id, token, user_id=user_id,
+    )
 
 
 def _resolve_pending_task_preview(
     session_id: str, preview_msg_id: str, decision: str, modifications: str = "",
 ) -> bool:
     """Signal a waiting task preview. Returns True if it was actually pending."""
-    entry = _pending_task_previews.get(session_id, {}).get(preview_msg_id)
-    if entry:
-        entry["decision"] = decision
-        entry["modifications"] = modifications
-        entry["event"].set()
-        return True
-    return False
+    return ws_state.resolve_pending_task_preview(
+        session_id, preview_msg_id, decision, modifications,
+    )
 
 
 # ── Multi-@mention greeting detection ──────────────────────────────────
@@ -320,25 +248,6 @@ def _is_multi_mention_greeting(content: str) -> bool:
         return True
 
     return False
-
-
-# ── Resolved interaction tracking (for first-wins + broadcast to peers) ─
-# {session_id: {message_id: {"resolvedBy": user_id, "userName": str, "timestamp": str}}}
-_resolved_interactions: dict[str, dict[str, dict]] = {}
-
-
-def _mark_interaction_resolved(session_id: str, message_id: str, user_id: str, user_name: str) -> bool:
-    """Atomically mark an interaction as resolved. Returns True if this is the first resolver (wins)."""
-    session_map = _resolved_interactions.setdefault(session_id, {})
-    if message_id in session_map:
-        return False  # already resolved
-    session_map[message_id] = {"resolvedBy": user_id, "userName": user_name, "timestamp": now()}
-    return True
-
-
-def _get_resolved_by(session_id: str, message_id: str) -> dict | None:
-    """Return resolver info if already resolved, or None."""
-    return _resolved_interactions.get(session_id, {}).get(message_id)
 
 
 async def _handle_agent_question_response(session_id: str, data: dict, user_id: str = "", user_name: str = "") -> None:
@@ -737,13 +646,7 @@ async def _append_turn_to_session_memory(
 
 def _should_run_memory_tasks(session_id: str) -> bool:
     """Return True if enough time has passed since last memory task run."""
-    import time
-    now_ts = time.monotonic()
-    last = ws_state._throttle_state.get(session_id, 0.0)
-    if now_ts - last >= ws_state._THROTTLE_SECONDS:
-        ws_state._throttle_state[session_id] = now_ts
-        return True
-    return False
+    return ws_state.should_run_memory_tasks(session_id)
 
 router = APIRouter(tags=["websocket"])
 
@@ -755,19 +658,7 @@ def _chunk_text_for_streaming(text: str, chunk_size: int = 60) -> list[str]:
     progressive text even when real SSE streaming is unavailable.
     Sentence-aware splitting ensures chunks end at natural boundaries.
     """
-    if not text:
-        return []
-    chunks: list[str] = []
-    buf = ""
-    separators = "，。！？；：,.!?;:\n"
-    for ch in text:
-        buf += ch
-        if len(buf) >= chunk_size or ch in separators:
-            chunks.append(buf)
-            buf = ""
-    if buf:
-        chunks.append(buf)
-    return chunks
+    return ws_state.chunk_text_for_streaming(text, chunk_size)
 
 
 @router.websocket("/ws/{session_id}")

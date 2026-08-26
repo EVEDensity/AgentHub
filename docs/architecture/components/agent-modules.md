@@ -57,3 +57,25 @@ the package; the facade only re-exports.
    reintroduce cycles.
 3. Run `pytest tests/services/test_agent_module_split.py` plus the full suite
    before merging agent changes.
+
+## Related: WebSocket lanes and session state (R3/R4 hot-module thinning)
+
+The IM transport is split into single-purpose lanes; each lane is thin and
+delegates business handlers to the page orchestrator via callbacks:
+
+- `app/api/websocket_state.py`: **sole owner** of session-scoped mutable state
+  (exec permission, permission requests, auto-name throttle, task-preview
+  waits, solution selection, PM question/warning/todo state, memory-task
+  throttle, resolved interactions, streaming chunks).
+- `app/api/websocket_lifecycle.py`: connect/disconnect + heartbeat.
+- `app/api/websocket_dispatch.py`: control-event routing (pong, presence,
+  typing, sync, permission responses, PM interactions, diff decisions).
+- `app/api/websocket_message_flow.py`: message-flow shaping (greeting detection,
+  DAG task items, follow-up todos, task preview).
+- `app/api/websocket.py`: orchestration shell — composes the lanes and the
+  `_process_and_stream` / `_invoke_agent` business pipeline.
+
+**Rule:** do not reintroduce per-module state dictionaries in `websocket.py`;
+all session state must be read/written through `websocket_state` so the
+dispatch, flow, and page orchestrator share one source of truth (verified:
+no duplicate state remains after the R3/R4 pass).

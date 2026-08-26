@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import dynamic from 'next/dynamic';
@@ -25,6 +25,9 @@ import { useResizableSize } from '../hooks/useResizableSize';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useSessionRecovery } from '../hooks/useSessionRecovery';
 import { useSessionWebSocket } from '../hooks/useSessionWebSocket';
+import { useMessageAutoScroll } from '../hooks/useMessageAutoScroll';
+import { AGENTS, FALLBACK_AGENTS, sortSessions } from '../lib/agents';
+import { authHeaders, fetchAuth as fetchAuthWithCallback } from '../lib/api';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
 import { clearDagSession, useDagState } from '../lib/dagStore';
 import { handleSharedWebSocketEvent } from '../lib/websocketSharedEvents';
@@ -62,25 +65,6 @@ const DagModal = dynamic(() => import('../components/chat/DagModal'), {
   ssr: false,
   loading: () => null,
 });
-
-const AGENTS = ['Orchestrator', 'Architect', 'CodeGen', 'Review', 'Test', 'Deploy', 'Implement'] as const;
-const FALLBACK_AGENTS: Agent[] = AGENTS.map((agentId) => ({
-  agentId,
-  domain: agentId.toLowerCase(),
-  status: 'sleeping',
-  adapterType: 'mock',
-  riskLevel: agentId === 'Deploy' ? 'L3' : agentId === 'CodeGen' || agentId === 'Orchestrator' ? 'L2' : 'L1',
-}));
-
-function sortSessions(items: ChatSession[]): ChatSession[] {
-  return [...items].sort((a, b) => {
-    const pinDiff = (b.isPinned || 0) - (a.isPinned || 0);
-    if (pinDiff !== 0) return pinDiff;
-    const aTime = a.lastMessageAt || a.createdAt || '';
-    const bTime = b.lastMessageAt || b.createdAt || '';
-    return bTime.localeCompare(aTime);
-  });
-}
 
 export default function AgentHubIM(): JSX.Element {
   const [token, setToken] = useState<string>('');
@@ -202,8 +186,6 @@ export default function AgentHubIM(): JSX.Element {
   attachedFilesRef.current = attachedFiles;
   const previewTabsRef = useRef(previewTabs);
   previewTabsRef.current = previewTabs;
-  const prevMessageCountRef = useRef(0);
-  const prevSessionRef = useRef<string>(sessionId);
   // 关键修复：始终以 ref 形式保留最新的 sessionId，
   // 让 handleSend / handleRetryMessage 等回调即使在 useCallback 闭包过期时
   // 也能拿到“此时此刻”真实的 sessionId，而不是上一次渲染的快照。
@@ -370,24 +352,9 @@ export default function AgentHubIM(): JSX.Element {
       .catch(() => {});
   }, [token]);
 
-  function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
-    const localToken = typeof window !== 'undefined' ? localStorage.getItem('agenthub_token') : '';
-    return localToken ? { ...extra, Authorization: `Bearer ${localToken}` } : extra;
-  }
-
-  /** Fetch wrapper that attaches auth headers and auto-logouts on 401.
-   *  Any component-level API call SHOULD use this instead of raw fetch
-   *  so stale/expired tokens are caught uniformly. */
+  // fetchAuth: 统一 401 处理见 lib/api.ts — 组件内包装以接入 handleTokenExpired。
   async function fetchAuth(url: string, init: RequestInit = {}): Promise<Response> {
-    const res = await fetch(url, {
-      ...init,
-      headers: { ...authHeaders(), ...(init.headers as Record<string, string> || {}) },
-    });
-    if (res.status === 401) {
-      handleTokenExpired();
-      throw new Error('TOKEN_EXPIRED');
-    }
-    return res;
+    return fetchAuthWithCallback(url, handleTokenExpired, init);
   }
 
   useEffect(() => {
@@ -400,53 +367,8 @@ export default function AgentHubIM(): JSX.Element {
     connectSession(sessionId);
   }, [token, sessionId, reloadMessages, connectSession]);
 
-  // ── Scroll-to-bottom helper refs ──────────────────────────
-  const scrollRafRef = useRef<number>(0);
-  const lastScrollTimeRef = useRef<number>(0);
-
-  useEffect(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-
-    const currentCount = messages.length;
-    const isNewMessage = currentCount > prevMessageCountRef.current;
-    const isSessionSwitch = sessionId !== prevSessionRef.current;
-    prevMessageCountRef.current = currentCount;
-    prevSessionRef.current = sessionId;
-
-    // Session switch: immediate scroll to bottom
-    if (isSessionSwitch) {
-      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
-      scrollRafRef.current = requestAnimationFrame(() => {
-        container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
-      });
-      return;
-    }
-
-    // New message during streaming: throttle to ~30fps to avoid scroll jank
-    // The progressive flush releases chunks at ~8ms intervals (125Hz) —
-    // scrolling on every chunk causes layout thrashing.
-    if (isNewMessage) {
-      const now = performance.now();
-      // Throttle: max one scroll per ~32ms (~30fps)
-      if (now - lastScrollTimeRef.current < 32) return;
-      lastScrollTimeRef.current = now;
-
-      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
-      scrollRafRef.current = requestAnimationFrame(() => {
-        // Use auto (not smooth) during streaming — smooth animation
-        // competes with DOM updates from progressive chunk release
-        container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
-      });
-      return;
-    }
-
-    // User is near the bottom: keep them anchored
-    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    if (distanceToBottom < 120) {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
-    }
-  }, [messages, sessionId]);
+  // ── Message auto-scroll (owned by useMessageAutoScroll) ──────────
+  useMessageAutoScroll(messages, sessionId, messagesContainerRef);
 
   // ── Mention detection ────────────────────────────────────
 
