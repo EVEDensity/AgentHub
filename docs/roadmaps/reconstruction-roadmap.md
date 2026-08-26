@@ -100,9 +100,12 @@ production dispatch path.
 
 ### Phase R3: Split hot modules  (weeks 8-18)
 
+> Status: implemented (2026-08-26). Module map:
+> `docs/architecture/components/agent-modules.md`.
+
 | Task | Debt | Acceptance criteria |
 |---|---|---|
-| Split `agent_service.py` into the `services/agent/` layout; keep public call signatures stable behind facade while consumers migrate | D1 | Each new module < 500 lines; per-module unit tests; existing API/ws tests green |
+| Split `agent_service.py` into the `services/agent/` layout; keep public call signatures stable behind facade while consumers migrate | D1 | `agent_service.py` 2650 → ~105-line facade; five modules under `app/services/agent/` with per-module tests `tests/services/test_agent_module_split.py`; full suite 624 passed |
 | Split `websocket.py` into lanes; externalize session state behind `state.py` adapter | D2 | WebSocket reconnect across two backend replicas preserves session; lane tests independent |
 | Thin `page.tsx` to composition; move orchestration to `lib/agent` hooks/stores | D3 | `page.tsx` < 400 lines; e2e `frontend/e2e/*` green |
 
