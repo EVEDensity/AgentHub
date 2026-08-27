@@ -110,8 +110,60 @@ usage 显示图像计费 prompt=1049 tokens。结论：**网关层零改动即�
 >   `multimodal_e2e_probe` 门禁入 gates+CI（无渠道密钥诚实 SKIP，真渠道
 >   一条命令复跑 PASS）；能力表"多模态"行升为已实现并链实现与测试。
 >   全量回归 **394 passed** 零回归。
-> - ⏳ 待办：G-2 闸门评审（11-03~11-07）前核对 A/B 双主线稳定点 →
->   R5-*（Desktop GA 核对 / Windows 安装包流水线 / 市场 SDK 解冻确认）。
+> - ⏳ 待办：G-2 闸门评审（11-03~11-07）→ R4-5 连续 7 天无人值守观察期
+>   （非评审阻塞项）→ R5-*（见 §0.2 三项预核对，其中流水线已提前达成）。
+
+## 0.1a 桌面端 P0 修复与 Shell 对齐（2026-08-27 晚间，G-2 放行后）
+
+> 背景会议结论：G-2 与 R4-5 观察期直接放行；主目标转为「网页端正确展示
+> 后端能力 → 桌面端缺陷修复 → 打包」。
+
+**P0 根因修复**：`desktop/src-tauri/tauri.conf.json` 缺
+`withGlobalTauri: true`（Tauri v2 默认不注入 `window.__TAURI__`），导致打包
+应用内全部 13 个原生命令静默走浏览器 fallback，截图所示「未配置/未知/需要
+在桌面应用中打开」均为硬编码假值。已开启开关，官方文档确认其为必要条件。
+
+**Shell UI 对齐**（desktop/ui/，消灭「前端有壳后端有魂但没接」项）：
+
+| 修复 | 接线 |
+|---|---|
+| 停止服务按钮 | `stop_runtime` + `service_status` 重渲染（原先命令闲置，仅靠关窗 Drop 兜底） |
+| 取消任务按钮 | `POST /api/v1/missions/{id}/cancel`，轮询至终态后自动隐藏 |
+| 模型连通测试 | 模型列表每行接入 `POST /api/admin/models/{id}/test`，显示延迟 |
+| 运行时就绪原因 | refresh 接入 `configuration_status.readyForRuntime`，缺口（Artifact 目录/MC 地址）结构化提示，不再只靠 probe 一行 detail |
+
+**验证**：前端 tsc 0 错误；vitest 26 文件 159 passed；后端 394 passed +
+181 subtests 与基线一致（4 个 multimodal error 为本机 Temp 目录 WinError 5
+权限问题，与代码无关）；sidecar 构建并 stage 通过；
+`packaging-preflight.ps1` PASS（含新 tauri.conf.json schema 校验）。
+
+### 0.1b P1 数据链修复（2026-08-27 深夜，同日第二轮）
+
+> 承接 §0.1a 比对结论中 P1 项，逐项真实接线（拒绝装饰性注入）。
+
+| # | 修复 | 契约 | 证据 |
+|---|---|---|---|
+| P1-a | Model API Key 桥接 | 桌面凭据库 → `start_all_with_secrets` 仅注入 mission-control 进程 env `AGENTHUB_DESKTOP_MODEL_API_KEY` → `create_model` 请求缺 key 时回退，审计带 `keySource: request/desktop/empty` | services.rs + models.py `resolve_model_api_key`；tests/services/test_admin_models_key_fallback.py 4 passed |
+| P1-b | MCP 探活 | 新原生命令 `probe_mcp`：`GET {mcpEndpoint}/healthz`，2xx=reachable / 401/403=unauthorized / 其余=unhealthy；不发送凭据、不把 TCP 连通当就绪；Shell MCP tab 显示真实状态点与 detail | probe.rs `probe_mcp_endpoint`（probe_url 重构为 probe_reachability 复用）+ cargo test 3 新例 + main.js `renderMcpProbe` |
+| P1-c | 本地栈 gateway 归位 | frontend 服务 env 新增 `GO_GATEWAY_URL=http://127.0.0.1:{base+1}` → next.config.js `/platform/*` rewrite 生效，模板市场（`/platform/templates`）在桌面本地栈可达（此前回落默认 8081 必失败） | services.rs `service_environment` |
+
+**诚实边界记录**：桌面「MCP Token」字段与 mcp-gateway 的 `JWT_SECRET`（签名
+密钥，本地模式已自愈 `localJWTSecret()`）语义不同，且远程 MCP token 目前无
+消费方——本轮**不做** token 注入，待真实远程 MCP 消费方落地时再接。
+`/api/admin/tools`（工具市场）与 legacy `/api/admin/*` 前缀冲突属独立切片，
+未在本轮处理。
+
+## 0.2 R5 前置三项预核对（2026-08-27 实测，供 G-2 引用）
+
+| 项 | 结论 | 证据 |
+|---|---|---|
+| R5-2 Windows 安装包流水线 | ✅ 提前达成（原定 11-10~11-21） | `.github/workflows/desktop-windows.yml`：workflow_dispatch + `desktop-v*` tag 双触发；release-policy.ps1 签名策略；MSI/NSIS + Portable 双产物；install/GUI/updater 三 smoke；manifest SHA-256 上传 |
+| R5-1 Desktop GA 网关核对 | ❌ blocked → ◐ 本日部分推进 | Delivery Plan 第 2~6 条（本地编排器/嵌入式 SQLite/回滚目录）仍未落地；本日完成其中前置项：`withGlobalTauri` P0 修复 + Shell 与本地服务命令面对齐，打包预检通过 |
+| R5-3 市场/SDK 解冻确认 | ◐ 条件成立，待 G-2 决议归档 | reconstruction-roadmap R3 stop condition 已 hold；R4 三门禁 CI 化；按 cross-cutting rules 以 G-2 go 决议为准（会议已放行，待归档） |
+
+> 通义/OpenAI 渠道补跑不占排期：拿到 key 后复用
+> `deploy/newapi/channel_probe.py --channel-type <t>` 一条命令。
+> R4-5 观察期起点=本文档归档次日，第 8 天凭日报与网关 usage 对账销项。
 
 ## 0.1 预 G-2 稳定点核对记录（2026-08-27 实测）
 

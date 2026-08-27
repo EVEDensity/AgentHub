@@ -9,6 +9,7 @@ Endpoints:
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +23,17 @@ from app.services.secret_service import decrypt_secret, encrypt_secret
 router = APIRouter(prefix="/models", tags=["admin-models"])
 
 
+def resolve_model_api_key(explicit: str) -> str:
+    """Prefer the request-provided key; fall back to the desktop-injected key.
+
+    The desktop shell stores a Model API Key in the OS credential store and
+    injects it into the local Mission Control process as
+    ``AGENTHUB_DESKTOP_MODEL_API_KEY``. Per-model keys from the request always
+    win; the desktop key only fills in when the request omits one.
+    """
+    return explicit or os.environ.get("AGENTHUB_DESKTOP_MODEL_API_KEY", "")
+
+
 # ── CREATE ────────────────────────────────────────────────────────────────
 
 
@@ -30,18 +42,20 @@ async def create_model(data: ModelConfigRequest, user: dict = Depends(get_curren
     """Register a new LLM provider model configuration."""
     require_admin(user)
 
-    api_key_hash = hashlib.sha256(data.apiKey.encode()).hexdigest() if data.apiKey else ""
+    api_key = resolve_model_api_key(data.apiKey)
+    api_key_hash = hashlib.sha256(api_key.encode()).hexdigest() if api_key else ""
 
     new_id = await aexecute_insert(
         "INSERT INTO model_configs(provider, model_name, api_key, api_key_hash, base_url, is_active, created_at) "
         "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-        data.provider, data.modelName, encrypt_secret(data.apiKey), api_key_hash,
+        data.provider, data.modelName, encrypt_secret(api_key), api_key_hash,
         data.baseUrl, 1, now(),
     )
 
     audit_id = write_audit(
         user["id"], "admin", "model_config_create", "L2", "approve",
-        {"provider": data.provider, "modelName": data.modelName},
+        {"provider": data.provider, "modelName": data.modelName,
+         "keySource": "request" if data.apiKey else ("desktop" if api_key else "empty")},
     )
     return {"status": "success", "id": int(new_id), "auditId": audit_id}
 

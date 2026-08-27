@@ -63,6 +63,13 @@ fn probe_url<F>(url: &Url, token: Option<&str>, classify: F) -> ControlPlaneSnap
 where
     F: FnOnce(u16, &str) -> ControlPlaneReachability,
 {
+    snapshot(probe_reachability(url, token, classify))
+}
+
+fn probe_reachability<F>(url: &Url, token: Option<&str>, classify: F) -> ControlPlaneReachability
+where
+    F: FnOnce(u16, &str) -> ControlPlaneReachability,
+{
     let agent = ureq::AgentBuilder::new()
         .timeout(PROBE_TIMEOUT)
         .redirects(0)
@@ -79,12 +86,55 @@ where
         Ok(response) => {
             let status = response.status();
             let body = read_body(response);
-            snapshot(classify(status, &body))
+            classify(status, &body)
         }
-        Err(ureq::Error::Status(status, response)) => {
-            snapshot(classify(status, &read_body(response)))
+        Err(ureq::Error::Status(status, response)) => classify(status, &read_body(response)),
+        Err(ureq::Error::Transport(_)) => ControlPlaneReachability::Unreachable,
+    }
+}
+
+const MCP_HEALTH_PATH: &str = "/healthz";
+
+/// Probe a configured MCP endpoint with the local gateway health contract
+/// (`GET /healthz`). Any 2xx response counts as reachable; the probe never
+/// sends credentials and never treats a mere TCP connect as readiness.
+pub fn probe_mcp_endpoint(endpoint: Option<&str>) -> ControlPlaneSnapshot {
+    let reachability = match endpoint.filter(|value| !value.is_empty()) {
+        None => ControlPlaneReachability::NotConfigured,
+        Some(value) => match Url::parse(value) {
+            Err(_) => ControlPlaneReachability::Unhealthy,
+            Ok(origin) => match join_origin_path(&origin, MCP_HEALTH_PATH) {
+                Err(_) => ControlPlaneReachability::Unhealthy,
+                Ok(health_url) => probe_reachability(&health_url, None, classify_mcp_health),
+            },
+        },
+    };
+    ControlPlaneSnapshot {
+        endpoint_configured: reachability != ControlPlaneReachability::NotConfigured,
+        detail: mcp_detail(reachability).to_owned(),
+        reachability,
+    }
+}
+
+fn classify_mcp_health(status: u16, _body: &str) -> ControlPlaneReachability {
+    match status {
+        401 | 403 => ControlPlaneReachability::Unauthorized,
+        status if (200..300).contains(&status) => ControlPlaneReachability::Reachable,
+        _ => ControlPlaneReachability::Unhealthy,
+    }
+}
+
+fn mcp_detail(reachability: ControlPlaneReachability) -> &'static str {
+    match reachability {
+        ControlPlaneReachability::NotConfigured => "MCP endpoint is not configured.",
+        ControlPlaneReachability::Unreachable => {
+            "MCP gateway did not respond within the probe timeout."
         }
-        Err(ureq::Error::Transport(_)) => snapshot(ControlPlaneReachability::Unreachable),
+        ControlPlaneReachability::Unauthorized => "MCP gateway rejected the request.",
+        ControlPlaneReachability::Unhealthy => {
+            "MCP gateway did not return a valid health contract."
+        }
+        ControlPlaneReachability::Reachable => "MCP gateway health probe succeeded.",
     }
 }
 
@@ -172,8 +222,8 @@ fn detail(reachability: ControlPlaneReachability) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_health, classify_session, join_origin_path, may_attach_token,
-        probe_control_plane,
+        classify_health, classify_mcp_health, classify_session, join_origin_path,
+        may_attach_token, probe_control_plane, probe_mcp_endpoint,
     };
     use crate::protocol::ControlPlaneReachability;
     use std::io::{Read, Write};
@@ -425,6 +475,42 @@ mod tests {
         );
         assert_eq!(
             classify_session(200, r#"{"name":"missing-id"}"#),
+            ControlPlaneReachability::Unhealthy
+        );
+    }
+
+    #[test]
+    fn mcp_probe_requires_configuration() {
+        let snapshot = probe_mcp_endpoint(None);
+        assert_eq!(
+            snapshot.reachability,
+            ControlPlaneReachability::NotConfigured
+        );
+        assert_eq!(snapshot.detail, "MCP endpoint is not configured.");
+    }
+
+    #[test]
+    fn mcp_probe_uses_healthz_contract() {
+        let (endpoint, server) = start_server(http_response(
+            "HTTP/1.1 200 OK",
+            r#"{"status":"ok","service":"mcp-gateway"}"#,
+        ));
+        let snapshot = probe_mcp_endpoint(Some(endpoint.as_str()));
+        let request = server.join().expect("server joins");
+        assert_eq!(snapshot.reachability, ControlPlaneReachability::Reachable);
+        assert_eq!(snapshot.detail, "MCP gateway health probe succeeded.");
+        assert!(request.contains("GET /healthz"));
+        assert!(!request.contains("Authorization"));
+    }
+
+    #[test]
+    fn mcp_probe_rejects_error_statuses() {
+        assert_eq!(
+            classify_mcp_health(401, ""),
+            ControlPlaneReachability::Unauthorized
+        );
+        assert_eq!(
+            classify_mcp_health(500, ""),
             ControlPlaneReachability::Unhealthy
         );
     }

@@ -11,6 +11,7 @@ use config::{
     SecretKind,
 };
 use probe::probe_control_plane as probe_saved_control_plane;
+use probe::probe_mcp_endpoint;
 use protocol::{ControlPlaneSnapshot, RuntimeSnapshot};
 use runtime::LocalRuntime;
 use services::{ServiceSnapshot, ServiceSupervisor};
@@ -28,7 +29,10 @@ fn start_runtime(
     configuration: State<'_, ConfigurationStore>,
     supervisor: State<'_, ServiceSupervisor>,
 ) -> Result<RuntimeSnapshot, String> {
-    let _ = supervisor.start_all();
+    let model_api_key = configuration
+        .secret(SecretKind::ModelApiKey)
+        .map_err(|error| error.to_string())?;
+    let _ = supervisor.start_all_with_secrets(model_api_key.as_deref());
     let configuration_ready = configuration
         .status()
         .map_err(|error| error.to_string())?
@@ -127,6 +131,17 @@ fn probe_control_plane(
 }
 
 #[tauri::command]
+fn probe_mcp(
+    configuration: State<'_, ConfigurationStore>,
+) -> Result<ControlPlaneSnapshot, String> {
+    let endpoint = configuration
+        .details()
+        .map_err(|error| error.to_string())?
+        .mcp_endpoint;
+    Ok(probe_mcp_endpoint(endpoint.as_deref()))
+}
+
+#[tauri::command]
 fn open_control_plane(configuration: State<'_, ConfigurationStore>, supervisor: State<'_, ServiceSupervisor>) -> Result<(), String> {
     let configured = configuration
         .mission_control_endpoint()
@@ -175,6 +190,7 @@ fn main() {
             set_configuration_secret,
             clear_configuration_secret,
             probe_control_plane,
+            probe_mcp,
             local_service_endpoint,
             frontend_endpoint,
             open_control_plane
