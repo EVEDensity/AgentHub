@@ -233,9 +233,15 @@ async function loadMonitor() {
   const stackState = document.querySelector('#monitor-stack-state');
   try {
     const stack = await nativeInvoke('stack_info');
-    if (stack) {
-      if (stackEl) stackEl.textContent = `v${stack.version}${stack.commit ? ` · ${stack.commit}` : ''} · 打包于 ${new Date(stack.generatedAt).toLocaleString()}`;
-      if (stackState) stackState.textContent = '已加载';
+    if (stack && stack.manifest) {
+      const m = stack.manifest;
+      const sourceLabel = stack.source === 'bundled' ? '捆绑栈' : stack.source === 'persisted' ? '历史栈回退' : '';
+      let text = `v${m.version}${m.commit ? ` · ${m.commit}` : ''} · ${sourceLabel} · 打包于 ${new Date(m.generatedAt).toLocaleString()}`;
+      if (Array.isArray(stack.persisted) && stack.persisted.length > 0) {
+        text += `；本机已存栈：${stack.persisted.map((p) => `v${p.version}${p.commit ? `@${p.commit.slice(0, 7)}` : ''}`).join('、')}`;
+      }
+      if (stackEl) stackEl.textContent = text;
+      if (stackState) stackState.textContent = stack.source === 'persisted' ? '回退' : '已加载';
     } else {
       if (stackEl) stackEl.textContent = '未找到 stack-manifest（旧包或开发目录运行）。';
       if (stackState) stackState.textContent = '无清单';

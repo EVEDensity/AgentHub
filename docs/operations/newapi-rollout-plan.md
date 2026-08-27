@@ -189,6 +189,20 @@ exe 已在位故不阻塞，但重建 mission-control 时需先
 产物含 stack-manifest + START-HERE。`missing_bundled_services_fail_closed`
 在本机沙箱仍受 ports 锁目录限制（CI 不受影响）。
 
+### 0.1e R5-1 收口：#4 目录级版本切换 + #5 安装器文案（2026-08-27 深夜，第五轮）
+
+| # | 交付 | 契约/证据 |
+|---|---|---|
+| R5-1#4 | 目录级版本切换 | 每个捆绑栈按 `version-commit` 快照到 `%LOCALAPPDATA%\AgentHub\stacks\<dir>\local-services`（每版本仅拷贝一次，best-effort 不阻塞启动）；捆绑服务二进制缺失时 supervisor 自动回退到**最新的含该二进制的持久化栈**；`stack_info` 升级为 `StackInfo{manifest(实际生效), source(bundled/persisted/unversioned), persisted(本机全部已存栈)}`；监视器显示来源标签与本机栈列表。cargo 3 新例：无清单=unversioned、捆绑栈按版本快照落盘、缺失回退到 0.2.0 持久栈。诚实边界：自动故障回退已实现，**手动钉住旧版本**（UI 选择切换）仍开放 |
+| R5-1#5 | 安装器文案 | 新增 `src-tauri/README-first.txt`（中英双语：唯一入口/禁止直跑捆绑二进制/数据目录）；package-windows.ps1 配置生成**合并为单次 --config**（修复 LocalServices+updater 同时启用时后者覆盖前者丢 resources 的隐患）；README-first 随 resources 注入安装根目录。实证：完整 `-LocalServices` 打包 installer smoke PASS（MSI 202MB/NSIS 184MB）；`msiexec /a` 管理员提取确认 `PFiles\AgentHub\README-first.txt` 紧邻 exe、内容正确 |
+
+**验证**：cargo **34 passed** 0 failed（含栈缓存 3 例，修正一个错误断言——
+`snapshots()` 不改变未启动服务初始状态）；MSI/NSIS/便携包/release manifest
+产物全刷新；便携包本轮未重建（上轮产物仍有效，下个 tag 构建会自然带上）。
+
+**R5-1 Delivery Plan 状态**：1-5 全部 implemented（#4/#5 见上，手动钉版与
+NSIS 定制文案为后续增强）；6（物理干净机记录）待实机执行，CI runner 已覆盖。
+
 ## 0.2 R5 前置三项预核对（2026-08-27 实测，供 G-2 引用）
 
 | 项 | 结论 | 证据 |

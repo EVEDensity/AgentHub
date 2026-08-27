@@ -142,8 +142,8 @@ fn probe_mcp(
 }
 
 #[tauri::command]
-fn stack_info(supervisor: State<'_, ServiceSupervisor>) -> Option<services::StackManifest> {
-    supervisor.stack_manifest().cloned()
+fn stack_info(supervisor: State<'_, ServiceSupervisor>) -> services::StackInfo {
+    supervisor.stack_info()
 }
 
 #[tauri::command]

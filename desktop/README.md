@@ -164,17 +164,18 @@ workflow GUI/installer smokes on a clean runner.
    server PostgreSQL/Compose unchanged. — implemented via
    `AGENTHUB_DB_BACKEND=sqlite` wiring in the supervisor.
 4. Bounded startup, health checks, shutdown, crash diagnostics, and
-   versioned resource directories for upgrade and rollback. — partially
-   implemented (health checks, restart bound, supervisor reaps on stop/drop;
-   `local-services/stack-manifest.json` written at packaging identifies the
-   bundled stack version/commit and is surfaced in the monitor panel via
-   `stack_info`; wholesale versioned resource directories remain open — the
-   updater/installer replaces the whole resource tree per release).
+   versioned resource directories for upgrade and rollback. — implemented
+   (health checks, restart bound, supervisor reaps on stop/drop; each bundled
+   stack is snapshotted once per `version-commit` under
+   `%LOCALAPPDATA%\AgentHub\stacks`, and when a bundled service binary is
+   missing the supervisor falls back to the newest persisted copy that
+   carries it — reported via `stack_info` as `bundled`, `persisted`, or
+   `unversioned`; manual pinning of an older stack remains open).
 5. Make `AgentHub.exe` the only documented user action in Portable and MSI
    packages; move endpoint and token fields to an advanced deployment mode.
-   — partially implemented (advanced settings dialog exists; portable ZIP
-   ships `START-HERE.txt` naming agenthub-desktop.exe as the only entry
-   point; MSI/NSIS installer copy remains open).
+   — implemented (advanced settings dialog exists; portable ZIP ships
+   `START-HERE.txt`; MSI/NSIS installers ship `README-first.txt` at the
+   install root next to the exe, verified by administrative MSI extraction).
 6. Validate a clean Windows machine with no Docker, Go, Rust, or repository
    checkout installed. — enforced by `installer-install-smoke.ps1` on the
    disposable CI runner, not yet run from a physical clean machine record.

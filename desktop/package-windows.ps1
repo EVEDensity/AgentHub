@@ -93,30 +93,36 @@ Push-Location $tauriDirectory
 try {
     $buildArguments = @("tauri", "build", "--target", $TargetTriple, "--ci")
     $generatedUpdaterConfig = $null
-    if ($LocalServices) {
+    # One merged config pass: resource entries and the signed-updater overrides
+    # MUST land in the same --config file — Tauri applies only the last
+    # --config, so two separate passes would silently drop one of them.
+    $resourceEntries = @()
+    $readmeFirst = Join-Path $tauriDirectory 'README-first.txt'
+    if (Test-Path -LiteralPath $readmeFirst -PathType Leaf) { $resourceEntries += 'README-first.txt' }
+    if ($LocalServices) { $resourceEntries += 'local-services/**/*' }
+    $updaterEnabled = $env:AGENTHUB_UPDATE_ENABLED -eq '1'
+    if ($resourceEntries.Count -gt 0 -or $updaterEnabled) {
         $config = Get-Content -LiteralPath $updaterConfigTemplate -Raw | ConvertFrom-Json
-        $config.bundle | Add-Member -NotePropertyName resources -NotePropertyValue @("local-services/**/*") -Force
-        $generatedUpdaterConfig = Join-Path ([IO.Path]::GetTempPath()) ("agenthub-tauri-config-" + [guid]::NewGuid().ToString('N') + '.json')
-        $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $generatedUpdaterConfig -Encoding utf8
-        $buildArguments += @('--config', $generatedUpdaterConfig)
-    }
-    if ($env:AGENTHUB_UPDATE_ENABLED -eq '1') {
-        $requiredUpdaterValues = @($env:AGENTHUB_UPDATE_PUBLIC_KEY, $env:AGENTHUB_UPDATE_ENDPOINT, $env:TAURI_SIGNING_PRIVATE_KEY)
-        if ($requiredUpdaterValues | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
-            throw "Signed updater build requires public key, endpoint, and TAURI_SIGNING_PRIVATE_KEY."
+        if ($resourceEntries.Count -gt 0) {
+            $config.bundle | Add-Member -NotePropertyName resources -NotePropertyValue $resourceEntries -Force
         }
-        $config = Get-Content -LiteralPath $updaterConfigTemplate -Raw | ConvertFrom-Json
-        $config.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $true -Force
-        $config | Add-Member -NotePropertyName plugins -NotePropertyValue ([pscustomobject]@{}) -Force
-        $config.plugins | Add-Member -NotePropertyName updater -NotePropertyValue ([pscustomobject]@{}) -Force
-        $config.plugins.updater | Add-Member -NotePropertyName pubkey -NotePropertyValue $null -Force
-        $config.plugins.updater | Add-Member -NotePropertyName endpoints -NotePropertyValue @() -Force
-        $config.plugins.updater.pubkey = $env:AGENTHUB_UPDATE_PUBLIC_KEY
-        $config.plugins.updater.endpoints = @($env:AGENTHUB_UPDATE_ENDPOINT)
+        if ($updaterEnabled) {
+            $requiredUpdaterValues = @($env:AGENTHUB_UPDATE_PUBLIC_KEY, $env:AGENTHUB_UPDATE_ENDPOINT, $env:TAURI_SIGNING_PRIVATE_KEY)
+            if ($requiredUpdaterValues | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+                throw "Signed updater build requires public key, endpoint, and TAURI_SIGNING_PRIVATE_KEY."
+            }
+            $config.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $true -Force
+            $config | Add-Member -NotePropertyName plugins -NotePropertyValue ([pscustomobject]@{}) -Force
+            $config.plugins | Add-Member -NotePropertyName updater -NotePropertyValue ([pscustomobject]@{}) -Force
+            $config.plugins.updater | Add-Member -NotePropertyName pubkey -NotePropertyValue $null -Force
+            $config.plugins.updater | Add-Member -NotePropertyName endpoints -NotePropertyValue @() -Force
+            $config.plugins.updater.pubkey = $env:AGENTHUB_UPDATE_PUBLIC_KEY
+            $config.plugins.updater.endpoints = @($env:AGENTHUB_UPDATE_ENDPOINT)
+            Write-Output 'Signed updater artifact generation enabled.'
+        }
         $generatedUpdaterConfig = Join-Path ([IO.Path]::GetTempPath()) ("agenthub-tauri-config-" + [guid]::NewGuid().ToString('N') + '.json')
         $config | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $generatedUpdaterConfig -Encoding utf8
         $buildArguments += @('--config', $generatedUpdaterConfig)
-        Write-Output 'Signed updater artifact generation enabled.'
     }
     if ($NoInstaller -or $Portable) {
         $buildArguments += "--no-bundle"

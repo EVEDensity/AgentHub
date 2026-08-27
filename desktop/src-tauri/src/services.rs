@@ -25,6 +25,13 @@ pub struct ServiceSnapshot { pub name: String, pub status: ServiceStatus, pub pr
 #[serde(rename_all = "camelCase")]
 pub struct StackManifest { pub schema_version: u32, pub version: String, pub commit: String, pub generated_at: String }
 
+/// What the shell reports about the local service stack: the manifest of the
+/// stack actually in use (bundled or a persisted fallback), which source won,
+/// and every stack version cached on this machine.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackInfo { pub manifest: Option<StackManifest>, pub source: String, pub persisted: Vec<StackManifest> }
+
 fn read_stack_manifest(path: &PathBuf) -> Option<StackManifest> {
     let raw = std::fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
@@ -35,17 +42,59 @@ fn read_stack_manifest(path: &PathBuf) -> Option<StackManifest> {
         generated_at: value.get("generatedAt")?.as_str()?.to_owned(),
     })
 }
+
+fn version_dir_name(manifest: &StackManifest) -> String {
+    let raw = if manifest.commit.is_empty() { manifest.version.clone() } else { format!("{}-{}", manifest.version, manifest.commit) };
+    raw.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect()
+}
+
+fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() { copy_dir_recursive(&entry.path(), &target)?; }
+        else if entry.file_type()?.is_file() { std::fs::copy(entry.path(), &target)?; }
+    }
+    Ok(())
+}
+
+/// Persisted stack manifests under `<data>/stacks/<version>/local-services`,
+/// newest generation first.
+fn list_persisted_stacks(stacks_dir: &PathBuf) -> Vec<StackManifest> {
+    let mut stacks = Vec::new();
+    let Ok(entries) = std::fs::read_dir(stacks_dir) else { return stacks };
+    for entry in entries.flatten() {
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if let Some(manifest) = read_stack_manifest(&entry.path().join("local-services").join("stack-manifest.json")) { stacks.push(manifest); }
+        }
+    }
+    stacks.sort_by(|a, b| b.generated_at.cmp(&a.generated_at));
+    stacks
+}
+
+/// Newest persisted copy that carries the requested service binary.
+fn find_persisted_exe(stacks_dir: &PathBuf, relative: &PathBuf) -> Option<(PathBuf, StackManifest)> {
+    for stack in list_persisted_stacks(stacks_dir) {
+        let candidate = stacks_dir.join(version_dir_name(&stack)).join("local-services").join(relative);
+        if candidate.is_file() { return Some((candidate, stack)); }
+    }
+    None
+}
 struct ServiceProcess { spec: ServiceSpec, child: Option<Child>, status: ServiceStatus, detail: String, restart_count: u8 }
 
-pub struct ServiceSupervisor { processes: Mutex<HashMap<String, ServiceProcess>>, ports: Option<PortLease>, stack: Option<StackManifest> }
+pub struct ServiceSupervisor { processes: Mutex<HashMap<String, ServiceProcess>>, ports: Option<PortLease>, effective: Option<StackManifest>, source: &'static str, persisted: Vec<StackManifest> }
 struct PortLease { base: u16, files: Vec<PathBuf> }
 impl Drop for PortLease { fn drop(&mut self) { for path in &self.files { let _ = std::fs::remove_file(path); } } }
 
 impl ServiceSupervisor {
     pub fn from_resource_dir(resource_dir: PathBuf) -> Self {
-        let service_dir = resource_dir.join("local-services");
         let data_root = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        let data_dir = data_root.join("AgentHub");
+        Self::from_resource_dir_with_data_dir(resource_dir, data_root.join("AgentHub"))
+    }
+
+    pub fn from_resource_dir_with_data_dir(resource_dir: PathBuf, data_dir: PathBuf) -> Self {
+        let service_dir = resource_dir.join("local-services");
         let db_path = data_dir.join("data").join("agenthub.db");
         let _ = std::fs::create_dir_all(db_path.parent().unwrap_or(&data_dir));
         let _ = std::fs::OpenOptions::new().create(true).append(true).open(&db_path);
@@ -53,9 +102,30 @@ impl ServiceSupervisor {
         let base = ports.as_ref().map(|lease| lease.base).unwrap_or(0);
         let definitions = [("mission-control", "agenthub-mission-control.exe"), ("gateway", "agenthub-gateway.exe"), ("mcp-gateway", "agenthub-mcp-gateway.exe"), ("frontend", "frontend\\node.exe")];
         let mut processes = HashMap::new();
+        let stack = read_stack_manifest(&service_dir.join("stack-manifest.json"));
+        // Persist each bundled stack once per version under <data>/stacks so a
+        // broken upgrade can fall back to the last copy that shipped a working
+        // service binary. Best-effort: failures never block startup.
+        let stacks_dir = data_dir.join("stacks");
+        if let Some(manifest) = &stack {
+            let snapshot = stacks_dir.join(version_dir_name(manifest)).join("local-services");
+            if !snapshot.join("stack-manifest.json").is_file() {
+                let _ = copy_dir_recursive(&service_dir, &snapshot);
+            }
+        }
+        let persisted = list_persisted_stacks(&stacks_dir);
+        let mut source = if stack.is_some() { "bundled" } else { "unversioned" };
+        let mut effective = stack.clone();
         for (index, (name, file)) in definitions.into_iter().enumerate() {
             let port = if name == "frontend" { base.saturating_add(4) } else { base.saturating_add(index as u16) };
-            let executable = [service_dir.join(file), resource_dir.join(file)].into_iter().find(|path| path.is_file()).unwrap_or_else(|| service_dir.join(file));
+            let relative = PathBuf::from(file);
+            let executable = match [service_dir.join(&relative), resource_dir.join(&relative)].into_iter().find(|path| path.is_file()) {
+                Some(path) => path,
+                None => match find_persisted_exe(&stacks_dir, &relative) {
+                    Some((path, manifest)) => { source = "persisted"; effective = Some(manifest); path }
+                    None => service_dir.join(&relative),
+                },
+            };
             let path = match name { "mission-control" => "/api/health", "frontend" => "/admin", _ => "/healthz" };
             let endpoint = Url::parse(&format!("http://127.0.0.1:{port}{path}")).expect("health URL");
             let environment = service_environment(name, port, base, &data_dir, &db_path);
@@ -65,11 +135,10 @@ impl ServiceSupervisor {
             let detail = if base == 0 { "no free AgentHub port group in 28000-28999" } else { "service resource is not bundled" };
             processes.insert(name.to_owned(), ServiceProcess { spec: ServiceSpec { name, executable, args, environment, health_endpoint: endpoint }, child: None, status: if base == 0 { ServiceStatus::Failed } else { ServiceStatus::Missing }, detail: detail.into(), restart_count: 0 });
         }
-        let stack = read_stack_manifest(&service_dir.join("stack-manifest.json"));
-        Self { processes: Mutex::new(processes), ports, stack }
+        Self { processes: Mutex::new(processes), ports, effective, source, persisted }
     }
 
-    pub fn stack_manifest(&self) -> Option<&StackManifest> { self.stack.as_ref() }
+    pub fn stack_info(&self) -> StackInfo { StackInfo { manifest: self.effective.clone(), source: self.source.to_owned(), persisted: self.persisted.clone() } }
 
     pub fn mission_control_endpoint(&self) -> Option<String> { self.ports.as_ref().map(|lease| format!("http://127.0.0.1:{}", lease.base)) }
     pub fn frontend_endpoint(&self) -> Option<String> { self.ports.as_ref().map(|lease| format!("http://127.0.0.1:{}/admin", lease.base + 4)) }
@@ -112,4 +181,4 @@ fn probe(endpoint: &Url) -> bool { let Some(port) = endpoint.port_or_known_defau
 impl Drop for ServiceSupervisor { fn drop(&mut self) { self.stop_all(); } }
 
 #[cfg(test)]
-mod tests { use super::*; #[test] fn missing_bundled_services_fail_closed() { let supervisor = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services")); let snapshots = supervisor.start_all(); assert!(snapshots.iter().all(|item| matches!(item.status, ServiceStatus::Missing | ServiceStatus::Failed))); } #[test] fn stack_manifest_is_absent_without_bundle() { let supervisor = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-manifest")); assert!(supervisor.stack_manifest().is_none()); } #[test] fn stack_manifest_is_parsed_when_present() { let root = std::env::temp_dir().join("agenthub-stack-manifest-test"); let service_dir = root.join("local-services"); std::fs::create_dir_all(&service_dir).expect("create service dir"); std::fs::write(service_dir.join("stack-manifest.json"), r#"{"schemaVersion":1,"version":"0.1.0","commit":"fd89ab8","generatedAt":"2026-08-27T12:00:00Z"}"#).expect("write manifest"); let supervisor = ServiceSupervisor::from_resource_dir(root.clone()); let manifest = supervisor.stack_manifest().expect("manifest present"); assert_eq!(manifest.version, "0.1.0"); assert_eq!(manifest.commit, "fd89ab8"); assert_eq!(manifest.schema_version, 1); std::fs::remove_dir_all(root).ok(); } #[test] fn separate_supervisors_get_separate_port_groups() { let first = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-a")); let second = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-b")); assert_ne!(first.mission_control_endpoint(), second.mission_control_endpoint()); } }
+mod tests { use super::*; #[test] fn missing_bundled_services_fail_closed() { let supervisor = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services")); let snapshots = supervisor.start_all(); assert!(snapshots.iter().all(|item| matches!(item.status, ServiceStatus::Missing | ServiceStatus::Failed))); } #[test] fn stack_is_unversioned_without_manifest() { let data = std::env::temp_dir().join("agenthub-test-data-unversioned"); let supervisor = ServiceSupervisor::from_resource_dir_with_data_dir(std::env::temp_dir().join("missing-agenthub-services-manifest"), data); let info = supervisor.stack_info(); assert_eq!(info.source, "unversioned"); assert!(info.manifest.is_none()); assert!(info.persisted.is_empty()); } #[test] fn bundled_stack_is_snapshotted_per_version() { let root = std::env::temp_dir().join("agenthub-stack-snapshot-test"); let data = std::env::temp_dir().join("agenthub-stack-snapshot-data"); let _ = std::fs::remove_dir_all(&root); let _ = std::fs::remove_dir_all(&data); let service_dir = root.join("local-services"); std::fs::create_dir_all(&service_dir).expect("create service dir"); std::fs::write(service_dir.join("stack-manifest.json"), r#"{"schemaVersion":1,"version":"0.2.0","commit":"abc1234","generatedAt":"2026-08-27T12:00:00Z"}"#).expect("write manifest"); std::fs::write(service_dir.join("agenthub-gateway.exe"), b"stub").expect("write exe"); let supervisor = ServiceSupervisor::from_resource_dir_with_data_dir(root.clone(), data.clone()); let info = supervisor.stack_info(); assert_eq!(info.source, "bundled"); assert_eq!(info.manifest.as_ref().expect("manifest").version, "0.2.0"); let snapshot_manifest = data.join("stacks").join("0.2.0-abc1234").join("local-services").join("stack-manifest.json"); assert!(snapshot_manifest.is_file(), "versioned snapshot must exist"); assert_eq!(info.persisted.len(), 1); assert_eq!(info.persisted[0].commit, "abc1234"); std::fs::remove_dir_all(root).ok(); std::fs::remove_dir_all(data).ok(); } #[test] fn missing_bundled_exe_falls_back_to_persisted_stack() { let root = std::env::temp_dir().join("agenthub-stack-fallback-test"); let data = std::env::temp_dir().join("agenthub-stack-fallback-data"); let _ = std::fs::remove_dir_all(&root); let _ = std::fs::remove_dir_all(&data); let service_dir = root.join("local-services"); std::fs::create_dir_all(&service_dir).expect("create service dir"); std::fs::write(service_dir.join("stack-manifest.json"), r#"{"schemaVersion":1,"version":"0.3.0","commit":"def5678","generatedAt":"2026-08-27T13:00:00Z"}"#).expect("write manifest"); let persisted_dir = data.join("stacks").join("0.2.0-abc1234").join("local-services"); std::fs::create_dir_all(&persisted_dir).expect("create persisted dir"); std::fs::write(persisted_dir.join("stack-manifest.json"), r#"{"schemaVersion":1,"version":"0.2.0","commit":"abc1234","generatedAt":"2026-08-27T12:00:00Z"}"#).expect("write persisted manifest"); std::fs::write(persisted_dir.join("agenthub-gateway.exe"), b"stub").expect("write persisted exe"); let supervisor = ServiceSupervisor::from_resource_dir_with_data_dir(root, data); let info = supervisor.stack_info(); assert_eq!(info.source, "persisted"); assert_eq!(info.manifest.as_ref().expect("effective manifest").version, "0.2.0"); } #[test] fn separate_supervisors_get_separate_port_groups() { let first = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-a")); let second = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-b")); assert_ne!(first.mission_control_endpoint(), second.mission_control_endpoint()); } }
