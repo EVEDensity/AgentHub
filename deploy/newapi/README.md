@@ -77,6 +77,15 @@ python deploy/newapi/verify_newapi.py \
   明文 key 写入任何报告。
 - **幂等**：`migrate_models.py --apply` 可重复执行；已存在的渠道/token
   自动跳过。
+- **setup 会重置选项**：`/api/setup`（首次初始化）会把
+  `SelfUseModeEnabled` 重置回 false —— 正确顺序是先完成初始化，再开启自用模式。
+- **内存熔断**：网关自带内存自保护，默认阈值 90%，超限返回 503
+  `system_memory_overloaded`。键为
+  `performance_setting.monitor_memory_threshold`（管理台「运营设置」或
+  PUT /api/option/ 可调）；低内存验证机可临时调高，生产建议保留 90 并接入 M3 告警。
+- **真实渠道探针**：`AGENTHUB_TEST_DEEPSEEK_KEY=<key>
+  python deploy/newapi/deepseek_channel_probe.py`（key 只经环境变量；
+  DeepSeek 官方模型名为 `deepseek-v4-flash` 等）。
 
 ## 回滚
 

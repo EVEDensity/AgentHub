@@ -13,6 +13,17 @@
 > U1 管理台手册（docs/operations/newapi-admin-guide.md）已落地；
 > D1-D5 文档已更新。剩余：真实供应商渠道 e2e 需团队提供 key 后补跑。
 
+**A1 进展（2026-08-27，DeepSeek 真实渠道）**：经 new-api 网关实测
+`deepseek-v4-flash`（官方模型名；注意不是口述的 flashV4）全部通过——
+渠道创建/同步（~3.1s，usage 90+27）/SSE（80 chunks，TTFT≈0ms）/原生
+tool_calls 透传，以及应用侧 `NewAPIGatewayAdapter → 网关 → DeepSeek`
+链路（2.7s 干净正文 + usage 102 tokens）。证据与复跑方式：
+`deploy/newapi/deepseek_channel_probe.py`（key 仅走环境变量）。踩坑：
+① /api/setup 会把 SelfUseModeEnabled 重置回 false —— 初始化后再置 true；
+② 网关内存熔断键 `performance_setting.monitor_memory_threshold`
+（本机验证时临时调至 99）；③ DeepSeek v4 为推理型模型，reasoning 由自研
+适配器 `<think>` 剥离逻辑正常处理。剩余：通义/OpenAI 渠道待 key。
+
 ## 0. 当前基线（已完成，2026-08-26）
 
 - 开关式接入：`AGENTHUB_LLM_GATEWAY=newapi` + `NEWAPI_BASE_URL/API_KEY`；
