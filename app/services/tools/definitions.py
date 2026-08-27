@@ -502,7 +502,7 @@ FILE_SEARCH = ToolDefinition(
     category="file",
     parameters=[
         ToolParameter(name="pattern", type="string", required=True,
-                      description="搜索的正则表达式，例如 'function\s+\w+' 或 'TODO'"),
+                      description=r"搜索的正则表达式，例如 'function\s+\w+' 或 'TODO'"),
         ToolParameter(name="path", type="string", required=False,
                       description="搜索的目录路径（相对于工作区），默认 '.'", default="."),
         ToolParameter(name="glob", type="string", required=False,

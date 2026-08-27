@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0105](0105-multimodal-vision-input-dual-track.md) | Multimodal vision input via dual-track content parts |
 | [0104](0104-optional-newapi-llm-gateway.md) | Optional new-api LLM gateway (supplier layer) |
 | [0103](0103-single-entry-desktop-orchestration.md) | Single-entry desktop orchestration |
 | [0102](0102-desktop-sidecar-artifact-root.md) | Desktop sidecar artifact root |

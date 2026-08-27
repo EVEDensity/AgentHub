@@ -15,6 +15,29 @@ def compact_text(text: str, *, max_chars: int = 240, ellipsis: str = "...") -> s
     return normalized[: max_chars - len(ellipsis)].rstrip() + ellipsis
 
 
+def compact_content_parts(parts: list[dict[str, Any]] | None, *, max_chars: int = 240) -> list[dict[str, Any]]:
+    """Project a content-parts turn down to summary form (MM-3 / ADR-0105).
+
+    Aligned with Deep Agents semantics: image parts NEVER enter compaction
+    prose — each becomes a bracketed placeholder noting that the user once
+    sent images; text parts are compacted normally. Payloads never leak.
+    """
+    if not parts:
+        return []
+    out: list[dict[str, Any]] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype == "image_url":
+            out.append({"type": "text", "text": "[用户曾发送图片]"})
+        elif ptype == "text":
+            compacted = compact_text(str(part.get("text", "")), max_chars=max_chars)
+            if compacted:
+                out.append({"type": "text", "text": compacted})
+    return out
+
+
 def _compact_tags(tags_raw: Any, *, max_tags: int = 4) -> str:
     if isinstance(tags_raw, str):
         import json

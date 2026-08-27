@@ -1,7 +1,59 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger("agenthub.prompt_context")
+
+
+def _is_image_attachment(name: str, file_type: str) -> bool:
+    return bool(
+        file_type.startswith("image/")
+        or name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
+    )
+
+
+def build_image_parts(attachments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Extract OpenAI-style ``image_url`` parts for vision-capable models (MM-2/ADR-0105).
+
+    Every candidate source is screened by the central guardrail
+    ``scan_image_source`` (MIME whitelist / size caps / data-URI shape,
+    fail-closed); turn-level caps reuse the central multimodal budget
+    constants (≤4 images / ≤6 MB per turn).
+    """
+    from app.services.guardrails import Severity, scan_image_source
+    from app.services.tools.multimodal.content_parts import (
+        MAX_IMAGE_BYTES_PER_TURN,
+        MAX_IMAGES_PER_TURN,
+    )
+
+    if not attachments:
+        return []
+    parts: list[dict[str, Any]] = []
+    total_bytes = 0
+    for item in attachments:
+        if len(parts) >= MAX_IMAGES_PER_TURN or total_bytes >= MAX_IMAGE_BYTES_PER_TURN:
+            break
+        name = str(item.get("name", ""))
+        file_type = str(item.get("type", ""))
+        content = str(item.get("content", "") or "")
+        if not _is_image_attachment(name, file_type) or not content.startswith("data:"):
+            continue
+        check = scan_image_source(content)
+        if not check.passed:
+            reasons = [f.message for f in check.flags if f.severity == Severity.BLOCK]
+            logger.info("build_image_parts: rejected %s (%s)",
+                        name, "; ".join(reasons)[:160])
+            continue
+        # decoded-byte estimate: base64 payload is ~4/3 of raw bytes
+        raw_est = max(0, (len(content) - content.find(",", 5)) * 3 // 4)
+        total_bytes += raw_est
+        parts.append({
+            "type": "image_url",
+            "image_url": {"url": content},
+        })
+    return parts
 
 
 def build_attachment_context(attachments: list[dict[str, Any]] | None) -> tuple[str, list[dict[str, Any]]]:
@@ -18,13 +70,13 @@ def build_attachment_context(attachments: list[dict[str, Any]] | None) -> tuple[
         size = int(item.get("size", 0) or 0)
         content = str(item.get("content", ""))
 
-        is_image = file_type.startswith("image/") or name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"))
-        if is_image:
-            preview = content[:180]
-            blocks.append(
-                f"[附件图片 {idx}] name={name}, type={file_type}, size={size}\n"
-                f"data_url_prefix={preview}"
-            )
+        if _is_image_attachment(name, file_type):
+            # MM-2: never splice base64/data-URL fragments into the prompt —
+            # images reach vision models as structured image parts
+            # (see build_image_parts); this block stays descriptive only.
+            has_payload = content.startswith("data:")
+            delivery = "已附带原图，将作为视觉输入提供" if has_payload else "已通过文件上传存储"
+            blocks.append(f"[附件图片 {idx}] name={name}, type={file_type}, size={size}；{delivery}")
         else:
             trimmed = content[:max_text_len]
             ext = name.split(".")[-1] if "." in name else "text"

@@ -81,6 +81,7 @@ from app.services.agent.tooling import (  # noqa: E402
 )
 
 from app.services.agent.context import _intent_from_domain  # noqa: E402
+from app.services.agent_prompt_context import build_image_parts  # noqa: E402
 
 class CollaborationContext:
     """Shared memory for one multi-agent collaboration turn.
@@ -255,6 +256,9 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
 
     attachment_context, attachment_meta = _build_attachment_context(attachments)
     quote_context = _build_quote_context(quote_references)
+    # MM-2/ADR-0105: inline images travel as structured parts next to the
+    # text prompt — never re-embedded into the string body.
+    image_parts = build_image_parts(attachments)
     llm_input = content
     if quote_context:
         llm_input = f"{quote_context}\n\n[用户当前问题]\n{content}"
@@ -331,6 +335,7 @@ async def call_agent(session_id: str, content: str, user_id: str, attachments: l
         streaming_executor=_get_streaming_executor(),
         on_tool_event=on_tool_event,
         simple_mode=simple_mode,
+        image_parts=image_parts,
     )
 
     content_out = normalize_agent_output(agent["agent_id"], result, content)
@@ -481,6 +486,7 @@ async def stream_agent_response(
                     stream_callback=on_chunk,
                     preprocess_context=preprocess_context,
                     simple_mode=simple_mode,
+                    image_parts=build_image_parts(attachments),
                 )
                 return ("ok", r, u, s)
             except Exception as _loop_exc:

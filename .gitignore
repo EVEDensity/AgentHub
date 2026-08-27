@@ -27,6 +27,15 @@ data/
 !frontend/data/
 *.sqlite3
 *.db
+
+# Native tokenizer assets — provisioned locally by benchmarks/fetch_tokenizers.py
+# (binary files are re-fetched deterministically; never committed)
+assets/tokenizers/
+.tmppytest/
+coverage.xml
+htmlcov/
+.coverage
+build_ws/
 .codegraph/
 .understand-anything/
 .playwright-cli/
@@ -88,5 +97,10 @@ platform/contracts/*
 !platform/contracts/v1/**
 platform/*.json
 deploy/prometheus.yml
-deploy/grafana/
+# deploy/grafana 其余内容仍是私有部署材料；
+# 仅放行 R4-5 四宫格面板 JSON 作为受版本控制的交付物。
+deploy/grafana/*
+!deploy/grafana/dashboards/
+deploy/grafana/dashboards/*
+!deploy/grafana/dashboards/newapi-gateway.json
 frontend/public/charts/

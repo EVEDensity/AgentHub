@@ -48,67 +48,201 @@ usage 显示图像计费 prompt=1049 tokens。结论：**网关层零改动即�
 
 ---
 
-# 任务安排 v2（2026-08-27 重构）
+# 任务安排 v3（2026-08-27 定稿主排期）
 
-v1 的 T*/P*/M*/U*/D* 大部分已落地（见执行状态）。本节重构后续排布：
-关闭 A1；插入需求侧拉动的**多模态工作流 MM**（设计先行、五步垂切、
-默认降级安全，方案见 [multimodal.md](../architecture/components/multimodal.md)）；
-R4 门禁主线不受影响并行推进。日期为计划窗口锚定，非工时承诺。
+> 本版替代 v2。与 v2 的区别：① 全部状态以当日 git 提交与代码直接核实为据，
+> 不沿用文档声明；② 每项任务补充依赖、质量标准、成功标准与应急预案；
+> ③ 三处关键缺口经逐行核对确认（见 §0）。日期为计划窗口锚定，非工时承诺。
 
-## 主线 A：R4 门禁收尾（不变，继续推进）
+> **执行进展（2026-08-27 当日冲刺）**：
+> - ✅ **MS-1 达成** — MM-0：ADR-0105 定稿 accepted，multimodal.md 同步转正，
+>   三项决策（路由约束/预算上限/压缩语义）含反对意见记录入档。
+> - ✅ **MM-1 完成** — `messages.content` 双轨落地（OpenAI execute/stream +
+>   Anthropic execute/stream + 签名统一 + provider 注入）；纯文本模型携图
+>   在任何网络 I/O 前 `VisionUnsupportedError` 显式报错；model_adapter_service
+>   schema 放宽 + mock 宽字符投影 + anthropic 路由显式 400；Kimi vision 真
+>   渠道 e2e 用例入 test_llm_gateway_e2e_matrix（env-gated）。新增双轨单测
+>   15 例，tests/services 全量 381 passed 零回归。
+> - ✅ **G-1 完成** — docs/operations/newapi-channel-fuse-decision-table.md
+>   （7 场景 + 演练清单 + 归档模板），告警引用与两份 rules 文件逐条核对。
+> - ✅ **R4-5 完成** — usage-exporter compose sidecar（复用 M2 导出脚本 +
+>   重试退避结构化日志）、Grafana 四宫格 JSON、.gitignore 白名单修正。
+> - ✅ **R4-2 主体完成** — benchmarks/fetch_tokenizers.py（HF 主源+镜像回退）
+>   已实测拉取 Qwen(7.0MB,sha c0382117…) / DeepSeek(7.8MB,sha 621ac2e2…)
+>   并经生产加载路径校验；calibrate_cn_estimator.py 反推出宽字符口径家族
+>   常数（qwen=0.61 deepseek=0.56）注入 CN_TOKEN_RATIOS；门禁语义按"计费
+>   parity"重构后 **SKIP→MEASURED 且 parity p95=0%**（estimator 残差 p95
+>   ~15-17% 作为校准观测值如实入档，短句 BPE 离散性所致，不阻塞预算强制：
+>   配置资产后 count_tokens 即精确值）。
+> - ✅ **第二轮冲刺（同日，CI+MM-2+R4-3/R4-4）**：
+>   *CI 接线* — docs-gates 新增 tokenizer 资产 `actions/cache`（key 锚定
+>   sha256 c0382117…）+ fetch 步骤（网络抖动 continue-on-error，门禁诚实
+>   SKIP 兜底）+ parity 门禁 env 三件套；*MM-2 完成* —
+>   [outgoingMessageDraft.ts](../../frontend/lib/outgoingMessageDraft.ts)
+>   图片停发 base64 进正文（`[Attached Image:]` 标记替代 dataURL 围栏，
+>   vitest 断言 body 无 base64）；后端
+>   [agent_prompt_context.py](../../app/services/agent_prompt_context.py)
+>   新增 `build_image_parts()`（白名单 MIME+4张/6MB 上限），图片附件描述
+>   不再泄漏 180 字符 dataURL 前缀；orchestrator/tooling/routing 打通
+>   `image_parts` → tool-loop 首轮 user turn 组装 `[image…, text]`
+>   parts list → 四个适配器调用点全部改走 `call_content`；
+>   *R4-3 完成* — `knowledge_retrieval_p95` 脚手架转真实探测：seed 同一
+>   离线语料到生产 L2VectorIndex，210 样本实测 **p95=1.5ms（阈值 80ms，
+>   correctness@3=7/7）** 入 CI；*R4-4 完成* — 尺寸(≤800行)/复杂度(McCabe
+>   ≤20)/覆盖率(≥60%，有 artifact 才强制否则诚实 SKIP)三门禁落地，
+>   存量基线 `quality_exemptions.json` 经类限定键（修掉同名方法互相覆盖
+>   的坑：OpenAI 与 Anthropic 两版 stream_prompt CC=34/25 曾互踩）由
+>   `gen_quality_exemptions.py` 生成，名单只减不增。
+> - ✅ **第三轮冲刺（同日，B 线收官）**：
+>   *MM-3 完成* — [fit_prompt](../../app/services/token_budget.py) 新增
+>   `image_count` 分支：先按 `IMAGE_TOKEN_COST`(1280/张) 扣除图像份额、
+>   文本保底 256 tokens 截断，stats 带 `image_tokens/images` 预算项；
+>   tool-loop 调用点按本轮实际附图数计费；compaction 新增
+>   `compact_content_parts()`（图片→"[用户曾发送图片]"占位，payload 不入
+>   摘要，对齐 Deep Agents 语义）。*MM-4 完成* —
+>   [tooling.py](../../app/services/agent/tooling.py) 工具结果落文本上下文
+>   前由 `extract_screenshot_uris()` 劫持 base64（≤4 张），下一轮视觉模型
+>   组真实 parts 回传 / 纯文本模型走 `image_describe` 降级注入结构化描述，
+>   两条路径均有单测（含降级故障不打断 loop）。*MM-5 完成* —
+>   guardrails 新增 `scan_image_source`/`scan_multimodal_content`（委托
+>   content_parts 校验器 fail-closed，BLOCK 标记带槽位索引；审计仅
+>   hash/size 无 payload）；`build_image_parts` 改经护栏扫描；
+>   `multimodal_e2e_probe` 门禁入 gates+CI（无渠道密钥诚实 SKIP，真渠道
+>   一条命令复跑 PASS）；能力表"多模态"行升为已实现并链实现与测试。
+>   全量回归 **394 passed** 零回归。
+> - ⏳ 待办：G-2 闸门评审（11-03~11-07）前核对 A/B 双主线稳定点 →
+>   R5-*（Desktop GA 核对 / Windows 安装包流水线 / 市场 SDK 解冻确认）。
 
-| # | 任务 | 负责人 | 开始 | 结束 | 优先级 | 交付物 |
-|---|---|---|---|---|---|---|
-| R4-2 | CN 原生 tokenizer 接入（Qwen/DeepSeek），`cn_tokenizer_precision` 从 SKIP 变实测 <5% | 后端 | 09-01 | 09-12 | **P0** | tokenizer 资产脚本 + 配置文档 + 门禁实测值 |
-| R4-3 | `knowledge_retrieval_p95` 脚手架转真实探测（L2VectorIndex 延迟探针）接入 CI | 后端 | 09-08 | 09-19 | P1 | 新门禁实测（阈值 80ms） |
-| R4-4 | 代码质量标准 CI 化（尺寸/复杂度/覆盖率三门禁 + 存量豁免清单） | 架构+后端 | 09-15 | 10-10 | P1 | 新 gate ×3 并入 docs-gates |
-| R4-5 | 用量导出自动化（compose cron/sidecar）+ Grafana 网关四宫格面板 | 运维+后端 | 09-01 | 09-19 | P2 | 自动化 job + dashboard JSON |
+## 0.1 预 G-2 稳定点核对记录（2026-08-27 实测）
 
-## 主线 B：多模态垂切 MM（新增，受控扩展）
+| 检查项 | 结果 |
+|---|---|
+| 全量回归 | 394 passed + 181 subtests（~17s），零失败 |
+| 前端 `tsc --noEmit` | 0 错误 |
+| 门禁：compaction ratio | PASS 92.64%（min 25%） |
+| 门禁：retrieval recall | PASS recall@3=100%（7/7，min 85%） |
+| 门禁：retrieval p95 | PASS 三次 1.5/1.3/1.5ms，偏差 ~14% <20% 验收线 |
+| 门禁：CN parity（Qwen 资产） | PASS p95=0%（estimator 残差 15.4% 为观测值） |
+| 门禁：code_file_size / complexity | 初跑抓到 MM 改动使 tooling.py 超基线（1045 行 >963、CC 130 >121）→ 已按规则**拆分修复而非刷新豁免**：vision_turn.py + circuit_breaker.py 两个单一职责模块抽出后全清 |
+| 门禁：multimodal probe | SKIP（真渠道复跑需 secrets；CI 已接） |
+| CI 配置 | ci.yml YAML 合法；Grafana 面板 JSON 合法（4 panels）；quality_exemptions.json 合法 |
+| 收尾处置 | build_ws/ 本地临时目录入 .gitignore |
 
-> 前置：MM-0 设计评审通过（ADR 转 accepted）；每步独立可验证；
-> 纯文本模型显式报错 + 降级路径是 MM-1 的一部分而非后续补丁。
+**G-2 就绪度**：A/B 双主线代码层面已到稳定点（唯一待办为 R4-5 导出自动化的
+连续 7 天无人值守观察期与真渠道 vision 探针的 secrets 配置，均不阻塞评审召开）。
 
-| # | 任务 | 负责人 | 开始 | 结束 | 优先级 | 验收标准 / 交付物 |
-|---|---|---|---|---|---|---|
-| MM-0 | 设计评审定稿：multimodal.md 由 proposed 转 accepted（ADR 化）；确认路由约束/预算上限/压缩语义三项决策 | 架构维护者 | 09-01 | 09-05 | **P0** | accepted 文档 |
-| MM-1 | 协议层垂切：messages.content `str \| list` 双轨向后兼容（adapter_manager ~4 处 + model_adapter_service schema）；纯文本模型携图 → 显式错误；Kimi vision 渠道 e2e（仓库 logo.png 实测即验收样本） | 后端 | 09-08 | 09-19 | **P0** | 经网关的视觉问答 e2e 测试入库 |
-| MM-2 | 附件管线：前端停发 base64 进正文（outgoingMessageDraft 改结构化附件）；build_attachment_context 产出 image part；≤2MB 内联/>2MB artifact 引用两条路径打通 | 前端+后端 | 09-15 | 10-03 | P0 | WS→适配器全链路图片可达模型；正文不再含 base64 |
-| MM-3 | 预算计费：图像固定 token 计费（保守 1024 tokens/张）、单轮 ≤4 张 ≤6MB 上限、compaction 摘要丢图语义对齐 | 后端 | 09-29 | 10-10 | P1 | fit_prompt 含图像分支的单测；预算报表可见图像项 |
-| MM-4 | 工具视觉回传：browser_screenshot 结果下一轮可作为视觉输入；不支持视觉模型的降级=结构化描述工具（子 LLM 模式） | 后端 | 10-06 | 10-17 | P2 | 截图→看图闭环 demo；降级路径测试 |
-| MM-5 | 护栏与门禁：图片类型白名单/尺寸卫生入 guardrails；多模态 e2e 探针固化为可选 CI 门禁；能力表"多模态"行链到实现与测试 | 安全+后端 | 10-13 | 10-24 | P1 | 探针门禁并入 docs-gates；能力表更新 |
+## 0. 已核查事实基线（2026-08-27）
 
-**工具层基础已提前落地（2026-08-27，超出原排期）**：
-[tools/multimodal/](../../app/services/tools/multimodal/__init__.py) 解耦包完成——
-content_parts 校验/计费常量、capability 视觉注册表、image_describe 工具
-（文本主模型 TODAY 可用的降级路径）、ModalityToolPlugin 插件基类；
-同时接通 `register_tools()` 半成品断点（plugin_tools.py 桥 → 全局
-registry），main.py 启动装配。影响：MM-3 的计费常量已存在；MM-4 的
-降级路径（image_describe）已可用，MM-4 剩余工作量减半；工具生态评估
-矩阵与成功标准 SC-1~SC-10 见 [multimodal.md](../architecture/components/multimodal.md) §6-§7。
+**已完成**（最新提交 bfba8ba，工作区干净）：
 
-## 收敛与冻结
+- R4 热区：记忆 L2 向量生命周期接入、websocket 业务车道拆分
+  （websocket_processor.py）、会话状态外部化（bd14115）；
+- 门禁：gates 含 `token_compaction_ratio` 真实测量且已接入 CI docs-gates；
+- Tokenizer 估算层完成（HF 本地目录加载 + CJK≈0.9 tokens/字系数），
+  原生 tokenizer 资产未接；
+- 多模态工具包 `app/services/tools/multimodal/` 全量落地（content_parts /
+  capability / image_describe / 插件基类），`plugin_tools.py` 打通插件注册
+  断点，main.py 启动装配（bfba8ba）——**超出原排期的提前交付**；
+- 网关：DeepSeek + 智谱双真实渠道、Kimi 视觉渠道 e2e 全绿；监控告警、
+  管理台手册、D1-D5 文档完成。
 
-- G-1 渠道熔断决策表 + 回滚演练归档（09-01~09-05，P1）。
-- G-2 E1-E5 扩展项闸门评审时间从 10-13 调整为 **11-03~11-07**——需等
-  多模态主线 B 与 R4 主线 A 双双到达稳定点后再统一评审，避免两次打断。
-- R5-*（Desktop GA 核对/安装包流水线/市场解冻）顺延至 G-2 通过后，节奏不变。
+**经核实的关键缺口**（本计划任务的直接输入）：
 
-## 执行顺序 v2
+- MM-1：[adapter_manager.py](../../app/services/adapter_manager.py) 请求侧
+  messages 仍全部 `content: str`（第 861 行 `content_blocks` 只是 Anthropic
+  **响应**解析，不是请求构造）；
+- MM-2：[outgoingMessageDraft.ts](../../frontend/lib/outgoingMessageDraft.ts)
+  仍把 `file.content`（base64）按代码块拼进正文；
+  `build_attachment_context` 仍截 180 字符前缀当文本；
+- MM-3：[token_budget.py](../../app/services/token_budget.py) 无任何图像计费
+  逻辑（`IMAGE_TOKEN_COST` 等常量已在 content_parts.py 定义但未接线）；
+- R4-2（原生 tokenizer 资产）/ R4-3（检索 p95 实测）/ R4-4（质量三门禁）/
+  R4-5（导出自动化）均未开工。
+
+## 1. 里程碑总览
+
+| MS | 达成内容 | 判定标准 | 目标日期 |
+|---|---|---|---|
+| MS-1 | 多模态设计评审通过 | multimodal.md 由 proposed → accepted 并登记 ADR | 09-05 |
+| MS-2 | 协议双轨 + tokenizer 实测 | MM-1 视觉 e2e 绿 **且** `cn_tokenizer_precision` 实测 <5% | 09-19 |
+| MS-3 | 多模态全链路 + 运维自动化 | 图片经 WS 可达模型；用量导出连续 7 天无人值守跑通 | 10-10 |
+| MS-4 | 护栏与门禁闭环 | MM-5 e2e 探针作为可选门禁并入 docs-gates | 10-24 |
+| MS-5 | 双主线稳定点 → 闸门评审 | G-2 通过，解锁 E1-E5 与 R5-* | 11-07 |
+
+## 2. 主线 A：R4 门禁收尾
+
+| # | 任务（负责人） | 日期 | 依赖/P | 交付物 | 成功标准 |
+|---|---|---|---|---|---|
+| R4-2 | CN 原生 tokenizer 资产接入（Qwen/DeepSeek）（后端） | 09-01~09-12 | 无 / **P0** | tokenizer 资产获取脚本 + 配置文档 + 实测值 | `cn_tokenizer_precision` SKIP→MEASURED 且误差 <5%；缺资产时必须诚实 SKIP 不谎报 |
+| R4-3 | `knowledge_retrieval_p95` 脚手架转 L2VectorIndex 真实探测入 CI（后端） | 09-08~09-19 | L2VectorIndex（已完成）/ P1 | 新门禁实测记录 | 阈值 80ms 下 MEASURED，重复运行三次偏差 <20% |
+| R4-4 | 代码质量 CI 化：尺寸/复杂度/覆盖率三门禁 + 存量豁免清单（架构+后端） | 09-15~10-10 | R4 门禁框架 / P1 | 三个新 gate 并入 docs-gates | 新增代码零豁免通过；豁免清单只减不增 |
+| R4-5 | 用量导出自动化（compose cron/sidecar）+ Grafana 网关四宫格（运维+后端） | 09-01~09-19 | M2 导出脚本（已完成）/ P2 | 自动化 job + dashboard JSON | 连续 7 天无人值守产出日报，与网关 usage 对账一致 |
+
+**A 线应急预案**：
+
+- R4-2：tokenizer 格式转换失败 → 回退 tiktoken `o200k_base` 对照校准并注明
+  口径；重型探索依赖放 requirements-dev.txt，生产镜像不带（吸收 CI
+  tiktoken 缺失教训，缺失时诚实 SKIP）。
+- R4-3：CI 无 pgvector 环境 → 探针降级 sqlite-vec 本地口径并单列阈值，
+  不与生产阈值混算。
+- R4-4：复杂度门禁首扫大面积 FAIL → 两档制（新代码严格 / 存量豁免清单
+  管理），避免一次性大整改阻塞主线。
+- R4-5：new-api usage API 升级致分页契约变化 → 借鉴迁移脚本先 `--dry-run`
+  校验；极端情况回退人工周导出，导出自动化延一周不挡里程碑。
+
+## 3. 主线 B：多模态垂切 MM
+
+> 前置：MM-0 评审通过后才开 MM-1 代码改动；每步独立可验证、默认降级安全。
+
+| # | 任务（负责人） | 日期 | 依赖/P | 交付物 | 成功标准 |
+|---|---|---|---|---|---|
+| MM-0 | 设计评审定稿：multimodal.md proposed→accepted、ADR 登记；路由约束/预算上限/压缩语义三项决策落笔（架构维护者） | 09-01~09-05 | 无 / **P0** | accepted 文档 + ADR 编号 | 三项决策均有结论与反对意见记录 |
+| MM-1 | 协议层双轨 `str \| list`：请求侧 ~4 处 + schema；纯文本模型携图显式报错（后端） | 09-08~09-19 | MM-0 / **P0** | 双轨改造 + VisionUnsupportedError 错误路径 + Kimi logo.png 视觉 e2e 入库 | 存量纯文本全量测试零回归；vision e2e 经网关 PASS；错误路径有单测 |
+| MM-2 | 附件管线：前端停发 base64 进正文；build_attachment_context 产出 image part；≤2MB 内联 / >2MB artifact 双路径（前端+后端） | 09-15~10-03 | MM-1 / **P0** | 结构化附件草稿 + image part 组装 + artifact 引用路径 | WS→适配器全链路图片可达；正文不含 `data:image`（grep 验证）；Kimi 端到端识图通过 |
+| MM-3 | 预算计费：图像固定 token 计费（1024/张）、单轮 ≤4 张 ≤6MB、compaction 丢图占位标记（后端） | 09-29~10-10 | MM-1，与 MM-2 并行 / P1 | fit_prompt 图像分支 + 上限强制点 + compaction 语义 | 图像分支单测覆盖；预算报表可见图像项；超限行为可预期 |
+| MM-4 | 工具视觉回传：browser_screenshot→下一轮视觉输入；降级=image_describe（后端） | 10-06~10-17 | MM-1 / P2 | 截图回传主通路（降级工具已提前落地，剩接线验证） | 截图→看图闭环 demo 留档；注入假视觉模型的降级测试 PASS |
+| MM-5 | 护栏与门禁：MIME 白名单/尺寸卫生入 guardrails；e2e 探针固化为可选 CI 门禁；能力表更新（安全+后端） | 10-13~10-24 | MM-2、MM-4 / P1 | guardrails 图片卫生规则 + 可选探针门禁 + 能力表"多模态"行 | SVG/恶意 MIME/超尺寸样本全被拒；探针可开关且 PASS；能力表链接有效 |
+
+**B 线应急预案**：
+
+- MM-1 改动面失控：schema 波及超过预估 ~4 处 → 收敛到 NewAPIGatewayAdapter
+  单点先行双轨（网关已是主力路径），自研直连渠道顺延 ≤1 周。
+- MM-2 前端回归风险：保底方案 = 后端直接从 attachments 元数据组 image part
+  （元数据已在存储链路），"前端停发 base64"拆为独立小步单独合入。
+- MM-3 计费口径分歧：固定常数保守计（1024/张），usage 实测只观测不承诺，
+  报表标注"估算口径"。
+- **整体熔断线**：MM-1 开工起两周内未达 MS-2 的 e2e 判定 → 冻结 B 线后续
+  步骤，改走 image_describe 降级方案独立上线，重新评审排期。
+
+## 4. 收敛冻结与 R5 预备
+
+- **G-1** 渠道熔断决策表 + 回滚演练归档（运维+后端，09-01~09-05，P1）。
+  成功标准：决策表覆盖 ≥90% 已知故障场景且演练记录归档。
+- **G-2** E1-E5 扩展项闸门评审（架构维护者，**11-03~11-07**）。前置：A/B
+  双主线达稳定点（MS-3 之后无未关闭缺陷）。产出：每项 E 的 go/no-go 与排期。
+- **R5-\***（G-2 通过后，节奏不变）：Desktop GA 网关核对（11-10~11-14）→
+  Windows 安装包流水线（11-10~11-21）→ 市场/SDK 解冻确认（11-17 起）。
+
+## 5. 关键路径与并行关系
 
 ```
-R4-2 ──► R4-3 ──► R4-4 ──────────────┐
-                                      ├──► G-2（闸门）──► R5-*
-MM-0 ──► MM-1 ──► MM-2 ──► MM-3 ──┬──┘
-                       R4-5/G-1 并行│
-                              MM-4 ► MM-5
+MS-1 ─► MM-1 ─┬─► MM-2 ──┐
+              ├─► MM-3 ──┤
+              └─► MM-4 ──┴─► MM-5 ─► MS-4          （B 线）
+R4-2 ─► R4-3 ──────► R4-4 ──────────────┐             （A 线）
+R4-5 / G-1 并行 ─────────────────────────┴─► G-2(MS-5) ─► R5-*
 ```
 
-## 附：风险登记（v2 增补）
+**资源提示**：A/B 线共享后端人力，MM-2 与 R4-4 同窗期（09-15~10-10）是唯一
+争抢点。届时人力不足则优先保 MM-2（需求侧价值高、验收样本明确），R4-4 顺延
+一周不影响里程碑判定。
+
+## 附：风险登记（v3 继承 v2 并核定）
 
 - 多模态为需求侧拉动的功能面扩张 → 以 MM-0 设计评审 + 每步可验证 +
-  默认降级安全约束偏离度；若 MM-1 两周内未达验收则回退排期并复评。
+  默认降级安全约束偏离度；触发 B 线整体熔断线即复评（见 §3）。
 - 视觉 token 计费各供应商口径不一 → 预算按保守常数计，usage 实测值仅观测不承诺。
+- 状态类改动一律受 AGENTS.md 约束：显式事务、测试覆盖，禁止 demo 假成功。
 
 ## 0. 当前基线（已完成，2026-08-26）
 

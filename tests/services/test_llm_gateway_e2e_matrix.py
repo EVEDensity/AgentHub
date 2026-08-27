@@ -268,3 +268,65 @@ def test_matrix_rerank_stays_on_selfhosted_service(tmp_path, monkeypatch) -> Non
     provider = mas._get_rerank_provider("bge-any")
     assert getattr(provider, "name", "bge") == "bge"
     assert "newapi" not in mas._init_providers()  # rerank path ignores gateway
+
+
+# ---------------------------------------------------------------------------
+# MM-1 acceptance — real-channel vision e2e (dual-track content parts)
+# ---------------------------------------------------------------------------
+# Opt-in like the rest of the matrix but keyed to a REAL gateway channel:
+#     NEWAPI_BASE_URL=https://<newapi-host>/v1
+#     AGENTHUB_TEST_CHANNEL_KEY=<gateway token>          (keys only via env!)
+#     [AGENTHUB_TEST_VISION_MODEL=moonshot-v1-8k-vision-preview]
+#     [AGENTHUB_TEST_IMAGE_PATH=<repo>/frontend/public/logo.png]
+# Without the env pair this test skips — CI stays green offline.
+
+VISION_BASE = os.getenv("NEWAPI_BASE_URL", "").strip()
+VISION_KEY = os.getenv("AGENTHUB_TEST_CHANNEL_KEY", "").strip()
+VISION_MODEL = os.getenv("AGENTHUB_TEST_VISION_MODEL",
+                         "moonshot-v1-8k-vision-preview").strip()
+VISION_IMAGE = os.getenv("AGENTHUB_TEST_IMAGE_PATH", "").strip()
+
+
+@pytest.mark.skipif(not (VISION_BASE and VISION_KEY),
+                    reason="real vision channel not configured "
+                           "(set NEWAPI_BASE_URL + AGENTHUB_TEST_CHANNEL_KEY)")
+def test_matrix_vision_dual_track_real_channel() -> None:
+    """content 数组携图经 new-api 直达视觉模型（ADR-0105 MM-1 验收）。
+
+    提供 AGENTHUB_TEST_IMAGE_PATH 时用该图片（如仓库 logo.png）；否则退化
+    为 1×1 PNG 只验证协议链路（网关透传 content 数组 + usage 计费可见）。
+    """
+    import base64
+    import mimetypes
+
+    if VISION_IMAGE and Path(VISION_IMAGE).is_file():
+        raw = Path(VISION_IMAGE).read_bytes()
+        mime = mimetypes.guess_type(VISION_IMAGE)[0] or "image/png"
+        url_value = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+    else:
+        import base64 as _b64
+        tiny_png = _b64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+            "AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+        url_value = f"data:image/png;base64,{_b64.b64encode(tiny_png).decode()}"
+
+    r = httpx.post(
+        f"{VISION_BASE.rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {VISION_KEY}"},
+        json={
+            "model": VISION_MODEL,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": url_value}},
+                    {"type": "text", "text": "用一句话描述这张图片的内容。"},
+                ],
+            }],
+        },
+        timeout=90,
+    )
+    assert r.status_code == 200, r.text[:400]
+    data = r.json()
+    assert data["choices"][0]["message"]["content"], "vision reply must be non-empty"
+    assert (data.get("usage", {}).get("prompt_tokens") or 0) > 0, \
+        "image billing should appear in usage.prompt_tokens"

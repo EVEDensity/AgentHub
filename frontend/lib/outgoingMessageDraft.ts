@@ -31,6 +31,14 @@ export function buildOutgoingMessageDraft({
   if (files.length > 0) {
     const fileBlocks = files.map((file) => {
       const ext = file.name.split('.').pop()?.toLowerCase() || '';
+      // MM-2 / ADR-0105: images are NEVER spliced into the body as base64
+      // fences — they ride the structured attachments payload to the
+      // backend, which converts them into vision-capable content parts.
+      const isImage = file.type.startsWith('image/')
+        || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.name);
+      if (isImage) {
+        return `[Attached Image: ${file.name}]`;
+      }
       if (file.fileId && !file.content) {
         return `[Attached File: ${file.name} (fileId: ${file.fileId})]`;
       }

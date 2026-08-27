@@ -5,6 +5,9 @@ writes a per-day JSON report, plus an optional Prometheus textfile-style
 gauge (``agenthub_newapi_*``) so the M3 alert
 ``NewAPIChannelKeyBalanceLow`` and cost panels can consume it.
 
+HTTP failures are retried up to 2 times with exponential backoff (2s/4s);
+every failure emits a structured JSON log line on stderr (never silent).
+
 Usage:
   python deploy/newapi/export_usage.py --since-days 1 \
       --base-url http://127.0.0.1:3000 --root-token sk-agenthub-root
@@ -19,6 +22,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,12 +38,44 @@ from deploy.newapi.migrate_models import newapi_admin_init
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 
 
+def _get_with_retry(base_url: str, path: str, headers: dict,
+                    *, attempts: int = 3) -> httpx.Response:
+    """带重试的 GET：初次请求 + 最多 2 次重试，指数退避（2s/4s）。
+
+    每次失败都向 stderr 打一行结构化 JSON 日志（不静默吞掉），
+    重试耗尽后抛出最后一次异常，由调用方/外层循环决定下一步。
+    """
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            resp = httpx.get(f"{base_url}{path}", headers=headers, timeout=15)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:  # noqa: BLE001 — 统一在此记录后按策略重试
+            last_error = exc
+            payload = {
+                "level": "error",
+                "event": "export_http_failure",
+                "url": f"{base_url}{path}",
+                "attempt": attempt + 1,
+                "attempts_total": attempts,
+                "retries_left": attempts - attempt - 1,
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:200],
+            }
+            print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+            if attempt < attempts - 1:
+                time.sleep(float(2 ** (attempt + 1)))
+    assert last_error is not None
+    raise last_error
+
+
 def _collect_logs(base: str, headers: dict, since_ts: int) -> list[dict]:
     """Page through new-api /api/log/ and keep entries after ``since_ts``."""
     collected: list[dict] = []
     page = 1
     while True:
-        r = httpx.get(f"{base}/api/log/?p={page}&page_size=100", headers=headers, timeout=15)
+        r = _get_with_retry(base, f"/api/log/?p={page}&page_size=100", headers)
         r.raise_for_status()
         payload = r.json().get("data") or {}
         items = payload.get("items") if isinstance(payload, dict) else payload
@@ -92,7 +128,11 @@ def main(argv: list[str] | None = None) -> int:
 
     token = asyncio.run(newapi_admin_init(args.base_url.rstrip("/"), args.root_token))
     if not token:
-        print("[FAIL] could not obtain admin token", file=sys.stderr)
+        print(json.dumps({
+            "level": "error",
+            "event": "admin_token_failed",
+            "detail": "could not obtain admin token from new-api",
+        }, ensure_ascii=False), file=sys.stderr)
         return 1
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -115,8 +155,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.prometheus_gauge:
         # Textfile-format gauge for channel balances (M3 alert support).
-        channels = httpx.get(f"{args.base_url.rstrip('/')}/api/channel/?p=1&size=100",
-                             headers=headers, timeout=15).json().get("data") or {}
+        channels = _get_with_retry(args.base_url.rstrip("/"),
+                                   "/api/channel/?p=1&size=100",
+                                   headers).json().get("data") or {}
         items = channels.get("items") if isinstance(channels, dict) else channels
         lines = ["# HELP agenthub_newapi_channel_min_balance minimum channel balance",
                  "# TYPE agenthub_newapi_channel_min_balance gauge"]

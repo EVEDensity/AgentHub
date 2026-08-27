@@ -15,6 +15,11 @@ name: agenthub-newapi
 #   AGENTHUB_NEWAPI_API_KEY=sk-agenthub-<token>
 # to route the LLM layer through new-api.
 #
+# 第三服务 usage-exporter 是每日用量导出 sidecar（R4-5）：复用
+# deploy/newapi/export_usage.py（M2），循环每 24h 拉取消费日志并把汇总
+# 写到 ./data/newapi-export/<YYYY-MM-DD>.json（日期取自容器内时钟）。
+# 凭据 NEWAPI_ROOT_TOKEN 只经环境变量注入，不落入任何仓库文件。
+#
 # Usage:
 #   docker compose -f deploy/docker-compose.newapi.yml up -d --build
 #   docker compose -f deploy/docker-compose.newapi.yml down
@@ -60,5 +65,68 @@ services:
       retries: 5
       start_period: 5s
 
+  # 每日用量导出 sidecar（R4-5）：无 cron、纯 compose 循环。
+  # 复用 deploy/newapi/export_usage.py（M2 已落地），每轮以非零退出码
+  # 报告失败并在 300s 后重试整轮；成功则 sleep 24h。产物落
+  # ./data/newapi-export/<YYYY-MM-DD>.json，与仓库卷互不影响。
+  usage-exporter:
+    image: python:3.13-slim
+    container_name: agenthub-usage-exporter
+    restart: unless-stopped
+    depends_on:
+      new-api:
+        condition: service_healthy
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      NEWAPI_BASE_URL: "http://new-api:3000"
+      # 凭据只经环境变量注入；导出报告本身不包含任何密钥。
+      NEWAPI_ROOT_TOKEN: "${NEWAPI_ROOT_TOKEN:-sk-agenthub-root}"
+    volumes:
+      # 脚本目录保持 <root>/deploy/newapi 三层结构挂载：
+      # export_usage.py 通过 __file__ 上溯推导 ROOT 后 import
+      # deploy.newapi.migrate_models，因此容器内路径必须是
+      # /opt/exporter/deploy/newapi。
+      - ./newapi:/opt/exporter/deploy/newapi:ro
+      - ./data/newapi-export:/data/newapi-export
+    command:
+      - sh
+      - -c
+      - |
+        pip install --no-cache-dir 'httpx==0.28.1' >/dev/null 2>&1 \
+          || pip install --no-cache-dir 'httpx==0.28.1'
+        # 每 24h 导出一次；日期取自容器内时钟（TZ 默认 Asia/Shanghai）。
+        while true; do
+          DAY="$$(date +%F)"
+          if python /opt/exporter/deploy/newapi/export_usage.py \
+               --base-url "$$NEWAPI_BASE_URL" \
+               --since-days 1 \
+               --out "/data/newapi-export/$${DAY}.json"; then
+            printf '{"level":"info","event":"export_done","date":"%s","next_run_seconds":86400}\n' "$$DAY"
+            sleep 86400
+          else
+            echo '{"level":"error","event":"export_failed","action":"retry_in_300s"}'
+            sleep 300
+          fi
+        done
+
 volumes:
   newapi-data:
+
+# ─────────────────────────────────────────────────────────────────────
+# 「连续 7 天无人值守」验收运行方式（R4-5）
+#
+# 1. 启动整栈（含 usage-exporter sidecar）：
+#      docker compose -f deploy/docker-compose.newapi.yml up -d --build
+#    凭据按需注入环境变量后再启动，例如：
+#      NEWAPI_ROOT_TOKEN=sk-agenthub-root docker compose ... up -d
+# 2. 观察点（7 天内无需任何人工干预即通过验收）：
+#    a) 容器不退出：docker ps 中 agenthub-usage-exporter 状态持续 Up，
+#       restart=unless-stopped 保证宿主机重启后自恢复；
+#    b) 落盘连续：deploy/data/newapi-export/ 下每天新增一个
+#       <YYYY-MM-DD>.json（容器 TZ 默认 Asia/Shanghai，日界正确）；
+#    c) 失败自愈：单轮网络故障由脚本内 2 次重试+指数退避消化，
+#       整轮失败以非零码报告并在 300s 后自动重试，结构化错误日志
+#       可用 docker logs agenthub-usage-exporter 检索（grep export_）；
+#    d) 面板可用：new-api :3000 /metrics 被 Prometheus 抓取后，
+#       导入 deploy/grafana/dashboards/newapi-gateway.json 即得四宫格。
+# ─────────────────────────────────────────────────────────────────────

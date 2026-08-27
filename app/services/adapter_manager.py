@@ -21,6 +21,13 @@ from app.config import (
     REQUEST_TIMEOUT_SECONDS,
 )
 
+from app.services.message_content import (
+    anthropic_blocks_from_content,
+    assert_parts_allowed_for_model,
+    flatten_text_content,
+    validate_dual_track_content,
+)
+
 logger = logging.getLogger("agenthub.adapter")
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -222,6 +229,10 @@ class LLMAdapterError(RuntimeError):
 
 
 class BaseAdapter:
+    # Provider identity injected by AdapterManager (eager dict + lazy-load
+    # branches); consumed by the fail-closed vision-capability gate (ADR-0105).
+    provider_name: str = ""
+
     def __init__(self) -> None:
         self.last_usage: dict[str, int] = {}
 
@@ -261,7 +272,7 @@ class BaseAdapter:
     async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "", **kwargs: Any) -> str:
         raise NotImplementedError
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str | list[dict[str, Any]], model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         """Streaming fallback: chunks the full response for pseudo-streaming.
 
         Subclasses SHOULD override this with real SSE/NDJSON streaming.
@@ -531,7 +542,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
     max_tokens: int = 32768  # 32K output — complex HTML/CSS/JS generation needs headroom
 
     async def execute_prompt(
-        self, prompt: str, model: str, api_key: str = "", base_url: str = "",
+        self, prompt: str | list[dict[str, Any]], model: str, api_key: str = "", base_url: str = "",
         tools: list[dict[str, Any]] | None = None,
         system_prompt: str = "",
     ) -> str:
@@ -547,10 +558,14 @@ class OpenAICompatibleAdapter(BaseAdapter):
 
         When *system_prompt* is non-empty, it is prepended as a system message.
         """
+        validate_dual_track_content(prompt)
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
-            return await MockAdapter().execute_prompt(prompt, model)
+            return await MockAdapter().execute_prompt(flatten_text_content(prompt), model)
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
+        # Dual-track (ADR-0105): image parts require a vision-capable model —
+        # text-only models get an explicit error, never silent degradation.
+        assert_parts_allowed_for_model(self.provider_name, actual_model, prompt)
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "/chat/completions"
         messages: list[dict[str, Any]] = []
         if system_prompt:
@@ -579,7 +594,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         data = response.json()
         usage = data.get("usage", {})
         self.last_usage = {
-            "prompt_tokens": usage.get("prompt_tokens") or max(1, len(prompt) // 4),
+            "prompt_tokens": usage.get("prompt_tokens") or max(1, len(flatten_text_content(prompt)) // 4),
             "completion_tokens": usage.get("completion_tokens") or 0,
             "total_tokens": usage.get("total_tokens") or 0,
         }
@@ -652,13 +667,16 @@ class OpenAICompatibleAdapter(BaseAdapter):
             )
         return content
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str | list[dict[str, Any]], model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
+        validate_dual_track_content(prompt)
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
-            async for chunk in MockAdapter().stream_prompt(prompt, model, system_prompt=system_prompt):
+            async for chunk in MockAdapter().stream_prompt(flatten_text_content(prompt), model, system_prompt=system_prompt):
                 yield chunk
             return
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
+        # Dual-track (ADR-0105): fail-closed vision gate before any network I/O.
+        assert_parts_allowed_for_model(self.provider_name, actual_model, prompt)
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "//chat/completions"
         url = url.replace("//chat", "/chat")  # normalize double slash
         stream_messages: list[dict[str, Any]] = []
@@ -822,11 +840,13 @@ class KimiAdapter(OpenAICompatibleAdapter):
 class AnthropicAdapter(BaseAdapter):
     default_model = "claude-sonnet-4-6"
 
-    async def execute_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "", **kwargs: Any) -> str:
+    async def execute_prompt(self, prompt: str | list[dict[str, Any]], model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "", **kwargs: Any) -> str:
+        validate_dual_track_content(prompt)
         key = api_key or ANTHROPIC_API_KEY
         if not ENABLE_REAL_LLM or not key:
-            return await MockAdapter().execute_prompt(prompt, model)
+            return await MockAdapter().execute_prompt(flatten_text_content(prompt), model)
         actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
+        assert_parts_allowed_for_model(self.provider_name, actual_model, prompt)
         url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com") + "/v1/messages"
 
         # ── Build messages payload ────────────────────────────────────
@@ -841,10 +861,10 @@ class AnthropicAdapter(BaseAdapter):
                         "cache_control": {"type": "ephemeral"},
                     },
                 ],
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": anthropic_blocks_from_content(prompt)}],
             }
         else:
-            payload = {"model": actual_model, "max_tokens": 32768, "messages": [{"role": "user", "content": prompt}]}
+            payload = {"model": actual_model, "max_tokens": 32768, "messages": [{"role": "user", "content": anthropic_blocks_from_content(prompt)}]}
 
         headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
         response = await _retry_request(
@@ -860,13 +880,13 @@ class AnthropicAdapter(BaseAdapter):
         content_blocks = data.get("content") or []
         first_block = (content_blocks[0] if isinstance(content_blocks[0], dict) else {}) if content_blocks else {}
         self.last_usage = {
-            "prompt_tokens": usage.get("input_tokens") or max(1, len(prompt) // 4),
+            "prompt_tokens": usage.get("input_tokens") or max(1, len(flatten_text_content(prompt)) // 4),
             "completion_tokens": usage.get("output_tokens") or max(1, len(first_block.get("text", "")) // 4),
-            "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or max(1, len(prompt) // 4) + max(1, len(first_block.get("text", "")) // 4),
+            "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or max(1, len(flatten_text_content(prompt)) // 4) + max(1, len(first_block.get("text", "")) // 4),
         }
         return "\n".join(block.get("text", "") for block in content_blocks if isinstance(block, dict) and block.get("type") == "text")
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str | list[dict[str, Any]], model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         """Real SSE streaming via Anthropic Messages Streaming API.
 
         Uses ``stream: True`` and parses Server-Sent Events (SSE):
@@ -878,9 +898,10 @@ class AnthropicAdapter(BaseAdapter):
         large static prefix (role instructions, tool definitions, rules)
         server-side and cuts TTFT by 50-70 % on subsequent requests.
         """
+        validate_dual_track_content(prompt)
         key = api_key or ANTHROPIC_API_KEY
         if not ENABLE_REAL_LLM or not key:
-            async for chunk in MockAdapter().stream_prompt(prompt, model):
+            async for chunk in MockAdapter().stream_prompt(flatten_text_content(prompt), model):
                 yield chunk
             return
 
@@ -900,7 +921,7 @@ class AnthropicAdapter(BaseAdapter):
                         "cache_control": {"type": "ephemeral"},
                     },
                 ],
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": anthropic_blocks_from_content(prompt)}],
                 "stream": True,
             }
         else:
@@ -908,10 +929,13 @@ class AnthropicAdapter(BaseAdapter):
             payload = {
                 "model": actual_model,
                 "max_tokens": 32768,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": anthropic_blocks_from_content(prompt)}],
                 "stream": True,
             }
 
+        # Dual-track (ADR-0105): image parts require a vision-capable model —
+        # checked before any network I/O.
+        assert_parts_allowed_for_model(self.provider_name, actual_model, prompt)
         headers = {
             "x-api-key": key,
             "anthropic-version": "2023-06-01",
@@ -1009,7 +1033,7 @@ class OllamaAdapter(BaseAdapter):
         except httpx.HTTPError:
             return await MockAdapter().execute_prompt(prompt, model)
 
-    async def stream_prompt(self, prompt: str, model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
+    async def stream_prompt(self, prompt: str | list[dict[str, Any]], model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "") -> AsyncGenerator[str, None]:
         url = (base_url.rstrip("/") if base_url else OLLAMA_BASE_URL) + "/api/generate"
         payload = {"model": model or "llama3", "prompt": prompt, "stream": True}
         if system_prompt:
@@ -1091,6 +1115,8 @@ class AdapterManager:
             "custom_openai": CustomOpenAIAdapter(),
             "kimi": KimiAdapter(),
         }
+        for _name, _inst in self.adapters.items():
+            _inst.provider_name = _name
 
     @property
     def _gateway_enabled(self) -> bool:
@@ -1105,6 +1131,7 @@ class AdapterManager:
         }:
             if "newapi" not in self.adapters:
                 self.adapters["newapi"] = NewAPIGatewayAdapter()
+                self.adapters["newapi"].provider_name = "newapi"
             return self.adapters["newapi"]
         # cloud_code is lazy-loaded to avoid circular imports
         # (CloudCodeAdapter imports from this module for BaseAdapter/MockAdapter)

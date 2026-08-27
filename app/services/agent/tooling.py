@@ -62,6 +62,12 @@ from app.services.agent.persistence import (  # noqa: E402
     save_message,
 )
 from app.services.agent.routing import _race_models, _update_runtime  # noqa: E402
+from app.services.agent.vision_turn import (  # noqa: E402
+    decide_turn_vision,
+    extract_screenshot_uris,
+)
+from app.services.agent.circuit_breaker import ToolLoopCircuitBreaker  # noqa: E402
+
 
 async def _log_tool_call(session_id: str, agent_id: str, tool_name: str, arguments: dict, result: dict) -> None:
     """Log a tool call to the audit table (best-effort, non-fatal)."""
@@ -99,6 +105,7 @@ async def _run_tool_call_loop(
     stream_callback: Any = None,
     preprocess_context: str = "",
     simple_mode: bool = False,
+    image_parts: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict, dict]:
     """Execute the tool-calling loop for a single user message.
 
@@ -150,6 +157,12 @@ async def _run_tool_call_loop(
     usage: dict = {}
     selected = models[0] if models else {"provider": "mock", "model_name": "mock", "api_key": "", "base_url": ""}
     adapter = None
+    # MM-2/ADR-0105: inline image parts ride along the first user turn as
+    # structured content; adapters fail closed on non-vision models.
+    _image_parts = list(image_parts or [])
+    # MM-4: screenshots produced by tools queue here for the NEXT turn —
+    # either as vision parts (vision-capable model) or a text description.
+    _queued_vision: list[str] = []
 
     # ── System prefix cache key for this tool-call loop ────────────
     # The system prefix (everything before "符号消息:") is identical
@@ -161,17 +174,9 @@ async def _run_tool_call_loop(
 
     async def _loop_body() -> tuple[str, dict, dict]:
         nonlocal final_text, usage, selected, adapter, _loop_prefix_cached
-        # ── Circuit-breaker counters (reset when a tool succeeds) ────────
-        # Three-tier detection:
-        #   1. Same-tool-same-error: the deadliest loop — agent calls the same
-        #      tool, gets the same error, retries anyway (max 3 consecutive).
-        #   2. Missing-required-params: agent doesn't understand tool schema
-        #      (max 2 consecutive rounds with missing-param errors).
-        #   3. All-tools-failed: every tool in a round fails (max 3 consecutive).
-        _consecutive_missing_param_rounds = 0
-        _consecutive_all_error_rounds = 0
-        # Per-tool failure tracking: tool_name → {error_key, consecutive_rounds}
-        _tool_failure_history: dict[str, dict] = {}
+        # ── Circuit breaker state (three-tier detection lives in
+        # app/services/agent/circuit_breaker.py) ──────────────────────────
+        _breaker = ToolLoopCircuitBreaker()
         for iteration in range(executor.MAX_ITERATIONS):
             # ── Respect cancellation token ────────────────────────────
             if token and token.cancelled:
@@ -228,11 +233,22 @@ async def _run_tool_call_loop(
                 )
 
             primary_model = models[0] if models else {}
+
+            # ── Decide what rides THIS call as vision (MM-2/3/4) ────────
+            extra_parts, describe_note, billed_images = await decide_turn_vision(
+                queued_vision=_queued_vision,
+                image_parts=_image_parts,
+                iteration=iteration,
+                provider=str(primary_model.get("provider", "")),
+                model_name=str(primary_model.get("model_name", "")),
+            )
+
             prompt, prompt_budget_stats = fit_prompt(
                 prompt,
                 primary_model.get("provider", ""),
                 primary_model.get("model_name", ""),
                 anchor="符号消息:",
+                image_count=billed_images,
             )
             from app.services.performance_monitor import monitor
             monitor.record_token_compaction(
@@ -248,6 +264,22 @@ async def _run_tool_call_loop(
             if system_prefix:
                 _loop_prefix_cached = system_prefix
                 prompt = user_prompt
+
+            # Dual-track user content (ADR-0105): image-bearing turns are a
+            # parts list [image..., text]; plain turns stay strings.
+            if extra_parts:
+                call_content: str | list[dict[str, Any]] = [
+                    *extra_parts,
+                    {"type": "text", "text": prompt + describe_note},
+                ]
+            elif _image_parts and iteration == 0:
+                call_content = [
+                    *_image_parts, {"type": "text", "text": prompt},
+                ]
+            elif describe_note:
+                call_content = prompt + describe_note
+            else:
+                call_content = prompt
 
             logger.info(
                 "tool_loop iter=%d: prompt_len=%d has_tool_section=%s",
@@ -285,7 +317,7 @@ async def _run_tool_call_loop(
                 gathered: list[str] = []
                 try:
                     async for chunk in adapter.stream_prompt(
-                        prompt,
+                        call_content,
                         model.get("model_name", "mock"),
                         decrypt_secret(model.get("api_key", "")),
                         model.get("base_url", ""),
@@ -326,7 +358,7 @@ async def _run_tool_call_loop(
             elif iteration == 0 and len(models) >= 2:
                 # ── Race top models concurrently (first success wins) ──
                 result, selected, adapter, errors = await _race_models(
-                    prompt, models, iteration, native_tools, token,
+                    call_content, models, iteration, native_tools, token,
                     system_prompt=_loop_prefix_cached or "",
                 )
                 if result:
@@ -345,7 +377,7 @@ async def _run_tool_call_loop(
                     started = time.perf_counter()
                     try:
                         result = await adapter.execute_prompt(
-                            prompt,
+                            call_content,
                             model.get("model_name", "mock"),
                             decrypt_secret(model.get("api_key", "")),
                             model.get("base_url", ""),
@@ -468,6 +500,16 @@ async def _run_tool_call_loop(
                     else:
                         tool_results = await executor.execute_all(tool_calls)
 
+                    # MM-4: hijack screenshot payloads before they reach the
+                    # text context; queue them for the next model turn.
+                    _fresh_uris, tool_results = extract_screenshot_uris(tool_results)
+                    if _fresh_uris:
+                        _queued_vision.extend(_fresh_uris)
+                        logger.info(
+                            "tool_loop iter=%d: queued %d screenshot(s) for vision refeed",
+                            iteration, len(_fresh_uris),
+                        )
+
                     if on_tool_event:
                         try:
                             await on_tool_event("done", tool_calls, tool_results)
@@ -485,113 +527,17 @@ async def _run_tool_call_loop(
                     conversation.append({"role": "tool", "results": tool_results})
 
                     # ── Circuit breaker: three-tier failure detection ───────
-                    # Prevents infinite tool-call loops (5-round dead loop cap).
-                    #
-                    # Tier 1 (per-tool): Same tool fails with the SAME error key
-                    #   for ≥3 consecutive rounds → dead loop: the agent keeps
-                    #   retrying a tool that can never succeed.  This is the
-                    #   most common infinite-loop pattern.
-                    #
-                    # Tier 2 (round-level): All tools in a round fail with
-                    #   missing-required-params for ≥2 consecutive rounds → the
-                    #   model fundamentally misunderstands the tool schemas.
-                    #
-                    # Tier 3 (round-level): All tools in a round fail for ≥3
-                    #   consecutive rounds → catch-all for systemic failure.
-                    all_failed = all(not r.get("success") for r in tool_results)
-                    missing_param_errors = [
-                        r for r in tool_results
-                        if not r.get("success") and r.get("missing_params")
-                    ]
-
-                    # ── Tier 1: Same-tool-same-error detection ────────────
-                    _tier1_triggered = False
-                    for tr in tool_results:
-                        if tr.get("success"):
-                            # Tool succeeded → reset its failure history
-                            tool_name = tr.get("tool_name", "")
-                            if tool_name in _tool_failure_history:
-                                del _tool_failure_history[tool_name]
-                            continue
-                        tool_name = tr.get("tool_name", "")
-                        if not tool_name:
-                            continue
-                        # Build a stable error key for this failure
-                        error_key = (
-                            tr.get("error", "")
-                            or tr.get("missing_params", "")
-                            or str(tr)
-                        )[:80]  # first 80 chars is enough to fingerprint
-                        prev = _tool_failure_history.get(tool_name)
-                        if prev and prev["error_key"] == error_key:
-                            prev["consecutive_rounds"] += 1
-                        else:
-                            _tool_failure_history[tool_name] = {
-                                "error_key": error_key,
-                                "consecutive_rounds": 1,
-                            }
-                        if _tool_failure_history[tool_name]["consecutive_rounds"] >= 3:
-                            logger.warning(
-                                "tool_loop iter=%d: circuit breaker TIER1 — "
-                                "tool '%s' failed with same error for %d consecutive rounds",
-                                iteration, tool_name,
-                                _tool_failure_history[tool_name]["consecutive_rounds"],
-                            )
-                            _tier1_triggered = True
-                    if _tier1_triggered:
+                    _event = _breaker.assess(tool_results, iteration)
+                    if _event is not None:
                         final_text = executor.build_tool_result_context(tool_results)
                         if on_tool_event:
                             try:
-                                await on_tool_event("circuit_breaker", tool_calls, [
-                                    {"tier": "tier1", "tool_name": tn, "rounds": _tool_failure_history.get(tn, {}).get("consecutive_rounds", 0)}
-                                    for tn in {tc.get("name", "") for tc in tool_calls} if tn
-                                ])
+                                await on_tool_event(
+                                    "circuit_breaker", tool_calls,
+                                    _event.tools or [{"tier": _event.tier}])
                             except Exception:
                                 pass
                         break
-
-                    # ── Tier 2: Missing-required-params across all tools ──
-                    if missing_param_errors:
-                        _consecutive_missing_param_rounds += 1
-                        logger.warning(
-                            "tool_loop iter=%d: %d/%d tools missing required params "
-                            "(consecutive_missing_rounds=%d)",
-                            iteration, len(missing_param_errors), len(tool_results),
-                            _consecutive_missing_param_rounds,
-                        )
-                        if _consecutive_missing_param_rounds >= 2:
-                            final_text = executor.build_tool_result_context(tool_results)
-                            logger.warning(
-                                "tool_loop: circuit breaker TIER2 after %d "
-                                "consecutive missing-param rounds",
-                                _consecutive_missing_param_rounds,
-                            )
-                            if on_tool_event:
-                                try:
-                                    await on_tool_event("circuit_breaker", tool_calls, [{"tier": "tier2"}])
-                                except Exception:
-                                    pass
-                            break
-                    elif all_failed:
-                        # ── Tier 3: All-tools-failed ──────────────────────
-                        _consecutive_all_error_rounds += 1
-                        if _consecutive_all_error_rounds >= 3:
-                            final_text = executor.build_tool_result_context(tool_results)
-                            logger.warning(
-                                "tool_loop: circuit breaker TIER3 after %d "
-                                "consecutive all-error rounds",
-                                _consecutive_all_error_rounds,
-                            )
-                            if on_tool_event:
-                                try:
-                                    await on_tool_event("circuit_breaker", tool_calls, [{"tier": "tier3"}])
-                                except Exception:
-                                    pass
-                            break
-                    else:
-                        # At least one tool succeeded → reset round-level counters
-                        _consecutive_missing_param_rounds = 0
-                        _consecutive_all_error_rounds = 0
 
                     if iteration >= executor.MAX_ITERATIONS - 1:
                         final_text = executor.build_tool_result_context(tool_results)
@@ -631,7 +577,7 @@ async def _run_tool_call_loop(
                 )
                 gathered: list[str] = []
                 async for chunk in adapter.stream_prompt(
-                    prompt,
+                    call_content,
                     model.get("model_name", "mock"),
                     decrypt_secret(model.get("api_key", "")),
                     model.get("base_url", ""),

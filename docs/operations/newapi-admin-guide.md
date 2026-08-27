@@ -1,7 +1,9 @@
 # new-api 管理控制台操作指南（U1）
 
 面向首次接手网关运营的管理员，目标：30 分钟内完成"渠道 + 模型 + token"
-配置。配套部署与迁移见 [deploy/newapi/README.md](../../deploy/newapi/README.md)。
+配置。配套部署与迁移见 [deploy/newapi/README.md](../../deploy/newapi/README.md)；
+故障处置、渠道熔断与回滚演练见
+[newapi-channel-fuse-decision-table.md](newapi-channel-fuse-decision-table.md)。
 
 ## 1. 登录与初始检查
 

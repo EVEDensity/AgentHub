@@ -238,7 +238,7 @@ async def record_task_execution(
         logger.debug("record_task_execution: failed to write (table may not exist yet)")
 
 async def _race_models(
-    prompt: str,
+    prompt: str | list[dict[str, Any]],
     models: list[dict],
     iteration: int,
     native_tools: list[dict] | None,
@@ -363,7 +363,7 @@ async def _race_models(
     return ("", models[0] if models else {}, None, errors)
 
 async def _race_models_streaming(
-    prompt: str,
+    prompt: str | list[dict[str, Any]],
     models: list[dict],
     token: Any,
     stream_callback,

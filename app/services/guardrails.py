@@ -425,6 +425,63 @@ def classify_tool_risk(tool_name: str, arguments: dict[str, Any]) -> GuardrailRe
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Multimodal hygiene (MM-5 / ADR-0105) — fail-closed image policy
+# ═══════════════════════════════════════════════════════════════════════
+
+def scan_image_source(uri: str) -> GuardrailResult:
+    """Validate one image source against the multimodal policy.
+
+    Delegates to the central validators (MIME whitelist, size caps, data-URI
+    shape) so the policy has a single source of truth; a violation maps to a
+    BLOCK flag naming the constraint. Audit events must carry only hash/
+    size metadata — never the payload.
+    """
+    import hashlib
+
+    from app.services.tools.multimodal.content_parts import validate_image_uri
+
+    try:
+        part = validate_image_uri(str(uri or ""))
+    except Exception as exc:  # noqa: BLE001 — any policy violation blocks
+        return GuardrailResult(passed=False, flags=[GuardrailFlag(
+            category=GuardrailCategory.INJECTION,
+            severity=Severity.BLOCK,
+            rule="image_hygiene",
+            message=f"image rejected by multimodal policy: {exc}",
+        )])
+    size = len(uri)
+    digest = hashlib.sha256(uri.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    # informational only — WARN never blocks, audit keeps hash/size not payload
+    return GuardrailResult(passed=True, flags=[GuardrailFlag(
+        category=GuardrailCategory.INJECTION,
+        severity=Severity.WARN,
+        rule="image_hygiene_ok",
+        message=f"image ok size={size} sha256[:16]={digest} mime={part.mime or 'remote-url'}",
+    )])
+
+
+def scan_multimodal_content(content: Any) -> GuardrailResult:
+    """Scan a dual-track content value (str | parts list) for image hygiene."""
+    if not isinstance(content, list):
+        return GuardrailResult(passed=True)
+    flags: list[GuardrailFlag] = []
+    for index, part in enumerate(content):
+        if isinstance(part, dict) and part.get("type") == "image_url":
+            uri = str((part.get("image_url") or {}).get("url", ""))
+            result = scan_image_source(uri)
+            flags.extend(result.flags)
+            if not result.passed:
+                # tag which slot failed so callers can drop just that part
+                flags[-1] = GuardrailFlag(
+                    category=flags[-1].category,
+                    severity=flags[-1].severity,
+                    rule=f"{flags[-1].rule}@content[{index}]",
+                    message=flags[-1].message,
+                )
+    return GuardrailResult(passed=all(f.severity != Severity.BLOCK for f in flags), flags=flags)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Convenience: single-call safety check
 # ═══════════════════════════════════════════════════════════════════════
 

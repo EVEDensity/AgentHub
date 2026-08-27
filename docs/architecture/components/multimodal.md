@@ -1,9 +1,11 @@
 # 多模态（视觉输入）架构设计
 
-> Status: proposed
+> Status: accepted（ADR-0105，2026-08-27 定稿）
 > Owner: backend maintainers
 > Last reviewed: 2026-08-27
-> 关联：[memory.md](memory.md)、ADR-0104（LLM 网关）、[newapi-rollout-plan](../../operations/newapi-rollout-plan.md)
+> 关联：[memory.md](memory.md)、ADR-0104（LLM 网关）、
+> [ADR-0105](../decisions/0105-multimodal-vision-input-dual-track.md)（本设计定稿）、
+> [newapi-rollout-plan](../../operations/newapi-rollout-plan.md)
 
 ## 1. 现状审计结论（2026-08-27，代码核实）
 

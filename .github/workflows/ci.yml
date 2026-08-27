@@ -33,10 +33,42 @@ jobs:
         run: python benchmarks/gates.py run --name token_compaction_ratio
       - name: L2 retrieval recall gate (offline eval set, recall > 85%)
         run: python benchmarks/gates.py run --name knowledge_retrieval_recall
+      - name: Knowledge retrieval latency gate (L2 probe, p95 < 80ms)
+        run: python benchmarks/gates.py run --name knowledge_retrieval_p95
+      - name: Code file-size gate (<=800 lines, legacy ratchet may only shrink)
+        run: python benchmarks/gates.py run --name code_file_size
+      - name: Code complexity gate (McCabe <=20, class-qualified exemptions)
+        run: python benchmarks/gates.py run --name code_complexity
       - name: Streaming first-token (TTFT) gate (pooled local mock, < 3s)
         run: python benchmarks/gates.py run --name streaming_ttft
-      - name: CN tokenizer precision gate (skips until a native tokenizer is configured)
+      - name: Restore native tokenizer assets
+        id: tokcache
+        uses: actions/cache@v4
+        with:
+          path: assets/tokenizers
+          # Key pins the Qwen tokenizer.json sha256[:16]; bump when
+          # benchmarks/fetch_tokenizers.py REPOS changes.
+          key: cn-tokenizers-qwen-c0382117ea329cdf
+      - name: Provision CN tokenizer assets (HF primary + mirror fallback)
+        if: steps.tokcache.outputs.cache-hit != 'true'
+        run: |
+          pip install "tokenizers>=0.20,<1"
+          python benchmarks/fetch_tokenizers.py --provider qwen
+        # Network flake must not hard-block CI: the gate degrades to an
+        # honest SKIP when no asset exists (never a synthetic pass).
+        continue-on-error: true
+      - name: CN tokenizer billing-parity gate
+        env:
+          AGENTHUB_TOKENIZER_QWEN_PATH: ${{ github.workspace }}/assets/tokenizers/qwen
+          AGENTHUB_CN_TOKENIZER_PROVIDER: qwen
         run: python benchmarks/gates.py run --name cn_tokenizer_precision
+      # MM-5 opt-in vision probe: honest SKIP unless a real channel is wired
+      # via repo secrets (NEWAPI_BASE_URL / AGENTHUB_TEST_CHANNEL_KEY).
+      - name: Multimodal vision e2e probe (skips without channel secrets)
+        env:
+          NEWAPI_BASE_URL: ${{ secrets.NEWAPI_BASE_URL }}
+          AGENTHUB_TEST_CHANNEL_KEY: ${{ secrets.AGENTHUB_TEST_CHANNEL_KEY }}
+        run: python benchmarks/gates.py run --name multimodal_e2e_probe
 
   # ═══════════════════════════════════════════════════════════════════
   # Frontend
@@ -134,12 +166,14 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: pip install ruff mypy pytest
+      - run: pip install ruff mypy pytest pytest-cov
       - run: ruff check .
         continue-on-error: true
       - run: mypy --ignore-missing-imports --check-untyped-defs .
         continue-on-error: true
-      - run: pytest --tb=short -q
+      - run: pytest --cov=services --cov-report=xml --tb=short -q
+      - name: Coverage gate (line-rate >= 60%)
+        run: python ../../benchmarks/gates.py run --name test_coverage
 
   workspace-runner-integration:
     name: 'Python - Workspace Runner integration'

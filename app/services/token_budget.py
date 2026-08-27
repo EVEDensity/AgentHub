@@ -81,21 +81,39 @@ def _tiktoken_encoder(model: str):
         return None
 
 
-def estimate_tokens_multilingual(text: str) -> int:
+# Per-provider tokens-per-wide-CJK-char calibration, measured against real
+# native tokenizers via benchmarks/calibrate_cn_estimator.py (R4). Re-derive
+# these constants from fresh assets whenever a family's vocab changes — never
+# hand-edit the numbers. Providers absent from this table keep the generic
+# conservative 0.9 fallback below.
+CN_TOKEN_RATIOS: dict[str, float] = {
+    "qwen": 0.61,
+    "deepseek": 0.56,
+}
+
+# Wide-CJK class: han characters + CJK punctuation (\u3000-\u303F included in
+# the 2E80-9FFF band) + fullwidth forms. Native BPE emits these at a similar
+# per-family rate, and folding punctuation into the calibrated bucket removes
+# the systematic under-count that (non_cjk // 4) produced for fullwidth marks.
+_WIDE_CJK_RE = re.compile(r"[\u2E80-\u9FFF\uF900-\uFAFF\uFF00-\uFFEF]")
+
+
+def estimate_tokens_multilingual(text: str, provider: str = "") -> int:
     """Multilingual estimator: CJK-aware fallback for providers without a
     native tokenizer.
 
-    CJK characters average ~0.9 tokens/char on modern multilingual BPE
-    (o200k/Qwen-style); latin ~4 chars/token. Keeping the estimate slightly
-    above reality remains conservative for budget enforcement. Exposed so the
-    CI tokenizer-precision gate can measure estimator error against a real
-    reference tokenizer.
+    Wide-CJK compression is family-specific (Qwen BPE ≈0.65 tokens/char,
+    DeepSeek V3 ≈0.59 measured in R4; see CN_TOKEN_RATIOS). Remaining ASCII
+    text runs ~4 chars/token. Providers with a calibrated constant use it;
+    everything else keeps the deliberately conservative 0.9 so budget
+    enforcement never under-counts an unknown family.
     """
     if not text:
         return 0
-    cjk = len(re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text))
-    non_cjk = len(text) - cjk
-    return max(1, int(cjk * 0.9) + (non_cjk + 3) // 4)
+    wide = len(_WIDE_CJK_RE.findall(text))
+    ratio = CN_TOKEN_RATIOS.get((provider or "").lower(), 0.9)
+    ascii_rest = len(text) - wide
+    return max(1, int(wide * ratio) + (ascii_rest + 3) // 4)
 
 
 def count_tokens(text: str, provider: str = "", model: str = "") -> int:
@@ -126,7 +144,7 @@ def count_tokens(text: str, provider: str = "", model: str = "") -> int:
         encoder = _tiktoken_encoder(model or "gpt-4o")
         if encoder is not None:
             return len(encoder.encode(text, disallowed_special=()))
-    return estimate_tokens_multilingual(text)
+    return estimate_tokens_multilingual(text, provider_key)
 
 
 def tokenizer_backend(provider: str = "", model: str = "") -> str:
@@ -247,32 +265,58 @@ def fit_prompt(
     *,
     output_reserve: int = 4_096,
     anchor: str = "",
+    image_count: int = 0,
 ) -> tuple[str, dict[str, int | bool]]:
+    """Fit the text prompt plus inline-image cost into the model's budget.
+
+    Images ride along the same request window, so each one is charged the
+    conservative flat :data:`IMAGE_TOKEN_COST` against the prompt limit
+    (MM-3 / ADR-0105): the text portion is truncated to whatever room the
+    images leave, never the other way around. ``image_count`` beyond the
+    turn cap is clamped by callers assembling parts — this function just
+    bills what it is told.
+    """
+    from app.services.tools.multimodal.content_parts import IMAGE_TOKEN_COST
+
+    billed_images = max(0, int(image_count))
+    image_tokens = billed_images * IMAGE_TOKEN_COST
     budget = TokenBudget.for_model(provider, model, output_reserve=output_reserve)
-    before = count_tokens(prompt, provider, model)
-    if before <= budget.prompt_limit:
-        return prompt, {"tokens_before": before, "tokens_after": before, "truncated": False}
+    # Reserve the image share first; text keeps at least a floor so the
+    # degrade path stays meaningful even under extreme image counts.
+    text_limit = max(256, budget.prompt_limit - image_tokens)
+
+    before_text = count_tokens(prompt, provider, model)
+    before_total = before_text + image_tokens
+    stats: dict[str, int | bool] = {
+        "tokens_before": before_total,
+        "tokens_after": before_total,
+        "truncated": False,
+        "image_tokens": image_tokens,
+        "images": billed_images,
+    }
+    if before_text <= text_limit:
+        return prompt, stats
+
+    def _count(text: str) -> int:
+        return count_tokens(text, provider, model)
 
     if anchor and anchor in prompt:
         index = prompt.rfind(anchor) + len(anchor)
         prefix, dynamic = prompt[:index], prompt[index:]
-        prefix_tokens = count_tokens(prefix, provider, model)
-        if prefix_tokens >= budget.prompt_limit - 256:
+        if _count(prefix) >= text_limit - 256:
             prefix, _ = truncate_to_tokens(
-                prefix,
-                budget.prompt_limit - 256,
-                provider,
-                model,
-                preserve_tail=0.25,
+                prefix, text_limit - 256, provider, model, preserve_tail=0.25,
             )
-        dynamic_budget = max(256, budget.prompt_limit - count_tokens(prefix, provider, model))
+        dynamic_budget = max(256, text_limit - _count(prefix))
         dynamic, _ = truncate_to_tokens(dynamic, dynamic_budget, provider, model)
         result = prefix + dynamic
     else:
-        result, _ = truncate_to_tokens(prompt, budget.prompt_limit, provider, model)
+        result, _ = truncate_to_tokens(prompt, text_limit, provider, model)
 
-    after = count_tokens(result, provider, model)
-    return result, {"tokens_before": before, "tokens_after": after, "truncated": True}
+    after_text = _count(result)
+    stats["tokens_after"] = after_text + image_tokens
+    stats["truncated"] = True
+    return result, stats
 
 
 def total_tokens(parts: Iterable[str], provider: str = "", model: str = "") -> int:

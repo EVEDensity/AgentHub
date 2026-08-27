@@ -54,7 +54,10 @@ REQUEST_LATENCY = Histogram(
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    # Dual-track per ADR-0105: plain string (legacy) or OpenAI-style parts
+    # list ({"type":"text"} / {"type":"image_url"}). Handlers that need raw
+    # text project through _content_text(); passthrough routes forward as-is.
+    content: str | list[dict[str, Any]]
 
 
 class ChatCompletionRequest(BaseModel):
@@ -121,7 +124,7 @@ class MockProvider:
     name = "mock"
 
     def chat(self, req: ChatCompletionRequest) -> ChatCompletionResponse:
-        last_msg = req.messages[-1].content if req.messages else ""
+        last_msg = _content_text(req.messages[-1].content) if req.messages else ""
         role_label = req.agent_role or "assistant"
         stage_label = req.stage or "unknown"
         response_text = (
@@ -285,7 +288,20 @@ class AnthropicClaudeProvider:
                 role = "user"
             else:
                 role = "user"
-            anthropic_msgs.append({"role": role, "content": m.content})
+            content = m.content
+            # Fail loud (ADR-0105): this route has no Anthropic image-block
+            # conversion yet — an image part here would silently drop.
+            if isinstance(content, list) and any(
+                isinstance(p, dict) and p.get("type") == "image_url" for p in content
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "anthropic route does not accept image parts yet; "
+                        "use an OpenAI-compatible vision-capable route"
+                    ),
+                )
+            anthropic_msgs.append({"role": role, "content": content})
         return system, anthropic_msgs
 
     def chat(self, req: ChatCompletionRequest) -> ChatCompletionResponse:
