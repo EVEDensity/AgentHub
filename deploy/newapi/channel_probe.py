@@ -1,15 +1,10 @@
-"""DeepSeek real-channel probe through the new-api gateway (A1 evidence).
+"""Generic real-channel probe through the local new-api gateway (A1).
 
-Idempotent: setup/login/channel/token are created only when missing; the
-channel is recreated when its model list changes. The provider key is read
-from the environment ONLY and is never written to disk or reports.
-
+Idempotent per (channel name); the provider key arrives via env only.
 Usage:
-    AGENTHUB_TEST_DEEPSEEK_KEY=sk-... python deploy/newapi/deepseek_channel_probe.py
-Options:
-    --base-url http://127.0.0.1:3000   gateway entry
-    --model deepseek-v4-flash          official upstream model name
-    --upstream https://api.deepseek.com  channel base (WITHOUT /v1)
+    AGENTHUB_TEST_CHANNEL_KEY=<key> python deploy/newapi/channel_probe.py \
+        --channel-name zhipu-real --upstream https://open.bigmodel.cn/api/paas/v4 \
+        --model glm-4-flash [--channel-type 24]
 """
 from __future__ import annotations
 
@@ -27,16 +22,19 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="probe a real DeepSeek channel via new-api")
+    parser = argparse.ArgumentParser(description="probe a real provider channel via new-api")
     parser.add_argument("--base-url", default="http://127.0.0.1:3000")
-    parser.add_argument("--model", default="deepseek-v4-flash")
-    parser.add_argument("--upstream", default="https://api.deepseek.com")
+    parser.add_argument("--channel-name", required=True)
+    parser.add_argument("--channel-type", type=int, default=1, help="new-api channel type (1=OpenAI)")
+    parser.add_argument("--upstream", required=True, help="channel base_url WITHOUT /v1 when type=1")
+    parser.add_argument("--model", required=True)
     parser.add_argument("--root-password", default=os.getenv("NEWAPI_ROOT_PASSWORD", "sk-agenthub-root"))
     parser.add_argument("--sqlite-db", default=str(Path(os.environ.get("TEMP", "")) / "newapi" / "one-api.db"))
+    parser.add_argument("--no-stream", action="store_true", help="skip SSE probe (some models stream-empty)")
     args = parser.parse_args(argv)
-    KEY = os.environ.get("AGENTHUB_TEST_DEEPSEEK_KEY", "")
+    KEY = os.environ.get("AGENTHUB_TEST_CHANNEL_KEY", "")
     if not KEY:
-        print("[FAIL] AGENTHUB_TEST_DEEPSEEK_KEY not set (env only — never on argv)")
+        print("[FAIL] AGENTHUB_TEST_CHANNEL_KEY not set (env only — never on argv)")
         return 1
 
     BASE = args.base_url.rstrip("/")
@@ -60,22 +58,27 @@ def main(argv: list[str] | None = None) -> int:
 
     listing = httpx.get(f"{BASE}/api/channel/?p=1&size=100", headers=hdr, timeout=15).json()
     items = ((listing.get("data") or {}).get("items")) or []
-    mine = [c for c in items if c.get("name") == "deepseek-real"]
+    mine = [c for c in items if c.get("name") == args.channel_name]
     for ch in mine:
-        if MODEL not in str(ch.get("models") or ""):
+        if (MODEL not in str(ch.get("models") or "")
+                or int(ch.get("type") or 0) != args.channel_type
+                or str(ch.get("base_url") or "") != args.upstream):
             httpx.delete(f"{BASE}/api/channel/{ch['id']}", headers=hdr, timeout=15)
-            print(f"[info] dropped stale channel id={ch['id']} models={ch.get('models')}")
+            print(f"[info] dropped stale channel id={ch['id']} type={ch.get('type')} "
+                  f"base={ch.get('base_url')} models={ch.get('models')}")
     if any(MODEL in str(c.get("models")) for c in mine):
-        record("channel-create", f"exists upstream={args.upstream} models=[{MODEL}]", True)
+        record("channel-create",
+               f"exists type={args.channel_type} upstream={args.upstream} models=[{MODEL}]", True)
     else:
         r = httpx.post(f"{BASE}/api/channel/", headers=hdr, json={
-            "channel": {"name": "deepseek-real", "type": 1, "key": KEY,
-                        "base_url": args.upstream, "models": MODEL,
-                        "group": "default"},
+            "channel": {"name": args.channel_name, "type": args.channel_type,
+                        "key": KEY, "base_url": args.upstream,
+                        "models": MODEL, "group": "default"},
             "mode": "single"})
         body = r.json()
         record("channel-create",
-               f"type=1 upstream={args.upstream} models=[{MODEL}] success={body.get('success')}",
+               f"type={args.channel_type} upstream={args.upstream} "
+               f"models=[{MODEL}] success={body.get('success')}",
                r.status_code == 200 and body.get("success"))
 
     conn = sqlite3.connect(args.sqlite_db)
@@ -109,32 +112,41 @@ def main(argv: list[str] | None = None) -> int:
     ok = r.status_code == 200
     detail = ""
     if ok:
-        content = r.json()["choices"][0]["message"]["content"]
-        usage = r.json().get("usage", {})
-        detail = (f"{(time.perf_counter() - t0) * 1000:.0f}ms "
-                  f"content={content[:40]!r} "
+        body = r.json()
+        msg = body["choices"][0]["message"]
+        content = str(msg.get("content") or "")
+        reasoning = str(msg.get("reasoning_content") or "")
+        usage = body.get("usage", {})
+        shown = content or (f"[reasoning-only] {reasoning[:80]}...")
+        detail = (f"{(time.perf_counter() - t0) * 1000:.0f}ms content={shown[:60]!r} "
                   f"usage={usage.get('prompt_tokens')}+{usage.get('completion_tokens')}")
+        ok = bool(content or reasoning)
     else:
         detail = f"status={r.status_code} {r.text[:220]}"
     record("chat-sync", detail, ok)
 
     # ── SSE streaming ────────────────────────────────────────────────────
-    ttft = None
-    chunks = 0
-    with httpx.stream("POST", f"{BASE}/v1/chat/completions", headers=ghdr, timeout=60,
-                      json={"model": MODEL, "stream": True,
-                            "messages": [{"role": "user", "content": "数到三，用中文"}]}) as resp:
-        status = resp.status_code
-        if status == 200:
-            start = time.perf_counter()
-            for line in resp.iter_lines():
-                if line.startswith("data:") and "[DONE]" not in line:
-                    chunks += 1
-                    if ttft is None:
-                        ttft = (time.perf_counter() - start) * 1000
-    record("chat-sse",
-           f"status={status} chunks={chunks} ttft={ttft:.0f}ms" if ttft is not None else f"status={status}",
-           status == 200 and chunks > 0 and ttft is not None)
+    if not args.no_stream:
+        ttft = None
+        chunks = 0
+        got_content = False
+        with httpx.stream("POST", f"{BASE}/v1/chat/completions", headers=ghdr, timeout=60,
+                          json={"model": MODEL, "stream": True,
+                                "messages": [{"role": "user", "content": "数到三，用中文"}]}) as resp:
+            status = resp.status_code
+            if status == 200:
+                start = time.perf_counter()
+                for line in resp.iter_lines():
+                    if line.startswith("data:") and "[DONE]" not in line:
+                        chunks += 1
+                        if ttft is None:
+                            ttft = (time.perf_counter() - start) * 1000
+                        if '"content"' in line and len(line) > 40:
+                            got_content = True
+        record("chat-sse",
+               (f"status={status} chunks={chunks} ttft={ttft:.0f}ms" if ttft is not None else f"status={status}")
+               + (" (content-bearing chunk seen)" if got_content else ""),
+               status == 200 and chunks > 0)
 
     # ── tool calls passthrough ───────────────────────────────────────────
     r = httpx.post(f"{BASE}/v1/chat/completions", headers=ghdr, timeout=60, json={
@@ -150,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         msg = r.json()["choices"][0]["message"]
         tcs = msg.get("tool_calls") or []
         detail = ("tool_calls=" + "; ".join(
-            f"{tc['function']['name']}({tc['function']['arguments'][:80]})" for tc in tcs)
+            f"{tc['function']['name']}({str(tc['function'].get('arguments'))[:80]})" for tc in tcs)
             if tcs else f"plain-text={str(msg.get('content'))[:60]!r}")
     else:
         detail = f"status={r.status_code} {r.text[:180]}"

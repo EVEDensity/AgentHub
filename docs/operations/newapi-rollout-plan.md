@@ -24,6 +24,17 @@ tool_calls 透传，以及应用侧 `NewAPIGatewayAdapter → 网关 → DeepSee
 （本机验证时临时调至 99）；③ DeepSeek v4 为推理型模型，reasoning 由自研
 适配器 `<think>` 剥离逻辑正常处理。剩余：通义/OpenAI 渠道待 key。
 
+**A1 进展（2026-08-27，智谱真实渠道）**：`glm-4-flash`（免费档最便宜）
+经网关全部通过——同步 4.0s（usage 13+5）、SSE TTFT=4ms、tool-calls 该
+免费模型不支持 function calling 而回退纯文本（链路 200 正常）；应用侧
+`NewAPIGatewayAdapter → 网关 → 智谱` 链路 2.8s 干净正文 + usage 18 tokens。
+探针已通用化：`deploy/newapi/channel_probe.py --channel-name <名>
+--channel-type <类型> --upstream <渠道基址> --model <模型>`（key 仅走
+AGENTHUB_TEST_CHANNEL_KEY）。踩坑：智谱 new-api 渠道 type=**16**
+（ChannelTypeZhipu），base_url 留空走内置端点；若用 OpenAI 兼容 type=1
+配 `/api/paas/v4` 会被网关追加 /v1 打成 404。A1 已覆盖 DeepSeek + 智谱
+两渠道；通义/OpenAI 待 key。
+
 ## 0. 当前基线（已完成，2026-08-26）
 
 - 开关式接入：`AGENTHUB_LLM_GATEWAY=newapi` + `NEWAPI_BASE_URL/API_KEY`；

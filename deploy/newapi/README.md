@@ -83,9 +83,13 @@ python deploy/newapi/verify_newapi.py \
   `system_memory_overloaded`。键为
   `performance_setting.monitor_memory_threshold`（管理台「运营设置」或
   PUT /api/option/ 可调）；低内存验证机可临时调高，生产建议保留 90 并接入 M3 告警。
-- **真实渠道探针**：`AGENTHUB_TEST_DEEPSEEK_KEY=<key>
-  python deploy/newapi/deepseek_channel_probe.py`（key 只经环境变量；
-  DeepSeek 官方模型名为 `deepseek-v4-flash` 等）。
+- **真实渠道探针**：通用版 `AGENTHUB_TEST_CHANNEL_KEY=<key>
+  python deploy/newapi/channel_probe.py --channel-name <名> --channel-type
+  <类型> --upstream <基址> --model <模型>`（key 只经环境变量）。已验证：
+  DeepSeek（type=1，`https://api.deepseek.com`，`deepseek-v4-flash`）、
+  智谱（**type=16**，base_url 留空走内置端点，`glm-4-flash` 免费）。
+  注意：type=1 渠道的 base_url 一律不带版本段（网关自动追加 `/v1`）；
+  智谱若用 type=1 + `/api/paas/v4` 会得到 404。
 
 ## 回滚
 
