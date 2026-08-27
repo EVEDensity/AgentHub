@@ -78,6 +78,15 @@ R4 门禁主线不受影响并行推进。日期为计划窗口锚定，非工�
 | MM-4 | 工具视觉回传：browser_screenshot 结果下一轮可作为视觉输入；不支持视觉模型的降级=结构化描述工具（子 LLM 模式） | 后端 | 10-06 | 10-17 | P2 | 截图→看图闭环 demo；降级路径测试 |
 | MM-5 | 护栏与门禁：图片类型白名单/尺寸卫生入 guardrails；多模态 e2e 探针固化为可选 CI 门禁；能力表"多模态"行链到实现与测试 | 安全+后端 | 10-13 | 10-24 | P1 | 探针门禁并入 docs-gates；能力表更新 |
 
+**工具层基础已提前落地（2026-08-27，超出原排期）**：
+[tools/multimodal/](../../app/services/tools/multimodal/__init__.py) 解耦包完成——
+content_parts 校验/计费常量、capability 视觉注册表、image_describe 工具
+（文本主模型 TODAY 可用的降级路径）、ModalityToolPlugin 插件基类；
+同时接通 `register_tools()` 半成品断点（plugin_tools.py 桥 → 全局
+registry），main.py 启动装配。影响：MM-3 的计费常量已存在；MM-4 的
+降级路径（image_describe）已可用，MM-4 剩余工作量减半；工具生态评估
+矩阵与成功标准 SC-1~SC-10 见 [multimodal.md](../architecture/components/multimodal.md) §6-§7。
+
 ## 收敛与冻结
 
 - G-1 渠道熔断决策表 + 回滚演练归档（09-01~09-05，P1）。

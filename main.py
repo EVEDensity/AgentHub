@@ -84,6 +84,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         _log.warning("startup: register_builtin_tools failed — tools will be unavailable", exc_info=True)
 
+    # Register modality (multimodal) tools via the plugin system
+    try:
+        from app.services.tools import register_modality_tools
+        plugin_count = register_modality_tools()
+        if plugin_count:
+            _log.info("startup: registered %d modality/plugin tools", plugin_count)
+    except Exception:
+        _log.warning("startup: register_modality_tools failed — multimodal tools unavailable", exc_info=True)
+
     # Initialize enhanced function-calling system
     try:
         from app.services.tools import initialize_tool_system
@@ -104,7 +113,9 @@ async def lifespan(app: FastAPI):
         _log.warning("startup: memory summary consumer unavailable", exc_info=True)
 
     try:
-        from app.services.distributed_cache_versions import distributed_cache_version_bus
+        from app.services.distributed_cache_versions import (
+            distributed_cache_version_bus,
+        )
         await distributed_cache_version_bus.start()
         app.state.distributed_cache_version_bus = distributed_cache_version_bus
     except Exception:

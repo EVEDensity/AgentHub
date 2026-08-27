@@ -31,6 +31,32 @@ def register_builtin_tools() -> int:
     return count
 
 
+def register_modality_tools() -> int:
+    """Register multimodal/modality tools via the plugin system.
+
+    Loads the builtin modality plugin (image_describe), then drains every
+    plugin's ``register_tools()`` results into the global registry — the
+    same path third-party plugins use. Returns total plugin-registered tools.
+    """
+    try:
+        from app.services.tools.multimodal import multimodality_plugin
+        from app.services.tools.plugin_manager import plugin_manager as pm
+
+        plugin_manager = pm
+        try:
+            plugin_manager.pm.register(multimodality_plugin, name="builtin.multimodality")
+        except ValueError:
+            logger.debug("register_modality_tools: modality plugin already registered")
+        except Exception:
+            logger.warning("register_modality_tools: failed to register plugin", exc_info=True)
+
+        from app.services.tools.plugin_tools import register_hook_tools
+        return register_hook_tools(plugin_manager)
+    except Exception:
+        logger.warning("register_modality_tools: modality layer unavailable", exc_info=True)
+        return 0
+
+
 # ── Enhanced system singletons (lazy-init via initialize_tool_system) ──
 
 _streaming_executor = None
@@ -40,7 +66,7 @@ _result_storage = None
 _progress_tracker = None
 
 
-async def initialize_tool_system() -> "StreamingToolExecutor":
+async def initialize_tool_system() -> StreamingToolExecutor:
     """Wire up all enhanced tool system components.
 
     Called once during FastAPI startup (lifespan).
@@ -54,12 +80,12 @@ async def initialize_tool_system() -> "StreamingToolExecutor":
     global _streaming_executor, _permission_manager, _hook_manager
     global _result_storage, _progress_tracker
 
-    from app.services.tool_registry import tool_registry
     from app.services.tool_executor import tool_executor
-    from app.services.tools.permission import PermissionManager
+    from app.services.tool_registry import tool_registry
     from app.services.tools.hooks import hook_manager as _hm
-    from app.services.tools.result_storage import ResultStorage
+    from app.services.tools.permission import PermissionManager
     from app.services.tools.progress import progress_tracker as _pt
+    from app.services.tools.result_storage import ResultStorage
     from app.services.tools.streaming_executor import StreamingToolExecutor
 
     # ── 1. Permission manager ──────────────────────────────────────────
@@ -108,11 +134,13 @@ async def initialize_tool_system() -> "StreamingToolExecutor":
     return _streaming_executor
 
 
-def get_streaming_executor() -> "StreamingToolExecutor | None":
+def get_streaming_executor() -> StreamingToolExecutor | None:
     """Return the module-level streaming executor (may be None if not initialized)."""
     return _streaming_executor
 
 
 # ── Re-exports for convenience ─────────────────────────────────────────
 
-from app.services.tools.streaming_executor import StreamingToolExecutor  # noqa: E402, F811
+from app.services.tools.streaming_executor import (
+    StreamingToolExecutor,
+)

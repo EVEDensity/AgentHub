@@ -61,7 +61,74 @@ M5 门禁护栏   guardrails 图片卫生（类型/尺寸上限）+ 视觉 e2e �
 - 图片 base64 进入 prompt 前过 guardrails 既有 PII/注入扫描的扩展（图片场景主要防提示注入图片—— Illusionist attack）：首版仅做类型白名单（png/jpg/webp/gif）+ 尺寸上限 + 可选 OCR 抽帧文本再扫描；
 - 图片不写入任何日志/审计明文，审计事件仅记 hash 与尺寸。
 
-## 6. 参考
+## 6. 工具生态评估与解耦实现（2026-08-27）
+
+### 6.1 现有工具支持矩阵（27 个内置工具逐项核实）
+
+| 能力 | 工具 | 结论 |
+|---|---|---|
+| 图像输出 | browser_screenshot | **唯一**能产出图像（screenshot_base64），但结果被 ResultStorage 10k 字符预算截断、按纯文本注入，无视觉消费者 |
+| 图像输入 | （无） | 全部 27 个工具入参 schema 不接受 image_url/base64；file_read 遇二进制显式报错；web_search 仅 title/url/snippet 三字段；memory 只收 markdown |
+| 半成品机制 | pluggy `register_tools()` | hookspec 已声明但**生产代码从未消费**——插件动态注册工具是断头路（本次已接通，见下） |
+| 双轨并行 | MCP 工具 | 经 StatelessMCPToolAdapter 包装进 Harness FunctionTool，不进 ToolRegistry |
+
+### 6.2 解耦架构：`app/services/tools/multimodal/`（已落地）
+
+```
+multimodal/
+├── content_parts.py   内容分片模型：text_part/image_url_part 构造器、
+│                      MIME 白名单（png/jpeg/webp/gif）、8MB URI 上限、
+│                      单轮 ≤4 张 ≤6MB assert、固定 token 计费常量
+├── capability.py      视觉能力注册表：默认 pattern 规则 + in-code 注册 +
+│                      AGENTHUB_VISION_MODELS env 覆盖；fail-closed
+│                      （未知模型一律视为纯文本，报错含降级指引）
+├── tools.py           具体工具 handler：image_describe（视觉子模型出
+│                      结构化文字描述——文本主模型 TODAY 可用的降级路径）
+└── plugin.py          ModalityToolPlugin 插件基类 + 内置 MultimodalityPlugin
+```
+
+配套通用件：
+* [plugin_tools.py](../../../app/services/tools/plugin_tools.py) —— **接通 register_tools() 断点**的桥：任何插件（内置/entry-point/PLUGINS_PATH）声明的工具字典 → ToolDefinition → tool_registry；handler 支持可调用与点分导入路径双形态。
+* [tools/__init__.py](../../../app/services/tools/__init__.py) `register_modality_tools()` + main.py 启动调用。
+
+解耦保证：
+1. **增删不影响核心**——删除 multimodal 包仅损失模态工具，definitions/adapter/registry 零改动；
+2. **新模态即插即用**——音频/视频插件只需继承 `ModalityToolPlugin` 并覆写 `tool_definitions()`；
+3. **能力注册开放**——第三方经 `register_vision_model` 或 env 声明自家视觉模型；
+4. **测试**：tests/services/test_multimodal_tools.py 覆盖内容校验、能力注册表、桥接端到端（插件→registry）、handler 成功与错误路径，11 用例全绿。
+
+### 6.3 GitHub 趋势项目调研结论
+
+| 项目 | 与本方案的关系 |
+|---|---|
+| LangChain/LangGraph 标准内容块（116k★） | 多模态协议事实标准，本项目 wire format 直接对齐其 content blocks |
+| OpenAI Agents SDK（26k★） | guardrails/tracing 作为一等公民的设计验证了 MM-5 把图片卫生放护栏层的做法 |
+| AutoGen / CrewAI / Smolagents | 无统一多模态工具层——各自在 message 层处理；本项目的"模态工具独立成包"是差异化超集 |
+| Deep Agents（LangChain 官方） | 大媒体"存后端传引用 + 摘要丢图"语义为本 M3/M2 决策背书 |
+| langchain-go Vision RFC #11 | `content: str \| list` 双轨向后兼容的模式来源 |
+| HuggingFace transformers/TIMM 生态 | 本地视觉模型适配路线备选（vLLM/Ollama 已覆盖主流 VL 开源模型，暂不需要直连） |
+
+## 7. 成功标准与验收度量
+
+### 功能正确性
+- SC-1 图片可达性：用户上传 → 前端不发 base64 进正文 → image part 抵达模型请求体（e2e 探针绿）。
+- SC-2 文本模型零回归：携图发给纯文本模型返回带降级指引的显式错误（不是 500）；全量既有套件通过。
+- SC-3 结构化描述质量：image_describe 在标注集（≥20 张：截图/照片/表格图/图表）上描述命中关键对象 ≥85%。
+- SC-4 截图闭环：browser_screenshot → image_describe（或直接回传）→ 模型答对页面要素 ≥80% 样本。
+
+### 性能与预算
+- SC-5 预算可信度：usage.prompt_tokens 实测 vs 本地图像计费常数偏差记录；单轮超限拒绝率 100%。
+- SC-6 时延：image_describe p95 <8s（网关+视觉模型链路）；多图单轮首字节 <3s。
+
+### 安全与治理
+- SC-7 卫生拦截率：非法 MIME/超大文件 100% 在 content_parts 层拒绝并留审计 hash（不含明文）。
+- SC-8 门禁在 CI：多模态 e2e 探针（mock 上游离线版 + 可选真实渠道）作为可选 gate；文档能力行链接实现与测试。
+
+### 生态健康
+- SC-9 解耦验证：删除 multimodal 包后核心启动与全套件仍绿（负向测试纳入 R4-4 质量门禁设计）。
+- SC-10 第三方接入工时：新模态插件从空文件到注册进 registry ≤50 行代码（以 audio 为样本复评一次）。
+
+## 8. 参考
 
 - LangChain 标准内容块与多模态消息（docs.langchain.com）
 - Deep Agents 多模态指南（媒体存后端传引用；压缩丢图语义）
