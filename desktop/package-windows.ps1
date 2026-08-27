@@ -46,7 +46,13 @@ if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
 }
 if ($LocalServices) {
     if (-not (Test-Path -LiteralPath $localServicesBuildScript -PathType Leaf)) { throw "Local service build script was not found." }
-    & $localServicesBuildScript
+    $stagedMissionControl = Join-Path $desktopDirectory "src-tauri\local-services\agenthub-mission-control.exe"
+    if (Test-Path -LiteralPath $stagedMissionControl -PathType Leaf) {
+        Write-Output "Reusing the staged Mission Control binary; skipping the PyInstaller freeze."
+        & $localServicesBuildScript -MissionControlBinary $stagedMissionControl
+    } else {
+        & $localServicesBuildScript
+    }
     if ($LASTEXITCODE -ne 0) { throw "Local service staging failed." }
 }
 
@@ -172,6 +178,14 @@ if ($Portable) {
         Copy-Item -LiteralPath $application -Destination (Join-Path $portableStage 'agenthub-desktop.exe') -Force
         Copy-Item -LiteralPath $packagedSidecar -Destination (Join-Path $portableStage 'agenthub-runtime.exe') -Force
         if ($LocalServices) { Copy-Item -LiteralPath $releaseServices -Destination (Join-Path $portableStage 'local-services') -Recurse -Force }
+        # Delivery plan item 5: AgentHub.exe is the only user action in the
+        # portable package; bundled service binaries are not user commands.
+        Set-Content -LiteralPath (Join-Path $portableStage 'START-HERE.txt') -Encoding utf8 -Value @(
+            'AgentHub portable package.',
+            'Run agenthub-desktop.exe - it is the only entry point and starts all local services itself.',
+            'Do not run node.exe, server.js, or any binary under local-services directly.',
+            'Local data lives under %LOCALAPPDATA%\AgentHub.'
+        )
         $portableFiles = @(Get-ChildItem -LiteralPath $portableStage -Force)
         if ($portableFiles.Count -eq 0) { throw "Portable staging directory is empty: $portableStage" }
         Compress-Archive -LiteralPath $portableFiles.FullName -DestinationPath $portableArchive -Force

@@ -229,6 +229,20 @@ async function clearStoredSecret(kind, button) {
   } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '凭据清除失败'; button.disabled = false; }
 }
 async function loadMonitor() {
+  const stackEl = document.querySelector('#monitor-stack');
+  const stackState = document.querySelector('#monitor-stack-state');
+  try {
+    const stack = await nativeInvoke('stack_info');
+    if (stack) {
+      if (stackEl) stackEl.textContent = `v${stack.version}${stack.commit ? ` · ${stack.commit}` : ''} · 打包于 ${new Date(stack.generatedAt).toLocaleString()}`;
+      if (stackState) stackState.textContent = '已加载';
+    } else {
+      if (stackEl) stackEl.textContent = '未找到 stack-manifest（旧包或开发目录运行）。';
+      if (stackState) stackState.textContent = '无清单';
+    }
+  } catch {
+    if (stackEl) stackEl.textContent = '桌面命令不可用，需在 AgentHub 桌面应用中打开。';
+  }
   const servicesEl = document.querySelector('#monitor-services');
   const runtimeEl = document.querySelector('#monitor-runtime');
   const runtimeState = document.querySelector('#monitor-runtime-state');

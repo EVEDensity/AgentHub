@@ -20,9 +20,24 @@ pub enum ServiceStatus { Missing, Stopped, Starting, Ready, Failed }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSnapshot { pub name: String, pub status: ServiceStatus, pub process_id: Option<u32>, pub detail: String }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackManifest { pub schema_version: u32, pub version: String, pub commit: String, pub generated_at: String }
+
+fn read_stack_manifest(path: &PathBuf) -> Option<StackManifest> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    Some(StackManifest {
+        schema_version: value.get("schemaVersion")?.as_u64()? as u32,
+        version: value.get("version")?.as_str()?.to_owned(),
+        commit: value.get("commit")?.as_str().unwrap_or_default().to_owned(),
+        generated_at: value.get("generatedAt")?.as_str()?.to_owned(),
+    })
+}
 struct ServiceProcess { spec: ServiceSpec, child: Option<Child>, status: ServiceStatus, detail: String, restart_count: u8 }
 
-pub struct ServiceSupervisor { processes: Mutex<HashMap<String, ServiceProcess>>, ports: Option<PortLease> }
+pub struct ServiceSupervisor { processes: Mutex<HashMap<String, ServiceProcess>>, ports: Option<PortLease>, stack: Option<StackManifest> }
 struct PortLease { base: u16, files: Vec<PathBuf> }
 impl Drop for PortLease { fn drop(&mut self) { for path in &self.files { let _ = std::fs::remove_file(path); } } }
 
@@ -50,8 +65,11 @@ impl ServiceSupervisor {
             let detail = if base == 0 { "no free AgentHub port group in 28000-28999" } else { "service resource is not bundled" };
             processes.insert(name.to_owned(), ServiceProcess { spec: ServiceSpec { name, executable, args, environment, health_endpoint: endpoint }, child: None, status: if base == 0 { ServiceStatus::Failed } else { ServiceStatus::Missing }, detail: detail.into(), restart_count: 0 });
         }
-        Self { processes: Mutex::new(processes), ports }
+        let stack = read_stack_manifest(&service_dir.join("stack-manifest.json"));
+        Self { processes: Mutex::new(processes), ports, stack }
     }
+
+    pub fn stack_manifest(&self) -> Option<&StackManifest> { self.stack.as_ref() }
 
     pub fn mission_control_endpoint(&self) -> Option<String> { self.ports.as_ref().map(|lease| format!("http://127.0.0.1:{}", lease.base)) }
     pub fn frontend_endpoint(&self) -> Option<String> { self.ports.as_ref().map(|lease| format!("http://127.0.0.1:{}/admin", lease.base + 4)) }
@@ -94,4 +112,4 @@ fn probe(endpoint: &Url) -> bool { let Some(port) = endpoint.port_or_known_defau
 impl Drop for ServiceSupervisor { fn drop(&mut self) { self.stop_all(); } }
 
 #[cfg(test)]
-mod tests { use super::*; #[test] fn missing_bundled_services_fail_closed() { let supervisor = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services")); let snapshots = supervisor.start_all(); assert!(snapshots.iter().all(|item| matches!(item.status, ServiceStatus::Missing | ServiceStatus::Failed))); } #[test] fn separate_supervisors_get_separate_port_groups() { let first = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-a")); let second = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-b")); assert_ne!(first.mission_control_endpoint(), second.mission_control_endpoint()); } }
+mod tests { use super::*; #[test] fn missing_bundled_services_fail_closed() { let supervisor = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services")); let snapshots = supervisor.start_all(); assert!(snapshots.iter().all(|item| matches!(item.status, ServiceStatus::Missing | ServiceStatus::Failed))); } #[test] fn stack_manifest_is_absent_without_bundle() { let supervisor = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-manifest")); assert!(supervisor.stack_manifest().is_none()); } #[test] fn stack_manifest_is_parsed_when_present() { let root = std::env::temp_dir().join("agenthub-stack-manifest-test"); let service_dir = root.join("local-services"); std::fs::create_dir_all(&service_dir).expect("create service dir"); std::fs::write(service_dir.join("stack-manifest.json"), r#"{"schemaVersion":1,"version":"0.1.0","commit":"fd89ab8","generatedAt":"2026-08-27T12:00:00Z"}"#).expect("write manifest"); let supervisor = ServiceSupervisor::from_resource_dir(root.clone()); let manifest = supervisor.stack_manifest().expect("manifest present"); assert_eq!(manifest.version, "0.1.0"); assert_eq!(manifest.commit, "fd89ab8"); assert_eq!(manifest.schema_version, 1); std::fs::remove_dir_all(root).ok(); } #[test] fn separate_supervisors_get_separate_port_groups() { let first = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-a")); let second = ServiceSupervisor::from_resource_dir(std::env::temp_dir().join("missing-agenthub-services-b")); assert_ne!(first.mission_control_endpoint(), second.mission_control_endpoint()); } }

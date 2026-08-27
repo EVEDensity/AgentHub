@@ -23,7 +23,12 @@ if ([string]::IsNullOrWhiteSpace($MissionControlBinary) -or -not (Test-Path -Lit
     $MissionControlBinary = Join-Path $OutputDirectory 'agenthub-mission-control.exe'
 }
 
-Copy-Item -LiteralPath $MissionControlBinary -Destination (Join-Path $OutputDirectory 'agenthub-mission-control.exe') -Force
+$missionControlTarget = Join-Path $OutputDirectory 'agenthub-mission-control.exe'
+$missionControlSource = (Resolve-Path -LiteralPath $MissionControlBinary -ErrorAction SilentlyContinue).Path
+$missionControlDest = (Resolve-Path -LiteralPath $missionControlTarget -ErrorAction SilentlyContinue).Path
+if ($missionControlSource -ne $missionControlDest) {
+    Copy-Item -LiteralPath $MissionControlBinary -Destination $missionControlTarget -Force
+}
 $frontendRoot = Join-Path $root 'frontend'
 Push-Location $frontendRoot
 try {
@@ -70,5 +75,20 @@ try {
     go build -trimpath -ldflags '-s -w' -o (Join-Path $OutputDirectory 'agenthub-mcp-gateway.exe') ./mcp-gateway/cmd/mcp-gateway
     if ($LASTEXITCODE -ne 0) { throw 'MCP Gateway build failed.' }
 } finally { Pop-Location }
+
+# Versioned stack manifest: identifies which local service stack a bundle
+# carries so the desktop shell (and a user support session) can report the
+# exact stack version after an upgrade or rollback. Contains no secrets.
+$stackVersion = (Get-Content -LiteralPath (Join-Path $root 'desktop\src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json).version
+$stackCommit = ''
+try { $stackCommit = (git -C $root rev-parse --short HEAD).Trim() } catch { }
+[ordered]@{
+    schemaVersion = 1
+    version       = $stackVersion
+    commit        = $stackCommit
+    generatedAt   = (Get-Date).ToUniversalTime().ToString('o')
+    services      = @('agenthub-mission-control.exe', 'agenthub-gateway.exe', 'agenthub-mcp-gateway.exe', 'frontend/server.js')
+} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $OutputDirectory 'stack-manifest.json') -Encoding utf8
+Write-Output "Stack manifest written (version $stackVersion, commit $stackCommit)."
 
 Write-Output "Local service binaries staged in $((Resolve-Path $OutputDirectory).Path)"

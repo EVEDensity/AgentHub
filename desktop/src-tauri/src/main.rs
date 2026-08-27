@@ -142,6 +142,11 @@ fn probe_mcp(
 }
 
 #[tauri::command]
+fn stack_info(supervisor: State<'_, ServiceSupervisor>) -> Option<services::StackManifest> {
+    supervisor.stack_manifest().cloned()
+}
+
+#[tauri::command]
 fn open_control_plane(configuration: State<'_, ConfigurationStore>, supervisor: State<'_, ServiceSupervisor>) -> Result<(), String> {
     let configured = configuration
         .mission_control_endpoint()
@@ -191,6 +196,7 @@ fn main() {
             clear_configuration_secret,
             probe_control_plane,
             probe_mcp,
+            stack_info,
             local_service_endpoint,
             frontend_endpoint,
             open_control_plane

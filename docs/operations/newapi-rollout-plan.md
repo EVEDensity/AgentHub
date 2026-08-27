@@ -176,6 +176,19 @@ smoke PASS（MSI/NSIS/exe 产物更新）。
 exe 已在位故不阻塞，但重建 mission-control 时需先
 `pip install pyinstaller`。多实例并发下捆绑前端仍指向首个实例端口组。
 
+### 0.1d R5-1 剩余切片：栈版本清单 + 便携包入口文案（2026-08-27 深夜，第四轮）
+
+| # | 交付 | 契约/证据 |
+|---|---|---|
+| R5-1#4(部分) | 栈版本清单 | `local-services/build-windows.ps1` staging 尾部写 `stack-manifest.json`（schemaVersion/version/commit/generatedAt/服务清单，无 secret）；`ServiceSupervisor` 读取并经新命令 `stack_info` 暴露；监视器顶部卡显示「服务栈版本」。cargo 2 新例（缺清单=None；有清单=解析字段）。实测 staged/release/便携 zip 三处 manifest 一致（v0.1.0 · cfd3b16）。诚实边界：是「版本诊断」而非目录级版本切换——升级/回滚由 updater/installer 整包替换资源树，README 已注明 |
+| R5-1#5(部分) | 便携包单一入口 | `package-windows.ps1 -Portable` stage 时写 `START-HERE.txt`（唯一入口 agenthub-desktop.exe；禁止直跑 node/server.js/local-services 二进制；数据目录 %LOCALAPPDATA%\AgentHub）。实测 zip 含 START-HERE.txt。MSI/NSIS 内文案由 WiX/NSIS 配置管理，仍开放 |
+| 打包链修复 | 复用 staged exe | `-LocalServices` 现复用已 stage 的 mission-control.exe（跳过 PyInstaller freeze，CI 无 staged exe 时仍走 freeze）；修 build-windows.ps1 自我拷贝与 $root 相对路径两处脚本 bug |
+
+**验证**：cargo 33 passed（含 manifest 2 例）；重打包 `-LocalServices -Portable`
+全链路 PASS（sidecar→preflight→build→artifact smoke→runtime smoke→zip），
+产物含 stack-manifest + START-HERE。`missing_bundled_services_fail_closed`
+在本机沙箱仍受 ports 锁目录限制（CI 不受影响）。
+
 ## 0.2 R5 前置三项预核对（2026-08-27 实测，供 G-2 引用）
 
 | 项 | 结论 | 证据 |
