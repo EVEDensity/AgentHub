@@ -147,6 +147,16 @@ fn stack_info(supervisor: State<'_, ServiceSupervisor>) -> services::StackInfo {
 }
 
 #[tauri::command]
+fn pin_stack(supervisor: State<'_, ServiceSupervisor>, version: String, commit: String) -> Result<String, String> {
+    supervisor.pin_stack(&version, &commit)
+}
+
+#[tauri::command]
+fn clear_stack_pin(supervisor: State<'_, ServiceSupervisor>) -> Result<String, String> {
+    supervisor.clear_stack_pin()
+}
+
+#[tauri::command]
 fn open_control_plane(configuration: State<'_, ConfigurationStore>, supervisor: State<'_, ServiceSupervisor>) -> Result<(), String> {
     let configured = configuration
         .mission_control_endpoint()
@@ -197,6 +207,8 @@ fn main() {
             probe_control_plane,
             probe_mcp,
             stack_info,
+            pin_stack,
+            clear_stack_pin,
             local_service_endpoint,
             frontend_endpoint,
             open_control_plane

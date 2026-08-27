@@ -203,6 +203,21 @@ exe 已在位故不阻塞，但重建 mission-control 时需先
 **R5-1 Delivery Plan 状态**：1-5 全部 implemented（#4/#5 见上，手动钉版与
 NSIS 定制文案为后续增强）；6（物理干净机记录）待实机执行，CI runner 已覆盖。
 
+### 0.1f B 清单清空：端到端实测抓出并修复 sqlite 存量 bug（2026-08-27 深夜，第六轮）
+
+| # | 交付 | 证据 |
+|---|---|---|
+| B1 | **本地起栈端到端实测** | ① 实测抓出**存量 P0 级 bug**：`aexecute_insert` 在 sqlite 后端 `row[0]` KeyError——桌面模式（sqlite）下所有 INSERT…RETURNING 必 500，即桌面「保存模型配置」此前**完全不可用**。修复 `_first_column` 双后端兼容（asyncpg Record 位移 / sqlite dict 取首值），3 单测回归。② 修复后实测闭环：`POST /api/admin/models` 不带 key → `{"status":"success","id":7}`，sqlite 落库 `api_key len=52 + hash` —— **P1-a 桌面 Key 桥接端到端实证** ✓。③ gateway 本地模式 `/healthz` 200、`/platform/templates` 200（无 Postgres 走 fallback 空列表，诚实降级）、`/api/admin/tools` 200 返回 26 内置工具且字段与前端 ToolMarketplace 契约匹配 ✓ |
+| B2 | Mission 事件时间线 | pollMission 接 `GET /{id}/events?afterSequence`（增量、断连容错），结果面板显示最近 12 条（#sequence + event_type + 时间），后端零改动 |
+| B3 | 默认凭据治理 | 账户面板：登录探测 admin123（401=已改/200=⚠ 仍用默认密码/其他=服务未运行）；修改密码表单接既有 `POST /api/user/change-password`（零后端改动）。实测：改密 success + 新密码重登录成功 |
+| B4 | 手动钉住旧版本栈 | native `pin_stack(version,commit)`/`clear_stack_pin`（校验栈已缓存 → 写 `<data>/stacks/.pinned`，重启生效）；exe 解析优先级 pinned → bundled → persisted fallback；监视器新增栈选择 + 钉住/取消按钮；`StackInfo` 增 `pinned`。cargo 新例：钉住后 source=pinned、effective=0.2.0、clear 可逆 |
+| B5 | 多实例端口告警 | refresh 检测绑定端口 ≠28000 时在状态行显式警告「捆绑管理后台内置地址仍指向 28000」——把静默失效转为诚实提示（架构级修复仍开放） |
+| B6 | 通义/OpenAI 补跑 | **不可执行**（等 key）；复用 channel_probe 一条命令，维持不占排期 |
+
+**验证**：cargo **35 passed** 0 failed；pytest **401 passed** + 181 subtests 零
+回归（含 first_column 3 例 + key fallback 4 例）；`-NoInstaller` 重打包
+artifact/runtime smoke PASS。
+
 ## 0.2 R5 前置三项预核对（2026-08-27 实测，供 G-2 引用）
 
 | 项 | 结论 | 证据 |

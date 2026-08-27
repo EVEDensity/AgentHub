@@ -150,6 +150,20 @@ async def aexecute(sql: str, *args: Any) -> None:
         await conn.execute(sql, *args)
 
 
+def _first_column(row: Any) -> str:
+    """Return the row's first column as a string.
+
+    asyncpg ``Record`` supports positional access (``row[0]``); the sqlite
+    wrapper returns plain dicts (``dict(sqlite3.Row)``), so take the first
+    value instead of indexing.
+    """
+    if not row:
+        return ""
+    if isinstance(row, dict):
+        return str(next(iter(row.values())))
+    return str(row[0])
+
+
 async def aexecute_insert(sql: str, *args: Any) -> str:
     """Execute an INSERT and return the new row's id as a string.
 
@@ -158,7 +172,7 @@ async def aexecute_insert(sql: str, *args: Any) -> str:
     pool = await aget_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(sql, *args)
-        return str(row[0]) if row else ""
+        return _first_column(row)
 
 
 async def aexecute_many(sql: str, args_list: list[tuple[Any, ...]]) -> None:

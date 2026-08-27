@@ -58,6 +58,10 @@ async function refresh() {
     const mcp = services.find((service) => service.name === 'mcp-gateway');
     elements.mcpEndpointLabel.textContent = mcp?.detail || '本地服务状态读取中';
     let statusMessage = controlPlane?.detail || '本地服务状态已更新';
+    const boundPort = Number(new URL(localMissionControl.endpoint, 'http://127.0.0.1').port);
+    if (boundPort && boundPort !== 28000) {
+      statusMessage += `；⚠ 当前实例绑定端口 ${boundPort}（非首选 28000）。捆绑管理后台的内置地址仍指向 28000，多实例并发时请在首个实例中使用管理后台。`;
+    }
     if (configStatus && configStatus.readyForRuntime === false) {
       const gaps = [
         !configStatus.artifactDirectoryConfigured && 'Artifact 目录未配置',
@@ -95,6 +99,7 @@ function selectSettingsSection(section) {
   elements.settingsTitle.textContent = active?.textContent?.trim() || '设置';
   if (section === 'configuration') openAdminFrame();
   if (section === 'monitoring') loadMonitor();
+  if (section === 'account') loadAccount();
 }
 
 function renderMcpProbe(probe) {
@@ -161,11 +166,24 @@ function renderTaskResult(mission, details = {}) {
 }
 
 async function pollMission(missionId) {
+  let afterSequence = 0;
+  const eventBuffer = [];
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const mission = (await localApi(`/api/v1/missions/${encodeURIComponent(missionId)}`)).mission || await localApi(`/api/v1/missions/${encodeURIComponent(missionId)}`);
-    const [workUnits, artifacts, evidence] = await Promise.all([
+    const [workUnits, artifacts, evidence, events] = await Promise.all([
       localApi(`/api/v1/missions/${missionId}/work-units`), localApi(`/api/v1/missions/${missionId}/artifacts`), localApi(`/api/v1/missions/${missionId}/evidence`),
+      localApi(`/api/v1/missions/${missionId}/events?afterSequence=${afterSequence}&limit=100`).catch(() => ({ events: [] })),
     ]);
+    const newEvents = events.events || [];
+    if (newEvents.length) {
+      afterSequence = newEvents[newEvents.length - 1].sequence ?? afterSequence;
+      eventBuffer.push(...newEvents);
+      const container = document.querySelector('#result-events');
+      if (container) container.replaceChildren(...eventBuffer.slice(-12).reverse().map((e) => {
+        const row = document.createElement('div'); row.className = 'result-item';
+        row.innerHTML = `<strong>#${e.sequence ?? '?'} ${e.event_type || e.eventType || '事件'}</strong><span>${(e.occurred_at || e.occurredAt || '').toString().replace('T', ' ').slice(0, 19)}</span>`; return row;
+      }));
+    }
     renderTaskResult(mission, { workUnits: workUnits.workUnits, artifacts: artifacts.artifacts, evidence: evidence.evidence });
     if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(mission.status)) { elements.cancelMission.hidden = true; activeMissionId = null; return; }
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -228,23 +246,69 @@ async function clearStoredSecret(kind, button) {
     elements.feedback.textContent = '凭据已清除';
   } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '凭据清除失败'; button.disabled = false; }
 }
+async function loadAccount() {
+  const stateEl = document.querySelector('#account-credential-state');
+  try {
+    const probe = await fetch(`${localMissionControl.endpoint}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'admin', password: 'admin123' }) });
+    if (probe.status === 401 || probe.status === 403) {
+      if (stateEl) stateEl.textContent = '✓ 默认密码已修改';
+    } else if (probe.ok) {
+      if (stateEl) stateEl.textContent = '⚠ 仍在使用默认密码 admin123，请在下方修改';
+    } else {
+      if (stateEl) stateEl.textContent = '本地服务未运行，无法检查凭据状态。';
+    }
+  } catch {
+    if (stateEl) stateEl.textContent = '本地服务未运行，无法检查凭据状态。';
+  }
+}
+
+async function changePassword(event) {
+  event.preventDefault();
+  const current = document.querySelector('#account-current-password').value;
+  const next = document.querySelector('#account-new-password').value;
+  const confirm = document.querySelector('#account-confirm-password').value;
+  if (next !== confirm) { elements.adminFeedback.textContent = '两次输入的新密码不一致'; return; }
+  try {
+    await localApi('/api/user/change-password', { method: 'POST', body: JSON.stringify({ current_password: current, new_password: next }) });
+    elements.adminFeedback.textContent = '密码已修改';
+    document.querySelector('#password-form').reset();
+    await loadAccount();
+  } catch (error) {
+    elements.adminFeedback.textContent = error instanceof Error ? error.message : '密码修改失败';
+  }
+}
+
 async function loadMonitor() {
   const stackEl = document.querySelector('#monitor-stack');
   const stackState = document.querySelector('#monitor-stack-state');
+  const pinSelect = document.querySelector('#stack-pin-select');
   try {
     const stack = await nativeInvoke('stack_info');
     if (stack && stack.manifest) {
       const m = stack.manifest;
-      const sourceLabel = stack.source === 'bundled' ? '捆绑栈' : stack.source === 'persisted' ? '历史栈回退' : '';
+      const sourceLabel = stack.source === 'bundled' ? '捆绑栈' : stack.source === 'persisted' ? '历史栈回退' : stack.source === 'pinned' ? `已钉住 ${stack.pinned || ''}` : '';
       let text = `v${m.version}${m.commit ? ` · ${m.commit}` : ''} · ${sourceLabel} · 打包于 ${new Date(m.generatedAt).toLocaleString()}`;
       if (Array.isArray(stack.persisted) && stack.persisted.length > 0) {
         text += `；本机已存栈：${stack.persisted.map((p) => `v${p.version}${p.commit ? `@${p.commit.slice(0, 7)}` : ''}`).join('、')}`;
       }
       if (stackEl) stackEl.textContent = text;
-      if (stackState) stackState.textContent = stack.source === 'persisted' ? '回退' : '已加载';
+      if (stackState) stackState.textContent = stack.source === 'persisted' ? '回退' : stack.source === 'pinned' ? '钉住' : '已加载';
+      if (pinSelect) {
+        pinSelect.replaceChildren(...(stack.persisted || []).map((p) => {
+          const option = document.createElement('option');
+          option.value = `${p.version}|${p.commit || ''}`;
+          option.textContent = `v${p.version}${p.commit ? ` @${p.commit.slice(0, 7)}` : ''}（${new Date(p.generatedAt).toLocaleDateString()}）`;
+          return option;
+        }));
+        if (stack.pinned) {
+          const current = [...pinSelect.options].find((o) => stack.pinned.startsWith(o.value.replace('|', '-')));
+          if (current) pinSelect.value = current.value;
+        }
+      }
     } else {
       if (stackEl) stackEl.textContent = '未找到 stack-manifest（旧包或开发目录运行）。';
       if (stackState) stackState.textContent = '无清单';
+      if (pinSelect) pinSelect.replaceChildren();
     }
   } catch {
     if (stackEl) stackEl.textContent = '桌面命令不可用，需在 AgentHub 桌面应用中打开。';
@@ -302,6 +366,18 @@ elements.navHome.addEventListener('click', () => switchView('home')); elements.a
 for (const tab of elements.adminTabs) tab.addEventListener('click', () => { for (const item of elements.adminTabs) item.classList.toggle('active', item === tab); for (const section of document.querySelectorAll('.admin-section')) section.hidden = section.id !== `admin-${tab.dataset.adminTab}`; });
 document.querySelector('#open-mcp-settings').addEventListener('click', openConfiguration);
 for (const button of document.querySelectorAll('[data-clear-secret]')) button.addEventListener('click', () => clearStoredSecret(button.dataset.clearSecret, button));
+document.querySelector('#password-form').addEventListener('submit', changePassword);
+document.querySelector('#stack-pin-apply').addEventListener('click', () => {
+  const select = document.querySelector('#stack-pin-select');
+  if (!select || !select.value) { elements.feedback.textContent = '本机暂无可钉住的历史栈'; return; }
+  const [version, commit] = select.value.split('|');
+  nativeInvoke('pin_stack', { version, commit }).then((message) => { elements.feedback.textContent = message; loadMonitor(); })
+    .catch((error) => { elements.feedback.textContent = error instanceof Error ? error.message : '钉住失败'; });
+});
+document.querySelector('#stack-pin-clear').addEventListener('click', () => {
+  nativeInvoke('clear_stack_pin').then((message) => { elements.feedback.textContent = message; loadMonitor(); })
+    .catch((error) => { elements.feedback.textContent = error instanceof Error ? error.message : '取消钉住失败'; });
+});
 for (const button of [elements.openConsole, elements.openConsoleNav, elements.openConsoleCard]) button.addEventListener('click', openConsole);
 for (const card of document.querySelectorAll('[data-prompt]')) card.addEventListener('click', () => { elements.taskInput.value = card.dataset.prompt; elements.taskInput.focus(); });
 elements.settings.addEventListener('click', () => switchView('settings')); elements.settingsBack.addEventListener('click', () => switchView('home')); for (const item of elements.settingsItems) item.addEventListener('click', () => selectSettingsSection(item.dataset.settingsSection)); elements.closeConfiguration.addEventListener('click', closeConfiguration); elements.cancelConfiguration.addEventListener('click', closeConfiguration); elements.form.addEventListener('submit', saveConfiguration);
