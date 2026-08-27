@@ -17,10 +17,17 @@ workflows remain owned by Mission Control. The current release packages the
 desktop shell and Runtime sidecar; it does not package the server deployment.
 
 The desktop experience is one `AgentHub.exe`: it owns the lifecycle of bundled
-Mission Control, Gateway, MCP Gateway, Runtime, and the standalone Next.js
-admin frontend. It creates local data directories, starts health-checked
-services, and opens `/admin` without requiring Node, Go, Rust, Python, or
-Docker. Docker Compose remains the server/private-deployment path.
+Mission Control, Gateway, MCP Gateway, and the standalone Next.js admin
+frontend, plus the Runtime sidecar. It creates local data directories, starts
+health-checked services, and opens the admin UI without requiring Node, Go,
+Rust, Python, or Docker. Docker Compose remains the server/private-deployment
+path. The bundled admin frontend bakes the local stack endpoints
+(`127.0.0.1:28000` control plane, `:28001` gateway) into its Next.js rewrites
+at `local-services/build-windows.ps1` build time; standalone Next.js bundles
+cannot re-read those endpoints from runtime environment variables. The first
+desktop instance receives the 28000 port group by allocation order;
+concurrent second instances get their own groups while the bundled frontend
+still targets the first instance (single-instance limitation).
 
 ## Layout
 
@@ -137,30 +144,40 @@ shortcut, detects immediate GUI/WebView2 startup failure, and uninstalls through
 the registered Windows command. This mutating check is opt-in locally and is
 enabled by the Windows workflow.
 
-The current shell has no Docker dependency. It owns only local Runtime
-lifecycle and redacted diagnostics. On first launch it creates local defaults
-and an Artifact directory; remote endpoints and credentials remain optional
-advanced configuration. The next product slice adds a local service
-orchestrator behind the same entry point. It must not duplicate Mission state
-or introduce a synthetic success path.
+The current shell has no Docker dependency. It owns local Runtime and local
+service lifecycle plus redacted diagnostics. On first launch it creates local
+defaults and an Artifact directory; remote endpoints and credentials remain
+optional advanced configuration. `ServiceSupervisor` starts the bundled
+Mission Control, Gateway, and MCP Gateway binaries with per-service health
+endpoints, bounded restart (3 attempts), and fail-closed Missing status when a
+binary is not bundled. End-to-end desktop startup is verified by the Windows
+workflow GUI/installer smokes on a clean runner.
 
 ## Delivery Plan
 
 1. Keep the current shell and sidecar contracts green as the release baseline.
-2. Add a native service orchestrator that starts bundled Gateway, Mission
-   Control, and MCP components as hidden child processes.
-3. Use an embedded SQLite database and per-user Artifact directory for the
-   local mode; keep server PostgreSQL/Compose unchanged.
-4. Add bounded startup, health checks, shutdown, crash diagnostics, and
-   versioned resource directories for upgrade and rollback.
+   — implemented; packaging smokes enforce it.
+2. Native service orchestrator that starts bundled Gateway, Mission Control,
+   and MCP components as hidden child processes. — implemented
+   (`src-tauri/src/services.rs`).
+3. Embedded SQLite database and per-user Artifact directory for local mode;
+   server PostgreSQL/Compose unchanged. — implemented via
+   `AGENTHUB_DB_BACKEND=sqlite` wiring in the supervisor.
+4. Bounded startup, health checks, shutdown, crash diagnostics, and
+   versioned resource directories for upgrade and rollback. — partially
+   implemented (health checks, restart bound, supervisor reaps on stop/drop;
+   versioned resource directories remain open).
 5. Make `AgentHub.exe` the only documented user action in Portable and MSI
    packages; move endpoint and token fields to an advanced deployment mode.
+   — partially implemented (advanced settings dialog exists; packaging
+   copy remains open).
 6. Validate a clean Windows machine with no Docker, Go, Rust, or repository
-   checkout installed.
+   checkout installed. — enforced by `installer-install-smoke.ps1` on the
+   disposable CI runner, not yet run from a physical clean machine record.
 
-This plan is not yet implemented. The current package still contains only the
-desktop shell and Runtime sidecar, so it is not a self-contained local
-Mission Control deployment.
+Items 4-6 remain the active R5-1 slice. The package now contains the shell,
+Runtime sidecar, and the local service stack, so the admin UI is a
+self-contained local deployment target.
 
 ## Configuration and credentials
 

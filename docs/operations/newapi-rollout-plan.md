@@ -153,6 +153,29 @@ usage 显示图像计费 prompt=1049 tokens。结论：**网关层零改动即�
 `/api/admin/tools`（工具市场）与 legacy `/api/admin/*` 前缀冲突属独立切片，
 未在本轮处理。
 
+### 0.1c P2 修复与捆绑前端 bake 缺陷修正（2026-08-27 深夜，同日第三轮）
+
+**P1-c 结论修正（重要）**：实测捆绑 standalone 前端的 rewrites 在构建时
+bake 为字面量（`required-server-files.json` 的 `_originalRewrites` 此前为
+`http://127.0.0.1:8081`），运行时 env 注入（P1-a/c 的 GO_GATEWAY_URL 等）
+对已构建包**无效**。即此前桌面包内 iframe 管理后台所有 API 请求都打到无
+服务的 8081 → 全 404。修正：构建期 bake 本地栈端点。
+
+| # | 修复 | 契约/证据 |
+|---|---|---|
+| P2-a | 捆绑前端 bake 本地端口 | `local-services/build-windows.ps1` 构建前注入 `API_BACKEND=legacy`、`API_BACKEND_URL=http://127.0.0.1:28000`、`GO_GATEWAY_URL=http://127.0.0.1:28001`；重建后 `_originalRewrites` 实测 = 28000/28001；单实例端口锚定依赖 `allocate_ports` 顺序分配，多实例并发为已知限制（脚本注释入档） |
+| P2-b | 工具市场路由 | `next.config.js` 在通用 `/api` rewrite 之前加 `/api/admin/tools(:path*)` → gateway（toolStore 期望 gateway 契约；legacy 同路径为无前端消费方的工具注册表）；重建包已含该路由 |
+| P2-c | 凭据清除 UI | 配置对话框按凭据状态启用「清除」按钮（仅 configured 可清），接 `clear_configuration_secret`；清除后重读 details 刷新 |
+| P2-d | 监视器 panel | 设置→监视器接真实数据：`service_status` 四服务行、`runtime_status`（状态/就绪/detail）、`/api/metrics/health`（模型健康/降级/运行时长）；不可达时如实显示 |
+| P2-e | 服务二进制补齐 | 本地 `local-services/` 此前**无任何服务 exe**（服务全 Missing 的根源）；已构建 `agenthub-gateway.exe`(24MB) + `agenthub-mcp-gateway.exe`(7.3MB)，mission-control.exe(146MB) 已在位；重打包后 bundle resources 实测含三 exe + 新前端 |
+
+**验证**：前端 tsc 0 错误；vitest 159 passed；tauri 重打包 artifact+runtime
+smoke PASS（MSI/NSIS/exe 产物更新）。
+
+**遗留上报**：本机 `.venv` 缺 PyInstaller（mission-control freeze 依赖）；
+exe 已在位故不阻塞，但重建 mission-control 时需先
+`pip install pyinstaller`。多实例并发下捆绑前端仍指向首个实例端口组。
+
 ## 0.2 R5 前置三项预核对（2026-08-27 实测，供 G-2 引用）
 
 | 项 | 结论 | 证据 |

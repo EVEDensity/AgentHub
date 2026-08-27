@@ -45,6 +45,12 @@ const nextConfig = {
   },
   async rewrites() {
     return [
+      // Tool marketplace (G1) is served by the Go gateway even in legacy
+      // mode: frontend/stores/toolStore.ts expects the gateway contract, and
+      // the legacy /api/admin/tools is an unrelated tool-registry with no
+      // frontend consumer. Must precede the generic /api rewrite.
+      { source: '/api/admin/tools', destination: `${goGatewayUrl}/api/admin/tools` },
+      { source: '/api/admin/tools/:path*', destination: `${goGatewayUrl}/api/admin/tools/:path*` },
       // /api/* routes to either legacy or Go based on API_BACKEND env.
       { source: '/api/:path*', destination: `${apiDestination}/api/:path*` },
       // /platform/* always routes to the Go gateway (new platform APIs).

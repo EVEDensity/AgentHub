@@ -94,6 +94,7 @@ function selectSettingsSection(section) {
   const active = [...elements.settingsItems].find((item) => item.dataset.settingsSection === section);
   elements.settingsTitle.textContent = active?.textContent?.trim() || '设置';
   if (section === 'configuration') openAdminFrame();
+  if (section === 'monitoring') loadMonitor();
 }
 
 function renderMcpProbe(probe) {
@@ -216,6 +217,41 @@ function renderConfigurationDetails(details) {
   elements.missionControlEndpoint.value = details.missionControlEndpoint ?? ''; elements.mcpEndpoint.value = details.mcpEndpoint ?? ''; elements.artifactDirectory.value = details.artifactDirectory ?? '';
   elements.missionControlToken.value = ''; elements.mcpToken.value = ''; elements.configurationModelApiKey.value = '';
   elements.secretStatus.textContent = `凭据：Mission Control ${secretLabel(details.missionControlToken)} · MCP ${secretLabel(details.mcpToken)} · Model API ${secretLabel(details.modelApiKey)}`;
+  const availability = { mission_control_token: details.missionControlToken, mcp_token: details.mcpToken, model_api_key: details.modelApiKey };
+  for (const button of document.querySelectorAll('[data-clear-secret]')) button.disabled = availability[button.dataset.clearSecret] !== 'configured';
+}
+async function clearStoredSecret(kind, button) {
+  button.disabled = true;
+  try {
+    await nativeInvoke('clear_configuration_secret', { kind });
+    renderConfigurationDetails(await nativeInvoke('configuration_details'));
+    elements.feedback.textContent = '凭据已清除';
+  } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '凭据清除失败'; button.disabled = false; }
+}
+async function loadMonitor() {
+  const servicesEl = document.querySelector('#monitor-services');
+  const runtimeEl = document.querySelector('#monitor-runtime');
+  const runtimeState = document.querySelector('#monitor-runtime-state');
+  const healthEl = document.querySelector('#monitor-health');
+  const healthState = document.querySelector('#monitor-health-state');
+  try {
+    const services = await nativeInvoke('service_status');
+    const rows = (Array.isArray(services) ? services : []).map((s) => `${serviceLabels[s.name] || s.name}: ${statusText(s.status)}`);
+    if (servicesEl) servicesEl.textContent = rows.length ? rows.join(' · ') : '未返回服务状态';
+    const runtime = await nativeInvoke('runtime_status');
+    if (runtimeEl) runtimeEl.textContent = runtime.detail || '—';
+    if (runtimeState) runtimeState.textContent = `${statusText(runtime.status)} / ${runtime.readiness || 'unknown'}`;
+  } catch (error) {
+    if (servicesEl) servicesEl.textContent = error instanceof Error ? error.message : '服务状态读取失败';
+  }
+  try {
+    const health = await localApi('/api/metrics/health');
+    if (healthState) healthState.textContent = health.status === 'healthy' ? '健康' : health.status || '未知';
+    if (healthEl) healthEl.textContent = `模型 ${health.modelsHealthy ?? '?'} 正常 / ${health.modelsDegraded ?? '?'} 降级 · 活动降级 ${health.activeDegradations ?? '?'} · 运行 ${Math.round((health.uptimeSeconds ?? 0) / 60)} 分钟`;
+  } catch {
+    if (healthState) healthState.textContent = '不可达';
+    if (healthEl) healthEl.textContent = '控制面健康探测失败（本地服务未运行？）';
+  }
 }
 async function openConfiguration() { try { renderConfigurationDetails(await nativeInvoke('configuration_details')); elements.dialog.showModal(); } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '设置读取失败'; } }
 function closeConfiguration() { if (elements.dialog.open) elements.dialog.close(); }
@@ -245,6 +281,7 @@ elements.modelList.addEventListener('click', async (event) => {
 elements.navHome.addEventListener('click', () => switchView('home')); elements.adminRefresh.addEventListener('click', loadAdmin); elements.modelForm.addEventListener('submit', saveModel);
 for (const tab of elements.adminTabs) tab.addEventListener('click', () => { for (const item of elements.adminTabs) item.classList.toggle('active', item === tab); for (const section of document.querySelectorAll('.admin-section')) section.hidden = section.id !== `admin-${tab.dataset.adminTab}`; });
 document.querySelector('#open-mcp-settings').addEventListener('click', openConfiguration);
+for (const button of document.querySelectorAll('[data-clear-secret]')) button.addEventListener('click', () => clearStoredSecret(button.dataset.clearSecret, button));
 for (const button of [elements.openConsole, elements.openConsoleNav, elements.openConsoleCard]) button.addEventListener('click', openConsole);
 for (const card of document.querySelectorAll('[data-prompt]')) card.addEventListener('click', () => { elements.taskInput.value = card.dataset.prompt; elements.taskInput.focus(); });
 elements.settings.addEventListener('click', () => switchView('settings')); elements.settingsBack.addEventListener('click', () => switchView('home')); for (const item of elements.settingsItems) item.addEventListener('click', () => selectSettingsSection(item.dataset.settingsSection)); elements.closeConfiguration.addEventListener('click', closeConfiguration); elements.cancelConfiguration.addEventListener('click', closeConfiguration); elements.form.addEventListener('submit', saveConfiguration);

@@ -27,9 +27,22 @@ Copy-Item -LiteralPath $MissionControlBinary -Destination (Join-Path $OutputDire
 $frontendRoot = Join-Path $root 'frontend'
 Push-Location $frontendRoot
 try {
+    # The standalone bundle bakes next.config.js rewrites at build time
+    # (_originalRewrites in .next/required-server-files.json), so the desktop
+    # local stack endpoints MUST be baked here; runtime env cannot change
+    # them. Anchors rely on ServiceSupervisor::allocate_ports handing the
+    # first desktop instance the 28000 group. Concurrent second instances get
+    # their own port groups while the bundled frontend still targets
+    # 28000/28001 — a documented single-instance limitation.
+    $env:API_BACKEND = 'legacy'
+    $env:API_BACKEND_URL = 'http://127.0.0.1:28000'
+    $env:GO_GATEWAY_URL = 'http://127.0.0.1:28001'
     npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw 'Next.js production build failed.' }
-} finally { Pop-Location }
+} finally {
+    Remove-Item Env:API_BACKEND, Env:API_BACKEND_URL, Env:GO_GATEWAY_URL -ErrorAction SilentlyContinue
+    Pop-Location
+}
 $standalone = Join-Path $frontendRoot '.next\standalone'
 if (-not (Test-Path -LiteralPath (Join-Path $standalone 'server.js') -PathType Leaf)) { throw 'Next.js standalone server.js was not generated.' }
 $frontendOutput = Join-Path $OutputDirectory 'frontend'
