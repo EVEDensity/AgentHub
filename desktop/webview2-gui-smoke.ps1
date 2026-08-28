@@ -25,19 +25,18 @@ try {
   Invoke-Playwright @('open', "http://127.0.0.1:$Port/index.html") | Out-Null
   $snapshot = Invoke-Playwright @('snapshot')
   if ($snapshot -notmatch '今天要完成什么' -or $snapshot -notmatch '本地桌面') { throw 'Initial desktop shell content was not rendered.' }
-  Invoke-Playwright @('screenshot', (Join-Path $OutputDirectory 'desktop-initial.png')) | Out-Null
+  # playwright-cli has no screenshot command; the snapshot text assertions
+  # above and below are the actual verification surface.
   $settingsRef = Find-Ref $snapshot '设置'
   Invoke-Playwright @('click', $settingsRef) | Out-Null
   $settingsSnapshot = Invoke-Playwright @('snapshot')
   if ($settingsSnapshot -notmatch '常规' -or $settingsSnapshot -notmatch '本地数据目录') { throw 'Settings view did not render.' }
-  Invoke-Playwright @('screenshot', (Join-Path $OutputDirectory 'desktop-settings.png')) | Out-Null
   $monitorRef = Find-Ref $settingsSnapshot '监视器'
   Invoke-Playwright @('click', $monitorRef) | Out-Null
   $monitorSnapshot = Invoke-Playwright @('snapshot')
   if ($monitorSnapshot -notmatch '服务栈版本') { throw 'Monitor panel did not render.' }
-  Invoke-Playwright @('screenshot', (Join-Path $OutputDirectory 'desktop-monitor.png')) | Out-Null
   $succeeded = $true
-  Write-Output "WebView2 GUI smoke passed; screenshots written to $OutputDirectory."
+  Write-Output "WebView2 GUI smoke passed."
 } finally {
   try { Invoke-Playwright @('close') | Out-Null } catch { }
   if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
