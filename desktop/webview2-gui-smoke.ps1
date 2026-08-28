@@ -24,17 +24,26 @@ function Find-Ref([string]$Snapshot, [string]$Label) {
 try {
   Invoke-Playwright @('open', "http://127.0.0.1:$Port/index.html") | Out-Null
   $snapshot = Invoke-Playwright @('snapshot')
-  if ($snapshot -notmatch '今天要完成什么' -or $snapshot -notmatch '本地桌面') { throw 'Initial desktop shell content was not rendered.' }
+  if ($snapshot -notmatch '今天要完成什么' -or $snapshot -notmatch '本地桌面') {
+    Add-Content -LiteralPath $cliOutput -Value ($snapshot -join "`n")
+    throw ('Initial desktop shell content was not rendered. snapshot head: ' + $snapshot.Substring(0, [Math]::Min(800, $snapshot.Length)))
+  }
   # playwright-cli has no screenshot command; the snapshot text assertions
   # above and below are the actual verification surface.
   $settingsRef = Find-Ref $snapshot '设置'
   Invoke-Playwright @('click', $settingsRef) | Out-Null
   $settingsSnapshot = Invoke-Playwright @('snapshot')
-  if ($settingsSnapshot -notmatch '常规' -or $settingsSnapshot -notmatch '本地数据目录') { throw 'Settings view did not render.' }
+  if ($settingsSnapshot -notmatch '常规' -or $settingsSnapshot -notmatch '本地数据目录') {
+    Add-Content -LiteralPath $cliOutput -Value ($settingsSnapshot -join "`n")
+    throw ('Settings view did not render. snapshot head: ' + $settingsSnapshot.Substring(0, [Math]::Min(800, $settingsSnapshot.Length)))
+  }
   $monitorRef = Find-Ref $settingsSnapshot '监视器'
   Invoke-Playwright @('click', $monitorRef) | Out-Null
   $monitorSnapshot = Invoke-Playwright @('snapshot')
-  if ($monitorSnapshot -notmatch '服务栈版本') { throw 'Monitor panel did not render.' }
+  if ($monitorSnapshot -notmatch '服务栈版本') {
+    Add-Content -LiteralPath $cliOutput -Value ($monitorSnapshot -join "`n")
+    throw ('Monitor panel did not render. snapshot head: ' + $monitorSnapshot.Substring(0, [Math]::Min(800, $monitorSnapshot.Length)))
+  }
   $succeeded = $true
   Write-Output "WebView2 GUI smoke passed."
 } finally {
