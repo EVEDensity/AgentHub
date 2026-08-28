@@ -23,7 +23,9 @@ if ($TargetTriple -notlike "*-windows-*") {
     throw "This build helper only stages Windows sidecars; received $TargetTriple."
 }
 
-& cargo +1.88.0 build --release --locked --offline --manifest-path $manifest --target $TargetTriple
+# --locked pins the build to Cargo.lock; no --offline here so a fresh CI
+# runner can fetch crates that the lock requires but no cache has seen yet.
+& cargo +1.88.0 build --release --locked --manifest-path $manifest --target $TargetTriple
 if ($LASTEXITCODE -ne 0) {
     throw "Runtime sidecar build failed."
 }
