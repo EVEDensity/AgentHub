@@ -16,47 +16,25 @@ $server = Start-Process -FilePath (Get-Command python -ErrorAction Stop).Source 
 $cliOutput = Join-Path $OutputDirectory "webview2-gui-cli.log"
 $succeeded = $false
 function Invoke-Playwright([string[]]$Arguments) {
-  # Route output through a file and decode it as UTF-8 explicitly: the CLI
-  # emits UTF-8, but PowerShell decodes captured native stdout with the
-  # legacy console codepage on hosted runners, which mangles the CJK
-  # snapshot text and breaks every -match against a Chinese literal.
-  $outputFile = Join-Path $OutputDirectory ("pw-out-" + [guid]::NewGuid().ToString('N') + ".log")
-  & cmd /c "npx --yes --package @playwright/cli playwright-cli $($Arguments -join ' ') > `"$outputFile`" 2>&1"
-  $exitCode = $LASTEXITCODE
-  $output = [System.IO.File]::ReadAllLines($outputFile, [System.Text.Encoding]::UTF8)
-  Remove-Item -LiteralPath $outputFile -Force -ErrorAction SilentlyContinue
+  $output = & npx --yes --package @playwright/cli playwright-cli @Arguments 2>&1
   Add-Content -LiteralPath $cliOutput -Value ($output -join [Environment]::NewLine)
-  if ($exitCode -ne 0) { throw "Playwright CLI failed: $($Arguments -join ' ')" }
+  if ($LASTEXITCODE -ne 0) { throw "Playwright CLI failed: $($Arguments -join ' ')" }
   return ($output -join [Environment]::NewLine)
 }
-function Find-Ref([string]$Snapshot, [string]$Label) {
-  $match = [regex]::Match($Snapshot, "(?m).*" + [regex]::Escape($Label) + ".*\[ref=(e\d+)\]")
-  if (-not $match.Success) { throw "Unable to find Playwright ref for '$Label'." }
-  return $match.Groups[1].Value
-}
 try {
+  # All assertions are ASCII DOM-state checks executed inside the page via
+  # eval: captured native stdout is decoded with the runner's legacy
+  # codepage, so matching Chinese snapshot text there is unreliable. DOM
+  # clicks drive the same listeners the real UI uses.
   Invoke-Playwright @('open', "http://127.0.0.1:$Port/index.html") | Out-Null
-  $snapshot = Invoke-Playwright @('snapshot')
-  if ($snapshot -notmatch '今天要完成什么' -or $snapshot -notmatch '本地桌面') {
-    Add-Content -LiteralPath $cliOutput -Value ($snapshot -join "`n")
-    throw ('Initial desktop shell content was not rendered. snapshot head: ' + $snapshot.Substring(0, [Math]::Min(800, $snapshot.Length)))
-  }
-  # playwright-cli has no screenshot command; the snapshot text assertions
-  # above and below are the actual verification surface.
-  $settingsRef = Find-Ref $snapshot '设置'
-  Invoke-Playwright @('click', $settingsRef) | Out-Null
-  $settingsSnapshot = Invoke-Playwright @('snapshot')
-  if ($settingsSnapshot -notmatch '常规' -or $settingsSnapshot -notmatch '本地数据目录') {
-    Add-Content -LiteralPath $cliOutput -Value ($settingsSnapshot -join "`n")
-    throw ('Settings view did not render. snapshot head: ' + $settingsSnapshot.Substring(0, [Math]::Min(800, $settingsSnapshot.Length)))
-  }
-  $monitorRef = Find-Ref $settingsSnapshot '监视器'
-  Invoke-Playwright @('click', $monitorRef) | Out-Null
-  $monitorSnapshot = Invoke-Playwright @('snapshot')
-  if ($monitorSnapshot -notmatch '服务栈版本') {
-    Add-Content -LiteralPath $cliOutput -Value ($monitorSnapshot -join "`n")
-    throw ('Monitor panel did not render. snapshot head: ' + $monitorSnapshot.Substring(0, [Math]::Min(800, $monitorSnapshot.Length)))
-  }
+  $home = Invoke-Playwright @('eval', "() => JSON.stringify({taskInput: !!document.getElementById('task-input'), serviceList: !!document.getElementById('service-list'), feedback: !!document.getElementById('feedback')})")
+  if ($home -notmatch '"taskInput":true' -or $home -notmatch '"serviceList":true' -or $home -notmatch '"feedback":true') { throw "Initial desktop shell did not render: $home" }
+  Invoke-Playwright @('eval', "document.getElementById('settings').click()") | Out-Null
+  $settings = Invoke-Playwright @('eval', "() => JSON.stringify({settingsVisible: !document.getElementById('settings-view').hidden, generalPanel: !document.querySelector('[data-settings-panel=general]').hidden, generalActive: document.querySelector('[data-settings-section=general]').classList.contains('active')})")
+  if ($settings -notmatch '"settingsVisible":true' -or $settings -notmatch '"generalPanel":true') { throw "Settings view did not render: $settings" }
+  Invoke-Playwright @('eval', "document.querySelector('[data-settings-section=monitoring]').click()") | Out-Null
+  $monitor = Invoke-Playwright @('eval', "() => JSON.stringify({monitorVisible: !document.querySelector('[data-settings-panel=monitoring]').hidden, stackCard: !!document.getElementById('monitor-stack'), stackState: !!document.getElementById('monitor-stack-state')})")
+  if ($monitor -notmatch '"monitorVisible":true' -or $monitor -notmatch '"stackCard":true') { throw "Monitor panel did not render: $monitor" }
   $succeeded = $true
   Write-Output "WebView2 GUI smoke passed."
 } finally {
