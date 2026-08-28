@@ -218,6 +218,25 @@ NSIS 定制文案为后续增强）；6（物理干净机记录）待实机执�
 回归（含 first_column 3 例 + key fallback 4 例）；`-NoInstaller` 重打包
 artifact/runtime smoke PASS。
 
+### 0.1g mission-control 重建与安装器实证（2026-08-27 深夜，第七轮）
+
+> 起因：核实时发现包内 mission-control.exe 为 8/26 旧版——**不含当日 sqlite
+> INSERT 修复等后端改动**，即此前产出的安装器在桌面模式下「保存模型配置」
+> 仍是坏的。已闭环：
+
+1. 本机安装 PyInstaller，`build-mission-control.ps1` freeze 成功（207s）。
+2. **冻结产物验收**：起 frozen exe（隔离 sqlite），login ok →
+   `create_model` success（id=7）→ metrics healthy —— sqlite 修复确认
+   已打入二进制。
+3. 完整 `-LocalServices` 安装器重建，installer artifact smoke PASS
+   （MSI 202MB / NSIS 184MB）。
+4. **SHA-256 实证**：MSI 管理员提取的 mission-control.exe 与 staged 新产物
+   哈希完全一致（MATCH: True）；README-first.txt 同在安装根目录。
+
+**结论**：当前 MSI/NSIS/便携资源已携带含全部当日后端修复的后端核心；
+「下载 exe 即用整体功能」在产物层面成立，剩端到端 GUI 运行验证
+（push 后 CI webview2/installer smoke 或实机一次）。
+
 ## 0.2 R5 前置三项预核对（2026-08-27 实测，供 G-2 引用）
 
 | 项 | 结论 | 证据 |
