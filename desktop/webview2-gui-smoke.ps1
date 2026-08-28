@@ -2,6 +2,11 @@
 param([int]$Port = 18765, [string]$OutputDirectory = "")
 
 $ErrorActionPreference = "Stop"
+# playwright-cli emits UTF-8; without this the runner's default console
+# encoding mangles the captured CJK snapshot text and every -notmatch
+# against a Chinese literal is trivially true.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 $desktopDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $uiDirectory = Join-Path $desktopDirectory "ui"
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { $OutputDirectory = Join-Path (Split-Path -Parent $desktopDirectory) "output\playwright" }
