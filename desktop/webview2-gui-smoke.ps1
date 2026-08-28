@@ -16,9 +16,17 @@ $server = Start-Process -FilePath (Get-Command python -ErrorAction Stop).Source 
 $cliOutput = Join-Path $OutputDirectory "webview2-gui-cli.log"
 $succeeded = $false
 function Invoke-Playwright([string[]]$Arguments) {
-  $output = & npx --yes --package @playwright/cli playwright-cli @Arguments 2>&1
+  # Route output through a file and decode it as UTF-8 explicitly: the CLI
+  # emits UTF-8, but PowerShell decodes captured native stdout with the
+  # legacy console codepage on hosted runners, which mangles the CJK
+  # snapshot text and breaks every -match against a Chinese literal.
+  $outputFile = Join-Path $OutputDirectory ("pw-out-" + [guid]::NewGuid().ToString('N') + ".log")
+  & cmd /c "npx --yes --package @playwright/cli playwright-cli $($Arguments -join ' ') > `"$outputFile`" 2>&1"
+  $exitCode = $LASTEXITCODE
+  $output = [System.IO.File]::ReadAllLines($outputFile, [System.Text.Encoding]::UTF8)
+  Remove-Item -LiteralPath $outputFile -Force -ErrorAction SilentlyContinue
   Add-Content -LiteralPath $cliOutput -Value ($output -join [Environment]::NewLine)
-  if ($LASTEXITCODE -ne 0) { throw "Playwright CLI failed: $($Arguments -join ' ')" }
+  if ($exitCode -ne 0) { throw "Playwright CLI failed: $($Arguments -join ' ')" }
   return ($output -join [Environment]::NewLine)
 }
 function Find-Ref([string]$Snapshot, [string]$Label) {
