@@ -195,6 +195,9 @@ jobs:
     env:
       AGENTHUB_TEST_POSTGRES_DSN: >-
         postgresql://agenthub_test:agenthub_test@127.0.0.1:5432/agenthub_test
+      # tests/integration imports the `app` package by its repo-root path;
+      # without this pytest cannot resolve it on the runner.
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
