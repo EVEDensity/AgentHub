@@ -49,7 +49,7 @@ class ContractLineageMigrationPostgresTests(unittest.IsolatedAsyncioTestCase):
     async def _seed_contract(self, contract_id: str = "contract-1") -> None:
         await self._connection.execute(
             """INSERT INTO mission_contracts(id, version, document)
-               VALUES($1, 1, jsonb_build_object('id', $1, 'version', 1))""",
+               VALUES($1::text, 1, jsonb_build_object('id', $1::text, 'version', 1))""",
             contract_id,
         )
 

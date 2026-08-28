@@ -13,10 +13,13 @@ services:
   # ═══════════════════════════════════════════════════════════════════════
 
   nats:
-    image: nats:2.10
-    command: ["-js"]
+    # -alpine variant: the scratch-based default image has no shell, so no
+    # in-container healthcheck command can ever run (container stayed
+    # "unhealthy" forever and blocked every dependent service).
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
     healthcheck:
-      test: ["CMD", "nats", "server", "check", "-s", "nats://localhost:4222"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/healthz >/dev/null 2>&1 || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10

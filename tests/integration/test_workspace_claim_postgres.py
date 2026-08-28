@@ -19,6 +19,7 @@ from app.api.v1.missions import (
 )
 from app.db.migrations.mission_control_plane import (
     AGENT_BINDING_PERSISTENCE_UPGRADE,
+    CONTRACT_REVISION_BINDING_UPGRADE,
     DELEGATION_PERSISTENCE_UPGRADE,
     MISSION_CONTROL_PLANE_UPGRADE,
     MISSION_EVENT_LEDGER_UPGRADE,
@@ -44,6 +45,9 @@ _MIGRATIONS = (
     + WORK_UNIT_PERSISTENCE_UPGRADE
     + DELEGATION_PERSISTENCE_UPGRADE
     + AGENT_BINDING_PERSISTENCE_UPGRADE
+    # add_mission inserts missions.contract_version; the column is added by
+    # this later upgrade, so the schema must include it before seeding.
+    + CONTRACT_REVISION_BINDING_UPGRADE
 )
 
 
@@ -358,7 +362,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-a",
                         agent_id="reviewer",
                         adapter_type="local_codex",
-                        supported_work_unit_kinds=("code_change",),
+                        supported_work_unit_kinds=("a2a.inbound",),
                         lease_seconds=120,
                     ),
                     control_b.claim_ready_work_unit(
@@ -366,7 +370,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-b",
                         agent_id="reviewer",
                         adapter_type="local_codex",
-                        supported_work_unit_kinds=("code_change",),
+                        supported_work_unit_kinds=("a2a.inbound",),
                         lease_seconds=120,
                     ),
                 ),
@@ -377,7 +381,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 runner_id="runner-a",
                 agent_id="reviewer",
                 adapter_type="local_codex",
-                supported_work_unit_kinds=("code_change",),
+                supported_work_unit_kinds=("a2a.inbound",),
                 lease_seconds=120,
             )
 
@@ -455,7 +459,9 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "mission-a",
             limit=100,
         )
-        async with httpx.AsyncClient(transport=transport) as revoked_http:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://mission-control.test"
+        ) as revoked_http:
             revoked = await revoked_http.post(
                 "/api/v1/missions/work-unit-claims",
                 json={
@@ -511,7 +517,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-a",
                         agent_id="reviewer",
                         adapter_type="local_codex",
-                        supported_work_unit_kinds=("code_change",),
+                        supported_work_unit_kinds=("a2a.inbound",),
                         lease_seconds=120,
                     ),
                     control_b.claim_ready_work_unit(
@@ -519,7 +525,7 @@ class WorkspaceClaimPostgresIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         runner_id="runner-b",
                         agent_id="reviewer",
                         adapter_type="local_codex",
-                        supported_work_unit_kinds=("code_change",),
+                        supported_work_unit_kinds=("a2a.inbound",),
                         lease_seconds=120,
                     ),
                 ),
