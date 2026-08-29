@@ -3,14 +3,19 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import json
 import tempfile
 import unittest
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from app.config import WORKSPACES_DIR
+from app.db.init_db import _create_mission_control_plane_sqlite
+from app.db.sqlite_pool import SQLitePool
 from app.domain import (
     AcceptanceCriterion,
     ActorRef,
@@ -27,10 +32,12 @@ from app.domain import (
     WorkUnit,
     WorkUnitStatus,
 )
+from app.repositories import MissionRepository
 from app.services.artifact_store_service import PublishedArtifact
 from app.services.desktop_local_runner import (
     DESKTOP_ADAPTER_TYPE,
     DESKTOP_AGENT_ID,
+    DESKTOP_RUNNER_LABEL,
     ENABLE_ENV,
     DesktopLocalRunnerController,
     DesktopLocalRunnerSettings,
@@ -47,6 +54,13 @@ from app.services.harness_service import (
     ModelResponse,
     ModelUsage,
 )
+from app.services.mission_service import MissionService
+from app.services.workspace_admission_service import (
+    DatabaseWorkspaceClaimAdmissionPolicyResolver,
+    WorkspaceClaimAdmissionPolicy,
+    WorkspaceClaimStatus,
+)
+from tests.domain.factories import build_mission, build_work_unit
 
 RUNNER_USER_ID = "user-1"
 WORKSPACE_ID = "local-admin"
@@ -642,6 +656,185 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     "file_search",
                 ],
             )
+
+
+# ── SQLite claim dialect (desktop local profile) ─────────────────────────
+
+
+class DesktopSqliteClaimTests(unittest.IsolatedAsyncioTestCase):
+    """Claim-path coverage against a real SQLite control plane.
+
+    The desktop local profile runs Mission Control on SQLite; the claim
+    candidate SQL, admission lock and tenant quota must work there without
+    PostgreSQL-only constructs.
+    """
+
+    async def asyncSetUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        pool = SQLitePool(Path(tmp.name) / "agenthub.db")
+        await pool.initialize()
+        self.addCleanup(pool.close)
+        acquire = pool.acquire()
+        self._conn = await acquire.__aenter__()
+
+        async def _release() -> None:
+            await acquire.__aexit__(None, None, None)
+
+        self.addCleanup(_release)
+        await _create_mission_control_plane_sqlite(self._conn)
+
+        @asynccontextmanager
+        async def _transaction_factory():
+            yield self._conn
+
+        self._repository = MissionRepository(
+            execute=self._conn.execute,
+            fetch_one=self._conn.fetchrow,
+            fetch_all=self._conn.fetch,
+            transaction_factory=_transaction_factory,
+        )
+
+    async def _seed_desktop_mission(self, mission_id: str) -> None:
+        from tests.domain.factories import build_contract
+
+        await self._repository.add_contract(
+            build_contract(id="contract-desktop-1")
+        )
+        await self._repository.add_mission(
+            build_mission(
+                id=mission_id,
+                workspace_id=WORKSPACE_ID,
+                contract_id="contract-desktop-1",
+                contract_version=1,
+                status="RUNNING",
+                source=MissionSource(type=MissionSourceType.MANUAL),
+                created_by=ActorRef(type=ActorType.HUMAN, id=WORKSPACE_ID),
+            )
+        )
+
+    async def _seed_desktop_task_unit(
+        self,
+        mission_id: str,
+        unit_id: str = "wu-desktop-1",
+        **updates: Any,
+    ) -> None:
+        values: dict[str, Any] = {
+            "id": unit_id,
+            "mission_id": mission_id,
+            "kind": "desktop.task",
+            "dependencies": [],
+            "input_refs": [],
+            "expected_outputs": [{"kind": "text", "required": False}],
+            "required_capabilities": [],
+            "assigned_agent_id": DESKTOP_AGENT_ID,
+            "assigned_adapter": DESKTOP_ADAPTER_TYPE,
+            "status": "PENDING",
+            "attempt": 0,
+        }
+        values.update(updates)
+        await self._repository.add_work_unit(build_work_unit(**values))
+
+    async def _claim(self) -> Any:
+        service = MissionService(self._repository)
+        return await service.claim_workspace_bound_work_unit(
+            WORKSPACE_ID,
+            agent_id=DESKTOP_AGENT_ID,
+            adapter_type=DESKTOP_ADAPTER_TYPE,
+            supported_work_unit_kinds=("desktop.task",),
+            runner_id=RUNNER_USER_ID,
+            actor=ActorRef(type=ActorType.SERVICE, id=DESKTOP_RUNNER_LABEL),
+            lease_seconds=300,
+            admission_policy=WorkspaceClaimAdmissionPolicy(
+                tenant_id=WORKSPACE_ID,
+                max_concurrent=0,
+            ),
+        )
+
+    async def test_empty_dependency_pending_unit_is_claimable(self) -> None:
+        await self._seed_desktop_mission("mis-claim-ok")
+        await self._seed_desktop_task_unit("mis-claim-ok")
+
+        outcome = await self._claim()
+
+        self.assertEqual(outcome.status, WorkspaceClaimStatus.CLAIMED)
+        self.assertIsNotNone(outcome.work_unit)
+        self.assertEqual(outcome.work_unit.id, "wu-desktop-1")
+        self.assertEqual(outcome.work_unit.status, WorkUnitStatus.LEASED)
+        self.assertIsNotNone(outcome.work_unit.lease)
+        self.assertEqual(outcome.work_unit.lease.runner_id, RUNNER_USER_ID)
+
+    async def test_expired_lease_unit_is_not_claimed(self) -> None:
+        await self._seed_desktop_mission("mis-claim-stale")
+        await self._seed_desktop_task_unit("mis-claim-stale")
+        stale_lease = {
+            "id": "lease-stale",
+            "runnerId": "runner-ghost",
+            "expiresAt": (
+                datetime.now(timezone.utc) - timedelta(seconds=60)
+            ).isoformat(),
+        }
+        await self._conn.execute(
+            "UPDATE work_units SET lease=$2 WHERE id=$1",
+            "wu-desktop-1",
+            json.dumps(stale_lease),
+        )
+
+        outcome = await self._claim()
+
+        self.assertEqual(outcome.status, WorkspaceClaimStatus.IDLE)
+        self.assertIsNone(outcome.work_unit)
+        row = await self._conn.fetchrow(
+            "SELECT status, lease FROM work_units WHERE id=$1", "wu-desktop-1"
+        )
+        self.assertEqual(row["status"], "PENDING")
+        self.assertIn("runner-ghost", row["lease"])
+
+    async def test_unsatisfied_dependency_unit_is_not_claimed(self) -> None:
+        await self._seed_desktop_mission("mis-claim-deps")
+        await self._seed_desktop_task_unit(
+            "mis-claim-deps", dependencies=["wu-dep-missing"]
+        )
+
+        outcome = await self._claim()
+
+        self.assertEqual(outcome.status, WorkspaceClaimStatus.IDLE)
+        self.assertIsNone(outcome.work_unit)
+
+    async def test_sqlite_admission_lock_and_active_lease_count(self) -> None:
+        await self._seed_desktop_mission("mis-admission")
+        await self._seed_desktop_task_unit("mis-admission")
+        await self._repository.lock_tenant_claim_admission(WORKSPACE_ID)
+        self.assertEqual(
+            await self._repository.count_tenant_active_runner_work_units(
+                WORKSPACE_ID
+            ),
+            0,
+        )
+
+        outcome = await self._claim()
+        self.assertEqual(outcome.status, WorkspaceClaimStatus.CLAIMED)
+        self.assertEqual(
+            await self._repository.count_tenant_active_runner_work_units(
+                WORKSPACE_ID
+            ),
+            1,
+        )
+
+    async def test_sqlite_admission_resolver_returns_local_unlimited_policy(
+        self,
+    ) -> None:
+        from app.db import session as db_session
+
+        with (
+            patch.object(db_session, "DB_BACKEND", "sqlite"),
+            patch.object(db_session, "DATABASE_URL", ""),
+        ):
+            resolver = DatabaseWorkspaceClaimAdmissionPolicyResolver()
+            policy = await resolver.resolve(workspace_id=WORKSPACE_ID)
+
+        self.assertEqual(policy.tenant_id, WORKSPACE_ID)
+        self.assertEqual(policy.max_concurrent, 0)
 
 
 if __name__ == "__main__":

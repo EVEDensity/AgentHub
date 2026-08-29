@@ -482,6 +482,19 @@ async def _create_mission_control_plane_sqlite(conn) -> None:
                     text[:80],
                 )
 
+    # The PostgreSQL chain adds UNIQUE (id, mission_id) on work_units through
+    # a DO block that SQLite cannot run. execution_checkpoints carries a
+    # composite foreign key REFERENCES work_units(id, mission_id); without a
+    # matching unique parent index SQLite raises "foreign key mismatch" on
+    # every checkpoint insert. Create the index the DO block would have made.
+    try:
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_work_units_id_mission "
+            "ON work_units(id, mission_id)"
+        )
+    except Exception as exc:
+        logger.warning("mission schema SQLite unique index skipped: %s", exc)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # PostgreSQL implementation

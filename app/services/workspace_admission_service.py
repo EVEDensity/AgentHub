@@ -79,8 +79,18 @@ WorkspaceClaimAdmissionLookup = Callable[
 async def _lookup_workspace_claim_admission(
     workspace_id: str,
 ) -> Mapping[str, object] | None:
-    from app.db.session import afetch_one
+    from app.db.session import afetch_one, is_sqlite_backend
 
+    if is_sqlite_backend():
+        # The local SQLite profile has no IAM quota truth (the platform_* IAM
+        # tables belong to the PostgreSQL deployment). The desktop
+        # single-tenant Runner claims without concurrency admission:
+        # max_concurrent=0 short-circuits the tenant quota check entirely.
+        return {
+            "tenant_id": workspace_id,
+            "status": "active",
+            "max_concurrent": "0",
+        }
     return await afetch_one(
         """
         SELECT workspace.tenant_id,

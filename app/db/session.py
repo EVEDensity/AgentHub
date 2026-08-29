@@ -109,6 +109,15 @@ async def aget_pool() -> PoolType:
         return _pool
 
 
+def is_sqlite_backend() -> bool:
+    """Return True when the configured backend is the local SQLite adapter.
+
+    Mirrors the branch condition of :func:`aget_pool` without initializing
+    a pool, so request paths and tests can branch on the dialect safely.
+    """
+    return DB_BACKEND == "sqlite" or (DB_BACKEND == "auto" and not DATABASE_URL)
+
+
 async def aclose_pool() -> None:
     """Close the database pool gracefully (call during app shutdown)."""
     global _pool, _sqlite_pool
