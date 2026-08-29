@@ -886,6 +886,12 @@ class MissionRepository:
                          AND candidate.kind = 'mission.fork'
                          AND candidate.assigned_adapter <> 'a2a.outbound'
                      )
+                     OR (
+                         mission.source->>'type' = 'manual'
+                         AND candidate.parent_work_unit_id IS NULL
+                         AND candidate.kind = 'desktop.task'
+                         AND candidate.assigned_adapter <> 'a2a.outbound'
+                     )
                  )
                  AND candidate.assigned_agent_id=$2
                  AND candidate.assigned_adapter=$3

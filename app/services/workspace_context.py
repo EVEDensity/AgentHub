@@ -27,6 +27,8 @@ from __future__ import annotations
 import contextvars
 import re
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from app.config import WORKSPACES_DIR
@@ -85,6 +87,31 @@ _current_user_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 _current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "workspace_session_id", default=""
 )
+_workspace_root_override: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "workspace_root_override", default=None
+)
+
+
+def set_workspace_root_override(root: Path | None) -> None:
+    """Bind the workspace root to an explicit directory for the current context.
+
+    The override exists for execution hosts that own a concrete root (e.g. the
+    desktop local runner). When set, it wins over the user/session pair and
+    every tool resolves paths against *root*. ``None`` clears the override.
+    """
+    _workspace_root_override.set(root.resolve() if root is not None else None)
+
+
+@contextmanager
+def workspace_root_override(root: Path) -> Iterator[Path]:
+    """Scope an explicit workspace root, restoring the previous binding after."""
+    previous = _workspace_root_override.get()
+    resolved = root.resolve()
+    set_workspace_root_override(resolved)
+    try:
+        yield resolved
+    finally:
+        _workspace_root_override.set(previous)
 
 
 def set_workspace_context(user_id: str, session_id: str) -> Path:
@@ -115,7 +142,13 @@ def get_workspace_root() -> Path:
 
     If no context has been set, falls back to a default directory
     under ``WORKSPACES_DIR`` so tools never operate on the project root.
+    An explicit root override (see :func:`set_workspace_root_override`)
+    always wins.
     """
+    override = _workspace_root_override.get()
+    if override is not None:
+        override.mkdir(parents=True, exist_ok=True)
+        return override
     uid = _current_user_id.get()
     sid = _current_session_id.get()
     if not uid or not sid:

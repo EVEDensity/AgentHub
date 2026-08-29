@@ -121,7 +121,21 @@ async def lifespan(app: FastAPI):
     except Exception:
         _log.warning("startup: distributed cache version bus unavailable", exc_info=True)
 
+    # Desktop local runner — env-gated (AGENTHUB_DESKTOP_LOCAL_RUNNER=1),
+    # never constructed in production or server deployments.
+    try:
+        from app.services.desktop_local_runner import startup_desktop_local_runner
+        await startup_desktop_local_runner(app)
+    except Exception:
+        _log.warning("startup: desktop local runner unavailable", exc_info=True)
+
     yield
+
+    try:
+        from app.services.desktop_local_runner import shutdown_desktop_local_runner
+        await shutdown_desktop_local_runner(app)
+    except Exception:
+        _log.warning("shutdown: desktop local runner stop failed", exc_info=True)
 
     consumer = getattr(app.state, "memory_summary_consumer", None)
     if consumer is not None:

@@ -69,6 +69,12 @@ from app.services.workspace_admission_service import (
 
 _A2A_OUTBOUND_ADAPTER = "a2a.outbound"
 _MAX_VERIFICATION_ARTIFACTS = 200
+
+# Root WorkUnit kind derived for desktop local-runner tasks on manual
+# Missions. Only the env-gated desktop local runner derivation creates
+# this kind; every other claim shape is unchanged.
+DESKTOP_TASK_WORK_UNIT_KIND = "desktop.task"
+_DESKTOP_TASK_WORK_UNIT_KIND = DESKTOP_TASK_WORK_UNIT_KIND
 _VERIFICATION_ARTIFACT_FIELDS = frozenset(
     {
         "id",
@@ -1506,6 +1512,13 @@ class MissionService:
             and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
         ):
             claim_mode = "mission.fork"
+        elif (
+            mission.source.type == MissionSourceType.MANUAL
+            and work_unit.parent_work_unit_id is None
+            and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
+            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+        ):
+            claim_mode = "desktop.task"
         else:
             raise WorkUnitNotReadyError(
                 "claim repository returned an ineligible root WorkUnit"
@@ -1612,7 +1625,20 @@ class MissionService:
                 and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
                 and bool(work_unit.input_refs)
             )
-            if not (is_inbound_root or is_outbound_root or is_mission_fork_root):
+            is_desktop_task_root = (
+                mission.source.type == MissionSourceType.MANUAL
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
+                and work_unit.assigned_agent_id is not None
+                and work_unit.assigned_adapter is not None
+                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+            )
+            if not (
+                is_inbound_root
+                or is_outbound_root
+                or is_mission_fork_root
+                or is_desktop_task_root
+            ):
                 raise WorkUnitNotReadyError(
                     "execution context is only available for controlled roots"
                 )

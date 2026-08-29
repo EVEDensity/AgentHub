@@ -28,6 +28,7 @@ from app.services.runner_checkpoint import MissionControlHarnessCheckpointFactor
 from app.services.runner_service import (
     A2AInboundClaimedWorkResolver,
     ClaimedWorkResolutionError,
+    ClaimedWorkResolver,
     KindAwareClaimedWorkResolver,
     MissionControlRunnerPort,
     MissionForkClaimedWorkResolver,
@@ -423,8 +424,14 @@ def build_kind_aware_workspace_runner(
     max_total_tokens: int | None = None,
     max_model_cost: float | None = None,
     heartbeat_interval_seconds: float | None = None,
+    extra_resolvers: Mapping[str, ClaimedWorkResolver] | None = None,
 ) -> WorkUnitRunner:
-    """Compose workspace execution for every registered model-backed root kind."""
+    """Compose workspace execution for every registered model-backed root kind.
+
+    ``extra_resolvers`` registers additional claimed-WorkUnit resolvers for
+    composition-specific root kinds (e.g. the desktop local runner). Kinds
+    must not collide with the built-in model-backed kinds.
+    """
 
     _validate_runner_binding(
         runner_id=runner_id,
@@ -454,24 +461,32 @@ def build_kind_aware_workspace_runner(
         max_total_tokens=max_total_tokens,
         max_model_cost=max_model_cost,
     )
-    resolver = KindAwareClaimedWorkResolver(
-        {
-            "a2a.inbound": A2AInboundClaimedWorkResolver(
-                control,
-                runner_id=runner_id,
-                harness_factory=inbound_factory,
-                max_context_chars=max_context_chars,
-                max_timeout_seconds=max_timeout_seconds,
-            ),
-            "mission.fork": MissionForkClaimedWorkResolver(
-                control,
-                runner_id=runner_id,
-                harness_factory=fork_factory,
-                max_context_chars=max_context_chars,
-                max_timeout_seconds=max_timeout_seconds,
-            ),
-        }
-    )
+    resolvers: dict[str, ClaimedWorkResolver] = {
+        "a2a.inbound": A2AInboundClaimedWorkResolver(
+            control,
+            runner_id=runner_id,
+            harness_factory=inbound_factory,
+            max_context_chars=max_context_chars,
+            max_timeout_seconds=max_timeout_seconds,
+        ),
+        "mission.fork": MissionForkClaimedWorkResolver(
+            control,
+            runner_id=runner_id,
+            harness_factory=fork_factory,
+            max_context_chars=max_context_chars,
+            max_timeout_seconds=max_timeout_seconds,
+        ),
+    }
+    if extra_resolvers:
+        for kind, resolver in extra_resolvers.items():
+            if kind in resolvers:
+                raise ValueError(f"claimed WorkUnit resolver kind conflict: {kind}")
+            if not callable(getattr(resolver, "resolve", None)):
+                raise TypeError(
+                    f"claimed WorkUnit resolver is invalid for kind: {kind}"
+                )
+            resolvers[kind] = resolver
+    resolver = KindAwareClaimedWorkResolver(resolvers)
     return WorkUnitRunner(
         control,
         publisher=publisher,

@@ -1230,6 +1230,34 @@ _MISSION_FORK_CONTEXT_PROFILE = _ModelContextProfile(
     require_ancestry=True,
     require_input_refs=True,
 )
+_DESKTOP_TASK_CONTEXT_PROFILE = _ModelContextProfile(
+    source_type="manual",
+    work_unit_kind="desktop.task",
+    label="desktop task",
+    schema="agenthub.desktop-task-context.v1",
+)
+
+
+class DesktopTaskClaimedWorkResolver(_ClaimedModelWorkResolver):
+    """Resolve one claimed desktop task root into bounded local execution."""
+
+    def __init__(
+        self,
+        control: MissionControlRunnerPort,
+        *,
+        runner_id: str,
+        harness_factory: ClaimedHarnessFactoryPort,
+        max_context_chars: int = 32_768,
+        max_timeout_seconds: float = 300.0,
+    ) -> None:
+        super().__init__(
+            control,
+            runner_id=runner_id,
+            harness_factory=harness_factory,
+            profile=_DESKTOP_TASK_CONTEXT_PROFILE,
+            max_context_chars=max_context_chars,
+            max_timeout_seconds=max_timeout_seconds,
+        )
 
 
 def compile_mission_fork_context(
@@ -1636,6 +1664,7 @@ __all__ = [
     "MissionControlRunnerClient",
     "MissionControlRunnerPort",
     "MissionForkClaimedWorkResolver",
+    "DesktopTaskClaimedWorkResolver",
     "RunnerControlError",
     "RunnerError",
     "RunnerExecutionError",
