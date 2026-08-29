@@ -226,7 +226,10 @@ impl LocalRuntime {
             ));
         }
         let (args, require_artifact_root) = spec.resolved_launch_args(artifact_directory);
-        match Command::new(&spec.executable).args(&args).spawn() {
+        let mut command = Command::new(&spec.executable);
+        command.args(&args);
+        crate::hide_window(&mut command);
+        match command.spawn() {
             Ok(child) => {
                 let process_id = child.id();
                 let mut state = self.state.lock().expect("local Runtime lock poisoned");

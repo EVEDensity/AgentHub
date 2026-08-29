@@ -18,13 +18,32 @@ use services::{ServiceSnapshot, ServiceSupervisor};
 use std::process::Command;
 use tauri::{Manager, State};
 
+/// Spawn a child process without flashing a console window on the desktop.
+/// The bundled services are console-subsystem binaries (PyInstaller, Go,
+/// node.exe); without CREATE_NO_WINDOW each spawn pops up a console window
+/// during startup and every automatic restart.
+#[cfg(windows)]
+pub(crate) fn hide_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+pub(crate) fn hide_window(_command: &mut Command) {}
+
+// Health probes and process lifecycle calls block for up to a few seconds.
+// They must stay off the main/UI thread: Tauri runs sync commands on the main
+// thread (freezing the webview), while async commands run on the async runtime
+// worker pool. Borrowed parameters (State) in async commands require a Result
+// return type.
 #[tauri::command]
-fn runtime_status(runtime: State<'_, LocalRuntime>) -> RuntimeSnapshot {
-    runtime.snapshot()
+async fn runtime_status(runtime: State<'_, LocalRuntime>) -> Result<RuntimeSnapshot, String> {
+    Ok(runtime.snapshot())
 }
 
 #[tauri::command]
-fn start_runtime(
+async fn start_runtime(
     runtime: State<'_, LocalRuntime>,
     configuration: State<'_, ConfigurationStore>,
     supervisor: State<'_, ServiceSupervisor>,
@@ -48,13 +67,18 @@ fn start_runtime(
 }
 
 #[tauri::command]
-fn stop_runtime(runtime: State<'_, LocalRuntime>, supervisor: State<'_, ServiceSupervisor>) -> RuntimeSnapshot {
+async fn stop_runtime(
+    runtime: State<'_, LocalRuntime>,
+    supervisor: State<'_, ServiceSupervisor>,
+) -> Result<RuntimeSnapshot, String> {
     supervisor.stop_all();
-    runtime.stop()
+    Ok(runtime.stop())
 }
 
 #[tauri::command]
-fn service_status(supervisor: State<'_, ServiceSupervisor>) -> Vec<ServiceSnapshot> { supervisor.snapshots() }
+async fn service_status(supervisor: State<'_, ServiceSupervisor>) -> Result<Vec<ServiceSnapshot>, String> {
+    Ok(supervisor.snapshots())
+}
 
 #[tauri::command]
 fn configuration_status(
@@ -111,7 +135,7 @@ fn frontend_endpoint(supervisor: State<'_, ServiceSupervisor>) -> Result<String,
 }
 
 #[tauri::command]
-fn probe_control_plane(
+async fn probe_control_plane(
     configuration: State<'_, ConfigurationStore>,
     supervisor: State<'_, ServiceSupervisor>,
 ) -> Result<ControlPlaneSnapshot, String> {
@@ -131,7 +155,7 @@ fn probe_control_plane(
 }
 
 #[tauri::command]
-fn probe_mcp(
+async fn probe_mcp(
     configuration: State<'_, ConfigurationStore>,
 ) -> Result<ControlPlaneSnapshot, String> {
     let endpoint = configuration
@@ -167,8 +191,10 @@ fn open_control_plane(configuration: State<'_, ConfigurationStore>, supervisor: 
         configured
     }.ok_or_else(|| "Mission Control endpoint is not configured".to_owned())?;
 
-    Command::new("rundll32.exe")
-        .args(["url.dll,FileProtocolHandler", endpoint.as_str()])
+    let mut command = Command::new("rundll32.exe");
+    command.args(["url.dll,FileProtocolHandler", endpoint.as_str()]);
+    hide_window(&mut command);
+    command
         .spawn()
         .map(|_| ())
         .map_err(|_| "Unable to open Mission Control in the default browser".to_owned())
