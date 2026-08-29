@@ -309,6 +309,34 @@ class MissionRepository:
         )
         return [self._event_from_row(row) for row in rows]
 
+    async def list_work_unit_events(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[EventEnvelope]:
+        """Latest work-unit events correlated with a mission, oldest first.
+
+        Harness checkpoint and work-unit lifecycle events are stored on the
+        ``work_unit`` aggregate (``correlation_id`` = mission id), so the
+        desktop execution feed reads them through this companion query to
+        :meth:`list_events`.
+        """
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        rows = await self._fetch_all(
+            """SELECT event_id, aggregate_type, aggregate_id, sequence, event_type,
+                      actor, occurred_at, correlation_id, causation_id, payload,
+                      schema_version
+               FROM mission_events
+               WHERE aggregate_type='work_unit' AND correlation_id=$1
+               ORDER BY occurred_at DESC, sequence DESC, event_id DESC
+               LIMIT $2""",
+            mission_id,
+            limit,
+        )
+        return [self._event_from_row(row) for row in reversed(rows)]
+
     async def add_evidence(self, evidence: Evidence) -> None:
         await self._execute(
             """INSERT INTO evidence(

@@ -17,6 +17,7 @@ const elements = {
   missionControlEndpoint: document.querySelector('#mission-control-endpoint'), mcpEndpoint: document.querySelector('#mcp-endpoint'), artifactDirectory: document.querySelector('#artifact-directory'),
   missionControlToken: document.querySelector('#mission-control-token'), mcpToken: document.querySelector('#mcp-token'), secretStatus: document.querySelector('#secret-status'), configurationModelApiKey: document.querySelector('#configuration-model-api-key'),
   taskResult: document.querySelector('#task-result'), resultStatus: document.querySelector('#result-status'), resultSummary: document.querySelector('#result-summary'), resultItems: document.querySelector('#result-items'),
+  resultEvents: document.querySelector('#result-events'), executionFeed: document.querySelector('#execution-feed'), executionFeedToggle: document.querySelector('#execution-feed-toggle'),
   adminFrame: document.querySelector('#admin-frame'),
 };
 
@@ -309,9 +310,106 @@ function renderTaskResult(mission, details = {}) {
   elements.resultItems.innerHTML = items.length ? items.map((item) => `<div class="result-item"><strong>${item.id || item.kind || '结果'}</strong><span>${item.status || item.verdict || item.summary || '已记录'}</span></div>`).join('') : '<div class="result-item"><span>任务已创建，等待执行服务产生结果。</span></div>';
 }
 
+// Central mapping for the desktop execution feed. Keys are the actual
+// event_type values stored in mission_events; checkpoint events carry the
+// harness phase in payload.phase. Unknown values fall back to the raw text.
+const eventTypeLabels = {
+  'harness.execution.started': '开始执行',
+  'harness.iteration.started': '迭代开始',
+  'harness.model.started': '模型推理中',
+  'harness.model.completed': '模型返回',
+  'harness.tool.started': '工具调用',
+  'harness.tool.completed': '工具执行',
+  'harness.budget.exhausted': '预算耗尽',
+  'harness.execution.completed': '执行完成',
+  'harness.execution.failed': '执行失败',
+  'mission.lifecycle.created': '任务已创建',
+  'mission.lifecycle.started': '任务已启动',
+  'mission.lifecycle.cancelled': '任务已取消',
+  'mission.lifecycle.failed': '任务失败',
+  'work_unit.lifecycle.created': '执行单元已创建',
+  'work_unit.lifecycle.leased': '执行器已认领',
+  'work_unit.lifecycle.started': '开始执行',
+  'work_unit.lifecycle.heartbeat': '执行心跳',
+  'work_unit.lifecycle.completed': '执行完成',
+  'work_unit.lifecycle.failed': '执行失败',
+  'work_unit.lifecycle.cancelled': '执行取消',
+  'work_unit.delegation.requested': '委派请求',
+  'work_unit.checkpoint.recorded': '检查点',
+  'contract.lifecycle.revised': '契约已修订',
+  'decision.lifecycle.cancelled': '决策已取消',
+};
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const truncateText = (value, max = 120) => {
+  const text = String(value ?? '');
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+};
+
+function describeMissionEvent(event) {
+  const payload = event.payload || {};
+  const phase = typeof payload.phase === 'string' ? payload.phase : '';
+  if (event.event_type === 'work_unit.checkpoint.recorded' && phase) {
+    if (phase === 'harness.iteration.started' && payload.iteration > 0) return `第 ${payload.iteration} 轮`;
+    return eventTypeLabels[phase] || phase;
+  }
+  return eventTypeLabels[event.event_type] || event.event_type || '事件';
+}
+
+function eventSummary(event) {
+  const payload = event.payload || {};
+  const parts = [];
+  if (payload.toolName) parts.push(`工具 ${payload.toolName}`);
+  if (payload.toolSuccess === true) parts.push('成功');
+  if (payload.toolSuccess === false) parts.push('失败');
+  if (typeof payload.iteration === 'number' && payload.iteration > 0) parts.push(`第 ${payload.iteration} 轮`);
+  if (typeof payload.toolCalls === 'number' && payload.toolCalls > 0) parts.push(`累计工具调用 ${payload.toolCalls} 次`);
+  if (payload.failureReason) parts.push(String(payload.failureReason));
+  return truncateText(parts.join(' · '));
+}
+
+const executionFeed = { seen: new Set(), items: [] };
+
+function resetExecutionFeed() {
+  executionFeed.seen = new Set();
+  executionFeed.items = [];
+  if (elements.executionFeed) elements.executionFeed.hidden = true;
+  if (elements.resultEvents) elements.resultEvents.replaceChildren();
+  if (elements.executionFeedToggle) {
+    elements.executionFeedToggle.setAttribute('aria-expanded', 'true');
+    elements.executionFeedToggle.classList.remove('collapsed');
+  }
+}
+
+function recordExecutionEvents(events) {
+  const fresh = [];
+  for (const event of events) {
+    const key = event.event_id || `${event.aggregate_type}:${event.aggregate_id}:${event.sequence}:${event.occurred_at}`;
+    if (executionFeed.seen.has(key)) continue;
+    executionFeed.seen.add(key);
+    fresh.push(event);
+  }
+  if (!fresh.length) return;
+  // Events arrive oldest-first; the feed shows the newest at the top.
+  fresh.reverse();
+  executionFeed.items = [...fresh, ...executionFeed.items].slice(0, 30);
+  renderExecutionFeed();
+}
+
+function renderExecutionFeed() {
+  if (!elements.executionFeed || !elements.resultEvents) return;
+  elements.executionFeed.hidden = false;
+  elements.resultEvents.replaceChildren(...executionFeed.items.map((event) => {
+    const row = document.createElement('div'); row.className = 'result-item';
+    const time = (event.occurred_at || '').toString().replace('T', ' ').slice(0, 19);
+    const summary = eventSummary(event);
+    row.innerHTML = `<strong>#${event.sequence ?? '?'} ${escapeHtml(describeMissionEvent(event))}</strong><span>${escapeHtml(time)}${summary ? ` · ${escapeHtml(summary)}` : ''}</span>`;
+    return row;
+  }));
+}
+
 async function pollMission(missionId) {
   let afterSequence = 0;
-  const eventBuffer = [];
+  resetExecutionFeed();
   const startedAt = Date.now();
   const deadline = startedAt + 30 * 60 * 1000;
   let lastRenderKey = '';
@@ -328,18 +426,18 @@ async function pollMission(missionId) {
     const mission = missionResp?.mission || missionResp || {};
     const newEvents = events?.events || [];
     if (newEvents.length) {
-      afterSequence = newEvents[newEvents.length - 1].sequence ?? afterSequence;
-      eventBuffer.push(...newEvents);
-      const container = document.querySelector('#result-events');
-      if (container) container.replaceChildren(...eventBuffer.slice(-12).reverse().map((e) => {
-        const row = document.createElement('div'); row.className = 'result-item';
-        row.innerHTML = `<strong>#${e.sequence ?? '?'} ${e.event_type || e.eventType || '事件'}</strong><span>${(e.occurred_at || e.occurredAt || '').toString().replace('T', ' ').slice(0, 19)}</span>`; return row;
-      }));
+      // Only mission-aggregate sequences advance the cursor; work-unit
+      // checkpoint events keep their own per-unit sequences and are
+      // deduplicated client-side by event_id.
+      for (const event of newEvents) {
+        if (event.aggregate_type === 'mission' && (event.sequence ?? 0) > afterSequence) afterSequence = event.sequence;
+      }
+      recordExecutionEvents(newEvents);
     }
     // Re-render only when something actually changed; rebuilding identical
     // DOM every tick caused visible jank while a mission was running.
     const details = { workUnits: workUnits?.workUnits || [], artifacts: artifacts?.artifacts || [], evidence: evidence?.evidence || [] };
-    const renderKey = JSON.stringify([mission.status, details.workUnits.length, details.artifacts.length, details.evidence.length, eventBuffer.length]);
+    const renderKey = JSON.stringify([mission.status, details.workUnits.length, details.artifacts.length, details.evidence.length]);
     if (renderKey !== lastRenderKey) {
       lastRenderKey = renderKey;
       renderTaskResult(mission, details);
@@ -559,6 +657,12 @@ document.querySelector('#stack-pin-clear').addEventListener('click', () => {
     .catch((error) => { elements.feedback.textContent = error instanceof Error ? error.message : '取消钉住失败'; });
 });
 elements.openConsole.addEventListener('click', openConsole);
+elements.executionFeedToggle?.addEventListener('click', () => {
+  const expanded = elements.executionFeedToggle.getAttribute('aria-expanded') === 'true';
+  elements.executionFeedToggle.setAttribute('aria-expanded', String(!expanded));
+  elements.executionFeedToggle.classList.toggle('collapsed', expanded);
+  if (elements.resultEvents) elements.resultEvents.hidden = expanded;
+});
 for (const card of document.querySelectorAll('[data-prompt]')) card.addEventListener('click', () => { elements.taskInput.value = card.dataset.prompt; elements.taskInput.dispatchEvent(new Event('input')); elements.taskInput.focus(); });
 elements.settings.addEventListener('click', () => switchView('settings')); elements.settingsBack.addEventListener('click', () => switchView('home')); for (const item of elements.settingsItems) item.addEventListener('click', () => selectSettingsSection(item.dataset.settingsSection)); elements.closeConfiguration.addEventListener('click', closeConfiguration); elements.cancelConfiguration.addEventListener('click', closeConfiguration); elements.form.addEventListener('submit', saveConfiguration);
 

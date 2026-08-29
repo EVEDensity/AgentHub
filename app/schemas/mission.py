@@ -227,6 +227,8 @@ class ExecutionCheckpointCreateRequest(BaseModel):
     model_cost: Annotated[float, Field(ge=0)]
     terminal: bool = False
     failure_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+    tool_name: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    tool_success: bool | None = None
 
 
 class WorkUnitExecutionRequest(BaseModel):

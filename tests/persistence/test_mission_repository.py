@@ -272,6 +272,38 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.repository.list_events("mis-1", limit=201)
 
+    async def test_work_unit_event_reads_are_correlated_and_bounded(self) -> None:
+        self.database.all = [
+            self.build_event_row(
+                build_event(
+                    aggregate_type="work_unit",
+                    aggregate_id="wu-1",
+                    sequence=2,
+                    event_id="evt-wu-2",
+                    event_type="work_unit.checkpoint.recorded",
+                )
+            ),
+            self.build_event_row(
+                build_event(
+                    aggregate_type="work_unit",
+                    aggregate_id="wu-1",
+                    sequence=1,
+                    event_id="evt-wu-1",
+                    event_type="work_unit.checkpoint.recorded",
+                )
+            ),
+        ]
+
+        events = await self.repository.list_work_unit_events("mis-1", limit=20)
+
+        self.assertEqual([event.sequence for event in events], [1, 2])
+        list_sql, list_args = self.database.fetched_all[-1]
+        self.assertIn("aggregate_type='work_unit'", list_sql)
+        self.assertIn("correlation_id=$1", list_sql)
+        self.assertEqual(list_args, ("mis-1", 20))
+        with self.assertRaises(ValueError):
+            await self.repository.list_work_unit_events("mis-1", limit=201)
+
     async def test_evidence_round_trip_and_mission_list(self) -> None:
         evidence = build_evidence()
 

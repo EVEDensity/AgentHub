@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from typing import Any
@@ -137,3 +138,81 @@ class ModelPortTests(unittest.IsolatedAsyncioTestCase):
                 model="test",
                 completion_token_cost=float("nan"),
             )
+
+    def test_non_positive_context_char_budget_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive"):
+            ModelAdapterPort(FakeAdapter("ok"), model="test", context_char_budget=0)
+
+
+class ContextCompressionTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _results(count: int, content: str) -> tuple[FunctionResult, ...]:
+        return tuple(
+            FunctionResult(
+                call_id=f"call-{index}",
+                name="file_read",
+                success=True,
+                content=content,
+            )
+            for index in range(1, count + 1)
+        )
+
+    async def test_context_within_budget_is_not_compressed(self) -> None:
+        adapter = FakeAdapter('{"content":"done"}')
+        port = ModelAdapterPort(adapter, model="test-model")
+        results = self._results(3, "x" * 400)
+
+        await port.complete(
+            HarnessRequest(code="answer", language="text", timeout=5), results
+        )
+
+        prompt = adapter.calls[0]["prompt"]
+        self.assertNotIn("已压缩", prompt)
+        self.assertEqual(prompt.count("x" * 400), 3)
+
+    async def test_oversized_context_compresses_oldest_and_keeps_recent_complete(self) -> None:
+        adapter = FakeAdapter('{"content":"done"}')
+        port = ModelAdapterPort(adapter, model="test-model", context_char_budget=3000)
+        results = self._results(4, "x" * 1000)
+
+        with self.assertLogs("app.services.model_port", level="DEBUG") as logs:
+            await port.complete(
+                HarnessRequest(code="answer", language="text", timeout=5), results
+            )
+
+        prompt = adapter.calls[0]["prompt"]
+        rendered = json.loads(prompt.split("\n\nTool results:\n", 1)[1])
+        self.assertEqual(len(rendered), 4)
+        for entry in rendered[:2]:
+            self.assertTrue(entry["content"].startswith("x" * 200))
+            self.assertTrue(entry["content"].endswith("…[已压缩 800 字符]"))
+        self.assertEqual(rendered[2]["content"], "x" * 1000)
+        self.assertEqual(rendered[3]["content"], "x" * 1000)
+        self.assertEqual(
+            rendered[0]["callId"],
+            "call-1",
+        )
+        self.assertLessEqual(
+            len(json.dumps(rendered, ensure_ascii=False, sort_keys=True)),
+            3000,
+        )
+        self.assertTrue(any("compressed" in message for message in logs.output))
+
+    async def test_compressed_transcript_stays_parseable_json(self) -> None:
+        adapter = FakeAdapter('{"content":"done"}')
+        port = ModelAdapterPort(adapter, model="test-model", context_char_budget=1200)
+        tricky = '中文"引号"\nand\\backslash' * 50
+        results = self._results(3, tricky)
+
+        await port.complete(
+            HarnessRequest(code="answer", language="text", timeout=5), results
+        )
+
+        rendered = json.loads(
+            adapter.calls[0]["prompt"].split("\n\nTool results:\n", 1)[1]
+        )
+        self.assertEqual(len(rendered), 3)
+        self.assertTrue(rendered[0]["content"].startswith('中文"引号"'))
+        self.assertIn("已压缩", rendered[0]["content"])
+        self.assertTrue(rendered[0]["content"].endswith("字符]"))
+        self.assertTrue(all(entry["success"] for entry in rendered))

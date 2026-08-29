@@ -4,14 +4,15 @@ import asyncio
 import copy
 import hashlib
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from app.config import WORKSPACES_DIR
 from app.db.init_db import _create_mission_control_plane_sqlite
@@ -39,6 +40,7 @@ from app.services.artifact_integrity_service import (
 )
 from app.services.artifact_store_service import PublishedArtifact
 from app.services.desktop_local_runner import (
+    CONTEXT_CHAR_BUDGET_ENV,
     DESKTOP_ADAPTER_TYPE,
     DESKTOP_AGENT_ID,
     DESKTOP_RUNNER_LABEL,
@@ -48,6 +50,8 @@ from app.services.desktop_local_runner import (
     VERIFY_INTERVAL_ENV,
     DesktopLocalRunnerController,
     DesktopLocalRunnerSettings,
+    DesktopModelConfig,
+    DesktopModelFactory,
     derive_desktop_task_work_units,
     shutdown_desktop_local_runner,
     startup_desktop_local_runner,
@@ -61,6 +65,7 @@ from app.services.harness_service import (
     ModelResponse,
     ModelUsage,
 )
+from app.services.model_port import ModelAdapterPort
 from app.services.mission_service import MissionService
 from app.services.workspace_admission_service import (
     DatabaseWorkspaceClaimAdmissionPolicyResolver,
@@ -236,6 +241,20 @@ class DesktopRunnerSettingsTests(unittest.TestCase):
             DesktopLocalRunnerSettings.from_env(
                 env={"AGENTHUB_DESKTOP_RUNNER_TOKEN": "abc"}
             )
+
+    def test_context_char_budget_defaults_to_24000(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(env={})
+        self.assertEqual(settings.context_char_budget, 24_000)
+
+    def test_context_char_budget_is_env_configurable(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(
+            env={CONTEXT_CHAR_BUDGET_ENV: "4096"}
+        )
+        self.assertEqual(settings.context_char_budget, 4096)
+
+    def test_non_positive_context_char_budget_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            DesktopLocalRunnerSettings.from_env(env={CONTEXT_CHAR_BUDGET_ENV: "0"})
 
     def test_default_workspace_root_is_under_workspaces_dir(self) -> None:
         settings = desktop_settings()
@@ -684,6 +703,63 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     "file_search",
                 ],
             )
+
+
+# ── Context compression wiring ───────────────────────────────────────────
+
+
+class DesktopModelContextBudgetTests(DesktopWorkspaceTestCase):
+    def test_model_factory_builds_port_with_configured_budget(self) -> None:
+        # The adapter manager import chain pulls optional plugin deps; the
+        # budget contract under test only needs a resolvable adapter stub.
+        fake_manager_module = ModuleType("app.services.adapter_manager")
+        fake_manager_module.adapter_manager = SimpleNamespace(
+            get_adapter=lambda provider: object()
+        )
+        with patch.dict(
+            sys.modules, {"app.services.adapter_manager": fake_manager_module}
+        ):
+            factory = DesktopModelFactory(
+                DesktopModelConfig(
+                    provider="mock", model="test-model", api_key="", base_url=""
+                ),
+                context_char_budget=1234,
+            )
+            port = factory.build([])
+
+        self.assertIsInstance(port, ModelAdapterPort)
+        self.assertEqual(port._context_char_budget, 1234)
+
+    async def test_controller_passes_settings_budget_to_model_factory(self) -> None:
+        with (
+            patch(
+                "app.services.desktop_local_runner.load_default_model_config",
+                new=AsyncMock(
+                    return_value=DesktopModelConfig(
+                        provider="mock", model="test-model", api_key="", base_url=""
+                    )
+                ),
+            ),
+            patch(
+                "app.services.desktop_local_runner.DesktopModelFactory"
+            ) as factory_cls,
+        ):
+            controller = DesktopLocalRunnerController(
+                desktop_settings(context_char_budget=4321),
+                control=_IdleControl(),
+                publisher=FakePublisher(),
+                mission_source=IdleMissionSource(),
+                workspace_root=self.workspace_root,
+            )
+
+            await controller.start()
+            try:
+                factory_cls.assert_called_once()
+                self.assertEqual(
+                    factory_cls.call_args.kwargs.get("context_char_budget"), 4321
+                )
+            finally:
+                await controller.stop()
 
 
 # ── Unattended verification loop ─────────────────────────────────────────

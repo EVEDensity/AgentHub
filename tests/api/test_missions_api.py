@@ -253,6 +253,24 @@ class FakeMissionRepository:
         )
         return events[:limit]
 
+    async def list_work_unit_events(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[EventEnvelope]:
+        events = [
+            event
+            for event in self.events
+            if event.aggregate_type.value == "work_unit"
+            and event.correlation_id == mission_id
+        ]
+        events.sort(
+            key=lambda event: (event.occurred_at, event.sequence, event.event_id),
+            reverse=True,
+        )
+        return list(reversed(events[:limit]))
+
     async def add_evidence(self, evidence: Evidence) -> None:
         self.evidence.append(evidence)
 
@@ -1884,6 +1902,45 @@ class MissionApiTests(unittest.TestCase):
         )
         denied = other_user_client.get("/api/v1/missions/mis-1/events")
         self.assertEqual(denied.status_code, 403)
+
+    def test_events_endpoint_merges_work_unit_checkpoint_events(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="workspace-1")
+        mission_event = build_event(
+            sequence=1,
+            event_id="evt-1",
+            event_type="mission.lifecycle.started",
+        )
+        checkpoint_event = build_event(
+            aggregate_type="work_unit",
+            aggregate_id="wu-1",
+            sequence=3,
+            event_id="evt-wu-3",
+            event_type="work_unit.checkpoint.recorded",
+            payload={
+                "phase": "harness.tool.completed",
+                "toolName": "file_write",
+                "iteration": 1,
+            },
+        )
+        repository.events = [checkpoint_event, mission_event]
+        admin_client = TestClient(
+            build_app(
+                repository,
+                {"id": "admin-1", "name": "Root", "role": "admin"},
+            )
+        )
+
+        response = admin_client.get("/api/v1/missions/mis-1/events")
+
+        self.assertEqual(response.status_code, 200)
+        events = response.json()["events"]
+        self.assertEqual(
+            [event["event_id"] for event in events],
+            ["evt-1", "evt-wu-3"],
+        )
+        self.assertEqual(events[1]["payload"]["toolName"], "file_write")
+        self.assertEqual(events[1]["payload"]["phase"], "harness.tool.completed")
 
     def test_create_and_list_pending_work_unit_with_event(self) -> None:
         repository = FakeMissionRepository()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections.abc import Mapping
 from typing import Any, Protocol
@@ -14,6 +15,18 @@ from app.services.harness_service import (
     ModelResponse,
     ModelUsage,
 )
+
+logger = logging.getLogger(__name__)
+
+# Context budget for the rendered tool-result transcript. Older entries are
+# summarized once the rendered prompt exceeds this many characters
+# (Codex-style /compact for the function-calling loop).
+DEFAULT_CONTEXT_CHAR_BUDGET = 24_000
+# Compression knobs: the newest results always stay verbatim; older ones are
+# replaced by a one-line summary carrying the first N content characters.
+_SUMMARY_HEAD_CHARS = 200
+_RECENT_RESULTS_KEPT = 2
+_SUMMARY_SUFFIX = "…[已压缩 {omitted} 字符]"
 
 
 class PromptAdapterPort(Protocol):
@@ -43,6 +56,7 @@ class ModelAdapterPort(ModelPort):
         tools: list[dict[str, Any]] | None = None,
         prompt_token_cost: float = 0.0,
         completion_token_cost: float = 0.0,
+        context_char_budget: int = DEFAULT_CONTEXT_CHAR_BUDGET,
     ) -> None:
         if not model.strip():
             raise ValueError("model must be non-empty")
@@ -53,6 +67,8 @@ class ModelAdapterPort(ModelPort):
             or completion_token_cost < 0
         ):
             raise ValueError("Model token costs must be non-negative")
+        if context_char_budget < 1:
+            raise ValueError("context_char_budget must be positive")
         self._adapter = adapter
         self._model = model
         self._api_key = api_key
@@ -61,6 +77,7 @@ class ModelAdapterPort(ModelPort):
         self._tools = list(tools) if tools is not None else None
         self._prompt_token_cost = prompt_token_cost
         self._completion_token_cost = completion_token_cost
+        self._context_char_budget = context_char_budget
 
     async def complete(
         self,
@@ -69,7 +86,11 @@ class ModelAdapterPort(ModelPort):
         *,
         tools_enabled: bool = True,
     ) -> ModelResponse:
-        prompt = _render_prompt(request.code, tool_results)
+        prompt = _render_prompt(
+            request.code,
+            tool_results,
+            context_char_budget=self._context_char_budget,
+        )
         raw = await self._adapter.execute_prompt(
             prompt,
             self._model,
@@ -101,7 +122,12 @@ class ModelAdapterPort(ModelPort):
         )
 
 
-def _render_prompt(prompt: str, tool_results: tuple[FunctionResult, ...]) -> str:
+def _render_prompt(
+    prompt: str,
+    tool_results: tuple[FunctionResult, ...],
+    *,
+    context_char_budget: int | None = None,
+) -> str:
     if not tool_results:
         return prompt
     rendered = [
@@ -113,7 +139,62 @@ def _render_prompt(prompt: str, tool_results: tuple[FunctionResult, ...]) -> str
         }
         for result in tool_results
     ]
+    if context_char_budget is not None:
+        rendered = _compress_rendered_results(rendered, context_char_budget)
     return f"{prompt}\n\nTool results:\n{json.dumps(rendered, ensure_ascii=False, sort_keys=True)}"
+
+
+def _rendered_chars(entries: list[dict[str, Any]]) -> int:
+    return len(
+        json.dumps(entries, ensure_ascii=False, sort_keys=True)
+    )
+
+
+def _compress_rendered_results(
+    entries: list[dict[str, Any]],
+    budget: int,
+) -> list[dict[str, Any]]:
+    """Summarize the oldest tool results once the transcript exceeds budget.
+
+    The newest ``_RECENT_RESULTS_KEPT`` entries always stay verbatim so the
+    model keeps the freshest context; older entries are replaced by a
+    one-line summary (head characters + omitted count) until the rendered
+    transcript fits the budget. Compressing stops as soon as the budget is
+    met, and entries too short to shrink are left untouched.
+    """
+    total = _rendered_chars(entries)
+    if total <= budget:
+        return entries
+    compressible = max(len(entries) - _RECENT_RESULTS_KEPT, 0)
+    compressed = list(entries)
+    saved_total = 0
+    for index in range(compressible):
+        if total - saved_total <= budget:
+            break
+        original = compressed[index]
+        content = original["content"]
+        head = content[:_SUMMARY_HEAD_CHARS]
+        omitted = len(content) - len(head)
+        if omitted <= 0:
+            continue
+        summarized = dict(original)
+        summarized["content"] = (
+            f"{head}{_SUMMARY_SUFFIX.format(omitted=omitted)}"
+        )
+        saved = len(json.dumps(original, ensure_ascii=False, sort_keys=True)) - len(
+            json.dumps(summarized, ensure_ascii=False, sort_keys=True)
+        )
+        if saved <= 0:
+            continue
+        compressed[index] = summarized
+        saved_total += saved
+    if saved_total > 0:
+        logger.debug(
+            "compressed %d chars of %d tool-result entries for the model prompt",
+            saved_total,
+            len(entries),
+        )
+    return compressed
 
 
 def _non_negative_int(value: object) -> int:
@@ -201,6 +282,7 @@ def _normalize_call(raw: object, index: int) -> FunctionCall | None:
 
 
 __all__ = [
+    "DEFAULT_CONTEXT_CHAR_BUDGET",
     "ModelAdapterPort",
     "PromptAdapterPort",
     "build_function_tool_schemas",

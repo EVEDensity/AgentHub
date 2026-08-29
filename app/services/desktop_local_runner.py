@@ -63,7 +63,11 @@ from app.services.mission_service import (
     DESKTOP_TASK_WORK_UNIT_KIND,
     MissionService,
 )
-from app.services.model_port import ModelAdapterPort, build_function_tool_schemas
+from app.services.model_port import (
+    DEFAULT_CONTEXT_CHAR_BUDGET,
+    ModelAdapterPort,
+    build_function_tool_schemas,
+)
 from app.services.runner_checkpoint import MissionControlHarnessCheckpointFactory
 from app.services.runner_composition import (
     CapabilityBindingFactoryPort,
@@ -98,6 +102,7 @@ MODEL_BASE_URL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL_BASE_URL"
 PROVIDER_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_PROVIDER"
 VERIFY_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY"
 VERIFY_INTERVAL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_INTERVAL_SECONDS"
+CONTEXT_CHAR_BUDGET_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_CONTEXT_CHAR_BUDGET"
 
 # The desktop shell always talks to the local Mission Control workspace.
 DESKTOP_WORKSPACE_ID = "local-admin"
@@ -118,6 +123,7 @@ _DEFAULT_BASE_URL = "http://127.0.0.1:28000"
 _DEFAULT_MAX_ITERATIONS = 8
 _DEFAULT_MAX_TOOL_CALLS = 32
 _DEFAULT_MAX_TOTAL_TOKENS = 200_000
+_DEFAULT_CONTEXT_CHAR_BUDGET = DEFAULT_CONTEXT_CHAR_BUDGET
 _DEFAULT_TIMEOUT_SECONDS = 300.0
 _DEFAULT_LEASE_SECONDS = 300
 _DEFAULT_IDLE_DELAY_SECONDS = 0.5
@@ -154,6 +160,7 @@ class DesktopLocalRunnerSettings:
     derivation_interval_seconds: float
     verify_enabled: bool
     verify_interval_seconds: float
+    context_char_budget: int = _DEFAULT_CONTEXT_CHAR_BUDGET
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DesktopLocalRunnerSettings:
@@ -186,6 +193,10 @@ class DesktopLocalRunnerSettings:
         max_total_tokens = _positive_int(
             environment, "AGENTHUB_DESKTOP_LOCAL_RUNNER_MAX_TOTAL_TOKENS",
             _DEFAULT_MAX_TOTAL_TOKENS,
+        )
+        context_char_budget = _positive_int(
+            environment, CONTEXT_CHAR_BUDGET_ENV,
+            _DEFAULT_CONTEXT_CHAR_BUDGET,
         )
         timeout_seconds = _positive_float(
             environment, "AGENTHUB_DESKTOP_LOCAL_RUNNER_TIMEOUT_SECONDS",
@@ -231,6 +242,7 @@ class DesktopLocalRunnerSettings:
                 VERIFY_INTERVAL_ENV,
                 _DEFAULT_VERIFY_INTERVAL_SECONDS,
             ),
+            context_char_budget=context_char_budget,
         )
 
     def default_workspace_root(self) -> Path:
@@ -331,12 +343,20 @@ async def load_default_model_config(
 class DesktopModelFactory(HarnessModelFactoryPort):
     """Build a request-scoped ModelPort from the admin model configuration."""
 
-    def __init__(self, config: DesktopModelConfig) -> None:
+    def __init__(
+        self,
+        config: DesktopModelConfig,
+        *,
+        context_char_budget: int = DEFAULT_CONTEXT_CHAR_BUDGET,
+    ) -> None:
         if not config.model.strip():
             raise DesktopRunnerError(
                 "desktop model configuration has an empty model name"
             )
+        if context_char_budget < 1:
+            raise DesktopRunnerError("context_char_budget must be positive")
         self._config = config
+        self._context_char_budget = context_char_budget
         from app.services.adapter_manager import adapter_manager
 
         self._adapter = adapter_manager.get_adapter(config.provider)
@@ -349,6 +369,7 @@ class DesktopModelFactory(HarnessModelFactoryPort):
             base_url=self._config.base_url,
             system_prompt=DESKTOP_SYSTEM_PROMPT,
             tools=build_function_tool_schemas(list(tools)),
+            context_char_budget=self._context_char_budget,
         )
 
 
@@ -689,7 +710,8 @@ class DesktopLocalRunnerController:
         model_factory = self._injected_model_factory
         if model_factory is None:
             model_factory = DesktopModelFactory(
-                await load_default_model_config(settings.model_name)
+                await load_default_model_config(settings.model_name),
+                context_char_budget=settings.context_char_budget,
             )
 
         self._runner = self._build_runner(
@@ -979,6 +1001,7 @@ async def shutdown_desktop_local_runner(app: Any) -> None:
 
 
 __all__ = [
+    "CONTEXT_CHAR_BUDGET_ENV",
     "DESKTOP_ADAPTER_TYPE",
     "DESKTOP_AGENT_ID",
     "DESKTOP_TASK_WORK_UNIT_KIND",

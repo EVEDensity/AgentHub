@@ -5,6 +5,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from app.domain import (
     ActorRef,
@@ -117,6 +118,38 @@ def build_runner_actor(user: dict) -> ActorRef:
 
 def new_identifier(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def _checkpoint_event_payload(
+    checkpoint: ExecutionCheckpoint,
+    *,
+    tool_name: str | None = None,
+    tool_success: bool | None = None,
+) -> dict[str, Any]:
+    """Observability payload for one ``work_unit.checkpoint.recorded`` event.
+
+    Content-minimized on purpose: durable checkpoints stay content-free, so
+    the desktop execution feed renders from these few factual fields only.
+    """
+    payload: dict[str, Any] = {
+        "checkpointId": checkpoint.id,
+        "attempt": checkpoint.attempt,
+        "sequence": checkpoint.sequence,
+        "phase": checkpoint.phase.value,
+        "iteration": checkpoint.iteration,
+        "toolCalls": checkpoint.tool_calls,
+        "promptTokens": checkpoint.prompt_tokens,
+        "completionTokens": checkpoint.completion_tokens,
+        "terminal": checkpoint.terminal,
+        "stateDigest": checkpoint.state_digest,
+    }
+    if checkpoint.failure_reason is not None:
+        payload["failureReason"] = checkpoint.failure_reason
+    if tool_name is not None:
+        payload["toolName"] = tool_name
+    if tool_success is not None:
+        payload["toolSuccess"] = tool_success
+    return payload
 
 
 class MissionNotFoundError(LookupError):
@@ -1759,6 +1792,8 @@ class MissionService:
         terminal: bool,
         failure_reason: str | None,
         actor: ActorRef,
+        tool_name: str | None = None,
+        tool_success: bool | None = None,
     ) -> ExecutionCheckpoint:
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
@@ -1876,14 +1911,11 @@ class MissionService:
                     actor=actor,
                     occurred_at=occurred_at,
                     correlation_id=mission_id,
-                    payload={
-                        "checkpointId": checkpoint.id,
-                        "attempt": checkpoint.attempt,
-                        "sequence": checkpoint.sequence,
-                        "phase": checkpoint.phase.value,
-                        "terminal": checkpoint.terminal,
-                        "stateDigest": checkpoint.state_digest,
-                    },
+                    payload=_checkpoint_event_payload(
+                        checkpoint,
+                        tool_name=tool_name,
+                        tool_success=tool_success,
+                    ),
                     schema_version=1,
                 )
             )

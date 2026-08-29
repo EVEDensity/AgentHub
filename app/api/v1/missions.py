@@ -472,7 +472,22 @@ async def list_mission_events(
         after_sequence=after_sequence,
         limit=limit,
     )
-    return {"events": [event.to_public_dict() for event in events]}
+    # Harness checkpoint and work-unit lifecycle events live on the
+    # work_unit aggregate; merge the latest window so the desktop execution
+    # feed sees them. Clients deduplicate by event_id.
+    work_unit_events = await repository.list_work_unit_events(
+        mission_id,
+        limit=limit,
+    )
+    merged = {
+        event.event_id: event
+        for event in [*events, *work_unit_events]
+    }
+    ordered = sorted(
+        merged.values(),
+        key=lambda event: (event.occurred_at, event.event_id),
+    )
+    return {"events": [event.to_public_dict() for event in ordered]}
 
 
 @router.get("/{mission_id}/evidence")
@@ -965,6 +980,8 @@ async def record_execution_checkpoint(
             model_cost=request.model_cost,
             terminal=request.terminal,
             failure_reason=request.failure_reason,
+            tool_name=request.tool_name,
+            tool_success=request.tool_success,
             actor=_build_execution_actor(user),
         )
     except MissionNotFoundError as exc:

@@ -35,6 +35,8 @@ class ExecutionCheckpointControlPort(Protocol):
         model_cost: float,
         terminal: bool,
         failure_reason: str | None,
+        tool_name: str | None = None,
+        tool_success: bool | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -95,6 +97,8 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
             model_cost=checkpoint.usage.cost,
             terminal=checkpoint.terminal,
             failure_reason=checkpoint.failure_reason,
+            tool_name=event.tool_name,
+            tool_success=event.tool_success,
         )
         try:
             durable = ExecutionCheckpoint.model_validate(payload)

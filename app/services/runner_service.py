@@ -121,6 +121,8 @@ class MissionControlRunnerPort(Protocol):
         model_cost: float,
         terminal: bool,
         failure_reason: str | None,
+        tool_name: str | None = None,
+        tool_success: bool | None = None,
     ) -> dict[str, Any]: ...
 
     async def register_artifact(
@@ -524,6 +526,8 @@ class MissionControlRunnerClient:
         model_cost: float,
         terminal: bool,
         failure_reason: str | None,
+        tool_name: str | None = None,
+        tool_success: bool | None = None,
     ) -> dict[str, Any]:
         del runner_id
         payload: dict[str, Any] = {
@@ -540,6 +544,10 @@ class MissionControlRunnerClient:
         }
         if failure_reason is not None:
             payload["failureReason"] = failure_reason
+        if tool_name is not None:
+            payload["toolName"] = tool_name
+        if tool_success is not None:
+            payload["toolSuccess"] = tool_success
         return await self._request(
             "POST",
             f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/checkpoints",
