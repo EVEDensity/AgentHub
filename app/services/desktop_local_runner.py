@@ -80,6 +80,8 @@ TOKEN_FILE_ENV = "AGENTHUB_DESKTOP_RUNNER_TOKEN_FILE"
 USER_ID_ENV = "AGENTHUB_DESKTOP_RUNNER_USER_ID"
 WORKSPACE_ROOT_ENV = "AGENTHUB_DESKTOP_WORKSPACE_ROOT"
 MODEL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL"
+MODEL_BASE_URL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL_BASE_URL"
+PROVIDER_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_PROVIDER"
 
 # The desktop shell always talks to the local Mission Control workspace.
 DESKTOP_WORKSPACE_ID = "local-admin"
@@ -266,19 +268,32 @@ async def load_default_model_config(
         if model_name is None or row.get("model_name") == model_name:
             selected = row
             break
+    key_env = os.environ.get("AGENTHUB_DESKTOP_MODEL_API_KEY", "")
+    model_env = os.environ.get(MODEL_ENV, "").strip()
+    base_url_env = os.environ.get(MODEL_BASE_URL_ENV, "").strip()
+    provider_env = os.environ.get(PROVIDER_ENV, "").strip()
     if selected is None:
-        raise DesktopRunnerError(
-            "no active admin model configuration is available for the "
-            "desktop local runner"
+        # Pure-environment fallback: no admin model configuration rows yet,
+        # so the desktop-injected key/model/base URL define the provider.
+        if not key_env or not model_env:
+            raise DesktopRunnerError(
+                "no active admin model configuration is available for the "
+                "desktop local runner"
+            )
+        return DesktopModelConfig(
+            provider=provider_env or "openai",
+            model=model_env,
+            api_key=key_env,
+            base_url=base_url_env,
         )
     api_key = decrypt_secret(str(selected.get("api_key") or ""))
     if not api_key:
-        api_key = os.environ.get("AGENTHUB_DESKTOP_MODEL_API_KEY", "")
+        api_key = key_env
     return DesktopModelConfig(
-        provider=str(selected.get("provider") or "mock"),
-        model=str(selected.get("model_name") or ""),
+        provider=str(selected.get("provider") or "") or provider_env or "openai",
+        model=str(selected.get("model_name") or "") or model_env,
         api_key=api_key,
-        base_url=str(selected.get("base_url") or ""),
+        base_url=str(selected.get("base_url") or "") or base_url_env,
     )
 
 
@@ -701,10 +716,10 @@ class DesktopLocalRunnerController:
                 raise
             except Exception as exc:
                 logger.warning(
-                    "desktop runner derivation failed: %s", type(exc).__name__
+                    "desktop runner derivation failed: %s",
+                    exc,
+                    exc_info=True,
                 )
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("desktop runner derivation failure", exc_info=exc)
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),

@@ -123,13 +123,30 @@ async def lifespan(app: FastAPI):
 
     # Desktop local runner — env-gated (AGENTHUB_DESKTOP_LOCAL_RUNNER=1),
     # never constructed in production or server deployments.
-    try:
-        from app.services.desktop_local_runner import startup_desktop_local_runner
-        await startup_desktop_local_runner(app)
-    except Exception:
-        _log.warning("startup: desktop local runner unavailable", exc_info=True)
+    # Scheduled as a post-startup task: the runner authenticates against this
+    # very process over HTTP, which only works once uvicorn is listening
+    # (i.e., after this lifespan yields).
+    import asyncio
+
+    from app.services.desktop_local_runner import startup_desktop_local_runner
+
+    async def _start_desktop_runner() -> None:
+        try:
+            await startup_desktop_local_runner(app)
+        except Exception:
+            _log.warning("startup: desktop local runner unavailable", exc_info=True)
+
+    app.state.desktop_runner_startup = asyncio.create_task(_start_desktop_runner())
 
     yield
+
+    startup_task = getattr(app.state, "desktop_runner_startup", None)
+    if startup_task is not None:
+        startup_task.cancel()
+        try:
+            await startup_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     try:
         from app.services.desktop_local_runner import shutdown_desktop_local_runner
