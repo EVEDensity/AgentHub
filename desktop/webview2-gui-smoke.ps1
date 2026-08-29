@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+﻿﻿[CmdletBinding()]
 param([int]$Port = 18765, [string]$OutputDirectory = "")
 
 $ErrorActionPreference = "Stop"
@@ -28,13 +28,13 @@ try {
   # clicks drive the same listeners the real UI uses.
   Invoke-Playwright @('open', "http://127.0.0.1:$Port/index.html") | Out-Null
   $homeState = Invoke-Playwright @('eval', "() => JSON.stringify({taskInput: !!document.getElementById('task-input'), serviceList: !!document.getElementById('service-list'), feedback: !!document.getElementById('feedback')})")
-  if ($homeState -notmatch '"taskInput":true' -or $homeState -notmatch '"serviceList":true' -or $homeState -notmatch '"feedback":true') { throw "Initial desktop shell did not render: $homeState" }
+  if ($homeState -notmatch 'taskInput[\\"]*:true' -or $homeState -notmatch 'serviceList[\\"]*:true' -or $homeState -notmatch 'feedback[\\"]*:true') { throw "Initial desktop shell did not render: $homeState" }
   Invoke-Playwright @('eval', "document.getElementById('settings').click()") | Out-Null
   $settings = Invoke-Playwright @('eval', "() => JSON.stringify({settingsVisible: !document.getElementById('settings-view').hidden, generalPanel: !document.querySelector('[data-settings-panel=general]').hidden, generalActive: document.querySelector('[data-settings-section=general]').classList.contains('active')})")
-  if ($settings -notmatch '"settingsVisible":true' -or $settings -notmatch '"generalPanel":true') { throw "Settings view did not render: $settings" }
+  if ($settings -notmatch 'settingsVisible[\\"]*:true' -or $settings -notmatch 'generalPanel[\\"]*:true') { throw "Settings view did not render: $settings" }
   Invoke-Playwright @('eval', "document.querySelector('[data-settings-section=monitoring]').click()") | Out-Null
   $monitor = Invoke-Playwright @('eval', "() => JSON.stringify({monitorVisible: !document.querySelector('[data-settings-panel=monitoring]').hidden, stackCard: !!document.getElementById('monitor-stack'), stackState: !!document.getElementById('monitor-stack-state')})")
-  if ($monitor -notmatch '"monitorVisible":true' -or $monitor -notmatch '"stackCard":true') { throw "Monitor panel did not render: $monitor" }
+  if ($monitor -notmatch 'monitorVisible[\\"]*:true' -or $monitor -notmatch 'stackCard[\\"]*:true') { throw "Monitor panel did not render: $monitor" }
   $succeeded = $true
   Write-Output "WebView2 GUI smoke passed."
 } finally {
