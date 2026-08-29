@@ -3,7 +3,7 @@ const elements = {
   serviceList: document.querySelector('#service-list'), feedback: document.querySelector('#feedback'),
   taskInput: document.querySelector('#task-input'), startTask: document.querySelector('#start-task'), modelChip: document.querySelector('#model-chip'),
   stopRuntime: document.querySelector('#stop-runtime'), cancelMission: document.querySelector('#cancel-mission'),
-  openConsole: document.querySelector('#open-console'), openConsoleNav: document.querySelector('#open-console-nav'),
+  openConsole: document.querySelector('#open-console'),
   navHome: document.querySelector('#nav-home'), navHistory: document.querySelector('#nav-history'),
   homeView: document.querySelector('#home-view'), historyView: document.querySelector('#history-view'), historyList: document.querySelector('#history-list'), historyRefresh: document.querySelector('#history-refresh'),
   settingsView: document.querySelector('#settings-view'),
@@ -105,10 +105,9 @@ function renderWorkspaceState(services, controlPlane) {
   servicesReady = allReady;
 
   elements.workspaceState.innerHTML = `<span class="dot ${dotClass}"></span>${label}`;
-  elements.sidebarDot.className = `dot ${dotClass}`;
+  elements.sidebarDot.className = `dot ${dotClass} avatar-dot`;
   elements.sidebarStatus.textContent = label;
   if (elements.stopRuntime) elements.stopRuntime.hidden = !states.some((state) => ['ready', 'starting'].includes(state));
-  elements.openConsoleNav.disabled = controlPlane?.endpointConfigured !== true;
 
   if (allReady) {
     elements.startTask.disabled = false;
@@ -318,7 +317,7 @@ async function stopServices() {
   try {
     await nativeInvoke('stop_runtime');
     const services = await nativeInvoke('service_status');
-    renderServices(services); renderWorkspaceState(services, { endpointConfigured: !elements.openConsoleNav.disabled });
+    renderServices(services); renderWorkspaceState(services, {});
     elements.feedback.textContent = '本地服务已停止';
   } catch (error) { elements.feedback.textContent = error instanceof Error ? error.message : '停止本地服务失败'; }
   finally { elements.stopRuntime.disabled = false; }
@@ -505,7 +504,7 @@ document.querySelector('#stack-pin-clear').addEventListener('click', () => {
   nativeInvoke('clear_stack_pin').then((message) => { elements.feedback.textContent = message; loadMonitor(); })
     .catch((error) => { elements.feedback.textContent = error instanceof Error ? error.message : '取消钉住失败'; });
 });
-for (const button of [elements.openConsole, elements.openConsoleNav]) button.addEventListener('click', openConsole);
+elements.openConsole.addEventListener('click', openConsole);
 for (const card of document.querySelectorAll('[data-prompt]')) card.addEventListener('click', () => { elements.taskInput.value = card.dataset.prompt; elements.taskInput.dispatchEvent(new Event('input')); elements.taskInput.focus(); });
 elements.settings.addEventListener('click', () => switchView('settings')); elements.settingsBack.addEventListener('click', () => switchView('home')); for (const item of elements.settingsItems) item.addEventListener('click', () => selectSettingsSection(item.dataset.settingsSection)); elements.closeConfiguration.addEventListener('click', closeConfiguration); elements.cancelConfiguration.addEventListener('click', closeConfiguration); elements.form.addEventListener('submit', saveConfiguration);
 

@@ -14,7 +14,6 @@
         <nav id="main-nav" class="nav-list">
           <button id="nav-home" class="nav-item active" type="button"><span class="nav-icon">+</span>新任务</button>
           <button id="nav-history" class="nav-item" type="button"><span class="nav-icon">≡</span>任务历史</button>
-          <button id="open-console-nav" class="nav-item" type="button"><span class="nav-icon">▣</span>管理后台</button>
         </nav>
         <nav id="settings-nav" class="settings-nav" hidden aria-label="设置分类">
           <button id="settings-back" class="settings-back" type="button"><span class="nav-icon">‹</span><span>返回</span></button>
@@ -26,9 +25,11 @@
           <button class="settings-item" data-settings-section="advanced" type="button"><span class="settings-icon">⌘</span>高级</button>
         </nav>
         <div class="sidebar-bottom">
-          <div class="sidebar-status"><span id="sidebar-dot" class="dot starting"></span><small id="sidebar-status">正在启动</small></div>
-          <button id="settings" class="nav-item" type="button"><span class="nav-icon">⚙</span>设置</button>
-          <div class="account-line"><span class="avatar">A</span><span><strong>本地桌面</strong><small>AgentHub Desktop</small></span></div>
+          <div class="account-line">
+            <span class="avatar">A<span id="sidebar-dot" class="dot starting avatar-dot"></span></span>
+            <span class="account-name"><strong>本地桌面</strong><span id="sidebar-status" class="visually-hidden">正在启动</span></span>
+            <button id="settings" class="gear-button" type="button" title="设置" aria-label="设置">⚙</button>
+          </div>
         </div>
       </aside>
       <main id="home-view" class="workspace" aria-labelledby="page-title">
