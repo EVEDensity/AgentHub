@@ -208,7 +208,7 @@ impl ServiceSupervisor {
 fn service_environment(name: &str, port: u16, base: u16, data_dir: &PathBuf, db_path: &PathBuf) -> Vec<(String, String)> {
     let address = format!("127.0.0.1:{port}");
     match name {
-        "mission-control" => vec![("AGENTHUB_DB_BACKEND".into(), "sqlite".into()), ("AGENTHUB_SQLITE_PATH".into(), db_path.to_string_lossy().into()), ("AGENTHUB_LOCAL_DATA".into(), data_dir.to_string_lossy().into()), ("HOST".into(), "127.0.0.1".into()), ("PORT".into(), port.to_string())],
+        "mission-control" => vec![("AGENTHUB_DB_BACKEND".into(), "sqlite".into()), ("AGENTHUB_SQLITE_PATH".into(), db_path.to_string_lossy().into()), ("AGENTHUB_LOCAL_DATA".into(), data_dir.to_string_lossy().into()), ("HOST".into(), "127.0.0.1".into()), ("PORT".into(), port.to_string()), ("AGENTHUB_DESKTOP_LOCAL_RUNNER".into(), "1".into()), ("AGENTHUB_DESKTOP_ADMIN_NAME".into(), "admin".into()), ("AGENTHUB_DESKTOP_ADMIN_PASSWORD".into(), "admin123".into())],
         "gateway" => vec![("GATEWAY_LOCAL_MODE".into(), "true".into()), ("GATEWAY_ADDR".into(), address.clone()), ("HOST".into(), "127.0.0.1".into()), ("PORT".into(), port.to_string())],
         "mcp-gateway" => vec![("MCP_LOCAL_MODE".into(), "true".into()), ("MCP_ADDR".into(), address), ("GATEWAY_URL".into(), format!("http://127.0.0.1:{}", base.saturating_add(1))), ("AGENTHUB_LOCAL_DATA".into(), data_dir.to_string_lossy().into())],
         "frontend" => vec![("HOSTNAME".into(), "127.0.0.1".into()), ("PORT".into(), port.to_string()), ("API_BACKEND".into(), "legacy".into()), ("API_BACKEND_URL".into(), format!("http://127.0.0.1:{}", base)), ("GO_GATEWAY_URL".into(), format!("http://127.0.0.1:{}", base.saturating_add(1)))],
