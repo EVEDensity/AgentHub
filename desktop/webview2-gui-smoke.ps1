@@ -1,4 +1,4 @@
-﻿﻿[CmdletBinding()]
+[CmdletBinding()]
 param([int]$Port = 18765, [string]$OutputDirectory = "")
 
 $ErrorActionPreference = "Stop"
