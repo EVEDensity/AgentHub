@@ -11,7 +11,10 @@ docs/internal/architecture/desktop-local-runner-plan.md §2):
   Harness with the model configured in the admin model table and the fixed
   desktop file-tool whitelist;
 - a derivation loop creates exactly one ``desktop.task`` root WorkUnit per
-  RUNNING manual Mission so desktop-created Missions become claimable.
+  RUNNING manual Mission so desktop-created Missions become claimable;
+- an unattended verification loop discovers VERIFYING items through the
+  Mission Control verifier API, checks the registered Artifact bytes and
+  submits PASS/FAIL Evidence so deterministic missions finish on their own.
 
 The whole controller is env-gated and defaults to off; production and
 server deployments never construct it.
@@ -32,11 +35,18 @@ import httpx
 from app.domain import (
     ActorRef,
     ActorType,
+    ArtifactRef,
+    EvidenceVerdict,
     MissionSourceType,
     MissionStatus,
     OutputSpec,
 )
 from app.repositories import MissionRepository
+from app.services.artifact_integrity_service import (
+    ArtifactByteVerificationError,
+    ArtifactByteVerifier,
+    build_artifact_byte_verifier,
+)
 from app.services.artifact_store_service import ArtifactPublisher
 from app.services.desktop_runner_tools import build_desktop_runner_tools
 from app.services.harness_checkpoint import (
@@ -67,6 +77,10 @@ from app.services.runner_service import (
     WorkUnitRunner,
 )
 from app.services.runner_worker import RunnerWorker
+from app.services.verifier_service import (
+    MissionControlVerifierClient,
+    VerificationSubmission,
+)
 from app.services.workspace_context import build_workspace_root
 
 logger = logging.getLogger("agenthub.desktop_local_runner")
@@ -82,6 +96,8 @@ WORKSPACE_ROOT_ENV = "AGENTHUB_DESKTOP_WORKSPACE_ROOT"
 MODEL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL"
 MODEL_BASE_URL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL_BASE_URL"
 PROVIDER_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_PROVIDER"
+VERIFY_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY"
+VERIFY_INTERVAL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_INTERVAL_SECONDS"
 
 # The desktop shell always talks to the local Mission Control workspace.
 DESKTOP_WORKSPACE_ID = "local-admin"
@@ -93,6 +109,11 @@ DESKTOP_SYSTEM_PROMPT = (
     "不要操作工作区之外的路径，完成后用一句话总结结果。"
 )
 
+# Unattended verification identity (submitted as Evidence verifier ref).
+DESKTOP_VERIFIER_ID = "desktop-local-verifier"
+DESKTOP_VERIFIER_VERSION = "1"
+_DESKTOP_EVALUATOR = "artifact-set.v1"
+
 _DEFAULT_BASE_URL = "http://127.0.0.1:28000"
 _DEFAULT_MAX_ITERATIONS = 8
 _DEFAULT_MAX_TOOL_CALLS = 32
@@ -102,6 +123,7 @@ _DEFAULT_LEASE_SECONDS = 300
 _DEFAULT_IDLE_DELAY_SECONDS = 0.5
 _DEFAULT_MAX_DELAY_SECONDS = 10.0
 _DEFAULT_DERIVATION_INTERVAL_SECONDS = 5.0
+_DEFAULT_VERIFY_INTERVAL_SECONDS = 5.0
 
 
 class DesktopRunnerError(RuntimeError):
@@ -130,6 +152,8 @@ class DesktopLocalRunnerSettings:
     idle_delay_seconds: float
     max_delay_seconds: float
     derivation_interval_seconds: float
+    verify_enabled: bool
+    verify_interval_seconds: float
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DesktopLocalRunnerSettings:
@@ -199,6 +223,13 @@ class DesktopLocalRunnerSettings:
                 environment,
                 "AGENTHUB_DESKTOP_LOCAL_RUNNER_DERIVATION_INTERVAL_SECONDS",
                 _DEFAULT_DERIVATION_INTERVAL_SECONDS,
+            ),
+            # Unattended verification defaults to on; ``0`` opts out.
+            verify_enabled=environment.get(VERIFY_ENV, "1").strip() == "1",
+            verify_interval_seconds=_positive_float(
+                environment,
+                VERIFY_INTERVAL_ENV,
+                _DEFAULT_VERIFY_INTERVAL_SECONDS,
             ),
         )
 
@@ -542,6 +573,36 @@ class DesktopAuthenticator:
         return DesktopRunnerIdentity(access_token=token, user_id=user_id)
 
 
+# ── Unattended verification ──────────────────────────────────────────────
+
+
+class DesktopVerifierControlPort(Protocol):
+    """Verifier commands against Mission Control (HTTP adapter in production)."""
+
+    async def discover_verification_work(
+        self,
+        workspace_id: str,
+    ) -> dict[str, Any]: ...
+
+    async def submit_verification(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        submission: VerificationSubmission,
+    ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class _VerificationArtifactBytes:
+    """Minimal Artifact descriptor for byte verification."""
+
+    id: str
+    digest: str
+    content_address: str
+    size_bytes: int
+
+
 # ── Controller ───────────────────────────────────────────────────────────
 
 
@@ -560,6 +621,8 @@ class DesktopLocalRunnerController:
         workspace_root: Path | None = None,
         tools: Sequence[FunctionTool] | None = None,
         max_result_chars: int | None = None,
+        verifier_control: DesktopVerifierControlPort | None = None,
+        byte_verifier: ArtifactByteVerifier | None = None,
     ) -> None:
         self._settings = settings
         self._injected_control = control
@@ -572,10 +635,14 @@ class DesktopLocalRunnerController:
         ).resolve()
         self._max_result_chars = max_result_chars
         self._tools = list(tools) if tools is not None else None
+        self._verifier_control = verifier_control
+        self._byte_verifier = byte_verifier
+        self._verifier: DesktopVerifierControlPort | None = None
         self._http_client: httpx.AsyncClient | None = None
         self._worker: RunnerWorker | None = None
         self._worker_task: asyncio.Task[Any] | None = None
         self._derivation_task: asyncio.Task[Any] | None = None
+        self._verification_task: asyncio.Task[Any] | None = None
         self._stop_event = asyncio.Event()
         self._runner: WorkUnitRunner | None = None
 
@@ -592,6 +659,7 @@ class DesktopLocalRunnerController:
         if self._injected_control is not None:
             control = self._injected_control
             runner_id = settings.user_id or DESKTOP_RUNNER_LABEL
+            verifier = self._verifier_control
         else:
             identity = await self._authenticator.resolve(settings)
             self._http_client = httpx.AsyncClient()
@@ -601,6 +669,12 @@ class DesktopLocalRunnerController:
                 http_client=self._http_client,
             )
             runner_id = identity.user_id
+            verifier = self._verifier_control or MissionControlVerifierClient(
+                settings.base_url,
+                access_token=identity.access_token,
+                http_client=self._http_client,
+            )
+        self._verifier = verifier
 
         if self._tools is not None:
             tools = list(self._tools)
@@ -634,18 +708,21 @@ class DesktopLocalRunnerController:
         self._worker = worker
         self._derivation_task = asyncio.create_task(self._derivation_loop())
         self._worker_task = asyncio.create_task(worker.run())
+        if settings.verify_enabled and self._verifier is not None:
+            self._verification_task = asyncio.create_task(self._verification_loop())
         logger.info(
-            "desktop local runner started: workspace=%s root=%s runner=%s",
+            "desktop local runner started: workspace=%s root=%s runner=%s verify=%s",
             settings.workspace_id,
             self._workspace_root,
             runner_id,
+            "on" if self._verification_task is not None else "off",
         )
 
     async def stop(self) -> None:
         self._stop_event.set()
         if self._worker is not None:
             self._worker.request_stop()
-        for task in (self._worker_task, self._derivation_task):
+        for task in (self._worker_task, self._derivation_task, self._verification_task):
             if task is None:
                 continue
             task.cancel()
@@ -655,6 +732,7 @@ class DesktopLocalRunnerController:
                 pass
         self._worker_task = None
         self._derivation_task = None
+        self._verification_task = None
         self._worker = None
         if self._http_client is not None:
             await self._http_client.aclose()
@@ -737,6 +815,131 @@ class DesktopLocalRunnerController:
             workspace_id=self._settings.workspace_id,
         )
 
+    async def _verification_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                await self._verify_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "desktop runner verification failed: %s",
+                    exc,
+                    exc_info=True,
+                )
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self._settings.verify_interval_seconds,
+                )
+            except TimeoutError:
+                continue
+
+    async def _verify_once(self) -> None:
+        """Discover one VERIFYING item and submit Evidence for artifact facts.
+
+        Everything runs through the Mission Control verifier API; the loop
+        only judges registered Artifact bytes (existence, non-empty size,
+        SHA-256 digest) — never its own execution result.
+        """
+        verifier = self._verifier
+        if verifier is None:
+            return
+        discovery = await verifier.discover_verification_work(
+            self._settings.workspace_id
+        )
+        if not isinstance(discovery, Mapping):
+            return
+        context = discovery.get("verificationContext")
+        if discovery.get("discoveryStatus") != "ready" or not isinstance(
+            context, Mapping
+        ):
+            return
+        policy = context.get("evaluationPolicy")
+        if not isinstance(policy, Mapping) or policy.get("status") != "ready":
+            # Manual / inconclusive policies stay with the human decision flow.
+            return
+        if policy.get("evaluator") != _DESKTOP_EVALUATOR:
+            return
+        work_unit = context.get("workUnit")
+        mission = context.get("mission")
+        if not isinstance(work_unit, Mapping) or not isinstance(mission, Mapping):
+            return
+        artifacts = [
+            artifact
+            for artifact in context.get("artifacts") or []
+            if isinstance(artifact, Mapping)
+        ]
+        if not artifacts:
+            return
+
+        failure_reason = await self._check_artifact_facts(artifacts)
+        if failure_reason is None:
+            verdict = EvidenceVerdict.PASS
+            summary = (
+                f"{_DESKTOP_EVALUATOR} verified {len(artifacts)} Artifact(s): "
+                "files exist, are non-empty and byte digests match."
+            )
+        else:
+            verdict = EvidenceVerdict.FAIL
+            summary = f"desktop artifact check failed: {failure_reason}"
+        submission = VerificationSubmission(
+            criterion_id=str(policy.get("criterionId")),
+            verifier_id=DESKTOP_VERIFIER_ID,
+            verifier_version=DESKTOP_VERIFIER_VERSION,
+            configuration_digest=str(policy.get("configurationDigest")),
+            verdict=verdict,
+            artifact_refs=tuple(
+                ArtifactRef(
+                    id=str(artifact.get("id")),
+                    digest=str(artifact.get("digest")),
+                )
+                for artifact in artifacts
+            ),
+            summary=summary,
+        )
+        await verifier.submit_verification(
+            str(mission.get("id")),
+            str(work_unit.get("id")),
+            submission=submission,
+        )
+        logger.info(
+            "desktop runner verification submitted: work_unit=%s verdict=%s reason=%s",
+            work_unit.get("id"),
+            verdict.value,
+            failure_reason or "artifact bytes verified",
+        )
+
+    async def _check_artifact_facts(
+        self,
+        artifacts: Sequence[Mapping[str, Any]],
+    ) -> str | None:
+        """Return ``None`` when every Artifact's bytes check out, else the reason."""
+        descriptors: list[_VerificationArtifactBytes] = []
+        for artifact in artifacts:
+            size_bytes = artifact.get("sizeBytes")
+            artifact_id = str(artifact.get("id"))
+            if not isinstance(size_bytes, int) or isinstance(size_bytes, bool):
+                return f"artifact {artifact_id} has an invalid registered size"
+            if size_bytes <= 0:
+                return f"artifact {artifact_id} is empty"
+            descriptors.append(
+                _VerificationArtifactBytes(
+                    id=artifact_id,
+                    digest=str(artifact.get("digest")),
+                    content_address=str(artifact.get("contentAddress")),
+                    size_bytes=size_bytes,
+                )
+            )
+        byte_verifier = self._byte_verifier
+        if byte_verifier is None:
+            byte_verifier = build_artifact_byte_verifier()
+        try:
+            await byte_verifier.verify_all(descriptors)
+        except ArtifactByteVerificationError as exc:
+            return str(exc)
+        return None
+
 
 # ── FastAPI lifespan wiring ──────────────────────────────────────────────
 
@@ -779,7 +982,11 @@ __all__ = [
     "DESKTOP_ADAPTER_TYPE",
     "DESKTOP_AGENT_ID",
     "DESKTOP_TASK_WORK_UNIT_KIND",
+    "DESKTOP_VERIFIER_ID",
+    "DESKTOP_VERIFIER_VERSION",
     "DESKTOP_WORKSPACE_ID",
+    "VERIFY_ENV",
+    "VERIFY_INTERVAL_ENV",
     "DesktopAuthenticator",
     "DesktopLocalRunnerController",
     "DesktopLocalRunnerSettings",
@@ -787,6 +994,7 @@ __all__ = [
     "DesktopModelFactory",
     "DesktopRunnerError",
     "DesktopTaskHarnessFactory",
+    "DesktopVerifierControlPort",
     "MissionControlDesktopMissionSource",
     "derive_desktop_task_work_units",
     "desktop_local_runner_settings",

@@ -22,6 +22,7 @@ from app.domain import (
     ActorType,
     Budgets,
     CriterionKind,
+    EvidenceVerdict,
     Lease,
     Mission,
     MissionContract,
@@ -33,12 +34,18 @@ from app.domain import (
     WorkUnitStatus,
 )
 from app.repositories import MissionRepository
+from app.services.artifact_integrity_service import (
+    ContentAddressedArtifactByteVerifier,
+)
 from app.services.artifact_store_service import PublishedArtifact
 from app.services.desktop_local_runner import (
     DESKTOP_ADAPTER_TYPE,
     DESKTOP_AGENT_ID,
     DESKTOP_RUNNER_LABEL,
+    DESKTOP_VERIFIER_ID,
     ENABLE_ENV,
+    VERIFY_ENV,
+    VERIFY_INTERVAL_ENV,
     DesktopLocalRunnerController,
     DesktopLocalRunnerSettings,
     derive_desktop_task_work_units,
@@ -86,6 +93,8 @@ def desktop_settings(**overrides: Any) -> DesktopLocalRunnerSettings:
         "idle_delay_seconds": 0.01,
         "max_delay_seconds": 0.05,
         "derivation_interval_seconds": 0.01,
+        "verify_enabled": False,
+        "verify_interval_seconds": 0.01,
     }
     base.update(overrides)
     return DesktopLocalRunnerSettings(**base)
@@ -182,6 +191,25 @@ class DesktopRunnerSettingsTests(unittest.TestCase):
         self.assertEqual(settings.base_url, "http://127.0.0.1:28000")
         self.assertEqual(settings.workspace_id, WORKSPACE_ID)
         self.assertIsNone(settings.workspace_root)
+
+    def test_verification_defaults_to_on_with_five_second_interval(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(env={})
+        self.assertTrue(settings.verify_enabled)
+        self.assertEqual(settings.verify_interval_seconds, 5.0)
+
+    def test_verification_can_be_disabled_and_tuned_via_env(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(
+            env={
+                VERIFY_ENV: "0",
+                VERIFY_INTERVAL_ENV: "2.5",
+            }
+        )
+        self.assertFalse(settings.verify_enabled)
+        self.assertEqual(settings.verify_interval_seconds, 2.5)
+
+    def test_non_positive_verify_interval_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            DesktopLocalRunnerSettings.from_env(env={VERIFY_INTERVAL_ENV: "0"})
 
     def test_env_enables_the_runner_with_overrides(self) -> None:
         settings = DesktopLocalRunnerSettings.from_env(
@@ -656,6 +684,241 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     "file_search",
                 ],
             )
+
+
+# ── Unattended verification loop ─────────────────────────────────────────
+
+
+class _IdleControl:
+    """Runner control for verification tests: never claims work."""
+
+    async def claim_ready_work_unit(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {"claimStatus": "idle", "workUnit": None}
+
+
+class FakeVerifierControl:
+    def __init__(self, discovery: dict[str, Any] | None) -> None:
+        self.discovery = discovery
+        self.discover_calls: list[str] = []
+        self.submissions: list[Any] = []
+        self.submitted = asyncio.Event()
+
+    async def discover_verification_work(
+        self, workspace_id: str
+    ) -> dict[str, Any]:
+        self.discover_calls.append(workspace_id)
+        if self.discovery is None:
+            return {"discoveryStatus": "idle", "verificationContext": None}
+        return self.discovery
+
+    async def submit_verification(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        submission: Any,
+    ) -> dict[str, Any]:
+        self.submissions.append((mission_id, work_unit_id, submission))
+        self.submitted.set()
+        return {}
+
+
+def artifact_set_policy() -> dict[str, Any]:
+    return {
+        "status": "ready",
+        "criterionId": "desktop-artifacts",
+        "evaluator": "artifact-set.v1",
+        "configurationDigest": "sha256:" + "b" * 64,
+        "parameters": {"minimumArtifacts": 1, "requiredArtifactKinds": ["report"]},
+    }
+
+
+def ready_discovery(
+    digest: str,
+    size_bytes: int,
+    content_address: str,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "discoveryStatus": "ready",
+        "verificationContext": {
+            "version": 3,
+            "mission": {
+                "id": "mis-desktop-1",
+                "title": "桌面任务",
+                "objective": "创建 notes.txt",
+            },
+            "contract": {
+                "id": "contract-manual-v1",
+                "version": 1,
+                "acceptanceCriteria": [],
+            },
+            "workUnit": {
+                "id": "wu-desktop-1",
+                "kind": "desktop.task",
+                "inputRefs": [],
+                "expectedOutputs": [],
+                "status": "VERIFYING",
+                "attempt": 1,
+            },
+            "artifacts": [
+                {
+                    "id": "art-1",
+                    "attempt": 1,
+                    "kind": "report",
+                    "digest": digest,
+                    "contentAddress": content_address,
+                    "mediaType": "text/plain",
+                    "sizeBytes": size_bytes,
+                    "sensitivity": "internal",
+                }
+            ],
+            "evaluationPolicy": policy or artifact_set_policy(),
+        },
+    }
+
+
+class DesktopVerificationLoopTests(DesktopWorkspaceTestCase):
+    def _artifact_root(self) -> Path:
+        root = Path(self._tmp.name) / "artifacts"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _byte_verifier(self) -> ContentAddressedArtifactByteVerifier:
+        settings = SimpleNamespace(
+            local_root=self._artifact_root(),
+            verify_max_bytes=1024 * 1024,
+        )
+        return ContentAddressedArtifactByteVerifier(settings)
+
+    def _store_artifact(self, content: bytes) -> tuple[str, int, str]:
+        digest = hashlib.sha256(content).hexdigest()
+        sha_dir = self._artifact_root() / "sha256"
+        sha_dir.mkdir(parents=True, exist_ok=True)
+        (sha_dir / digest).write_bytes(content)
+        return f"sha256:{digest}", len(content), f"local:sha256/{digest}"
+
+    async def _run_controller(
+        self,
+        verifier: FakeVerifierControl,
+        **setting_overrides: Any,
+    ) -> DesktopLocalRunnerController:
+        controller = DesktopLocalRunnerController(
+            desktop_settings(verify_enabled=True, **setting_overrides),
+            control=_IdleControl(),
+            publisher=FakePublisher(),
+            model_factory=StaticModelFactory(ScriptedModel()),
+            mission_source=IdleMissionSource(),
+            workspace_root=self.workspace_root,
+            verifier_control=verifier,
+            byte_verifier=self._byte_verifier(),
+        )
+        await controller.start()
+        return controller
+
+    async def test_ready_artifact_set_item_submits_pass_evidence(self) -> None:
+        digest, size, address = self._store_artifact(b"notes content")
+        verifier = FakeVerifierControl(ready_discovery(digest, size, address))
+        controller = await self._run_controller(verifier)
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=2)
+        finally:
+            await controller.stop()
+
+        self.assertEqual(verifier.discover_calls, [WORKSPACE_ID])
+        self.assertEqual(len(verifier.submissions), 1)
+        mission_id, work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual((mission_id, work_unit_id), ("mis-desktop-1", "wu-desktop-1"))
+        self.assertEqual(submission.verdict, EvidenceVerdict.PASS)
+        self.assertEqual(submission.criterion_id, "desktop-artifacts")
+        self.assertEqual(submission.verifier_id, DESKTOP_VERIFIER_ID)
+        self.assertEqual(
+            submission.configuration_digest,
+            "sha256:" + "b" * 64,
+        )
+        self.assertEqual(
+            [(ref.id, ref.digest) for ref in submission.artifact_refs],
+            [("art-1", digest)],
+        )
+        self.assertIn("verified 1 Artifact", submission.summary)
+
+    async def test_missing_artifact_bytes_submits_fail_with_reason(self) -> None:
+        digest = "sha256:" + hashlib.sha256(b"nowhere").hexdigest()
+        verifier = FakeVerifierControl(
+            ready_discovery(digest, 12, f"local:sha256/{digest.removeprefix('sha256:')}")
+        )
+        controller = await self._run_controller(verifier)
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=2)
+        finally:
+            await controller.stop()
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
+        self.assertIn("unavailable", submission.summary)
+
+    async def test_empty_artifact_submits_fail_without_byte_read(self) -> None:
+        digest = "sha256:" + "c" * 64
+        verifier = FakeVerifierControl(
+            ready_discovery(digest, 0, f"local:sha256/{'c' * 64}")
+        )
+        controller = await self._run_controller(verifier)
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=2)
+        finally:
+            await controller.stop()
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
+        self.assertIn("empty", submission.summary)
+
+    async def test_idle_discovery_submits_nothing(self) -> None:
+        verifier = FakeVerifierControl(None)
+        controller = await self._run_controller(verifier)
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            await controller.stop()
+        self.assertEqual(verifier.submissions, [])
+        self.assertGreaterEqual(len(verifier.discover_calls), 1)
+
+    async def test_inconclusive_policy_submits_nothing(self) -> None:
+        digest, size, address = self._store_artifact(b"manual output")
+        manual_policy = {
+            "status": "inconclusive",
+            "reasonCode": "no_applicable_policy",
+            "criterionIds": ["desktop-review"],
+        }
+        verifier = FakeVerifierControl(
+            ready_discovery(digest, size, address, policy=manual_policy)
+        )
+        controller = await self._run_controller(verifier)
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            await controller.stop()
+        self.assertEqual(verifier.submissions, [])
+
+    async def test_verify_disabled_spawns_no_loop(self) -> None:
+        digest, size, address = self._store_artifact(b"never verified")
+        verifier = FakeVerifierControl(ready_discovery(digest, size, address))
+        controller = DesktopLocalRunnerController(
+            desktop_settings(verify_enabled=False),
+            control=_IdleControl(),
+            publisher=FakePublisher(),
+            model_factory=StaticModelFactory(ScriptedModel()),
+            mission_source=IdleMissionSource(),
+            workspace_root=self.workspace_root,
+            verifier_control=verifier,
+            byte_verifier=self._byte_verifier(),
+        )
+        await controller.start()
+        try:
+            self.assertIsNone(controller._verification_task)
+            await asyncio.sleep(0.05)
+            self.assertEqual(verifier.discover_calls, [])
+        finally:
+            await controller.stop()
 
 
 # ── SQLite claim dialect (desktop local profile) ─────────────────────────

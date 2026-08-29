@@ -17,6 +17,7 @@ use runtime::LocalRuntime;
 use services::{ServiceSnapshot, ServiceSupervisor};
 use std::process::Command;
 use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 /// Spawn a child process without flashing a console window on the desktop.
 /// The bundled services are console-subsystem binaries (PyInstaller, Go,
@@ -180,6 +181,34 @@ fn clear_stack_pin(supervisor: State<'_, ServiceSupervisor>) -> Result<String, S
     supervisor.clear_stack_pin()
 }
 
+/// Let the user pick the workspace (project) folder and persist the binding.
+/// The binding takes effect on the next mission-control start (app restart).
+#[tauri::command]
+async fn pick_workspace_folder(
+    app: tauri::AppHandle,
+    configuration: State<'_, ConfigurationStore>,
+) -> Result<Option<String>, String> {
+    // Folder pickers must not run on the main/UI thread: async commands run on
+    // the async runtime worker pool, where the blocking dialog is safe.
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .simplified()
+        .into_path()
+        .map_err(|error| error.to_string())?;
+    let path = path.to_string_lossy().into_owned();
+    configuration
+        .set_workspace_root(&path)
+        .map_err(|error| error.to_string())?;
+    Ok(Some(path))
+}
+
 #[tauri::command]
 fn open_control_plane(configuration: State<'_, ConfigurationStore>, supervisor: State<'_, ServiceSupervisor>) -> Result<(), String> {
     let configured = configuration
@@ -203,15 +232,20 @@ fn open_control_plane(configuration: State<'_, ConfigurationStore>, supervisor: 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
             let configuration = ConfigurationStore::new(config_dir);
             configuration
                 .ensure_defaults()
                 .map_err(|error| error.to_string())?;
+            let workspace_root = configuration.workspace_root().unwrap_or(None);
             app.manage(configuration);
             let resource_dir = app.path().resource_dir()?;
-            let supervisor = ServiceSupervisor::from_resource_dir(resource_dir.clone());
+            let supervisor = ServiceSupervisor::from_resource_dir_with_workspace_root(
+                resource_dir.clone(),
+                workspace_root,
+            );
             let runtime = supervisor.runtime_port().map_or_else(
                 || LocalRuntime::from_resource_dir(resource_dir.clone()),
                 |port| LocalRuntime::from_resource_dir_with_port(resource_dir.clone(), port),
@@ -237,7 +271,8 @@ fn main() {
             clear_stack_pin,
             local_service_endpoint,
             frontend_endpoint,
-            open_control_plane
+            open_control_plane,
+            pick_workspace_folder
         ])
         .run(tauri::generate_context!())
         .expect("AgentHub desktop shell failed");

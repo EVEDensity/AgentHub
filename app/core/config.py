@@ -23,7 +23,36 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # ── Derive base paths ──────────────────────────────────────────────────
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent  # app/core → app → project root
 _PROJECT_ROOT = _BASE_DIR.parent
-_DATA_DIR = _BASE_DIR / "data"
+
+
+def _resolve_data_dir() -> Path:
+    """Resolve the local data directory.
+
+    Priority: ``AGENTHUB_LOCAL_DATA`` (desktop packaged profile points this at
+    the user-local data root, e.g. ``%LOCALAPPDATA%\\AgentHub``) → its ``data``
+    subdirectory; otherwise the in-project ``data`` directory. PostgreSQL
+    production deployments are unaffected (they only use ``DATABASE_URL``).
+    """
+    local_data = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
+    if local_data:
+        return Path(local_data) / "data"
+    return _BASE_DIR / "data"
+
+
+def _resolve_workspaces_dir() -> Path:
+    """Resolve the workspaces root.
+
+    Priority: explicit ``AGENTHUB_WORKSPACES_DIR`` → ``AGENTHUB_LOCAL_DATA``
+    data directory → the in-project default.
+    """
+    explicit = os.environ.get("AGENTHUB_WORKSPACES_DIR", "").strip()
+    if explicit:
+        return Path(explicit)
+    return _resolve_data_dir() / "workspaces"
+
+
+_DATA_DIR = _resolve_data_dir()
+_WORKSPACES_DIR = _resolve_workspaces_dir()
 
 # Ensure data directory exists (idempotent)
 _DATA_DIR.mkdir(exist_ok=True)
@@ -291,7 +320,7 @@ class Settings(BaseSettings):
 
     @property
     def workspaces_dir(self) -> Path:
-        return _DATA_DIR / "workspaces"
+        return _WORKSPACES_DIR
 
     @property
     def memory_dir(self) -> Path:

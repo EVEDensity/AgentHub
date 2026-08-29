@@ -38,6 +38,7 @@ function nativeInvoke(command, args) {
   if (command === 'set_configuration_secret') return Promise.resolve({});
   if (command === 'clear_configuration_secret') return Promise.resolve({});
   if (command === 'pin_stack' || command === 'clear_stack_pin') return Promise.resolve('预览环境不支持该操作');
+  if (command === 'pick_workspace_folder') return Promise.resolve(null);
   if (command === 'runtime_status') return Promise.resolve({ status: 'running', readiness: 'ready', detail: '本地运行时就绪。' });
   if (command === 'probe_control_plane') return Promise.resolve({ reachability: 'reachable', endpointConfigured: true, detail: '本地控制面已连接' });
   if (command === 'probe_mcp') return Promise.resolve({ reachability: 'reachable', endpointConfigured: true, detail: '本地 MCP 已连接' });
@@ -209,9 +210,41 @@ function selectSettingsSection(section) {
   for (const panel of elements.settingsPanels) panel.hidden = panel.dataset.settingsPanel !== section;
   const active = [...elements.settingsItems].find((item) => item.dataset.settingsSection === section);
   elements.settingsTitle.textContent = active?.textContent?.trim() || '设置';
+  if (section === 'general') loadWorkspaceRootSetting();
   if (section === 'advanced') openAdminFrame();
   if (section === 'monitoring') loadMonitor();
   if (section === 'account') loadAccount();
+}
+
+async function loadWorkspaceRootSetting() {
+  const pathEl = document.querySelector('#workspace-root-path');
+  if (!pathEl) return;
+  try {
+    const details = await nativeInvoke('configuration_details');
+    const bound = details?.workspaceRoot;
+    pathEl.textContent = bound
+      ? `当前绑定：${bound}`
+      : '未绑定，任务将使用默认桌面工作区。';
+  } catch {
+    pathEl.textContent = '绑定状态读取失败。';
+  }
+}
+
+async function pickWorkspaceRootFolder() {
+  const pathEl = document.querySelector('#workspace-root-path');
+  const button = document.querySelector('#pick-workspace-root');
+  if (!pathEl || !button || button.disabled) return;
+  button.disabled = true;
+  try {
+    const picked = await nativeInvoke('pick_workspace_folder');
+    if (picked) {
+      pathEl.textContent = `当前绑定：${picked}（重启应用后生效）`;
+    }
+  } catch (error) {
+    pathEl.textContent = error instanceof Error ? error.message : '选择项目文件夹失败';
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderMcpProbe(probe) {
@@ -513,6 +546,7 @@ document.querySelector('#open-mcp-settings').addEventListener('click', openConfi
 document.querySelector('#open-advanced-settings').addEventListener('click', openConfiguration);
 for (const button of document.querySelectorAll('[data-clear-secret]')) button.addEventListener('click', () => clearStoredSecret(button.dataset.clearSecret, button));
 document.querySelector('#password-form').addEventListener('submit', changePassword);
+document.querySelector('#pick-workspace-root').addEventListener('click', pickWorkspaceRootFolder);
 document.querySelector('#stack-pin-apply').addEventListener('click', () => {
   const select = document.querySelector('#stack-pin-select');
   if (!select || !select.value) { elements.feedback.textContent = '本机暂无可钉住的历史栈'; return; }

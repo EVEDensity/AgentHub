@@ -22,6 +22,7 @@ pub struct DesktopConfigInput {
     pub mission_control_endpoint: Option<String>,
     pub mcp_endpoint: Option<String>,
     pub artifact_directory: Option<String>,
+    pub workspace_root: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -31,6 +32,7 @@ struct DesktopConfig {
     mission_control_endpoint: Option<String>,
     mcp_endpoint: Option<String>,
     artifact_directory: Option<String>,
+    workspace_root: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq)]
@@ -86,6 +88,7 @@ pub struct ConfigurationDetails {
     pub mission_control_endpoint: Option<String>,
     pub mcp_endpoint: Option<String>,
     pub artifact_directory: Option<String>,
+    pub workspace_root: Option<String>,
     pub mission_control_token: SecretAvailability,
     pub mcp_token: SecretAvailability,
     pub model_api_key: SecretAvailability,
@@ -207,6 +210,7 @@ impl ConfigurationStore {
             mission_control_endpoint: config.mission_control_endpoint,
             mcp_endpoint: config.mcp_endpoint,
             artifact_directory: config.artifact_directory,
+            workspace_root: config.workspace_root,
             mission_control_token: self.secret_status(SecretKind::MissionControlToken),
             mcp_token: self.secret_status(SecretKind::McpToken),
             model_api_key: self.secret_status(SecretKind::ModelApiKey),
@@ -256,11 +260,22 @@ impl ConfigurationStore {
         &self,
         input: DesktopConfigInput,
     ) -> Result<ConfigurationStatus, ConfigurationError> {
+        // The advanced-settings form does not manage the workspace binding;
+        // carry it over unless the input explicitly provides one.
+        let existing_workspace_root = if input.workspace_root.is_none() {
+            self.load_config()?.workspace_root
+        } else {
+            None
+        };
         let config = DesktopConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             mission_control_endpoint: validate_endpoint(input.mission_control_endpoint)?,
             mcp_endpoint: validate_endpoint(input.mcp_endpoint)?,
             artifact_directory: validate_artifact_directory(input.artifact_directory)?,
+            workspace_root: match validate_workspace_root(input.workspace_root)? {
+                Some(value) => Some(value),
+                None => existing_workspace_root,
+            },
         };
         let mut encoded =
             serde_json::to_vec_pretty(&config).map_err(|_| ConfigurationError::Serialization)?;
@@ -270,6 +285,25 @@ impl ConfigurationStore {
         fs::create_dir_all(parent).map_err(|_| ConfigurationError::Io)?;
         fs::write(&self.path, encoded).map_err(|_| ConfigurationError::Io)?;
         self.status()
+    }
+
+    pub fn set_workspace_root(
+        &self,
+        value: &str,
+    ) -> Result<ConfigurationStatus, ConfigurationError> {
+        let mut config = self.load_config()?;
+        config.workspace_root = validate_workspace_root(Some(value.to_owned()))?;
+        let mut encoded =
+            serde_json::to_vec_pretty(&config).map_err(|_| ConfigurationError::Serialization)?;
+        encoded.push(b'\n');
+        let parent = self.path.parent().ok_or(ConfigurationError::Io)?;
+        fs::create_dir_all(parent).map_err(|_| ConfigurationError::Io)?;
+        fs::write(&self.path, encoded).map_err(|_| ConfigurationError::Io)?;
+        self.status()
+    }
+
+    pub fn workspace_root(&self) -> Result<Option<String>, ConfigurationError> {
+        Ok(self.load_config()?.workspace_root)
     }
 
     pub fn set_secret(
@@ -368,11 +402,18 @@ fn validate_artifact_directory(
     Ok(Some(value.to_owned()))
 }
 
+fn validate_workspace_root(
+    value: Option<String>,
+) -> Result<Option<String>, ConfigurationError> {
+    validate_artifact_directory(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigurationStore, DesktopConfigInput, SecretAvailability, SecretInput, SecretKind,
-        SecretStore, SecretStoreError, DEFAULT_MCP_ENDPOINT, DEFAULT_MISSION_CONTROL_ENDPOINT,
+        ConfigurationError, ConfigurationStore, DesktopConfigInput, SecretAvailability,
+        SecretInput, SecretKind, SecretStore, SecretStoreError, DEFAULT_MCP_ENDPOINT,
+        DEFAULT_MISSION_CONTROL_ENDPOINT,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -434,6 +475,7 @@ mod tests {
                 mission_control_endpoint: Some("https://control.example.test".into()),
                 mcp_endpoint: Some("https://mcp.example.test".into()),
                 artifact_directory: Some(artifact_dir),
+                workspace_root: None,
             })
             .expect("config saves");
         store
@@ -489,6 +531,7 @@ mod tests {
             mission_control_endpoint: Some("https://user:password@example.test".into()),
             mcp_endpoint: Some("file:///tmp/mcp".into()),
             artifact_directory: None,
+            workspace_root: None,
         });
         assert!(result.is_err());
         assert!(!dir.join("config.json").exists());
@@ -524,6 +567,7 @@ mod tests {
                 mission_control_endpoint: Some("https://control.example.test".into()),
                 mcp_endpoint: Some("https://mcp.example.test".into()),
                 artifact_directory: Some(artifact_dir.clone()),
+                workspace_root: None,
             })
             .expect("config saves");
         store
@@ -553,6 +597,70 @@ mod tests {
         assert_eq!(details.mcp_token, SecretAvailability::Missing);
         let encoded = serde_json::to_string(&details).expect("details encode");
         assert!(!encoded.contains("never-returned-token"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_root_persists_and_survives_save_config() {
+        let (store, dir) = test_store();
+        store.ensure_defaults().expect("defaults save");
+        assert_eq!(store.workspace_root().expect("root read"), None);
+
+        let binding = std::env::temp_dir().join("agenthub-workspace-binding");
+        store
+            .set_workspace_root(&binding.to_string_lossy())
+            .expect("workspace root saves");
+        assert_eq!(
+            store.workspace_root().expect("root read").as_deref(),
+            Some(binding.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            store.details().expect("details read").workspace_root.as_deref(),
+            Some(binding.to_string_lossy().as_ref())
+        );
+
+        // The advanced-settings save flow (no workspaceRoot in the input)
+        // must not clear the binding.
+        store
+            .save_config(DesktopConfigInput {
+                mission_control_endpoint: Some("https://control.example.test".into()),
+                mcp_endpoint: Some("https://mcp.example.test".into()),
+                artifact_directory: Some(std::env::temp_dir().to_string_lossy().into_owned()),
+                workspace_root: None,
+            })
+            .expect("config saves");
+        assert_eq!(
+            store.workspace_root().expect("root read").as_deref(),
+            Some(binding.to_string_lossy().as_ref())
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_root_rejects_relative_paths() {
+        let (store, dir) = test_store();
+        let result = store.set_workspace_root("relative/path");
+        assert!(matches!(result, Err(ConfigurationError::InvalidInput)));
+        assert_eq!(store.workspace_root().expect("root read"), None);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn workspace_root_input_can_be_set_through_save_config() {
+        let (store, dir) = test_store();
+        let binding = std::env::temp_dir().join("agenthub-workspace-binding-input");
+        store
+            .save_config(DesktopConfigInput {
+                mission_control_endpoint: None,
+                mcp_endpoint: None,
+                artifact_directory: None,
+                workspace_root: Some(binding.to_string_lossy().into_owned()),
+            })
+            .expect("config saves");
+        assert_eq!(
+            store.workspace_root().expect("root read").as_deref(),
+            Some(binding.to_string_lossy().as_ref())
+        );
         let _ = fs::remove_dir_all(dir);
     }
 }
