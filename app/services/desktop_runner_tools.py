@@ -24,11 +24,18 @@ PermissionManager configuration untouched.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.services.harness_service import FunctionTool
+from app.services.harness_service import (
+    FunctionCallingHarness,
+    FunctionTool,
+    HarnessRequest,
+    ModelPort,
+)
+from app.services.runner_composition import HarnessModelFactoryPort
 from app.services.tool_registry import ToolDefinition
 from app.services.tools.definitions import (
     CODE_EXECUTE,
@@ -38,6 +45,8 @@ from app.services.tools.definitions import (
     FILE_SEARCH,
     FILE_WRITE,
     FILE_WRITE_BATCH,
+    MEMORY_SAVE,
+    MEMORY_SEARCH,
     MKDIR,
 )
 from app.services.workspace_context import workspace_root_override
@@ -55,7 +64,8 @@ _TRUNCATION_MARKER = "...[截断]"
 
 # plan §3 whitelist order: read/write/edit/batch-write/mkdir/glob/search,
 # plus the desktop-profile code_execute unlocked through the local
-# PermissionManager policy below.
+# PermissionManager policy below, and the self-contained memory tools
+# (G8: no path arguments, so the generic executor wraps them unchanged).
 _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     FILE_READ,
     FILE_WRITE,
@@ -65,7 +75,44 @@ _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     FILE_GLOB,
     FILE_SEARCH,
     CODE_EXECUTE,
+    MEMORY_SAVE,
+    MEMORY_SEARCH,
 )
+
+# ── delegate_subtask (G8): Codex-style spawn_agent for the desktop ───────
+
+# One subtask per call, bounded iterations: the sub-toolset excludes
+# delegate_subtask itself, so recursion is structurally impossible and a
+# sub agent can never spawn further agents.
+DELEGATE_SUBTASK_TOOL_NAME = "delegate_subtask"
+DELEGATE_SUBTASK_MAX_ITERATIONS = 4
+DELEGATE_SUBTASK_DEFAULT_ITERATIONS = 4
+DELEGATE_SUBTASK_RESULT_MAX_CHARS = 4000
+
+# Defaults mirror the desktop runner parent budgets; the controller passes
+# its resolved settings through DelegateSubtaskConfig so the subtask reuses
+# the parent configuration.
+_DELEGATE_SUBTASK_DEFAULT_TOOL_CALLS = 32
+_DELEGATE_SUBTASK_DEFAULT_TOTAL_TOKENS = 200_000
+_DELEGATE_SUBTASK_DEFAULT_TIMEOUT_SECONDS = 300.0
+
+
+@dataclass(frozen=True)
+class DelegateSubtaskConfig:
+    """Budgets for one delegate_subtask Harness run."""
+
+    max_tool_calls: int = _DELEGATE_SUBTASK_DEFAULT_TOOL_CALLS
+    max_total_tokens: int | None = _DELEGATE_SUBTASK_DEFAULT_TOTAL_TOKENS
+    timeout_seconds: float = _DELEGATE_SUBTASK_DEFAULT_TIMEOUT_SECONDS
+
+    def __post_init__(self) -> None:
+        if self.max_tool_calls < 1:
+            raise ValueError("max_tool_calls must be at least 1")
+        if self.max_total_tokens is not None and self.max_total_tokens < 1:
+            raise ValueError("max_total_tokens must be positive")
+        if self.timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+
 
 _JSON_SCHEMA_TYPES: dict[str, str] = {
     "string": "string",
@@ -260,12 +307,90 @@ def _build_code_execute_executor(
     return execute
 
 
+def _validate_delegate_arguments_factory() -> Callable[
+    [Mapping[str, Any]], Mapping[str, Any]
+]:
+    def validate(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not isinstance(arguments, Mapping):
+            raise TypeError("tool arguments must be an object")
+        objective = arguments.get("objective")
+        if not isinstance(objective, str) or not objective.strip():
+            raise ValueError("objective must be a non-empty string")
+        validated: dict[str, Any] = {"objective": objective}
+        max_iterations = arguments.get(
+            "max_iterations", DELEGATE_SUBTASK_DEFAULT_ITERATIONS
+        )
+        if max_iterations is None:
+            max_iterations = DELEGATE_SUBTASK_DEFAULT_ITERATIONS
+        if not isinstance(max_iterations, int) or isinstance(max_iterations, bool):
+            raise ValueError("max_iterations must be an integer")
+        validated["max_iterations"] = max(
+            1, min(max_iterations, DELEGATE_SUBTASK_MAX_ITERATIONS)
+        )
+        return validated
+
+    return validate
+
+
+def _build_delegate_subtask_executor(
+    model_factory: HarnessModelFactoryPort,
+    subtask_tools: Sequence[FunctionTool],
+    config: DelegateSubtaskConfig,
+) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
+    """Run one bounded child Harness over the whitelist sans delegate_subtask.
+
+    The child model is built from the parent model factory (same model,
+    system prompt and context budget); its tool set excludes this tool so a
+    sub agent can neither recurse nor spawn further agents. The child's
+    final summary text is returned, truncated to the desktop result cap.
+    """
+    tools = list(subtask_tools)
+
+    async def execute(arguments: Mapping[str, Any]) -> str:
+        objective = str(arguments.get("objective", "")).strip()
+        max_iterations = int(
+            arguments.get("max_iterations", DELEGATE_SUBTASK_DEFAULT_ITERATIONS)
+        )
+        harness = FunctionCallingHarness(
+            model_factory.build(tools),
+            tools,
+            max_iterations=max_iterations,
+            max_tool_calls=config.max_tool_calls,
+            max_total_tokens=config.max_total_tokens,
+        )
+        try:
+            result = await harness.execute(
+                HarnessRequest(
+                    code=objective,
+                    language="python",
+                    timeout=config.timeout_seconds,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the parent model
+            return _truncate(f"子任务执行失败: {exc}", DELEGATE_SUBTASK_RESULT_MAX_CHARS)
+        if not result.sandbox.success:
+            reason = result.sandbox.stderr or result.sandbox.stdout or "未知原因"
+            return _truncate(
+                f"子任务执行失败: {reason}", DELEGATE_SUBTASK_RESULT_MAX_CHARS
+            )
+        return _truncate(result.sandbox.stdout or "", DELEGATE_SUBTASK_RESULT_MAX_CHARS)
+
+    return execute
+
+
 def build_desktop_runner_tools(
     workspace_root: Path,
     *,
     max_result_chars: int = DESKTOP_TOOL_RESULT_MAX_CHARS,
+    model_factory: HarnessModelFactoryPort | None = None,
+    subtask_config: DelegateSubtaskConfig | None = None,
 ) -> list[FunctionTool]:
-    """Build the fixed desktop tool whitelist bound to *workspace_root*."""
+    """Build the fixed desktop tool whitelist bound to *workspace_root*.
+
+    When *model_factory* is provided, ``delegate_subtask`` is appended as the
+    desktop spawn-agent tool; without it the whitelist stays execution-only,
+    which also keeps the sub-toolset recursion-free by construction.
+    """
     if max_result_chars < 1:
         raise ValueError("max_result_chars must be positive")
     resolved_root = workspace_root.resolve()
@@ -289,11 +414,49 @@ def build_desktop_runner_tools(
                 handler=executor,
             )
         )
+    if model_factory is not None:
+        config = subtask_config or DelegateSubtaskConfig()
+        tools.append(
+            FunctionTool(
+                name=DELEGATE_SUBTASK_TOOL_NAME,
+                description=(
+                    "派生一个子 agent 独立完成一个明确定义的子任务，并返回其最终总结。"
+                    "子任务无法再派生更深的子任务；用于把检查、调研等辅助工作"
+                    "从当前任务中分离出去。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "objective": {
+                            "type": "string",
+                            "description": "子任务目标，必须自包含且明确可完成",
+                        },
+                        "max_iterations": {
+                            "type": "number",
+                            "description": (
+                                "子任务最大迭代轮数（1-4，默认 4）"
+                            ),
+                            "default": DELEGATE_SUBTASK_DEFAULT_ITERATIONS,
+                        },
+                    },
+                    "required": ["objective"],
+                },
+                validate_arguments=_validate_delegate_arguments_factory(),
+                handler=_build_delegate_subtask_executor(
+                    model_factory, tools, config
+                ),
+            )
+        )
     return tools
 
 
 __all__ = [
+    "DELEGATE_SUBTASK_DEFAULT_ITERATIONS",
+    "DELEGATE_SUBTASK_MAX_ITERATIONS",
+    "DELEGATE_SUBTASK_RESULT_MAX_CHARS",
+    "DELEGATE_SUBTASK_TOOL_NAME",
     "DESKTOP_CODE_EXECUTE_MAX_TIMEOUT",
     "DESKTOP_TOOL_RESULT_MAX_CHARS",
+    "DelegateSubtaskConfig",
     "build_desktop_runner_tools",
 ]

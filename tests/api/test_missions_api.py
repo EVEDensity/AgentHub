@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
 import unittest
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -12,6 +16,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.missions import (
     get_agent_binding_resolver,
     get_artifact_byte_verifier,
+    get_desktop_execution_workspace_root,
     get_mission_repository,
     get_runner_workspace_grant_authorizer,
     get_verifier_workspace_grant_authorizer,
@@ -6025,6 +6030,172 @@ class DecisionExpiryApiTests(unittest.TestCase):
         self.assertEqual(repository.mission.status.value, "WAITING_DECISION")
         self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
         self.assertEqual(repository.events, [])
+
+
+# ── G7: desktop changed-files disclosure ─────────────────────────────────
+
+
+def _run_git(repo: Path, *args: str) -> None:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"git {' '.join(args)} failed: {completed.stderr.strip()}"
+        )
+
+
+def _init_git_repo_with_commits(*, second_commit: bool) -> Path:
+    repo = Path(tempfile.mkdtemp(prefix="agenthub-changed-files-"))
+    _run_git(repo, "init")
+    (repo / "calc.py").write_text("def add(a, b):\n    return a + b\n\n", encoding="utf-8")
+    (repo / "README.md").write_text("# demo\n", encoding="utf-8")
+    _run_git(repo, "add", ".")
+    _run_git(
+        repo,
+        "-c", "user.name=AgentHub Test",
+        "-c", "user.email=agenthub@example.local",
+        "commit", "-m", "seed files",
+    )
+    if second_commit:
+        (repo / "calc.py").write_text(
+            "def add(a, b):\n"
+            "    return a + b  # validated\n"
+            "\n"
+            "def sub(a, b):\n"
+            "    return a - b\n",
+            encoding="utf-8",
+        )
+        _run_git(repo, "add", ".")
+        _run_git(
+            repo,
+            "-c", "user.name=AgentHub Test",
+            "-c", "user.email=agenthub@example.local",
+            "commit", "-m", "extend calc",
+        )
+    return repo
+
+
+class MissionChangedFilesApiTests(unittest.TestCase):
+    """G7 endpoint: HEAD change set of the desktop execution workspace."""
+
+    def _cleanup_dir(self, path: Path) -> None:
+        shutil.rmtree(path, ignore_errors=True)
+
+    def _client(
+        self,
+        repository: FakeMissionRepository,
+        workspace_root: Path,
+    ) -> TestClient:
+        app = build_app(
+            repository,
+            {"id": "user-1", "name": "Ada", "role": "developer"},
+        )
+        app.dependency_overrides[get_desktop_execution_workspace_root] = (
+            lambda: workspace_root
+        )
+        return TestClient(app)
+
+    def _desktop_repository(self, *, second_commit: bool = False) -> tuple[
+        FakeMissionRepository, Path
+    ]:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="SUCCEEDED")
+        repository.work_units = [build_work_unit(kind="desktop.task")]
+        return repository, _init_git_repo_with_commits(second_commit=second_commit)
+
+    def test_desktop_task_change_set_is_disclosed(self) -> None:
+        repository, repo_dir = self._desktop_repository()
+        self.addCleanup(self._cleanup_dir, repo_dir)
+        client = self._client(repository, repo_dir)
+
+        response = client.get("/api/v1/missions/mis-1/changed-files")
+
+        self.assertEqual(response.status_code, 200)
+        files = response.json()["files"]
+        by_path = {file["path"]: file for file in files}
+        self.assertEqual(
+            by_path["calc.py"],
+            {"path": "calc.py", "status": "A", "additions": 3, "deletions": 0},
+        )
+        self.assertEqual(
+            by_path["README.md"],
+            {"path": "README.md", "status": "A", "additions": 1, "deletions": 0},
+        )
+
+    def test_modified_file_status_and_counts_follow_head(self) -> None:
+        repository, repo_dir = self._desktop_repository(second_commit=True)
+        self.addCleanup(self._cleanup_dir, repo_dir)
+        client = self._client(repository, repo_dir)
+
+        response = client.get("/api/v1/missions/mis-1/changed-files")
+
+        self.assertEqual(response.status_code, 200)
+        files = response.json()["files"]
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["path"], "calc.py")
+        self.assertEqual(files[0]["status"], "M")
+        self.assertEqual(files[0]["additions"], 3)
+        self.assertEqual(files[0]["deletions"], 1)
+
+    def test_non_desktop_mission_reports_no_files(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="SUCCEEDED")
+        repository.work_units = [build_work_unit(kind="code_change")]
+        repo_dir = _init_git_repo_with_commits(second_commit=False)
+        self.addCleanup(self._cleanup_dir, repo_dir)
+        client = self._client(repository, repo_dir)
+
+        response = client.get("/api/v1/missions/mis-1/changed-files")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"files": []})
+
+    def test_workspace_without_git_reports_no_files(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="SUCCEEDED")
+        repository.work_units = [build_work_unit(kind="desktop.task")]
+        plain_dir = Path(tempfile.mkdtemp(prefix="agenthub-plain-workspace-"))
+        self.addCleanup(self._cleanup_dir, plain_dir)
+        client = self._client(repository, plain_dir)
+
+        response = client.get("/api/v1/missions/mis-1/changed-files")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"files": []})
+
+    def test_unknown_mission_returns_404(self) -> None:
+        repository = FakeMissionRepository()
+        repo_dir = _init_git_repo_with_commits(second_commit=False)
+        self.addCleanup(self._cleanup_dir, repo_dir)
+        client = self._client(repository, repo_dir)
+
+        response = client.get("/api/v1/missions/missing-mission/changed-files")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_workspace_access_is_enforced(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="SUCCEEDED")
+        repository.work_units = [build_work_unit(kind="desktop.task")]
+        repo_dir = _init_git_repo_with_commits(second_commit=False)
+        self.addCleanup(self._cleanup_dir, repo_dir)
+        app = build_app(
+            repository,
+            {"id": "someone-else", "name": "Mallory", "role": "developer"},
+        )
+        app.dependency_overrides[get_desktop_execution_workspace_root] = (
+            lambda: repo_dir
+        )
+        client = TestClient(app)
+
+        response = client.get("/api/v1/missions/mis-1/changed-files")
+
+        self.assertEqual(response.status_code, 403)
 
 
 if __name__ == "__main__":

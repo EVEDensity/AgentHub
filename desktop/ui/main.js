@@ -18,6 +18,7 @@ const elements = {
   missionControlToken: document.querySelector('#mission-control-token'), mcpToken: document.querySelector('#mcp-token'), secretStatus: document.querySelector('#secret-status'), configurationModelApiKey: document.querySelector('#configuration-model-api-key'),
   taskResult: document.querySelector('#task-result'), resultStatus: document.querySelector('#result-status'), resultSummary: document.querySelector('#result-summary'), resultItems: document.querySelector('#result-items'),
   resultEvents: document.querySelector('#result-events'), executionFeed: document.querySelector('#execution-feed'), executionFeedToggle: document.querySelector('#execution-feed-toggle'),
+  changedFiles: document.querySelector('#changed-files'), changedFilesBody: document.querySelector('#changed-files-body'),
   adminFrame: document.querySelector('#admin-frame'),
 };
 
@@ -374,6 +375,8 @@ function resetExecutionFeed() {
   executionFeed.items = [];
   if (elements.executionFeed) elements.executionFeed.hidden = true;
   if (elements.resultEvents) elements.resultEvents.replaceChildren();
+  if (elements.changedFiles) { elements.changedFiles.hidden = true; }
+  if (elements.changedFilesBody) elements.changedFilesBody.replaceChildren();
   if (elements.executionFeedToggle) {
     elements.executionFeedToggle.setAttribute('aria-expanded', 'true');
     elements.executionFeedToggle.classList.remove('collapsed');
@@ -405,6 +408,32 @@ function renderExecutionFeed() {
     row.innerHTML = `<strong>#${event.sequence ?? '?'} ${escapeHtml(describeMissionEvent(event))}</strong><span>${escapeHtml(time)}${summary ? ` · ${escapeHtml(summary)}` : ''}</span>`;
     return row;
   }));
+}
+
+// G7: change-set disclosure for finished desktop tasks. The backend reads
+// the workspace git HEAD; unknown statuses fall back to the raw letter.
+const changedFileStatusLabels = { A: '新增', M: '修改', D: '删除', R: '重命名', C: '复制', T: '类型变更' };
+
+function renderChangedFiles(files) {
+  if (!elements.changedFiles || !elements.changedFilesBody) return;
+  const rows = Array.isArray(files) ? files.filter((file) => file && typeof file.path === 'string') : [];
+  if (!rows.length) { elements.changedFiles.hidden = true; elements.changedFilesBody.replaceChildren(); return; }
+  elements.changedFiles.hidden = false;
+  elements.changedFilesBody.replaceChildren(...rows.map((file) => {
+    const row = document.createElement('div'); row.className = 'result-item';
+    const status = changedFileStatusLabels[file.status] || file.status || '变更';
+    const additions = typeof file.additions === 'number' ? file.additions : 0;
+    const deletions = typeof file.deletions === 'number' ? file.deletions : 0;
+    row.innerHTML = `<strong>${escapeHtml(file.path)}</strong><span>${escapeHtml(status)} · <span class="diff-add">+${additions}</span>/<span class="diff-del">-${deletions}</span></span>`;
+    return row;
+  }));
+}
+
+async function loadMissionChangedFiles(missionId) {
+  try {
+    const payload = await localApi(`/api/v1/missions/${encodeURIComponent(missionId)}/changed-files`);
+    renderChangedFiles(payload?.files || []);
+  } catch (error) { renderChangedFiles([]); }
 }
 
 async function pollMission(missionId) {
@@ -442,7 +471,11 @@ async function pollMission(missionId) {
       lastRenderKey = renderKey;
       renderTaskResult(mission, details);
     }
-    if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(mission.status)) { elements.cancelMission.hidden = true; activeMissionId = null; return; }
+    if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(mission.status)) {
+      elements.cancelMission.hidden = true; activeMissionId = null;
+      if (mission.status === 'SUCCEEDED') await loadMissionChangedFiles(missionId);
+      return;
+    }
     if (['CREATED', 'PENDING'].includes(mission.status) && Date.now() - startedAt > 15000) {
       elements.feedback.textContent = '任务已创建，正在等待本地执行器认领（执行器未随当前版本捆绑时任务将保持排队）…';
     }

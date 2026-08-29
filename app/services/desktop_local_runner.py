@@ -48,7 +48,10 @@ from app.services.artifact_integrity_service import (
     build_artifact_byte_verifier,
 )
 from app.services.artifact_store_service import ArtifactPublisher
-from app.services.desktop_runner_tools import build_desktop_runner_tools
+from app.services.desktop_runner_tools import (
+    DelegateSubtaskConfig,
+    build_desktop_runner_tools,
+)
 from app.services.harness_checkpoint import (
     HarnessCheckpointPort,
     HarnessExecutionContext,
@@ -697,21 +700,35 @@ class DesktopLocalRunnerController:
             )
         self._verifier = verifier
 
+        model_factory = self._injected_model_factory
+        if model_factory is None:
+            model_factory = DesktopModelFactory(
+                await load_default_model_config(settings.model_name),
+                context_char_budget=settings.context_char_budget,
+            )
+
         if self._tools is not None:
             tools = list(self._tools)
         elif self._max_result_chars is not None:
             tools = build_desktop_runner_tools(
                 self._workspace_root,
                 max_result_chars=self._max_result_chars,
+                model_factory=model_factory,
+                subtask_config=DelegateSubtaskConfig(
+                    max_tool_calls=settings.max_tool_calls,
+                    max_total_tokens=settings.max_total_tokens,
+                    timeout_seconds=settings.timeout_seconds,
+                ),
             )
         else:
-            tools = build_desktop_runner_tools(self._workspace_root)
-
-        model_factory = self._injected_model_factory
-        if model_factory is None:
-            model_factory = DesktopModelFactory(
-                await load_default_model_config(settings.model_name),
-                context_char_budget=settings.context_char_budget,
+            tools = build_desktop_runner_tools(
+                self._workspace_root,
+                model_factory=model_factory,
+                subtask_config=DelegateSubtaskConfig(
+                    max_tool_calls=settings.max_tool_calls,
+                    max_total_tokens=settings.max_total_tokens,
+                    timeout_seconds=settings.timeout_seconds,
+                ),
             )
 
         self._runner = self._build_runner(

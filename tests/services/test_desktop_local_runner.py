@@ -57,6 +57,9 @@ from app.services.desktop_local_runner import (
     startup_desktop_local_runner,
 )
 from app.services.desktop_runner_tools import (
+    DELEGATE_SUBTASK_DEFAULT_ITERATIONS,
+    DELEGATE_SUBTASK_MAX_ITERATIONS,
+    DELEGATE_SUBTASK_RESULT_MAX_CHARS,
     DESKTOP_CODE_EXECUTE_MAX_TIMEOUT,
     DESKTOP_TOOL_RESULT_MAX_CHARS,
     _clamp_desktop_timeout,
@@ -172,7 +175,7 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
         self.assertNotIn("超出桌面工作区允许范围", result)
         self.assertEqual(target.read_text(encoding="utf-8"), "inside")
 
-    async def test_desktop_whitelist_has_seven_file_tools_plus_code_execute(self) -> None:
+    async def test_desktop_whitelist_binds_builtin_and_memory_tools(self) -> None:
         tools = build_desktop_runner_tools(self.workspace_root)
         self.assertEqual(
             [tool.name for tool in tools],
@@ -185,10 +188,68 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
                 "file_glob",
                 "file_search",
                 "code_execute",
+                "memory_save",
+                "memory_search",
             ],
         )
 
+    async def test_delegate_subtask_appended_only_with_model_factory(self) -> None:
+        factory = _SubtaskModelFactory(ModelResponse(content="done"))
+        tools = build_desktop_runner_tools(self.workspace_root, model_factory=factory)
+        self.assertEqual(tools[-1].name, "delegate_subtask")
+        self.assertNotIn("delegate_subtask", [tool.name for tool in tools[:-1]])
+
+        without_factory = build_desktop_runner_tools(self.workspace_root)
+        self.assertNotIn(
+            "delegate_subtask", [tool.name for tool in without_factory]
+        )
+
     # ── code_execute desktop profile (G5) ─────────────────────────────
+
+    async def test_memory_save_and_search_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as memory_tmp:
+            memory_dir = Path(memory_tmp)
+            with (
+                patch("app.config.MEMORY_DIR", memory_dir),
+                patch(
+                    "app.services.tools.builtin_tools.MEMORY_DIR", memory_dir
+                ),
+            ):
+                saved = await call_tool(
+                    self.workspace_root,
+                    "memory_save",
+                    {
+                        "name": "desktop-runner-note",
+                        "content": "桌面 runner 的项目偏好记忆",
+                        "type": "project",
+                        "description": "G8 memory whitelist",
+                    },
+                )
+                self.assertIn("desktop-runner-note", saved)
+                self.assertIn("桌面 runner 的项目偏好记忆", saved)
+                searched = await call_tool(
+                    self.workspace_root,
+                    "memory_search",
+                    {"query": "desktop-runner-note"},
+                )
+                self.assertIn("desktop-runner-note", searched)
+                self.assertIn("G8 memory whitelist", searched)
+
+    async def test_memory_save_rejects_empty_content(self) -> None:
+        with tempfile.TemporaryDirectory() as memory_tmp:
+            memory_dir = Path(memory_tmp)
+            with (
+                patch("app.config.MEMORY_DIR", memory_dir),
+                patch(
+                    "app.services.tools.builtin_tools.MEMORY_DIR", memory_dir
+                ),
+            ):
+                result = await call_tool(
+                    self.workspace_root,
+                    "memory_save",
+                    {"name": "empty", "content": "  "},
+                )
+        self.assertIn("记忆内容不能为空", result)
 
     async def test_code_execute_runs_python_and_returns_output(self) -> None:
         result = await call_tool(
@@ -271,6 +332,136 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
             )
         self.assertIn("桌面本地策略未批准 code_execute", result)
         self.assertNotIn("must not run", result)
+
+
+# ── delegate_subtask (G8) ────────────────────────────────────────────────
+
+
+class _SubtaskModel:
+    """Scripted ModelPort for one delegate_subtask child harness."""
+
+    def __init__(self, response: ModelResponse) -> None:
+        self._response = response
+        self.requests: list[str] = []
+
+    async def complete(
+        self,
+        request: Any,
+        tool_results: tuple[Any, ...],
+        *,
+        tools_enabled: bool = True,
+    ) -> ModelResponse:
+        self.requests.append(request.code)
+        return self._response
+
+
+class _SubtaskModelFactory:
+    """Capturing HarnessModelFactoryPort double for delegate tests."""
+
+    def __init__(
+        self,
+        response: ModelResponse | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self._response = response or ModelResponse(content="子任务总结")
+        self._error = error
+        self.tool_sets: list[list[str]] = []
+
+    def build(self, tools: Any) -> Any:
+        self.tool_sets.append([tool.name for tool in tools])
+        return _SubtaskModel(self._response)
+
+
+class DesktopDelegateSubtaskTests(DesktopWorkspaceTestCase):
+    async def test_delegate_subtask_returns_child_summary(self) -> None:
+        factory = _SubtaskModelFactory(
+            ModelResponse(content="子任务完成：calc.py 实现正确。")
+        )
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root, model_factory=factory
+            )
+        }
+        result = await tools["delegate_subtask"].handler(
+            {"objective": "检查 calc.py 的内容并给出评价"}
+        )
+        self.assertIn("子任务完成：calc.py 实现正确。", result)
+        # The child harness ran on the objective through the parent factory
+        # with every tool except delegate_subtask itself.
+        self.assertEqual(factory.tool_sets, [list(tools)[:-1]])
+
+    async def test_delegate_subtask_toolset_excludes_itself(self) -> None:
+        factory = _SubtaskModelFactory()
+        tools = build_desktop_runner_tools(self.workspace_root, model_factory=factory)
+        await tools[-1].handler({"objective": "任意子任务"})
+        # Recursion-proofing: the child toolset never contains
+        # delegate_subtask, so a sub agent cannot spawn further agents.
+        self.assertEqual(len(factory.tool_sets), 1)
+        self.assertNotIn("delegate_subtask", factory.tool_sets[0])
+        self.assertEqual(len(factory.tool_sets[0]), len(tools) - 1)
+
+    async def test_delegate_subtask_failure_is_surfaced_to_parent(self) -> None:
+        class ExplodingModel:
+            async def complete(self, *args: Any, **kwargs: Any) -> ModelResponse:
+                raise RuntimeError("model channel down")
+
+        class ExplodingFactory:
+            def build(self, tools: Any) -> Any:
+                return ExplodingModel()
+
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root, model_factory=ExplodingFactory()
+            )
+        }
+        result = await tools["delegate_subtask"].handler({"objective": "子任务"})
+        self.assertIn("子任务执行失败", result)
+        self.assertIn("RuntimeError", result)
+
+    def test_delegate_subtask_arguments_are_validated_and_clamped(self) -> None:
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root,
+                model_factory=_SubtaskModelFactory(),
+            )
+        }
+        validate = tools["delegate_subtask"].validate_arguments
+        self.assertEqual(
+            validate({"objective": "目标"})["max_iterations"],
+            DELEGATE_SUBTASK_DEFAULT_ITERATIONS,
+        )
+        self.assertEqual(
+            validate({"objective": "目标", "max_iterations": 99})["max_iterations"],
+            DELEGATE_SUBTASK_MAX_ITERATIONS,
+        )
+        self.assertEqual(
+            validate({"objective": "目标", "max_iterations": 0})["max_iterations"],
+            1,
+        )
+        with self.assertRaises(ValueError):
+            validate({"objective": "   "})
+        with self.assertRaises(ValueError):
+            validate({"max_iterations": 2})
+        with self.assertRaises(ValueError):
+            validate({"objective": "目标", "max_iterations": "many"})
+
+    async def test_delegate_subtask_truncates_oversized_summary(self) -> None:
+        factory = _SubtaskModelFactory(
+            ModelResponse(content="x" * (DELEGATE_SUBTASK_RESULT_MAX_CHARS + 500))
+        )
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root, model_factory=factory
+            )
+        }
+        result = await tools["delegate_subtask"].handler({"objective": "子任务"})
+        self.assertLessEqual(len(result), DELEGATE_SUBTASK_RESULT_MAX_CHARS + 40)
+        self.assertIn("...[截断]", result)
 
 
 # ── Settings gating ──────────────────────────────────────────────────────
@@ -777,7 +968,9 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 "成功",
                 model_factory.model.observed_tool_results[1][0].content,
             )
-            # The desktop whitelist is bound as the request-scoped tool set.
+            # The desktop whitelist is bound as the request-scoped tool set,
+            # including the G8 memory tools and the model-backed
+            # delegate_subtask spawn tool.
             self.assertEqual(
                 model_factory.tool_sets[0],
                 [
@@ -789,6 +982,9 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     "file_glob",
                     "file_search",
                     "code_execute",
+                    "memory_save",
+                    "memory_search",
+                    "delegate_subtask",
                 ],
             )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -47,7 +48,12 @@ from app.services.artifact_integrity_service import (
     build_artifact_byte_verifier,
 )
 from app.services.auth_service import get_current_user
+from app.services.desktop_changed_files_service import (
+    collect_desktop_changed_files,
+    resolve_desktop_execution_workspace_root,
+)
 from app.services.mission_service import (
+    DESKTOP_TASK_WORK_UNIT_KIND,
     AgentBindingNotFoundError,
     ContractRevisionConflictError,
     DecisionConflictError,
@@ -103,8 +109,16 @@ def get_workspace_claim_admission_policy_resolver(
     return DatabaseWorkspaceClaimAdmissionPolicyResolver()
 
 
+def get_desktop_execution_workspace_root() -> Path:
+    return resolve_desktop_execution_workspace_root()
+
+
 CurrentUser = Annotated[dict, Depends(get_current_user)]
 MissionRepositoryDep = Annotated[MissionRepository, Depends(get_mission_repository)]
+DesktopExecutionWorkspaceRootDep = Annotated[
+    Path,
+    Depends(get_desktop_execution_workspace_root),
+]
 ArtifactByteVerifierDep = Annotated[
     ArtifactByteVerifier,
     Depends(get_artifact_byte_verifier),
@@ -488,6 +502,27 @@ async def list_mission_events(
         key=lambda event: (event.occurred_at, event.event_id),
     )
     return {"events": [event.to_public_dict() for event in ordered]}
+
+
+@router.get("/{mission_id}/changed-files")
+async def list_mission_changed_files(
+    mission_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    workspace_root: DesktopExecutionWorkspaceRootDep,
+) -> dict:
+    """Disclose the change set a desktop task produced in HEAD (G7).
+
+    Only ``desktop.task`` Missions have a desktop execution workspace; other
+    Missions report an empty change set.
+    """
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    work_units = await repository.list_work_units(mission_id)
+    if not any(
+        unit.kind == DESKTOP_TASK_WORK_UNIT_KIND for unit in work_units
+    ):
+        return {"files": []}
+    return {"files": collect_desktop_changed_files(workspace_root)}
 
 
 @router.get("/{mission_id}/evidence")
