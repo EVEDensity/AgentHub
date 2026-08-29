@@ -111,10 +111,19 @@ class MissionRepository:
         )
 
     async def lock_contract_lineage(self, contract_id: str) -> None:
-        await self._fetch_one(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-            contract_id,
-        )
+        try:
+            await self._fetch_one(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                contract_id,
+            )
+        except Exception as error:
+            # SQLite has no advisory-lock functions; its single serialized
+            # connection already orders concurrent contract creation, so the
+            # lineage lock degrades to a no-op there. Anything else still
+            # fails loudly.
+            if "hashtextextended" not in str(error):
+                raise
+            await self._fetch_one("SELECT 1")
 
     async def add_contract_lineage(
         self,

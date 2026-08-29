@@ -12,9 +12,13 @@ from typing import Any
 
 _PARAMETER = re.compile(r"\$(\d+)")
 _CAST = re.compile(r"::[a-zA-Z_][a-zA-Z0-9_]*")
+# PostgreSQL row-lock clauses have no SQLite equivalent; the local profile's
+# single serialized connection already orders concurrent access.
+_ROW_LOCK = re.compile(r"\bFOR\s+UPDATE\b[^;]*", re.IGNORECASE)
 
 
 def _sql(statement: str, args: tuple[Any, ...] = ()) -> tuple[str, tuple[Any, ...]]:
+    statement = _ROW_LOCK.sub("", statement)
     statement = _CAST.sub("", statement)
     positions: list[int] = []
 
