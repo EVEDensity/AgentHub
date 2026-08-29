@@ -4,7 +4,7 @@ import asyncio
 import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -112,6 +112,8 @@ class ModelPort(Protocol):
         self,
         request: HarnessRequest,
         tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = True,
     ) -> ModelResponse: ...
 
 
@@ -252,6 +254,67 @@ class FunctionCallingHarness:
                 usage,
             )
 
+        async def summarize() -> HarnessResult | None:
+            """Final no-tools round after the iteration budget is exhausted.
+
+            Mirrors the Codex top-out semantics: the executed tool results are
+            handed back to the model without a tool schema so the run still
+            ends with a usable summary instead of discarding completed work.
+            Returns None when the summary round fails so the caller falls back
+            to the original budget-exhausted failure.
+            """
+            nonlocal usage
+            summary_request = replace(
+                request,
+                code=(
+                    f"{request.code}\n\n"
+                    "The tool iteration budget is exhausted and no further "
+                    "tool calls are available. Using the tool results above, "
+                    "write the final answer to the original task now."
+                ),
+            )
+            try:
+                response = await self._model.complete(
+                    summary_request,
+                    tuple(tool_results),
+                    tools_enabled=False,
+                )
+            except Exception:  # noqa: BLE001 - summary failure falls back to FAILED
+                return None
+            usage = usage.add(response.usage)
+            if not response.content:
+                return None
+            summary_iteration = self._max_iterations + 1
+            await recorder.record(
+                HarnessEventType.ITERATION_STARTED,
+                iteration=summary_iteration,
+                tool_calls=tool_calls,
+                usage=usage,
+                tool_results=tuple(tool_results),
+            )
+            result = HarnessResult(
+                sandbox=SandboxResult(
+                    success=True,
+                    stdout=response.content,
+                    stderr="",
+                    exit_code=0,
+                    duration_ms=_duration_ms(started_at),
+                    mode="function-calling",
+                ),
+                iterations=summary_iteration,
+                tool_calls=tool_calls,
+                usage=usage,
+            )
+            await recorder.record(
+                HarnessEventType.EXECUTION_COMPLETED,
+                iteration=summary_iteration,
+                tool_calls=tool_calls,
+                usage=usage,
+                tool_results=tuple(tool_results),
+                terminal=True,
+            )
+            return result
+
         try:
             async with asyncio.timeout(request.timeout):
                 await recorder.record(
@@ -347,6 +410,13 @@ class FunctionCallingHarness:
                             tool_call=call,
                             tool_success=function_result.success,
                         )
+
+                # Falling out of the loop means every iteration ended with
+                # executed tool calls: append one no-tools summary round so
+                # completed work is not discarded (Codex top-out semantics).
+                summarized = await summarize()
+                if summarized is not None:
+                    return summarized
         except TimeoutError:
             return await failed(
                 f"Harness timed out after {request.timeout}s",

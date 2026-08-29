@@ -66,6 +66,8 @@ class ModelAdapterPort(ModelPort):
         self,
         request: HarnessRequest,
         tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = True,
     ) -> ModelResponse:
         prompt = _render_prompt(request.code, tool_results)
         raw = await self._adapter.execute_prompt(
@@ -74,7 +76,7 @@ class ModelAdapterPort(ModelPort):
             self._api_key,
             self._base_url,
             system_prompt=self._system_prompt,
-            tools=self._tools,
+            tools=self._tools if tools_enabled else None,
         )
         response = normalize_model_response(raw)
         return ModelResponse(

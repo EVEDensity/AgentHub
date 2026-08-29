@@ -46,13 +46,17 @@ class ScriptedModel:
     def __init__(self, responses: list[ModelResponse]) -> None:
         self.responses = responses
         self.calls: list[tuple[HarnessRequest, tuple[FunctionResult, ...]]] = []
+        self.tools_enabled: list[bool] = []
 
     async def complete(
         self,
         request: HarnessRequest,
         tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = True,
     ) -> ModelResponse:
         self.calls.append((request, tool_results))
+        self.tools_enabled.append(tools_enabled)
         return self.responses.pop(0)
 
 
@@ -260,6 +264,197 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.sandbox.success)
         self.assertIn("iteration budget exhausted", result.sandbox.error)
         self.assertEqual(result.tool_calls, 2)
+
+    async def test_function_calling_harness_appends_no_tools_summary_round_when_iterations_exhausted(self) -> None:
+        async def no_op(arguments: Mapping[str, Any]) -> str:
+            return str(arguments["count"])
+
+        checkpoint_port = InMemoryHarnessCheckpointPort()
+        model = ScriptedModel(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        FunctionCall(id="call-1", name="noop", arguments={"count": 1}),
+                    ),
+                    usage=ModelUsage(prompt_tokens=3, completion_tokens=2, cost=0.1),
+                ),
+                ModelResponse(
+                    tool_calls=(
+                        FunctionCall(id="call-2", name="noop", arguments={"count": 2}),
+                    ),
+                    usage=ModelUsage(prompt_tokens=3, completion_tokens=2, cost=0.1),
+                ),
+                ModelResponse(
+                    content="Summary of the completed work.",
+                    usage=ModelUsage(prompt_tokens=5, completion_tokens=4, cost=0.2),
+                ),
+            ]
+        )
+        harness = FunctionCallingHarness(
+            model,
+            [FunctionTool(name="noop", handler=no_op, validate_arguments=_validate_count)],
+            max_iterations=2,
+            checkpoint_port=checkpoint_port,
+        )
+
+        result = await harness.execute(
+            HarnessRequest(code="Keep calling tools", language="text", timeout=5)
+        )
+
+        self.assertTrue(result.sandbox.success)
+        self.assertEqual(result.sandbox.stdout, "Summary of the completed work.")
+        self.assertEqual(result.iterations, 3)
+        self.assertEqual(result.tool_calls, 2)
+        self.assertEqual(result.usage.total_tokens, 19)
+        self.assertAlmostEqual(result.usage.cost, 0.4)
+        # The summary round is a pure-text call without the tool schema and
+        # receives the executed tool results.
+        self.assertEqual(model.tools_enabled, [True, True, False])
+        summary_request, summary_results = model.calls[2]
+        self.assertIn("tool iteration budget is exhausted", summary_request.code)
+        self.assertIn("final answer", summary_request.code)
+        self.assertEqual(len(summary_results), 2)
+        self.assertEqual(
+            [event.event_type for event in checkpoint_port.events],
+            [
+                HarnessEventType.EXECUTION_STARTED,
+                HarnessEventType.ITERATION_STARTED,
+                HarnessEventType.MODEL_STARTED,
+                HarnessEventType.MODEL_COMPLETED,
+                HarnessEventType.TOOL_STARTED,
+                HarnessEventType.TOOL_COMPLETED,
+                HarnessEventType.ITERATION_STARTED,
+                HarnessEventType.MODEL_STARTED,
+                HarnessEventType.MODEL_COMPLETED,
+                HarnessEventType.TOOL_STARTED,
+                HarnessEventType.TOOL_COMPLETED,
+                # The summary round reuses the iteration marker one past the
+                # budget so durable phase constraints stay valid.
+                HarnessEventType.ITERATION_STARTED,
+                HarnessEventType.EXECUTION_COMPLETED,
+            ],
+        )
+        self.assertEqual(checkpoint_port.events[-2].iteration, 3)
+        assert checkpoint_port.latest is not None
+        self.assertTrue(checkpoint_port.latest.terminal)
+        self.assertEqual(checkpoint_port.latest.iteration, 3)
+
+    async def test_function_calling_harness_falls_back_to_failed_when_summary_round_fails(self) -> None:
+        async def no_op(arguments: Mapping[str, Any]) -> str:
+            return str(arguments["count"])
+
+        class FailingSummaryModel:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.tools_enabled: list[bool] = []
+
+            async def complete(
+                self,
+                request: HarnessRequest,
+                tool_results: tuple[FunctionResult, ...],
+                *,
+                tools_enabled: bool = True,
+            ) -> ModelResponse:
+                del request, tool_results
+                self.calls += 1
+                self.tools_enabled.append(tools_enabled)
+                if self.calls > 2:
+                    raise RuntimeError("summary provider unavailable")
+                return ModelResponse(
+                    tool_calls=(
+                        FunctionCall(
+                            id=f"call-{self.calls}",
+                            name="noop",
+                            arguments={"count": self.calls},
+                        ),
+                    )
+                )
+
+        checkpoint_port = InMemoryHarnessCheckpointPort()
+        model = FailingSummaryModel()
+        harness = FunctionCallingHarness(
+            model,
+            [FunctionTool(name="noop", handler=no_op, validate_arguments=_validate_count)],
+            max_iterations=2,
+            checkpoint_port=checkpoint_port,
+        )
+
+        result = await harness.execute(
+            HarnessRequest(code="Keep calling tools", language="text", timeout=5)
+        )
+
+        self.assertFalse(result.sandbox.success)
+        self.assertIn("iteration budget exhausted", result.sandbox.error)
+        self.assertEqual(result.tool_calls, 2)
+        self.assertEqual(model.tools_enabled, [True, True, False])
+        self.assertEqual(
+            [event.event_type for event in checkpoint_port.events[-2:]],
+            [
+                HarnessEventType.BUDGET_EXHAUSTED,
+                HarnessEventType.EXECUTION_FAILED,
+            ],
+        )
+        self.assertEqual(checkpoint_port.events[-1].budget, "iterations")
+
+    async def test_function_calling_harness_does_not_summarize_on_early_completion(self) -> None:
+        async def no_op(arguments: Mapping[str, Any]) -> str:
+            return str(arguments["count"])
+
+        model = ScriptedModel(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        FunctionCall(id="call-1", name="noop", arguments={"count": 1}),
+                    )
+                ),
+                ModelResponse(content="done"),
+            ]
+        )
+        harness = FunctionCallingHarness(
+            model,
+            [FunctionTool(name="noop", handler=no_op, validate_arguments=_validate_count)],
+            max_iterations=8,
+        )
+
+        result = await harness.execute(
+            HarnessRequest(code="Finish quickly", language="text", timeout=5)
+        )
+
+        self.assertTrue(result.sandbox.success)
+        self.assertEqual(result.sandbox.stdout, "done")
+        self.assertEqual(result.iterations, 2)
+        self.assertEqual(len(model.calls), 2)
+        self.assertTrue(all(model.tools_enabled))
+
+    async def test_function_calling_harness_does_not_summarize_on_tool_call_budget(self) -> None:
+        async def no_op(arguments: Mapping[str, Any]) -> str:
+            return str(arguments["count"])
+
+        model = ScriptedModel(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        FunctionCall(id="call-1", name="noop", arguments={"count": 1}),
+                        FunctionCall(id="call-2", name="noop", arguments={"count": 2}),
+                    )
+                )
+            ]
+        )
+        harness = FunctionCallingHarness(
+            model,
+            [FunctionTool(name="noop", handler=no_op, validate_arguments=_validate_count)],
+            max_tool_calls=1,
+        )
+
+        result = await harness.execute(
+            HarnessRequest(code="Call twice", language="text", timeout=5)
+        )
+
+        self.assertFalse(result.sandbox.success)
+        self.assertIn("tool-call budget exhausted", result.sandbox.error)
+        # Tool abuse tops out immediately: no summary round is attempted.
+        self.assertEqual(len(model.calls), 1)
+        self.assertEqual(model.tools_enabled, [True])
 
     async def test_function_calling_harness_returns_validation_and_execution_failures_to_model(self) -> None:
         handler_called = False

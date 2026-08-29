@@ -55,6 +55,24 @@ class ModelPortTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["model"], "test-model")
         self.assertEqual(call["kwargs"]["system_prompt"], "system")
 
+    async def test_adapter_omits_tool_schema_when_tools_are_disabled(self) -> None:
+        adapter = FakeAdapter('{"content":"summary"}')
+        port = ModelAdapterPort(
+            adapter,
+            model="test-model",
+            system_prompt="system",
+            tools=[{"type": "function", "function": {"name": "lookup"}}],
+        )
+        response = await port.complete(
+            HarnessRequest(code="summarize", language="text", timeout=5),
+            (),
+            tools_enabled=False,
+        )
+
+        self.assertEqual(response.content, "summary")
+        self.assertIsNone(adapter.calls[0]["kwargs"]["tools"])
+        self.assertIn("summarize", adapter.calls[0]["prompt"])
+
     def test_normalize_internal_and_openai_tool_calls(self) -> None:
         internal = normalize_model_response(
             '{"tool_calls":[{"id":"a","name":"lookup","arguments":{"q":"x"}}]}'

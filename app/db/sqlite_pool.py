@@ -30,17 +30,42 @@ def _sql(statement: str, args: tuple[Any, ...] = ()) -> tuple[str, tuple[Any, ..
     return converted, tuple(args[index] for index in positions)
 
 
+class _SharedTransactionState:
+    """Transaction bookkeeping for one underlying sqlite3 connection.
+
+    ``SQLitePool.acquire()`` hands a fresh adapter to every caller while all
+    of them share a single serialized ``sqlite3.Connection`` and its one
+    transaction, so the open/closed state must be tracked at connection
+    level instead of per adapter instance.
+    """
+
+    __slots__ = ("depth", "rollback_pending")
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self.rollback_pending = False
+
+    @property
+    def active(self) -> bool:
+        return self.depth > 0
+
+
 class SQLiteConnection:
-    def __init__(self, connection: sqlite3.Connection, lock: asyncio.Lock) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        lock: asyncio.Lock,
+        state: _SharedTransactionState | None = None,
+    ) -> None:
         self._connection = connection
         self._lock = lock
-        self._in_transaction = False
+        self._tx_state = state if state is not None else _SharedTransactionState()
 
     async def execute(self, statement: str, *args: Any) -> str:
         query, values = _sql(statement, args)
         async with self._lock:
             cursor = await asyncio.to_thread(self._connection.execute, query, values)
-            if not self._in_transaction:
+            if not self._tx_state.active:
                 await asyncio.to_thread(self._connection.commit)
             return f"OK {cursor.rowcount}"
 
@@ -48,7 +73,7 @@ class SQLiteConnection:
         query, _ = _sql(statement)
         async with self._lock:
             await asyncio.to_thread(self._connection.executemany, query, args_list)
-            if not self._in_transaction:
+            if not self._tx_state.active:
                 await asyncio.to_thread(self._connection.commit)
 
     async def fetch(self, statement: str, *args: Any) -> list[dict[str, Any]]:
@@ -71,14 +96,28 @@ class SQLiteConnection:
 
     async def _begin(self) -> None:
         async with self._lock:
+            if self._tx_state.active:
+                # Nested or concurrent BEGIN reuses the already-open
+                # transaction; only the reference count grows.
+                self._tx_state.depth += 1
+                return
             await asyncio.to_thread(self._connection.execute, "BEGIN")
-            self._in_transaction = True
+            self._tx_state.depth = 1
 
     async def _finish(self, rollback: bool) -> None:
         async with self._lock:
-            operation = self._connection.rollback if rollback else self._connection.commit
+            if not self._tx_state.active:
+                return
+            self._tx_state.depth -= 1
+            if self._tx_state.depth > 0:
+                # A failed inner scope must not be committed by the outer
+                # scope, so mark the shared transaction rollback-only.
+                self._tx_state.rollback_pending = self._tx_state.rollback_pending or rollback
+                return
+            perform_rollback = rollback or self._tx_state.rollback_pending
+            self._tx_state.rollback_pending = False
+            operation = self._connection.rollback if perform_rollback else self._connection.commit
             await asyncio.to_thread(operation)
-            self._in_transaction = False
 
     async def close(self) -> None:
         async with self._lock:
@@ -102,6 +141,7 @@ class SQLitePool:
         self.path = path
         self._connection: sqlite3.Connection | None = None
         self._lock = asyncio.Lock()
+        self._tx_state = _SharedTransactionState()
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,6 +151,7 @@ class SQLitePool:
             check_same_thread=False,
         )
         self._connection.row_factory = sqlite3.Row
+        self._tx_state = _SharedTransactionState()
         async with self._lock:
             await asyncio.to_thread(self._connection.execute, "PRAGMA foreign_keys = ON")
             await asyncio.to_thread(
@@ -123,7 +164,7 @@ class SQLitePool:
     async def acquire(self):
         if self._connection is None:
             raise RuntimeError("SQLite pool is not initialized")
-        yield SQLiteConnection(self._connection, self._lock)
+        yield SQLiteConnection(self._connection, self._lock, self._tx_state)
 
     async def close(self) -> None:
         if self._connection is not None:
