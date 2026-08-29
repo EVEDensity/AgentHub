@@ -36,14 +36,26 @@ echo "::group::Service /healthz checks"
 check_health() {
   local name="$1"
   local port="$2"
+  local attempts=15
+  local sleep_secs=2
 
   echo -n "  $name (:$port) ... "
-  local resp
-  resp=$(curl -sf "http://localhost:$port/healthz" 2>&1) || {
-    echo "FAILED — curl exited non-zero"
-    echo "  Response: $resp"
+  # `docker compose up --wait` returns as soon as a container runs when it
+  # has no HEALTHCHECK, but uvicorn binds its port only after NATS connect
+  # and stream creation (~1s). Probe with retries to absorb that race.
+  local resp=""
+  for _ in $(seq 1 "$attempts"); do
+    if resp=$(curl -sf "http://localhost:$port/healthz" 2>&1); then
+      break
+    fi
+    resp=""
+    sleep "$sleep_secs"
+  done
+
+  if [ -z "$resp" ]; then
+    echo "FAILED — no response after $attempts attempts"
     return 1
-  }
+  fi
 
   # Services return {"status":"ok"} or {"status":"degraded"}.
   # "degraded" is acceptable in CI when optional deps are unavailable.
