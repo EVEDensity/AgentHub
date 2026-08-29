@@ -279,13 +279,21 @@ function renderTaskResult(mission, details = {}) {
 async function pollMission(missionId) {
   let afterSequence = 0;
   const eventBuffer = [];
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const mission = (await localApi(`/api/v1/missions/${encodeURIComponent(missionId)}`)).mission || await localApi(`/api/v1/missions/${encodeURIComponent(missionId)}`);
-    const [workUnits, artifacts, evidence, events] = await Promise.all([
-      localApi(`/api/v1/missions/${missionId}/work-units`), localApi(`/api/v1/missions/${missionId}/artifacts`), localApi(`/api/v1/missions/${missionId}/evidence`),
-      localApi(`/api/v1/missions/${missionId}/events?afterSequence=${afterSequence}&limit=100`).catch(() => ({ events: [] })),
+  const startedAt = Date.now();
+  const deadline = startedAt + 30 * 60 * 1000;
+  let lastRenderKey = '';
+  let delayMs = 1000;
+  const safe = (promise) => promise.catch(() => null);
+  while (Date.now() < deadline) {
+    const [missionResp, workUnits, artifacts, evidence, events] = await Promise.all([
+      localApi(`/api/v1/missions/${encodeURIComponent(missionId)}`),
+      safe(localApi(`/api/v1/missions/${missionId}/work-units`)),
+      safe(localApi(`/api/v1/missions/${missionId}/artifacts`)),
+      safe(localApi(`/api/v1/missions/${missionId}/evidence`)),
+      safe(localApi(`/api/v1/missions/${missionId}/events?afterSequence=${afterSequence}&limit=100`)),
     ]);
-    const newEvents = events.events || [];
+    const mission = missionResp?.mission || missionResp || {};
+    const newEvents = events?.events || [];
     if (newEvents.length) {
       afterSequence = newEvents[newEvents.length - 1].sequence ?? afterSequence;
       eventBuffer.push(...newEvents);
@@ -295,11 +303,23 @@ async function pollMission(missionId) {
         row.innerHTML = `<strong>#${e.sequence ?? '?'} ${e.event_type || e.eventType || '事件'}</strong><span>${(e.occurred_at || e.occurredAt || '').toString().replace('T', ' ').slice(0, 19)}</span>`; return row;
       }));
     }
-    renderTaskResult(mission, { workUnits: workUnits.workUnits, artifacts: artifacts.artifacts, evidence: evidence.evidence });
+    // Re-render only when something actually changed; rebuilding identical
+    // DOM every tick caused visible jank while a mission was running.
+    const details = { workUnits: workUnits?.workUnits || [], artifacts: artifacts?.artifacts || [], evidence: evidence?.evidence || [] };
+    const renderKey = JSON.stringify([mission.status, details.workUnits.length, details.artifacts.length, details.evidence.length, eventBuffer.length]);
+    if (renderKey !== lastRenderKey) {
+      lastRenderKey = renderKey;
+      renderTaskResult(mission, details);
+    }
     if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(mission.status)) { elements.cancelMission.hidden = true; activeMissionId = null; return; }
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (['CREATED', 'PENDING'].includes(mission.status) && Date.now() - startedAt > 15000) {
+      elements.feedback.textContent = '任务已创建，正在等待本地执行器认领（执行器未随当前版本捆绑时任务将保持排队）…';
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    delayMs = Math.min(delayMs * 1.5, 4000);
   }
   elements.cancelMission.hidden = true; activeMissionId = null;
+  elements.feedback.textContent = '任务长时间未更新，已停止自动刷新；可稍后在「任务历史」中查看最终状态。';
 }
 
 async function cancelActiveMission() {
