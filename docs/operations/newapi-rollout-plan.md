@@ -237,13 +237,49 @@ artifact/runtime smoke PASS。
 「下载 exe 即用整体功能」在产物层面成立，剩端到端 GUI 运行验证
 （push 后 CI webview2/installer smoke 或实机一次）。
 
+### 0.1h GA 关键路径闭环：main CI 与桌面流水线首次全绿（2026-08-28）
+
+> 起因：push 后发现 main 分支 CI 连续 5 次红灯。逐轮定位并修复（详见
+> 提交 8555c0d → 0a161ed），最终 run **33178162249**（ci.yml）与
+> **33231676165**（desktop-windows.yml）双双全绿。
+
+**main CI 修复**（4 处根因）：
+1. `services/python` 无任何测试文件，pytest 收集 0 个测试 exit 5 →
+   无测试时诚实 SKIP（coverage gate 本就在无 artifact 时 SKIP）。
+2. integration job 缺 `PYTHONPATH`，9 个测试文件收集期 `No module named app`。
+3. **integration 首次真实执行暴露 6 例存量缺陷**（本地起 postgres:16
+   迭代修复，39 passed 全绿）：lineage seed 的 `$1` 进
+   `jsonb_build_object` 类型不可推断（`::text`）；workspace claim 套件
+   迁移列表缺 `CONTRACT_REVISION_BINDING_UPGRADE`（`contract_version`
+   列缺失）；claim kinds 与 seed kind 不匹配（6001238 笔误，因收集期
+   失败潜伏两周）；`revoked_http` 客户端缺 ASGI transport。
+4. Smoke：nats:2.10 scratch 镜像无 shell 致 healthcheck 永不执行 →
+   `nats:2.10-alpine` + 监控端口 8222 + wget healthz + 宿主端口发布。
+
+**桌面流水线修复**（首次运行暴露 5 处，run 33231676165 全绿，18m41s）：
+1. sidecar 构建硬编码 `--offline`，CI 无缓存必炸 → 移除。
+2. GUI smoke 断言锚定旧版 UI 文案 → 对齐当前 shell。
+3. playwright-cli 无 `screenshot` 子命令 → 移除无效调用。
+4. runner 代码页损坏 CJK 输出（`[Console]::OutputEncoding` 对无控制台
+   句柄场景无效；cmd 重定向因浏览器句柄继承挂起）→ 断言改为页内
+   `eval` 纯 ASCII DOM 状态检查（home → settings → monitoring 链）。
+5. BOM 双重编码损坏（`锘縖[CmdletBinding` ParserError）→ 脚本纯 ASCII 化。
+
+**G-2 正式放行归档 + R5-3 解冻生效**：
+- §0.2 三项核对表即 G-2 评审材料，会议放行决议以本节记录归档。
+- R4 三门禁 CI 化 + R4-5 观察期进行中（起点=本文档更新日，第 8 天对账）。
+- **R5-3 市场/SDK 解冻自本节归档起生效**：市场产品化（C2）、
+  scoped API tokens 与 TS/Python SDK（C3）、verifier 强化（C4）、
+  安全基线白皮书（C5）解冻开工；签名发布（desktop-v* tag + 5 个
+  secrets）为独立运营动作，不阻塞解冻。
+
 ## 0.2 R5 前置三项预核对（2026-08-27 实测，供 G-2 引用）
 
 | 项 | 结论 | 证据 |
 |---|---|---|
 | R5-2 Windows 安装包流水线 | ✅ 提前达成（原定 11-10~11-21） | `.github/workflows/desktop-windows.yml`：workflow_dispatch + `desktop-v*` tag 双触发；release-policy.ps1 签名策略；MSI/NSIS + Portable 双产物；install/GUI/updater 三 smoke；manifest SHA-256 上传 |
-| R5-1 Desktop GA 网关核对 | ❌ blocked → ◐ 本日部分推进 | Delivery Plan 第 2~6 条（本地编排器/嵌入式 SQLite/回滚目录）仍未落地；本日完成其中前置项：`withGlobalTauri` P0 修复 + Shell 与本地服务命令面对齐，打包预检通过 |
-| R5-3 市场/SDK 解冻确认 | ◐ 条件成立，待 G-2 决议归档 | reconstruction-roadmap R3 stop condition 已 hold；R4 三门禁 CI 化；按 cross-cutting rules 以 G-2 go 决议为准（会议已放行，待归档） |
+| R5-1 Desktop GA 网关核对 | ✅ GA 候选达成（08-28，见 §0.1h） | Delivery Plan 六项全 implemented；桌面流水线 run 33231676165 全绿（sidecar/打包/install 生命周期 smoke/WebView2 GUI smoke）；desktop/README Status 已更新 |
+| R5-3 市场/SDK 解冻确认 | ✅ 解冻生效（08-28，见 §0.1h） | reconstruction-roadmap R3 stop condition 已 hold；R4 三门禁 CI 化；G-2 放行决议已归档 |
 
 > 通义/OpenAI 渠道补跑不占排期：拿到 key 后复用
 > `deploy/newapi/channel_probe.py --channel-type <t>` 一条命令。

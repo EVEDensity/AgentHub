@@ -1,6 +1,9 @@
 # AgentHub Desktop
 
-> Status: implemented shell; single-entry local orchestration planned
+> Status: GA candidate — Windows pipeline green end to end (workflow run
+> 33231676165: sidecar build, MSI/NSIS/portable packaging, installer
+> lifecycle smoke, WebView2 GUI smoke); signed public release pending the
+> five signing secrets in the repository.
 > Owner: desktop maintainers
 > Last reviewed: 2026-08-24
 
@@ -178,11 +181,12 @@ workflow GUI/installer smokes on a clean runner.
    install root next to the exe, verified by administrative MSI extraction).
 6. Validate a clean Windows machine with no Docker, Go, Rust, or repository
    checkout installed. — enforced by `installer-install-smoke.ps1` on the
-   disposable CI runner, not yet run from a physical clean machine record.
+   disposable CI runner (green in workflow run 33231676165); a physical
+   clean-machine record remains an optional operations artifact.
 
-Items 4-6 remain the active R5-1 slice. The package now contains the shell,
-Runtime sidecar, and the local service stack, so the admin UI is a
-self-contained local deployment target.
+All six items are implemented and pipeline-enforced; R5-1 is closed. The
+package contains the shell, Runtime sidecar, and the local service stack,
+so the admin UI is a self-contained local deployment target.
 
 ## Configuration and credentials
 
