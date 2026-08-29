@@ -57,7 +57,9 @@ from app.services.desktop_local_runner import (
     startup_desktop_local_runner,
 )
 from app.services.desktop_runner_tools import (
+    DESKTOP_CODE_EXECUTE_MAX_TIMEOUT,
     DESKTOP_TOOL_RESULT_MAX_CHARS,
+    _clamp_desktop_timeout,
     build_desktop_runner_tools,
 )
 from app.services.harness_service import (
@@ -170,7 +172,7 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
         self.assertNotIn("超出桌面工作区允许范围", result)
         self.assertEqual(target.read_text(encoding="utf-8"), "inside")
 
-    async def test_desktop_whitelist_has_exactly_seven_file_tools(self) -> None:
+    async def test_desktop_whitelist_has_seven_file_tools_plus_code_execute(self) -> None:
         tools = build_desktop_runner_tools(self.workspace_root)
         self.assertEqual(
             [tool.name for tool in tools],
@@ -182,8 +184,93 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
                 "mkdir",
                 "file_glob",
                 "file_search",
+                "code_execute",
             ],
         )
+
+    # ── code_execute desktop profile (G5) ─────────────────────────────
+
+    async def test_code_execute_runs_python_and_returns_output(self) -> None:
+        result = await call_tool(
+            self.workspace_root,
+            "code_execute",
+            {"code": "print('hello desktop exec')", "language": "python"},
+        )
+        self.assertIn("hello desktop exec", result)
+        self.assertNotIn("工具执行失败", result)
+
+    async def test_code_execute_relative_paths_land_inside_workspace(self) -> None:
+        await call_tool(
+            self.workspace_root,
+            "file_write",
+            {"path": "notes.txt", "content": "from the workspace"},
+        )
+        result = await call_tool(
+            self.workspace_root,
+            "code_execute",
+            {"code": "print(open('notes.txt', encoding='utf-8').read())"},
+        )
+        self.assertIn("from the workspace", result)
+
+    async def test_code_execute_cwd_is_confined_to_workspace_root(self) -> None:
+        result = await call_tool(
+            self.workspace_root,
+            "code_execute",
+            {
+                "code": "import os; print(os.path.basename(os.getcwd()))",
+                "cwd": "sub",
+            },
+        )
+        self.assertIn("sub", result)
+        self.assertTrue((self.workspace_root / "sub").is_dir())
+
+        escape = await call_tool(
+            self.workspace_root,
+            "code_execute",
+            {"code": "print('nope')", "cwd": ".."},
+        )
+        self.assertIn("超出桌面工作区允许范围", escape)
+
+    async def test_code_execute_timeout_is_enforced(self) -> None:
+        result = await call_tool(
+            self.workspace_root,
+            "code_execute",
+            {"code": "import time; time.sleep(5)", "language": "python", "timeout": 1},
+        )
+        self.assertIn("超时", result)
+
+    def test_code_execute_timeout_is_clamped_to_desktop_ceiling(self) -> None:
+        self.assertEqual(_clamp_desktop_timeout(90), DESKTOP_CODE_EXECUTE_MAX_TIMEOUT)
+        self.assertEqual(_clamp_desktop_timeout(60), DESKTOP_CODE_EXECUTE_MAX_TIMEOUT)
+        self.assertEqual(_clamp_desktop_timeout(30), 30)
+
+    async def test_code_execute_permission_denial_fails_closed(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from app.services.tools.permission import PermissionBehavior
+
+        class DenyingManager:
+            def add_rule(self, rule: object) -> None:
+                del rule
+
+            async def check(self, *args: object, **kwargs: object):
+                return SimpleNamespace(
+                    behavior=PermissionBehavior.DENY,
+                    reason="denied by stub",
+                    source="test:stub",
+                )
+
+        with patch(
+            "app.services.tools.permission.PermissionManager", DenyingManager
+        ):
+            result = await call_tool(
+                self.workspace_root,
+                "code_execute",
+                {"code": "print('must not run')"},
+            )
+        self.assertIn("桌面本地策略未批准 code_execute", result)
+        self.assertNotIn("must not run", result)
 
 
 # ── Settings gating ──────────────────────────────────────────────────────
@@ -701,6 +788,7 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     "mkdir",
                     "file_glob",
                     "file_search",
+                    "code_execute",
                 ],
             )
 

@@ -11,6 +11,14 @@ the function-calling Harness. Each wrapper:
   error, before any handler runs;
 - renders the built-in handler's structured result as plain text and
   truncates oversized content, which is the first token-economy layer.
+
+The whitelist also includes ``code_execute`` (desktop profile): the
+decision flows through :class:`PermissionManager` with a locally
+injected allow rule — the desktop runs unattended, so the ASK
+interaction is replaced by auto-approval bounded to the workspace root
+and a 60s hard timeout ceiling (the control-plane tool_call journal
+stays the audit trail). Production server paths keep their own
+PermissionManager configuration untouched.
 """
 
 from __future__ import annotations
@@ -23,6 +31,7 @@ from typing import Any
 from app.services.harness_service import FunctionTool
 from app.services.tool_registry import ToolDefinition
 from app.services.tools.definitions import (
+    CODE_EXECUTE,
     FILE_EDIT,
     FILE_GLOB,
     FILE_READ,
@@ -37,9 +46,16 @@ from app.services.workspace_context import workspace_root_override
 # reach the model. Configurable per runner via build_desktop_runner_tools.
 DESKTOP_TOOL_RESULT_MAX_CHARS = 4000
 
+# Desktop档位 hard ceiling for one code_execute call. The built-in handler
+# keeps its own finer caps (30s scripts / longer install commands); this
+# wrapper only guarantees the desktop never runs longer than 60s.
+DESKTOP_CODE_EXECUTE_MAX_TIMEOUT = 60
+
 _TRUNCATION_MARKER = "...[截断]"
 
-# plan §3 whitelist order: read/write/edit/batch-write/mkdir/glob/search.
+# plan §3 whitelist order: read/write/edit/batch-write/mkdir/glob/search,
+# plus the desktop-profile code_execute unlocked through the local
+# PermissionManager policy below.
 _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     FILE_READ,
     FILE_WRITE,
@@ -48,6 +64,7 @@ _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     MKDIR,
     FILE_GLOB,
     FILE_SEARCH,
+    CODE_EXECUTE,
 )
 
 _JSON_SCHEMA_TYPES: dict[str, str] = {
@@ -170,6 +187,79 @@ def _build_tool_executor(
     return execute
 
 
+def _clamp_desktop_timeout(timeout: float) -> int:
+    """Cap a code_execute timeout at the desktop 60s ceiling."""
+    return min(int(timeout), DESKTOP_CODE_EXECUTE_MAX_TIMEOUT)
+
+
+async def _desktop_code_execute_denial(arguments: Mapping[str, Any]) -> str | None:
+    """Decide ``code_execute`` approval through the PermissionManager flow.
+
+    The desktop profile runs unattended, so the interactive ASK outcome is
+    replaced by local policy injection: a fresh in-memory manager carries a
+    system-level allow rule for code_execute, keeping the central decision
+    flow (and the PG/server production configuration) untouched. Any
+    non-ALLOW decision fails closed.
+    """
+    from app.services.tools.permission import (
+        PermissionBehavior,
+        PermissionManager,
+        PermissionMode,
+        PermissionRule,
+        ToolPermissionContext,
+    )
+
+    manager = PermissionManager()
+    manager.add_rule(
+        PermissionRule(
+            tool_pattern=CODE_EXECUTE.name,
+            path_pattern="*",
+            behavior="allow",
+            source="desktop_local_policy",
+            priority=100,
+        )
+    )
+    result = await manager.check(
+        CODE_EXECUTE.name,
+        dict(arguments),
+        ToolPermissionContext(mode=PermissionMode.DEFAULT),
+        risk_level=CODE_EXECUTE.risk_level,
+        requires_user_confirmation=CODE_EXECUTE.requires_user_confirmation,
+    )
+    if result.behavior is PermissionBehavior.ALLOW:
+        return None
+    return (
+        f"工具执行失败: 桌面本地策略未批准 code_execute "
+        f"({result.source}: {result.reason})"
+    )
+
+
+def _build_code_execute_executor(
+    handler: Callable[..., Awaitable[object]],
+    workspace_root: Path,
+    max_result_chars: int,
+) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
+    """Desktop executor for code_execute: PermissionManager gate + 60s cap.
+
+    The execution channel itself is the built-in subprocess implementation,
+    reused unchanged: python/bash only, cwd resolved inside the workspace
+    root by the handler, output truncation applied by the shared renderer.
+    """
+    inner = _build_tool_executor(handler, workspace_root, max_result_chars)
+
+    async def execute(arguments: Mapping[str, Any]) -> str:
+        denial = await _desktop_code_execute_denial(arguments)
+        if denial is not None:
+            return denial
+        clamped = dict(arguments)
+        timeout = clamped.get("timeout")
+        if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+            clamped["timeout"] = _clamp_desktop_timeout(timeout)
+        return await inner(clamped)
+
+    return execute
+
+
 def build_desktop_runner_tools(
     workspace_root: Path,
     *,
@@ -185,19 +275,25 @@ def build_desktop_runner_tools(
         handler = definition.handler
         if handler is None:
             raise ValueError(f"desktop tool has no handler: {definition.name}")
+        executor = (
+            _build_code_execute_executor(handler, resolved_root, max_result_chars)
+            if definition is CODE_EXECUTE
+            else _build_tool_executor(handler, resolved_root, max_result_chars)
+        )
         tools.append(
             FunctionTool(
                 name=definition.name,
                 description=definition.description,
                 parameters=_build_parameter_schema(definition),
                 validate_arguments=_validate_arguments_factory(definition),
-                handler=_build_tool_executor(handler, resolved_root, max_result_chars),
+                handler=executor,
             )
         )
     return tools
 
 
 __all__ = [
+    "DESKTOP_CODE_EXECUTE_MAX_TIMEOUT",
     "DESKTOP_TOOL_RESULT_MAX_CHARS",
     "build_desktop_runner_tools",
 ]

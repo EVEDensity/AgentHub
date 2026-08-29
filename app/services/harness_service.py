@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
+
+import httpx
 
 from app.services.harness_checkpoint import (
     HarnessCheckpoint,
@@ -19,6 +23,45 @@ from app.services.harness_checkpoint import (
     _HarnessRecorder,
 )
 from app.services.tools.sandbox_executor import SandboxResult
+
+logger = logging.getLogger("agenthub.harness")
+
+# G6 transient-error retry: one bounded backoff retry for network-class
+# provider failures (httpx connect/read/timeout errors, HTTP 429/5xx).
+# The retry runs inside the harness asyncio.timeout budget, so it can never
+# extend the overall deadline; usage is counted from the successful
+# response only.
+MODEL_RETRY_BACKOFF_SECONDS = 2.0
+
+_TRANSIENT_STATUS_PATTERN = re.compile(r"\bHTTP\s*[:/ ]?\s*(\d{3})\b", re.IGNORECASE)
+
+
+def is_transient_model_error(exc: BaseException) -> bool:
+    """Return ``True`` when *exc* looks like a retriable provider failure.
+
+    Covers network-class httpx errors and HTTP 429/5xx failures, whether
+    they surface as native httpx exceptions or as adapter errors carrying
+    a ``status_code``/``response`` attribute or an ``HTTP <code>`` message.
+    """
+    if isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ReadError,
+            httpx.TimeoutException,
+            TimeoutError,
+        ),
+    ):
+        return True
+    for candidate in (getattr(exc, "status_code", None), getattr(getattr(exc, "response", None), "status_code", None)):
+        if isinstance(candidate, int) and (candidate == 429 or 500 <= candidate <= 599):
+            return True
+    match = _TRANSIENT_STATUS_PATTERN.search(str(exc))
+    if match:
+        status = int(match.group(1))
+        if status == 429 or 500 <= status <= 599:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -274,7 +317,7 @@ class FunctionCallingHarness:
                 ),
             )
             try:
-                response = await self._model.complete(
+                response = await self._complete_with_retry(
                     summary_request,
                     tuple(tool_results),
                     tools_enabled=False,
@@ -340,7 +383,9 @@ class FunctionCallingHarness:
                         usage=usage,
                         tool_results=tuple(tool_results),
                     )
-                    response = await self._model.complete(request, tuple(tool_results))
+                    response = await self._complete_with_retry(
+                        request, tuple(tool_results)
+                    )
                     usage = usage.add(response.usage)
                     await recorder.record(
                         HarnessEventType.MODEL_COMPLETED,
@@ -431,6 +476,43 @@ class FunctionCallingHarness:
             "Harness iteration budget exhausted before a final response",
             budget="iterations",
         )
+
+    async def _complete_with_retry(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = True,
+    ) -> ModelResponse:
+        """One MODEL call with a single backoff retry for transient errors.
+
+        The retry sleeps ``MODEL_RETRY_BACKOFF_SECONDS`` and runs inside the
+        caller's ``asyncio.timeout`` budget, so a pending harness deadline
+        interrupts the backoff instead of being extended by it. Usage is
+        only ever counted from the successful response by the caller.
+        """
+        # Preserve the historical call shapes: the loop call passes no
+        # keyword (ModelPort defaults tools_enabled), the summary call
+        # disables tools explicitly. Adapter stubs may implement either
+        # signature only.
+        kwargs: dict[str, Any] = {} if tools_enabled else {"tools_enabled": False}
+
+        def invoke() -> Any:
+            return self._model.complete(request, tool_results, **kwargs)
+
+        try:
+            return await invoke()
+        except Exception as exc:  # noqa: BLE001 - retried only when transient
+            if not is_transient_model_error(exc):
+                raise
+            logger.warning(
+                "harness: transient model error (%s: %s), retrying once in %.1fs",
+                type(exc).__name__,
+                exc,
+                MODEL_RETRY_BACKOFF_SECONDS,
+            )
+            await asyncio.sleep(MODEL_RETRY_BACKOFF_SECONDS)
+            return await invoke()
 
     def _budget_error(self, usage: ModelUsage) -> tuple[str, str] | None:
         if (

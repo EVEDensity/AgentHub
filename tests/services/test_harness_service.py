@@ -5,6 +5,9 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
+
+import httpx
 
 from app.services.harness_service import (
     FunctionCall,
@@ -726,3 +729,153 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
             HarnessExecutionContext(mission_id="", work_unit_id="wu-1", attempt=1)
         with self.assertRaises(ValueError):
             HarnessExecutionContext(mission_id="mis-1", work_unit_id="wu-1", attempt=0)
+
+
+class TransientModelRetryTests(unittest.IsolatedAsyncioTestCase):
+    """G6: one bounded backoff retry for transient model-provider errors."""
+
+    def _no_backoff(self):
+        return patch(
+            "app.services.harness_service.MODEL_RETRY_BACKOFF_SECONDS", 0
+        )
+
+    async def test_transient_network_error_is_retried_once_and_succeeds(self) -> None:
+        class FlakyModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def complete(
+                self,
+                request: HarnessRequest,
+                tool_results: tuple[FunctionResult, ...],
+                *,
+                tools_enabled: bool = True,
+            ) -> ModelResponse:
+                del request, tool_results, tools_enabled
+                self.calls += 1
+                if self.calls == 1:
+                    raise httpx.ConnectError("connection reset by peer")
+                return ModelResponse(
+                    content="recovered",
+                    usage=ModelUsage(prompt_tokens=5, completion_tokens=3, cost=0.02),
+                )
+
+        model = FlakyModel()
+        with self._no_backoff():
+            result = await FunctionCallingHarness(model, []).execute(
+                HarnessRequest(code="x", language="text", timeout=10)
+            )
+
+        self.assertTrue(result.sandbox.success)
+        self.assertEqual(result.sandbox.stdout, "recovered")
+        self.assertEqual(model.calls, 2)
+        # Usage is counted from the successful response only — no duplicates.
+        self.assertEqual(result.usage.total_tokens, 8)
+        self.assertAlmostEqual(result.usage.cost, 0.02)
+
+    async def test_persistent_transient_error_fails_after_single_retry(self) -> None:
+        class DeadModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def complete(
+                self,
+                request: HarnessRequest,
+                tool_results: tuple[FunctionResult, ...],
+                *,
+                tools_enabled: bool = True,
+            ) -> ModelResponse:
+                del request, tool_results, tools_enabled
+                self.calls += 1
+                raise httpx.ReadError("read interrupted")
+
+        model = DeadModel()
+        with self._no_backoff():
+            result = await FunctionCallingHarness(model, []).execute(
+                HarnessRequest(code="x", language="text", timeout=10)
+            )
+
+        self.assertFalse(result.sandbox.success)
+        self.assertEqual(
+            result.sandbox.error,
+            "Harness model execution failed: ReadError",
+        )
+        # Exactly one retry: initial attempt + 1, never a third call.
+        self.assertEqual(model.calls, 2)
+
+    async def test_non_transient_model_error_is_not_retried(self) -> None:
+        class InvalidKeyModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def complete(
+                self,
+                request: HarnessRequest,
+                tool_results: tuple[FunctionResult, ...],
+                *,
+                tools_enabled: bool = True,
+            ) -> ModelResponse:
+                del request, tool_results, tools_enabled
+                self.calls += 1
+                raise httpx.HTTPStatusError(
+                    "auth failed",
+                    request=httpx.Request("POST", "https://provider.test"),
+                    response=httpx.Response(401),
+                )
+
+        model = InvalidKeyModel()
+        with self._no_backoff():
+            result = await FunctionCallingHarness(model, []).execute(
+                HarnessRequest(code="x", language="text", timeout=10)
+            )
+
+        self.assertFalse(result.sandbox.success)
+        self.assertEqual(model.calls, 1)
+
+    async def test_retry_backoff_stays_inside_harness_timeout(self) -> None:
+        """A pending harness deadline interrupts the backoff, not the reverse."""
+
+        class DeadModel:
+            async def complete(
+                self,
+                request: HarnessRequest,
+                tool_results: tuple[FunctionResult, ...],
+                *,
+                tools_enabled: bool = True,
+            ) -> ModelResponse:
+                del request, tool_results, tools_enabled
+                raise httpx.ConnectError("down")
+
+        # timeout=1s < backoff=3s: if the retry slept outside the harness
+        # asyncio.timeout the run would fail with a model error after 3s;
+        # inside it, the deadline fires first.
+        with patch(
+            "app.services.harness_service.MODEL_RETRY_BACKOFF_SECONDS", 3.0
+        ):
+            result = await FunctionCallingHarness(DeadModel(), []).execute(
+                HarnessRequest(code="x", language="text", timeout=1.0)
+            )
+
+        self.assertFalse(result.sandbox.success)
+        self.assertIn("timed out", result.sandbox.error)
+
+    def test_http_status_error_classification(self) -> None:
+        from app.services.harness_service import is_transient_model_error
+
+        def status_error(code: int) -> httpx.HTTPStatusError:
+            return httpx.HTTPStatusError(
+                f"HTTP {code}",
+                request=httpx.Request("POST", "https://provider.test"),
+                response=httpx.Response(code),
+            )
+
+        self.assertTrue(is_transient_model_error(httpx.ConnectError("x")))
+        self.assertTrue(is_transient_model_error(httpx.ReadError("x")))
+        self.assertTrue(is_transient_model_error(httpx.ReadTimeout("x")))
+        self.assertTrue(is_transient_model_error(TimeoutError()))
+        self.assertTrue(is_transient_model_error(status_error(429)))
+        self.assertTrue(is_transient_model_error(status_error(500)))
+        self.assertTrue(is_transient_model_error(status_error(503)))
+        self.assertFalse(is_transient_model_error(status_error(401)))
+        self.assertFalse(is_transient_model_error(status_error(403)))
+        self.assertFalse(is_transient_model_error(ValueError("boom")))
