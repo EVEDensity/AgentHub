@@ -286,11 +286,14 @@ class RunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 "claim",
                 "context",
                 "start",
+                # P3-4b: state-identical checkpoints (MODEL_STARTED /
+                # MODEL_COMPLETED on an unchanged zero-usage state) are
+                # skipped before upload; only EXECUTION_STARTED,
+                # ITERATION_STARTED and the terminal EXECUTION_COMPLETED
+                # reach Mission Control.
                 "checkpoint:1",
                 "checkpoint:2",
                 "checkpoint:3",
-                "checkpoint:4",
-                "checkpoint:5",
                 "register",
                 "complete",
             ],
@@ -639,11 +642,11 @@ class RunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 "claim",
                 "context",
                 "start",
+                # P3-4b: state-identical checkpoints on an unchanged
+                # zero-usage state are skipped before upload.
                 "checkpoint:1",
                 "checkpoint:2",
                 "checkpoint:3",
-                "checkpoint:4",
-                "checkpoint:5",
                 "register",
                 "complete",
             ],

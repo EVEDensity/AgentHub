@@ -228,8 +228,9 @@ class RunnerServiceRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([name for name, _ in control.calls][1:], [
             "context",
             "start",
-            "checkpoint",
-            "checkpoint",
+            # P3-4b: state-identical checkpoints on an unchanged zero-usage
+            # state are skipped before upload; only EXECUTION_STARTED,
+            # ITERATION_STARTED and the terminal EXECUTION_COMPLETED remain.
             "checkpoint",
             "checkpoint",
             "checkpoint",

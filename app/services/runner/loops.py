@@ -1,0 +1,291 @@
+"""Derivation and unattended-verification loop helpers (split module).
+
+- derivation: exactly one ``desktop.task`` WorkUnit per RUNNING manual Mission;
+- verification: ``VERIFY:`` / ``RUN:`` acceptance-command extraction and
+  workspace execution used by the controller's unattended verifier loop.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
+
+from app.domain import (
+    ActorRef,
+    ActorType,
+    MissionSourceType,
+    MissionStatus,
+    OutputSpec,
+)
+from app.repositories import MissionRepository
+from app.services.mission_service import (
+    DESKTOP_TASK_WORK_UNIT_KIND,
+    MissionService,
+)
+from app.services.runner.settings import (
+    DESKTOP_ADAPTER_TYPE,
+    DESKTOP_AGENT_ID,
+    DESKTOP_RUNNER_LABEL,
+    RUN_COMMAND_MARKER,
+    VERIFY_COMMAND_MARKER,
+    VERIFY_COMMAND_OUTPUT_TAIL_CHARS,
+)
+
+logger = logging.getLogger("agenthub.desktop_local_runner")
+
+# ── Mission → WorkUnit derivation ────────────────────────────────────────
+
+
+class DesktopMissionSourcePort(Protocol):
+    """The durable Mission projections the derivation needs."""
+
+    async def running_manual_missions(self, workspace_id: str) -> Sequence[Any]: ...
+
+    async def has_work_unit_kind(self, mission_id: str, kind: str) -> bool: ...
+
+    async def create_desktop_task_work_unit(self, mission_id: str) -> str: ...
+
+
+class MissionControlDesktopMissionSource:
+    """Derivation adapter over the in-process Mission repository."""
+
+    def __init__(self, repository_factory: Any = MissionRepository) -> None:
+        self._repository_factory = repository_factory
+
+    async def running_manual_missions(self, workspace_id: str) -> Sequence[Any]:
+        repository = self._repository_factory()
+        missions = await repository.list_missions(workspace_id, limit=200)
+        return [
+            mission
+            for mission in missions
+            if mission.status == MissionStatus.RUNNING
+            and mission.source.type == MissionSourceType.MANUAL
+        ]
+
+    async def has_work_unit_kind(self, mission_id: str, kind: str) -> bool:
+        repository = self._repository_factory()
+        work_units = await repository.list_work_units(mission_id)
+        return any(unit.kind == kind for unit in work_units)
+
+    async def create_desktop_task_work_unit(self, mission_id: str) -> str:
+        repository = self._repository_factory()
+        service = MissionService(repository)
+        work_unit = await service.create_work_unit(
+            mission_id,
+            work_unit_id=None,
+            kind=DESKTOP_TASK_WORK_UNIT_KIND,
+            dependencies=[],
+            input_refs=[],
+            expected_outputs=[OutputSpec(kind="text", required=False)],
+            required_capabilities=[],
+            assigned_adapter=DESKTOP_ADAPTER_TYPE,
+            actor=ActorRef(
+                type=ActorType.SERVICE,
+                id=DESKTOP_RUNNER_LABEL,
+                display_name="Desktop Local Runner",
+            ),
+            assigned_agent_id=DESKTOP_AGENT_ID,
+        )
+        return work_unit.id
+
+
+async def derive_desktop_task_work_units(
+    mission_source: DesktopMissionSourcePort,
+    *,
+    workspace_id: str,
+) -> list[str]:
+    """Create exactly one ``desktop.task`` WorkUnit per eligible Mission.
+
+    A Mission is eligible when it is RUNNING, desktop-created (manual
+    source) and has no ``desktop.task`` WorkUnit yet — including failed
+    ones, so derivation never retries doomed Missions on its own.
+    """
+    derived: list[str] = []
+    for mission in await mission_source.running_manual_missions(workspace_id):
+        if await mission_source.has_work_unit_kind(
+            str(mission.id), DESKTOP_TASK_WORK_UNIT_KIND
+        ):
+            continue
+        work_unit_id = await mission_source.create_desktop_task_work_unit(
+            str(mission.id)
+        )
+        logger.info(
+            "desktop runner derived WorkUnit %s for Mission %s",
+            work_unit_id,
+            mission.id,
+        )
+        derived.append(work_unit_id)
+    return derived
+
+
+# ── Unattended verification ──────────────────────────────────────────────
+
+
+def extract_verify_commands(objective: str) -> tuple[str, ...]:
+    """Return the acceptance commands declared as ``VERIFY: <command>`` lines.
+
+    Any objective line starting with the marker (leading whitespace allowed)
+    declares one workspace command; empty commands are ignored.
+    """
+    return _extract_marker_commands(objective, VERIFY_COMMAND_MARKER)
+
+
+def extract_run_commands(objective: str) -> tuple[str, ...]:
+    """Return the shell commands declared as ``RUN: <command>`` lines (P1-3).
+
+    Declared commands are executed by the unattended verifier during
+    acceptance only; the ``command_execute`` tool never runs shell directly.
+    """
+    return _extract_marker_commands(objective, RUN_COMMAND_MARKER)
+
+
+def _extract_marker_commands(objective: str, marker: str) -> tuple[str, ...]:
+    commands: list[str] = []
+    for line in objective.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(marker):
+            continue
+        command = stripped[len(marker) :].strip()
+        if command:
+            commands.append(command)
+    return tuple(commands)
+
+
+@dataclass(frozen=True)
+class VerifyCommandOutcome:
+    """Result of one acceptance command run in the workspace."""
+
+    command: str
+    exit_code: int | None
+    output: str
+    timed_out: bool
+
+
+async def run_verify_command(
+    command: str,
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+) -> VerifyCommandOutcome:
+    """Run one acceptance command in the workspace, capturing merged output.
+
+    The command inherits the runner process environment; on timeout the whole
+    process tree is killed and the outcome is reported as a non-zero result
+    with whatever output was produced so far.
+    """
+    try:
+        process = await asyncio.create_subprocess_shell(
+            command,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except NotImplementedError:
+        # Event loops without subprocess support (e.g. the Windows selector
+        # loop used by some uvicorn configs) fall back to a threaded sync run
+        # so the verification loop never blocks.
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            _run_verify_command_sync,
+            command,
+            cwd,
+            timeout_seconds,
+        )
+    try:
+        stdout, _ = await asyncio.wait_for(
+            process.communicate(),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError:
+        await _kill_process_tree(process)
+        try:
+            stdout, _ = await process.communicate()
+        except ProcessLookupError:
+            stdout = b""
+        return VerifyCommandOutcome(
+            command=command,
+            exit_code=None,
+            output=(stdout or b"").decode("utf-8", errors="replace"),
+            timed_out=True,
+        )
+    return VerifyCommandOutcome(
+        command=command,
+        exit_code=process.returncode,
+        output=stdout.decode("utf-8", errors="replace"),
+        timed_out=False,
+    )
+
+
+def _run_verify_command_sync(
+    command: str,
+    cwd: Path,
+    timeout_seconds: float,
+) -> VerifyCommandOutcome:
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or b""
+        return VerifyCommandOutcome(
+            command=command,
+            exit_code=None,
+            output=output.decode("utf-8", errors="replace"),
+            timed_out=True,
+        )
+    return VerifyCommandOutcome(
+        command=command,
+        exit_code=completed.returncode,
+        output=(completed.stdout or b"").decode("utf-8", errors="replace"),
+        timed_out=False,
+    )
+
+
+async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
+    """Terminate the verify command; on Windows kill the whole tree first.
+
+    ``Process.kill()`` only terminates the shell, leaving grandchildren alive
+    while they still hold the output pipe; ``taskkill /T`` takes the tree
+    down so ``communicate()`` can finish promptly.
+    """
+    if sys.platform == "win32" and process.returncode is None:
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/F",
+            "/T",
+            "/PID",
+            str(process.pid),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(killer.wait(), timeout=10)
+            return
+        except TimeoutError:
+            pass
+    process.kill()
+
+
+def _verify_command_failure_summary(
+    outcome: VerifyCommandOutcome,
+    *,
+    label: str = "verify command",
+) -> str:
+    if outcome.timed_out:
+        reason = f"{label} timed out"
+    else:
+        reason = f"{label} failed with exit code {outcome.exit_code}"
+    tail = outcome.output[-VERIFY_COMMAND_OUTPUT_TAIL_CHARS:]
+    return f"{reason}: {outcome.command}\n--- output tail ---\n{tail}"

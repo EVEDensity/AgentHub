@@ -1,16 +1,14 @@
 {
   "id": "regression-sort",
   "title": "修复最近一次改动引入的排序回归",
-  "objective": "products.py 的 sort_products 此前长期按「价格从低到高；价格相同时按名称字典序升序」正确工作，最近一次改动引入了一行回归，行为已经不对。请找出并只修复这一处回归，不要重写或重构其他逻辑，不得修改 check.py。修复后运行 python check.py 必须输出 OK。",
+  "objective": "products.py 的 sort_products 此前长期按「价格从低到高；价格相同时按名称字典序升序」正确工作，最近一次改动引入了一行回归，行为已经不对。请找出并只修复这一处回归，不要重写或重构其他逻辑。验收脚本在工作区外部由系统自动运行，修复后必须确保验收输出 OK。",
   "verify_command": "python check.py",
+  "check_external": true,
+  "check": "from products import sort_products\n\ncatalog = [\n    {\"name\": \"beta\", \"price\": 30},\n    {\"name\": \"alpha\", \"price\": 30},\n    {\"name\": \"zeta\", \"price\": 10},\n    {\"name\": \"mid\", \"price\": 20},\n]\n\nresult = sort_products(catalog)\nassert [item[\"name\"] for item in result] == [\"zeta\", \"mid\", \"alpha\", \"beta\"], result\nassert catalog[0][\"name\"] == \"beta\", \"input list must not be modified\"\nprint(\"OK\")\n",
   "setup": [
     {
       "path": "products.py",
       "content": "\"\"\"商品排序工具。\n\nsort_products 的既定行为：按价格从低到高排序；\n价格相同时按名称字典序升序。该行为此前长期正确，\n最近一次改动引入了回归。\n\"\"\"\n\n\ndef sort_products(products):\n    return sorted(products, key=lambda p: (-p[\"price\"], p[\"name\"]))\n"
-    },
-    {
-      "path": "check.py",
-      "content": "from products import sort_products\n\ncatalog = [\n    {\"name\": \"beta\", \"price\": 30},\n    {\"name\": \"alpha\", \"price\": 30},\n    {\"name\": \"zeta\", \"price\": 10},\n    {\"name\": \"mid\", \"price\": 20},\n]\n\nresult = sort_products(catalog)\nassert [item[\"name\"] for item in result] == [\"zeta\", \"mid\", \"alpha\", \"beta\"], result\nassert catalog[0][\"name\"] == \"beta\", \"input list must not be modified\"\nprint(\"OK\")\n"
     }
   ]
 }

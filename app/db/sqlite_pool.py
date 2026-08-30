@@ -154,6 +154,15 @@ class SQLitePool:
         self._tx_state = _SharedTransactionState()
         async with self._lock:
             await asyncio.to_thread(self._connection.execute, "PRAGMA foreign_keys = ON")
+            # WAL + synchronous=NORMAL (P3-2a): durable-but-fast local profile.
+            # Both pragmas are idempotent; WAL survives across connections so
+            # re-opening the same database keeps the mode.
+            await asyncio.to_thread(
+                self._connection.execute, "PRAGMA journal_mode = WAL"
+            )
+            await asyncio.to_thread(
+                self._connection.execute, "PRAGMA synchronous = NORMAL"
+            )
             await asyncio.to_thread(
                 self._connection.execute,
                 "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",

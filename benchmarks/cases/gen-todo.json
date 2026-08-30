@@ -1,12 +1,9 @@
 {
   "id": "gen-todo",
   "title": "从零实现 todo 纯函数模块",
-  "objective": "在工作区新建 todo.py，用纯 Python 实现以下三个函数（不引入任何第三方依赖，所有修改类函数都返回新列表，不得修改传入的列表）：\n1. add_task(tasks, title) -> list：返回新列表，在末尾追加 {\"id\": 下一个自增 id, \"title\": title, \"done\": False}；id 从 1 开始，新 id 等于现有最大 id + 1；\n2. complete_task(tasks, task_id) -> list：返回新列表，把 id 为 task_id 的任务的 done 标记为 True，其余任务原样保留；找不到该 id 时抛出 KeyError；\n3. open_tasks(tasks) -> list：只保留 done 为 False 的任务，保持原有顺序。\n\ndone 的值必须是布尔类型（True/False）。不得修改 check.py。修复后运行 python check.py 必须输出 OK。",
+  "objective": "在工作区新建 todo.py，用纯 Python 实现以下三个函数（不引入任何第三方依赖，所有修改类函数都返回新列表，不得修改传入的列表）：\n1. add_task(tasks, title) -> list：返回新列表，在末尾追加 {\"id\": 下一个自增 id, \"title\": title, \"done\": False}；id 从 1 开始，新 id 等于现有最大 id + 1；\n2. complete_task(tasks, task_id) -> list：返回新列表，把 id 为 task_id 的任务的 done 标记为 True，其余任务原样保留；找不到该 id 时抛出 KeyError；\n3. open_tasks(tasks) -> list：只保留 done 为 False 的任务，保持原有顺序。\n\ndone 的值必须是布尔类型（True/False）。验收脚本在工作区外部由系统自动运行，修复后必须确保验收输出 OK。",
   "verify_command": "python check.py",
-  "setup": [
-    {
-      "path": "check.py",
-      "content": "from todo import add_task, complete_task, open_tasks\n\ntasks = add_task([], \"write benchmark\")\nassert tasks == [{\"id\": 1, \"title\": \"write benchmark\", \"done\": False}], tasks\nassert isinstance(tasks[0][\"done\"], bool)\n\nsnapshot = list(tasks)\ntasks2 = add_task(tasks, \"run replay\")\nassert tasks2[1][\"id\"] == 2 and tasks2[1][\"done\"] is False, tasks2\nassert tasks == snapshot, \"add_task must not modify its input\"\n\ndone = complete_task(tasks2, 1)\nassert done[0][\"done\"] is True and done[1][\"done\"] is False, done\nassert tasks2[0][\"done\"] is False, \"complete_task must not modify its input\"\n\ntry:\n    complete_task(tasks2, 99)\nexcept KeyError:\n    pass\nelse:\n    raise AssertionError(\"expected KeyError for unknown id\")\n\nassert open_tasks(done) == [done[1]], open_tasks(done)\nassert open_tasks(tasks2) == tasks2\nprint(\"OK\")\n"
-    }
-  ]
+  "check_external": true,
+  "check": "from todo import add_task, complete_task, open_tasks\n\ntasks = add_task([], \"write benchmark\")\nassert tasks == [{\"id\": 1, \"title\": \"write benchmark\", \"done\": False}], tasks\nassert isinstance(tasks[0][\"done\"], bool)\n\nsnapshot = list(tasks)\ntasks2 = add_task(tasks, \"run replay\")\nassert tasks2[1][\"id\"] == 2 and tasks2[1][\"done\"] is False, tasks2\nassert tasks == snapshot, \"add_task must not modify its input\"\n\ndone = complete_task(tasks2, 1)\nassert done[0][\"done\"] is True and done[1][\"done\"] is False, done\nassert tasks2[0][\"done\"] is False, \"complete_task must not modify its input\"\n\ntry:\n    complete_task(tasks2, 99)\nexcept KeyError:\n    pass\nelse:\n    raise AssertionError(\"expected KeyError for unknown id\")\n\nassert open_tasks(done) == [done[1]], open_tasks(done)\nassert open_tasks(tasks2) == tasks2\nprint(\"OK\")\n",
+  "setup": []
 }

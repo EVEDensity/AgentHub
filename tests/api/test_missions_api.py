@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import tempfile
@@ -6259,6 +6260,107 @@ class MissionChangedFilesApiTests(unittest.TestCase):
         response = client.get("/api/v1/missions/mis-1/changed-files")
 
         self.assertEqual(response.status_code, 403)
+
+
+class MissionEventStreamApiTests(unittest.TestCase):
+    """P3-4a: SSE stream over the mission event ledger."""
+
+    def _repository(self) -> FakeMissionRepository:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="workspace-1")
+        repository.events = [
+            build_event(
+                sequence=1,
+                event_id="evt-1",
+                event_type="mission.lifecycle.created",
+            ),
+            build_event(
+                sequence=2,
+                event_id="evt-2",
+                event_type="mission.lifecycle.started",
+            ),
+        ]
+        return repository
+
+    def test_stream_pushes_events_as_sse_data_frames_and_terminates(self) -> None:
+        repository = self._repository()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "admin-1", "name": "Root", "role": "admin"},
+            )
+        )
+
+        with client.stream(
+            "GET",
+            "/api/v1/missions/mis-1/events/stream?maxSeconds=0.3&pollSeconds=0.05",
+        ) as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("text/event-stream", response.headers["content-type"])
+            body = b"".join(response.iter_bytes()).decode("utf-8")
+
+        frames = [
+            line.removeprefix("data: ").strip()
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+        self.assertGreaterEqual(len(frames), 1)
+        payloads = [json.loads(frame) for frame in frames]
+        self.assertEqual(
+            [payload["event_id"] for payload in payloads],
+            ["evt-1", "evt-2"],
+        )
+        self.assertEqual(payloads[0]["event_type"], "mission.lifecycle.created")
+
+    def test_stream_honors_after_sequence_cursor(self) -> None:
+        repository = self._repository()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "admin-1", "name": "Root", "role": "admin"},
+            )
+        )
+
+        with client.stream(
+            "GET",
+            "/api/v1/missions/mis-1/events/stream"
+            "?afterSequence=1&maxSeconds=0.3&pollSeconds=0.05",
+        ) as response:
+            body = b"".join(response.iter_bytes()).decode("utf-8")
+
+        frames = [
+            line.removeprefix("data: ").strip()
+            for line in body.splitlines()
+            if line.startswith("data: ")
+        ]
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(json.loads(frames[0])["event_id"], "evt-2")
+
+    def test_stream_is_workspace_scoped(self) -> None:
+        repository = self._repository()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-2", "name": "Grace", "role": "developer"},
+            )
+        )
+
+        response = client.get("/api/v1/missions/mis-1/events/stream")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_stream_returns_404_for_unknown_mission(self) -> None:
+        repository = self._repository()
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "admin-1", "name": "Root", "role": "admin"},
+            )
+        )
+
+        response = client.get("/api/v1/missions/mis-missing/events/stream")
+
+        self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":

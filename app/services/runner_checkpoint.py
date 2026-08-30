@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -40,8 +41,48 @@ class ExecutionCheckpointControlPort(Protocol):
     ) -> dict[str, Any]: ...
 
 
+def checkpoint_state_digest(
+    checkpoint: HarnessCheckpoint,
+    event: HarnessEvent,
+) -> str:
+    """Digest the uploaded execution state, excluding identity/sequence/phase.
+
+    Mission Control's durable ``stateDigest`` folds in the sequence, so it
+    can never repeat. This runner-side digest covers the state fields the
+    port uploads minus the loop-position metadata (``phase``): two harness
+    events with the same iteration/usage/tool state carry the same durable
+    content, so the second one is skipped before upload (P3-4b).
+    """
+    material = {
+        "completion_tokens": checkpoint.usage.completion_tokens,
+        "failure_reason": checkpoint.failure_reason,
+        "iteration": checkpoint.iteration,
+        "model_cost": checkpoint.usage.cost,
+        "prompt_tokens": checkpoint.usage.prompt_tokens,
+        "terminal": checkpoint.terminal,
+        "tool_calls": checkpoint.tool_calls,
+        "tool_name": event.tool_name,
+        "tool_success": event.tool_success,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            material,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
-    """Map one Harness attempt to content-minimized durable checkpoints."""
+    """Map one Harness attempt to content-minimized durable checkpoints.
+
+    Checkpoint slimming (P3-4b): consecutive events whose uploaded state
+    digest equals the previous upload are skipped — Mission Control only
+    receives state changes plus the mandatory terminal checkpoint, and the
+    server-side contiguous sequence is consumed by uploads only.
+    """
 
     def __init__(
         self,
@@ -57,6 +98,8 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
         self._execution = execution
         self._runner_id = runner_id
         self._lease_id = lease_id
+        self._last_state_digest: str | None = None
+        self._uploaded_count = 0
 
     async def record(
         self,
@@ -81,14 +124,21 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
                 "Harness checkpoint failure reason exceeds durable limit"
             )
 
-        checkpoint_id = _checkpoint_id(self._execution, checkpoint.sequence)
+        state_digest = checkpoint_state_digest(checkpoint, event)
+        if not checkpoint.terminal and state_digest == self._last_state_digest:
+            # Identical execution state: skip the upload (P3-4b).
+            return
+
+        self._uploaded_count += 1
+        sequence = self._uploaded_count
+        checkpoint_id = _checkpoint_id(self._execution, sequence)
         payload = await self._control.record_execution_checkpoint(
             self._execution.mission_id,
             self._execution.work_unit_id,
             runner_id=self._runner_id,
             lease_id=self._lease_id,
             checkpoint_id=checkpoint_id,
-            sequence=checkpoint.sequence,
+            sequence=sequence,
             phase=checkpoint.phase.value,
             iteration=checkpoint.iteration,
             tool_calls=checkpoint.tool_calls,
@@ -112,7 +162,7 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
             "mission_id": self._execution.mission_id,
             "work_unit_id": self._execution.work_unit_id,
             "attempt": self._execution.attempt,
-            "sequence": checkpoint.sequence,
+            "sequence": sequence,
             "phase": checkpoint.phase.value,
             "iteration": checkpoint.iteration,
             "tool_calls": checkpoint.tool_calls,
@@ -124,6 +174,7 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
         }
         if any(getattr(durable, field) != value for field, value in expected.items()):
             raise HarnessError("Mission Control checkpoint identity drifted")
+        self._last_state_digest = state_digest
 
 
 class MissionControlHarnessCheckpointFactory:
@@ -166,4 +217,5 @@ __all__ = [
     "ExecutionCheckpointControlPort",
     "MissionControlHarnessCheckpointFactory",
     "MissionControlHarnessCheckpointPort",
+    "checkpoint_state_digest",
 ]

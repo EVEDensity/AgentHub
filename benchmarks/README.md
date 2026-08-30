@@ -29,12 +29,20 @@ into the Mission verdict.
   2 pure-generation tasks (implement a specified module), 1 one-line
   regression fix. Every case ships a `check.py` acceptance script that
   prints `OK` on success.
+- All 8 cases are **benchmark v2** (`"check_external": true`): the
+  acceptance script source lives in the case's `check` field and is
+  materialized by `run_benchmark.py` OUTSIDE the model-reachable workspace,
+  under `benchmarks/.runs/<run>/checks/<case>/check.py`. The effective
+  `VERIFY:` command executes that script by absolute path with the workspace
+  as cwd (the generated script inserts the cwd into `sys.path` so case
+  modules still resolve). Cases without `check_external` keep the legacy
+  in-workspace behavior.
 - `run_benchmark.py` — per case: builds an isolated workspace, starts a
   dedicated mission-control process (SQLite-isolated, desktop local runner
   enabled), creates a Mission whose objective ends with
-  `VERIFY: <verify_command>`, waits for the terminal state, replays the
-  acceptance command in the workspace, and aggregates a JSON report plus a
-  terminal table.
+  `VERIFY: <effective verify command>`, waits for the terminal state, replays
+  the acceptance command in the workspace, and aggregates a JSON report plus
+  a terminal table.
 
 ### Usage
 
@@ -60,11 +68,12 @@ Each run keeps its workspaces and per-case SQLite databases under
 | `mission_status` | Durable Mission verdict (`SUCCEEDED` means the runner finished AND the `VERIFY:` gate passed; `FAILED` covers both execution and acceptance failure) |
 | `metrics.iterations` / `total_tokens` / `model_cost` | Summarized from the mission's harness `execution_checkpoints` (last checkpoint per attempt is cumulative usage) |
 | `duration_seconds` | Wall clock from workspace creation to terminal state |
-| `setup_files_modified` | Set to true when the model edited a seeded file (the objectives forbid editing `check.py`; the flag keeps such runs detectable) |
+| `setup_files_modified` | Set to true when the model edited a seeded workspace file; the flag keeps such runs detectable (check.py itself is not seeded — see benchmark v2 below) |
 
 ### P1 contract: `VERIFY:` test-loop tasks
 
-`app/services/desktop_local_runner.py` parses any objective line starting
+`app/services/runner/loops.py` (re-exported through
+`app/services/desktop_local_runner.py`) parses any objective line starting
 with `VERIFY:` before submitting unattended PASS Evidence, runs the command
 in the workspace (timeout `AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT`,
 default 120 s) and submits FAIL Evidence with the last 2000 output characters
@@ -72,10 +81,13 @@ when it exits non-zero — which transitions the WorkUnit/Mission to `FAILED`.
 Derivation does not retry failed Missions on its own, so a FAIL is final.
 The benchmark cases are the live carrier of this path.
 
-Honest caveat: `check.py` lives inside the model-reachable workspace, so a
-model could tamper with the checker. The objectives explicitly forbid it and
-the tamper flag exposes violations; treat flagged runs as invalid rather
-than failures.
+Checker integrity (benchmark v2): the acceptance script is no longer part of
+the model-reachable workspace — `check_external` cases materialize it under
+`benchmarks/.runs/<run>/checks/<case>/` and the objective no longer invites
+the model to run or modify it. Tampering with the checker is therefore out
+of the model's reach; `setup_files_modified` continues to flag edits to the
+seeded workspace files, and flagged runs remain invalid rather than
+failures.
 
 ## Rule
 

@@ -51,6 +51,15 @@ async def lifespan(app: FastAPI):
         "enabled" if _cfg.orchestrator.preprocess_enabled else "disabled",
     )
 
+    # ── Desktop secret provisioning (P3-3a) ─────────────────────────
+    # Earliest lifespan point: AGENTHUB_SECRET_KEY must exist before any
+    # secret-dependent service initializes (JWT signing, API-key decryption).
+    try:
+        from app.services.desktop_secret import ensure_secret_key
+        ensure_secret_key()
+    except Exception:
+        _log.warning("startup: desktop secret key provisioning failed", exc_info=True)
+
     # ── Secret validation ────────────────────────────────────────────
     from app.services.secret_service import validate_secret
     validate_secret()

@@ -14,12 +14,13 @@ runner process.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Protocol
 
 import httpx
 
+from app.repositories import MissionRepository
 from app.services.harness_service import (
     FunctionResult,
     HarnessRequest,
@@ -64,6 +65,30 @@ class InMemoryGuidanceSource:
         return self._guidance.get(mission_id, ())
 
 
+def _collect_pending_guidance(
+    events: Iterable[Mapping[str, Any]],
+    consumed_event_ids: set[str],
+) -> tuple[str, ...]:
+    """Consume guidance events once by event id and return their contents.
+
+    Shared by the HTTP and in-process sources; ``consumed_event_ids`` may be
+    a controller-level ledger shared across every runner worker (P3-1c), so
+    N workers never inject the same guidance entry twice.
+    """
+    pending: list[str] = []
+    for event in events:
+        event_id = str(event.get("event_id") or event.get("eventId") or "")
+        if not event_id or event_id in consumed_event_ids:
+            continue
+        consumed_event_ids.add(event_id)
+        if event.get("event_type") != GUIDANCE_EVENT_TYPE:
+            continue
+        content = (event.get("payload") or {}).get(GUIDANCE_CONTENT_KEY)
+        if isinstance(content, str) and content.strip():
+            pending.append(content.strip())
+    return tuple(pending)
+
+
 class MissionControlGuidanceSource:
     """HTTP adapter over the Mission events feed for guidance events.
 
@@ -80,12 +105,15 @@ class MissionControlGuidanceSource:
         access_token: str | None = None,
         http_client: httpx.AsyncClient | None = None,
         event_limit: int = 200,
+        consumed_event_ids: set[str] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._access_token = access_token
         self._http_client = http_client
         self._event_limit = event_limit
-        self._consumed_event_ids: set[str] = set()
+        self._consumed_event_ids = (
+            consumed_event_ids if consumed_event_ids is not None else set()
+        )
 
     async def pending_guidance(self, mission_id: str) -> tuple[str, ...]:
         try:
@@ -95,18 +123,7 @@ class MissionControlGuidanceSource:
                 "guidance fetch failed for mission %s: %s", mission_id, exc
             )
             return ()
-        pending: list[str] = []
-        for event in events:
-            event_id = str(event.get("event_id") or event.get("eventId") or "")
-            if not event_id or event_id in self._consumed_event_ids:
-                continue
-            self._consumed_event_ids.add(event_id)
-            if event.get("event_type") != GUIDANCE_EVENT_TYPE:
-                continue
-            content = (event.get("payload") or {}).get(GUIDANCE_CONTENT_KEY)
-            if isinstance(content, str) and content.strip():
-                pending.append(content.strip())
-        return tuple(pending)
+        return _collect_pending_guidance(events, self._consumed_event_ids)
 
     async def _list_events(self, mission_id: str) -> list[Mapping[str, Any]]:
         headers = (
@@ -130,6 +147,50 @@ class MissionControlGuidanceSource:
         if not isinstance(events, list):
             return []
         return [event for event in events if isinstance(event, Mapping)]
+
+
+class InProcessGuidanceSource:
+    """Read the guidance ledger directly from the in-process Mission repository.
+
+    The desktop runner shares the Mission Control process and database, so
+    the HTTP round-trip can be skipped: guidance events are read through the
+    same repository the Mission API writes to. Consumption bookkeeping is
+    shared through ``consumed_event_ids`` — pass one controller-level set to
+    every worker's source (P3-1c). Failures degrade to "no guidance" exactly
+    like the HTTP source.
+    """
+
+    def __init__(
+        self,
+        repository_factory: Any = MissionRepository,
+        *,
+        consumed_event_ids: set[str] | None = None,
+        event_limit: int = 200,
+    ) -> None:
+        self._repository_factory = repository_factory
+        self._consumed_event_ids = (
+            consumed_event_ids if consumed_event_ids is not None else set()
+        )
+        self._event_limit = event_limit
+
+    async def pending_guidance(self, mission_id: str) -> tuple[str, ...]:
+        try:
+            repository = self._repository_factory()
+            events = await repository.list_events(
+                mission_id,
+                after_sequence=0,
+                limit=self._event_limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - guidance is best-effort
+            logger.warning(
+                "guidance fetch failed for mission %s: %s", mission_id, exc
+            )
+            return ()
+        normalized = [
+            event.to_public_dict() if not isinstance(event, Mapping) else event
+            for event in events
+        ]
+        return _collect_pending_guidance(normalized, self._consumed_event_ids)
 
 
 class GuidanceInjectingModel:
@@ -175,6 +236,7 @@ __all__ = [
     "GuidanceInjectingModel",
     "GuidanceSourcePort",
     "InMemoryGuidanceSource",
+    "InProcessGuidanceSource",
     "MissionControlGuidanceSource",
     "format_guidance_block",
 ]

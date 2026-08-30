@@ -194,7 +194,8 @@ boundary. It is not the permanent home of every Agent feature.
   unsatisfied policies cannot be bypassed through the direct verification API.
   This evaluator proves Artifact-set availability and byte integrity only, not
   semantic correctness or test execution. The desktop local runner
-  (`services/desktop_local_runner.py`) additionally treats any Mission
+  (the `services/runner/` package behind the `services/desktop_local_runner.py`
+  facade) additionally treats any Mission
   objective line starting with `VERIFY:` as a workspace acceptance command:
   before submitting unattended PASS Evidence it runs that command in the
   workspace (timeout `AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT`,

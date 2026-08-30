@@ -1,16 +1,14 @@
 {
   "id": "py-logic-discount",
   "title": "修复折扣计算逻辑错误",
-  "objective": "calc.py 的 apply_discount(price, percent) 应按 percent% 折扣计算折后价，但当前实现把折扣加到了价格上（逻辑错误）。请修复 calc.py 中的这一处逻辑错误，不要重写其他部分，不得修改 check.py。修复后运行 python check.py 必须输出 OK。",
+  "objective": "calc.py 的 apply_discount(price, percent) 应按 percent% 折扣计算折后价，但当前实现把折扣加到了价格上（逻辑错误）。请修复 calc.py 中的这一处逻辑错误，不要重写其他部分。验收脚本在工作区外部由系统自动运行，修复后必须确保验收输出 OK。",
   "verify_command": "python check.py",
+  "check_external": true,
+  "check": "from calc import apply_discount\n\nassert abs(apply_discount(100, 20) - 80.0) < 1e-9, apply_discount(100, 20)\nassert abs(apply_discount(250, 10) - 225.0) < 1e-9, apply_discount(250, 10)\nassert abs(apply_discount(0, 50) - 0.0) < 1e-9, apply_discount(0, 50)\nassert abs(apply_discount(99.9, 15) - 84.915) < 1e-9, apply_discount(99.9, 15)\nprint(\"OK\")\n",
   "setup": [
     {
       "path": "calc.py",
       "content": "\"\"\"价格折扣工具。\n\napply_discount(price, percent) 返回按 percent%（0-100）打折后的价格。\n\"\"\"\n\n\ndef apply_discount(price, percent):\n    \"\"\"按 percent% 折扣计算折后价。\"\"\"\n    return price + price * percent / 100\n"
-    },
-    {
-      "path": "check.py",
-      "content": "from calc import apply_discount\n\nassert abs(apply_discount(100, 20) - 80.0) < 1e-9, apply_discount(100, 20)\nassert abs(apply_discount(250, 10) - 225.0) < 1e-9, apply_discount(250, 10)\nassert abs(apply_discount(0, 50) - 0.0) < 1e-9, apply_discount(0, 50)\nassert abs(apply_discount(99.9, 15) - 84.915) < 1e-9, apply_discount(99.9, 15)\nprint(\"OK\")\n"
     }
   ]
 }

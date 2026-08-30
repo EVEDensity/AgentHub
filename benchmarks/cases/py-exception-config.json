@@ -1,16 +1,14 @@
 {
   "id": "py-exception-config",
   "title": "补齐配置读取的异常处理",
-  "objective": "config_loader.py 的 load_setting(path, key, default=None) 从 JSON 配置文件读取 key 对应的值。按文档约定：文件不存在、内容不是合法 JSON、或 key 缺失时都应返回 default，但当前实现没有任何异常处理，会直接抛出异常。请为 load_setting 补齐异常处理（只捕获会导致违约的具体异常类型，不要吞掉所有异常），不得修改 check.py。修复后运行 python check.py 必须输出 OK。",
+  "objective": "config_loader.py 的 load_setting(path, key, default=None) 从 JSON 配置文件读取 key 对应的值。按文档约定：文件不存在、内容不是合法 JSON、或 key 缺失时都应返回 default，但当前实现没有任何异常处理，会直接抛出异常。请为 load_setting 补齐异常处理（只捕获会导致违约的具体异常类型，不要吞掉所有异常）。验收脚本在工作区外部由系统自动运行，修复后必须确保验收输出 OK。",
   "verify_command": "python check.py",
+  "check_external": true,
+  "check": "import json\n\nfrom config_loader import load_setting\n\nwith open(\"good.json\", \"w\", encoding=\"utf-8\") as handle:\n    json.dump({\"port\": 8080, \"name\": \"agenthub\"}, handle)\nwith open(\"bad.json\", \"w\", encoding=\"utf-8\") as handle:\n    handle.write(\"{not json\")\n\nassert load_setting(\"good.json\", \"port\") == 8080\nassert load_setting(\"good.json\", \"name\") == \"agenthub\"\nassert load_setting(\"good.json\", \"missing\", \"fallback\") == \"fallback\"\nassert load_setting(\"good.json\", \"missing\") is None\nassert load_setting(\"bad.json\", \"port\", 0) == 0\nassert load_setting(\"no-such-file.json\", \"port\", 0) == 0\nprint(\"OK\")\n",
   "setup": [
     {
       "path": "config_loader.py",
       "content": "import json\n\n\ndef load_setting(path, key, default=None):\n    \"\"\"从 JSON 配置文件读取 key 对应的值。\n\n    文件不存在、内容不是合法 JSON、或 key 缺失时，返回 default，\n    而不是抛出异常。\n    \"\"\"\n    with open(path, \"r\", encoding=\"utf-8\") as handle:\n        data = json.load(handle)\n    return data[key]\n"
-    },
-    {
-      "path": "check.py",
-      "content": "import json\n\nfrom config_loader import load_setting\n\nwith open(\"good.json\", \"w\", encoding=\"utf-8\") as handle:\n    json.dump({\"port\": 8080, \"name\": \"agenthub\"}, handle)\nwith open(\"bad.json\", \"w\", encoding=\"utf-8\") as handle:\n    handle.write(\"{not json\")\n\nassert load_setting(\"good.json\", \"port\") == 8080\nassert load_setting(\"good.json\", \"name\") == \"agenthub\"\nassert load_setting(\"good.json\", \"missing\", \"fallback\") == \"fallback\"\nassert load_setting(\"good.json\", \"missing\") is None\nassert load_setting(\"bad.json\", \"port\", 0) == 0\nassert load_setting(\"no-such-file.json\", \"port\", 0) == 0\nprint(\"OK\")\n"
     }
   ]
 }

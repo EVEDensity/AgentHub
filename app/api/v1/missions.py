@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import time
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, AsyncIterator, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from app.api.v1.access import authorize_verifier, authorize_workspace
 from app.domain import (
@@ -145,6 +149,10 @@ MissionLimit = Annotated[int, Query(ge=1, le=200)]
 MissionOffset = Annotated[int, Query(ge=0)]
 EventAfterSequence = Annotated[int, Query(alias="afterSequence", ge=0)]
 EventLimit = Annotated[int, Query(ge=1, le=200)]
+EventPollSeconds = Annotated[
+    float, Query(alias="pollSeconds", ge=0.05, le=30.0)
+]
+EventMaxSeconds = Annotated[float, Query(alias="maxSeconds", ge=0, le=3600)]
 WorkUnitLimit = Annotated[int, Query(ge=1, le=200)]
 WorkUnitOffset = Annotated[int, Query(ge=0)]
 ArtifactLimit = Annotated[int, Query(ge=1, le=200)]
@@ -473,15 +481,21 @@ async def cancel_mission(
     )
 
 
-@router.get("/{mission_id}/events")
-async def list_mission_events(
+async def _collect_mission_events(
+    repository: MissionRepository,
     mission_id: str,
-    user: CurrentUser,
-    repository: MissionRepositoryDep,
-    after_sequence: EventAfterSequence = 0,
-    limit: EventLimit = 100,
-) -> dict:
-    await _authorized_mission(mission_id, user=user, repository=repository)
+    *,
+    after_sequence: int,
+    limit: int,
+    seen_event_ids: set[str] | None = None,
+) -> tuple[list[dict], int]:
+    """Shared events query: mission ledger window + work-unit event window.
+
+    Returns the ordered public dicts and the highest mission-aggregate
+    sequence observed (the SSE cursor). When ``seen_event_ids`` is given,
+    already-delivered events are dropped (work-unit events are re-listed as
+    a bounded window on every poll; clients/streams deduplicate by event_id).
+    """
     events = await repository.list_events(
         mission_id,
         after_sequence=after_sequence,
@@ -502,7 +516,97 @@ async def list_mission_events(
         merged.values(),
         key=lambda event: (event.occurred_at, event.event_id),
     )
-    return {"events": [event.to_public_dict() for event in ordered]}
+    cursor = after_sequence
+    public: list[dict] = []
+    for event in ordered:
+        # Only mission-aggregate sequences advance the SSE cursor; work-unit
+        # events carry their own aggregate's sequence numbers.
+        if event.aggregate_type.value == "mission":
+            cursor = max(cursor, event.sequence)
+        if seen_event_ids is not None:
+            if event.event_id in seen_event_ids:
+                continue
+            seen_event_ids.add(event.event_id)
+        public.append(event.to_public_dict())
+    return public, cursor
+
+
+@router.get("/{mission_id}/events")
+async def list_mission_events(
+    mission_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    after_sequence: EventAfterSequence = 0,
+    limit: EventLimit = 100,
+) -> dict:
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    public, _cursor = await _collect_mission_events(
+        repository,
+        mission_id,
+        after_sequence=after_sequence,
+        limit=limit,
+    )
+    return {"events": public}
+
+
+@router.get("/{mission_id}/events/stream")
+async def stream_mission_events(
+    mission_id: str,
+    request: Request,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    after_sequence: EventAfterSequence = 0,
+    limit: EventLimit = 100,
+    poll_seconds: EventPollSeconds = 1.0,
+    max_seconds: EventMaxSeconds = 0,
+) -> StreamingResponse:
+    """Server-Sent Events stream over the mission event ledger (P3-4a).
+
+    Reuses the ``GET /events`` query logic and polls it every
+    ``pollSeconds`` (default 1 s), pushing each new event as one
+    ``data: <json>`` frame. The mission-aggregate sequence acts as the
+    cursor; a client disconnect ends the stream. ``maxSeconds`` bounds the
+    stream server-side (0 = unlimited).
+    """
+    mission = await _authorized_mission(mission_id, user=user, repository=repository)
+    del mission
+
+    async def event_stream() -> AsyncIterator[str]:
+        cursor = after_sequence
+        seen_event_ids: set[str] = set()
+        deadline = time.monotonic() + max_seconds if max_seconds > 0 else None
+        while True:
+            try:
+                batch, cursor = await _collect_mission_events(
+                    repository,
+                    mission_id,
+                    after_sequence=cursor,
+                    limit=limit,
+                    seen_event_ids=seen_event_ids,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - a failed poll must not kill the stream
+                batch = []
+            for event in batch:
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if deadline is not None and time.monotonic() >= deadline:
+                return
+            try:
+                if await request.is_disconnected():
+                    return
+            except Exception:  # noqa: BLE001 - transport already gone
+                return
+            await asyncio.sleep(poll_seconds)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/{mission_id}/guidance")
