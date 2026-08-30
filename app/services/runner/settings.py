@@ -31,6 +31,9 @@ VERIFY_COMMAND_TIMEOUT_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEO
 CONTEXT_CHAR_BUDGET_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_CONTEXT_CHAR_BUDGET"
 WORKERS_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_WORKERS"
 MCP_CONFIG_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MCP_CONFIG"
+# OS-level sandbox switch (Job Object + restricted token on Windows, bwrap on
+# Linux): default on, ``0`` falls back to the original plain subprocess.
+SANDBOX_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_SANDBOX"
 # P3-2b: prefer the in-process guidance reader over the HTTP feed (the
 # desktop runner shares the Mission Control process and database).
 INPROCESS_GUIDANCE_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_INPROCESS"
@@ -112,6 +115,7 @@ class DesktopLocalRunnerSettings:
     context_char_budget: int = _DEFAULT_CONTEXT_CHAR_BUDGET
     workers: int = 1
     mcp_config: Path | None = None
+    sandbox_enabled: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DesktopLocalRunnerSettings:
@@ -201,6 +205,8 @@ class DesktopLocalRunnerSettings:
             context_char_budget=context_char_budget,
             workers=_worker_count(environment),
             mcp_config=_mcp_config_path(environment),
+            # OS sandbox defaults to on; ``0`` degrades to plain subprocess.
+            sandbox_enabled=environment.get(SANDBOX_ENV, "1").strip() == "1",
         )
 
     def default_workspace_root(self) -> Path:

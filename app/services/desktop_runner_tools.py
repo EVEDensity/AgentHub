@@ -24,6 +24,7 @@ PermissionManager configuration untouched.
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -289,12 +290,17 @@ def _build_code_execute_executor(
     handler: Callable[..., Awaitable[object]],
     workspace_root: Path,
     max_result_chars: int,
+    sandbox_enabled: bool | None = None,
 ) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
     """Desktop executor for code_execute: PermissionManager gate + 60s cap.
 
-    The execution channel itself is the built-in subprocess implementation,
-    reused unchanged: python/bash only, cwd resolved inside the workspace
-    root by the handler, output truncation applied by the shared renderer.
+    The execution channel is the built-in subprocess implementation, reused
+    unchanged: python/bash only, cwd resolved inside the workspace root by
+    the handler, output truncation applied by the shared renderer.  With the
+    OS sandbox enabled (``sandbox_enabled=None`` resolves the env switch) the
+    run is instead wrapped by the platform sandbox runner
+    (Job Object + restricted token on Windows, bwrap on Linux) with the same
+    python/bash semantics and rendering.
     """
     inner = _build_tool_executor(handler, workspace_root, max_result_chars)
 
@@ -306,9 +312,145 @@ def _build_code_execute_executor(
         timeout = clamped.get("timeout")
         if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
             clamped["timeout"] = _clamp_desktop_timeout(timeout)
+        if _sandbox_active(sandbox_enabled):
+            return await _sandboxed_code_execute(
+                clamped, workspace_root, max_result_chars
+            )
         return await inner(clamped)
 
     return execute
+
+
+def _sandbox_active(flag: bool | None) -> bool:
+    """Resolve the OS-sandbox switch: explicit flag wins, else the env default."""
+    if flag is not None:
+        return bool(flag)
+    from app.services.runner.sandbox import sandbox_enabled as resolve
+
+    return resolve()
+
+
+async def _sandboxed_code_execute(
+    arguments: Mapping[str, Any],
+    workspace_root: Path,
+    max_result_chars: int,
+) -> str:
+    """Run one code_execute payload through the OS-level sandbox runner.
+
+    Mirrors the built-in handler semantics (python script / bash one-liner or
+    script, workspace-confined cwd, install-command metadata) but executes
+    via ``run_sandboxed`` so the child lands in a Job Object under a
+    restricted token (Windows) or bwrap (Linux).
+    """
+    from app.services.runner import sandbox
+    from app.services.tools.builtin_tools import (
+        MAX_CODE_OUTPUT_CHARS,
+        _build_python_cmd,
+        _is_install_command,
+        _is_one_liner,
+    )
+    from app.services.tools.sandbox_executor import sandbox_executor
+
+    code = str(arguments.get("code") or "")
+    language = str(arguments.get("language") or "python").lower()
+    if language in ("sh", "shell"):
+        language = "bash"
+    if language not in ("python", "bash"):
+        return f"工具执行失败: 不支持的语言: {arguments.get('language')}。支持: python, bash"
+
+    cwd_resolved = _resolve_tool_path(
+        str(arguments.get("cwd") or ".").strip() or ".", workspace_root
+    )
+    if cwd_resolved is None:
+        return (
+            f"工具执行失败: 工作目录 '{arguments.get('cwd')}' "
+            f"超出桌面工作区允许范围 ({workspace_root})"
+        )
+    cwd_resolved.mkdir(parents=True, exist_ok=True)
+
+    timeout = arguments.get("timeout")
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+        timeout = 30
+    timeout_seconds = max(float(timeout), 0.1)
+
+    code_stripped = code.strip()
+    is_install = _is_install_command(code_stripped, language)
+
+    exec_dir = workspace_root / ".agenthub_exec"
+    exec_dir.mkdir(parents=True, exist_ok=True)
+    script_path: Path | None = None
+    if language == "python":
+        script_path = exec_dir / "script.py"
+        script_path.write_text(code, encoding="utf-8")
+        argv = [str(part) for part in _build_python_cmd(workspace_root, script_path)]
+    elif _is_one_liner(code_stripped):
+        argv = ["bash", "-lc", code_stripped]
+    else:
+        script_path = exec_dir / "script.sh"
+        script_path.write_text(code, encoding="utf-8")
+        argv = ["bash", str(script_path)]
+
+    policy = sandbox.build_sandbox_policy(workspace_root, timeout_seconds)
+    try:
+        loop = asyncio.get_running_loop()
+        completed = await loop.run_in_executor(
+            None, sandbox.run_sandboxed, argv, str(cwd_resolved), policy
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced to the model
+        return _truncate(
+            f"工具执行失败: 沙箱执行异常: {exc}", max_result_chars
+        )
+    finally:
+        if script_path is not None:
+            try:
+                script_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    returncode = completed.returncode
+    stdout_text = completed.stdout or ""
+    stderr_text = completed.stderr or ""
+
+    metadata: dict[str, Any] = {
+        "language": language,
+        "exit_code": returncode,
+        "timeout_seconds": timeout_seconds,
+        "cwd": str(cwd_resolved.relative_to(workspace_root)) or ".",
+        "is_install": is_install,
+        # "os" = restricted-token/Job-Object (Windows) or bwrap (Linux)
+        # sandbox applied; "plain" = audited fail-open degrade.
+        "sandbox": "os" if getattr(completed, "sandboxed", False) else "plain",
+    }
+    if returncode is None:
+        return _render_result(
+            {
+                "success": False,
+                "error": f"代码执行超时 ({int(timeout_seconds)}秒)",
+                "metadata": metadata,
+            },
+            max_result_chars,
+        )
+    stdout = sandbox_executor.sanitize_output(stdout_text)[:MAX_CODE_OUTPUT_CHARS]
+    stderr = sandbox_executor.sanitize_output(stderr_text)[:MAX_CODE_OUTPUT_CHARS]
+    result_parts: list[str] = []
+    if stdout:
+        result_parts.append(f"[标准输出]\n{stdout}")
+    if stderr:
+        result_parts.append(f"[标准错误]\n{stderr}")
+    if returncode != 0:
+        result_parts.append(f"[退出码: {returncode}]")
+    if not result_parts:
+        result_parts.append("[无输出]")
+    metadata["stdout_length"] = len(stdout)
+    metadata["stderr_length"] = len(stderr)
+    return _render_result(
+        {
+            "success": returncode == 0,
+            "result": "\n\n".join(result_parts),
+            "metadata": metadata,
+        },
+        max_result_chars,
+    )
 
 
 def _validate_delegate_arguments_factory() -> Callable[
@@ -472,12 +614,16 @@ def build_desktop_runner_tools(
     max_result_chars: int = DESKTOP_TOOL_RESULT_MAX_CHARS,
     model_factory: HarnessModelFactoryPort | None = None,
     subtask_config: DelegateSubtaskConfig | None = None,
+    sandbox_enabled: bool | None = None,
 ) -> list[FunctionTool]:
     """Build the fixed desktop tool whitelist bound to *workspace_root*.
 
     When *model_factory* is provided, ``delegate_subtask`` is appended as the
     desktop spawn-agent tool; without it the whitelist stays execution-only,
     which also keeps the sub-toolset recursion-free by construction.
+
+    ``sandbox_enabled`` routes ``code_execute`` through the OS-level sandbox
+    runner when truthy; ``None`` resolves the env default switch.
     """
     if max_result_chars < 1:
         raise ValueError("max_result_chars must be positive")
@@ -489,7 +635,9 @@ def build_desktop_runner_tools(
         if handler is None:
             raise ValueError(f"desktop tool has no handler: {definition.name}")
         executor = (
-            _build_code_execute_executor(handler, resolved_root, max_result_chars)
+            _build_code_execute_executor(
+                handler, resolved_root, max_result_chars, sandbox_enabled
+            )
             if definition is CODE_EXECUTE
             else _build_tool_executor(handler, resolved_root, max_result_chars)
         )

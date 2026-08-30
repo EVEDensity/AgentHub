@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -171,13 +172,29 @@ async def run_verify_command(
     *,
     cwd: Path,
     timeout_seconds: float,
+    sandbox_enabled: bool | None = None,
 ) -> VerifyCommandOutcome:
     """Run one acceptance command in the workspace, capturing merged output.
 
     The command inherits the runner process environment; on timeout the whole
     process tree is killed and the outcome is reported as a non-zero result
     with whatever output was produced so far.
+
+    ``sandbox_enabled`` opts the run into the OS-level sandbox facade
+    (Job Object + restricted token on Windows, bwrap on Linux); ``None``
+    resolves the default switch (on, ``AGENTHUB_DESKTOP_LOCAL_RUNNER_SANDBOX=0``
+    disables).  ``False`` keeps the original plain-subprocess execution.
     """
+    if _sandbox_active(sandbox_enabled):
+        # The sandbox runner is a blocking synchronous API; keep the event
+        # loop free by running it in the default executor.
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            _run_verify_command_sandboxed,
+            command,
+            cwd,
+            timeout_seconds,
+        )
     try:
         process = await asyncio.create_subprocess_shell(
             command,
@@ -276,6 +293,48 @@ async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
         except TimeoutError:
             pass
     process.kill()
+
+
+def _sandbox_active(flag: bool | None) -> bool:
+    """Resolve the OS-sandbox switch: explicit flag wins, else the env default."""
+    if flag is not None:
+        return bool(flag)
+    from app.services.runner.sandbox import sandbox_enabled as resolve
+
+    return resolve()
+
+
+def _verify_command_invocation(command: str) -> list[str] | str:
+    """Build the sandbox invocation for one shell command string.
+
+    POSIX keeps an argv list (``sh -c`` receives its argument verbatim).
+    Windows returns a raw command line string: ``cmd /d /s /c "<command>"``.
+    The command's own quotes must reach cmd.exe unescaped — cmd does not
+    honor MSVCRT ``\\"`` — and the ``/s`` switch makes cmd strip the outer
+    quotes, so the inner command line stays intact.
+    """
+    if sys.platform == "win32":
+        shell = os.environ.get("COMSPEC", "cmd.exe")
+        return f'"{shell}" /d /s /c "{command}"'
+    return ["/bin/sh", "-c", command]
+
+
+def _run_verify_command_sandboxed(
+    command: str,
+    cwd: Path,
+    timeout_seconds: float,
+) -> VerifyCommandOutcome:
+    from app.services.runner import sandbox
+
+    invocation = _verify_command_invocation(command)
+    policy = sandbox.build_sandbox_policy(cwd, timeout_seconds)
+    completed = sandbox.run_sandboxed(invocation, str(cwd), policy)
+    return VerifyCommandOutcome(
+        command=command,
+        exit_code=completed.returncode,
+        output=completed.stdout + completed.stderr,
+        timed_out=completed.returncode is None,
+    )
 
 
 def _verify_command_failure_summary(

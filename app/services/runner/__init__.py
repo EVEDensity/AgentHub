@@ -33,6 +33,12 @@ from app.services.runner.loops import (
     extract_verify_commands,
     run_verify_command,
 )
+from app.services.runner.sandbox import (
+    build_sandbox_policy,
+    get_sandbox_runner,
+    run_sandboxed,
+    sandbox_enabled,
+)
 from app.services.runner.model import (
     DesktopModelConfig,
     DesktopModelConfigLoader,
@@ -60,6 +66,7 @@ from app.services.runner.settings import (
     MODEL_ENV,
     PROVIDER_ENV,
     RUN_COMMAND_MARKER,
+    SANDBOX_ENV,
     TOKEN_ENV,
     TOKEN_FILE_ENV,
     USER_ID_ENV,
@@ -94,6 +101,7 @@ __all__ = [
     "MODEL_ENV",
     "PROVIDER_ENV",
     "RUN_COMMAND_MARKER",
+    "SANDBOX_ENV",
     "TOKEN_ENV",
     "TOKEN_FILE_ENV",
     "USER_ID_ENV",
@@ -117,12 +125,16 @@ __all__ = [
     "DesktopVerifierControlPort",
     "MissionControlDesktopMissionSource",
     "VerifyCommandOutcome",
+    "build_sandbox_policy",
     "derive_desktop_task_work_units",
     "desktop_local_runner_settings",
     "extract_run_commands",
     "extract_verify_commands",
+    "get_sandbox_runner",
     "load_default_model_config",
+    "run_sandboxed",
     "run_verify_command",
+    "sandbox_enabled",
     "shutdown_desktop_local_runner",
     "startup_desktop_local_runner",
 ]

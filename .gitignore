@@ -107,3 +107,4 @@ deploy/grafana/*
 deploy/grafana/dashboards/*
 !deploy/grafana/dashboards/newapi-gateway.json
 frontend/public/charts/
+node_modules

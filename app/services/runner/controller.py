@@ -240,6 +240,7 @@ class DesktopLocalRunnerController:
                     max_total_tokens=settings.max_total_tokens,
                     timeout_seconds=settings.timeout_seconds,
                 ),
+                sandbox_enabled=settings.sandbox_enabled,
             )
         else:
             tools = build_desktop_runner_tools(
@@ -250,6 +251,7 @@ class DesktopLocalRunnerController:
                     max_total_tokens=settings.max_total_tokens,
                     timeout_seconds=settings.timeout_seconds,
                 ),
+                sandbox_enabled=settings.sandbox_enabled,
             )
 
         mcp_bridge = await self._build_mcp_bridge()
@@ -662,6 +664,7 @@ class DesktopLocalRunnerController:
                 command,
                 cwd=self._workspace_root,
                 timeout_seconds=self._settings.verify_command_timeout_seconds,
+                sandbox_enabled=self._settings.sandbox_enabled,
             )
             if outcome.timed_out or outcome.exit_code != 0:
                 return _verify_command_failure_summary(outcome, label=label)

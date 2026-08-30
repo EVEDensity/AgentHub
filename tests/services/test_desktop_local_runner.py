@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -48,6 +49,7 @@ from app.services.desktop_local_runner import (
     ENABLE_ENV,
     MCP_CONFIG_ENV,
     RUN_COMMAND_MARKER,
+    SANDBOX_ENV,
     VERIFY_COMMAND_TIMEOUT_ENV,
     VERIFY_ENV,
     VERIFY_INTERVAL_ENV,
@@ -126,7 +128,11 @@ class DesktopWorkspaceTestCase(unittest.IsolatedAsyncioTestCase):
     """Runs each test against an isolated temporary workspace."""
 
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
+        # ignore_cleanup_errors: on Windows the sandboxed children's writes
+        # into the workspace can race an external watcher (AV/indexer) that
+        # briefly holds a directory handle, making the temp-dir teardown hit
+        # ERROR_SHARING_VIOLATION even though every child already exited.
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._tmp.cleanup)
         self.workspace_root = Path(self._tmp.name) / "workspace"
         self.workspace_root.mkdir(parents=True, exist_ok=True)
@@ -1602,6 +1608,216 @@ class DesktopVerifyCommandUnitTests(DesktopWorkspaceTestCase):
 
     def test_extract_run_commands_without_marker_is_empty(self) -> None:
         self.assertEqual(extract_run_commands("普通任务描述"), ())
+
+
+# ── OS sandbox integration points (Windows Job Object / POSIX bwrap) ─────
+
+
+class DesktopSandboxIntegrationTests(DesktopWorkspaceTestCase):
+    """接入点：沙箱开启时 verify 命令与 code_execute 走 run_sandboxed。"""
+
+    async def test_verify_command_routes_through_sandbox_when_enabled(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_run_sandboxed(
+            cmd: list[str], cwd: str, policy: Any
+        ) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            captured["cwd"] = cwd
+            captured["policy"] = policy
+            completed = subprocess.CompletedProcess(
+                args=list(cmd), returncode=0, stdout="hello verify\n", stderr=""
+            )
+            completed.sandboxed = True
+            return completed
+
+        with patch(
+            "app.services.runner.sandbox.run_sandboxed",
+            side_effect=fake_run_sandboxed,
+        ):
+            outcome = await run_verify_command(
+                "python -c \"print('hello verify')\"",
+                cwd=self.workspace_root,
+                timeout_seconds=5,
+                sandbox_enabled=True,
+            )
+
+        self.assertEqual(outcome.exit_code, 0)
+        self.assertFalse(outcome.timed_out)
+        self.assertIn("hello verify", outcome.output)
+        self.assertTrue(captured["cmd"])  # shell-wrapped argv reached the sandbox
+        self.assertEqual(captured["cwd"], str(self.workspace_root))
+        self.assertEqual(
+            Path(captured["policy"].workspace_root), self.workspace_root
+        )
+        self.assertEqual(captured["policy"].timeout_seconds, 5)
+
+    async def test_verify_command_skips_sandbox_when_disabled(self) -> None:
+        with patch("app.services.runner.sandbox.run_sandboxed") as spy:
+            outcome = await run_verify_command(
+                "python -c \"print('plain path')\"",
+                cwd=self.workspace_root,
+                timeout_seconds=30,
+                sandbox_enabled=False,
+            )
+        spy.assert_not_called()
+        self.assertEqual(outcome.exit_code, 0)
+        self.assertIn("plain path", outcome.output)
+
+    async def test_verify_command_sandbox_reports_timeout(self) -> None:
+        def fake_run_sandboxed(
+            cmd: list[str], cwd: str, policy: Any
+        ) -> subprocess.CompletedProcess:
+            completed = subprocess.CompletedProcess(
+                args=list(cmd), returncode=None, stdout="partial\n", stderr=""
+            )
+            completed.sandboxed = True
+            return completed
+
+        with patch(
+            "app.services.runner.sandbox.run_sandboxed",
+            side_effect=fake_run_sandboxed,
+        ):
+            outcome = await run_verify_command(
+                "python -c \"import time; time.sleep(30)\"",
+                cwd=self.workspace_root,
+                timeout_seconds=0.5,
+                sandbox_enabled=True,
+            )
+        self.assertIsNone(outcome.exit_code)
+        self.assertTrue(outcome.timed_out)
+        self.assertIn("partial", outcome.output)
+
+    async def test_code_execute_routes_through_sandbox_when_enabled(self) -> None:
+        calls: list[tuple[list[str], str, Any]] = []
+
+        def fake_run_sandboxed(
+            cmd: list[str], cwd: str, policy: Any
+        ) -> subprocess.CompletedProcess:
+            calls.append((cmd, cwd, policy))
+            completed = subprocess.CompletedProcess(
+                args=list(cmd), returncode=0, stdout="sandbox exec ok\n", stderr=""
+            )
+            completed.sandboxed = True
+            return completed
+
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root, sandbox_enabled=True
+            )
+        }
+        with patch(
+            "app.services.runner.sandbox.run_sandboxed",
+            side_effect=fake_run_sandboxed,
+        ):
+            result = await tools["code_execute"].handler(
+                {"code": "print('sandbox exec ok')", "language": "python"}
+            )
+
+        self.assertEqual(len(calls), 1)
+        cmd, _cwd, policy = calls[0]
+        self.assertTrue(cmd[0].lower().endswith("python.exe") or "python" in cmd[0])
+        self.assertTrue(cmd[1].endswith("script.py"))
+        self.assertEqual(
+            Path(policy.workspace_root), self.workspace_root.resolve()
+        )
+        self.assertIn("sandbox exec ok", result)
+        self.assertIn('"sandbox": "os"', result)
+
+    async def test_code_execute_reports_degraded_sandbox_metadata(self) -> None:
+        """Fail-open 降级时 metadata 记录 "plain"，供调用方审计。"""
+
+        def fake_run_sandboxed(
+            cmd: list[str], cwd: str, policy: Any
+        ) -> subprocess.CompletedProcess:
+            completed = subprocess.CompletedProcess(
+                args=list(cmd), returncode=0, stdout="degraded run\n", stderr=""
+            )
+            completed.sandboxed = False
+            return completed
+
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root, sandbox_enabled=True
+            )
+        }
+        with patch(
+            "app.services.runner.sandbox.run_sandboxed",
+            side_effect=fake_run_sandboxed,
+        ):
+            result = await tools["code_execute"].handler(
+                {"code": "print('degraded run')", "language": "python"}
+            )
+        self.assertIn("degraded run", result)
+        self.assertIn('"sandbox": "plain"', result)
+
+    async def test_code_execute_skips_sandbox_when_disabled(self) -> None:
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root, sandbox_enabled=False
+            )
+        }
+        with patch("app.services.runner.sandbox.run_sandboxed") as spy:
+            result = await tools["code_execute"].handler(
+                {"code": "print('builtin path')", "language": "python"}
+            )
+        spy.assert_not_called()
+        self.assertIn("builtin path", result)
+
+    async def test_sandboxed_code_execute_real_run(self) -> None:
+        """任务级真实验证：沙箱开启时 code_execute 完整执行一条 python。"""
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(
+                self.workspace_root, sandbox_enabled=True
+            )
+        }
+        result = await tools["code_execute"].handler(
+            {"code": "print('sandbox e2e ok')", "language": "python", "timeout": 30}
+        )
+        self.assertIn("sandbox e2e ok", result)
+
+    async def test_sandboxed_verify_command_real_run(self) -> None:
+        """任务级真实验证：沙箱开启时 verify 命令完整执行。"""
+        (self.workspace_root / "sandbox_probe.py").write_text(
+            "print('verify through sandbox')\n", encoding="utf-8"
+        )
+        outcome = await run_verify_command(
+            "python sandbox_probe.py",
+            cwd=self.workspace_root,
+            timeout_seconds=30,
+            sandbox_enabled=True,
+        )
+        self.assertEqual(outcome.exit_code, 0)
+        self.assertFalse(outcome.timed_out)
+        self.assertIn("verify through sandbox", outcome.output)
+
+    def test_settings_sandbox_env_switch(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env({ENABLE_ENV: "1"})
+        self.assertTrue(settings.sandbox_enabled)  # default on
+        settings = DesktopLocalRunnerSettings.from_env(
+            {ENABLE_ENV: "1", SANDBOX_ENV: "0"}
+        )
+        self.assertFalse(settings.sandbox_enabled)
+
+    async def test_verifier_forwards_settings_sandbox_flag(self) -> None:
+        settings = desktop_settings(sandbox_enabled=False)
+        controller = DesktopLocalRunnerController(
+            settings, workspace_root=self.workspace_root
+        )
+        with patch(
+            "app.services.runner.controller.run_verify_command",
+            wraps=run_verify_command,
+        ) as spy:
+            failure = await controller._run_verify_commands(
+                ["python -c \"print('flag check')\""]
+            )
+        self.assertIsNone(failure)
+        self.assertEqual(spy.call_count, 1)
+        self.assertEqual(spy.call_args.kwargs.get("sandbox_enabled"), False)
 
 
 # ── SQLite claim dialect (desktop local profile) ─────────────────────────
