@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,7 +106,14 @@ MODEL_BASE_URL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL_BASE_URL"
 PROVIDER_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_PROVIDER"
 VERIFY_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY"
 VERIFY_INTERVAL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_INTERVAL_SECONDS"
+VERIFY_COMMAND_TIMEOUT_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT"
 CONTEXT_CHAR_BUDGET_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_CONTEXT_CHAR_BUDGET"
+
+# Test-loop task convention (P1): an objective line starting with this marker
+# declares one acceptance command. The unattended verifier runs it in the
+# workspace before submitting PASS Evidence; exit code 0 is mandatory.
+VERIFY_COMMAND_MARKER = "VERIFY:"
+VERIFY_COMMAND_OUTPUT_TAIL_CHARS = 2000
 
 # The desktop shell always talks to the local Mission Control workspace.
 DESKTOP_WORKSPACE_ID = "local-admin"
@@ -133,6 +141,7 @@ _DEFAULT_IDLE_DELAY_SECONDS = 0.5
 _DEFAULT_MAX_DELAY_SECONDS = 10.0
 _DEFAULT_DERIVATION_INTERVAL_SECONDS = 5.0
 _DEFAULT_VERIFY_INTERVAL_SECONDS = 5.0
+_DEFAULT_VERIFY_COMMAND_TIMEOUT_SECONDS = 120.0
 
 
 class DesktopRunnerError(RuntimeError):
@@ -163,6 +172,7 @@ class DesktopLocalRunnerSettings:
     derivation_interval_seconds: float
     verify_enabled: bool
     verify_interval_seconds: float
+    verify_command_timeout_seconds: float = _DEFAULT_VERIFY_COMMAND_TIMEOUT_SECONDS
     context_char_budget: int = _DEFAULT_CONTEXT_CHAR_BUDGET
 
     @classmethod
@@ -244,6 +254,11 @@ class DesktopLocalRunnerSettings:
                 environment,
                 VERIFY_INTERVAL_ENV,
                 _DEFAULT_VERIFY_INTERVAL_SECONDS,
+            ),
+            verify_command_timeout_seconds=_positive_float(
+                environment,
+                VERIFY_COMMAND_TIMEOUT_ENV,
+                _DEFAULT_VERIFY_COMMAND_TIMEOUT_SECONDS,
             ),
             context_char_budget=context_char_budget,
         )
@@ -600,6 +615,154 @@ class DesktopAuthenticator:
 # ── Unattended verification ──────────────────────────────────────────────
 
 
+def extract_verify_commands(objective: str) -> tuple[str, ...]:
+    """Return the acceptance commands declared as ``VERIFY: <command>`` lines.
+
+    Any objective line starting with the marker (leading whitespace allowed)
+    declares one workspace command; empty commands are ignored.
+    """
+    commands: list[str] = []
+    for line in objective.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(VERIFY_COMMAND_MARKER):
+            continue
+        command = stripped[len(VERIFY_COMMAND_MARKER) :].strip()
+        if command:
+            commands.append(command)
+    return tuple(commands)
+
+
+@dataclass(frozen=True)
+class VerifyCommandOutcome:
+    """Result of one acceptance command run in the workspace."""
+
+    command: str
+    exit_code: int | None
+    output: str
+    timed_out: bool
+
+
+async def run_verify_command(
+    command: str,
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+) -> VerifyCommandOutcome:
+    """Run one acceptance command in the workspace, capturing merged output.
+
+    The command inherits the runner process environment; on timeout the whole
+    process tree is killed and the outcome is reported as a non-zero result
+    with whatever output was produced so far.
+    """
+    try:
+        process = await asyncio.create_subprocess_shell(
+            command,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except NotImplementedError:
+        # Event loops without subprocess support (e.g. the Windows selector
+        # loop used by some uvicorn configs) fall back to a threaded sync run
+        # so the verification loop never blocks.
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            _run_verify_command_sync,
+            command,
+            cwd,
+            timeout_seconds,
+        )
+    try:
+        stdout, _ = await asyncio.wait_for(
+            process.communicate(),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError:
+        await _kill_process_tree(process)
+        try:
+            stdout, _ = await process.communicate()
+        except ProcessLookupError:
+            stdout = b""
+        return VerifyCommandOutcome(
+            command=command,
+            exit_code=None,
+            output=(stdout or b"").decode("utf-8", errors="replace"),
+            timed_out=True,
+        )
+    return VerifyCommandOutcome(
+        command=command,
+        exit_code=process.returncode,
+        output=stdout.decode("utf-8", errors="replace"),
+        timed_out=False,
+    )
+
+
+def _run_verify_command_sync(
+    command: str,
+    cwd: Path,
+    timeout_seconds: float,
+) -> VerifyCommandOutcome:
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or b""
+        return VerifyCommandOutcome(
+            command=command,
+            exit_code=None,
+            output=output.decode("utf-8", errors="replace"),
+            timed_out=True,
+        )
+    return VerifyCommandOutcome(
+        command=command,
+        exit_code=completed.returncode,
+        output=(completed.stdout or b"").decode("utf-8", errors="replace"),
+        timed_out=False,
+    )
+
+
+async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
+    """Terminate the verify command; on Windows kill the whole tree first.
+
+    ``Process.kill()`` only terminates the shell, leaving grandchildren alive
+    while they still hold the output pipe; ``taskkill /T`` takes the tree
+    down so ``communicate()`` can finish promptly.
+    """
+    if sys.platform == "win32" and process.returncode is None:
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/F",
+            "/T",
+            "/PID",
+            str(process.pid),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(killer.wait(), timeout=10)
+            return
+        except TimeoutError:
+            pass
+    process.kill()
+
+
+def _verify_command_failure_summary(outcome: VerifyCommandOutcome) -> str:
+    if outcome.timed_out:
+        reason = "verify command timed out"
+    else:
+        reason = f"verify command failed with exit code {outcome.exit_code}"
+    tail = outcome.output[-VERIFY_COMMAND_OUTPUT_TAIL_CHARS:]
+    return f"{reason}: {outcome.command}\n--- output tail ---\n{tail}"
+
+
 class DesktopVerifierControlPort(Protocol):
     """Verifier commands against Mission Control (HTTP adapter in production)."""
 
@@ -914,14 +1077,22 @@ class DesktopLocalRunnerController:
 
         failure_reason = await self._check_artifact_facts(artifacts)
         if failure_reason is None:
+            verify_commands = extract_verify_commands(
+                str(mission.get("objective") or "")
+            )
+            if verify_commands:
+                failure_reason = await self._run_verify_commands(verify_commands)
+        if failure_reason is None:
             verdict = EvidenceVerdict.PASS
             summary = (
                 f"{_DESKTOP_EVALUATOR} verified {len(artifacts)} Artifact(s): "
                 "files exist, are non-empty and byte digests match."
             )
+            if verify_commands:
+                summary += " Verify command(s) passed: " + "; ".join(verify_commands)
         else:
             verdict = EvidenceVerdict.FAIL
-            summary = f"desktop artifact check failed: {failure_reason}"
+            summary = f"desktop verification failed: {failure_reason}"
         submission = VerificationSubmission(
             criterion_id=str(policy.get("criterionId")),
             verifier_id=DESKTOP_VERIFIER_ID,
@@ -979,6 +1150,26 @@ class DesktopLocalRunnerController:
             return str(exc)
         return None
 
+    async def _run_verify_commands(
+        self,
+        commands: Sequence[str],
+    ) -> str | None:
+        """Run the objective's VERIFY commands; ``None`` means all passed.
+
+        Each command runs in the workspace root with the configured timeout;
+        the first failing command produces the Evidence summary (output tail
+        included) that drives the FAIL verdict.
+        """
+        for command in commands:
+            outcome = await run_verify_command(
+                command,
+                cwd=self._workspace_root,
+                timeout_seconds=self._settings.verify_command_timeout_seconds,
+            )
+            if outcome.timed_out or outcome.exit_code != 0:
+                return _verify_command_failure_summary(outcome)
+        return None
+
 
 # ── FastAPI lifespan wiring ──────────────────────────────────────────────
 
@@ -1025,6 +1216,9 @@ __all__ = [
     "DESKTOP_VERIFIER_ID",
     "DESKTOP_VERIFIER_VERSION",
     "DESKTOP_WORKSPACE_ID",
+    "VERIFY_COMMAND_MARKER",
+    "VERIFY_COMMAND_OUTPUT_TAIL_CHARS",
+    "VERIFY_COMMAND_TIMEOUT_ENV",
     "VERIFY_ENV",
     "VERIFY_INTERVAL_ENV",
     "DesktopAuthenticator",
@@ -1036,9 +1230,12 @@ __all__ = [
     "DesktopTaskHarnessFactory",
     "DesktopVerifierControlPort",
     "MissionControlDesktopMissionSource",
+    "VerifyCommandOutcome",
     "derive_desktop_task_work_units",
     "desktop_local_runner_settings",
+    "extract_verify_commands",
     "load_default_model_config",
+    "run_verify_command",
     "shutdown_desktop_local_runner",
     "startup_desktop_local_runner",
 ]

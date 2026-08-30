@@ -2,14 +2,80 @@
 
 > Status: draft
 > Owner: performance maintainers
-> Last reviewed: 2026-08-26
-> Scope: CI-enforced performance gates backing public claims
+> Last reviewed: 2026-08-30
+> Scope: CI-enforced performance gates backing public claims + local codegen baseline
 
 ## Purpose
 
 Every near-term performance claim in public documentation must be provable by
 a gate in this directory. Until a gate exists, the claim is demoted to
 "target" (see `docs/zh/guide/what-is-agenthub.md` capability table).
+
+## Local code generation baseline (P0) & test-loop tasks (P1)
+
+`cases/` + `run_benchmark.py` implement the two highest-priority items from
+`docs/internal/architecture/codex-capability-gap-analysis.md`: a replayable
+code-generation / bug-fix baseline that measures a real pass rate, and the
+`VERIFY:` test-loop task type that turns an acceptance command's exit code
+into the Mission verdict.
+
+### Structure
+
+- `cases/*.json` — 8 benchmark tasks. Each case carries `id`, `title`,
+  `objective` (task description given to the model), `verify_command`
+  (acceptance command) and `setup` (seed workspace files). Coverage:
+  3 single-file python bugs (logic / boundary / exception handling),
+  2 cross-file python tasks (call-signature / return-shape mismatch),
+  2 pure-generation tasks (implement a specified module), 1 one-line
+  regression fix. Every case ships a `check.py` acceptance script that
+  prints `OK` on success.
+- `run_benchmark.py` — per case: builds an isolated workspace, starts a
+  dedicated mission-control process (SQLite-isolated, desktop local runner
+  enabled), creates a Mission whose objective ends with
+  `VERIFY: <verify_command>`, waits for the terminal state, replays the
+  acceptance command in the workspace, and aggregates a JSON report plus a
+  terminal table.
+
+### Usage
+
+```powershell
+# The model API key is read from the environment only (missing -> exit 2,
+# never written to disk or to result files).
+$env:AGENTHUB_DESKTOP_MODEL_API_KEY = "sk-..."
+.venv\Scripts\python.exe benchmarks\run_benchmark.py
+# Subset / model overrides:
+.venv\Scripts\python.exe benchmarks\run_benchmark.py --cases py-logic-discount,gen-todo `
+    --provider deepseek --model deepseek-v4-flash --max-iterations 8
+```
+
+Each run keeps its workspaces and per-case SQLite databases under
+`benchmarks/.runs/<run_id>/` (gitignored); result JSON lands in
+`benchmarks/results/<run_id>.json` (gitignored).
+
+### Metrics
+
+| Metric | Meaning |
+|---|---|
+| `verify_passed` / pass rate | `verify_command` exit code 0 when replayed in the workspace after the Mission reached a terminal state — this is the benchmark truth |
+| `mission_status` | Durable Mission verdict (`SUCCEEDED` means the runner finished AND the `VERIFY:` gate passed; `FAILED` covers both execution and acceptance failure) |
+| `metrics.iterations` / `total_tokens` / `model_cost` | Summarized from the mission's harness `execution_checkpoints` (last checkpoint per attempt is cumulative usage) |
+| `duration_seconds` | Wall clock from workspace creation to terminal state |
+| `setup_files_modified` | Set to true when the model edited a seeded file (the objectives forbid editing `check.py`; the flag keeps such runs detectable) |
+
+### P1 contract: `VERIFY:` test-loop tasks
+
+`app/services/desktop_local_runner.py` parses any objective line starting
+with `VERIFY:` before submitting unattended PASS Evidence, runs the command
+in the workspace (timeout `AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT`,
+default 120 s) and submits FAIL Evidence with the last 2000 output characters
+when it exits non-zero — which transitions the WorkUnit/Mission to `FAILED`.
+Derivation does not retry failed Missions on its own, so a FAIL is final.
+The benchmark cases are the live carrier of this path.
+
+Honest caveat: `check.py` lives inside the model-reachable workspace, so a
+model could tamper with the checker. The objectives explicitly forbid it and
+the tamper flag exposes violations; treat flagged runs as invalid rather
+than failures.
 
 ## Rule
 

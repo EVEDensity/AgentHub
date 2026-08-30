@@ -46,6 +46,7 @@ from app.services.desktop_local_runner import (
     DESKTOP_RUNNER_LABEL,
     DESKTOP_VERIFIER_ID,
     ENABLE_ENV,
+    VERIFY_COMMAND_TIMEOUT_ENV,
     VERIFY_ENV,
     VERIFY_INTERVAL_ENV,
     DesktopLocalRunnerController,
@@ -53,6 +54,8 @@ from app.services.desktop_local_runner import (
     DesktopModelConfig,
     DesktopModelFactory,
     derive_desktop_task_work_units,
+    extract_verify_commands,
+    run_verify_command,
     shutdown_desktop_local_runner,
     startup_desktop_local_runner,
 )
@@ -533,6 +536,20 @@ class DesktopRunnerSettingsTests(unittest.TestCase):
     def test_non_positive_context_char_budget_is_rejected(self) -> None:
         with self.assertRaises(Exception):
             DesktopLocalRunnerSettings.from_env(env={CONTEXT_CHAR_BUDGET_ENV: "0"})
+
+    def test_verify_command_timeout_defaults_to_120_seconds(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(env={})
+        self.assertEqual(settings.verify_command_timeout_seconds, 120.0)
+
+    def test_verify_command_timeout_is_env_configurable(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(
+            env={VERIFY_COMMAND_TIMEOUT_ENV: "30"}
+        )
+        self.assertEqual(settings.verify_command_timeout_seconds, 30.0)
+
+    def test_non_positive_verify_command_timeout_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            DesktopLocalRunnerSettings.from_env(env={VERIFY_COMMAND_TIMEOUT_ENV: "0"})
 
     def test_default_workspace_root_is_under_workspaces_dir(self) -> None:
         settings = desktop_settings()
@@ -1098,6 +1115,7 @@ def ready_discovery(
     size_bytes: int,
     content_address: str,
     policy: dict[str, Any] | None = None,
+    objective: str = "创建 notes.txt",
 ) -> dict[str, Any]:
     return {
         "discoveryStatus": "ready",
@@ -1106,7 +1124,7 @@ def ready_discovery(
             "mission": {
                 "id": "mis-desktop-1",
                 "title": "桌面任务",
-                "objective": "创建 notes.txt",
+                "objective": objective,
             },
             "contract": {
                 "id": "contract-manual-v1",
@@ -1279,6 +1297,142 @@ class DesktopVerificationLoopTests(DesktopWorkspaceTestCase):
             self.assertEqual(verifier.discover_calls, [])
         finally:
             await controller.stop()
+
+    # ── Test-loop tasks: VERIFY: acceptance commands (P1) ──────────────
+
+    async def _submit_for_objective(
+        self,
+        objective: str,
+        **setting_overrides: Any,
+    ) -> tuple[FakeVerifierControl, DesktopLocalRunnerController]:
+        digest, size, address = self._store_artifact(b"task output")
+        objective_lines = objective + "\nVERIFY: python check.py"
+        verifier = FakeVerifierControl(
+            ready_discovery(digest, size, address, objective=objective_lines)
+        )
+        controller = await self._run_controller(verifier, **setting_overrides)
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=10)
+        finally:
+            await controller.stop()
+        return verifier, controller
+
+    async def test_passing_verify_command_submits_pass_evidence(self) -> None:
+        (self.workspace_root / "check.py").write_text(
+            "print('OK')\n", encoding="utf-8"
+        )
+        verifier, _controller = await self._submit_for_objective(
+            "修复后运行 python check.py 必须输出 OK"
+        )
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.PASS)
+        self.assertIn("verified 1 Artifact", submission.summary)
+        self.assertIn("Verify command(s) passed: python check.py", submission.summary)
+
+    async def test_failing_verify_command_submits_fail_with_output_tail(
+        self,
+    ) -> None:
+        (self.workspace_root / "check.py").write_text(
+            "raise AssertionError('expected 80.0, got 120.0')\n",
+            encoding="utf-8",
+        )
+        verifier, _controller = await self._submit_for_objective(
+            "修复 calc.py 的折扣计算"
+        )
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
+        self.assertIn("verify command failed with exit code 1", submission.summary)
+        self.assertIn("expected 80.0, got 120.0", submission.summary)
+
+    async def test_timed_out_verify_command_submits_fail(self) -> None:
+        (self.workspace_root / "check.py").write_text(
+            "import time; time.sleep(30)\n",
+            encoding="utf-8",
+        )
+        verifier, _controller = await self._submit_for_objective(
+            "修复慢任务",
+            verify_command_timeout_seconds=0.5,
+        )
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
+        self.assertIn("verify command timed out", submission.summary)
+
+    async def test_verify_command_runs_only_after_artifact_facts_pass(self) -> None:
+        digest = "sha256:" + hashlib.sha256(b"nowhere").hexdigest()
+        missing_address = f"local:sha256/{digest.removeprefix('sha256:')}"
+        verifier = FakeVerifierControl(
+            ready_discovery(
+                digest,
+                12,
+                missing_address,
+                objective="修复任务\nVERIFY: python check.py",
+            )
+        )
+        (self.workspace_root / "check.py").write_text(
+            "raise AssertionError('must not run')\n",
+            encoding="utf-8",
+        )
+        controller = await self._run_controller(verifier)
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=5)
+        finally:
+            await controller.stop()
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
+        self.assertIn("unavailable", submission.summary)
+        self.assertNotIn("must not run", submission.summary)
+
+
+class DesktopVerifyCommandUnitTests(DesktopWorkspaceTestCase):
+    async def test_run_verify_command_returns_exit_code_and_output(self) -> None:
+        outcome = await run_verify_command(
+            'python -c "print(\'hello verify\')"',
+            cwd=self.workspace_root,
+            timeout_seconds=30,
+        )
+        self.assertEqual(outcome.exit_code, 0)
+        self.assertFalse(outcome.timed_out)
+        self.assertIn("hello verify", outcome.output)
+
+    async def test_run_verify_command_captures_failure_output(self) -> None:
+        outcome = await run_verify_command(
+            'python -c "import sys; print(\'boom\'); sys.exit(3)"',
+            cwd=self.workspace_root,
+            timeout_seconds=30,
+        )
+        self.assertEqual(outcome.exit_code, 3)
+        self.assertFalse(outcome.timed_out)
+        self.assertIn("boom", outcome.output)
+
+    async def test_run_verify_command_reports_timeout(self) -> None:
+        outcome = await run_verify_command(
+            'python -c "import time; time.sleep(30)"',
+            cwd=self.workspace_root,
+            timeout_seconds=0.5,
+        )
+        self.assertIsNone(outcome.exit_code)
+        self.assertTrue(outcome.timed_out)
+
+    def test_extract_verify_commands_reads_marker_lines(self) -> None:
+        objective = (
+            "修复 calc.py 的折扣计算。\n"
+            "修复后运行 python check.py 必须输出 OK。\n"
+            "VERIFY: python check.py\n"
+            "忽略：VERIFY 不是标记\n"
+            "VERIFY:   \n"
+            "  VERIFY: python -m pytest -q\n"
+        )
+        self.assertEqual(
+            extract_verify_commands(objective),
+            ("python check.py", "python -m pytest -q"),
+        )
+
+    def test_extract_verify_commands_without_marker_is_empty(self) -> None:
+        self.assertEqual(extract_verify_commands("普通任务描述\n没有标记"), ())
 
 
 # ── SQLite claim dialect (desktop local profile) ─────────────────────────

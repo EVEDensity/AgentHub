@@ -1,0 +1,12 @@
+{
+  "id": "gen-textstats",
+  "title": "从零实现 textstats 模块",
+  "objective": "在工作区新建 textstats.py，用纯 Python 实现以下三个函数（不引入任何第三方依赖）：\n1. word_count(text) -> int：按空白切分统计单词数，连续空白只算一个分隔符，空字符串返回 0；\n2. char_frequency(text) -> dict：只统计字母与数字（忽略其他字符），键为小写字符、值为出现次数，返回普通 dict；\n3. longest_word(text) -> str：返回长度最长的单词（按空白切分），并列时返回先出现的那个，没有单词时返回空字符串。\n\n不得修改 check.py。修复后运行 python check.py 必须输出 OK。",
+  "verify_command": "python check.py",
+  "setup": [
+    {
+      "path": "check.py",
+      "content": "from textstats import char_frequency, longest_word, word_count\n\nassert word_count(\"hello   world\") == 2, word_count(\"hello   world\")\nassert word_count(\"\") == 0\nassert word_count(\"  a b  c \") == 3\nassert char_frequency(\"Aa b!1\") == {\"a\": 2, \"b\": 1, \"1\": 1}, char_frequency(\"Aa b!1\")\nassert char_frequency(\"!@#\") == {}\nassert longest_word(\"I love agenthub\") == \"agenthub\"\nassert longest_word(\"aa bb ccc ccc\") == \"ccc\"\nassert longest_word(\"\") == \"\"\nprint(\"OK\")\n"
+    }
+  ]
+}

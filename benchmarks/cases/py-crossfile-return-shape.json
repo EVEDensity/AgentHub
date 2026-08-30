@@ -1,0 +1,20 @@
+{
+  "id": "py-crossfile-return-shape",
+  "title": "修复跨文件返回结构不匹配（字典键名）",
+  "objective": "bulletin.py 读取 weather.daily_range 的返回值时用了键 \"min\"/\"max\"，而 weather.py 中该函数实际返回的字典键是 \"low\"/\"high\"（返回结构以 weather.py 为权威定义），运行必然抛出 KeyError。请修正 bulletin.py 中的键名以匹配 weather.py 的真实返回结构。不得修改 weather.py 与 check.py。修复后运行 python check.py 必须输出 OK。",
+  "verify_command": "python check.py",
+  "setup": [
+    {
+      "path": "weather.py",
+      "content": "\"\"\"天气数据聚合。本模块的返回结构是权威定义，不要修改本文件。\"\"\"\n\n\ndef daily_range(temperatures):\n    \"\"\"返回 {\"low\": 最低温, \"high\": 最高温}；空输入返回 None。\"\"\"\n    if not temperatures:\n        return None\n    return {\"low\": min(temperatures), \"high\": max(temperatures)}\n\n\ndef average(temperatures):\n    \"\"\"返回平均温度；空输入返回 None。\"\"\"\n    if not temperatures:\n        return None\n    return sum(temperatures) / len(temperatures)\n"
+    },
+    {
+      "path": "bulletin.py",
+      "content": "\"\"\"一周天气简报：调用 weather 模块生成每日低温/高温/均值。\"\"\"\n\nfrom weather import average, daily_range\n\nWEEK = {\n    \"周一\": [18, 26],\n    \"周二\": [17, 25],\n    \"周三\": [20, 29],\n}\n\n\ndef briefing():\n    lines = []\n    for day, temps in WEEK.items():\n        spread = daily_range(temps)\n        lines.append(\n            f\"{day} 最低 {spread['min']} 最高 {spread['max']} 平均 {average(temps):.1f}\"\n        )\n    return \"\\n\".join(lines)\n\n\nif __name__ == \"__main__\":\n    print(briefing())\n"
+    },
+    {
+      "path": "check.py",
+      "content": "from bulletin import briefing\n\nexpected = \"\\n\".join([\n    \"周一 最低 18 最高 26 平均 22.0\",\n    \"周二 最低 17 最高 25 平均 21.0\",\n    \"周三 最低 20 最高 29 平均 24.5\",\n])\nassert briefing() == expected, briefing()\nprint(\"OK\")\n"
+    }
+  ]
+}

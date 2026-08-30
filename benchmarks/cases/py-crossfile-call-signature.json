@@ -1,0 +1,20 @@
+{
+  "id": "py-crossfile-call-signature",
+  "title": "修复跨文件调用签名不匹配（参数个数）",
+  "objective": "report.py 调用 inventory.total_value 时传了 3 个参数，而 inventory.py 中该函数的权威签名只接受 2 个参数（prices, quantities），运行必然抛出 TypeError。请以 inventory.py 的现有签名为准修正 report.py 的调用：总价用 total_value(PRICES, QUANTITIES) 计算，九折逻辑在 report.py 内完成（现有 discounted 计算保留）。不得修改 inventory.py 与 check.py。修复后运行 python check.py 必须输出 OK。",
+  "verify_command": "python check.py",
+  "setup": [
+    {
+      "path": "inventory.py",
+      "content": "\"\"\"库存价值计算。以下函数签名是唯一权威定义，不要修改本文件。\"\"\"\n\n\ndef total_value(prices, quantities):\n    \"\"\"返回逐项价格乘以数量后的总金额。\n\n    prices 与 quantities 等长；不含任何折扣逻辑。\n    \"\"\"\n    return sum(price * quantity for price, quantity in zip(prices, quantities))\n\n\ndef format_cny(amount):\n    \"\"\"把金额格式化为人民币字符串，保留两位小数。\"\"\"\n    return \"CNY {:.2f}\".format(amount)\n"
+    },
+    {
+      "path": "report.py",
+      "content": "\"\"\"报表生成：调用 inventory 模块汇总库存总价值。\"\"\"\n\nfrom inventory import format_cny, total_value\n\nPRICES = [12.5, 3.0, 7.25]\nQUANTITIES = [4, 10, 2]\nDISCOUNT = 0.9  # 九折\n\n\ndef build_report():\n    total = total_value(PRICES, QUANTITIES, DISCOUNT)\n    discounted = total * DISCOUNT\n    return \"库存总价（九折后）: \" + format_cny(discounted)\n\n\nif __name__ == \"__main__\":\n    print(build_report())\n"
+    },
+    {
+      "path": "check.py",
+      "content": "from report import build_report\n\nraw = (12.5 * 4 + 3.0 * 10 + 7.25 * 2) * 0.9\nexpected = \"库存总价（九折后）: CNY {:.2f}\".format(raw)\nassert build_report() == expected, build_report()\nprint(\"OK\")\n"
+    }
+  ]
+}

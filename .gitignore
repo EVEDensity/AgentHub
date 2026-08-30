@@ -32,6 +32,8 @@ data/
 # Native tokenizer assets — provisioned locally by benchmarks/fetch_tokenizers.py
 # (binary files are re-fetched deterministically; never committed)
 assets/tokenizers/
+benchmarks/.runs/
+benchmarks/results/
 .tmppytest/
 coverage.xml
 htmlcov/

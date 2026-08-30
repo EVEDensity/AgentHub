@@ -193,7 +193,15 @@ boundary. It is not the permanent home of every Agent feature.
   again inside the state-transition transaction; unsupported, ambiguous, or
   unsatisfied policies cannot be bypassed through the direct verification API.
   This evaluator proves Artifact-set availability and byte integrity only, not
-  semantic correctness or test execution. PASS also runs the controlled
+  semantic correctness or test execution. The desktop local runner
+  (`services/desktop_local_runner.py`) additionally treats any Mission
+  objective line starting with `VERIFY:` as a workspace acceptance command:
+  before submitting unattended PASS Evidence it runs that command in the
+  workspace (timeout `AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT`,
+  default 120 s); exit code 0 gates the PASS submission while a non-zero exit
+  or timeout submits FAIL Evidence carrying the last 2000 output characters,
+  which transitions the WorkUnit and Mission to `FAILED` (derivation never
+  retries a failed Mission on its own). PASS also runs the controlled
   `artifact-set.v1` evaluator over the exact byte-verification results before
   and during transactional admission. Missing, extra, duplicate, wrong-digest,
   or wrong-size results fail without Evidence or state mutation; successful

@@ -1,0 +1,594 @@
+"""本地代码生成基准回放（bug 修复 + 生成任务，P0 度量）。
+
+对 ``benchmarks/cases/*.json`` 逐个执行：
+
+1. 建立隔离工作区并写入初始（带 bug / 空缺）文件；
+2. 启动一个独立的 mission-control 进程（SQLite 隔离、桌面本地 Runner 开启、
+   模型 API key 只从环境变量 ``AGENTHUB_DESKTOP_MODEL_API_KEY`` 读取，
+   缺失时 exit 2，key 绝不落盘）；
+3. 创建 Mission：objective = case 描述 + ``VERIFY: <验收命令>`` 行，
+   Contract 内嵌 ``artifact-set.v1`` 验收策略（走 P1 测试闭环验证路径）；
+4. 等待 Mission 终态，从 execution checkpoints 汇总迭代数 / tokens / 成本；
+5. 在工作区复跑验收命令，记录通过与否；
+6. 汇总输出 JSON 与终端表格（通过率、平均迭代数、平均耗时、平均 tokens）。
+
+用法::
+
+    set AGENTHUB_DESKTOP_MODEL_API_KEY=sk-...
+    .venv/Scripts/python.exe benchmarks/run_benchmark.py
+    .venv/Scripts/python.exe benchmarks/run_benchmark.py --cases py-logic-discount,gen-todo
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import sqlite3
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+BENCHMARKS_DIR = Path(__file__).resolve().parent
+CASES_DIR = BENCHMARKS_DIR / "cases"
+DEFAULT_RUNS_DIR = BENCHMARKS_DIR / ".runs"
+DEFAULT_RESULTS_DIR = BENCHMARKS_DIR / "results"
+
+WORKSPACE_ID = "local-admin"
+KEY_ENV = "AGENTHUB_DESKTOP_MODEL_API_KEY"
+READY_TIMEOUT_SECONDS = 180.0
+POLL_INTERVAL_SECONDS = 3.0
+SERVER_STOP_TIMEOUT_SECONDS = 30.0
+VERIFY_OUTPUT_TAIL_CHARS = 2000
+TERMINAL_MISSION_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
+
+
+# ── Case loading ─────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class BenchmarkCase:
+    id: str
+    title: str
+    objective: str
+    verify_command: str
+    setup: tuple[dict, ...] = field(default_factory=tuple)
+
+
+def load_cases(cases_dir: Path) -> list[BenchmarkCase]:
+    cases: list[BenchmarkCase] = []
+    for path in sorted(cases_dir.glob("*.json")):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("id", "title", "objective", "verify_command", "setup"):
+            if key not in raw:
+                raise ValueError(f"{path.name}: missing required field '{key}'")
+        cases.append(
+            BenchmarkCase(
+                id=str(raw["id"]),
+                title=str(raw["title"]),
+                objective=str(raw["objective"]),
+                verify_command=str(raw["verify_command"]),
+                setup=tuple(dict(item) for item in raw["setup"]),
+            )
+        )
+    if not cases:
+        raise SystemExit(f"no benchmark cases found in {cases_dir}")
+    return cases
+
+
+def select_cases(cases: list[BenchmarkCase], filter_arg: str) -> list[BenchmarkCase]:
+    if not filter_arg:
+        return cases
+    wanted = [item.strip() for item in filter_arg.split(",") if item.strip()]
+    known = {case.id for case in cases}
+    unknown = [item for item in wanted if item not in known]
+    if unknown:
+        raise SystemExit(f"unknown case id(s): {', '.join(unknown)}")
+    return [case for case in cases if case.id in set(wanted)]
+
+
+# ── HTTP helpers ──────────────────────────────────────────────────────────
+
+
+def http_json(
+    method: str,
+    url: str,
+    *,
+    token: str | None = None,
+    payload: dict | None = None,
+    timeout: float = 30.0,
+) -> dict:
+    request = urllib.request.Request(url, method=method)
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        request.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(request, body, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def wait_for_server(base_url: str, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"{base_url}/", timeout=5) as response:
+                if response.status == 200:
+                    return
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.5)
+    raise TimeoutError(f"mission control not ready within {timeout:.0f}s: {base_url}")
+
+
+def login(base_url: str) -> tuple[str, str]:
+    payload = http_json(
+        "POST",
+        f"{base_url}/api/auth/login",
+        payload={"name": "admin", "password": "admin123"},
+    )
+    token = str(payload.get("accessToken") or "")
+    user_id = str((payload.get("user") or {}).get("id") or "")
+    if not token or not user_id:
+        raise RuntimeError("admin login returned no identity")
+    return token, user_id
+
+
+def mission_objective(case: BenchmarkCase) -> str:
+    return f"{case.objective.rstrip()}\nVERIFY: {case.verify_command}"
+
+
+def mission_contract(contract_id: str, case_timeout: int) -> dict:
+    """Desktop-task contract with the artifact-set.v1 acceptance policy.
+
+    The runner's unattended verifier only judges WorkUnits whose Contract
+    carries this policy; the P1 ``VERIFY:`` acceptance command then gates
+    the PASS Evidence submission.
+    """
+    return {
+        "id": contract_id,
+        "version": 1,
+        "repositoryScopes": [],
+        "allowedCapabilities": [],
+        "budgets": {
+            "timeSeconds": max(1, case_timeout),
+            "modelCost": 10.0,
+            "retries": 0,
+        },
+        "acceptanceCriteria": [
+            {
+                "id": "desktop-artifacts",
+                "kind": "test",
+                "description": (
+                    "desktop.task 产物存在且验收命令退出码为 0"
+                ),
+                "required": True,
+                "configuration": {
+                    "evaluator": "artifact-set.v1",
+                    "workUnitKinds": ["desktop.task"],
+                    "minimumArtifacts": 1,
+                    "requiredArtifactKinds": ["test-result"],
+                },
+            },
+        ],
+        "decisionGates": [],
+        "forbiddenActions": [],
+    }
+
+
+# ── Server lifecycle ─────────────────────────────────────────────────────
+
+
+def free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def server_environment(
+    case_dir: Path,
+    workspace: Path,
+    port: int,
+    args: argparse.Namespace,
+    api_key: str,
+) -> dict:
+    env = os.environ.copy()
+    # Verify commands run through the runner with `python` resolved from
+    # PATH — make sure it is this venv's interpreter.
+    venv_bin = Path(sys.executable).resolve().parent
+    env["PATH"] = str(venv_bin) + os.pathsep + env.get("PATH", "")
+    env["AGENTHUB_DB_BACKEND"] = "sqlite"
+    env["AGENTHUB_SQLITE_PATH"] = str(case_dir / "agenthub.db")
+    env["AGENTHUB_WORKSPACES_DIR"] = str(case_dir / "agenthub-data")
+    env.pop("DATABASE_URL", None)
+    env["AGENTHUB_DESKTOP_LOCAL_RUNNER"] = "1"
+    env["AGENTHUB_DESKTOP_LOCAL_RUNNER_BASE_URL"] = f"http://127.0.0.1:{port}"
+    env["AGENTHUB_DESKTOP_WORKSPACE_ROOT"] = str(workspace)
+    env["AGENTHUB_DESKTOP_MODEL_API_KEY"] = api_key
+    env["AGENTHUB_DESKTOP_LOCAL_RUNNER_PROVIDER"] = args.provider
+    env["AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL"] = args.model
+    if args.model_base_url:
+        env["AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL_BASE_URL"] = args.model_base_url
+    env["AGENTHUB_DESKTOP_LOCAL_RUNNER_MAX_ITERATIONS"] = str(args.max_iterations)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def start_server(
+    case_dir: Path,
+    workspace: Path,
+    port: int,
+    args: argparse.Namespace,
+    api_key: str,
+) -> tuple[subprocess.Popen, Any]:
+    env = server_environment(case_dir, workspace, port, args, api_key)
+    server_log = open(case_dir / "server.log", "wb")
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        env=env,
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
+    )
+    return process, server_log
+
+
+def stop_server(process: subprocess.Popen | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=SERVER_STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=SERVER_STOP_TIMEOUT_SECONDS)
+
+
+# ── Verification & metrics ───────────────────────────────────────────────
+
+
+def run_acceptance_command(
+    verify_command: str,
+    workspace: Path,
+    timeout: float,
+) -> tuple[int | None, str, bool]:
+    """Replay the acceptance command in the workspace; (exit code, output tail, timed out)."""
+    try:
+        proc = subprocess.run(
+            verify_command,
+            cwd=str(workspace),
+            shell=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+        output = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        return proc.returncode, output[-VERIFY_OUTPUT_TAIL_CHARS:], False
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or b""
+        if exc.stderr:
+            output += exc.stderr
+        return None, output.decode("utf-8", errors="replace")[-VERIFY_OUTPUT_TAIL_CHARS:], True
+
+
+def setup_file_states(case: BenchmarkCase, workspace: Path) -> dict[str, bool]:
+    """Record whether any seeded file was modified during the run."""
+    return {
+        item["path"]: (workspace / item["path"]).read_bytes() != item["content"].encode("utf-8")
+        for item in case.setup
+        if (workspace / item["path"]).exists()
+    }
+
+
+def read_checkpoint_metrics(db_path: Path, mission_id: str) -> dict:
+    """Summarize harness checkpoints (last row per work-unit attempt is cumulative)."""
+    if not db_path.exists():
+        return {
+            "iterations": None,
+            "tool_calls": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+            "model_cost": None,
+        }
+    connection = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    try:
+        rows = connection.execute(
+            (
+                "SELECT work_unit_id, attempt, sequence, iteration, tool_calls, "
+                "prompt_tokens, completion_tokens, model_cost "
+                "FROM execution_checkpoints WHERE mission_id = ? "
+                "ORDER BY work_unit_id, attempt, sequence"
+            ),
+            (mission_id,),
+        ).fetchall()
+    finally:
+        connection.close()
+    if not rows:
+        return {
+            "iterations": None,
+            "tool_calls": None,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+            "model_cost": None,
+        }
+    last_per_attempt: dict[tuple[str, int], tuple] = {}
+    for row in rows:
+        last_per_attempt[(row[0], row[1])] = row
+    totals = {
+        "iterations": max(row[3] for row in last_per_attempt.values()),
+        "tool_calls": sum(row[4] for row in last_per_attempt.values()),
+        "prompt_tokens": sum(row[5] for row in last_per_attempt.values()),
+        "completion_tokens": sum(row[6] for row in last_per_attempt.values()),
+        "model_cost": round(sum(row[7] for row in last_per_attempt.values()), 6),
+    }
+    totals["total_tokens"] = totals["prompt_tokens"] + totals["completion_tokens"]
+    return totals
+
+
+# ── One case run ─────────────────────────────────────────────────────────
+
+
+def run_case(
+    case: BenchmarkCase,
+    case_dir: Path,
+    api_key: str,
+    args: argparse.Namespace,
+) -> dict:
+    workspace = case_dir / "workspace"
+    workspace.mkdir(parents=True)
+    for item in case.setup:
+        target = workspace / item["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # newline="\n" keeps the seeded bytes stable on Windows so the
+        # setup-file tamper detection below only fires on real edits.
+        target.write_text(item["content"], encoding="utf-8", newline="\n")
+
+    port = free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    mission_id = f"mis-bench-{case.id}"
+    result: dict = {
+        "id": case.id,
+        "mission_id": mission_id,
+        "verify_command": case.verify_command,
+        "mission_status": None,
+        "verify_exit_code": None,
+        "verify_passed": False,
+        "verify_output_tail": None,
+        "verify_timed_out": False,
+        "setup_files_modified": {},
+        "error": None,
+    }
+
+    server = None
+    server_log = None
+    started = time.monotonic()
+    try:
+        server, server_log = start_server(case_dir, workspace, port, args, api_key)
+        wait_for_server(base_url, READY_TIMEOUT_SECONDS)
+        token, _user_id = login(base_url)
+        http_json(
+            "POST",
+            f"{base_url}/api/v1/missions",
+            token=token,
+            payload={
+                "id": mission_id,
+                "workspaceId": WORKSPACE_ID,
+                "title": case.title,
+                "objective": mission_objective(case),
+                "source": {"type": "manual"},
+                "contract": mission_contract(
+                    f"contract-{mission_id}", args.case_timeout
+                ),
+            },
+        )
+        http_json(
+            "POST",
+            f"{base_url}/api/v1/missions/{mission_id}/start",
+            token=token,
+            payload={},
+        )
+
+        deadline = time.monotonic() + args.case_timeout
+        while time.monotonic() < deadline:
+            mission = http_json(
+                "GET",
+                f"{base_url}/api/v1/missions/{mission_id}",
+                token=token,
+            )
+            status = str(mission.get("status") or "")
+            result["mission_status"] = status
+            if status in TERMINAL_MISSION_STATUSES:
+                break
+            time.sleep(POLL_INTERVAL_SECONDS)
+        else:
+            result["mission_status"] = "TIMEOUT"
+    except Exception as exc:  # noqa: BLE001 - a broken case must not stop the run
+        result["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        stop_server(server)
+        if server_log is not None:
+            server_log.close()
+
+    result["duration_seconds"] = round(time.monotonic() - started, 1)
+    result["setup_files_modified"] = setup_file_states(case, workspace)
+    if result["error"] is None and result["mission_status"] != "TIMEOUT":
+        exit_code, output_tail, timed_out = run_acceptance_command(
+            case.verify_command, workspace, args.verify_timeout
+        )
+        result["verify_exit_code"] = exit_code
+        result["verify_timed_out"] = timed_out
+        result["verify_output_tail"] = output_tail
+        result["verify_passed"] = exit_code == 0
+    result["metrics"] = read_checkpoint_metrics(
+        case_dir / "agenthub.db", mission_id
+    )
+    return result
+
+
+# ── Reporting ────────────────────────────────────────────────────────────
+
+
+def print_report(results: list[dict], total_elapsed: float) -> None:
+    header = (
+        f"{'case':30s} {'mission':10s} {'verify':6s} {'iter':>4s} "
+        f"{'tokens':>8s} {'cost':>7s} {'耗时s':>7s}"
+    )
+    print("\n" + "=" * len(header))
+    print(header)
+    print("-" * len(header))
+    for item in results:
+        metrics = item.get("metrics") or {}
+        verify = (
+            "PASS"
+            if item.get("verify_passed")
+            else ("TIMEOUT" if item.get("verify_timed_out") else "FAIL")
+        )
+        mission = str(item.get("mission_status") or "ERROR")[:10]
+        iterations = metrics.get("iterations")
+        tokens = metrics.get("total_tokens")
+        cost = metrics.get("model_cost")
+        flag = "*" if any(item.get("setup_files_modified", {}).values()) else ""
+        print(
+            f"{item['id'][:30]:30s} {mission:10s} {verify:6s} "
+            f"{str(iterations if iterations is not None else '-'):>4s} "
+            f"{str(tokens if tokens is not None else '-'):>8s} "
+            f"{str(cost if cost is not None else '-'):>7s} "
+            f"{item.get('duration_seconds', 0):>7.1f}{flag}"
+        )
+    print("-" * len(header))
+    total = len(results)
+    verify_passed = sum(1 for item in results if item.get("verify_passed"))
+    mission_ok = sum(
+        1 for item in results if item.get("mission_status") == "SUCCEEDED"
+    )
+    print(
+        f"通过率: {verify_passed}/{total} ({verify_passed / total * 100:.1f}%)  "
+        f"Mission SUCCEEDED: {mission_ok}/{total}  "
+        f"总耗时: {total_elapsed:.1f}s  "
+        f"(*=种子文件被改动)"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--cases", default="", help="逗号分隔的 case id 过滤")
+    parser.add_argument("--provider", default="deepseek", help="模型 provider")
+    parser.add_argument("--model", default="deepseek-v4-flash", help="模型名")
+    parser.add_argument(
+        "--model-base-url",
+        default="",
+        help="模型 base URL（留空用 provider 适配器默认值）",
+    )
+    parser.add_argument(
+        "--max-iterations", type=int, default=8, help="Runner 迭代上限"
+    )
+    parser.add_argument(
+        "--case-timeout", type=int, default=1800, help="单 case Mission 终态等待秒数"
+    )
+    parser.add_argument(
+        "--verify-timeout", type=float, default=120.0, help="复跑验收命令超时秒数"
+    )
+    parser.add_argument(
+        "--runs-dir", type=Path, default=DEFAULT_RUNS_DIR, help="运行工作区根目录"
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="结果 JSON 路径（默认 benchmarks/results/<run_id>.json）",
+    )
+    args = parser.parse_args(argv)
+
+    api_key = os.environ.get(KEY_ENV, "").strip()
+    if not api_key:
+        print(
+            f"environment variable {KEY_ENV} is required to run the benchmark "
+            "(the key is read from the environment only and never persisted)",
+            file=sys.stderr,
+        )
+        return 2
+
+    cases = select_cases(load_cases(CASES_DIR), args.cases)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    runs_dir = args.runs_dir / run_id
+    runs_dir.mkdir(parents=True, exist_ok=True)
+
+    print(
+        f"run {run_id}: {len(cases)} case(s), provider={args.provider} "
+        f"model={args.model} max_iterations={args.max_iterations}"
+    )
+    started = time.monotonic()
+    results: list[dict] = []
+    for index, case in enumerate(cases, start=1):
+        print(
+            f"\n[{index}/{len(cases)}] {case.id} -> "
+            f"{runs_dir / case.id}",
+            flush=True,
+        )
+        item = run_case(case, runs_dir / case.id, api_key, args)
+        results.append(item)
+        print(
+            f"    mission={item.get('mission_status')} "
+            f"verify_passed={item.get('verify_passed')} "
+            f"tokens={(item.get('metrics') or {}).get('total_tokens')} "
+            f"duration={item.get('duration_seconds')}s",
+            flush=True,
+        )
+
+    total_elapsed = time.monotonic() - started
+    output_path = args.output or (DEFAULT_RESULTS_DIR / f"{run_id}.json")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    document = {
+        "run_id": run_id,
+        "provider": args.provider,
+        "model": args.model,
+        "model_base_url": args.model_base_url or None,
+        "max_iterations": args.max_iterations,
+        "started_at": run_id,
+        "total_elapsed_seconds": round(total_elapsed, 1),
+        "summary": {
+            "total": len(results),
+            "mission_succeeded": sum(
+                1 for item in results if item.get("mission_status") == "SUCCEEDED"
+            ),
+            "verify_passed": sum(
+                1 for item in results if item.get("verify_passed")
+            ),
+            "pass_rate": (
+                sum(1 for item in results if item.get("verify_passed")) / len(results)
+                if results
+                else 0.0
+            ),
+        },
+        "cases": results,
+    }
+    output_path.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print_report(results, total_elapsed)
+    print(f"\n结果已写入: {output_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
