@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react';
-import { AlertTriangle, CheckCircle2, Play, RefreshCw, Square } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Play, RefreshCw, Send, Square } from 'lucide-react';
 import { useWorkspaceStore } from '../../stores/workspaceStore';
 
 type Mission = {
@@ -65,6 +65,8 @@ export default function MissionControlPanel({ authHeaders, setNotice, fmtErr }: 
   const [title, setTitle] = useState('');
   const [objective, setObjective] = useState('');
   const [contract, setContract] = useState(DEFAULT_CONTRACT);
+  const [guidance, setGuidance] = useState('');
+  const [sendingGuidance, setSendingGuidance] = useState(false);
 
   const selected = useMemo(() => missions.find((mission) => mission.id === selectedId) ?? null, [missions, selectedId]);
 
@@ -125,6 +127,26 @@ export default function MissionControlPanel({ authHeaders, setNotice, fmtErr }: 
     }
   }, [authHeaders, fmtErr, loadMissions, selected, setNotice]);
 
+  const sendGuidance = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selected || !guidance.trim()) return;
+    setSendingGuidance(true); setError('');
+    try {
+      const response = await fetch(`/api/v1/missions/${encodeURIComponent(selected.id)}/guidance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ content: guidance.trim() }),
+      });
+      const body = await json(response);
+      if (!response.ok) throw new Error(message(body, `HTTP ${response.status}`));
+      setGuidance('');
+      setNotice('指导已发送，将在下一轮模型调用前注入（不打断执行）');
+    } catch (caught) {
+      const detail = caught instanceof Error ? caught.message : '指导发送失败';
+      setError(fmtErr?.(detail, '指导发送失败') ?? detail);
+    } finally { setSendingGuidance(false); }
+  }, [authHeaders, fmtErr, guidance, selected, setNotice]);
+
   const createMission = useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setCreating(true); setError('');
     try {
@@ -152,7 +174,7 @@ export default function MissionControlPanel({ authHeaders, setNotice, fmtErr }: 
       {showCreate && <form onSubmit={createMission} className="space-y-3 rounded border border-warm-200 bg-white p-4"><div className="grid gap-3 md:grid-cols-2"><label className="text-sm text-warm-700">标题<input required value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1 w-full rounded border border-warm-200 px-3 py-2" /></label><label className="text-sm text-warm-700">目标<textarea required value={objective} onChange={(event) => setObjective(event.target.value)} rows={2} className="mt-1 w-full rounded border border-warm-200 px-3 py-2" /></label></div><label className="block text-sm text-warm-700">Contract JSON<textarea required value={contract} onChange={(event) => setContract(event.target.value)} rows={8} className="mt-1 w-full rounded border border-warm-200 px-3 py-2 font-mono text-xs" /></label><div className="flex justify-end gap-2"><button type="button" className="rounded border border-warm-200 px-3 py-2 text-sm" onClick={() => setShowCreate(false)}>取消</button><button type="submit" disabled={creating} className="rounded bg-primary-600 px-3 py-2 text-sm text-white disabled:opacity-50">{creating ? '创建中' : '提交创建'}</button></div></form>}
       <div className="min-h-[460px] overflow-hidden rounded border border-warm-200 bg-white md:grid md:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.5fr)]">
         <div className="border-b border-warm-200 md:border-b-0 md:border-r">{loading && missions.length === 0 ? <div className="p-6 text-sm text-warm-500">正在加载 Mission</div> : missions.length === 0 ? <div className="p-6 text-sm text-warm-500">当前工作空间暂无 Mission</div> : <ul className="divide-y divide-warm-150">{missions.map((mission) => <li key={mission.id}><button type="button" className={`w-full px-4 py-3 text-left hover:bg-warm-50 ${selectedId === mission.id ? 'bg-primary-50' : ''}`} onClick={() => setSelectedId(mission.id)}><span className="block truncate text-sm font-medium text-warm-900">{mission.title}</span><span className="mt-1 block truncate font-mono text-xs text-warm-500">{mission.id}</span><span className={`mt-2 inline-flex rounded border px-2 py-0.5 text-xs ${statusClass(mission.status)}`}>{mission.status}</span></button></li>)}</ul>}</div>
-        <div className="min-w-0 p-4 md:p-5">{selected ? <div className="space-y-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-h3 text-warm-900">{selected.title}</h3><p className="mt-1 text-sm text-warm-600">{selected.objective}</p><p className="mt-2 font-mono text-xs text-warm-500">{selected.id}</p></div><div className="flex gap-2">{selected.status === 'READY' && <button type="button" className="inline-flex items-center gap-1 rounded bg-primary-600 px-3 py-2 text-sm text-white" onClick={() => void runMissionCommand('start')}><Play className="h-4 w-4" />启动</button>}{!['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(selected.status) && <button type="button" className="inline-flex items-center gap-1 rounded border border-danger-200 px-3 py-2 text-sm text-danger-700" onClick={() => void runMissionCommand('cancel')}><Square className="h-4 w-4" />取消</button>}</div></div><div className="grid gap-3 sm:grid-cols-3"><Metric label="WorkUnit" value={String(workUnits.length)} /><Metric label="Artifact" value={String(artifacts.length)} /><Metric label="Evidence" value={String(evidence.length)} /></div>{detailLoading ? <p className="text-sm text-warm-500">正在加载详情</p> : <div className="space-y-4"><DataList title="WorkUnit 状态" items={workUnits.map((unit) => `${unit.id} · ${unit.kind} · ${unit.status}${unit.attempt ? ` · attempt ${unit.attempt}` : ''}`)} empty="暂无 WorkUnit" /><DataList title="Artifact" items={artifacts.map((item) => String(item.id ?? item.artifactId ?? '未命名 Artifact'))} empty="暂无 Artifact" /><DataList title="Evidence" items={evidence.map((item) => String(item.id ?? item.evidenceId ?? '未命名 Evidence'))} empty="暂无 Evidence" /></div>}</div> : <div className="flex min-h-52 items-center justify-center text-sm text-warm-500">选择一个 Mission 查看真实状态</div>}</div>
+        <div className="min-w-0 p-4 md:p-5">{selected ? <div className="space-y-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-h3 text-warm-900">{selected.title}</h3><p className="mt-1 text-sm text-warm-600">{selected.objective}</p><p className="mt-2 font-mono text-xs text-warm-500">{selected.id}</p></div><div className="flex gap-2">{selected.status === 'READY' && <button type="button" className="inline-flex items-center gap-1 rounded bg-primary-600 px-3 py-2 text-sm text-white" onClick={() => void runMissionCommand('start')}><Play className="h-4 w-4" />启动</button>}{!['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(selected.status) && <button type="button" className="inline-flex items-center gap-1 rounded border border-danger-200 px-3 py-2 text-sm text-danger-700" onClick={() => void runMissionCommand('cancel')}><Square className="h-4 w-4" />取消</button>}</div></div><div className="grid gap-3 sm:grid-cols-3"><Metric label="WorkUnit" value={String(workUnits.length)} /><Metric label="Artifact" value={String(artifacts.length)} /><Metric label="Evidence" value={String(evidence.length)} /></div>{selected.status === 'RUNNING' && <form onSubmit={sendGuidance} className="space-y-1 rounded border border-warm-200 bg-white p-3"><label className="text-sm font-medium text-warm-800">运行中指导</label><div className="flex gap-2"><input value={guidance} onChange={(event) => setGuidance(event.target.value)} placeholder="补充要求或纠正方向，将在下一轮模型调用前注入（不打断执行）" className="flex-1 rounded border border-warm-200 px-3 py-2 text-sm" maxLength={2000} /><button type="submit" disabled={sendingGuidance || !guidance.trim()} className="inline-flex h-9 items-center gap-1 rounded bg-primary-600 px-3 text-sm text-white hover:bg-primary-700 disabled:opacity-50"><Send className="h-4 w-4" />{sendingGuidance ? '发送中' : '发送'}</button></div></form>}{detailLoading ? <p className="text-sm text-warm-500">正在加载详情</p> : <div className="space-y-4"><DataList title="WorkUnit 状态" items={workUnits.map((unit) => `${unit.id} · ${unit.kind} · ${unit.status}${unit.attempt ? ` · attempt ${unit.attempt}` : ''}`)} empty="暂无 WorkUnit" /><DataList title="Artifact" items={artifacts.map((item) => String(item.id ?? item.artifactId ?? '未命名 Artifact'))} empty="暂无 Artifact" /><DataList title="Evidence" items={evidence.map((item) => String(item.id ?? item.evidenceId ?? '未命名 Evidence'))} empty="暂无 Evidence" /></div>}</div> : <div className="flex min-h-52 items-center justify-center text-sm text-warm-500">选择一个 Mission 查看真实状态</div>}</div>
       </div>
     </section>
   );

@@ -71,6 +71,18 @@ class ContractRevisionRequest(BaseModel):
     contract: MissionContract
 
 
+class MissionGuidanceRequest(BaseModel):
+    """One run-time guidance entry injected into a RUNNING Mission (P1-1)."""
+
+    model_config = ConfigDict(
+        alias_generator=_to_camel,
+        extra="forbid",
+        populate_by_name=True,
+    )
+
+    content: Annotated[str, Field(min_length=1, max_length=2000)]
+
+
 class MissionListResponse(BaseModel):
     missions: list[dict]
 

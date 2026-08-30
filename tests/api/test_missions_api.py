@@ -1947,6 +1947,69 @@ class MissionApiTests(unittest.TestCase):
         self.assertEqual(events[1]["payload"]["toolName"], "file_write")
         self.assertEqual(events[1]["payload"]["phase"], "harness.tool.completed")
 
+    def test_guidance_endpoint_appends_event_and_lists_it(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        response = client.post(
+            "/api/v1/missions/mis-1/guidance",
+            json={"content": "  输出改为中文  "},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        event = response.json()
+        self.assertEqual(event["event_type"], "mission.guidance.added")
+        self.assertEqual(event["aggregate_id"], "mis-1")
+        self.assertEqual(event["payload"]["content"], "输出改为中文")
+        self.assertEqual(len(repository.events), 1)
+
+        listed = client.get("/api/v1/missions/mis-1/events")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(
+            [item["event_id"] for item in listed.json()["events"]],
+            [event["event_id"]],
+        )
+
+    def test_guidance_endpoint_validates_and_scopes(self) -> None:
+        repository = FakeMissionRepository()
+        repository.mission = build_mission(workspace_id="user-1", status="RUNNING")
+        client = TestClient(
+            build_app(
+                repository,
+                {"id": "user-1", "name": "Ada", "role": "developer"},
+            )
+        )
+
+        missing = client.post(
+            "/api/v1/missions/mis-missing/guidance",
+            json={"content": "hello"},
+        )
+        self.assertEqual(missing.status_code, 404)
+
+        blank = client.post("/api/v1/missions/mis-1/guidance", json={"content": " "})
+        self.assertEqual(blank.status_code, 422)
+        self.assertEqual(repository.events, [])
+
+        # Workspace scoping: another workspace's developer is denied.
+        other = TestClient(
+            build_app(
+                repository,
+                {"id": "user-2", "name": "Grace", "role": "developer"},
+            )
+        )
+        denied = other.post(
+            "/api/v1/missions/mis-1/guidance",
+            json={"content": "hello"},
+        )
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(repository.events, [])
+
     def test_create_and_list_pending_work_unit_with_event(self) -> None:
         repository = FakeMissionRepository()
         repository.mission = build_mission(

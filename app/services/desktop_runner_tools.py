@@ -23,6 +23,7 @@ PermissionManager configuration untouched.
 
 from __future__ import annotations
 
+import ast
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ from app.services.harness_service import (
     ModelPort,
 )
 from app.services.runner_composition import HarnessModelFactoryPort
-from app.services.tool_registry import ToolDefinition
+from app.services.tool_registry import ToolDefinition, ToolParameter
 from app.services.tools.definitions import (
     CODE_EXECUTE,
     FILE_EDIT,
@@ -66,6 +67,9 @@ _TRUNCATION_MARKER = "...[截断]"
 # plus the desktop-profile code_execute unlocked through the local
 # PermissionManager policy below, and the self-contained memory tools
 # (G8: no path arguments, so the generic executor wraps them unchanged).
+# P1-3/P2-3 append the denial-only ``command_execute`` (shell runs are
+# confined to objective-declared acceptance commands) and the zero-dependency
+# ``lint_check`` Python syntax probe.
 _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     FILE_READ,
     FILE_WRITE,
@@ -378,6 +382,90 @@ def _build_delegate_subtask_executor(
     return execute
 
 
+# ── command_execute (P1-3): denial-only shell tool ───────────────────────
+
+COMMAND_EXECUTE_TOOL_NAME = "command_execute"
+COMMAND_EXECUTE_DENIED_MESSAGE = (
+    "工具执行失败: 桌面档不允许通过 command_execute 工具直接执行 shell 命令。"
+    "如需运行命令，请在任务 objective 中以 'RUN: <command>' 行声明，"
+    "该命令会在验收（verifier）阶段于工作区内执行，其退出码与输出会进入 Evidence 证据。"
+)
+
+
+async def _command_execute_denied(_arguments: Mapping[str, Any]) -> str:
+    return COMMAND_EXECUTE_DENIED_MESSAGE
+
+
+def _validate_command_execute_arguments_factory() -> Callable[
+    [Mapping[str, Any]], Mapping[str, Any]
+]:
+    def validate(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not isinstance(arguments, Mapping):
+            raise TypeError("tool arguments must be an object")
+        command = arguments.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise ValueError("command must be a non-empty string")
+        return {"command": command.strip()}
+
+    return validate
+
+
+# ── lint_check (P2-3): zero-dependency Python syntax diagnostics ─────────
+
+LINT_CHECK_TOOL_NAME = "lint_check"
+
+_PATH_ONLY_TOOL_DEFINITION = ToolDefinition(
+    name=LINT_CHECK_TOOL_NAME,
+    description="Python syntax check for one workspace .py file.",
+    category="code",
+    parameters=[
+        ToolParameter(
+            name="path",
+            type="string",
+            required=True,
+            description="Workspace-relative .py file path",
+        ),
+    ],
+    return_type="string",
+    examples=[],
+)
+
+
+def _build_lint_check_executor(
+    workspace_root: Path,
+    _max_result_chars: int,
+) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
+    async def execute(arguments: Mapping[str, Any]) -> str:
+        path = arguments.get("path")
+        if not isinstance(path, str) or not path.strip():
+            return "工具执行失败: path 必须是非空字符串"
+        resolved = _resolve_tool_path(path, workspace_root)
+        if resolved is None:
+            return (
+                f"工具执行失败: 路径 '{path}' 超出桌面工作区允许范围 "
+                f"({workspace_root})"
+            )
+        if resolved.suffix != ".py":
+            return f"工具执行失败: lint_check 仅支持 .py 文件，收到 '{path}'"
+        if not resolved.is_file():
+            return f"工具执行失败: 文件不存在: {path}"
+        try:
+            source = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"工具执行失败: 无法读取文件: {exc}"
+        try:
+            ast.parse(source, filename=str(resolved))
+        except SyntaxError as exc:
+            line = exc.lineno or 0
+            offset = exc.offset or 0
+            return f"语法错误: {path} 行 {line} 列 {offset}: {exc.msg}"
+        except ValueError as exc:
+            return f"工具执行失败: 无法解析文件: {exc}"
+        return "OK: 未发现 Python 语法错误"
+
+    return execute
+
+
 def build_desktop_runner_tools(
     workspace_root: Path,
     *,
@@ -414,6 +502,51 @@ def build_desktop_runner_tools(
                 handler=executor,
             )
         )
+    tools.append(
+        FunctionTool(
+            name=COMMAND_EXECUTE_TOOL_NAME,
+            description=(
+                "执行任意 shell 命令（桌面档已禁用工具直连执行）："
+                "请改在任务 objective 中以 'RUN: <command>' 行声明命令，"
+                "由验收阶段执行并计入证据。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "要执行的 shell 命令",
+                    },
+                },
+                "required": ["command"],
+            },
+            validate_arguments=_validate_command_execute_arguments_factory(),
+            handler=_command_execute_denied,
+        )
+    )
+    tools.append(
+        FunctionTool(
+            name=LINT_CHECK_TOOL_NAME,
+            description=(
+                "对工作区内的 .py 文件运行零依赖的 Python 语法检查，"
+                "返回首个语法错误的行号与信息；用于写码后自我检查修复。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "工作区内 .py 文件路径（相对或工作区内绝对路径）",
+                    },
+                },
+                "required": ["path"],
+            },
+            validate_arguments=_validate_arguments_factory(
+                _PATH_ONLY_TOOL_DEFINITION
+            ),
+            handler=_build_lint_check_executor(resolved_root, max_result_chars),
+        )
+    )
     if model_factory is not None:
         config = subtask_config or DelegateSubtaskConfig()
         tools.append(
@@ -451,12 +584,15 @@ def build_desktop_runner_tools(
 
 
 __all__ = [
+    "COMMAND_EXECUTE_DENIED_MESSAGE",
+    "COMMAND_EXECUTE_TOOL_NAME",
     "DELEGATE_SUBTASK_DEFAULT_ITERATIONS",
     "DELEGATE_SUBTASK_MAX_ITERATIONS",
     "DELEGATE_SUBTASK_RESULT_MAX_CHARS",
     "DELEGATE_SUBTASK_TOOL_NAME",
     "DESKTOP_CODE_EXECUTE_MAX_TIMEOUT",
     "DESKTOP_TOOL_RESULT_MAX_CHARS",
+    "LINT_CHECK_TOOL_NAME",
     "DelegateSubtaskConfig",
     "build_desktop_runner_tools",
 ]

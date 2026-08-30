@@ -49,6 +49,20 @@ from app.services.artifact_integrity_service import (
     build_artifact_byte_verifier,
 )
 from app.services.artifact_store_service import ArtifactPublisher
+from app.services.desktop_guidance import (
+    GuidanceInjectingModel,
+    GuidanceSourcePort,
+    MissionControlGuidanceSource,
+)
+from app.services.desktop_mcp_bridge import (
+    DesktopMcpBridge,
+    load_mcp_server_configs,
+)
+from app.services.desktop_mission_memory import (
+    MISSION_MEMORY_BODY_SUMMARY_CHARS,
+    DesktopMissionMemorySink,
+    MissionMemorySinkPort,
+)
 from app.services.desktop_runner_tools import (
     DelegateSubtaskConfig,
     build_desktop_runner_tools,
@@ -108,12 +122,20 @@ VERIFY_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY"
 VERIFY_INTERVAL_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_INTERVAL_SECONDS"
 VERIFY_COMMAND_TIMEOUT_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT"
 CONTEXT_CHAR_BUDGET_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_CONTEXT_CHAR_BUDGET"
+WORKERS_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_WORKERS"
+MCP_CONFIG_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_MCP_CONFIG"
 
 # Test-loop task convention (P1): an objective line starting with this marker
 # declares one acceptance command. The unattended verifier runs it in the
 # workspace before submitting PASS Evidence; exit code 0 is mandatory.
 VERIFY_COMMAND_MARKER = "VERIFY:"
 VERIFY_COMMAND_OUTPUT_TAIL_CHARS = 2000
+
+# Shell-command convention (P1-3): objective lines starting with this marker
+# declare commands the unattended verifier executes during acceptance. The
+# ``command_execute`` tool itself is denial-only, so arbitrary shell runs stay
+# confined to declared acceptance semantics.
+RUN_COMMAND_MARKER = "RUN:"
 
 # The desktop shell always talks to the local Mission Control workspace.
 DESKTOP_WORKSPACE_ID = "local-admin"
@@ -123,7 +145,11 @@ DESKTOP_RUNNER_LABEL = "desktop-local-runner"
 DESKTOP_SYSTEM_PROMPT = (
     "你是桌面本地任务执行器。使用提供的文件工具在桌面工作区内完成任务，"
     "不要操作工作区之外的路径，完成后用一句话总结结果。"
+    "开始新任务时，可用 memory_search 工具查询历史任务记忆"
+    "（记忆键形如 mission-<任务id>，也可按主题关键词搜索）来复用以往任务沉淀的经验。"
 )
+
+_MAX_DESKTOP_WORKERS = 4
 
 # Unattended verification identity (submitted as Evidence verifier ref).
 DESKTOP_VERIFIER_ID = "desktop-local-verifier"
@@ -174,6 +200,8 @@ class DesktopLocalRunnerSettings:
     verify_interval_seconds: float
     verify_command_timeout_seconds: float = _DEFAULT_VERIFY_COMMAND_TIMEOUT_SECONDS
     context_char_budget: int = _DEFAULT_CONTEXT_CHAR_BUDGET
+    workers: int = 1
+    mcp_config: Path | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DesktopLocalRunnerSettings:
@@ -261,6 +289,8 @@ class DesktopLocalRunnerSettings:
                 _DEFAULT_VERIFY_COMMAND_TIMEOUT_SECONDS,
             ),
             context_char_budget=context_char_budget,
+            workers=_worker_count(environment),
+            mcp_config=_mcp_config_path(environment),
         )
 
     def default_workspace_root(self) -> Path:
@@ -288,6 +318,26 @@ def _positive_float(env: Mapping[str, str], key: str, default: float) -> float:
     if value <= 0:
         raise DesktopRunnerError(f"{key} must be positive")
     return value
+
+
+def _worker_count(env: Mapping[str, str]) -> int:
+    """Resolve the parallel RunnerWorker count (P2-2): default 1, at most 4."""
+    raw = env.get(WORKERS_ENV, "").strip()
+    if not raw:
+        return 1
+    value = int(raw)
+    if value < 1:
+        raise DesktopRunnerError(f"{WORKERS_ENV} must be positive")
+    if value > _MAX_DESKTOP_WORKERS:
+        raise DesktopRunnerError(
+            f"{WORKERS_ENV} must not exceed {_MAX_DESKTOP_WORKERS}"
+        )
+    return value
+
+
+def _mcp_config_path(env: Mapping[str, str]) -> Path | None:
+    raw = env.get(MCP_CONFIG_ENV, "").strip()
+    return Path(raw) if raw else None
 
 
 # ── Model composition ────────────────────────────────────────────────────
@@ -408,6 +458,7 @@ class DesktopTaskHarnessFactory:
         *,
         tools: Sequence[FunctionTool],
         checkpoint_factory: Any | None = None,
+        guidance_source: GuidanceSourcePort | None = None,
         max_iterations: int = _DEFAULT_MAX_ITERATIONS,
         max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS,
         max_total_tokens: int | None = _DEFAULT_MAX_TOTAL_TOKENS,
@@ -420,6 +471,7 @@ class DesktopTaskHarnessFactory:
         self._model_factory = model_factory
         self._tools = list(tools)
         self._checkpoint_factory = checkpoint_factory
+        self._guidance_source = guidance_source
         self._max_iterations = max_iterations
         self._max_tool_calls = max_tool_calls
         self._max_total_tokens = max_total_tokens
@@ -446,6 +498,12 @@ class DesktopTaskHarnessFactory:
                 lease_id=lease_id,
             )
         model = self._model_factory.build(self._tools)
+        if self._guidance_source is not None:
+            model = GuidanceInjectingModel(
+                model,
+                self._guidance_source,
+                mission_id=str(mission.get("id", "")),
+            )
         model_cost_limit = self._max_model_cost
         contract = context.get("contract")
         if isinstance(contract, Mapping):
@@ -621,12 +679,25 @@ def extract_verify_commands(objective: str) -> tuple[str, ...]:
     Any objective line starting with the marker (leading whitespace allowed)
     declares one workspace command; empty commands are ignored.
     """
+    return _extract_marker_commands(objective, VERIFY_COMMAND_MARKER)
+
+
+def extract_run_commands(objective: str) -> tuple[str, ...]:
+    """Return the shell commands declared as ``RUN: <command>`` lines (P1-3).
+
+    Declared commands are executed by the unattended verifier during
+    acceptance only; the ``command_execute`` tool never runs shell directly.
+    """
+    return _extract_marker_commands(objective, RUN_COMMAND_MARKER)
+
+
+def _extract_marker_commands(objective: str, marker: str) -> tuple[str, ...]:
     commands: list[str] = []
     for line in objective.splitlines():
         stripped = line.strip()
-        if not stripped.startswith(VERIFY_COMMAND_MARKER):
+        if not stripped.startswith(marker):
             continue
-        command = stripped[len(VERIFY_COMMAND_MARKER) :].strip()
+        command = stripped[len(marker) :].strip()
         if command:
             commands.append(command)
     return tuple(commands)
@@ -754,11 +825,15 @@ async def _kill_process_tree(process: asyncio.subprocess.Process) -> None:
     process.kill()
 
 
-def _verify_command_failure_summary(outcome: VerifyCommandOutcome) -> str:
+def _verify_command_failure_summary(
+    outcome: VerifyCommandOutcome,
+    *,
+    label: str = "verify command",
+) -> str:
     if outcome.timed_out:
-        reason = "verify command timed out"
+        reason = f"{label} timed out"
     else:
-        reason = f"verify command failed with exit code {outcome.exit_code}"
+        reason = f"{label} failed with exit code {outcome.exit_code}"
     tail = outcome.output[-VERIFY_COMMAND_OUTPUT_TAIL_CHARS:]
     return f"{reason}: {outcome.command}\n--- output tail ---\n{tail}"
 
@@ -810,6 +885,8 @@ class DesktopLocalRunnerController:
         max_result_chars: int | None = None,
         verifier_control: DesktopVerifierControlPort | None = None,
         byte_verifier: ArtifactByteVerifier | None = None,
+        guidance_source: GuidanceSourcePort | None = None,
+        memory_sink: MissionMemorySinkPort | None = None,
     ) -> None:
         self._settings = settings
         self._injected_control = control
@@ -824,10 +901,13 @@ class DesktopLocalRunnerController:
         self._tools = list(tools) if tools is not None else None
         self._verifier_control = verifier_control
         self._byte_verifier = byte_verifier
+        self._guidance_source = guidance_source
+        self._memory_sink = memory_sink
         self._verifier: DesktopVerifierControlPort | None = None
+        self._mcp_bridge: DesktopMcpBridge | None = None
         self._http_client: httpx.AsyncClient | None = None
-        self._worker: RunnerWorker | None = None
-        self._worker_task: asyncio.Task[Any] | None = None
+        self._workers: list[RunnerWorker] = []
+        self._worker_tasks: list[asyncio.Task[Any]] = []
         self._derivation_task: asyncio.Task[Any] | None = None
         self._verification_task: asyncio.Task[Any] | None = None
         self._stop_event = asyncio.Event()
@@ -838,7 +918,7 @@ class DesktopLocalRunnerController:
         return self._workspace_root
 
     async def start(self) -> None:
-        if self._worker_task is not None:
+        if self._worker_tasks:
             raise RuntimeError("desktop local runner is already running")
         self._stop_event.clear()
         settings = self._settings
@@ -861,6 +941,12 @@ class DesktopLocalRunnerController:
                 access_token=identity.access_token,
                 http_client=self._http_client,
             )
+            if self._guidance_source is None:
+                self._guidance_source = MissionControlGuidanceSource(
+                    settings.base_url,
+                    access_token=identity.access_token,
+                    http_client=self._http_client,
+                )
         self._verifier = verifier
 
         model_factory = self._injected_model_factory
@@ -894,37 +980,75 @@ class DesktopLocalRunnerController:
                 ),
             )
 
-        self._runner = self._build_runner(
-            control,
-            runner_id=runner_id,
-            model_factory=model_factory,
-            tools=tools,
-        )
-        worker = RunnerWorker(
-            self._runner,
-            workspace_id=settings.workspace_id,
-            lease_seconds=settings.lease_seconds,
-            idle_delay_seconds=settings.idle_delay_seconds,
-            max_delay_seconds=settings.max_delay_seconds,
-        )
-        self._worker = worker
+        mcp_bridge = await self._build_mcp_bridge()
+        if mcp_bridge is not None:
+            mcp_tools = await mcp_bridge.build_tools()
+            tools.extend(mcp_tools)
+            logger.info("desktop runner MCP bridge added %d tool(s)", len(mcp_tools))
+        self._mcp_bridge = mcp_bridge
+
+        worker_count = max(1, min(settings.workers, _MAX_DESKTOP_WORKERS))
+        for index in range(worker_count):
+            worker_runner_id = (
+                runner_id if worker_count == 1 else f"{runner_id}-w{index}"
+            )
+            runner = self._build_runner(
+                control,
+                runner_id=worker_runner_id,
+                model_factory=model_factory,
+                tools=tools,
+            )
+            if index == 0:
+                self._runner = runner
+            worker = RunnerWorker(
+                runner,
+                workspace_id=settings.workspace_id,
+                lease_seconds=settings.lease_seconds,
+                idle_delay_seconds=settings.idle_delay_seconds,
+                max_delay_seconds=settings.max_delay_seconds,
+            )
+            self._workers.append(worker)
         self._derivation_task = asyncio.create_task(self._derivation_loop())
-        self._worker_task = asyncio.create_task(worker.run())
+        self._worker_tasks = [
+            asyncio.create_task(worker.run()) for worker in self._workers
+        ]
         if settings.verify_enabled and self._verifier is not None:
             self._verification_task = asyncio.create_task(self._verification_loop())
         logger.info(
-            "desktop local runner started: workspace=%s root=%s runner=%s verify=%s",
+            "desktop local runner started: workspace=%s root=%s runner=%s "
+            "workers=%d verify=%s mcp=%s",
             settings.workspace_id,
             self._workspace_root,
             runner_id,
+            worker_count,
             "on" if self._verification_task is not None else "off",
+            "on" if mcp_bridge is not None else "off",
         )
+
+    async def _build_mcp_bridge(self) -> DesktopMcpBridge | None:
+        """Build the optional MCP bridge from env config; degrade on error."""
+        if self._settings.mcp_config is None:
+            return None
+        try:
+            configs = load_mcp_server_configs(self._settings.mcp_config)
+        except Exception as exc:  # noqa: BLE001 - MCP is optional
+            logger.warning(
+                "desktop runner MCP config %s is invalid, MCP tools disabled: %s",
+                self._settings.mcp_config,
+                exc,
+            )
+            return None
+        return DesktopMcpBridge(configs)
 
     async def stop(self) -> None:
         self._stop_event.set()
-        if self._worker is not None:
-            self._worker.request_stop()
-        for task in (self._worker_task, self._derivation_task, self._verification_task):
+        for worker in self._workers:
+            worker.request_stop()
+        for task in (
+            *self._worker_tasks,
+            self._derivation_task,
+            self._verification_task,
+        ):
             if task is None:
                 continue
             task.cancel()
@@ -932,10 +1056,14 @@ class DesktopLocalRunnerController:
                 await task
             except asyncio.CancelledError:
                 pass
-        self._worker_task = None
+        self._worker_tasks = []
+        self._workers = []
         self._derivation_task = None
         self._verification_task = None
-        self._worker = None
+        self._runner = None
+        if self._mcp_bridge is not None:
+            await self._mcp_bridge.aclose()
+            self._mcp_bridge = None
         if self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
@@ -957,6 +1085,7 @@ class DesktopLocalRunnerController:
                 control,
                 runner_id=runner_id,
             ),
+            guidance_source=self._guidance_source,
             max_iterations=settings.max_iterations,
             max_tool_calls=settings.max_tool_calls,
             max_total_tokens=settings.max_total_tokens,
@@ -1076,12 +1205,15 @@ class DesktopLocalRunnerController:
             return
 
         failure_reason = await self._check_artifact_facts(artifacts)
-        if failure_reason is None:
-            verify_commands = extract_verify_commands(
-                str(mission.get("objective") or "")
+        objective = str(mission.get("objective") or "")
+        verify_commands = extract_verify_commands(objective)
+        run_commands = extract_run_commands(objective)
+        if failure_reason is None and verify_commands:
+            failure_reason = await self._run_verify_commands(verify_commands)
+        if failure_reason is None and run_commands:
+            failure_reason = await self._run_verify_commands(
+                run_commands, label="Run command"
             )
-            if verify_commands:
-                failure_reason = await self._run_verify_commands(verify_commands)
         if failure_reason is None:
             verdict = EvidenceVerdict.PASS
             summary = (
@@ -1090,6 +1222,8 @@ class DesktopLocalRunnerController:
             )
             if verify_commands:
                 summary += " Verify command(s) passed: " + "; ".join(verify_commands)
+            if run_commands:
+                summary += " Run command(s) passed: " + "; ".join(run_commands)
         else:
             verdict = EvidenceVerdict.FAIL
             summary = f"desktop verification failed: {failure_reason}"
@@ -1119,6 +1253,70 @@ class DesktopLocalRunnerController:
             verdict.value,
             failure_reason or "artifact bytes verified",
         )
+        if verdict is EvidenceVerdict.PASS:
+            await self._save_mission_memory(
+                str(mission.get("id")),
+                objective=objective,
+                artifacts=artifacts,
+            )
+
+    async def _save_mission_memory(
+        self,
+        mission_id: str,
+        *,
+        objective: str,
+        artifacts: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Persist one cross-task memory entry after a PASS verdict (P1-2).
+
+        The final model summary is the first registered Artifact's bytes;
+        failures degrade to a warning — memory deposition never flips the
+        already-submitted verdict.
+        """
+        sink = self._memory_sink
+        if sink is None:
+            sink = DesktopMissionMemorySink()
+        summary = ""
+        if artifacts:
+            try:
+                descriptor = _VerificationArtifactBytes(
+                    id=str(artifacts[0].get("id")),
+                    digest=str(artifacts[0].get("digest")),
+                    content_address=str(artifacts[0].get("contentAddress")),
+                    size_bytes=int(artifacts[0].get("sizeBytes") or 0),
+                )
+                byte_verifier = self._byte_verifier
+                if byte_verifier is None:
+                    byte_verifier = build_artifact_byte_verifier()
+                content = await byte_verifier.read_verified(
+                    descriptor,
+                    max_bytes=4 * MISSION_MEMORY_BODY_SUMMARY_CHARS,
+                )
+                summary = content.decode("utf-8", errors="replace")
+            except Exception as exc:  # noqa: BLE001 - best-effort deposition
+                logger.warning(
+                    "desktop runner could not read summary artifact for "
+                    "mission %s: %s",
+                    mission_id,
+                    exc,
+                )
+        try:
+            saved = await sink.save_mission_summary(
+                mission_id,
+                objective=objective,
+                summary=summary,
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort deposition
+            logger.warning(
+                "desktop runner memory deposition failed for mission %s: %s",
+                mission_id,
+                exc,
+            )
+            return
+        if saved:
+            logger.info(
+                "desktop runner deposited memory for mission %s", mission_id
+            )
 
     async def _check_artifact_facts(
         self,
@@ -1153,8 +1351,10 @@ class DesktopLocalRunnerController:
     async def _run_verify_commands(
         self,
         commands: Sequence[str],
+        *,
+        label: str = "verify command",
     ) -> str | None:
-        """Run the objective's VERIFY commands; ``None`` means all passed.
+        """Run declared objective commands; ``None`` means all passed.
 
         Each command runs in the workspace root with the configured timeout;
         the first failing command produces the Evidence summary (output tail
@@ -1167,7 +1367,7 @@ class DesktopLocalRunnerController:
                 timeout_seconds=self._settings.verify_command_timeout_seconds,
             )
             if outcome.timed_out or outcome.exit_code != 0:
-                return _verify_command_failure_summary(outcome)
+                return _verify_command_failure_summary(outcome, label=label)
         return None
 
 
@@ -1216,11 +1416,14 @@ __all__ = [
     "DESKTOP_VERIFIER_ID",
     "DESKTOP_VERIFIER_VERSION",
     "DESKTOP_WORKSPACE_ID",
+    "MCP_CONFIG_ENV",
+    "RUN_COMMAND_MARKER",
     "VERIFY_COMMAND_MARKER",
     "VERIFY_COMMAND_OUTPUT_TAIL_CHARS",
     "VERIFY_COMMAND_TIMEOUT_ENV",
     "VERIFY_ENV",
     "VERIFY_INTERVAL_ENV",
+    "WORKERS_ENV",
     "DesktopAuthenticator",
     "DesktopLocalRunnerController",
     "DesktopLocalRunnerSettings",
@@ -1233,6 +1436,7 @@ __all__ = [
     "VerifyCommandOutcome",
     "derive_desktop_task_work_units",
     "desktop_local_runner_settings",
+    "extract_run_commands",
     "extract_verify_commands",
     "load_default_model_config",
     "run_verify_command",

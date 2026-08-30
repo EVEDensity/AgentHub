@@ -46,14 +46,18 @@ from app.services.desktop_local_runner import (
     DESKTOP_RUNNER_LABEL,
     DESKTOP_VERIFIER_ID,
     ENABLE_ENV,
+    MCP_CONFIG_ENV,
+    RUN_COMMAND_MARKER,
     VERIFY_COMMAND_TIMEOUT_ENV,
     VERIFY_ENV,
     VERIFY_INTERVAL_ENV,
+    WORKERS_ENV,
     DesktopLocalRunnerController,
     DesktopLocalRunnerSettings,
     DesktopModelConfig,
     DesktopModelFactory,
     derive_desktop_task_work_units,
+    extract_run_commands,
     extract_verify_commands,
     run_verify_command,
     shutdown_desktop_local_runner,
@@ -193,6 +197,8 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
                 "code_execute",
                 "memory_save",
                 "memory_search",
+                "command_execute",
+                "lint_check",
             ],
         )
 
@@ -335,6 +341,73 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
             )
         self.assertIn("桌面本地策略未批准 code_execute", result)
         self.assertNotIn("must not run", result)
+
+    # ── command_execute (P1-3): denial-only shell tool ────────────────
+
+    async def test_command_execute_is_denial_only(self) -> None:
+        result = await call_tool(
+            self.workspace_root,
+            "command_execute",
+            {"command": "echo pwned"},
+        )
+        self.assertIn("工具执行失败", result)
+        self.assertIn("RUN:", result)
+        self.assertIn("验收", result)
+        self.assertNotIn("pwned", result.replace("echo pwned", ""))
+
+    def test_command_execute_arguments_are_validated(self) -> None:
+        tools = {
+            tool.name: tool
+            for tool in build_desktop_runner_tools(self.workspace_root)
+        }
+        validate = tools["command_execute"].validate_arguments
+        self.assertEqual(validate({"command": " ls -la "}), {"command": "ls -la"})
+        with self.assertRaises(ValueError):
+            validate({"command": "   "})
+        with self.assertRaises(ValueError):
+            validate({})
+
+    # ── lint_check (P2-3): zero-dependency syntax diagnostics ─────────
+
+    async def test_lint_check_returns_ok_for_valid_python(self) -> None:
+        (self.workspace_root / "good.py").write_text(
+            "def add(a, b):\n    return a + b\n", encoding="utf-8"
+        )
+        result = await call_tool(
+            self.workspace_root, "lint_check", {"path": "good.py"}
+        )
+        self.assertTrue(result.startswith("OK"))
+
+    async def test_lint_check_reports_syntax_error_location(self) -> None:
+        (self.workspace_root / "bad.py").write_text(
+            "def add(a, b):\n    return a + :\n", encoding="utf-8"
+        )
+        result = await call_tool(
+            self.workspace_root, "lint_check", {"path": "bad.py"}
+        )
+        self.assertIn("语法错误", result)
+        self.assertIn("行 2", result)
+        self.assertIn("bad.py", result)
+
+    async def test_lint_check_rejects_missing_and_non_python_paths(self) -> None:
+        missing = await call_tool(
+            self.workspace_root, "lint_check", {"path": "nope.py"}
+        )
+        self.assertIn("文件不存在", missing)
+
+        (self.workspace_root / "note.txt").write_text("plain", encoding="utf-8")
+        wrong_type = await call_tool(
+            self.workspace_root, "lint_check", {"path": "note.txt"}
+        )
+        self.assertIn("仅支持 .py", wrong_type)
+
+    async def test_lint_check_rejects_paths_outside_workspace(self) -> None:
+        outside = self.workspace_root.parent / "outside.py"
+        outside.write_text("x = 1\n", encoding="utf-8")
+        result = await call_tool(
+            self.workspace_root, "lint_check", {"path": str(outside)}
+        )
+        self.assertIn("超出桌面工作区允许范围", result)
 
 
 # ── delegate_subtask (G8) ────────────────────────────────────────────────
@@ -556,6 +629,44 @@ class DesktopRunnerSettingsTests(unittest.TestCase):
         root = settings.default_workspace_root()
         self.assertEqual(root.relative_to(WORKSPACES_DIR), root.relative_to(WORKSPACES_DIR))
         self.assertTrue(str(root).startswith(str(WORKSPACES_DIR)))
+
+    # ── P1-2 system prompt guidance ─────────────────────────────────────
+
+    def test_desktop_system_prompt_mentions_memory_search(self) -> None:
+        from app.services.desktop_local_runner import DESKTOP_SYSTEM_PROMPT
+
+        self.assertIn("memory_search", DESKTOP_SYSTEM_PROMPT)
+        self.assertIn("历史任务记忆", DESKTOP_SYSTEM_PROMPT)
+
+    # ── P2-2 worker count settings ──────────────────────────────────────
+
+    def test_workers_default_to_one(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(env={})
+        self.assertEqual(settings.workers, 1)
+
+    def test_workers_are_env_configurable_within_ceiling(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(env={WORKERS_ENV: "3"})
+        self.assertEqual(settings.workers, 3)
+
+    def test_worker_count_above_ceiling_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            DesktopLocalRunnerSettings.from_env(env={WORKERS_ENV: "5"})
+
+    def test_non_positive_worker_count_is_rejected(self) -> None:
+        with self.assertRaises(Exception):
+            DesktopLocalRunnerSettings.from_env(env={WORKERS_ENV: "0"})
+
+    # ── P2-1 MCP config settings ────────────────────────────────────────
+
+    def test_mcp_config_defaults_to_none(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(env={})
+        self.assertIsNone(settings.mcp_config)
+
+    def test_mcp_config_is_env_configurable(self) -> None:
+        settings = DesktopLocalRunnerSettings.from_env(
+            env={MCP_CONFIG_ENV: "C:/cfg/mcp.json"}
+        )
+        self.assertEqual(settings.mcp_config, Path("C:/cfg/mcp.json"))
 
 
 class DesktopRunnerLifespanTests(unittest.IsolatedAsyncioTestCase):
@@ -986,7 +1097,8 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                 model_factory.model.observed_tool_results[1][0].content,
             )
             # The desktop whitelist is bound as the request-scoped tool set,
-            # including the G8 memory tools and the model-backed
+            # including the G8 memory tools, the P1-3 command_execute denial
+            # tool, the P2-3 lint_check tool, and the model-backed
             # delegate_subtask spawn tool.
             self.assertEqual(
                 model_factory.tool_sets[0],
@@ -1001,6 +1113,8 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
                     "code_execute",
                     "memory_save",
                     "memory_search",
+                    "command_execute",
+                    "lint_check",
                     "delegate_subtask",
                 ],
             )
@@ -1386,6 +1500,45 @@ class DesktopVerificationLoopTests(DesktopWorkspaceTestCase):
         self.assertIn("unavailable", submission.summary)
         self.assertNotIn("must not run", submission.summary)
 
+    # ── Test-loop tasks: RUN: shell commands in acceptance (P1-3) ──────
+
+    async def _submit_run_objective(
+        self,
+        script_body: str,
+        **setting_overrides: Any,
+    ) -> FakeVerifierControl:
+        digest, size, address = self._store_artifact(b"task output")
+        (self.workspace_root / "run_check.py").write_text(
+            script_body, encoding="utf-8"
+        )
+        objective = "整理数据\nRUN: python run_check.py"
+        verifier = FakeVerifierControl(
+            ready_discovery(digest, size, address, objective=objective)
+        )
+        controller = await self._run_controller(verifier, **setting_overrides)
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=10)
+        finally:
+            await controller.stop()
+        return verifier
+
+    async def test_passing_run_command_executes_and_passes(self) -> None:
+        verifier = await self._submit_run_objective("print('RUN OK')\n")
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.PASS)
+        self.assertIn("Run command(s) passed: python run_check.py", submission.summary)
+
+    async def test_failing_run_command_submits_fail_with_output(self) -> None:
+        verifier = await self._submit_run_objective(
+            "raise AssertionError('RUN failed: bad data')\n"
+        )
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
+        self.assertIn("Run command failed with exit code 1", submission.summary)
+        self.assertIn("RUN failed: bad data", submission.summary)
+
 
 class DesktopVerifyCommandUnitTests(DesktopWorkspaceTestCase):
     async def test_run_verify_command_returns_exit_code_and_output(self) -> None:
@@ -1433,6 +1586,22 @@ class DesktopVerifyCommandUnitTests(DesktopWorkspaceTestCase):
 
     def test_extract_verify_commands_without_marker_is_empty(self) -> None:
         self.assertEqual(extract_verify_commands("普通任务描述\n没有标记"), ())
+
+    def test_extract_run_commands_reads_marker_lines(self) -> None:
+        objective = (
+            "整理数据文件。\n"
+            "RUN: python build.py\n"
+            "  RUN:python check.py --quick\n"
+            "RUN:   \n"
+            "这不是标记: RUN: python x.py\n"
+        )
+        self.assertEqual(
+            extract_run_commands(objective),
+            ("python build.py", "python check.py --quick"),
+        )
+
+    def test_extract_run_commands_without_marker_is_empty(self) -> None:
+        self.assertEqual(extract_run_commands("普通任务描述"), ())
 
 
 # ── SQLite claim dialect (desktop local profile) ─────────────────────────
@@ -1612,6 +1781,407 @@ class DesktopSqliteClaimTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(policy.tenant_id, WORKSPACE_ID)
         self.assertEqual(policy.max_concurrent, 0)
+
+
+# ── P1-2: memory deposition after verifier PASS ──────────────────────────
+
+
+class RecordingMemorySink:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+        self.deposited = asyncio.Event()
+
+    async def save_mission_summary(
+        self,
+        mission_id: str,
+        *,
+        objective: str,
+        summary: str,
+    ) -> bool:
+        self.calls.append((mission_id, objective, summary))
+        self.deposited.set()
+        return True
+
+
+class DesktopMissionMemoryDepositionTests(DesktopWorkspaceTestCase):
+    """PASS verdict deposits one mission memory; FAIL never does."""
+
+    def _artifact_root(self) -> Path:
+        root = Path(self._tmp.name) / "artifacts"
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    def _byte_verifier(self) -> ContentAddressedArtifactByteVerifier:
+        settings = SimpleNamespace(
+            local_root=self._artifact_root(),
+            verify_max_bytes=1024 * 1024,
+        )
+        return ContentAddressedArtifactByteVerifier(settings)
+
+    def _store_artifact(self, content: bytes) -> tuple[str, int, str]:
+        digest = hashlib.sha256(content).hexdigest()
+        sha_dir = self._artifact_root() / "sha256"
+        sha_dir.mkdir(parents=True, exist_ok=True)
+        (sha_dir / digest).write_bytes(content)
+        return f"sha256:{digest}", len(content), f"local:sha256/{digest}"
+
+    async def _run_verification(
+        self,
+        sink: RecordingMemorySink,
+        *,
+        artifact_content: bytes | None,
+        wait_deposit: bool = False,
+    ) -> FakeVerifierControl:
+        if artifact_content is not None:
+            digest, size, address = self._store_artifact(artifact_content)
+            discovery = ready_discovery(
+                digest, size, address, objective="在工作区创建 hello.txt"
+            )
+        else:
+            digest = "sha256:" + hashlib.sha256(b"nowhere").hexdigest()
+            discovery = ready_discovery(
+                digest,
+                12,
+                f"local:sha256/{digest.removeprefix('sha256:')}",
+                objective="在工作区创建 hello.txt",
+            )
+        verifier = FakeVerifierControl(discovery)
+        controller = DesktopLocalRunnerController(
+            desktop_settings(verify_enabled=True),
+            control=_IdleControl(),
+            publisher=FakePublisher(),
+            model_factory=StaticModelFactory(ScriptedModel()),
+            mission_source=IdleMissionSource(),
+            workspace_root=self.workspace_root,
+            verifier_control=verifier,
+            byte_verifier=self._byte_verifier(),
+            memory_sink=sink,
+        )
+        await controller.start()
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=5)
+            if wait_deposit:
+                await asyncio.wait_for(sink.deposited.wait(), timeout=5)
+            else:
+                # Give the loop a beat to finish (or skip) the deposition.
+                await asyncio.sleep(0.1)
+        finally:
+            await controller.stop()
+        return verifier
+
+    async def test_pass_evidence_deposits_mission_memory(self) -> None:
+        sink = RecordingMemorySink()
+        summary_text = "已创建 hello.txt，内容为问候语。"
+        verifier = await self._run_verification(
+            sink,
+            artifact_content=summary_text.encode("utf-8"),
+            wait_deposit=True,
+        )
+
+        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        self.assertEqual(submission.verdict, EvidenceVerdict.PASS)
+        self.assertEqual(len(sink.calls), 1)
+        mission_id, objective, summary = sink.calls[0]
+        self.assertEqual(mission_id, "mis-desktop-1")
+        self.assertEqual(objective, "在工作区创建 hello.txt")
+        self.assertIn("已创建 hello.txt", summary)
+
+    async def test_fail_evidence_skips_memory_deposition(self) -> None:
+        sink = RecordingMemorySink()
+        await self._run_verification(sink, artifact_content=None)
+        self.assertEqual(sink.calls, [])
+
+
+# ── P2-2: parallel RunnerWorkers ─────────────────────────────────────────
+
+
+class TwoUnitControl:
+    """Serves two claimable units to whichever worker claims first."""
+
+    def __init__(
+        self,
+        units: list[tuple[dict[str, Any], dict[str, Any]]],
+    ) -> None:
+        self._queue = list(units)
+        self._contexts = {
+            claimed["workUnit"]["id"]: context for claimed, context in units
+        }
+        self.claimed_by: dict[str, str] = {}
+        self.completed: list[str] = []
+        self.failures: list[tuple[str, str]] = []
+        self.statuses: list[str] = []
+        self._lock = asyncio.Lock()
+        self.all_done = asyncio.Event()
+
+    async def claim_ready_work_unit(
+        self,
+        workspace_id: str,
+        *,
+        runner_id: str,
+        agent_id: str,
+        adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        del workspace_id, agent_id, adapter_type, lease_seconds
+        assert "desktop.task" in supported_work_unit_kinds
+        async with self._lock:
+            if not self._queue:
+                return {"claimStatus": "idle", "workUnit": None}
+            claimed, _context = self._queue.pop(0)
+            work_unit_id = claimed["workUnit"]["id"]
+            # The control plane stamps the lease with the claiming runner.
+            claimed["workUnit"]["lease"]["runnerId"] = runner_id
+            self.claimed_by[work_unit_id] = runner_id
+            self.statuses.append("LEASED")
+            return copy.deepcopy(claimed)
+
+    async def get_execution_context(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+    ) -> dict[str, Any]:
+        del mission_id, lease_id
+        context = copy.deepcopy(self._contexts[work_unit_id])
+        context["workUnit"]["lease"]["runnerId"] = runner_id
+        return {"executionContext": context}
+
+    async def start_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+    ) -> dict[str, Any]:
+        del mission_id, work_unit_id, runner_id
+        self.statuses.append("RUNNING")
+        return {"lease": {"id": lease_id}, "attempt": 1}
+
+    async def heartbeat_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        lease_seconds: int,
+    ) -> dict[str, Any]:
+        del mission_id, work_unit_id, runner_id, lease_seconds
+        return {"lease": {"id": lease_id}, "attempt": 1}
+
+    async def record_execution_checkpoint(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return {
+            "id": kwargs["checkpoint_id"],
+            "missionId": mission_id,
+            "workUnitId": work_unit_id,
+            "attempt": 1,
+            "sequence": kwargs["sequence"],
+            "phase": kwargs["phase"],
+            "iteration": kwargs["iteration"],
+            "toolCalls": kwargs["tool_calls"],
+            "promptTokens": kwargs["prompt_tokens"],
+            "completionTokens": kwargs["completion_tokens"],
+            "modelCost": kwargs["model_cost"],
+            "terminal": kwargs["terminal"],
+            "failureReason": kwargs.get("failure_reason"),
+            "stateDigest": "sha256:" + "a" * 64,
+            "createdBy": {"id": RUNNER_USER_ID, "type": "service"},
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def register_artifact(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        artifact: PublishedArtifact,
+        artifact_id: str,
+        kind: str,
+        media_type: str,
+    ) -> dict[str, Any]:
+        del mission_id, work_unit_id, runner_id, lease_id, artifact, kind, media_type
+        return {"id": artifact_id}
+
+    async def complete_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        artifact_refs: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        del mission_id, runner_id, lease_id, artifact_refs
+        self.statuses.append("SUCCEEDED")
+        self.completed.append(work_unit_id)
+        if len(self.completed) == 2:
+            self.all_done.set()
+        return {}
+
+    async def fail_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        del mission_id, runner_id, lease_id
+        self.failures.append((work_unit_id, reason))
+        return {"lease": {"id": lease_id}, "attempt": 1}
+
+
+class SlowScriptedModel(ScriptedModel):
+    """ScriptedModel whose first turn yields control long enough for the
+    second worker to poll and claim the other unit."""
+
+    async def complete(self, request, tool_results):
+        await asyncio.sleep(0.05)
+        return await super().complete(request, tool_results)
+
+
+async def _noop_auto_git_commit(*args: Any, **kwargs: Any) -> None:
+    del args, kwargs
+
+
+def multi_worker_claim_payloads() -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Two independent desktop.task claims on two manual Missions."""
+    units: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for index in (1, 2):
+        lease = Lease(
+            id=f"lease-multi-{index}",
+            runner_id=RUNNER_USER_ID,
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=300),
+        )
+        work_unit = WorkUnit(
+            id=f"wu-multi-{index}",
+            mission_id=f"mis-multi-{index}",
+            assigned_agent_id=DESKTOP_AGENT_ID,
+            kind="desktop.task",
+            dependencies=(),
+            input_refs=(),
+            expected_outputs=(OutputSpec(kind="text", required=False),),
+            required_capabilities=(),
+            assigned_adapter=DESKTOP_ADAPTER_TYPE,
+            status=WorkUnitStatus.LEASED,
+            attempt=1,
+            lease=lease,
+        )
+        contract = MissionContract(
+            id="contract-manual-v1",
+            version=1,
+            repository_scopes=(),
+            allowed_capabilities=(),
+            budgets=Budgets(time_seconds=300, model_cost=1, retries=0),
+            acceptance_criteria=(
+                AcceptanceCriterion(
+                    id="manual-review",
+                    kind=CriterionKind.MANUAL,
+                    description="由工作空间操作者审核输出",
+                    required=True,
+                ),
+            ),
+            decision_gates=(),
+            forbidden_actions=(),
+        )
+        now = datetime.now(timezone.utc)
+        mission = Mission(
+            id=f"mis-multi-{index}",
+            workspace_id=WORKSPACE_ID,
+            title=f"并行任务 {index}",
+            objective=f"在工作区创建 hello-{index}.txt，内容为 hello {index}",
+            source=MissionSource(type=MissionSourceType.MANUAL),
+            contract_id="contract-manual-v1",
+            contract_version=1,
+            status=MissionStatus.RUNNING,
+            created_by=ActorRef(type=ActorType.HUMAN, id=WORKSPACE_ID),
+            created_at=now,
+            updated_at=now,
+        )
+        claimed = {
+            "claimStatus": "claimed",
+            "workUnit": work_unit.to_public_dict(),
+        }
+        context = {
+            "version": 1,
+            "mission": mission.to_public_dict(),
+            "contract": contract.to_public_dict(),
+            "workUnit": work_unit.to_public_dict(),
+        }
+        units.append((claimed, context))
+    return units
+
+
+class DesktopMultiWorkerTests(DesktopWorkspaceTestCase):
+    """P2-2: ``AGENTHUB_DESKTOP_LOCAL_RUNNER_WORKERS`` parallel claim loop."""
+
+    def _controller(self, control: TwoUnitControl) -> DesktopLocalRunnerController:
+        return DesktopLocalRunnerController(
+            desktop_settings(workers=2),
+            control=control,
+            publisher=FakePublisher(),
+            model_factory=StaticModelFactory(SlowScriptedModel()),
+            mission_source=IdleMissionSource(),
+            workspace_root=self.workspace_root,
+        )
+
+    async def test_two_workers_claim_different_units_in_parallel(self) -> None:
+        control = TwoUnitControl(multi_worker_claim_payloads())
+        controller = self._controller(control)
+        # The fire-and-forget git auto-commit after file_write races with
+        # test workspace cleanup on Windows; it is not part of this contract.
+        with patch(
+            "app.services.tools.builtin_tools._auto_git_commit",
+            new=_noop_auto_git_commit,
+        ):
+            await controller.start()
+            try:
+                self.assertEqual(len(controller._workers), 2)
+                await asyncio.wait_for(control.all_done.wait(), timeout=10)
+            finally:
+                await controller.stop()
+
+        self.assertEqual(
+            sorted(control.completed), ["wu-multi-1", "wu-multi-2"]
+        )
+        self.assertEqual(control.failures, [])
+        # Two distinct workers claimed the two units: runner ids carry the
+        # worker sequence suffix.
+        runner_ids = set(control.claimed_by.values())
+        self.assertEqual(len(runner_ids), 2)
+        self.assertTrue(
+            all(runner_id.endswith(("-w0", "-w1")) for runner_id in runner_ids)
+        )
+        self.assertTrue((self.workspace_root / "hello.txt").exists())
+        self.assertEqual(
+            (self.workspace_root / "hello.txt").read_text(encoding="utf-8"),
+            "hello desktop runner",
+        )
+
+    async def test_stop_stops_every_worker(self) -> None:
+        control = TwoUnitControl(multi_worker_claim_payloads())
+        controller = self._controller(control)
+        with patch(
+            "app.services.tools.builtin_tools._auto_git_commit",
+            new=_noop_auto_git_commit,
+        ):
+            await controller.start()
+            self.assertEqual(len(controller._worker_tasks), 2)
+            await controller.stop()
+        self.assertEqual(controller._worker_tasks, [])
+        self.assertEqual(controller._workers, [])
 
 
 if __name__ == "__main__":

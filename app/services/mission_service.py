@@ -826,6 +826,43 @@ class MissionService:
                 await repository.append_event(work_unit_event)
         return updated_mission
 
+    async def add_mission_guidance(
+        self,
+        mission_id: str,
+        *,
+        content: str,
+        actor: ActorRef,
+    ) -> EventEnvelope:
+        """Append one run-time guidance entry as a Mission event (P1-1).
+
+        Guidance is an append-only ledger entry — it never mutates the
+        objective or transitions Mission state. The desktop runner consumes
+        it before the next model call and injects it into the prompt once.
+        """
+        stripped = content.strip()
+        if not stripped:
+            raise ValueError("mission guidance content must not be empty")
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            occurred_at = datetime.now(timezone.utc)
+            sequence = await repository.get_last_event_sequence(mission.id) + 1
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="mission",
+                aggregate_id=mission.id,
+                sequence=sequence,
+                event_type="mission.guidance.added",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission.id,
+                payload={"content": stripped},
+                schema_version=1,
+            )
+            await repository.append_event(event)
+        return event
+
     async def fail_mission(
         self,
         mission_id: str,
