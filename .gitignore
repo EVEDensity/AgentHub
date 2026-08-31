@@ -22,6 +22,7 @@ frontend/.next-codex/
 .env.*
 !.env.example
 agenthub-update.key
+agenthub-update.key.pub
 
 # Runtime data and local indexes
 data/

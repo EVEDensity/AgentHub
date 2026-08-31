@@ -37,6 +37,7 @@ API 目标转换为可恢复、可审计、附带 Artifact 和 Evidence 的执�
 ## Documentation map
 
 - [Architecture boundaries](./architecture/)
+- [North Star（开发者优先的 CLI 体验路线图）](./roadmaps/north-star-developer-cli-experience.md)
 - [Delivery roadmap（重构与交付路线图）](./roadmaps/reconstruction-roadmap.md)
 - [Documentation governance](./governance/documentation-standard.md)
 - [Code quality standard（代码质量与审查机制）](./governance/code-quality-standard.md)
