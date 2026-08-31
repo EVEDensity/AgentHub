@@ -42,17 +42,17 @@
 
 ## 2. 现状评估（2026-08-31，诚实表）
 
-| 项                                                   | 状态                 | 证据                                                                                  |
-| --------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------- |
-| Mission / WorkUnit / Artifact / Evidence / Decision | ✅ 已落地              | `app/domain`、`app/repositories/mission_repository.py`、`migrations/`                 |
-| A2A 出站 + 入站                                         | ✅ 已落地（生产路径）        | `a2a_adapter_service.py`、inbound mapping 迁移、`A2A_DISPATCH_MODE=runner` cutover + 单测 |
-| 独立 verifier（执行者不能自证）                                | ✅ 已落地              | ADR-0004/0059/0060、`verifier_service/`                                              |
-| 桌面单 exe 开箱即用                                        | ❌ 未兑现              | 打包流水线绿，但签名发布依赖 5 个 secrets；无公开 Release 产物                                           |
-| CLI / TUI 入口                                        | ✅ CLI 已实现（M0）；TUI 未开始 | `app/cli/`（`python -m app.cli`）、`tests/cli/`                                |
-| headless exec / PR 审查 Action                        | ⚠️ exec 已实现并本地验证；CI workflow 未接线 | `app/cli` exec --json + 退出码契约；GitHub Actions 接入属 M1                          |
-| 公开 agent 能力基准（Terminal-Bench 等）                     | ❌ 未接入              | benchmarks 仅覆盖 P95/召回/tokenizer 精度                                                  |
-| 分层项目指令 / skills 生态                                  | ⚠️ 仅有根 `AGENTS.md` | 无 CLAUDE.md 层级、无 skills 打包机制                                                        |
-| Web 搜索 / 浏览器工具                                      | ❌ 缺失               | 工具集为"有界安全"哲学，无 web/浏览器能力                                                            |
+| 项                                                   | 状态                               | 证据                                                                                  |
+| --------------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------- |
+| Mission / WorkUnit / Artifact / Evidence / Decision | ✅ 已落地                            | `app/domain`、`app/repositories/mission_repository.py`、`migrations/`                 |
+| A2A 出站 + 入站                                         | ✅ 已落地（生产路径）                      | `a2a_adapter_service.py`、inbound mapping 迁移、`A2A_DISPATCH_MODE=runner` cutover + 单测 |
+| 独立 verifier（执行者不能自证）                                | ✅ 已落地                            | ADR-0004/0059/0060、`verifier_service/`                                              |
+| 桌面单 exe 开箱即用                                        | ❌ 未兑现                            | 打包流水线绿，但签名发布依赖 5 个 secrets；无公开 Release 产物                                           |
+| CLI / TUI 入口                                        | ✅ CLI 已实现（M0）；TUI 未开始            | `app/cli/`（`python -m app.cli`）、`tests/cli/`                                        |
+| headless exec / PR 审查 Action                        | ⚠️ exec 已实现并本地验证；CI workflow 未接线 | `app/cli` exec --json + 退出码契约；GitHub Actions 接入属 M1                                 |
+| 公开 agent 能力基准（Terminal-Bench 等）                     | ❌ 未接入                            | benchmarks 仅覆盖 P95/召回/tokenizer 精度                                                  |
+| 分层项目指令 / skills 生态                                  | ✅ 已实现（M1：分层 AGENTS.md 合并注入 + 只读 skill_list/skill_load） | `app/cli/runtime.py`、`app/services/desktop_runner_tools.py`、`tests/services/test_desktop_skill_tools.py` |
+| Web 搜索 / 浏览器工具                                      | ⚠️ web_search 已实现（M1，Tavily/DDG）；浏览器操作仍缺失 | `app/services/tools/network_tools.py`、`tests/services/test_web_search_tool.py` |
 
 > 注：`docs/index.md` 仍把 A2A 标注为"原型"，属文档滞后，与代码不一致，
 > 应为"已实现"。
@@ -98,34 +98,46 @@ Aider、Cline、Goose）：
 ## 5. 里程碑（每个 M 必须产出可运行产物，不空转）
 
 ### M0 — CLI 最小闭环（核心已交付 2026-08-31，CI 接线余项）
+
 交付：
-- `agenthub init`：初始化本地项目目录（sqlite + 工作区 + 配置）。
-- `agenthub run "<objective>" [--model ...]`：一次对话完成一个任务，
+
+* `agenthub init`：初始化本地项目目录（sqlite + 工作区 + 配置）。
+
+* `agenthub run "<objective>" [--model ...]`：一次对话完成一个任务，
   全程驱动现有 desktop runner 工具集与 harness。
-- `agenthub exec --json`：无头模式，`--json` 输出结构化结果，退出码
+
+* `agenthub exec --json`：无头模式，`--json` 输出结构化结果，退出码
   与 Mission 终态一致（供 CI 使用）。
-- 输出：计划 → 变更文件 diff（复用 changed-files 逻辑）→ VERIFY 结果 →
+
+* 输出：计划 → 变更文件 diff（复用 changed-files 逻辑）→ VERIFY 结果 →
   Evidence/Artifact 摘要。
-- 默认环境：PostgreSQL 可选；本地 `SQLite` profile 一跑就跑。
-验收标准：
-- `agenthub run "修复 XXX 并 VERIFY"` 在全新目录可完成闭环，
+
+* 默认环境：PostgreSQL 可选；本地 `SQLite` profile 一跑就跑。
+  验收标准：
+
+* `agenthub run "修复 XXX 并 VERIFY"` 在全新目录可完成闭环，
   且**不要求预装 Docker/PG**。
-- `agenthub exec --json` 在 CI（GitHub Actions）可跑通并正确返回退出码。
-- Mission 的 verifier 门禁在 CLI 生效：执行代理无法伪造 PASS。
+
+* `agenthub exec --json` 在 CI（GitHub Actions）可跑通并正确返回退出码。
+
+* Mission 的 verifier 门禁在 CLI 生效：执行代理无法伪造 PASS。
 
 > **状态（2026-08-31）**：核心三条已实现并本地验证。入口为
 > `python -m app.cli`（`app/cli/`，见 [app/README.md](../../app/README.md)）。
 > 证据：
-> - 无 key 开箱（mock 回退）与 `init/run/exec` 三个子命令：
+>
+> * 无 key 开箱（mock 回退）与 `init/run/exec` 三个子命令：
 >   `tests/cli/test_cli_main.py`（单元）；
-> - 端到端闭环 + **诚实失败**（mock 注册 artifact 字节验证通过，但
+>
+> * 端到端闭环 + **诚实失败**（mock 注册 artifact 字节验证通过，但
 >   `VERIFY:` 命令一票否决 → FAILED → 退出码 1）：
 >   `tests/cli/test_cli_e2e.py`（`AGENTHUB_CLI_E2E=1` 门控）；
-> - 修复了 `_PROJECT_ROOT` 越出仓库根导致 CLI 触碰工作区外路径的缺陷
+>
+> * 修复了 `_PROJECT_ROOT` 越出仓库根导致 CLI 触碰工作区外路径的缺陷
 >   （`tests/core/test_project_root.py`）。
-> 余项：GitHub Actions workflow 中跑 `exec --json` 冒烟（并入 M1），
-> 以及 `npm i -g` 打包分发（按计划属于 M3）。
-> 用法注意：`VERIFY: <命令>` 需独占一行，才会被提取为验收命令。
+>   余项：GitHub Actions workflow 中跑 `exec --json` 冒烟（并入 M1），
+>   以及 `npm i -g` 打包分发（按计划属于 M3）。
+>   用法注意：`VERIFY: <命令>` 需独占一行，才会被提取为验收命令。
 
 ### M1 — CLI 完善 + 能力补全
 
@@ -137,14 +149,23 @@ Aider、Cline、Goose）：
   `app/services/runner/model.py`（`compose_desktop_system_prompt`），
   测试 `tests/cli/test_cli_main.py::AgentsMdLayerTests`。
 
-* skills 加载：复用 `plugins/` 机制做可分发 skill 包。（未开始）
+* skills 加载：复用 `plugins/` 机制做可分发 skill 包。
+  ✅ 已交付（2026-08-31）：desktop 白名单新增只读 `skill_list`/`skill_load`
+  工具，复用 `skill_tools._parse_skill_md` 解析 `<workspace>/.claude/skills/`
+  下的 SKILL.md（frontmatter+正文+脚本清单）；技能脚本执行仍不进白名单
+  （代理可读指引、不可执行任意脚本）。测试
+  `tests/services/test_desktop_skill_tools.py`。可分发打包归 M3。
 
-* Web 搜索工具补入工具集，补齐调研类任务。（未开始）
+* Web 搜索工具补入工具集，补齐调研类任务。
+  ✅ 已交付（2026-08-31）：`web_search` 工具 —— 设置
+  `AGENTHUB_TAVILY_API_KEY` 走 Tavily，否则零 key 走 DuckDuckGo HTML
+  （诚实失败，无合成结果）；结果含标题/URL/摘要并截断；桌面档经
+  `AGENTHUB_DESKTOP_WEB_SEARCH` 门控（默认关，CLI 默认开、
+  `--no-web-search` 可关）。测试 `tests/services/test_web_search_tool.py`。
 
 * 会话持久化与 `--resume`。
   ✅ 已交付（2026-08-31）：本地状态持久化（`.agenthub/db` + `data` 跨
-  运行复用）；`agenthub missions` 列出历史任务；`run/exec
-  --resume <mission_id>` 把先前任务的目标/终态/沉淀摘要作为只读上下文
+  运行复用）；`agenthub missions` 列出历史任务；`run/exec --resume <mission_id>` 把先前任务的目标/终态/沉淀摘要作为只读上下文
   前置（绝不虚构历史）。测试见 `tests/cli/test_cli_main.py`。
 
 * CI 接线（自 M0 余项并入）：`.github/workflows/ci.yml` 新增

@@ -238,7 +238,7 @@ jobs:
           cache-dependency-path: requirements.txt
       - run: pip install -r requirements.txt pytest
       - name: CLI unit tests
-        run: pytest tests/cli/test_cli_main.py tests/core/test_project_root.py --tb=short -q
+        run: pytest tests/cli/test_cli_main.py tests/core/test_project_root.py tests/services/test_web_search_tool.py tests/services/test_desktop_skill_tools.py --tb=short -q
       - name: CLI e2e (mock provider, honest-failure contract)
         env:
           AGENTHUB_CLI_E2E: '1'

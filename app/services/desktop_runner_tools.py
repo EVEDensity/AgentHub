@@ -650,10 +650,163 @@ def _build_web_search_executor(
         except (TypeError, ValueError):
             max_results = 5
         outcome = await web_search_handler(query, max_results=max_results)
-        rendered = _render_result(outcome, max_result_chars)
-        return rendered
+        # ``_render_result`` expects the {"success", "error"/"result"} shape.
+        rendered_outcome = (
+            outcome
+            if outcome.get("success") is False
+            else {
+                "success": True,
+                "result": {
+                    "backend": outcome.get("backend"),
+                    "results": outcome.get("results", []),
+                },
+            }
+        )
+        return _render_result(rendered_outcome, max_result_chars)
 
     return execute
+
+
+# ── skill tools (north-star M1): read-only workspace skill discovery ──────
+#
+# Reuses the SKILL.md parser from app.services.tools.skill_tools so the
+# CLI/desktop path reads the same skill packages as the web product.
+# Only the read-only pair is exposed (list + load); script execution stays
+# outside the desktop whitelist — agents can read instructions, not run
+# arbitrary skill scripts.
+
+SKILL_LIST_TOOL_NAME = "skill_list"
+SKILL_LOAD_TOOL_NAME = "skill_load"
+
+
+def _workspace_skills_dir(workspace_root: Path) -> Path:
+    return workspace_root / ".claude" / "skills"
+
+
+async def _list_workspace_skills(workspace_root: Path) -> list[dict[str, Any]]:
+    from app.services.tools.skill_tools import _parse_skill_md
+
+    skills_dir = _workspace_skills_dir(workspace_root)
+    entries: list[dict[str, Any]] = []
+    if not skills_dir.is_dir():
+        return entries
+    try:
+        children = sorted(skills_dir.iterdir())
+    except OSError:
+        return entries
+    for entry in children:
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        parsed = await _parse_skill_md(entry)
+        if parsed is None:
+            continue
+        entries.append(
+            {
+                "name": str(parsed.get("name") or entry.name),
+                "description": str(parsed.get("description") or ""),
+                "version": str(parsed.get("version") or ""),
+                "scripts": list(parsed.get("scripts") or []),
+            }
+        )
+    return entries
+
+
+def _validate_skill_list_arguments(
+    arguments: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if not isinstance(arguments, Mapping):
+        raise TypeError("tool arguments must be an object")
+    return {}
+
+
+def _validate_skill_load_arguments(
+    arguments: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if not isinstance(arguments, Mapping):
+        raise TypeError("tool arguments must be an object")
+    name = arguments.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("name must be a non-empty string")
+    cleaned = name.strip()
+    # Skill names are directory names; refuse traversal-shaped input.
+    if "/" in cleaned or "\\" in cleaned or cleaned in (".", ".."):
+        raise ValueError("name must be a plain skill directory name")
+    return {"name": cleaned}
+
+
+def _build_skill_tools(
+    workspace_root: Path,
+    max_result_chars: int,
+) -> list[FunctionTool]:
+    async def list_execute(_arguments: Mapping[str, Any]) -> str:
+        skills = await _list_workspace_skills(workspace_root)
+        outcome = {
+            "success": True,
+            "result": {
+                "skills": skills,
+                "total": len(skills),
+                "hint": (
+                    "用 skill_load 加载某技能的完整文档后再遵循其指引"
+                    if skills
+                    else "工作区 .claude/skills/ 下没有技能包"
+                ),
+            },
+        }
+        return _render_result(outcome, max_result_chars)
+
+    async def load_execute(arguments: Mapping[str, Any]) -> str:
+        from app.services.tools.skill_tools import _parse_skill_md
+
+        name = str(arguments.get("name") or "")
+        skill_dir = _workspace_skills_dir(workspace_root) / name
+        if not skill_dir.is_dir():
+            return f"工具执行失败: 未找到技能 '{name}'（可用 skill_list 查看）"
+        parsed = await _parse_skill_md(skill_dir)
+        if parsed is None:
+            return f"工具执行失败: 技能 '{name}' 缺少可解析的 SKILL.md"
+        outcome = {
+            "success": True,
+            "result": {
+                "name": parsed.get("name"),
+                "description": parsed.get("description"),
+                "version": parsed.get("version"),
+                "body": parsed.get("body"),
+                "scripts": parsed.get("scripts"),
+            },
+        }
+        return _render_result(outcome, max_result_chars)
+
+    return [
+        FunctionTool(
+            name=SKILL_LIST_TOOL_NAME,
+            description=(
+                "列出工作区 .claude/skills/ 下的技能包（名称/描述/版本/脚本）。"
+                "技能是可复用的工作流说明，先列出再按需加载。"
+            ),
+            parameters={"type": "object", "properties": {}},
+            validate_arguments=_validate_skill_list_arguments,
+            handler=list_execute,
+        ),
+        FunctionTool(
+            name=SKILL_LOAD_TOOL_NAME,
+            description=(
+                "加载指定技能的完整文档（SKILL.md 正文与脚本清单），"
+                "加载后严格遵循该技能的流程指引。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "技能目录名（见 skill_list 结果）",
+                    },
+                },
+                "required": ["name"],
+            },
+            validate_arguments=_validate_skill_load_arguments,
+            handler=load_execute,
+        ),
+    ]
 
 
 def build_desktop_runner_tools(
@@ -770,6 +923,9 @@ def build_desktop_runner_tools(
                 handler=_build_web_search_executor(max_result_chars),
             )
         )
+    tools.extend(
+        _build_skill_tools(resolved_root, max_result_chars)
+    )
     if model_factory is not None:
         config = subtask_config or DelegateSubtaskConfig()
         tools.append(
@@ -816,6 +972,8 @@ __all__ = [
     "DESKTOP_CODE_EXECUTE_MAX_TIMEOUT",
     "DESKTOP_TOOL_RESULT_MAX_CHARS",
     "LINT_CHECK_TOOL_NAME",
+    "SKILL_LIST_TOOL_NAME",
+    "SKILL_LOAD_TOOL_NAME",
     "WEB_SEARCH_ENV",
     "WEB_SEARCH_TOOL_NAME",
     "DelegateSubtaskConfig",
