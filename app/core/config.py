@@ -22,7 +22,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ── Derive base paths ──────────────────────────────────────────────────
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent  # app/core → app → project root
-_PROJECT_ROOT = _BASE_DIR.parent
+
+
+def _resolve_project_root() -> Path:
+    """Resolve the project root that owns ``.claude`` memory/skill state.
+
+    Priority: explicit ``AGENTHUB_PROJECT_ROOT`` (desktop bundles and other
+    packaged layouts point this at the install/user root) → the checkout
+    directory itself. The historical default escaped one level above the
+    checkout, which made the CLI and dev profiles touch paths outside the
+    workspace boundary.
+    """
+    explicit = os.environ.get("AGENTHUB_PROJECT_ROOT", "").strip()
+    if explicit:
+        return Path(explicit).resolve()
+    return _BASE_DIR
+
+
+_PROJECT_ROOT = _resolve_project_root()
 
 
 def _resolve_data_dir() -> Path:
