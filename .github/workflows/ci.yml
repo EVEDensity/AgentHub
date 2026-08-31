@@ -219,6 +219,46 @@ jobs:
       - run: pytest tests/integration --tb=short -q
 
   # ═══════════════════════════════════════════════════════════════════
+  # Developer CLI — unit tests + headless exec --json smoke (north-star M1)
+  # The exec smoke proves the exit-code contract on CI: the mock provider
+  # cannot create files, so the VERIFY: gate must veto the mission and
+  # `agenthub exec --json` must exit 1 (never a fake success).
+  # ═══════════════════════════════════════════════════════════════════
+  cli:
+    name: 'Developer CLI'
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt pytest
+      - name: CLI unit tests
+        run: pytest tests/cli/test_cli_main.py tests/core/test_project_root.py --tb=short -q
+      - name: CLI e2e (mock provider, honest-failure contract)
+        env:
+          AGENTHUB_CLI_E2E: '1'
+        run: pytest tests/cli/test_cli_e2e.py --tb=short -q
+      - name: Headless exec smoke (exit code must be 1, verifier veto)
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p agenthub-cli-smoke && cd agenthub-cli-smoke
+          OBJ="创建 hello.py 并打印 hello world。"$'\n'"VERIFY: python hello.py"
+          set +e
+          python -m app.cli exec "$OBJ" --json --mission-timeout 240 > result.json
+          code=$?
+          set -e
+          echo "exit code: $code"
+          cat result.json
+          test "$code" -eq 1
+          grep -q '"status": "FAILED"' result.json
+
+
+  # ═══════════════════════════════════════════════════════════════════
   # Docker — build verification (key images only, parallel)
   # ═══════════════════════════════════════════════════════════════════
   docker-build:

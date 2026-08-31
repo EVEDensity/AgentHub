@@ -130,12 +130,26 @@ Aider、Cline、Goose）：
 ### M1 — CLI 完善 + 能力补全
 
 * 分层项目指令：读取 `AGENTS.md`（根 → 项目 → 子目录合并）。
+  ✅ 已交付（2026-08-31）：CLI 合并分层 `AGENTS.md`（workspace 根 → cwd，
+  浅层优先），经 `AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE` 注入
+  desktop 系统提示（20k 字符截断并显式标注）。见
+  `app/cli/runtime.py`（`collect_agents_md_layers`/`merge_project_instructions`）、
+  `app/services/runner/model.py`（`compose_desktop_system_prompt`），
+  测试 `tests/cli/test_cli_main.py::AgentsMdLayerTests`。
 
-* skills 加载：复用 `plugins/` 机制做可分发 skill 包。
+* skills 加载：复用 `plugins/` 机制做可分发 skill 包。（未开始）
 
-* Web 搜索工具补入工具集，补齐调研类任务。
+* Web 搜索工具补入工具集，补齐调研类任务。（未开始）
 
 * 会话持久化与 `--resume`。
+  ✅ 已交付（2026-08-31）：本地状态持久化（`.agenthub/db` + `data` 跨
+  运行复用）；`agenthub missions` 列出历史任务；`run/exec
+  --resume <mission_id>` 把先前任务的目标/终态/沉淀摘要作为只读上下文
+  前置（绝不虚构历史）。测试见 `tests/cli/test_cli_main.py`。
+
+* CI 接线（自 M0 余项并入）：`.github/workflows/ci.yml` 新增
+  `Developer CLI` job —— 单测 + e2e + 无头 `exec --json` 冒烟
+  （退出码必须为 1，验证 verifier 否决路径，杜绝假成功）。
   验收标准：M0 的 3 条验收继续成立，且新增能力有对应单测。
 
 ### M2 — TUI（后续）
