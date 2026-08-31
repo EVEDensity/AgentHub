@@ -235,13 +235,18 @@ Aider、Cline、Goose）：
 
 ### M3 — 生态与发布
 
-* **桌面引导下载器（4.0 产品形态基线的落地）**：`AgentHub.exe` 轻量引导器
-  首次运行从发布源下载完整运行时栈至 `%LOCALAPPDATA%\AgentHub\stacks\`
-  （含下载进度、栈清单校验 sha256、失败重试/断点续传），验证
-  `readyz` 后切换 `.pinned`；旧版本保留可回滚。现有
-  `services.rs` 的 stacks/pinned/manifest 机制即其宿主。
-  验收标准：全新机器上仅凭引导器 exe 完成首次下载→启动→跑通一个
-  Mission；断网中断后重试可续；`.pinned` 回滚可用。
+* **桌面引导下载器（4.0 产品形态基线的落地）**：
+  ✅ **CLI 引导核心已交付（2026-08-31）**：`app/cli/stack_installer.py`
+  + `agenthub upgrade <manifest-url>` / `agenthub stacks` ——
+  栈清单（schemaVersion=1，version/commit/files[sha256,size]）严格校验
+  （拒绝越界路径/坏尺寸/错 schema）；逐文件 sha256 校验、
+  `*.part` 暂存后原子改名、已验证文件跳过实现断点续传；清单副本落
+  `stacks/<version>-<commit>/local-services/stack-manifest.json`（与
+  `services.rs` 的发现约定完全一致）；`.pinned` 经 tmp+rename 原子切换；
+  **安装失败不动当前 pin**，旧栈保留可回滚。网络层可注入，
+  `tests/cli/test_stack_installer.py`（15 用例离线全覆盖）。
+  余项（M3 后续）：桌面 exe 引导器 UI 集成（Tauri 侧调用同一下载核心
+  或经由 CLI）、发布源（GitHub Releases）托管真实栈产物。
 
 * `agenthub` 打包：`npm i -g` 分发（二进制内置，零运行时依赖）。
 

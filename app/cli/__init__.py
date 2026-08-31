@@ -17,6 +17,12 @@
 - ``tui``: full-screen Textual application (north-star M2) — streaming
   transcript, header status, input line; missions run in a thread
   worker with results marshalled back via call_from_thread.
+- ``stacks`` / ``upgrade``: runtime-stack bootstrap (north-star M3,
+  §4.0 product baseline) — download a versioned stack with sha256
+  verification and resume, place it under ``stacks/<version>-<commit>/``
+  where the desktop shell discovers it, and pin it atomically; failed
+  installs never disturb the current pin and older stacks remain for
+  rollback (see ``stack_installer``).
 
 The CLI never owns Mission state: it boots an isolated SQLite-backed
 Mission Control subprocess and talks to it over the same versioned HTTP

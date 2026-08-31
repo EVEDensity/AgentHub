@@ -198,6 +198,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable the public-web search tool for this session",
     )
+
+    stacks_parser = subparsers.add_parser(
+        "stacks", help="list installed runtime stacks and the pinned one"
+    )
+    stacks_parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="data directory holding stacks/ (default: local .agenthub)",
+    )
+
+    upgrade_parser = subparsers.add_parser(
+        "upgrade",
+        help="download and verify a runtime stack, then pin it (M3)",
+    )
+    upgrade_parser.add_argument(
+        "manifest_url",
+        help="URL of the stack manifest (stack-manifest.json)",
+    )
+    upgrade_parser.add_argument(
+        "--base-url",
+        default="",
+        help="base URL prefix for manifest file entries (default: manifest dir)",
+    )
+    upgrade_parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="data directory holding stacks/ (default: local .agenthub)",
+    )
     return parser
 
 
@@ -376,6 +404,75 @@ def _print_human(result: MissionRunResult, *, elapsed: float) -> None:
     print("=" * 60)
 
 
+def _resolve_data_dir(flag_value: str | None, cwd: Path) -> Path:
+    """Stack data directory: explicit flag wins, else .agenthub state."""
+    if flag_value:
+        return Path(flag_value).resolve()
+    return state_dir(cwd)
+
+
+def cmd_stacks(args: argparse.Namespace, cwd: Path) -> int:
+    from app.cli.stack_installer import list_installed_stacks, read_pinned
+
+    data_dir = _resolve_data_dir(args.data_dir, cwd)
+    pinned = read_pinned(data_dir)
+    stacks = list_installed_stacks(data_dir)
+    if not stacks:
+        print(f"no installed stacks under {data_dir}\\stacks")
+        print("install one with: agenthub upgrade <manifest-url>")
+        return EXIT_OK
+    print(f"{'VERSION':28} {'COMMIT':10} FILES  DIR")
+    print("-" * 76)
+    for stack in stacks:
+        marker = "  ← pinned" if stack.directory_name == pinned else ""
+        print(
+            f"{stack.version:28} {stack.commit[:10]:10} "
+            f"{len(stack.files):5}  {stack.directory_name}{marker}"
+        )
+    print()
+    print(f"pinned: {pinned or '（无）'}")
+    print("rollback by re-pin: agenthub upgrade <old-manifest-url>")
+    return EXIT_OK
+
+
+def cmd_upgrade(args: argparse.Namespace, cwd: Path) -> int:
+    from app.cli.stack_installer import (
+        StackInstallerError,
+        default_fetch_fn,
+        install_stack,
+    )
+
+    data_dir = _resolve_data_dir(args.data_dir, cwd)
+    base_url = args.base_url
+    if not base_url:
+        # Default: serve files from the manifest's directory.
+        base_url = args.manifest_url.rsplit("/", 1)[0]
+
+    def report(path: str, index: int, total: int) -> None:
+        print(f"  [{index}/{total}] {path}")
+
+    print(f"installing stack from {args.manifest_url}")
+    print(f"target: {data_dir}\\stacks")
+    try:
+        manifest = install_stack(
+            manifest_url=args.manifest_url,
+            data_dir=data_dir,
+            fetch_fn=default_fetch_fn,
+            base_url=base_url,
+            on_progress=report,
+        )
+    except StackInstallerError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print("the pinned stack is unchanged", file=sys.stderr)
+        return EXIT_INFRA_ERROR
+    print(
+        f"installed {manifest.directory_name} "
+        f"(version {manifest.version}, {len(manifest.files)} files, verified)"
+    )
+    print(f"pinned: {manifest.directory_name}")
+    return EXIT_OK
+
+
 def cli_main(argv: list[str] | None = None) -> int:
     if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
         try:
@@ -401,6 +498,10 @@ def cli_main(argv: list[str] | None = None) -> int:
         from app.cli.tui import run_tui_cli
 
         return run_tui_cli(args)
+    if args.command == "stacks":
+        return cmd_stacks(args, cwd)
+    if args.command == "upgrade":
+        return cmd_upgrade(args, cwd)
     parser.error(f"unknown command: {args.command}")
     return EXIT_INFRA_ERROR  # unreachable
 
