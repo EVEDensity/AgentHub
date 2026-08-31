@@ -209,7 +209,15 @@ Aider、Cline、Goose）：
 
 ### M2 — TUI（后续）
 
+* ✅ **交互式 REPL 基线已交付（2026-08-31）**：`agenthub chat`（
+  `app/cli/chat.py`）——斜杠命令（/help /missions /resume /unresume
+  /new /status /quit）、每轮实时 `[status]` 流、多轮自动链式 resume
+  （上一任务的 objective/终态/摘要作为下一轮只读上下文）、基础设施
+  错误不终止会话。零新依赖，直接复用 `execute_objective` 引擎。
+  测试 `tests/cli/test_cli_chat.py`（脚本化输入/输出注入）。
+
 * 全屏 TUI：斜杠命令、diff 分屏查看/编辑、会话列表/resume、实时流式输出。
+  （未开始，在 REPL 基线之上迭代）
 
 * 复用前端组件/状态约定（见优化路线图 D3：编排下沉到 `lib/` hooks）。
 

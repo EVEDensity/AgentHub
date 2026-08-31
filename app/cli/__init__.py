@@ -10,7 +10,10 @@
   optional ``--resume`` prior-mission context;
 - ``exec``: headless variant of ``run`` with ``--json`` output and an
   exit code derived from the Mission terminal status;
-- ``missions``: list missions recorded in the persistent local state.
+- ``missions``: list missions recorded in the persistent local state;
+- ``chat``: interactive REPL (north-star M2 baseline) — slash commands,
+  per-turn status stream, and automatic resume chaining so consecutive
+  turns accumulate prior objectives/statuses/summaries.
 
 The CLI never owns Mission state: it boots an isolated SQLite-backed
 Mission Control subprocess and talks to it over the same versioned HTTP

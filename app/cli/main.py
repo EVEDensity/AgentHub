@@ -132,6 +132,39 @@ def build_parser() -> argparse.ArgumentParser:
         default=20,
         help="maximum missions to list (default: %(default)s)",
     )
+
+    chat_parser = subparsers.add_parser(
+        "chat", help="interactive session (slash commands, chained context)"
+    )
+    _add_model_flags(chat_parser)
+    chat_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="workspace root for file tools (default: current directory)",
+    )
+    chat_parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_TOKENS,
+        help="total token budget per mission (default: %(default)s)",
+    )
+    chat_parser.add_argument(
+        "--runner-timeout-seconds",
+        type=float,
+        default=DEFAULT_RUNNER_TIMEOUT_SECONDS,
+        help="harness timeout budget in seconds (default: %(default)s)",
+    )
+    chat_parser.add_argument(
+        "--mission-timeout",
+        type=float,
+        default=DEFAULT_MISSION_TIMEOUT,
+        help="wall-clock wait per mission (default: %(default)s)",
+    )
+    chat_parser.add_argument(
+        "--no-web-search",
+        action="store_true",
+        help="disable the public-web search tool for this session",
+    )
     return parser
 
 
@@ -327,6 +360,10 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_run(args, cwd, json_mode=True)
     if args.command == "missions":
         return cmd_missions(args, cwd)
+    if args.command == "chat":
+        from app.cli.chat import run_chat_cli
+
+        return run_chat_cli(args)
     parser.error(f"unknown command: {args.command}")
     return EXIT_INFRA_ERROR  # unreachable
 
