@@ -14,6 +14,9 @@
 - ``chat``: interactive REPL (north-star M2 baseline) — slash commands,
   per-turn status stream, and automatic resume chaining so consecutive
   turns accumulate prior objectives/statuses/summaries.
+- ``tui``: full-screen Textual application (north-star M2) — streaming
+  transcript, header status, input line; missions run in a thread
+  worker with results marshalled back via call_from_thread.
 
 The CLI never owns Mission state: it boots an isolated SQLite-backed
 Mission Control subprocess and talks to it over the same versioned HTTP

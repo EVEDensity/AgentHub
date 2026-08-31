@@ -165,6 +165,39 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="disable the public-web search tool for this session",
     )
+
+    tui_parser = subparsers.add_parser(
+        "tui", help="full-screen terminal UI (north-star M2)"
+    )
+    _add_model_flags(tui_parser)
+    tui_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="workspace root for file tools (default: current directory)",
+    )
+    tui_parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_TOKENS,
+        help="total token budget per mission (default: %(default)s)",
+    )
+    tui_parser.add_argument(
+        "--runner-timeout-seconds",
+        type=float,
+        default=DEFAULT_RUNNER_TIMEOUT_SECONDS,
+        help="harness timeout budget in seconds (default: %(default)s)",
+    )
+    tui_parser.add_argument(
+        "--mission-timeout",
+        type=float,
+        default=DEFAULT_MISSION_TIMEOUT,
+        help="wall-clock wait per mission (default: %(default)s)",
+    )
+    tui_parser.add_argument(
+        "--no-web-search",
+        action="store_true",
+        help="disable the public-web search tool for this session",
+    )
     return parser
 
 
@@ -364,6 +397,10 @@ def cli_main(argv: list[str] | None = None) -> int:
         from app.cli.chat import run_chat_cli
 
         return run_chat_cli(args)
+    if args.command == "tui":
+        from app.cli.tui import run_tui_cli
+
+        return run_tui_cli(args)
     parser.error(f"unknown command: {args.command}")
     return EXIT_INFRA_ERROR  # unreachable
 

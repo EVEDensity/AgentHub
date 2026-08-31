@@ -86,10 +86,11 @@ Aider、Cline、Goose）：
 
 与 Codex 等市面 agent 工具一致的发布形态：
 
-1. **`AgentHub.exe` 是一个轻量引导器（bootstrap installer/launcher）**，
+1. **`AgentHub.exe`** **是一个轻量引导器（bootstrap installer/launcher）**，
    本身不携带完整运行时。首次点击后，引导器把完整运行时栈**下载/落盘
    到用户数据目录**（Windows：`%LOCALAPPDATA%\AgentHub`），随后每次启动
    由引导器拉起该目录中的栈。
+
 2. **数据目录是系统的家**，布局（部分已由
    `desktop/src-tauri/src/services.rs` 实现）：
 
@@ -104,6 +105,7 @@ Aider、Cline、Goose）：
 
 3. **栈版本化 + 钉住 + 回滚**：新版本下载为新 `stacks/<version>/` 目录，
    验证就绪后才切换 `.pinned`；旧版本保留，可回退。
+
 4. **CLI 与桌面同构**：CLI 的 `.agenthub/` 本地状态目录（db/data/logs）
    即同一形态的最小实现；两者都不把状态写进安装位置。
 
@@ -207,22 +209,28 @@ Aider、Cline、Goose）：
   （退出码必须为 1，验证 verifier 否决路径，杜绝假成功）。
   验收标准：M0 的 3 条验收继续成立，且新增能力有对应单测。
 
-### M2 — TUI（后续）
+### M2 — TUI（基线与全屏均已交付 2026-08-31）
 
-* ✅ **交互式 REPL 基线已交付（2026-08-31）**：`agenthub chat`（
+* ✅ **交互式 REPL 基线**：`agenthub chat`（
   `app/cli/chat.py`）——斜杠命令（/help /missions /resume /unresume
   /new /status /quit）、每轮实时 `[status]` 流、多轮自动链式 resume
   （上一任务的 objective/终态/摘要作为下一轮只读上下文）、基础设施
   错误不终止会话。零新依赖，直接复用 `execute_objective` 引擎。
   测试 `tests/cli/test_cli_chat.py`（脚本化输入/输出注入）。
 
-* 全屏 TUI：斜杠命令、diff 分屏查看/编辑、会话列表/resume、实时流式输出。
-  （未开始，在 REPL 基线之上迭代）
+* ✅ **全屏 TUI（Textual）**：`agenthub tui`（`app/cli/tui.py`）——
+  Header（模型/运行态）+ RichLog 流式转录 + 输入行 + 状态栏布局；
+  任务在 thread worker 中执行（UI 保持响应），状态与结果经
+  `call_from_thread` 回传；运行中拒绝并发提交；多轮自动链式与
+  REPL 一致。框架选型记录：**Textual 8.x**（纯 Python、Windows
+  原生、`run_test()` pilot 支持无头测试——ratatui 需独立 Rust
+  产物、ink 需 Node 运行时，均与"复用引擎零平行实现"冲突）。
+  依赖已入 `requirements.txt`。测试 `tests/cli/test_cli_tui.py`
+  （pilot 无头驱动真实 App）。
 
-* 复用前端组件/状态约定（见优化路线图 D3：编排下沉到 `lib/` hooks）。
+* 全屏 diff 分屏查看/编辑、会话列表视图：（未开始，在 Textual
+  App 之上增量迭代）
 
-* 框架候选：Rust ratatui（与 desktop sidecar 同栈）或 TS ink；实现时在
-  本文件记录 ADR 候选。
   验收标准：TUI 能完成 M1 的全部交互，且状态与 WEB/CLI 同源（同一 Mission）。
 
 ### M3 — 生态与发布

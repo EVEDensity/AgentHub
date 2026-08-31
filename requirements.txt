@@ -5,6 +5,9 @@ pydantic==2.10.6
 pydantic-settings==2.7.0
 python-multipart==0.0.20
 
+# ── Developer CLI TUI (north-star M2) ───────────────────────────────
+textual==8.2.8
+
 # ── Database ────────────────────────────────────────────────────────
 asyncpg==0.31.0
 alembic==1.18.4
