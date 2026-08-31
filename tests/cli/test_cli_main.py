@@ -18,7 +18,9 @@ from app.cli.runtime import (
     EXIT_OK,
     EXIT_WAIT_TIMEOUT,
     build_contract,
+    collect_agents_md_layers,
     list_workspace_files,
+    merge_project_instructions,
     resolve_model_settings,
     status_to_exit_code,
 )
@@ -142,13 +144,13 @@ class ServerEnvTests(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp)
-            workspace = run_dir / "ws"
+            workspace = Path(tmp) / "ws"
             model = runtime.CliModelSettings(
                 provider="mock", model="mock-llm", api_key="mock", base_url=""
             )
             env = runtime.build_server_env(
-                run_dir=run_dir,
+                db_path=Path(tmp) / "db" / "agenthub.db",
+                data_dir=Path(tmp) / "data",
                 workspace_root=workspace,
                 port=28123,
                 model=model,
@@ -165,6 +167,85 @@ class ServerEnvTests(unittest.TestCase):
         )
         # The API key must travel only via the environment.
         self.assertEqual(env["AGENTHUB_DESKTOP_MODEL_API_KEY"], "mock")
+
+    def test_project_instructions_env_wiring(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            instructions = Path(tmp) / "instructions.md"
+            instructions.write_text("# 项目指令\n- 使用 uv", encoding="utf-8")
+            model = runtime.CliModelSettings(
+                provider="mock", model="mock-llm", api_key="mock", base_url=""
+            )
+            env = runtime.build_server_env(
+                db_path=Path(tmp) / "db" / "agenthub.db",
+                data_dir=Path(tmp) / "data",
+                workspace_root=Path(tmp) / "ws",
+                port=28124,
+                model=model,
+                max_total_tokens=1,
+                runner_timeout_seconds=1.0,
+                project_instructions_file=instructions,
+            )
+            self.assertEqual(
+                env["AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE"],
+                str(instructions),
+            )
+
+
+class AgentsMdLayerTests(unittest.TestCase):
+    def _make_tree(self, tmp: str) -> Path:
+        root = Path(tmp)
+        (root / "sub" / "deep").mkdir(parents=True, exist_ok=True)
+        (root / "AGENTS.md").write_text("root rules", encoding="utf-8")
+        (root / "sub" / "AGENTS.md").write_text("sub rules", encoding="utf-8")
+        return root
+
+    def test_layers_ordered_shallow_first(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_tree(tmp)
+            layers = collect_agents_md_layers(root, root / "sub" / "deep")
+            resolved_root = root.resolve()
+        self.assertEqual(len(layers), 2)
+        # Shallow first: the workspace root AGENTS.md, then the more
+        # specific subdirectory layer.
+        self.assertEqual(layers[0], (resolved_root / "AGENTS.md").resolve())
+        self.assertEqual(layers[1], (root / "sub" / "AGENTS.md").resolve())
+
+    def test_target_outside_root_clamps(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_tree(tmp)
+            layers = collect_agents_md_layers(root, root / ".." / "elsewhere")
+            resolved_root = root.resolve()
+            # Must not raise; stays within root.
+            for layer in layers:
+                self.assertTrue(layer.is_relative_to(resolved_root))
+
+    def test_merge_orders_general_then_specific(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_tree(tmp)
+            layers = collect_agents_md_layers(root, root / "sub")
+            merged = merge_project_instructions(layers)
+        self.assertIn("root rules", merged)
+        self.assertIn("sub rules", merged)
+        self.assertLess(merged.index("root rules"), merged.index("sub rules"))
+
+    def test_merge_skips_unreadable(self) -> None:
+        self.assertEqual(merge_project_instructions([]), "")
+
+    def test_workspace_root_agents_md_only(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._make_tree(tmp)
+            layers = collect_agents_md_layers(root, root)
+        self.assertEqual(layers, [(root / "AGENTS.md").resolve()])
 
 
 if __name__ == "__main__":

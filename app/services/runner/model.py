@@ -10,6 +10,7 @@ import logging
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from app.services.desktop_guidance import (
@@ -50,6 +51,50 @@ from app.services.runner_composition import (
 logger = logging.getLogger("agenthub.desktop_local_runner")
 
 # ── Model composition ────────────────────────────────────────────────────
+
+# Optional project instructions appended to the desktop system prompt.
+# The file content is expected to be plain text (typically the merged
+# layered AGENTS.md produced by the CLI/desktop shell); it is read once
+# per factory construction. Empty/missing files are ignored silently so
+# deployments without project instructions keep the default prompt.
+PROJECT_INSTRUCTIONS_FILE_ENV = "AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE"
+_PROJECT_INSTRUCTIONS_MAX_CHARS = 20_000
+
+
+def _load_project_instructions() -> str:
+    """Read optional project instructions for the desktop system prompt.
+
+    The file is read once per call site; oversized content is truncated
+    with an explicit note so the model knows instructions were cut short.
+    """
+    path = os.environ.get(PROJECT_INSTRUCTIONS_FILE_ENV, "").strip()
+    if not path:
+        return ""
+    try:
+        content = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("project instructions file unreadable: %s", path)
+        return ""
+    content = content.strip()
+    if len(content) > _PROJECT_INSTRUCTIONS_MAX_CHARS:
+        content = content[:_PROJECT_INSTRUCTIONS_MAX_CHARS] + (
+            "\n\n... [项目指令过长，已截断至前 "
+            f"{_PROJECT_INSTRUCTIONS_MAX_CHARS} 字符]"
+        )
+    return content
+
+
+def compose_desktop_system_prompt(base_prompt: str) -> str:
+    """Append project instructions (if any) to the desktop system prompt."""
+    instructions = _load_project_instructions()
+    if not instructions:
+        return base_prompt
+    return (
+        f"{base_prompt}\n\n"
+        "## 项目指令（AGENTS.md 合并结果，优先级高于以上默认约定）\n"
+        f"{instructions}"
+    )
+
 
 
 @dataclass(frozen=True)
@@ -144,7 +189,7 @@ class DesktopModelFactory(HarnessModelFactoryPort):
             model=self._config.model,
             api_key=self._config.api_key,
             base_url=self._config.base_url,
-            system_prompt=DESKTOP_SYSTEM_PROMPT,
+            system_prompt=compose_desktop_system_prompt(DESKTOP_SYSTEM_PROMPT),
             tools=build_function_tool_schemas(list(tools)),
             context_char_budget=self._context_char_budget,
         )

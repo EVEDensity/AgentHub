@@ -46,6 +46,56 @@ DEFAULT_MAX_TOTAL_TOKENS = 200_000
 
 DEFAULT_MOCK_MODEL = "mock-llm"
 
+# Layered project instructions (north-star M1): AGENTS.md files found from
+# the workspace root up to the current directory are merged shallowest-first
+# so deeper (more specific) entries come last and read as refinements.
+AGENTS_MD_NAME = "AGENTS.md"
+_PROJECT_INSTRUCTIONS_FILE_ENV = "AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE"
+
+
+def collect_agents_md_layers(workspace_root: Path, cwd: Path | None = None) -> list[Path]:
+    """Return AGENTS.md paths from workspace root toward ``cwd`` (shallow first).
+
+    Both endpoints are resolved and the walk never escapes the workspace
+    root. Non-existent files are skipped; the result is ordered so the
+    merged prompt reads general → specific.
+    """
+    root = workspace_root.resolve()
+    target = (cwd or workspace_root).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        target = root
+    # Walk from the target up to the root, then reverse so the merged
+    # prompt reads general (workspace root) → specific (cwd).
+    chain: list[Path] = []
+    current = target
+    while True:
+        chain.append(current)
+        if current == root or current.parent == current:
+            break
+        current = current.parent
+    layers: list[Path] = []
+    for directory in reversed(chain):
+        candidate = directory / AGENTS_MD_NAME
+        if candidate.is_file():
+            layers.append(candidate)
+    return layers
+
+
+def merge_project_instructions(paths: list[Path]) -> str:
+    """Merge layered AGENTS.md files into one instruction block."""
+    sections: list[str] = []
+    for path in paths:
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not content:
+            continue
+        sections.append(f"### {path.parent.name or str(path.parent)}/AGENTS.md\n\n{content}")
+    return "\n\n".join(sections)
+
 
 @dataclass(frozen=True)
 class CliModelSettings:
@@ -152,24 +202,29 @@ def build_contract(contract_id: str, time_seconds: int) -> dict[str, Any]:
 
 def build_server_env(
     *,
-    run_dir: Path,
+    db_path: Path,
+    data_dir: Path,
     workspace_root: Path,
     port: int,
     model: CliModelSettings,
     max_total_tokens: int,
     runner_timeout_seconds: float,
+    project_instructions_file: Path | None = None,
 ) -> dict[str, str]:
     """Env for the isolated SQLite mission-control subprocess.
 
     The model API key travels only through the subprocess environment;
-    it is never written to any file under ``run_dir``.
+    it is never written to any file under the state directory. Project
+    instructions (merged layered AGENTS.md), when present, are exposed
+    to the desktop model factory through
+    ``AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE``.
     """
     env = os.environ.copy()
     env.update(
         {
             "AGENTHUB_DB_BACKEND": "sqlite",
-            "AGENTHUB_SQLITE_PATH": str(run_dir / "db" / "agenthub.db"),
-            "AGENTHUB_LOCAL_DATA": str(run_dir / "data"),
+            "AGENTHUB_SQLITE_PATH": str(db_path),
+            "AGENTHUB_LOCAL_DATA": str(data_dir),
             "AGENTHUB_DESKTOP_LOCAL_RUNNER": "1",
             "AGENTHUB_DESKTOP_LOCAL_RUNNER_BASE_URL": f"http://127.0.0.1:{port}",
             "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY": "1",
@@ -191,6 +246,8 @@ def build_server_env(
             "AGENTHUB_LLM_GATEWAY": "",
         }
     )
+    if project_instructions_file is not None:
+        env[_PROJECT_INSTRUCTIONS_FILE_ENV] = str(project_instructions_file)
     return env
 
 
@@ -208,41 +265,61 @@ def free_port(start: int = 28_100) -> int:
 
 
 class MissionControlProcess:
-    """Own the isolated SQLite mission-control subprocess lifecycle."""
+    """Own the SQLite mission-control subprocess lifecycle.
+
+    The database and local data live under the persistent ``.agenthub``
+    state directory so missions survive across CLI invocations; per-boot
+    logs go to ``.agenthub/logs/``.
+    """
 
     def __init__(
         self,
         *,
-        run_dir: Path,
+        state_dir: Path,
         workspace_root: Path,
         model: CliModelSettings,
         max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
         runner_timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS,
         port: int | None = None,
+        project_instructions: str = "",
     ) -> None:
-        self._run_dir = run_dir
+        self._state_dir = state_dir
         self._workspace_root = workspace_root
         self._model = model
         self._max_total_tokens = max_total_tokens
         self._runner_timeout_seconds = runner_timeout_seconds
+        self._project_instructions = project_instructions.strip()
         self.port = port or free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self._process: subprocess.Popen[bytes] | None = None
         self._log_handle: Any = None
 
     def start(self, *, timeout: float = DEFAULT_SERVER_STARTUP_TIMEOUT) -> None:
-        (self._run_dir / "db").mkdir(parents=True, exist_ok=True)
-        (self._run_dir / "data").mkdir(parents=True, exist_ok=True)
+        db_dir = self._state_dir / "db"
+        data_dir = self._state_dir / "data"
+        logs_dir = self._state_dir / "logs"
+        for directory in (db_dir, data_dir, logs_dir):
+            directory.mkdir(parents=True, exist_ok=True)
         self._workspace_root.mkdir(parents=True, exist_ok=True)
+        instructions_file: Path | None = None
+        if self._project_instructions:
+            instructions_file = self._state_dir / "project-instructions.md"
+            instructions_file.write_text(
+                self._project_instructions + "\n", encoding="utf-8"
+            )
         env = build_server_env(
-            run_dir=self._run_dir,
+            db_path=db_dir / "agenthub.db",
+            data_dir=data_dir,
             workspace_root=self._workspace_root,
             port=self.port,
             model=self._model,
             max_total_tokens=self._max_total_tokens,
             runner_timeout_seconds=self._runner_timeout_seconds,
+            project_instructions_file=instructions_file,
         )
-        log_path = self._run_dir / "mission-control.log"
+        log_path = (
+            logs_dir / f"mission-control-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        )
         self._log_handle = log_path.open("wb")
         self._process = subprocess.Popen(
             [
@@ -389,6 +466,13 @@ class MissionControlClient:
         response.raise_for_status()
         return response.json().get("artifacts", [])
 
+    def missions(self) -> list[dict[str, Any]]:
+        response = self._client.get("/api/v1/missions", headers=self.headers)
+        response.raise_for_status()
+        payload = response.json()
+        missions = payload.get("missions", [])
+        return missions if isinstance(missions, list) else []
+
 
 @dataclass
 class MissionRunResult:
@@ -446,36 +530,117 @@ def list_workspace_files(workspace_root: Path) -> list[str]:
     return files
 
 
+def build_resume_context(client: MissionControlClient, mission_id: str) -> str:
+    """Build prior-mission context for ``--resume``.
+
+    Reads the prior Mission's objective, terminal status, and its first
+    registered artifact bytes (the desktop runner deposits the final
+    model summary there). Missing history degrades to an empty string —
+    resume never invents context.
+    """
+    try:
+        mission = client.get_mission(mission_id)
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(f"cannot resume: mission {mission_id} not found") from exc
+    objective = str(mission.get("objective") or "").strip()
+    status = str(mission.get("status") or "UNKNOWN")
+    summary = ""
+    try:
+        artifacts = client.artifacts(mission_id)
+    except httpx.HTTPError:
+        artifacts = []
+    if artifacts:
+        address = str(artifacts[0].get("contentAddress") or "")
+        # contentAddress is "local:sha256/<digest>"; read through the
+        # artifact store root derived from the same state directory.
+        digest = address.split("/")[-1]
+        artifact_path = None
+        for candidate in _artifact_search_roots():
+            candidate_path = candidate / digest[:2] / digest
+            if candidate_path.is_file():
+                artifact_path = candidate_path
+                break
+        if artifact_path is not None:
+            try:
+                summary = artifact_path.read_text(encoding="utf-8").strip()[:4_000]
+            except (OSError, UnicodeDecodeError):
+                summary = ""
+    lines = [
+        f"先前任务 {mission_id}（状态：{status}）的目标：",
+        objective or "（无目标记录）",
+    ]
+    if summary:
+        lines += ["先前任务的执行总结：", summary]
+    return "\n".join(lines)
+
+
+def _artifact_search_roots() -> list[Path]:
+    """Candidate artifact CAS roots for the local state directory."""
+    roots: list[Path] = []
+    local_data = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
+    if local_data:
+        roots.append(Path(local_data) / "data" / "artifacts")
+    roots.append(Path("data") / "artifacts")
+    return roots
+
+
+def list_recent_missions(
+    *,
+    state_dir: Path,
+    workspace_root: Path,
+    model: CliModelSettings,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """List missions recorded in the persistent local state database."""
+    with MissionControlProcess(
+        state_dir=state_dir,
+        workspace_root=workspace_root,
+        model=model,
+    ) as process:
+        with MissionControlClient(process.base_url) as client:
+            client.login()
+            return client.missions()[:limit]
+
+
 def execute_objective(
     *,
     objective: str,
     workspace_root: Path,
-    run_dir: Path,
+    state_dir: Path,
     model: CliModelSettings,
     max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
     runner_timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS,
     mission_timeout: float = DEFAULT_MISSION_TIMEOUT,
+    project_instructions: str = "",
+    resume_mission_id: str = "",
     on_status: Any = None,
 ) -> MissionRunResult:
     """Run one objective end to end and return the structured result.
 
-    Raises ``RuntimeError`` on infrastructure failures (server did not
-    start, HTTP errors); mission-level failure is reported through the
-    result status, never by faking success.
+    ``resume_mission_id`` prepends the prior Mission's objective, status
+    and deposited summary as read-only context. Raises ``RuntimeError``
+    on infrastructure failures (server did not start, HTTP errors);
+    mission-level failure is reported through the result status, never
+    by faking success.
     """
     title = objective.strip().splitlines()[0][:80] or "CLI mission"
     with MissionControlProcess(
-        run_dir=run_dir,
+        state_dir=state_dir,
         workspace_root=workspace_root,
         model=model,
         max_total_tokens=max_total_tokens,
         runner_timeout_seconds=runner_timeout_seconds,
+        project_instructions=project_instructions,
     ) as process:
         with MissionControlClient(process.base_url) as client:
             client.login()
+            full_objective = objective
+            if resume_mission_id:
+                context = build_resume_context(client, resume_mission_id)
+                full_objective = f"{context}\n\n---\n\n{objective}"
             mission = client.create_and_start_mission(
                 title=title,
-                objective=objective,
+                objective=full_objective,
                 time_seconds=int(runner_timeout_seconds),
             )
             mission_id = str(mission["id"])

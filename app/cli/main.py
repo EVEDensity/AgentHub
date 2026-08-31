@@ -21,7 +21,6 @@ import argparse
 import json
 import sys
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,10 @@ from app.cli.runtime import (
     EXIT_INFRA_ERROR,
     EXIT_OK,
     MissionRunResult,
+    collect_agents_md_layers,
     execute_objective,
+    list_recent_missions,
+    merge_project_instructions,
     resolve_model_settings,
     state_dir,
 )
@@ -80,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
             help="workspace root for file tools (default: current directory)",
         )
         run_parser.add_argument(
+            "--resume",
+            default=None,
+            metavar="MISSION_ID",
+            help="prepend a prior mission's objective and summary as context",
+        )
+        run_parser.add_argument(
             "--max-total-tokens",
             type=int,
             default=DEFAULT_MAX_TOTAL_TOKENS,
@@ -103,6 +111,22 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="emit a single JSON result document on stdout",
             )
+
+    missions_parser = subparsers.add_parser(
+        "missions", help="list missions recorded in the local state"
+    )
+    _add_model_flags(missions_parser)
+    missions_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="workspace root (default: current directory)",
+    )
+    missions_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="maximum missions to list (default: %(default)s)",
+    )
     return parser
 
 
@@ -157,8 +181,16 @@ def cmd_run(
         config=config,
     )
     workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
-    run_dir = state_dir(cwd) / "runs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    directory = state_dir(cwd)
+    directory.mkdir(parents=True, exist_ok=True)
+    # Layered AGENTS.md project instructions: workspace root → cwd,
+    # merged shallowest-first and injected into the system prompt.
+    instruction_paths = collect_agents_md_layers(workspace_root, cwd)
+    project_instructions = merge_project_instructions(instruction_paths)
+    if args.resume and args.resume.strip():
+        resume_mission_id = args.resume.strip()
+    else:
+        resume_mission_id = ""
 
     def _emit_status(status: str) -> None:
         if not json_mode:
@@ -168,19 +200,27 @@ def cmd_run(
         print(f"objective: {args.objective}")
         print(f"workspace: {workspace_root}")
         print(f"model:     {settings.provider} / {settings.model}")
-        print(f"run dir:   {run_dir}")
-        print("booting isolated mission-control (SQLite, desktop runner)...")
+        if instruction_paths:
+            print(
+                "agents.md: "
+                + ", ".join(str(p.parent.name) or "/" for p in instruction_paths)
+            )
+        if resume_mission_id:
+            print(f"resume:   {resume_mission_id}")
+        print("booting local mission-control (SQLite, desktop runner)...")
         started = time.monotonic()
 
     try:
         result = execute_objective(
             objective=args.objective,
             workspace_root=workspace_root,
-            run_dir=run_dir,
+            state_dir=directory,
             model=settings,
             max_total_tokens=args.max_total_tokens,
             runner_timeout_seconds=args.runner_timeout_seconds,
             mission_timeout=args.mission_timeout,
+            project_instructions=project_instructions,
+            resume_mission_id=resume_mission_id,
             on_status=_emit_status,
         )
     except (RuntimeError, OSError) as exc:
@@ -199,6 +239,45 @@ def cmd_run(
     else:
         _print_human(result, elapsed=time.monotonic() - started)
     return result.exit_code
+
+
+def cmd_missions(args: argparse.Namespace, cwd: Path) -> int:
+    config = _load_config(cwd)
+    settings = resolve_model_settings(
+        provider=args.provider,
+        model=args.model,
+        base_url=args.model_base_url,
+        config=config,
+    )
+    workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
+    directory = state_dir(cwd)
+    if not (directory / "db" / "agenthub.db").is_file():
+        print("no local missions yet — run `agenthub run` first")
+        return EXIT_OK
+    try:
+        missions = list_recent_missions(
+            state_dir=directory,
+            workspace_root=workspace_root,
+            model=settings,
+            limit=args.limit,
+        )
+    except (RuntimeError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_INFRA_ERROR
+    if not missions:
+        print("no local missions yet — run `agenthub run` first")
+        return EXIT_OK
+    print(f"{'MISSION ID':40} {'STATUS':12} OBJECTIVE")
+    print("-" * 80)
+    for mission in missions:
+        mission_id = str(mission.get("id") or "")[:38]
+        status = str(mission.get("status") or "")[:12]
+        objective = str(mission.get("objective") or "").splitlines()
+        summary = (objective[0] if objective else "")[:60]
+        print(f"{mission_id:40} {status:12} {summary}")
+    print()
+    print("resume with: agenthub run \"<objective>\" --resume <MISSION_ID>")
+    return EXIT_OK
 
 
 def _print_human(result: MissionRunResult, *, elapsed: float) -> None:
@@ -240,6 +319,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_run(args, cwd, json_mode=False)
     if args.command == "exec":
         return cmd_run(args, cwd, json_mode=True)
+    if args.command == "missions":
+        return cmd_missions(args, cwd)
     parser.error(f"unknown command: {args.command}")
     return EXIT_INFRA_ERROR  # unreachable
 
