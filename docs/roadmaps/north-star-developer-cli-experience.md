@@ -42,17 +42,17 @@
 
 ## 2. 现状评估（2026-08-31，诚实表）
 
-| 项                                                   | 状态                               | 证据                                                                                  |
-| --------------------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------------- |
-| Mission / WorkUnit / Artifact / Evidence / Decision | ✅ 已落地                            | `app/domain`、`app/repositories/mission_repository.py`、`migrations/`                 |
-| A2A 出站 + 入站                                         | ✅ 已落地（生产路径）                      | `a2a_adapter_service.py`、inbound mapping 迁移、`A2A_DISPATCH_MODE=runner` cutover + 单测 |
-| 独立 verifier（执行者不能自证）                                | ✅ 已落地                            | ADR-0004/0059/0060、`verifier_service/`                                              |
-| 桌面单 exe 开箱即用                                        | ❌ 未兑现                            | 打包流水线绿，但签名发布依赖 5 个 secrets；无公开 Release 产物                                           |
-| CLI / TUI 入口                                        | ✅ CLI 已实现（M0）；TUI 未开始            | `app/cli/`（`python -m app.cli`）、`tests/cli/`                                        |
-| headless exec / PR 审查 Action                        | ⚠️ exec 已实现并本地验证；CI workflow 未接线 | `app/cli` exec --json + 退出码契约；GitHub Actions 接入属 M1                                 |
-| 公开 agent 能力基准（Terminal-Bench 等）                     | ❌ 未接入                            | benchmarks 仅覆盖 P95/召回/tokenizer 精度                                                  |
-| 分层项目指令 / skills 生态                                  | ✅ 已实现（M1：分层 AGENTS.md 合并注入 + 只读 skill_list/skill_load） | `app/cli/runtime.py`、`app/services/desktop_runner_tools.py`、`tests/services/test_desktop_skill_tools.py` |
-| Web 搜索 / 浏览器工具                                      | ⚠️ web_search 已实现（M1，Tavily/DDG）；浏览器操作仍缺失 | `app/services/tools/network_tools.py`、`tests/services/test_web_search_tool.py` |
+| 项                                                   | 状态                                                       | 证据                                                                                                       |
+| --------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Mission / WorkUnit / Artifact / Evidence / Decision | ✅ 已落地                                                    | `app/domain`、`app/repositories/mission_repository.py`、`migrations/`                                      |
+| A2A 出站 + 入站                                         | ✅ 已落地（生产路径）                                              | `a2a_adapter_service.py`、inbound mapping 迁移、`A2A_DISPATCH_MODE=runner` cutover + 单测                      |
+| 独立 verifier（执行者不能自证）                                | ✅ 已落地                                                    | ADR-0004/0059/0060、`verifier_service/`                                                                   |
+| 桌面单 exe 开箱即用                                        | ❌ 未兑现                                                    | 打包流水线绿，但签名发布依赖 5 个 secrets；无公开 Release 产物                                                                |
+| CLI / TUI 入口                                        | ✅ CLI 已实现（M0）；TUI 未开始                                    | `app/cli/`（`python -m app.cli`）、`tests/cli/`                                                             |
+| headless exec / PR 审查 Action                        | ⚠️ exec 已实现并本地验证；CI workflow 未接线                         | `app/cli` exec --json + 退出码契约；GitHub Actions 接入属 M1                                                      |
+| 公开 agent 能力基准（Terminal-Bench 等）                     | ❌ 未接入                                                    | benchmarks 仅覆盖 P95/召回/tokenizer 精度                                                                       |
+| 分层项目指令 / skills 生态                                  | ✅ 已实现（M1：分层 AGENTS.md 合并注入 + 只读 skill\_list/skill\_load） | `app/cli/runtime.py`、`app/services/desktop_runner_tools.py`、`tests/services/test_desktop_skill_tools.py` |
+| Web 搜索 / 浏览器工具                                      | ⚠️ web\_search 已实现（M1，Tavily/DDG）；浏览器操作仍缺失               | `app/services/tools/network_tools.py`、`tests/services/test_web_search_tool.py`                           |
 
 > 注：`docs/index.md` 仍把 A2A 标注为"原型"，属文档滞后，与代码不一致，
 > 应为"已实现"。
@@ -82,6 +82,38 @@ Aider、Cline、Goose）：
 
 ## 4. 北极星原则（不可妥协）
 
+### 4.0 产品形态基线：desktop exe 是引导下载器，不是完整运行时（2026-08-31 确立）
+
+与 Codex 等市面 agent 工具一致的发布形态：
+
+1. **`AgentHub.exe` 是一个轻量引导器（bootstrap installer/launcher）**，
+   本身不携带完整运行时。首次点击后，引导器把完整运行时栈**下载/落盘
+   到用户数据目录**（Windows：`%LOCALAPPDATA%\AgentHub`），随后每次启动
+   由引导器拉起该目录中的栈。
+2. **数据目录是系统的家**，布局（部分已由
+   `desktop/src-tauri/src/services.rs` 实现）：
+
+   ```
+   <数据目录>/
+     stacks/<version>-<commit>/local-services/   # 版本化运行时栈（可多版本共存）
+       stack-manifest.json                        # 栈清单（schemaVersion/version/commit）
+     stacks/.pinned                               # 当前钉住的栈版本
+     data/                                        # 业务数据（SQLite、artifacts CAS、日志）
+     workspaces/                                  # 用户代码工作区
+   ```
+
+3. **栈版本化 + 钉住 + 回滚**：新版本下载为新 `stacks/<version>/` 目录，
+   验证就绪后才切换 `.pinned`；旧版本保留，可回退。
+4. **CLI 与桌面同构**：CLI 的 `.agenthub/` 本地状态目录（db/data/logs）
+   即同一形态的最小实现；两者都不把状态写进安装位置。
+
+> 现状核对：`services.rs` 已有 `StackInfo`（manifest/source/persisted/pinned）、
+> `stacks/<version>/` 版本化缓存、bundled→persisted 拷贝降级路径；
+> **尚未实现**的是"从远端下载栈"这一引导环节（当前 bundled 栈来自安装包
+> 内资源），以及下载进度/校验/断点续传。归入 M3（生态与发布）。
+
+### 4.1 原则
+
 1. **CLI-first**：所有让开发者上手更费力的表面，优先级都低于"至少存在一个
    好用的终端入口"。TUI 是 CLI 的后续增强，不阻塞 CLI。
 2. **复用引擎，不造平行实现**：CLI/TUI 直接复用现有
@@ -94,6 +126,8 @@ Aider、Cline、Goose）：
    agent 只需一个 API key 环境变量。
 5. **可回放、可审计**：每个动作可回放（复用 `execution_checkpoints`），
    每次完成必须有 Evidence，杜绝 demo 假成功。
+6. **安装位置 ≠ 数据位置**：任何形态（exe 引导器/CLI）都不把可变状态写进
+   程序安装目录；一切状态归数据目录（见 4.0）。
 
 ## 5. 里程碑（每个 M 必须产出可运行产物，不空转）
 
@@ -184,6 +218,14 @@ Aider、Cline、Goose）：
   验收标准：TUI 能完成 M1 的全部交互，且状态与 WEB/CLI 同源（同一 Mission）。
 
 ### M3 — 生态与发布
+
+* **桌面引导下载器（4.0 产品形态基线的落地）**：`AgentHub.exe` 轻量引导器
+  首次运行从发布源下载完整运行时栈至 `%LOCALAPPDATA%\AgentHub\stacks\`
+  （含下载进度、栈清单校验 sha256、失败重试/断点续传），验证
+  `readyz` 后切换 `.pinned`；旧版本保留可回滚。现有
+  `services.rs` 的 stacks/pinned/manifest 机制即其宿主。
+  验收标准：全新机器上仅凭引导器 exe 完成首次下载→启动→跑通一个
+  Mission；断网中断后重试可续；`.pinned` 回滚可用。
 
 * `agenthub` 打包：`npm i -g` 分发（二进制内置，零运行时依赖）。
 
