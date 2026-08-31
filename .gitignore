@@ -27,6 +27,7 @@ agenthub-update.key.pub
 # Runtime data and local indexes
 data/
 !frontend/data/
+.agenthub/
 *.sqlite3
 *.db
 
