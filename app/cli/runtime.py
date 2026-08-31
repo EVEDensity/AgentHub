@@ -51,6 +51,7 @@ DEFAULT_MOCK_MODEL = "mock-llm"
 # so deeper (more specific) entries come last and read as refinements.
 AGENTS_MD_NAME = "AGENTS.md"
 _PROJECT_INSTRUCTIONS_FILE_ENV = "AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE"
+_WEB_SEARCH_ENV = "AGENTHUB_DESKTOP_WEB_SEARCH"
 
 
 def collect_agents_md_layers(workspace_root: Path, cwd: Path | None = None) -> list[Path]:
@@ -210,6 +211,7 @@ def build_server_env(
     max_total_tokens: int,
     runner_timeout_seconds: float,
     project_instructions_file: Path | None = None,
+    web_search: bool = False,
 ) -> dict[str, str]:
     """Env for the isolated SQLite mission-control subprocess.
 
@@ -248,6 +250,9 @@ def build_server_env(
     )
     if project_instructions_file is not None:
         env[_PROJECT_INSTRUCTIONS_FILE_ENV] = str(project_instructions_file)
+    # North-star M1: the developer CLI exposes the public-web search tool
+    # by default; packaged desktop deployments keep it off.
+    env[_WEB_SEARCH_ENV] = "1" if web_search else "0"
     return env
 
 
@@ -282,6 +287,7 @@ class MissionControlProcess:
         runner_timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS,
         port: int | None = None,
         project_instructions: str = "",
+        web_search: bool = False,
     ) -> None:
         self._state_dir = state_dir
         self._workspace_root = workspace_root
@@ -289,6 +295,7 @@ class MissionControlProcess:
         self._max_total_tokens = max_total_tokens
         self._runner_timeout_seconds = runner_timeout_seconds
         self._project_instructions = project_instructions.strip()
+        self._web_search = web_search
         self.port = port or free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self._process: subprocess.Popen[bytes] | None = None
@@ -316,6 +323,7 @@ class MissionControlProcess:
             max_total_tokens=self._max_total_tokens,
             runner_timeout_seconds=self._runner_timeout_seconds,
             project_instructions_file=instructions_file,
+            web_search=self._web_search,
         )
         log_path = (
             logs_dir / f"mission-control-{time.strftime('%Y%m%d-%H%M%S')}.log"
@@ -613,6 +621,7 @@ def execute_objective(
     mission_timeout: float = DEFAULT_MISSION_TIMEOUT,
     project_instructions: str = "",
     resume_mission_id: str = "",
+    web_search: bool = True,
     on_status: Any = None,
 ) -> MissionRunResult:
     """Run one objective end to end and return the structured result.
@@ -631,6 +640,7 @@ def execute_objective(
         max_total_tokens=max_total_tokens,
         runner_timeout_seconds=runner_timeout_seconds,
         project_instructions=project_instructions,
+        web_search=web_search,
     ) as process:
         with MissionControlClient(process.base_url) as client:
             client.login()

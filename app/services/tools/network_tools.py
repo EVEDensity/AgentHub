@@ -209,3 +209,165 @@ async def http_request_handler(
             "error": f"HTTP 请求失败: {exc}",
             "metadata": {"url": url},
         }
+
+
+# ── web_search (north-star M1) ────────────────────────────────────────────
+
+WEB_SEARCH_TIMEOUT = 20  # seconds
+WEB_SEARCH_MAX_RESULTS = 8
+WEB_SEARCH_RESULT_SNIPPET_CHARS = 600
+TAVILY_API_KEY_ENV = "AGENTHUB_TAVILY_API_KEY"
+_DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html/"
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+async def web_search_handler(query: str, max_results: int = 5) -> dict[str, Any]:
+    """Search the public web and return bounded results.
+
+    Backend resolution:
+
+    - ``AGENTHUB_TAVILY_API_KEY`` set → Tavily Search API (preferred);
+    - otherwise → DuckDuckGo HTML endpoint (no key required, best effort).
+
+    Failures return ``{"success": False, "error": ...}`` — never a
+    synthetic result set.
+    """
+    import os as _os
+
+    query = (query or "").strip()
+    if not query:
+        return {"success": False, "error": "搜索关键词不能为空"}
+    limit = min(max(int(max_results), 1), WEB_SEARCH_MAX_RESULTS)
+
+    api_key = _os.environ.get(TAVILY_API_KEY_ENV, "").strip()
+    if api_key:
+        return await _tavily_search(query, api_key, limit)
+    return await _ddg_html_search(query, limit)
+
+
+async def _tavily_search(query: str, api_key: str, limit: int) -> dict[str, Any]:
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=WEB_SEARCH_TIMEOUT) as client:
+            response = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": query,
+                    "max_results": limit,
+                    "include_answer": False,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except httpx.TimeoutException:
+        return {"success": False, "error": f"搜索超时（{WEB_SEARCH_TIMEOUT}秒）"}
+    except Exception as exc:
+        logger.warning("tavily search failed: %s", exc)
+        return {"success": False, "error": f"Tavily 搜索失败: {exc}"}
+
+    results = []
+    for item in payload.get("results", [])[:limit]:
+        results.append(
+            {
+                "title": _clip(str(item.get("title") or ""), 200),
+                "url": str(item.get("url") or ""),
+                "snippet": _clip(
+                    str(item.get("content") or ""), WEB_SEARCH_RESULT_SNIPPET_CHARS
+                ),
+            }
+        )
+    if not results:
+        return {"success": False, "error": "搜索无结果"}
+    return {"success": True, "results": results, "backend": "tavily"}
+
+
+async def _ddg_html_search(query: str, limit: int) -> dict[str, Any]:
+    """Keyless DuckDuckGo HTML search. Best effort: the endpoint may rate
+    limit or change markup, in which case the failure is reported honestly."""
+    import re as _re
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=WEB_SEARCH_TIMEOUT) as client:
+            response = await client.post(
+                _DDG_HTML_ENDPOINT,
+                data={"q": query, "kl": "wt-wt"},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; AgentHub/4.0)",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            response.raise_for_status()
+            html = response.text
+    except httpx.TimeoutException:
+        return {"success": False, "error": f"搜索超时（{WEB_SEARCH_TIMEOUT}秒）"}
+    except Exception as exc:
+        logger.warning("duckduckgo search failed: %s", exc)
+        return {"success": False, "error": f"DuckDuckGo 搜索失败: {exc}"}
+
+    # Zero-dependency parse: each organic result is an <a class="result__a">
+    # plus an optional <a class="result__snippet">.
+    link_pattern = _re.compile(
+        r'<a[^>]+class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        _re.DOTALL,
+    )
+    snippet_pattern = _re.compile(
+        r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>', _re.DOTALL
+    )
+    tag_pattern = _re.compile(r"<[^>]+>")
+    entity_map = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "#39": "'"}
+    entity_pattern = _re.compile(r"&([a-z0-9#]+);")
+
+    def _clean(fragment: str) -> str:
+        text = tag_pattern.sub("", fragment)
+        text = entity_pattern.sub(
+            lambda m: entity_map.get(m.group(1), m.group(0)), text
+        )
+        return text.strip()
+
+    links = link_pattern.findall(html)
+    snippets = snippet_pattern.findall(html)
+    results = []
+    seen_urls: set[str] = set()
+    for index, (href, title_html) in enumerate(links):
+        # DuckDuckGo wraps URLs in a redirect; extract the direct target.
+        url = href
+        if "uddg=" in href:
+            from urllib.parse import parse_qs, unquote, urlparse
+
+            try:
+                query_params = parse_qs(urlparse(href).query)
+                url = unquote(query_params.get("uddg", [href])[0])
+            except Exception:
+                url = href
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        title = _clean(title_html)
+        if not title:
+            continue
+        snippet = (
+            _clean(snippets[index]) if index < len(snippets) else ""
+        )
+        results.append(
+            {
+                "title": _clip(title, 200),
+                "url": url,
+                "snippet": _clip(snippet, WEB_SEARCH_RESULT_SNIPPET_CHARS),
+            }
+        )
+        if len(results) >= limit:
+            break
+    if not results:
+        return {
+            "success": False,
+            "error": "搜索无结果（DuckDuckGo HTML 端点可能被限流，稍后重试）",
+        }
+    return {"success": True, "results": results, "backend": "duckduckgo"}

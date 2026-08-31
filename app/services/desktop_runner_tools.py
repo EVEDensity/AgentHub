@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -608,6 +609,53 @@ def _build_lint_check_executor(
     return execute
 
 
+# ── web_search (north-star M1): bounded public-web research tool ──────────
+
+WEB_SEARCH_TOOL_NAME = "web_search"
+WEB_SEARCH_ENV = "AGENTHUB_DESKTOP_WEB_SEARCH"
+
+
+def web_search_enabled() -> bool:
+    """Whether the desktop profile exposes the public-web search tool.
+
+    Defaults to off so packaged desktop deployments keep the historical
+    bounded whitelist; the developer CLI opts in explicitly.
+    """
+    return os.environ.get(WEB_SEARCH_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def _validate_web_search_arguments(
+    arguments: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if not isinstance(arguments, Mapping):
+        raise TypeError("tool arguments must be an object")
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    max_results = arguments.get("max_results", 5)
+    if isinstance(max_results, bool) or not isinstance(max_results, (int, float)):
+        raise ValueError("max_results must be a number")
+    return {"query": query.strip(), "max_results": int(max_results)}
+
+
+def _build_web_search_executor(
+    max_result_chars: int,
+) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
+    from app.services.tools.network_tools import web_search_handler
+
+    async def execute(arguments: Mapping[str, Any]) -> str:
+        query = str(arguments.get("query") or "")
+        try:
+            max_results = int(arguments.get("max_results", 5))
+        except (TypeError, ValueError):
+            max_results = 5
+        outcome = await web_search_handler(query, max_results=max_results)
+        rendered = _render_result(outcome, max_result_chars)
+        return rendered
+
+    return execute
+
+
 def build_desktop_runner_tools(
     workspace_root: Path,
     *,
@@ -695,6 +743,33 @@ def build_desktop_runner_tools(
             handler=_build_lint_check_executor(resolved_root, max_result_chars),
         )
     )
+    if web_search_enabled():
+        tools.append(
+            FunctionTool(
+                name=WEB_SEARCH_TOOL_NAME,
+                description=(
+                    "搜索公开网络并返回带链接的结果列表（标题/URL/摘要），"
+                    "用于查文档、找库用法、调研类任务。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "搜索关键词",
+                        },
+                        "max_results": {
+                            "type": "number",
+                            "description": "返回结果数（1-8，默认 5）",
+                            "default": 5,
+                        },
+                    },
+                    "required": ["query"],
+                },
+                validate_arguments=_validate_web_search_arguments,
+                handler=_build_web_search_executor(max_result_chars),
+            )
+        )
     if model_factory is not None:
         config = subtask_config or DelegateSubtaskConfig()
         tools.append(
@@ -741,6 +816,9 @@ __all__ = [
     "DESKTOP_CODE_EXECUTE_MAX_TIMEOUT",
     "DESKTOP_TOOL_RESULT_MAX_CHARS",
     "LINT_CHECK_TOOL_NAME",
+    "WEB_SEARCH_ENV",
+    "WEB_SEARCH_TOOL_NAME",
     "DelegateSubtaskConfig",
     "build_desktop_runner_tools",
+    "web_search_enabled",
 ]

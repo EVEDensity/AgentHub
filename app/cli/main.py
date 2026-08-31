@@ -105,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
             default=DEFAULT_MISSION_TIMEOUT,
             help="wall-clock wait before giving up (default: %(default)s)",
         )
+        run_parser.add_argument(
+            "--no-web-search",
+            action="store_true",
+            help="disable the public-web search tool for this run",
+        )
         if json_flag:
             run_parser.add_argument(
                 "--json",
@@ -221,6 +226,7 @@ def cmd_run(
             mission_timeout=args.mission_timeout,
             project_instructions=project_instructions,
             resume_mission_id=resume_mission_id,
+            web_search=not args.no_web_search,
             on_status=_emit_status,
         )
     except (RuntimeError, OSError) as exc:
