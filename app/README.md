@@ -5,6 +5,14 @@ boundary. It is not the permanent home of every Agent feature.
 
 ## Ownership
 
+- `cli/`: developer CLI (`python -m app.cli`) — boots an isolated
+  SQLite-backed Mission Control subprocess with the desktop local runner
+  and drives one Mission over the versioned HTTP API. `run` prints a
+  human report, `exec --json` emits a structured result whose exit code
+  maps the Mission terminal status (CI contract). The model API key is
+  env-only and never written to disk; without a key the CLI falls back
+  to the mock provider. Covered by `tests/cli/` (unit + E2E gated by
+  `AGENTHUB_CLI_E2E=1`).
 - `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
   transition models.
 - `repositories/`: persistence and transaction boundaries.

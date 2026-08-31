@@ -42,17 +42,17 @@
 
 ## 2. 现状评估（2026-08-31，诚实表）
 
-| 项 | 状态 | 证据 |
-|---|---|---|
-| Mission / WorkUnit / Artifact / Evidence / Decision | ✅ 已落地 | `app/domain`、`app/repositories/mission_repository.py`、`migrations/` |
-| A2A 出站 + 入站 | ✅ 已落地（生产路径） | `a2a_adapter_service.py`、inbound mapping 迁移、`A2A_DISPATCH_MODE=runner` cutover + 单测 |
-| 独立 verifier（执行者不能自证） | ✅ 已落地 | ADR-0004/0059/0060、`verifier_service/` |
-| 桌面单 exe 开箱即用 | ❌ 未兑现 | 打包流水线绿，但签名发布依赖 5 个 secrets；无公开 Release 产物 |
-| CLI / TUI 入口 | ❌ 未开始 | 仓库无 `cli`/`tui` 目录 |
-| headless exec / PR 审查 Action | ❌ 未开始 | 仅有内部 benchmark 门禁（`benchmarks/gates.py`） |
-| 公开 agent 能力基准（Terminal-Bench 等） | ❌ 未接入 | benchmarks 仅覆盖 P95/召回/tokenizer 精度 |
-| 分层项目指令 / skills 生态 | ⚠️ 仅有根 `AGENTS.md` | 无 CLAUDE.md 层级、无 skills 打包机制 |
-| Web 搜索 / 浏览器工具 | ❌ 缺失 | 工具集为"有界安全"哲学，无 web/浏览器能力 |
+| 项                                                   | 状态                 | 证据                                                                                  |
+| --------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------- |
+| Mission / WorkUnit / Artifact / Evidence / Decision | ✅ 已落地              | `app/domain`、`app/repositories/mission_repository.py`、`migrations/`                 |
+| A2A 出站 + 入站                                         | ✅ 已落地（生产路径）        | `a2a_adapter_service.py`、inbound mapping 迁移、`A2A_DISPATCH_MODE=runner` cutover + 单测 |
+| 独立 verifier（执行者不能自证）                                | ✅ 已落地              | ADR-0004/0059/0060、`verifier_service/`                                              |
+| 桌面单 exe 开箱即用                                        | ❌ 未兑现              | 打包流水线绿，但签名发布依赖 5 个 secrets；无公开 Release 产物                                           |
+| CLI / TUI 入口                                        | ✅ CLI 已实现（M0）；TUI 未开始 | `app/cli/`（`python -m app.cli`）、`tests/cli/`                                |
+| headless exec / PR 审查 Action                        | ⚠️ exec 已实现并本地验证；CI workflow 未接线 | `app/cli` exec --json + 退出码契约；GitHub Actions 接入属 M1                          |
+| 公开 agent 能力基准（Terminal-Bench 等）                     | ❌ 未接入              | benchmarks 仅覆盖 P95/召回/tokenizer 精度                                                  |
+| 分层项目指令 / skills 生态                                  | ⚠️ 仅有根 `AGENTS.md` | 无 CLAUDE.md 层级、无 skills 打包机制                                                        |
+| Web 搜索 / 浏览器工具                                      | ❌ 缺失               | 工具集为"有界安全"哲学，无 web/浏览器能力                                                            |
 
 > 注：`docs/index.md` 仍把 A2A 标注为"原型"，属文档滞后，与代码不一致，
 > 应为"已实现"。
@@ -62,15 +62,15 @@
 对比基准（2026 年热门 agent：OpenCode、Claude Code、Codex CLI、Gemini CLI、
 Aider、Cline、Goose）：
 
-| 维度 | AgentHub 现状 | 热门 agent | 对开发者的影响 |
-|---|---|---|---|
-| 第一触点 | 仅 Web UI + 未发布的桌面包 | 终端优先、一行安装 | 试用/获客门槛极高 |
-| 快速上手 | 需 Python/Docker/环境变量 | 开箱即用，有免费层 | 验证成本趋零 vs 手术级 |
-| headless/CI | 内部门禁，无对外 PR Action | `exec`/`-p` + GitHub Action | 无法嵌入日常 git 流程 |
-| 项目指令生态 | 单一 AGENTS.md | 分层 AGENTS.md + skills | 上下文复用与一致性缺失 |
-| 公开基准分数 | 无 | Terminal-Bench 83.4%(Codex) | 无法量化证明"能干活" |
-| 记忆架构 | L0-L2 较重，L3 未落地 | SQLite 轻量记忆 | 人力成本 vs 完成度 |
-| 工具面 | 文件/执行/lint 有界 | +web 搜索/浏览器操作 | 调研类任务不可用 |
+| 维度          | AgentHub 现状          | 热门 agent                    | 对开发者的影响       |
+| ----------- | -------------------- | --------------------------- | ------------- |
+| 第一触点        | 仅 Web UI + 未发布的桌面包   | 终端优先、一行安装                   | 试用/获客门槛极高     |
+| 快速上手        | 需 Python/Docker/环境变量 | 开箱即用，有免费层                   | 验证成本趋零 vs 手术级 |
+| headless/CI | 内部门禁，无对外 PR Action   | `exec`/`-p` + GitHub Action | 无法嵌入日常 git 流程 |
+| 项目指令生态      | 单一 AGENTS.md         | 分层 AGENTS.md + skills       | 上下文复用与一致性缺失   |
+| 公开基准分数      | 无                    | Terminal-Bench 83.4%(Codex) | 无法量化证明"能干活"   |
+| 记忆架构        | L0-L2 较重，L3 未落地      | SQLite 轻量记忆                 | 人力成本 vs 完成度   |
+| 工具面         | 文件/执行/lint 有界        | +web 搜索/浏览器操作               | 调研类任务不可用      |
 
 **被诟病的行业通病与本项目态势**：
 
@@ -97,7 +97,7 @@ Aider、Cline、Goose）：
 
 ## 5. 里程碑（每个 M 必须产出可运行产物，不空转）
 
-### M0 — CLI 最小闭环（当前阶段，最先实施）
+### M0 — CLI 最小闭环（核心已交付 2026-08-31，CI 接线余项）
 交付：
 - `agenthub init`：初始化本地项目目录（sqlite + 工作区 + 配置）。
 - `agenthub run "<objective>" [--model ...]`：一次对话完成一个任务，
@@ -111,44 +111,75 @@ Aider、Cline、Goose）：
 - `agenthub run "修复 XXX 并 VERIFY"` 在全新目录可完成闭环，
   且**不要求预装 Docker/PG**。
 - `agenthub exec --json` 在 CI（GitHub Actions）可跑通并正确返回退出码。
-- Mission 的 verifier 门禁路径在 CLI 生效：执行代理无法伪造 PASS。
+- Mission 的 verifier 门禁在 CLI 生效：执行代理无法伪造 PASS。
+
+> **状态（2026-08-31）**：核心三条已实现并本地验证。入口为
+> `python -m app.cli`（`app/cli/`，见 [app/README.md](../../app/README.md)）。
+> 证据：
+> - 无 key 开箱（mock 回退）与 `init/run/exec` 三个子命令：
+>   `tests/cli/test_cli_main.py`（单元）；
+> - 端到端闭环 + **诚实失败**（mock 注册 artifact 字节验证通过，但
+>   `VERIFY:` 命令一票否决 → FAILED → 退出码 1）：
+>   `tests/cli/test_cli_e2e.py`（`AGENTHUB_CLI_E2E=1` 门控）；
+> - 修复了 `_PROJECT_ROOT` 越出仓库根导致 CLI 触碰工作区外路径的缺陷
+>   （`tests/core/test_project_root.py`）。
+> 余项：GitHub Actions workflow 中跑 `exec --json` 冒烟（并入 M1），
+> 以及 `npm i -g` 打包分发（按计划属于 M3）。
+> 用法注意：`VERIFY: <命令>` 需独占一行，才会被提取为验收命令。
 
 ### M1 — CLI 完善 + 能力补全
-- 分层项目指令：读取 `AGENTS.md`（根 → 项目 → 子目录合并）。
-- skills 加载：复用 `plugins/` 机制做可分发 skill 包。
-- Web 搜索工具补入工具集，补齐调研类任务。
-- 会话持久化与 `--resume`。
-验收标准：M0 的 3 条验收继续成立，且新增能力有对应单测。
+
+* 分层项目指令：读取 `AGENTS.md`（根 → 项目 → 子目录合并）。
+
+* skills 加载：复用 `plugins/` 机制做可分发 skill 包。
+
+* Web 搜索工具补入工具集，补齐调研类任务。
+
+* 会话持久化与 `--resume`。
+  验收标准：M0 的 3 条验收继续成立，且新增能力有对应单测。
 
 ### M2 — TUI（后续）
-- 全屏 TUI：斜杠命令、diff 分屏查看/编辑、会话列表/resume、实时流式输出。
-- 复用前端组件/状态约定（见优化路线图 D3：编排下沉到 `lib/` hooks）。
-- 框架候选：Rust ratatui（与 desktop sidecar 同栈）或 TS ink；实现时在
+
+* 全屏 TUI：斜杠命令、diff 分屏查看/编辑、会话列表/resume、实时流式输出。
+
+* 复用前端组件/状态约定（见优化路线图 D3：编排下沉到 `lib/` hooks）。
+
+* 框架候选：Rust ratatui（与 desktop sidecar 同栈）或 TS ink；实现时在
   本文件记录 ADR 候选。
-验收标准：TUI 能完成 M1 的全部交互，且状态与 WEB/CLI 同源（同一 Mission）。
+  验收标准：TUI 能完成 M1 的全部交互，且状态与 WEB/CLI 同源（同一 Mission）。
 
 ### M3 — 生态与发布
-- `agenthub` 打包：`npm i -g` 分发（二进制内置，零运行时依赖）。
-- PR 审查 Action：`agenthub review-pr` / GitHub Action，接入现有 verifier。
-- 公开基准分数：把 benchmark cases 对接到 Terminal-Bench 类评测，给出可引用
+
+* `agenthub` 打包：`npm i -g` 分发（二进制内置，零运行时依赖）。
+
+* PR 审查 Action：`agenthub review-pr` / GitHub Action，接入现有 verifier。
+
+* 公开基准分数：把 benchmark cases 对接到 Terminal-Bench 类评测，给出可引用
   分数（诚实标注模型与日期）。
-- 桌面签名发布解阻塞：将 5 个签名 secrets 流程化提上日程；mac 不在当前
+
+* 桌面签名发布解阻塞：将 5 个签名 secrets 流程化提上日程；mac 不在当前
   范围（明确暂不投入）。
-验收标准：README 可声明"一行安装 + 有公开分数 + PR 审查可用"。
+  验收标准：README 可声明"一行安装 + 有公开分数 + PR 审查可用"。
 
 ## 6. 硬性停止条件
 
-- 任何里程碑不得以"降低验证标准"换取完成：VERIFY 门禁、Evidence、
+* 任何里程碑不得以"降低验证标准"换取完成：VERIFY 门禁、Evidence、
   审计回放必须保持。
-- 不允许在 `agenthub` 路径里出现 demo/synthetic 成功。
-- 涉及执行边界、状态模型、部署归属的变更必须新增/更新 ADR（文档治理
+
+* 不允许在 `agenthub` 路径里出现 demo/synthetic 成功。
+
+* 涉及执行边界、状态模型、部署归属的变更必须新增/更新 ADR（文档治理
   标准 §Review requirements）。
-- 北极星文档自身的每个能力声明必须链接到实现或测试，否则降级为
+
+* 北极星文档自身的每个能力声明必须链接到实现或测试，否则降级为
   目标/原型表述（同 `what-is-agenthub.md` 的能力标级约定）。
 
 ## 7. 后续维护约定
 
-- 达成一个 M 后：更新本文档状态、补验收证据（测试链接）、刷新 §2 现状表。
-- 每次发布评审：检查 §3 缺陷表是否有已解决项，同步删除。
-- 方向争议时：本文档优先于旧 roadmap 中未更新的产品表述，但不得越过
+* 达成一个 M 后：更新本文档状态、补验收证据（测试链接）、刷新 §2 现状表。
+
+* 每次发布评审：检查 §3 缺陷表是否有已解决项，同步删除。
+
+* 方向争议时：本文档优先于旧 roadmap 中未更新的产品表述，但不得越过
   tests/contracts/ADR。
+
