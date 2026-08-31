@@ -39,7 +39,7 @@ pub struct StackInfo {
 
 const PIN_FILE: &str = ".pinned";
 
-fn version_dir_name_of(version: &str, commit: &str) -> String {
+pub fn version_dir_name_of(version: &str, commit: &str) -> String {
     let raw = if commit.is_empty() { version.to_owned() } else { format!("{version}-{commit}") };
     raw.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '_' }).collect()
 }
@@ -57,6 +57,11 @@ fn read_stack_manifest(path: &PathBuf) -> Option<StackManifest> {
         commit: value.get("commit")?.as_str().unwrap_or_default().to_owned(),
         generated_at: value.get("generatedAt")?.as_str()?.to_owned(),
     })
+}
+
+/// Public re-export for the bootstrap module (manifest copy reads).
+pub fn read_stack_manifest_public(path: &PathBuf) -> Option<StackManifest> {
+    read_stack_manifest(path)
 }
 
 fn copy_dir_recursive(src: &PathBuf, dst: &PathBuf) -> std::io::Result<()> {

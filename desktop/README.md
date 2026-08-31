@@ -50,6 +50,17 @@ still targets the first instance (single-instance limitation).
 - `updater-rollback-smoke.ps1`: verifies signed updater metadata and rehearses
   restoring the previous ready sidecar after a failed candidate launch.
 - `ui/`: dependency-free shell UI served by the desktop application.
+- `src-tauri/src/bootstrap.rs`: stack bootstrap downloader (north-star
+  M3). On first run the shell can fetch a runtime stack from a release
+  source (`stack-manifest.json`, schemaVersion 1) into
+  `%LOCALAPPDATA%\AgentHub\stacks\<version>-<commit>\` with per-file
+  sha256 verification, `*.part` staging, resume, and an atomic
+  `.pinned` switch — a failed install never disturbs the current pin.
+  The Tauri command `bootstrap_stack` runs it on the async runtime
+  pool and streams progress over the `bootstrap-progress` channel.
+  The same manifest format is produced by
+  `scripts/make_stack_manifest.py` and consumed by the developer CLI
+  (`agenthub upgrade`), so desktop and CLI bootstrap identically.
 
 ## Development
 

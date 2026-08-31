@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bootstrap;
 mod config;
 mod probe;
 mod protocol;
@@ -181,6 +182,53 @@ fn clear_stack_pin(supervisor: State<'_, ServiceSupervisor>) -> Result<String, S
     supervisor.clear_stack_pin()
 }
 
+/// Data directory used by the supervisor (`%LOCALAPPDATA%\AgentHub`).
+/// Kept in one place so the bootstrap downloader writes stacks exactly
+/// where `ServiceSupervisor` discovers them.
+fn desktop_data_dir() -> std::path::PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("AgentHub")
+}
+
+/// Download and verify a runtime stack from a release source, then pin
+/// it (north-star M3, §4.0 baseline). Blocking IO runs on the async
+/// runtime pool via `spawn_blocking` so the webview never freezes.
+/// Progress events stream to the frontend through the
+/// `bootstrap-progress` channel.
+#[tauri::command]
+async fn bootstrap_stack(
+    app: tauri::AppHandle,
+    manifest_url: String,
+    base_url: Option<String>,
+) -> Result<bootstrap::BootstrapReport, String> {
+    let data_dir = desktop_data_dir();
+    let base = base_url.unwrap_or_else(|| {
+        manifest_url
+            .rsplit('/')
+            .skip(1)
+            .collect::<Vec<_>>()
+            .join("/")
+    });
+    let manifest_url_clone = manifest_url.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let channel = app.channel::<bootstrap::ProgressEvent>("bootstrap-progress");
+        bootstrap::bootstrap_stack(
+            &manifest_url_clone,
+            &data_dir,
+            &base,
+            &mut |event| {
+                let _ = channel.send(event);
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    Ok(report)
+}
+
 /// Let the user pick the workspace (project) folder and persist the binding.
 /// The binding takes effect on the next mission-control start (app restart).
 #[tauri::command]
@@ -269,6 +317,7 @@ fn main() {
             stack_info,
             pin_stack,
             clear_stack_pin,
+            bootstrap_stack,
             local_service_endpoint,
             frontend_endpoint,
             open_control_plane,

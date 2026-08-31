@@ -236,17 +236,28 @@ Aider、Cline、Goose）：
 ### M3 — 生态与发布
 
 * **桌面引导下载器（4.0 产品形态基线的落地）**：
-  ✅ **CLI 引导核心已交付（2026-08-31）**：`app/cli/stack_installer.py`
-  + `agenthub upgrade <manifest-url>` / `agenthub stacks` ——
-  栈清单（schemaVersion=1，version/commit/files[sha256,size]）严格校验
-  （拒绝越界路径/坏尺寸/错 schema）；逐文件 sha256 校验、
-  `*.part` 暂存后原子改名、已验证文件跳过实现断点续传；清单副本落
-  `stacks/<version>-<commit>/local-services/stack-manifest.json`（与
-  `services.rs` 的发现约定完全一致）；`.pinned` 经 tmp+rename 原子切换；
-  **安装失败不动当前 pin**，旧栈保留可回滚。网络层可注入，
-  `tests/cli/test_stack_installer.py`（15 用例离线全覆盖）。
-  余项（M3 后续）：桌面 exe 引导器 UI 集成（Tauri 侧调用同一下载核心
-  或经由 CLI）、发布源（GitHub Releases）托管真实栈产物。
+  ✅ **三层交付完成（2026-08-31）**：
+  1. **CLI 核心**：`app/cli/stack_installer.py` + `agenthub upgrade
+     <manifest-url>` / `agenthub stacks` —— 清单严格校验、逐文件
+     sha256、`*.part` 暂存、断点续传、`.pinned` 原子切换、失败不动
+     当前 pin、旧栈可回滚（`tests/cli/test_stack_installer.py`，
+     15 用例 + 本地 HTTP 发布源冒烟）。
+  2. **桌面 Rust 模块**：`desktop/src-tauri/src/bootstrap.rs` —— Python
+     契约的 Rust 镜像（同一清单 schema、同一 stacks 布局、同一
+     `.pinned` 约定），复用 `services.rs` 的
+     `version_dir_name_of`/`StackManifest`；新增 Tauri 命令
+     `bootstrap_stack`（manifestUrl/baseUrl → BootstrapReport），
+     阻塞 IO 走 `spawn_blocking`，进度经 `bootstrap-progress` 通道
+     流式发给前端。含 Rust 单测（解析/校验/原子写/pin）。
+  3. **发布源**：`scripts/make_stack_manifest.py`（生成 schemaVersion=1
+     清单，sha256+size，排除 pin/旧清单）+ `desktop-windows.yml` 新增
+     `publish-stack` job（desktop-v* tag 触发：组装栈产物 → 生成清单
+     → 附到 GitHub Release，资产名保留 `local-services/` 前缀使
+     downloader 的 base_url 直接解析）。测试
+     `tests/scripts/test_make_stack_manifest.py`（含生成物被 Python
+     安装器接受的闭环验证）。
+  余项：桌面 UI 首启向导（调用 `bootstrap_stack` 命令的界面）、
+  打包产物扩展为完整服务栈（当前以 runtime sidecar 起步）。
 
 * `agenthub` 打包：`npm i -g` 分发（二进制内置，零运行时依赖）。
 
