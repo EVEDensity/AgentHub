@@ -667,6 +667,51 @@ def _build_web_search_executor(
     return execute
 
 
+WEB_FETCH_TOOL_NAME = "web_fetch"
+
+
+def _validate_web_fetch_arguments(
+    arguments: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if not isinstance(arguments, Mapping):
+        raise TypeError("tool arguments must be an object")
+    url = arguments.get("url")
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError("url must be a non-empty string")
+    max_chars = arguments.get("max_chars")
+    if max_chars is not None:
+        if isinstance(max_chars, bool) or not isinstance(max_chars, (int, float)):
+            raise ValueError("max_chars must be a number")
+        return {"url": url.strip(), "max_chars": int(max_chars)}
+    return {"url": url.strip()}
+
+
+def _build_web_fetch_executor(
+    max_result_chars: int,
+) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
+    from app.services.tools.network_tools import web_fetch_handler
+
+    async def execute(arguments: Mapping[str, Any]) -> str:
+        url = str(arguments.get("url") or "")
+        try:
+            max_chars = int(arguments.get("max_chars") or 0)
+        except (TypeError, ValueError):
+            max_chars = 0
+        outcome = (
+            await web_fetch_handler(url, max_chars=max_chars)
+            if max_chars > 0
+            else await web_fetch_handler(url)
+        )
+        rendered_outcome = (
+            outcome
+            if outcome.get("success") is False
+            else {"success": True, "result": outcome.get("result", {})}
+        )
+        return _render_result(rendered_outcome, max_result_chars)
+
+    return execute
+
+
 # ── skill tools (north-star M1): read-only workspace skill discovery ──────
 #
 # Reuses the SKILL.md parser from app.services.tools.skill_tools so the
@@ -921,6 +966,32 @@ def build_desktop_runner_tools(
                 },
                 validate_arguments=_validate_web_search_arguments,
                 handler=_build_web_search_executor(max_result_chars),
+            )
+        )
+        tools.append(
+            FunctionTool(
+                name=WEB_FETCH_TOOL_NAME,
+                description=(
+                    "抓取一个公开网页并返回可读正文（HTML 转纯文本，含标题），"
+                    "用于读取搜索结果中的具体页面内容。"
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "要抓取的公开 URL",
+                        },
+                        "max_chars": {
+                            "type": "number",
+                            "description": "正文最多返回字符数（200-20000，默认 20000）",
+                            "default": 20000,
+                        },
+                    },
+                    "required": ["url"],
+                },
+                validate_arguments=_validate_web_fetch_arguments,
+                handler=_build_web_fetch_executor(max_result_chars),
             )
         )
     tools.extend(

@@ -371,3 +371,124 @@ async def _ddg_html_search(query: str, limit: int) -> dict[str, Any]:
             "error": "搜索无结果（DuckDuckGo HTML 端点可能被限流，稍后重试）",
         }
     return {"success": True, "results": results, "backend": "duckduckgo"}
+
+
+# ── web_fetch (north-star §2 / I-6a) ──────────────────────────────────────
+#
+# The browser-side complement to web_search: instead of a result list,
+# it retrieves one public URL and extracts readable text (HTML →
+# stripped text with title; plain text / JSON passed through). The
+# capability boundary is the same as web_search — the same SSRF rules
+# as http_request, the same desktop gatekeeping switch — so enabling
+# web tools exposes both together.
+
+WEB_FETCH_TIMEOUT = 20  # seconds
+WEB_FETCH_MAX_CHARS = 20_000
+WEB_FETCH_MAX_REDIRECTS = 5
+
+
+def _html_to_text(html: str) -> tuple[str, str]:
+    """Extract (title, readable text) from an HTML page, dependency-free.
+
+    Best-effort: drops script/style blocks, tags, and collapses
+    whitespace. Rendering JavaScript or visual structure is out of
+    scope — this is a reader, not a browser engine.
+    """
+    import re as _re
+
+    entity_map = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "#39": "'", "nbsp": " "}
+
+    def _decode(text: str) -> str:
+        return _re.sub(
+            r"&([a-z0-9#]+);", lambda m: entity_map.get(m.group(1), m.group(0)), text
+        )
+
+    title = ""
+    title_match = _re.search(r"<title[^>]*>(.*?)</title>", html, _re.DOTALL | _re.IGNORECASE)
+    if title_match:
+        title = _clip(_decode(_re.sub(r"<[^>]+>", "", title_match.group(1))), 300)
+
+    text = _re.sub(
+        r"<(script|style|noscript|svg|head)[^>]*>.*?</\1>",
+        " ",
+        html,
+        flags=_re.DOTALL | _re.IGNORECASE,
+    )
+    # Block-level tags become separators so words from adjacent
+    # elements do not run together.
+    text = _re.sub(r"</?(p|div|br|li|tr|h[1-6]|section|article|blockquote)[^>]*>", "\n", text, flags=_re.IGNORECASE)
+    text = _re.sub(r"<[^>]+>", " ", text)
+    text = _decode(text)
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return title, "\n".join(line for line in lines if line)
+
+
+async def web_fetch_handler(url: str, max_chars: int = WEB_FETCH_MAX_CHARS) -> dict[str, Any]:
+    """Fetch one public URL and return readable text content.
+
+    Gated by the same desktop web-tools switch as web_search. HTML
+    pages are converted to stripped text (title + body); plain text and
+    JSON pass through. SSRF rules are identical to http_request.
+    Failures return ``{"success": False, "error": ...}`` — never a
+    synthetic document.
+    """
+    import httpx
+
+    url = (url or "").strip()
+    if not url:
+        return {"success": False, "error": "URL 不能为空"}
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    allowed, reason = _is_host_allowed(url)
+    if not allowed:
+        return {"success": False, "error": reason}
+
+    limit = min(max(int(max_chars), 200), WEB_FETCH_MAX_CHARS)
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=WEB_FETCH_TIMEOUT,
+            follow_redirects=True,
+            max_redirects=WEB_FETCH_MAX_REDIRECTS,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AgentHub/4.0)"},
+        ) as client:
+            response = await client.get(url)
+    except httpx.TimeoutException:
+        return {"success": False, "error": f"抓取超时（{WEB_FETCH_TIMEOUT}秒）"}
+    except httpx.TooManyRedirects:
+        return {"success": False, "error": f"重定向次数超过 {WEB_FETCH_MAX_REDIRECTS} 次"}
+    except Exception as exc:
+        logger.warning("web_fetch failed: %s", exc)
+        return {"success": False, "error": f"抓取失败: {exc}"}
+
+    if response.status_code >= 400:
+        return {
+            "success": False,
+            "error": f"目标返回 HTTP {response.status_code}",
+            "metadata": {"url": url, "status_code": response.status_code},
+        }
+
+    content_type = response.headers.get("content-type", "").lower()
+    raw = response.text
+    if "html" in content_type:
+        title, text = _html_to_text(raw)
+        content_kind = "html"
+    else:
+        title, text = "", raw
+        content_kind = "json" if "json" in content_type else "text"
+
+    truncated = len(text) > limit
+    if truncated:
+        text = text[:limit]
+
+    result: dict[str, Any] = {
+        "url": str(response.url),
+        "content_type": content_type,
+        "kind": content_kind,
+        "content": text,
+        "truncated": truncated,
+    }
+    if title:
+        result["title"] = title
+    return {"success": True, "result": result}
