@@ -13,6 +13,8 @@ Slash commands (typed instead of an objective):
     /missions      list recorded missions
     /resume <id>   chain a specific prior mission into the next turn
     /unresume      clear the chained context
+    /compact       fold the session chain into one compact context document
+    /replay        replay every mission of this session (objective/status/summary)
     /new           start a fresh conversation (clears the chain)
     /status        show current session settings
     /quit          exit
@@ -33,6 +35,9 @@ from app.cli.runtime import (
     DEFAULT_MISSION_TIMEOUT,
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
     CliModelSettings,
+    MissionControlClient,
+    MissionControlProcess,
+    build_compact_context,
     collect_agents_md_layers,
     execute_objective,
     list_recent_missions,
@@ -52,6 +57,8 @@ _HELP_LINES = (
     "/missions      列出本地历史任务",
     "/resume <id>   将指定任务链入下一轮上下文",
     "/unresume      清除链式上下文",
+    "/compact       将会话任务链压缩为一份上下文文档（下一轮注入摘要而非全链）",
+    "/replay        回放本会话每个任务（目标/状态/耗时/产物）",
     "/new           开始全新会话（清除链式上下文）",
     "/status        显示当前会话设置",
     "/quit          退出",
@@ -64,6 +71,8 @@ class ChatSessionState:
 
     chained_mission_id: str | None = None
     session_missions: list[str] = field(default_factory=list)
+    session_records: list[dict[str, Any]] = field(default_factory=list)
+    compact_context: str | None = None
 
 
 def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
@@ -92,6 +101,83 @@ def _print_result_compact(result: Any, emit: Callable[..., None]) -> None:
             else ""
         )
         emit(f"  files: {preview}{more}")
+
+
+def _record_session_mission(session: ChatSessionState, result: Any) -> None:
+    """Keep a replayable digest of this turn's mission (I-6c /replay)."""
+    session.session_records.append(
+        {
+            "mission_id": result.mission_id,
+            "objective_first_line": (
+                (result.objective or "").strip().splitlines() or [""]  # type: ignore[attr-defined]
+            )[0][:120],
+            "status": result.status,
+            "wall_seconds": result.wall_seconds,
+            "artifacts": len(result.artifacts),
+            "workspace_files": list(result.workspace_files),
+        }
+    )
+
+
+def _compact_session_context(
+    *,
+    settings: CliModelSettings,
+    workspace_root: Path,
+    directory: Path,
+    session: ChatSessionState,
+    emit: Callable[..., None],
+) -> None:
+    """Fold the session chain into one compact context document."""
+    if not session.session_missions:
+        emit("本会话尚无任务，无需压缩（先运行一个任务）")
+        return
+    try:
+        with MissionControlProcess(
+            state_dir=directory,
+            workspace_root=workspace_root,
+            model=settings,
+        ) as process:
+            with MissionControlClient(process.base_url) as client:
+                client.login()
+                document = build_compact_context(
+                    client, list(session.session_missions)
+                )
+    except (RuntimeError, OSError) as exc:
+        emit(f"error: {exc}")
+        return
+    if not document.strip():
+        emit("压缩结果为空（本地任务记录不可读），链式上下文保持不变")
+        return
+    session.compact_context = document
+    emit(
+        f"已压缩 {len(session.session_missions)} 个任务为一份上下文文档"
+        f"（{len(document)} 字符）；下一轮将注入该摘要而非全链。"
+        "继续运行新任务后链会自动恢复逐轮链入。"
+    )
+
+
+def _replay_session(session: ChatSessionState, emit: Callable[..., None]) -> None:
+    """Replay every mission of this session from recorded digests."""
+    if not session.session_records:
+        emit("本会话尚无任务（回放只覆盖本会话内运行过的任务）")
+        return
+    emit(f"本会话共 {len(session.session_records)} 个任务：")
+    for index, record in enumerate(session.session_records, start=1):
+        emit(
+            f"  {index}. {record['mission_id']}  {record['status']}  "
+            f"{record['wall_seconds']:.1f}s  artifacts {record['artifacts']}"
+        )
+        emit(f"     目标: {record['objective_first_line'] or '（空）'}")
+        if record["workspace_files"]:
+            preview = ", ".join(record["workspace_files"][:6])
+            more = (
+                f" +{len(record['workspace_files']) - 6} more"
+                if len(record["workspace_files"]) > 6
+                else ""
+            )
+            emit(f"     文件: {preview}{more}")
+    if session.compact_context:
+        emit("（当前处于 /compact 压缩上下文模式）")
 
 
 def _run_slash_command(
@@ -125,11 +211,25 @@ def _run_slash_command(
         return True
     if name in ("/new", "/unresume"):
         session.chained_mission_id = None
+        if name == "/new":
+            session.compact_context = None
         emit(
             "已清除链式上下文，下一轮从零开始"
             if name == "/new"
             else "已清除链式上下文"
         )
+        return True
+    if name == "/compact":
+        _compact_session_context(
+            settings=settings,
+            workspace_root=workspace_root,
+            directory=directory,
+            session=session,
+            emit=emit,
+        )
+        return True
+    if name == "/replay":
+        _replay_session(session, emit)
         return True
     if name == "/resume":
         if not args:
@@ -232,6 +332,7 @@ def chat_session(
             continue
 
         emit(f"… 运行任务（{settings.provider}/{settings.model}）")
+        compact_context = session.compact_context
         try:
             result = execute_objective(
                 objective=objective,
@@ -244,6 +345,7 @@ def chat_session(
                 project_instructions=project_instructions,
                 resume_mission_id=session.chained_mission_id or "",
                 web_search=not no_web_search,
+                context_text=compact_context or "",
                 on_status=lambda status: emit(f"  [status] {status}"),
             )
         except (RuntimeError, OSError) as exc:
@@ -251,8 +353,12 @@ def chat_session(
             continue
         _print_result_compact(result, emit)
         session.session_missions.append(result.mission_id)
-        # Chain the finished mission so the next turn continues the story.
+        _record_session_mission(session, result)
+        # Chain the finished mission so the next turn continues the
+        # story. A compacted context is one-shot: after this turn the
+        # chain (which now includes this mission) takes over again.
         session.chained_mission_id = result.mission_id
+        session.compact_context = None
         emit()
 
 

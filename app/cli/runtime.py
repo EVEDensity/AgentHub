@@ -620,6 +620,62 @@ def build_resume_context(client: MissionControlClient, mission_id: str) -> str:
     return "\n".join(lines)
 
 
+def _mission_digest(client: MissionControlClient, mission_id: str) -> str:
+    """One mission's (id, status, objective, summary) digest block."""
+    try:
+        mission = client.get_mission(mission_id)
+    except httpx.HTTPError:
+        return f"- {mission_id}：（记录不可读）"
+    objective = " ".join(
+        str(mission.get("objective") or "").split()
+    )[:160]
+    status = str(mission.get("status") or "UNKNOWN")
+    summary = ""
+    try:
+        artifacts = client.artifacts(mission_id)
+    except httpx.HTTPError:
+        artifacts = []
+    if artifacts:
+        address = str(artifacts[0].get("contentAddress") or "")
+        digest = address.split("/")[-1]
+        for candidate in _artifact_search_roots():
+            candidate_path = candidate / digest[:2] / digest
+            if candidate_path.is_file():
+                try:
+                    summary = (
+                        candidate_path.read_text(encoding="utf-8").strip()[:600]
+                    )
+                except (OSError, UnicodeDecodeError):
+                    summary = ""
+                break
+    block = f"- {mission_id}（{status}）：{objective or '（无目标记录）'}"
+    if summary:
+        block += f"\n  总结：{summary}"
+    return block
+
+
+def build_compact_context(
+    client: MissionControlClient, mission_ids: list[str]
+) -> str:
+    """Compact a chain of missions into one structured context document.
+
+    I-6c interactive compact: instead of chaining every prior mission
+    turn by turn, one document carries each mission's objective,
+    status, and deposited summary. Everything comes from the local
+    mission records — compacting never invents history.
+    """
+    valid_ids = [mid for mid in mission_ids if mid]
+    if not valid_ids:
+        return ""
+    blocks = [_mission_digest(client, mid) for mid in valid_ids]
+    lines = [
+        "以下是本会话先前任务的压缩上下文（/compact 生成，"
+        "目标/状态/总结均来自本地任务记录）：",
+        *blocks,
+    ]
+    return "\n".join(lines)
+
+
 def _artifact_search_roots() -> list[Path]:
     """Candidate artifact CAS roots for the local state directory."""
     roots: list[Path] = []
@@ -661,6 +717,7 @@ def execute_objective(
     resume_mission_id: str = "",
     web_search: bool = True,
     tool_permission_mode: str | None = None,
+    context_text: str = "",
     on_status: Any = None,
 ) -> MissionRunResult:
     """Run one objective end to end and return the structured result.
@@ -685,7 +742,11 @@ def execute_objective(
         with MissionControlClient(process.base_url) as client:
             client.login()
             full_objective = objective
-            if resume_mission_id:
+            if context_text.strip():
+                # I-6c: pre-compacted session context (from /compact)
+                # replaces the per-turn chain when present.
+                full_objective = f"{context_text.strip()}\n\n---\n\n{objective}"
+            elif resume_mission_id:
                 context = build_resume_context(client, resume_mission_id)
                 full_objective = f"{context}\n\n---\n\n{objective}"
             mission = client.create_and_start_mission(

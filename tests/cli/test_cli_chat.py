@@ -25,6 +25,7 @@ class _FakeResult:
     status: str = "FAILED"
     exit_code: int = 1
     wall_seconds: float = 3.0
+    objective: str = ""
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     workspace_files: list[str] = field(default_factory=list)
 
