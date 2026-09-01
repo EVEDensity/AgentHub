@@ -22,11 +22,19 @@ import PreviewSidebar from '../components/shared/PreviewSidebar';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ResizableDivider from '../components/common/ResizableDivider';
 import { useResizableSize } from '../hooks/useResizableSize';
+import { useAuthPanel } from '../hooks/useAuthPanel';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useSessionRecovery } from '../hooks/useSessionRecovery';
 import { useSessionWebSocket } from '../hooks/useSessionWebSocket';
 import { useMessageAutoScroll } from '../hooks/useMessageAutoScroll';
 import { AGENTS, FALLBACK_AGENTS, sortSessions } from '../lib/agents';
+import {
+  detectMentionTrigger,
+  filterAgentsForMention,
+  filterSkillsForMention,
+  filterWorkflowsForMention,
+  isObserverRestrictedSession,
+} from '../lib/mention';
 import { authHeaders, fetchAuth as fetchAuthWithCallback } from '../lib/api';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
 import { clearDagSession, useDagState } from '../lib/dagStore';
@@ -67,10 +75,6 @@ const DagModal = dynamic(() => import('../components/chat/DagModal'), {
 });
 
 export default function AgentHubIM(): JSX.Element {
-  const [token, setToken] = useState<string>('');
-  const [user, setUser] = useState<User | null>(null);
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [authForm, setAuthForm] = useState<{ name: string; password: string }>({ name: '', password: '' });
   // ── 当前 session 的 messages / isStreaming 从 SessionStore 派生 ────────────
   // 这样切到别的 session 时，旧 session 的 messages 和流状态会保留在 Map 里，
   // 切回来时直接命中缓存，流的 chunks 不会丢。
@@ -175,7 +179,8 @@ export default function AgentHubIM(): JSX.Element {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
-  const tokenRef = useRef<string>(token);
+  // 初始 ''，由下方 effect 与最新 token 同步
+  const tokenRef = useRef<string>('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const mentionStartRef = useRef<number>(-1);
   const mentionPanelRef = useRef<HTMLDivElement | null>(null);
@@ -269,6 +274,25 @@ export default function AgentHubIM(): JSX.Element {
     onMessage: handleSocketMessage,
   });
 
+  // ── 登录/注册表单 + 会话凭证状态（抽出为 useAuthPanel） ──────────
+  const {
+    token,
+    user,
+    authMode,
+    authForm,
+    handleAuthFormChange,
+    handleToggleAuthMode,
+    handleAuthSubmit,
+    handleTokenExpired,
+    handleLogout,
+  } = useAuthPanel({
+    wsRef,
+    disconnectAll,
+    clearSession,
+    clearDagSession,
+    setNotice,
+  });
+
   // ── Effects ──────────────────────────────────────────────
 
   useEffect(() => {
@@ -277,33 +301,8 @@ export default function AgentHubIM(): JSX.Element {
   }, [sessionId, token]);
 
   useEffect(() => {
-    const saved = localStorage.getItem('agenthub_token');
-    const savedUser = localStorage.getItem('agenthub_user');
-    if (saved) setToken(saved);
-    if (savedUser) setUser(JSON.parse(savedUser) as User);
-  }, []);
-
-  useEffect(() => {
     document.documentElement.lang = 'zh-CN';
   }, []);
-
-  /** Centralised handler for expired / invalid auth tokens.
-   *  Clears stored credentials, tears down all active connections,
-   *  and returns the UI to the login screen with an explanatory notice. */
-  function handleTokenExpired(): void {
-    // Prevent duplicate logout cascades
-    if (!localStorage.getItem('agenthub_token')) return;
-
-    const sessionIds = Array.from(wsRef.current.keys());
-    localStorage.removeItem('agenthub_token');
-    localStorage.removeItem('agenthub_user');
-    disconnectAll();
-    sessionIds.forEach((sid) => clearSession(sid));
-    sessionIds.forEach((sid) => clearDagSession(sid));
-    setToken('');
-    setUser(null);
-    setNotice('登录已过期，请重新登录');
-  }
 
   const { reloadMessages } = useSessionRecovery({
     sessionId,
@@ -379,43 +378,21 @@ export default function AgentHubIM(): JSX.Element {
     // useCallback, but consistent with the handler guards below).
     const sid = activeSessionIdRef.current;
     const currentSession = sessionsRef.current.find((s) => s.id === sid);
-    const myRole = currentSession?.myRole || 'viewer';
-    const memberCount = currentSession?.memberCount ?? 0;
-    const isObserverInMultiUser = myRole === 'viewer' && memberCount > 1;
-    if (isObserverInMultiUser) {
+    if (isObserverRestrictedSession(currentSession)) {
       setMentionOpen(false);
       setMentionActiveIndex(0);
       mentionStartRef.current = -1;
       return;
     }
 
-    const textBefore = value.slice(0, cursor);
-    const lastAt = textBefore.lastIndexOf('@');
-    const lastHash = textBefore.lastIndexOf('#');
-    const lastSlash = textBefore.lastIndexOf('/');
-
-    const candidates: Array<{ pos: number; trigger: '@' | '#' | '/' }> = [];
-    if (lastAt >= 0) candidates.push({ pos: lastAt, trigger: '@' });
-    if (lastHash >= 0) candidates.push({ pos: lastHash, trigger: '#' });
-    if (lastSlash >= 0) candidates.push({ pos: lastSlash, trigger: '/' });
-    candidates.sort((a, b) => b.pos - a.pos);
-
-    for (const c of candidates) {
-      const charBefore = c.pos === 0 ? ' ' : value[c.pos - 1];
-      const textAfter = textBefore.slice(c.pos + 1);
-      // For / trigger, also skip if preceded by a protocol scheme (e.g. "https://")
-      if (c.trigger === '/' && textBefore.slice(Math.max(0, c.pos - 7), c.pos).match(/(?:https?|ftp|file):$/)) {
-        continue;
-      }
-      if (!textAfter.includes(' ') && !textAfter.includes('\n') &&
-          (c.pos === 0 || charBefore === ' ' || charBefore === '\n')) {
-        setMentionSearch(textAfter);
-        setMentionOpen(true);
-        setMentionActiveIndex(0);
-        setMentionTrigger(c.trigger);
-        mentionStartRef.current = c.pos;
-        return;
-      }
+    const hit = detectMentionTrigger(value, cursor);
+    if (hit) {
+      setMentionSearch(hit.search);
+      setMentionOpen(true);
+      setMentionActiveIndex(0);
+      setMentionTrigger(hit.trigger);
+      mentionStartRef.current = hit.pos;
+      return;
     }
     setMentionOpen(false);
     setMentionActiveIndex(0);
@@ -423,47 +400,6 @@ export default function AgentHubIM(): JSX.Element {
   }
 
   // ── Callbacks ────────────────────────────────────────────
-
-  const handleAuthFormChange = useCallback((update: Partial<{ name: string; password: string }>) => {
-    setAuthForm((prev) => ({ ...prev, ...update }));
-  }, []);
-
-  const handleToggleAuthMode = useCallback(() => {
-    setAuthMode((prev) => (prev === 'login' ? 'register' : 'login'));
-  }, []);
-
-  const handleAuthSubmit = useCallback((e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const submit = async () => {
-      const res = await fetch(`/api/auth/${authMode}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(authForm),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setNotice(data.detail || 'Auth failed');
-        return;
-      }
-      localStorage.setItem('agenthub_token', data.accessToken);
-      localStorage.setItem('agenthub_user', JSON.stringify(data.user));
-      setToken(data.accessToken as string);
-      setUser(data.user as User);
-      setNotice('Login success');
-    };
-    void submit();
-  }, [authMode, authForm]);
-
-  const handleLogout = useCallback(() => {
-    const sessionIds = Array.from(wsRef.current.keys());
-    localStorage.removeItem('agenthub_token');
-    localStorage.removeItem('agenthub_user');
-    disconnectAll();
-    sessionIds.forEach((sid) => clearSession(sid));
-    sessionIds.forEach((sid) => clearDagSession(sid));
-    setToken('');
-    setUser(null);
-  }, [disconnectAll]);
 
   const handleCreateSession = useCallback(async () => {
     const name = `Untitled Session ${sessions.length + 1}`;
@@ -671,33 +607,20 @@ export default function AgentHubIM(): JSX.Element {
     }, 200);
   }, []);
 
-  const filteredAgents = useMemo(() => agents.filter((agent) => {
-    const matchesSearch = mentionSearch === '' ||
-      agent.agentId.toLowerCase().includes(mentionSearch.toLowerCase()) ||
-      agent.domain.toLowerCase().includes(mentionSearch.toLowerCase());
-    const matchesLevel = selectedRiskLevel === 'all' || agent.rankLevel === selectedRiskLevel;
-    return matchesSearch && matchesLevel;
-  }), [agents, mentionSearch, selectedRiskLevel]);
+  const filteredAgents = useMemo(
+    () => filterAgentsForMention(agents, mentionSearch, selectedRiskLevel),
+    [agents, mentionSearch, selectedRiskLevel],
+  );
 
-  const filteredWorkflows = useMemo(() => workflows.filter((w) => {
-    if (mentionSearch === '') return true;
-    const q = mentionSearch.toLowerCase();
-    return (
-      w.name.toLowerCase().includes(q) ||
-      w.description.toLowerCase().includes(q) ||
-      w.triggerKeywords.some((k) => k.toLowerCase().includes(q))
-    );
-  }), [workflows, mentionSearch]);
+  const filteredWorkflows = useMemo(
+    () => filterWorkflowsForMention(workflows, mentionSearch),
+    [workflows, mentionSearch],
+  );
 
-  const filteredSkills = useMemo(() => skills.filter((s) => {
-    if (mentionSearch === '') return true;
-    const q = mentionSearch.toLowerCase();
-    return (
-      s.name.toLowerCase().includes(q) ||
-      (s.display_name || '').toLowerCase().includes(q) ||
-      (s.description || '').toLowerCase().includes(q)
-    );
-  }), [skills, mentionSearch]);
+  const filteredSkills = useMemo(
+    () => filterSkillsForMention(skills, mentionSearch),
+    [skills, mentionSearch],
+  );
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentionOpen) {
