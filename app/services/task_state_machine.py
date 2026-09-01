@@ -8,7 +8,6 @@ from app.db.session import afetch_all, afetch_one, aexecute, aexecute_insert
 from app.schemas.dag import DAGConfig
 from app.services.agent_route_service import agent_route_service
 from app.services.template_engine import template_engine
-from app.services.websocket_manager import manager
 
 
 class TaskStateMachine:
@@ -62,12 +61,10 @@ class TaskStateMachine:
                 for node in ready:
                     node.status = "RUNNING"
                     await self.persist_progress(task_id, dag, node.id)
-                    await manager.broadcast(session_id, {"event": "task_update", **dag.model_dump()})
                     node.status = "SUCCESS"
                     completed.add(node.id)
                     dag.completed = len(completed)
                     await self.persist_progress(task_id, dag, node.id)
-                    await manager.broadcast(session_id, {"event": "task_update", **dag.model_dump()})
             await self.transition(task_id, "SUCCESS")
             return dag.model_dump()
         except Exception:

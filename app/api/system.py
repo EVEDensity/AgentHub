@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.services.adapter_manager import adapter_manager
-from app.services.langgraph_workflow import agent_workflow
 
 router = APIRouter(prefix="/api", tags=["system"])
 
@@ -132,30 +131,6 @@ async def preview(task_id: str) -> dict[str, str]:
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "AgentHub"}
-
-
-@router.get("/langgraph/graph")
-async def get_langgraph_graph() -> dict:
-    """获取 LangGraph 工作流的可视化信息"""
-    return agent_workflow.get_graph_visualization()
-
-
-@router.get("/langgraph/graph/ascii")
-async def get_langgraph_ascii() -> dict[str, str]:
-    """获取 LangGraph 工作流的 ASCII 图形"""
-    return {"ascii_diagram": agent_workflow.get_ascii_diagram()}
-
-
-@router.get("/langgraph/nodes")
-async def get_langgraph_nodes() -> dict:
-    """获取 LangGraph 工作流的节点信息"""
-    return {"nodes": agent_workflow._graph_info["nodes"]}
-
-
-@router.get("/langgraph/edges")
-async def get_langgraph_edges() -> dict:
-    """获取 LangGraph 工作流的边信息"""
-    return {"edges": agent_workflow._graph_info["edges"]}
 
 
 @router.get("/adapters")
