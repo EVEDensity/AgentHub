@@ -104,8 +104,12 @@ Remaining gaps:
 
 - Add Qwen, DeepSeek, Doubao, GLM, and Claude native tokenizer adapters
   (load path exists; parity enforced by `cn_tokenizer_precision`).
-- Port `build_compact_context`-style incremental rollup into the session
-  summary writer so L1 summaries are diff-based, not regenerated.
+- ✅ Done (2026-09-01): L1 session summaries are now change-only folds —
+  `SessionMemoryManager.update_session_summary` merges the existing digest
+  with only the turns after its cursor
+  (`app/services/memory/session_memory.py`; covered by
+  `app/services/memory/test_session_incremental.py`). Same
+  "distill-what-changed" pattern as `build_compact_context`.
 
 ### Medium term
 

@@ -40,6 +40,20 @@ SESSION_SUMMARY_PROMPT = """你是一个会话总结系统。请将以下对话�
 {transcript}
 """
 
+SESSION_SUMMARY_INCREMENTAL_PROMPT = """你是一个会话总结系统。以下是某个会话的既有摘要，以及该会话**新增**的对话记录。请把新增内容合入既有摘要，输出更新后的摘要（ADR-0107 增量折叠：只处理变化，不重读整段历史）。
+
+要求：
+1. 保留既有摘要中的关键目标、决策、产物与遗留问题
+2. 合并新增对话中的新需求、新决策、新产物与新遗留问题；被新增内容推翻或已不再相关的过时信息可以删去
+3. 只返回摘要文本，不要添加任何前缀或后缀；总长度控制在 250 字以内
+
+既有摘要：
+{existing_summary}
+
+新增对话：
+{transcript}
+"""
+
 GLOBAL_SUMMARY_PROMPT = """你是一个全局记忆聚合系统。以下是多个会话的摘要列表。请综合为一段 500 字以内的全局摘要。
 
 要求：
@@ -103,12 +117,20 @@ class SessionMemoryManager:
             except (ValueError, TypeError):
                 pass
 
-        # 3. Build transcript (last 20 messages only)
+        # 3/4. Summarize — incremental fold when a summary exists (ADR-0107):
+        #      feed ONLY the messages after the cursor plus the existing digest,
+        #      never re-summarize the whole history from scratch.
         recent = messages[-20:]
-        transcript = self._build_transcript(recent)
-
-        # 4. Call LLM for summarization
-        summary = await self._call_summarization_llm(transcript)
+        existing = await self.get_session_summary(session_id)
+        if existing:
+            new_messages = self._messages_after(messages, last_msg_id)
+            prompt = self._build_incremental_input(existing, new_messages)
+            if prompt is None:
+                return None  # nothing new to fold — keep current digest
+            summary = await self._call_llm_raw(prompt)
+        else:
+            transcript = self._build_transcript(recent)
+            summary = await self._call_summarization_llm(transcript)
         if not summary:
             return None
 
@@ -324,6 +346,41 @@ class SessionMemoryManager:
             if m["id"] == last_id:
                 return i
         return len(messages)
+
+    @staticmethod
+    def _messages_after(messages: list[dict[str, Any]], last_id: str) -> list[dict[str, Any]]:
+        """Return the messages strictly after the persisted cursor.
+
+        ``last_msg_id == ''`` (never summarized) returns everything;
+        when the cursor is missing from the fetched set the whole list is
+        returned (fail-safe: recompute from scratch rather than drop data).
+        """
+        if not last_id:
+            return list(messages)
+        for i, m in enumerate(messages):
+            if m["id"] == last_id:
+                return messages[i + 1:]
+        return list(messages)
+
+    @staticmethod
+    def _build_incremental_input(
+        existing_summary: str,
+        new_messages: list[dict[str, Any]],
+    ) -> str | None:
+        """Compose the incremental-fold prompt: existing digest + only the new
+        turns. Returns None when there is nothing new to fold, so the caller
+        keeps the current digest untouched (ADR-0107 change-only rollup).
+        """
+        new_messages = new_messages[-20:]
+        if not new_messages:
+            return None
+        transcript = SessionMemoryManager._build_transcript(new_messages)
+        if not transcript.strip():
+            return None
+        return SESSION_SUMMARY_INCREMENTAL_PROMPT.format(
+            existing_summary=existing_summary[:1200] or "（无既有摘要）",
+            transcript=transcript,
+        )
 
     @staticmethod
     def _build_transcript(messages: list[dict[str, Any]], max_chars: int = 4000) -> str:
