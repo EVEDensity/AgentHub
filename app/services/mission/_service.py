@@ -68,31 +68,18 @@ from app.services.workspace_admission_service import (
     WorkspaceClaimStatus,
 )
 
-_A2A_OUTBOUND_ADAPTER = "a2a.outbound"
-_MAX_VERIFICATION_ARTIFACTS = 200
-
-# Root WorkUnit kind derived for desktop local-runner tasks on manual
-# Missions. Only the env-gated desktop local runner derivation creates
-# this kind; every other claim shape is unchanged.
-DESKTOP_TASK_WORK_UNIT_KIND = "desktop.task"
-_DESKTOP_TASK_WORK_UNIT_KIND = DESKTOP_TASK_WORK_UNIT_KIND
-_VERIFICATION_ARTIFACT_FIELDS = frozenset(
-    {
-        "id",
-        "attempt",
-        "kind",
-        "digest",
-        "contentAddress",
-        "mediaType",
-        "sizeBytes",
-        "sourceRepository",
-        "baseCommit",
-        "sensitivity",
-    }
+# Re-export types/errors/helpers from _types — MissionService uses them.
+# Note: `from module import *` skips underscore-prefixed names, so we list
+# the ones actually referenced by the MissionService implementation.
+from app.services.mission._types import *  # noqa: F401,F403  # surface errors/helpers
+from app.services.mission._types import (
+    _A2A_OUTBOUND_ADAPTER,
+    _DESKTOP_TASK_WORK_UNIT_KIND,
+    _MAX_VERIFICATION_ARTIFACTS,
+    _VERIFICATION_ARTIFACT_FIELDS,
+    _checkpoint_event_payload,
 )
 
-# Re-export types/errors/helpers from _types — MissionService uses them
-from app.services.mission._types import *
 
 class MissionService:
     def __init__(
