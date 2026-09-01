@@ -69,7 +69,7 @@ Aider、Cline、Goose）：
 | headless/CI | 内部门禁，无对外 PR Action   | `exec`/`-p` + GitHub Action | 无法嵌入日常 git 流程 |
 | 项目指令生态      | 单一 AGENTS.md         | 分层 AGENTS.md + skills       | 上下文复用与一致性缺失   |
 | 公开基准分数      | 无                    | Terminal-Bench 83.4%(Codex) | 无法量化证明"能干活"   |
-| 记忆架构        | L0-L2 较重，L3 未落地      | SQLite 轻量记忆                 | 人力成本 vs 完成度   |
+| 记忆架构        | L0/L1 轻量（ADR-0107），与竞品同级        | SQLite 轻量记忆                 | 已收敛      |
 | 工具面         | 文件/执行/lint 有界        | +web 搜索/浏览器操作               | 调研类任务不可用      |
 
 **被诟病的行业通病与本项目态势**：

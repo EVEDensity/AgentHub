@@ -18,7 +18,7 @@ API 目标转换为可恢复、可审计、附带 Artifact 和 Evidence 的执�
 | AgentNet / Legacy DAG | 已实现，迁移中 | 兼容现有功能，不再作为新写模型 |
 | MCP Gateway | 原型 | STDIO + SSE 已有，业务无状态化待完成 |
 | A2A | 已实现（生产路径） | 出站/入站经 runner 派发（`A2A_DISPATCH_MODE=runner`）：Agent Card、能力探测、双向签名信任、Mission 任务接口与对等结果导出已落地。实现见 [a2a_adapter_service](../app/services/a2a_adapter_service.py)、[a2a_outbound_runner](../app/services/a2a_outbound_runner.py)，测试 [tests/services/test_a2a_\*](../tests/services/) |
-| RAG / Memory | 部分实现 | 检索与记忆组件存在，统一 Context Compiler 待完成 |
+| RAG / Memory | L0/L1（精简，ADR-0107） | 会话转录 + 会话摘要；L2 向量/L3/procedural 重层已随 web 聊天下线移除，详见 [memory](../app/services/memory/) 与 [ADR-0107](architecture/decisions/0107-memory-slimming-web-chat-decommission.md) |
 | LLM 网关（new-api，可选） | 条件可用 | `AGENTHUB_LLM_GATEWAY=newapi` 启用，通道/迁移/验证脚本见 [deploy/newapi](../deploy/newapi/README.md)，决策 [ADR-0104](architecture/decisions/0104-optional-newapi-llm-gateway.md) |
 | 多模态（视觉输入） | 已实现（ADR-0105） | 协议双轨/附件管线/预算计费/工具回传/护栏门禁全链路落地；e2e 探针 `multimodal_e2e_probe` 入 CI（无渠道密钥时诚实 SKIP）。实现见 [adapter_manager](../app/services/adapter_manager.py)、[multimodal 包](../app/services/tools/multimodal/__init__.py)，测试 [test_message_content_dual_track](../tests/services/test_message_content_dual_track.py) |
 | 沙箱、IAM、审计 | 部分实现 | 部署能力与安全边界按环境逐项验证 |

@@ -85,4 +85,8 @@ Rationale:
 
 ## Supersedes
 
-None.
+None — but Partially superseded by
+[ADR-0107](0107-memory-slimming-web-chat-decommission.md) (2026-09-01): the
+L2 layer and its gates were removed with the memory slimming, so "L2 gates
+remain the retrieval contract" no longer holds. The L3 judgment (stay off
+the near-term timeline) is unchanged and reinforced.

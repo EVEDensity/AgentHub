@@ -114,25 +114,25 @@ no new logic added to the legacy files.
 
 ### Phase R4: Prove performance and quality (weeks 18-26)
 
-> Status: in progress (2026-08-26). Started: L2 vector lifecycle landed in
-> `app/services/memory/l2_vector.py` with embedding-version/retention/
-> deletion-propagation; CJK-aware estimator refactored to a public
-> `estimate_tokens_multilingual`; benchmark suite extended with
-> `knowledge_retrieval_recall` (measured recall@3 = 100% on the internal eval
-> set, min 85%) and `cn_tokenizer_precision` (measured when a native CN
-> tokenizer is configured, honest SKIP otherwise) — both wired into the
-> `docs-gates` CI job.
+> Status: in progress (2026-08-26). Started: CJK-aware estimator refactored
+> to a public `estimate_tokens_multilingual`; benchmark suite extended with
+> `cn_tokenizer_precision` (measured when a native CN tokenizer is
+> configured, honest SKIP otherwise) — wired into the `docs-gates` CI job.
 > (2026-09-01 R4 closure check) `streaming_ttft` gate is wired into the
 > `docs-gates` CI job and its threshold is aligned with the documented dev
 > claim (P95 < 2s in `docs/zh/advanced/performance.md`; measured p95 = 15ms
 > on the pooled local mock). The code-quality ratchet was refreshed after
 > the I-6/I-7 slices grew several legacy modules; exemptions may only
 > shrink from the new baseline.
+> (2026-09-01) Memory slimmed to L0/L1 by ADR-0107 — the L2 vector layer
+> (`l2_vector.py`), L3/global summaries, semantic consolidation and the
+> retrieval benchmark gates were removed with the web-chat memory
+> decommission; see ADR-0107 and `docs/architecture/components/memory.md`.
 
 | Task | Debt | Acceptance criteria |
 |---|---|---|
-| Complete memory L2 vector lifecycle + CN provider tokenizers; add offline eval set | D9 | Recall > 85% on internal set; token estimation error < 5% for listed CN providers |
-| Extend benchmark suite to streaming TTFT and memory/retrieval | D7, D9 | P95 gates enforced in CI for the claims in `performance.md` |
+| CN provider tokenizers + billing parity; add offline eval set | D9 | Token estimation error < 5% for listed CN providers when a native tokenizer is provisioned (`cn_tokenizer_precision` gate) |
+| Extend benchmark suite to streaming TTFT | D7 | P95 gates enforced in CI for the claims in `performance.md` (L2 retrieval gates removed with ADR-0107) |
 | Apply code-quality standard (see `docs/governance/code-quality-standard.md`) to all new PRs | all | CI enforces size/complexity/coverage gates |
 
 **Stop condition:** CI benchmark gates exist for every near-term claim in

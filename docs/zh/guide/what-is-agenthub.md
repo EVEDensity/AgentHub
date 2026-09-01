@@ -40,9 +40,11 @@ L2 向量记忆 → Qdrant (语义检索)
 L3 知识图谱 → PostgreSQL (实体关系图)
 ```
 
-> 状态说明：L0/L1 与部分语义记忆已实现；L2 统一向量生命周期与 L3 分层
-> 尚未完整落地，详见 [记忆架构](../../architecture/components/memory.md)。
-> 在 L2/L3 完成前，请勿将 ContextOS 标注为"已实现"。
+> 状态说明：L0/L1（会话转录 + 会话摘要）已实现；L2 向量/L3 分层与语义
+> 检索已按 [ADR-0107](../../architecture/decisions/0107-memory-slimming-web-chat-decommission.md)
+> 移除（记忆精简为与竞品同级，详见
+> [记忆架构](../../architecture/components/memory.md)）。
+> 在明确引入向量检索用例之前，勿将 ContextOS/多级记忆标注为"已实现"。
 
 ## 竞品对比
 
