@@ -258,8 +258,23 @@ Aider、Cline、Goose）：
      安装器接受的闭环验证）。
      余项：桌面 UI 首启向导（调用 `bootstrap_stack` 命令的界面）、
      打包产物扩展为完整服务栈（当前以 runtime sidecar 起步）。
+     —— 2026-09-01 已收口：首启向导 UI（`desktop/ui/` +
+     `tests/desktop/test_bootstrap_wizard_ui.py`）、`publish-stack`
+     改为构建完整 local-services 栈并附 Release（含资产名逐项
+     校验）。见 desktop/README.md「First-run bootstrap wizard」。
 
 * `agenthub` 打包：`npm i -g` 分发（二进制内置，零运行时依赖）。
+  —— 2026-09-01 已实现（I-2）：
+  `scripts/build-cli-windows.ps1`（PyInstaller onefile 冻结
+  `cli_entrypoint.py` → `agenthub.exe`，隐藏 `_serve` 子命令使冻结
+  二进制自行拉起 mission-control 子进程，无需主机 Python）；
+  npm 包 `distributions/npm/cli`（零运行时依赖 launcher）+
+  `@agenthub/cli-win32-x64` 平台二进制包；
+  `.github/workflows/npm-cli.yml`（cli-v\* tag：冻结 → mock 通道
+  闭环冒烟 → 双包发布，需 `NPM_TOKEN` secret）。
+  结构契约测试：`tests/npm/test_npm_cli_package.py`、
+  `tests/cli/test_cli_frozen.py`。
+  余项：打首个 `cli-v*` tag 实际发布（依赖 npm scope 与 NPM_TOKEN）。
 
 * PR 审查 Action：`agenthub review-pr` / GitHub Action，接入现有 verifier。
 
