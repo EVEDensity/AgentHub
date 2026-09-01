@@ -25,6 +25,9 @@ The detailed target design and migration sequence are stored locally under
 
 ## Contents
 
+- `multi-agent-collaboration.md`: blueprint for the chat-shaped
+  multi-agent collaboration system (session event log, @agent trigger,
+  receipts retrieval) per ADR-0108.
 - `components/system-boundaries.md`: ownership and request flow summary.
 - `components/harness.md`: Harness loop, checkpoint, and event boundary.
 - `components/runner.md`: execution-plan, polling, backoff, and shutdown boundary.

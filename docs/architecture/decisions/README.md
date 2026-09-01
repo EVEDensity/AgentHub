@@ -13,6 +13,8 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0108](0108-event-log-as-memory-multi-agent-collaboration.md) | Event log as memory for multi-agent collaboration |
+| [0107](0107-memory-slimming-web-chat-decommission.md) | Slim the memory subsystem to L0/L1 |
 | [0106](0106-l3-knowledge-graph-stays-r5.md) | L3 knowledge graph stays on the R5 timeline |
 | [0105](0105-multimodal-vision-input-dual-track.md) | Multimodal vision input via dual-track content parts |
 | [0104](0104-optional-newapi-llm-gateway.md) | Optional new-api LLM gateway (supplier layer) |
