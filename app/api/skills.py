@@ -10,7 +10,12 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.utils.async_file import aread_text, aexists
 
-router = APIRouter(prefix="/api/skills", tags=["skills"])
+# NOTE: the router prefix is version-neutral ("/skills"); it is mounted twice:
+#   - legacy mount:  app/api/routes.py        -> /api/skills   (unauthenticated)
+#   - versioned mount: app/api/v1/router.py  -> /api/v1/skills (authenticated)
+# Both mounts share this single implementation, so the legacy surface stays a
+# compatibility alias until all callers migrate to the versioned API.
+router = APIRouter(prefix="/skills", tags=["skills"])
 
 logger = logging.getLogger("agenthub.skills")
 

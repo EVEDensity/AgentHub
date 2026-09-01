@@ -345,8 +345,8 @@ export default function AgentHubIM(): JSX.Element {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: WorkflowSummary[]) => setWorkflows(data))
       .catch(() => {});
-    // ── Fetch skills ────────────────────────────────────────────────
-    fetch('/api/skills')
+    // ── Fetch skills (versioned, authenticated v1 surface) ──────────
+    fetch('/api/v1/skills', { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: { skills: SkillMeta[] }) => setSkills(data.skills || []))
       .catch(() => {});

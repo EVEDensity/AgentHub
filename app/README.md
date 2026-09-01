@@ -271,6 +271,12 @@ boundary. It is not the permanent home of every Agent feature.
   after byte verification; expired delegated attempts cannot satisfy a retry.
 
 * `api/`: HTTP/WebSocket transport; handlers must delegate to services.
+  The versioned surface lives under `api/v1/` (missions, agent-catalog,
+  a2a adapter, access, skills); new HTTP capabilities belong there. The
+  legacy `/api/*` routers stay mounted as compatibility aliases — `skills`
+  is the migration pattern: one version-neutral router mounted twice
+  (legacy `/api/skills` unauthenticated, `/api/v1/skills` authenticated)
+  until every caller migrates.
 
 * `schemas/`: versioned request and response validation.
 
