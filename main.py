@@ -156,10 +156,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         _log.warning("shutdown: desktop local runner stop failed", exc_info=True)
 
-    consumer = getattr(app.state, "memory_summary_consumer", None)
-    if consumer is not None:
-        await consumer.close()
-
     version_bus = getattr(app.state, "distributed_cache_version_bus", None)
     if version_bus is not None:
         await version_bus.close()
