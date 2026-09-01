@@ -1211,21 +1211,13 @@ export default function AgentHubIM(): JSX.Element {
   });
 
   // 点击附件卡片上的预览按钮: 弹出全屏预览模态
-  // ── PM/PMO 事件发送 ────────────────────────────────────────────────
-  // Automatically injects sender / userId so bubble components don't
-  // need to know the current user.
   const handleSendPMEvent = useCallback((event: Record<string, unknown>) => {
     const activeSessionId = activeSessionIdRef.current;
     if (!activeSessionId) return;
-    const targetWs = wsRef.current.get(activeSessionId);
-    if (targetWs && targetWs.readyState === WebSocket.OPEN) {
-      targetWs.send(JSON.stringify({
-        ...event,
-        sender: user?.name || 'user',
-        userId: user?.id || '',
-      }));
-    }
-  }, [user]);
+    // Post-WebSocket migration: PM events no longer flow over WS.
+    // This is a silent no-op; the MessageList still passes events here
+    // but we deliberately drop them until a v1 API endpoint exists.
+  }, []);
 
   // ── 对话引用 ──────────────────────────────────────────────────────
   const handleQuoteMessage = useCallback((msg: Message, selectedText?: string) => {
@@ -1454,11 +1446,8 @@ export default function AgentHubIM(): JSX.Element {
             activeTools={activeTools}
             currentAgentName={currentAgentName}
             onInterruptStream={() => {
-              const ws = wsRef.current.get(activeSessionIdRef.current);
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ event: 'interrupt_stream' }));
-                addToast({ type: 'info', title: '已发送中断请求', duration: 3000 });
-              }
+              cancelMission();
+              addToast({ type: 'info', title: '已发送中断请求', duration: 3000 });
             }}
           />
         </header>
