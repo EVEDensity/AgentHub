@@ -226,6 +226,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="data directory holding stacks/ (default: local .agenthub)",
     )
+
+    # Internal: the frozen npm binary re-invokes itself with `_serve` to
+    # boot the local mission-control subprocess (see
+    # app.cli.runtime.server_command). Not part of the public surface.
+    serve_parser = subparsers.add_parser("_serve", help=argparse.SUPPRESS)
+    serve_parser.add_argument("--host", default="127.0.0.1")
+    serve_parser.add_argument("--port", type=int, required=True)
+    serve_parser.add_argument("--log-level", default="warning")
     return parser
 
 
@@ -473,6 +481,19 @@ def cmd_upgrade(args: argparse.Namespace, cwd: Path) -> int:
     return EXIT_OK
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Hidden `_serve`: run mission-control in-process (frozen binaries)."""
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level,
+    )
+    return EXIT_OK
+
+
 def cli_main(argv: list[str] | None = None) -> int:
     if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
         try:
@@ -502,6 +523,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_stacks(args, cwd)
     if args.command == "upgrade":
         return cmd_upgrade(args, cwd)
+    if args.command == "_serve":
+        return cmd_serve(args)
     parser.error(f"unknown command: {args.command}")
     return EXIT_INFRA_ERROR  # unreachable
 

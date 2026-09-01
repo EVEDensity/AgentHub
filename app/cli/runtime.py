@@ -30,6 +30,46 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR_NAME = ".agenthub"
 WORKSPACE_ID = "local-admin"
 
+
+def is_frozen() -> bool:
+    """True when running as a PyInstaller-frozen binary (npm distribution)."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def server_command(port: int) -> list[str]:
+    """Command line that boots the local mission-control subprocess.
+
+    In a source checkout the CLI reuses the ambient interpreter
+    (``python -m uvicorn main:app`` from the repository root). In the
+    frozen npm distribution there is no interpreter — the binary
+    re-invokes itself with the hidden ``_serve`` subcommand, which runs
+    the same ``main:app`` ASGI app in-process (``main`` is collected as
+    a hidden import, exactly like the mission-control freeze).
+    """
+    if is_frozen():
+        return [sys.executable, "_serve", "--port", str(port)]
+    return [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--log-level",
+        "warning",
+    ]
+
+
+def server_cwd() -> str | None:
+    """Working directory for the mission-control subprocess.
+
+    ``main:app`` only resolves from the repository root in a source
+    checkout; frozen binaries carry their own bundle and run anywhere.
+    """
+    return None if is_frozen() else str(REPO_ROOT)
+
 TERMINAL_MISSION_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
 
 # Exit codes are part of the CLI contract (used by CI callers of `exec`).
@@ -330,19 +370,8 @@ class MissionControlProcess:
         )
         self._log_handle = log_path.open("wb")
         self._process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "uvicorn",
-                "main:app",
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(self.port),
-                "--log-level",
-                "warning",
-            ],
-            cwd=str(REPO_ROOT),
+            server_command(self.port),
+            cwd=server_cwd(),
             env=env,
             stdout=self._log_handle,
             stderr=subprocess.STDOUT,
