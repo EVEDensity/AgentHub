@@ -26,6 +26,7 @@ import { useAuthPanel } from '../hooks/useAuthPanel';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useSessionRecovery } from '../hooks/useSessionRecovery';
 import { useSessionWebSocket } from '../hooks/useSessionWebSocket';
+import { useMissionChat } from '../hooks/useMissionChat';
 import { useMessageAutoScroll } from '../hooks/useMessageAutoScroll';
 import { AGENTS, FALLBACK_AGENTS, sortSessions } from '../lib/agents';
 import {
@@ -311,6 +312,51 @@ export default function AgentHubIM(): JSX.Element {
     messages,
     onTokenExpired: handleTokenExpired,
   });
+
+  // ── P1/P0: Mission/v1 chat for @mention routing ────────────────
+  // @mention of an Agent takes this path (POST /chat/mission → SSE)
+  // instead of the legacy WebSocket.  Non-mention messages still use
+  // WebSocket — gradual migration off the orchestrator.
+  const {
+    sendMission,
+    cancel: cancelMission,
+    streamState: missionStreamState,
+    missionId: activeMissionId,
+    events: missionEvents,
+    mentions: missionMentions,
+  } = useMissionChat({
+    token,
+    workspaceId: 'local-admin',
+    sessionId,
+    authHeaders,
+  });
+
+  // ── Wire Mission SSE events into session message store ───────────
+  // Every time the SSE stream delivers a new mapped event, append it
+  // to the current session so MessageList renders it alongside WS
+  // messages.  The `missionEvents` array is append-only, so `prev`
+  // always contains all prior events for the active mission.
+  const prevMissionCountRef = useRef(0);
+  useEffect(() => {
+    const activeSessionId = activeSessionIdRef.current;
+    if (!activeSessionId) return;
+    const seen = prevMissionCountRef.current;
+    if (missionEvents.length <= seen) return;
+    const newEvents = missionEvents.slice(seen);
+    prevMissionCountRef.current = missionEvents.length;
+    for (const evt of newEvents) {
+      const msg: Message = {
+        id: `evt-${evt.missionId}-${evt.timestamp}-${evt.type}`,
+        event: 'mission',
+        sessionId: activeSessionId,
+        sender: 'Mission',
+        content: evt.content,
+        type: 'text',
+        timestamp: evt.timestamp || new Date().toISOString(),
+      };
+      updateSessionMessages(activeSessionId, (prev) => [...prev, msg]);
+    }
+  }, [missionEvents]);
 
   useEffect(() => {
     if (!token) return;
@@ -906,26 +952,56 @@ export default function AgentHubIM(): JSX.Element {
     ]);
 
     setSessions((prev) => sortSessions(prev.map((s) => (s.id === activeSessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
-    const sendResult = sendOrQueue(activeSessionId, wsMsg);
-    if (sendResult === 'sent') {
-      setSendState('sent');
+
+    // ── P0: Full migration — every message now routes through Mission/SSE ──
+    // Legacy WebSocket is kept as a feature-flagged fallback.  Mention
+    // detection above still drives the "AgentName is working" optimistic
+    // label and the participants banner, but no longer decides the route.
+    const USE_MISSION = true;  // TODO: gate on env var / feature flag
+
+    if (USE_MISSION) {
+      // Mission path: POST create → SSE stream, append events as they land.
+      // sendMission rejects on 4xx/5xx — we surface the error in-place
+      // and let the user retry rather than silently falling back to WS.
+      sendMission(draft.aiContent).then((result) => {
+        if (!result) {
+          setSendState('error');
+          setNotice('Mission create failed — check console for details');
+        } else {
+          setSendState('sent');
+        }
+      }).catch(() => {
+        setSendState('error');
+        setNotice('Mission stream error — retry or refresh the page');
+      });
     } else {
-      setSendState('error');
+      // Legacy WebSocket fallback — feature-flagged out in P0 migration.
+      const sendResult = sendOrQueue(activeSessionId, wsMsg);
+      if (sendResult === 'sent') {
+        setSendState('sent');
+      } else {
+        setSendState('error');
+      }
     }
     setInput('');
     setAttachedFiles([]);
     setFileReferences([]);
     setQuoteReferences([]);
-  }, [sessionId, user, isStreaming, fileReferences, quoteReferences]);
+  }, [sessionId, user, isStreaming, fileReferences, quoteReferences, sendMission]);
 
   const handleRetryMessage = useCallback((msg: PendingMessage) => {
-    const result = sendOrQueue(msg.sessionId, msg);
-    if (result === 'sent') {
-      setNotice('Message sent');
-    } else {
-      setNotice('WebSocket not connected, waiting for reconnect');
-    }
-  }, [sendOrQueue]);
+    // P0: Retry also goes through Mission/SSE — same route as the
+    // original send, but a fresh Mission with the same objective.
+    sendMission(msg.content).then((result) => {
+      if (result) {
+        setNotice('Message resent via Mission');
+      } else {
+        setNotice('Retry failed — check console for details');
+      }
+    }).catch(() => {
+      setNotice('Retry stream error — refresh the page');
+    });
+  }, [sendMission]);
 
   const handlePreview = useCallback(async () => {
     const res = await fetch('/api/preview/local-task', { headers: authHeaders() });

@@ -157,6 +157,7 @@ class MissionSourceType(str, Enum):
     A2A_INBOUND = "a2a.inbound"
     IMPORT = "import"
     MISSION_FORK = "mission.fork"
+    CHAT = "chat"          # Web chat Mission (v1 chat_mission adapter)
 
 
 class MissionSource(DomainModel):

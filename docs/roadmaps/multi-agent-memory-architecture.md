@@ -16,16 +16,18 @@
 **事实与判断分离约定**：§1–§4 为调研得到的客观事实（附来源）；
 §5–§8 为基于事实的项目演进建议与趋势研判。
 
----
+***
 
 ## 1. 调研背景与方法
 
 - **背景**：AgentHub 记忆子系统刚完成减负（ADR-0107：仅保留 L0 转录 +
   L1 增量会话摘要）；产品愿景对标 Block Buzz——聊天工具形态、会话内
   @Agent 唤醒、人机多 Agent 同房间协作、Agent 承接任务执行。
+
 - **方法**：优先读取 GitHub 仓库 README/架构文档/官方文档，结合
   2025–2026 多Agent记忆行业评测（LoCoMo / LongMemEval / BEAM），
   先完成事实搜集，再做对比与推演。
+
 - **调研对象**：Block Buzz、AutoGen、LangGraph、CrewAI、Mem0、
   Letta(MemGPT)、Zep、Graphiti、OpenHands、AnythingLLM。
 
@@ -48,16 +50,20 @@ Agent 自带**。开场场景即本文方向的样板：凌晨事故频道里问
 
 - **一切皆签名事件**：每个动作（消息、reaction、工作流步骤、画板、
   huddle）都是密码学签名的 Nostr 事件，以 `kind` 整数区分；新增功能
-  = 新增 kind，旧客户端不破坏。
+  \= 新增 kind，旧客户端不破坏。
+
 - **Relay 是唯一事实源**：客户端经 WebSocket 连接单一 relay；relay
   负责鉴权、验签、持久化、扇出（fan-out）、搜索索引与自动化触发。
   没有 P2P 交换、没有 gossip、没有副本协商。
+
 - **存储**：Postgres（events、channels、tokens、workflows、audit）+
   Redis（presence/typing/跨节点 fan-out）；buzz-search 在 `search_ts`
   上做全文检索。
+
 - **身份模型**：人类与 Agent 是**同等的first-class 成员**；身份可携带。
   **通道成员资格是唯一访问门槛**（开放频道可搜索可自加入；私密频道
   邀请制；访客用 scoped token 限定到特定频道）。
+
 - **租户边界**：community = 工作区；URL 即 community；未知 host
   fail-closed；隔离经 TLA+/Tamarin 形式化验证。
 
@@ -80,9 +86,13 @@ Buzz 的记忆设计可以概括为「**一个事件日志 + 一个搜索索引 
 ### 2.4 Buzz 刻意不做的
 
 - 不做认知记忆管线（无 encode/consolidate/recall 认知循环）；
+
 - 不做向量/embedding 记忆层（检索 = Postgres FTS）；
+
 - 不做知识图谱或实体抽取；
+
 - 不做多存储副本（relay 是唯一事实源，无事件复制）；
+
 - 平台不做"大脑"——不替 Agent 决定记什么、忘什么。
 
 > 对 AgentHub 的启示：Buzz 的记忆竞争力来自**结构（事件日志 + 索引 +
@@ -91,19 +101,21 @@ Buzz 的记忆设计可以概括为「**一个事件日志 + 一个搜索索引 
 
 ## 3. GitHub 高星多Agent项目记忆四大范式对比
 
-| 范式 | 代表项目 | 实现机制 | 存储 | 优点 | 缺点 | 工程成本 | 评测参考 |
-|---|---|---|---|---|---|---|---|
-| ① 事件日志即记忆 | **Buzz** | 不可变签名事件流 + FTS 索引 + receipts 回溯 | Postgres（事件表） | 天然可审计、可回放；零记忆管线维护；回答自带证据 | 无语义泛化（不产生"洞察"）；检索依赖关键词 | 低（一套事件存储+索引） | 无（非对话记忆基准目标） |
-| ② 双栈记忆 | **LangGraph**、AutoGen | 短期=检查点（thread state），长期=外部 Store 跨线程读写 | 检查点库 + 可插拔 KV/Postgres/向量 | 边界清晰；短期上下文精确可控；长期记忆可选可换 | 长期记忆语义需自建；跨会话合并逻辑落在应用层 | 中（检查点设施已内置，长期层按需） | LongMemEval 类时序任务依赖自建质量 |
-| ③ 抽取/整备管线 | **Mem0**、CrewAI | LLM 抽取事实→冲突消解→增删改（ADD/UPDATE/DELETE）→按需注入 | 向量库 + 图（可选）+ KV | 记忆条目化、可解释；token 花在增量上；官方 LoCoMo 报告优于基线 | 管线本身耗 token/调用；抽取错误会固化进记忆；依赖 embedding 服务与额外存储 | 高（服务化组件 + 向量库 + 观测） | Mem0 报 LoCoMo 显著提升（自报口径）；第三方复现有出入 |
-| ④ 自编辑/时序知识层 | **Letta(MemGPT)**、**Zep/Graphiti** | Letta：模型自编辑 core memory 块 + 分页；Zep：时序知识图谱，实体带 valid/invalid 时间 | SQLite/Postgres（Letta）；图数据库 + 向量（Zep） | 记忆结构可推理；时序有效性支持"现在 vs 曾经"；Letta 块级自管理灵活 | 架构重、心智负担大；Zep 依赖 Neo4j 级图栈；自编辑可能自我污染 | 高（额外服务/图库/学习成本） | Zep 报 LongMemEval 时序问题大幅优于基线（自报口径） |
+| 范式          | 代表项目                               | 实现机制                                                           | 存储                                    | 优点                                      | 缺点                                             | 工程成本                | 评测参考                               |
+| ----------- | ---------------------------------- | -------------------------------------------------------------- | ------------------------------------- | --------------------------------------- | ---------------------------------------------- | ------------------- | ---------------------------------- |
+| ① 事件日志即记忆   | **Buzz**                           | 不可变签名事件流 + FTS 索引 + receipts 回溯                                | Postgres（事件表）                         | 天然可审计、可回放；零记忆管线维护；回答自带证据                | 无语义泛化（不产生"洞察"）；检索依赖关键词                         | 低（一套事件存储+索引）        | 无（非对话记忆基准目标）                       |
+| ② 双栈记忆      | **LangGraph**、AutoGen              | 短期=检查点（thread state），长期=外部 Store 跨线程读写                         | 检查点库 + 可插拔 KV/Postgres/向量             | 边界清晰；短期上下文精确可控；长期记忆可选可换                 | 长期记忆语义需自建；跨会话合并逻辑落在应用层                         | 中（检查点设施已内置，长期层按需）   | LongMemEval 类时序任务依赖自建质量            |
+| ③ 抽取/整备管线   | **Mem0**、CrewAI                    | LLM 抽取事实→冲突消解→增删改（ADD/UPDATE/DELETE）→按需注入                      | 向量库 + 图（可选）+ KV                       | 记忆条目化、可解释；token 花在增量上；官方 LoCoMo 报告优于基线  | 管线本身耗 token/调用；抽取错误会固化进记忆；依赖 embedding 服务与额外存储 | 高（服务化组件 + 向量库 + 观测） | Mem0 报 LoCoMo 显著提升（自报口径）；第三方复现有出入  |
+| ④ 自编辑/时序知识层 | **Letta(MemGPT)**、**Zep/Graphiti** | Letta：模型自编辑 core memory 块 + 分页；Zep：时序知识图谱，实体带 valid/invalid 时间 | SQLite/Postgres（Letta）；图数据库 + 向量（Zep） | 记忆结构可推理；时序有效性支持"现在 vs 曾经"；Letta 块级自管理灵活 | 架构重、心智负担大；Zep 依赖 Neo4j 级图栈；自编辑可能自我污染           | 高（额外服务/图库/学习成本）     | Zep 报 LongMemEval 时序问题大幅优于基线（自报口径） |
 
 补充事实：
 
 - **OpenHands**：走轻量路线——微代理（microagents）触发 + 会话压缩
   （condenser），与 AgentHub 的 `/compact` 同族。
+
 - **AnythingLLM**：以 RAG 工作区为核心的记忆（文档→向量→检索），
   面向知识问答而非任务记忆。
+
 - **评测基准**：LoCoMo（多会话长程对话回忆）、LongMemEval（时序
   推理与知识更新）、BEAM（大规模行为轨迹检索）是 2025–2026 主流
   口径；注意各项目自报分数与第三方复现存在差异，引用时标注口径。
@@ -119,17 +131,17 @@ Buzz 的记忆设计可以概括为「**一个事件日志 + 一个搜索索引 
 
 ### 4.1 现状（诚实表）
 
-| 能力 | 状态 | 证据 |
-|---|---|---|
-| Mission/WorkUnit/Artifact/Evidence/Decision 事件流 | ✅ | `app/domain`、`migrations/`、ADR-0001~0010 |
-| 独立 verifier（执行者不自证） | ✅ | ADR-0004/0059/0060 |
-| A2A 双向签名身份 + runner 派发 | ✅ 生产路径 | `a2a_adapter_service.py`、ADR-0037~0043 |
-| @agent mention 解析 | ✅（Web 面板） | `frontend/…/lib/mention.ts`、UserRoster |
-| 记忆 L0/L1 减负 + 增量摘要 | ✅ | ADR-0107、`session_memory.py` |
-| CLI 闭环（run/exec/chat/tui/replay） | ✅ | `app/cli/`、`tests/cli/` |
-| 跨会话任务检索（receipts） | ⚪ 无 | —— |
-| Agent 会话成员化 + 触发路由 | ⚪ 无 | —— |
-| Web 聊天 → Mission/v1 API | 🔵 迁移中 | ADR-0107 下线 legacy 路径 |
+| 能力                                              | 状态        | 证据                                        |
+| ----------------------------------------------- | --------- | ----------------------------------------- |
+| Mission/WorkUnit/Artifact/Evidence/Decision 事件流 | ✅         | `app/domain`、`migrations/`、ADR-0001\~0010 |
+| 独立 verifier（执行者不自证）                             | ✅         | ADR-0004/0059/0060                        |
+| A2A 双向签名身份 + runner 派发                          | ✅ 生产路径    | `a2a_adapter_service.py`、ADR-0037\~0043   |
+| @agent mention 解析                               | ✅（Web 面板） | `frontend/…/lib/mention.ts`、UserRoster    |
+| 记忆 L0/L1 减负 + 增量摘要                              | ✅         | ADR-0107、`session_memory.py`              |
+| CLI 闭环（run/exec/chat/tui/replay）                | ✅         | `app/cli/`、`tests/cli/`                   |
+| 跨会话任务检索（receipts）                               | ⚪ 无       | ——                                        |
+| Agent 会话成员化 + 触发路由                              | ⚪ 无       | ——                                        |
+| Web 聊天 → Mission/v1 API                         | 🔵 迁移中    | ADR-0107 下线 legacy 路径                     |
 
 ### 4.2 产品目标（北极星收敛表述）
 
@@ -139,17 +151,17 @@ Buzz 的记忆设计可以概括为「**一个事件日志 + 一个搜索索引 
 
 ## 5. Buzz 能力映射与差距表
 
-| Buzz 能力 | AgentHub 现状 | 差距 | 差距等级 |
-|---|---|---|---|
-| 不可变事件日志（一切行为） | Mission 事件流已覆盖任务域；**会话域消息尚未统一入事件流模型** | 会话事件流建模 | 中 |
-| 通道成员资格 = 访问门槛 | UserRoster 有雏形；**Agent 尚非正式会话成员** | 统一成员模型 + Agent 成员化 | 中 |
-| 人类/Agent 同级身份 | A2A 已实现外部 Agent 身份；**内部 Agent 会话身份未建** | 内部 Agent 能力卡 + 会话身份 | 中 |
-| @agent 触发 → 执行 | mention 解析已有；**缺 mention→Mission 触发路由** | 触发路由 | 高 |
-| Receipts 检索（带证据回答） | replay 已实现单任务回放；**缺跨会话检索视图** | Mission/Evidence FTS + `agenthub search` | **高（P0）** |
-| 工作流事件触发 | 无 | 事件模式→Mission 规则引擎 | 低（延后） |
-| 全文搜索（Cmd+K） | 无统一索引 | 会话+任务统一索引 | 低（延后） |
-| FTS 索引（search_ts） | 无 | receipts 视图自带 | 并入 P0 |
-| 形式化租户隔离 | 多租户按环境验证 | 不阻塞当前阶段 | 延后 |
+| Buzz 能力            | AgentHub 现状                             | 差距                                       | 差距等级      |
+| ------------------ | --------------------------------------- | ---------------------------------------- | --------- |
+| 不可变事件日志（一切行为）      | Mission 事件流已覆盖任务域；**会话域消息尚未统一入事件流模型**   | 会话事件流建模                                  | 中         |
+| 通道成员资格 = 访问门槛      | UserRoster 有雏形；**Agent 尚非正式会话成员**       | 统一成员模型 + Agent 成员化                       | 中         |
+| 人类/Agent 同级身份      | A2A 已实现外部 Agent 身份；**内部 Agent 会话身份未建**  | 内部 Agent 能力卡 + 会话身份                      | 中         |
+| @agent 触发 → 执行     | mention 解析已有；**缺 mention→Mission 触发路由** | 触发路由                                     | 高         |
+| Receipts 检索（带证据回答） | replay 已实现单任务回放；**缺跨会话检索视图**            | Mission/Evidence FTS + `agenthub search` | **高（P0）** |
+| 工作流事件触发            | 无                                       | 事件模式→Mission 规则引擎                        | 低（延后）     |
+| 全文搜索（Cmd+K）        | 无统一索引                                   | 会话+任务统一索引                                | 低（延后）     |
+| FTS 索引（search\_ts） | 无                                       | receipts 视图自带                            | 并入 P0     |
+| 形式化租户隔离            | 多租户按环境验证                                | 不阻塞当前阶段                                  | 延后        |
 
 差距结论：**AgentHub 缺的不是"记忆能力"而是"记忆入口"**——事件流、
 验证、回放都已就绪，缺的是把既有事件流变成可检索、可触发、可对话的
@@ -182,10 +194,13 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
 - **记忆在变轻**：主流工具（OpenHands condenser、各家 /compact）
   收敛到"转录 + 增量摘要"，重型认知管线退潮为服务化组件
   （Mem0/Zep）面向嵌入场景。
+
 - **可审计性在变重**：企业侧对"Agent 说过什么/做过什么"的回放与
   证据要求上升——正对 AgentHub 的 verifier 分离优势。
+
 - **聊天即协调平面**：多Agent 协作入口从编排面板转向会话（@agent
   即任务），Buzz 是该形态最完整的开源样板。
+
 - **评测口径仍分裂**：自报 vs 复现差异大，引用需标注；AgentHub
   应优先自建与自身验收对齐的基准（VERIFY 退出码）。
 
@@ -198,8 +213,7 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
 
 1. **Receipts 任务检索切片**：Mission/Evidence 上加 FTS/关键词视图 +
    `agenthub search "<query>"`（附 mission 链接与 VERIFY 结果）。
-   ✅ 已交付（2026-09-01）：`agenthub search "<关键词>" [--status] [--days]
-   [--json]` + `agenthub replay <mission_id>`（`app/cli/receipts.py::
+   ✅ 已交付（2026-09-01）：`agenthub search "<关键词>" [--status] [--days] [--json]` + `agenthub replay <mission_id>`（`app/cli/receipts.py::
    search_receipts`，纯读路径零 schema 变更；测试 `tests/cli/
    test_cli_search.py` 17 例）。同时修复 `agenthub missions` 缺
    `workspaceId` 查询参数导致 422 的存量缺陷，以及 v1 API camelCase
@@ -210,14 +224,14 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
    （`app/api/v1/chat_mission.py`，create+start 合并返回 SSE
    streamUrl）；`GET /api/v1/workspaces/{scope_id}/members` 统一
    成员目录（`app/api/v1/workspace_members.py`）；前端
-   `frontend/lib/workspaceMembers.ts` 替代硬编码 FALLBACK_AGENTS，
+   `frontend/lib/workspaceMembers.ts` 替代硬编码 FALLBACK\_AGENTS，
    `frontend/lib/missionEventMapper.ts` 将 Mission 事件映射为聊天气泡
    类型。legacy WebSocket/`websocket_processor.py` 暂保留，后续切片
    逐步替换。
 
 ### 中期（P1）
 
-3. **Agent 成员化第一刀**：统一会话成员目录（人类/内部/外部），
+1. **Agent 成员化第一刀**：统一会话成员目录（人类/内部/外部），
    会话内 Agent 可见、可 @。验收：UserRoster 与成员目录一致。
    ✅ P1 切片（2026-09-01）：`GET /api/v1/workspaces/{scope_id}/members`
    返回统一成员视图（当前人类 + 启用的 Agent Catalog 绑定）；
@@ -225,48 +239,71 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
    `/api/agent/registry` legacy 端点；`DatabaseAgentBindingResolver
    .list_enabled` 新增批量查询方法。测试 `tests/api/
    test_v1_workspace_members.py` 4 例 + 前端 vitest 3/6 例。
-4. **消息→Mission 触发路由**：mention 解析结果自动创建 Mission 并
+2. **消息→Mission 触发路由**：mention 解析结果自动创建 Mission 并
    回写结果事件。验收：会话内 @dev 完成一次端到端任务闭环。
-5. **项目事实落地**：`.agenthub/memory.md` 键级覆盖语义 + 门控注入。
+3. **项目事实落地**：`.agenthub/memory.md` 键级覆盖语义 + 门控注入。
    ✅ 已交付（2026-09-01）：`agenthub facts list|set|get|remove`
    （`app/cli/project_facts.py`，键级覆盖原地生效、无关事实保序）；
    `execute_objective` 注入前按当前目标关键词门控筛选，全库永不
    整体注入（测试 `tests/cli/test_project_facts.py` 12 例）。
-6. **MCP 记忆工具**：`recall`/`retain` 只读暴露 L0/L1 与事实。
+4. **MCP 记忆工具**：`recall`/`retain` 只读暴露 L0/L1 与事实。
 
 ### 长期（P2/P3）
 
-7. 订阅/规则触发（先确认后执行）；
-8. 事件流统一索引（会话+任务跨域）；
-9. 会话事件流与 Agent 目录/工作台表面（Web 投影）。
+1. 订阅/规则触发（先确认后执行）；
+2. 事件流统一索引（会话+任务跨域）；
+3. 会话事件流与 Agent 目录/工作台表面（Web 投影）。
 
 ### 明确不做（停止条件）
 
 - ❌ Nostr relay / 线协议重构；
+
 - ❌ 引入 Mem0/Letta/Zep/Graphiti 作为业务依赖；
+
 - ❌ 默认启用向量/embedding 检索（opt-in 前置验收标准）；
+
 - ❌ 在 legacy orchestrator 运行时上新建聊天功能；
+
 - ❌ 无 Evidence 的任务完成公告 / 执行者自证（永久红线）；
+
 - ❌ 会话转录复制进第二存储。
 
 ## 9. Sources
 
 - Buzz 仓库与文档：
-  - https://github.com/block/buzz （README：relay 即工作区、七表面、成员模型）
-  - https://github.com/block/buzz/blob/main/ARCHITECTURE.md （事件模型、fan-out、存储、buzz-search FTS）
-  - https://github.com/block/buzz/blob/main/docs/multi-tenant-relay.md （租户隔离与形式化验证）
+
+  - <https://github.com/block/buzz> （README：relay 即工作区、七表面、成员模型）
+
+  - <https://github.com/block/buzz/blob/main/ARCHITECTURE.md> （事件模型、fan-out、存储、buzz-search FTS）
+
+  - <https://github.com/block/buzz/blob/main/docs/multi-tenant-relay.md> （租户隔离与形式化验证）
+
 - 范式对比对象：
-  - AutoGen：https://github.com/microsoft/autogen
-  - LangGraph（Memory / 双栈）：https://langchain-ai.github.io/langgraph/concepts/memory/
-  - CrewAI（Memory）：https://docs.crewai.com/concepts/memory
-  - Mem0：https://github.com/mem0ai/mem0 及 https://docs.mem0.ai/
-  - Letta / MemGPT：https://github.com/letta-ai/letta
-  - Zep：https://github.com/getzep/zep ；Graphiti：https://github.com/getzep/graphiti
-  - OpenHands：https://github.com/All-Hands-AI/OpenHands
-  - AnythingLLM：https://github.com/Mintplex-Labs/anything-llm
+
+  - AutoGen：<https://github.com/microsoft/autogen>
+
+  - LangGraph（Memory / 双栈）：<https://langchain-ai.github.io/langgraph/concepts/memory/>
+
+  - CrewAI（Memory）：<https://docs.crewai.com/concepts/memory>
+
+  - Mem0：<https://github.com/mem0ai/mem0> 及 <https://docs.mem0.ai/>
+
+  - Letta / MemGPT：<https://github.com/letta-ai/letta>
+
+  - Zep：<https://github.com/getzep/zep> ；Graphiti：<https://github.com/getzep/graphiti>
+
+  - OpenHands：<https://github.com/All-Hands-AI/OpenHands>
+
+  - AnythingLLM：<https://github.com/Mintplex-Labs/anything-llm>
+
 - 评测基准：
-  - LoCoMo：https://github.com/snap-research/locomo
-  - LongMemEval：https://github.com/xiaowu0162/LongMemEval
-  - BEAM：https://github.com/google-deepmind/beam （大规模行为轨迹检索评测）
-- 本项目内部依据：ADR-0104~0108、北极星路线图、`app/cli/runtime.py`、
+
+  - LoCoMo：<https://github.com/snap-research/locomo>
+
+  - LongMemEval：<https://github.com/xiaowu0162/LongMemEval>
+
+  - BEAM：<https://github.com/google-deepmind/beam> （大规模行为轨迹检索评测）
+
+- 本项目内部依据：ADR-0104\~0108、北极星路线图、`app/cli/runtime.py`、
   `app/services/memory/`。
+

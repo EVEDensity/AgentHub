@@ -45,6 +45,8 @@ from app.services.tools.session_tools import (
     artifact_list_handler,
     artifact_read_handler,
     conversation_search_handler,
+    memory_recall_handler,
+    memory_retain_handler,
 )
 
 # ── web_search ────────────────────────────────────────────────────────
@@ -704,6 +706,60 @@ CONVERSATION_SEARCH = ToolDefinition(
     is_concurrency_safe=True,
 )
 
+# ── memory_recall ─────────────────────────────────────────────────────
+
+MEMORY_RECALL = ToolDefinition(
+    name="memory_recall",
+    description="只读暴露多层记忆（L0 工作记忆 / L1 情景摘要 / 语义持久化记忆 / 项目事实）。Agent 执行 Mission 时调用此工具获取用户偏好、历史上下文、项目 ADR 等信息，避免重复询问或违反既有约定。支持关键词过滤。",
+    category="memory",
+    parameters=[
+        ToolParameter(name="query", type="string", required=False,
+                      description="搜索关键词（可选），匹配语义记忆的 name/description/body 字段和项目事实", default=""),
+        ToolParameter(name="scope", type="string", required=False,
+                      description="记忆范围: 'session'(默认, 当前会话) 或 'global'(跨会话聚合)", default="session"),
+        ToolParameter(name="max_results", type="number", required=False,
+                      description="语义记忆/事实的最大返回数量，默认10，最大30", default=10),
+    ],
+    return_type='{"query": "str", "scope": "str", "layers": {"L0": {...}, "L1": {...}, "semantic": {...}, "facts": {...}}}',
+    examples=[
+        ToolExample(
+            user_question="回忆一下用户之前提过什么技术偏好？",
+            parameters={"query": "偏好 技术栈", "max_results": 5},
+        ),
+        ToolExample(
+            user_question="这个项目有哪些已知的 ADR 或架构决策？",
+            parameters={"query": "ADR 架构", "scope": "global", "max_results": 10},
+        ),
+    ],
+    risk_level="L1",
+    handler=memory_recall_handler,
+    is_concurrency_safe=True,  # Read-only — no side effects
+)
+
+# ── memory_retain ─────────────────────────────────────────────────────
+
+MEMORY_RETAIN = ToolDefinition(
+    name="memory_retain",
+    description="将一个请求级别的工作记忆事实追加到当前会话的 working memory 文件。Agent 在 Mission 执行中观察到用户偏好、项目约束等时调用此工具即时记录，信息会在下一次 memory_recall 中可见。区别于 memory_save（写持久化 MEMORY.md 跨会话保留），memory_retain 仅会话内有效。",
+    category="memory",
+    parameters=[
+        ToolParameter(name="fact", type="string", required=True,
+                      description="要保留的事实内容（20-500 字符），如 '用户偏好 TypeScript 严格模式'"),
+        ToolParameter(name="note", type="string", required=False,
+                      description="上下文备注（why / where 观察到的）", default=""),
+    ],
+    return_type='{"sessionId": "str", "fact": "str", "recordedAt": "str", "path": "str"}',
+    examples=[
+        ToolExample(
+            user_question="（Agent 在 Mission 执行中观察到）用户提到所有 API 必须用 FastAPI + Pydantic v2，需要记住这个偏好",
+            parameters={"fact": "项目 API 必须使用 FastAPI + Pydantic v2", "note": "用户在 Mission mission_xyz 对话中明确"},
+        ),
+    ],
+    risk_level="L1",
+    handler=memory_retain_handler,
+    is_concurrency_safe=False,  # Has side effects (appends to working memory file)
+)
+
 # ── invoke_agent ───────────────────────────────────────────────────────
 # THIS is the key tool that transforms the Orchestrator from a "fake
 # dispatcher" into a REAL orchestrator.  It allows the default agent
@@ -945,6 +1001,8 @@ BUILTIN_TOOLS: list[ToolDefinition] = [
     CODE_EXECUTE,
     MEMORY_SEARCH,
     MEMORY_SAVE,
+    MEMORY_RECALL,
+    MEMORY_RETAIN,
     BROWSER_NAVIGATE,
     BROWSER_SCREENSHOT,
     BROWSER_EXTRACT,

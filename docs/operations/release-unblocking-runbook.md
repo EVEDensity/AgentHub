@@ -14,6 +14,7 @@
   门禁（`release-policy.ps1 -PublicRelease`）→ 打包 + 三重 smoke →
   `publish-stack` job 构建完整 local-services 栈并附到 GitHub Release
   （manifest + 逐文件 sha256 + 资产名校验）。
+
 - `cli-v*` tag → `.github/workflows/npm-cli.yml`：冻结 `agenthub.exe`
   → mock 通道闭环冒烟 → 发布 `@agenthub/cli` + `@agenthub/cli-win32-x64`。
 
@@ -22,18 +23,18 @@
 
 ## Secrets 清单与获取方式
 
-| Secret | 用途 | 获取方式 | 成本 |
-|---|---|---|---|
-| `AGENTHUB_WINDOWS_SIGNING_CERT_BASE64` | Windows 代码签名证书（PFX, base64） | 见 §A | 免费（自签/CI 证书）或付费（CA） |
-| `AGENTHUB_WINDOWS_SIGNING_PASSWORD` | 上述 PFX 的密码 | 自定 | 免费 |
-| `AGENTHUB_UPDATE_PRIVATE_KEY` | Tauri updater 签名私钥（minisign 风格） | `tauri signer generate` 本地生成 | 免费 |
-| `AGENTHUB_UPDATE_PUBLIC_KEY` | updater 公钥（注入 Tauri updater 配置） | 与上同对 | 免费 |
-| `AGENTHUB_UPDATE_ENDPOINT` | updater 清单 URL | 指向 Release 资产 | 免费 |
+| Secret                                 | 用途                              | 获取方式                         | 成本                  |
+| -------------------------------------- | ------------------------------- | ---------------------------- | ------------------- |
+| `AGENTHUB_WINDOWS_SIGNING_CERT_BASE64` | Windows 代码签名证书（PFX, base64）     | 见 §A                         | 免费（自签/CI 证书）或付费（CA） |
+| `AGENTHUB_WINDOWS_SIGNING_PASSWORD`    | 上述 PFX 的密码                      | 自定                           | 免费                  |
+| `AGENTHUB_UPDATE_PRIVATE_KEY`          | Tauri updater 签名私钥（minisign 风格） | `tauri signer generate` 本地生成 | 免费                  |
+| `AGENTHUB_UPDATE_PUBLIC_KEY`           | updater 公钥（注入 Tauri updater 配置） | 与上同对                         | 免费                  |
+| `AGENTHUB_UPDATE_ENDPOINT`             | updater 清单 URL                  | 指向 Release 资产                | 免费                  |
 
 另有第 6 个可选 secret：
 
-| Secret | 用途 |
-|---|---|
+| Secret                                 | 用途               |
+| -------------------------------------- | ---------------- |
 | `AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD` | 私钥口令（生成时设了密码才需要） |
 
 npm 发布线另需 `NPM_TOKEN`（npm automation token，对 `@agenthub` scope
@@ -129,20 +130,24 @@ Release 并附上完整栈资产）。
 
 ## 验收（north-star §5）
 
-| 项 | 验证命令 |
-|---|---|
-| 一行安装 | 干净机器 `npm i -g @agenthub/cli && agenthub run "<目标>"` |
-| 有公开分数 | `benchmarks/public-scores.md` 已有 2026-09-01 deepseek-v4-flash 8/8 |
-| PR 审查可用 | 提交一个 PR，观察 review-pr.yml 运行与 findings summary |
-| 桌面完整栈 | 新机器下载 Release 栈 → `agenthub upgrade <manifest-url>` 或首启向导 |
+| 项       | 验证命令                                                              |
+| ------- | ----------------------------------------------------------------- |
+| 一行安装    | 干净机器 `npm i -g @agenthub/cli && agenthub run "<目标>"`              |
+| 有公开分数   | `benchmarks/public-scores.md` 已有 2026-09-01 deepseek-v4-flash 8/8 |
+| PR 审查可用 | 提交一个 PR，观察 review-pr.yml 运行与 findings summary                     |
+| 桌面完整栈   | 新机器下载 Release 栈 → `agenthub upgrade <manifest-url>` 或首启向导         |
 
 ## 故障排查
 
 - **release-policy 失败**：日志会列出缺失的 secret 名单，按 §步骤 4 补齐。
+
 - **updater 签名失败**：确认 `TAURI_SIGNING_PRIVATE_KEY` 对应
   `AGENTHUB_UPDATE_PRIVATE_KEY`（workflow 已做映射），口令 secret 是否
   需要配。
+
 - **npm publish 403**：`@agenthub` scope 未被账号拥有——先在 npmjs.com
   创建 org `agenthub`，或改用非 scope 名并同步改 `distributions/npm/`。
+
 - **cli 冒烟失败**：看 frozen binary 的 `_serve` 日志（workspace 下
   `.agenthub/logs/`）。
+
