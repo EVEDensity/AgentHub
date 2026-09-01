@@ -56,7 +56,7 @@ L3 知识图谱 → PostgreSQL (实体关系图)
 | Rust 性能核心 | 目标（P95 < 80ms；基准门禁已接入 CI：`benchmarks/gates.py` 的 `api_latency_p95`/`streaming_ttft`） | ❌ | ❌ | ❌ |
 | 4 层记忆 | ⚠️ L0/L1 已实现，L2/L3 进行中 | ❌ | ❌ | ❌ |
 | MCP 协议 | ✅ HTTP JSON-RPC + 兼容 SSE/STDIO | ⚠️ 基础 | ❌ | ❌ |
-| A2A 协议 | 原型（能力探测、签名信任已有；外部互操作认证进行中） | ❌ | ❌ | ❌ |
+| A2A 协议 | ✅ 生产路径（runner 派发，出站/入站 + 对等结果导出已落地；外部互操作认证持续进行） | ❌ | ❌ | ❌ |
 | 企业级 IAM+审计 | ✅ RBAC/ABAC + 审计事件（按环境验证） | ⚠️ RBAC | ❌ | ❌ |
 | Docker 沙箱 | ✅ seccomp | ❌ | ❌ | ❌ |
 | 开源协议 | Apache 2.0 | Apache 2.0 | MIT | Sustainable Use |

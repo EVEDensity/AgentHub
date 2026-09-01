@@ -52,10 +52,10 @@
 | headless exec / PR 审查 Action                        | ⚠️ exec 已实现并本地验证；CI workflow 未接线                         | `app/cli` exec --json + 退出码契约；GitHub Actions 接入属 M1                                                      |
 | 公开 agent 能力基准（Terminal-Bench 等）                     | ❌ 未接入                                                    | benchmarks 仅覆盖 P95/召回/tokenizer 精度                                                                       |
 | 分层项目指令 / skills 生态                                  | ✅ 已实现（M1：分层 AGENTS.md 合并注入 + 只读 skill\_list/skill\_load） | `app/cli/runtime.py`、`app/services/desktop_runner_tools.py`、`tests/services/test_desktop_skill_tools.py` |
-| Web 搜索 / 浏览器工具                                      | ⚠️ web\_search 已实现（M1，Tavily/DDG）；浏览器操作仍缺失               | `app/services/tools/network_tools.py`、`tests/services/test_web_search_tool.py`                           |
+| Web 搜索 / 浏览器工具                                      | ✅ web\_search（M1，Tavily/DDG）+ web\_fetch（I-6a，URL→可读文本，同 SSRF/门禁边界）              | `app/services/tools/network_tools.py`、`tests/services/test_web_search_tool.py`                           |
 
-> 注：`docs/index.md` 仍把 A2A 标注为"原型"，属文档滞后，与代码不一致，
-> 应为"已实现"。
+> 注（2026-09-01 对账）：`docs/index.md` 与 `docs/zh/guide/what-is-agenthub.md`
+> 已把 A2A 从"原型"改为"已实现（生产路径）"，与代码一致。
 
 ## 3. 核心缺陷（开发者视角，多维评估摘要）
 
@@ -76,9 +76,9 @@ Aider、Cline、Goose）：
 
 1. "agent 说自己完成就完成" → 本项目已用独立 verifier 解决 ✅
 2. "无效迭代循环 + 上下文爆掉 + token 失控" → 已有 bound/budget，
-   缺交互式 compact/回放 ⚠️
+   交互式 `/compact` 与 `/replay` 已落地（I-6c）✅
 3. "权限弹窗打断 + 执行不安全" → 已有沙箱+审批，
-   缺 Codex 式（suggest/edit/auto）细粒度策略分级 ⚠️
+   Codex 式（suggest/edit/auto）细粒度策略分级已落地（I-6b）✅
 
 ## 4. 北极星原则（不可妥协）
 
