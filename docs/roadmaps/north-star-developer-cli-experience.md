@@ -237,8 +237,8 @@ Aider、Cline、Goose）：
 
 * **桌面引导下载器（4.0 产品形态基线的落地）**：
   ✅ **三层交付完成（2026-08-31）**：
-  1. **CLI 核心**：`app/cli/stack_installer.py` + `agenthub upgrade
-     <manifest-url>` / `agenthub stacks` —— 清单严格校验、逐文件
+
+  1. **CLI 核心**：`app/cli/stack_installer.py` + `agenthub upgrade <manifest-url>` / `agenthub stacks` —— 清单严格校验、逐文件
      sha256、`*.part` 暂存、断点续传、`.pinned` 原子切换、失败不动
      当前 pin、旧栈可回滚（`tests/cli/test_stack_installer.py`，
      15 用例 + 本地 HTTP 发布源冒烟）。
@@ -251,13 +251,13 @@ Aider、Cline、Goose）：
      流式发给前端。含 Rust 单测（解析/校验/原子写/pin）。
   3. **发布源**：`scripts/make_stack_manifest.py`（生成 schemaVersion=1
      清单，sha256+size，排除 pin/旧清单）+ `desktop-windows.yml` 新增
-     `publish-stack` job（desktop-v* tag 触发：组装栈产物 → 生成清单
+     `publish-stack` job（desktop-v\* tag 触发：组装栈产物 → 生成清单
      → 附到 GitHub Release，资产名保留 `local-services/` 前缀使
-     downloader 的 base_url 直接解析）。测试
+     downloader 的 base\_url 直接解析）。测试
      `tests/scripts/test_make_stack_manifest.py`（含生成物被 Python
      安装器接受的闭环验证）。
-  余项：桌面 UI 首启向导（调用 `bootstrap_stack` 命令的界面）、
-  打包产物扩展为完整服务栈（当前以 runtime sidecar 起步）。
+     余项：桌面 UI 首启向导（调用 `bootstrap_stack` 命令的界面）、
+     打包产物扩展为完整服务栈（当前以 runtime sidecar 起步）。
 
 * `agenthub` 打包：`npm i -g` 分发（二进制内置，零运行时依赖）。
 

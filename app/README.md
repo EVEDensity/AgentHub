@@ -5,7 +5,7 @@ boundary. It is not the permanent home of every Agent feature.
 
 ## Ownership
 
-- `cli/`: developer CLI (`python -m app.cli`) — boots an isolated
+* `cli/`: developer CLI (`python -m app.cli`) — boots an isolated
   SQLite-backed Mission Control subprocess with the desktop local runner
   and drives one Mission over the versioned HTTP API. `run` prints a
   human report, `exec --json` emits a structured result whose exit code
@@ -13,12 +13,15 @@ boundary. It is not the permanent home of every Agent feature.
   env-only and never written to disk; without a key the CLI falls back
   to the mock provider. Covered by `tests/cli/` (unit + E2E gated by
   `AGENTHUB_CLI_E2E=1`).
-- `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
+
+* `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
   transition models.
-- `repositories/`: persistence and transaction boundaries.
+
+* `repositories/`: persistence and transaction boundaries.
   Legacy session file versions remain in `artifacts`; Mission Control owns
   immutable execution metadata in the separate `mission_artifacts` table.
-- `services/`: application use cases, compatibility adapters, and storage ports.
+
+* `services/`: application use cases, compatibility adapters, and storage ports.
   Artifact byte verification reads Runner-owned content through this boundary;
   Mission Control retains only immutable Artifact metadata.
   Peer-facing A2A result export is a separate all-or-nothing service. It emits
@@ -266,10 +269,14 @@ boundary. It is not the permanent home of every Agent feature.
   resolution so scope is applied at call time. Evidence admission rechecks
   Artifact ownership against the verified WorkUnit and attempt before and
   after byte verification; expired delegated attempts cannot satisfy a retry.
-- `api/`: HTTP/WebSocket transport; handlers must delegate to services.
-- `schemas/`: versioned request and response validation.
-- `compat/`: one-way adapters from legacy Task/DAG data into Mission objects.
-- `core/`, `db/`, `utils/`: shared application infrastructure.
+
+* `api/`: HTTP/WebSocket transport; handlers must delegate to services.
+
+* `schemas/`: versioned request and response validation.
+
+* `compat/`: one-way adapters from legacy Task/DAG data into Mission objects.
+
+* `core/`, `db/`, `utils/`: shared application infrastructure.
 
 New execution behavior must enter through Mission/WorkUnit services. Do not add
 new business state to the legacy LangGraph task state machine.
@@ -280,3 +287,4 @@ new business state to the legacy LangGraph task state machine.
 2. Append an event for every durable state transition.
 3. Add domain, persistence, and API tests as applicable.
 4. Update the nearest contract or ADR when ownership changes.
+
