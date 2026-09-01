@@ -25,7 +25,6 @@ import { useResizableSize } from '../hooks/useResizableSize';
 import { useAuthPanel } from '../hooks/useAuthPanel';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useSessionRecovery } from '../hooks/useSessionRecovery';
-import { useSessionWebSocket } from '../hooks/useSessionWebSocket';
 import { useMissionChat } from '../hooks/useMissionChat';
 import { useMessageAutoScroll } from '../hooks/useMessageAutoScroll';
 import { AGENTS, FALLBACK_AGENTS, sortSessions } from '../lib/agents';
@@ -40,8 +39,6 @@ import { authHeaders, fetchAuth as fetchAuthWithCallback } from '../lib/api';
 import { agentsFromMembers, fetchWorkspaceMembers } from '../lib/workspaceMembers';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
 import { clearDagSession, useDagState } from '../lib/dagStore';
-import { handleSharedWebSocketEvent } from '../lib/websocketSharedEvents';
-import { flushAllPendingStreamBuffer, handleStreamWebSocketEvent } from '../lib/websocketStreamEvents';
 import {
   useSessionMessages,
   useSessionStreaming,
@@ -115,7 +112,7 @@ export default function AgentHubIM(): JSX.Element {
   const [streamPhase, setStreamPhase] = useState<'idle' | 'thinking' | 'executing' | 'generating' | 'done'>('idle');
   // Currently executing tool names (shown in ChatHeader)
   const [activeTools, setActiveTools] = useState<string[]>([]);
-  // WebSocket send state: idle → sending → sent
+  // Mission/SSE send state: idle → sending → sent → error
   const [sendState, setSendState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   // Current agent name extracted from the message content
   const [currentAgentName, setCurrentAgentName] = useState<string>('');
@@ -170,14 +167,6 @@ export default function AgentHubIM(): JSX.Element {
   // 整个外层 flex 容器的引用（用于响应式断点计算）
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // ── per-session stream lifecycle ──────────────────────────────────
-  // streamFlushRafRef 改为 per-session Map，让每个 session 独立 RAF 调度 flush。
-  const wsRef = useRef<Map<string, WebSocket>>(new Map());
-  const streamFlushRafRef = useRef<Map<string, number>>(new Map());
-  // per-session setTimeout IDs for progressive chunk release.
-  const progressiveFlushTimersRef = useRef<Map<string, number>>(new Map());
-  // Track the last stream_interrupted timestamp per session.
-  const streamInterruptedAtRef = useRef<Map<string, number>>(new Map());
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const messagesContainerRef = useRef<HTMLElement | null>(null);
   const currentSessionRef = useRef<string>(sessionId);
@@ -201,80 +190,6 @@ export default function AgentHubIM(): JSX.Element {
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  function handleSocketSessionClosed(sid: string): void {
-    const raf = streamFlushRafRef.current.get(sid);
-    if (raf != null) {
-      window.cancelAnimationFrame(raf);
-      streamFlushRafRef.current.delete(sid);
-    }
-    const timer = progressiveFlushTimersRef.current.get(sid);
-    if (timer != null) {
-      window.clearTimeout(timer);
-      progressiveFlushTimersRef.current.delete(sid);
-    }
-    flushAllPendingStreamBuffer(sid, {
-      streamFlushRafRef,
-      progressiveFlushTimersRef,
-    });
-    streamInterruptedAtRef.current.delete(sid);
-    if (currentSessionRef.current === sid) {
-      setStreamPhase('idle');
-      setActiveTools([]);
-      setCurrentAgentName('');
-    }
-  }
-
-  function handleSocketMessage(raw: Record<string, unknown>, evt: string | undefined, chunkSessionId: string, ws: WebSocket): void {
-    void ws;
-    if (handleSharedWebSocketEvent(raw, evt, chunkSessionId, {
-      wsRef,
-      setWorkspaceVersion,
-      setPreviewTabs,
-      setNotice,
-      setPmState,
-      setDegradationStatus,
-      setSessions,
-      setIsAutoNaming,
-      setExecPermission,
-      sortSessions,
-    })) {
-      return;
-    }
-
-    if (handleStreamWebSocketEvent(raw, evt, chunkSessionId, {
-      streamFlushRafRef,
-      progressiveFlushTimersRef,
-      streamInterruptedAtRef,
-      setStreamPhase,
-      setActiveTools,
-      setCurrentAgentName,
-      setSessions,
-      sortSessions,
-      addToast,
-      setGenerated,
-      handleOpenFilePreview,
-      handleOpenDiffPreview,
-    })) {
-      return;
-    }
-  }
-
-  const {
-    connectSession,
-    closeSession,
-    disconnectAll,
-    sendOrQueue,
-  } = useSessionWebSocket({
-    wsRef,
-    currentSessionRef,
-    tokenRef,
-    setConnected,
-    setNotice,
-    addToast,
-    onSessionClosed: handleSocketSessionClosed,
-    onMessage: handleSocketMessage,
-  });
 
   // ── 登录/注册表单 + 会话凭证状态（抽出为 useAuthPanel） ──────────
   const {
@@ -288,8 +203,7 @@ export default function AgentHubIM(): JSX.Element {
     handleTokenExpired,
     handleLogout,
   } = useAuthPanel({
-    wsRef,
-    disconnectAll,
+    sessions,
     clearSession,
     clearDagSession,
     setNotice,
@@ -313,10 +227,8 @@ export default function AgentHubIM(): JSX.Element {
     onTokenExpired: handleTokenExpired,
   });
 
-  // ── P1/P0: Mission/v1 chat for @mention routing ────────────────
-  // @mention of an Agent takes this path (POST /chat/mission → SSE)
-  // instead of the legacy WebSocket.  Non-mention messages still use
-  // WebSocket — gradual migration off the orchestrator.
+  // ── P0 complete: all messages go through Mission/v1 (POST /chat/mission → SSE)
+  // Legacy WebSocket path was removed in T0-3 debt cleanup.
   const {
     sendMission,
     cancel: cancelMission,
@@ -412,8 +324,7 @@ export default function AgentHubIM(): JSX.Element {
     if (!cached) {
       void reloadMessages(false);
     }
-    connectSession(sessionId);
-  }, [token, sessionId, reloadMessages, connectSession]);
+  }, [token, sessionId, reloadMessages]);
 
   // ── Message auto-scroll (owned by useMessageAutoScroll) ──────────
   useMessageAutoScroll(messages, sessionId, messagesContainerRef);
@@ -508,8 +419,6 @@ export default function AgentHubIM(): JSX.Element {
         setDeleting(false);
         return;
       }
-      // 关闭这个 session 的 WebSocket、清理 Store
-      closeSession(id);
       clearSession(id);
       clearDagSession(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
@@ -528,7 +437,7 @@ export default function AgentHubIM(): JSX.Element {
     } finally {
       setDeleting(false);
     }
-  }, [closeSession, confirmDelete, deleting, sessionId, sessions]);
+  }, [confirmDelete, deleting, sessionId, sessions]);
 
   const cancelDeleteSession = useCallback(() => {
     if (deleting) return;

@@ -2,22 +2,20 @@
 
 // ────────────────────────────────────────────────────────────────────
 // 登录/注册表单 + 会话凭证状态（从 app/page.tsx 抽出，行为保持一致）
+// WebSocket 依赖已在 T0-3 移除；登出/凭证过期现在直接遍历 sessions。
 // ────────────────────────────────────────────────────────────────────
 import { useCallback, useEffect, useState } from 'react';
-import type { User } from '../types';
+import type { ChatSession, User } from '../types';
 
 export interface UseAuthPanelOptions {
-  /** 活跃 WebSocket 连接表（登出/凭证过期时逐个关闭） */
-  wsRef: React.MutableRefObject<Map<string, WebSocket>>;
-  disconnectAll: () => void;
+  sessions: ChatSession[];
   clearSession: (sessionId: string) => void;
   clearDagSession: (sessionId: string) => void;
   setNotice: (msg: string) => void;
 }
 
 export function useAuthPanel({
-  wsRef,
-  disconnectAll,
+  sessions,
   clearSession,
   clearDagSession,
   setNotice,
@@ -66,33 +64,31 @@ export function useAuthPanel({
   }, [authMode, authForm, setNotice]);
 
   /** Centralised handler for expired / invalid auth tokens.
-   *  Clears stored credentials, tears down all active connections,
+   *  Clears stored credentials and session store,
    *  and returns the UI to the login screen with an explanatory notice. */
   const handleTokenExpired = useCallback((): void => {
     // Prevent duplicate logout cascades
     if (!localStorage.getItem('agenthub_token')) return;
 
-    const sessionIds = Array.from(wsRef.current.keys());
+    const sessionIds = sessions.map((s) => s.id);
     localStorage.removeItem('agenthub_token');
     localStorage.removeItem('agenthub_user');
-    disconnectAll();
     sessionIds.forEach((sid) => clearSession(sid));
     sessionIds.forEach((sid) => clearDagSession(sid));
     setToken('');
     setUser(null);
     setNotice('登录已过期，请重新登录');
-  }, [wsRef, disconnectAll, clearSession, clearDagSession, setNotice]);
+  }, [sessions, clearSession, clearDagSession, setNotice]);
 
   const handleLogout = useCallback(() => {
-    const sessionIds = Array.from(wsRef.current.keys());
+    const sessionIds = sessions.map((s) => s.id);
     localStorage.removeItem('agenthub_token');
     localStorage.removeItem('agenthub_user');
-    disconnectAll();
     sessionIds.forEach((sid) => clearSession(sid));
     sessionIds.forEach((sid) => clearDagSession(sid));
     setToken('');
     setUser(null);
-  }, [wsRef, disconnectAll, clearSession, clearDagSession]);
+  }, [sessions, clearSession, clearDagSession]);
 
   return {
     token,
