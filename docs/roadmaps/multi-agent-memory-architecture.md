@@ -198,7 +198,12 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
 
 1. **Receipts 任务检索切片**：Mission/Evidence 上加 FTS/关键词视图 +
    `agenthub search "<query>"`（附 mission 链接与 VERIFY 结果）。
-   验收：能回答"上个月修过什么"类查询，每条结果含证据链。
+   ✅ 已交付（2026-09-01）：`agenthub search "<关键词>" [--status] [--days]
+   [--json]` + `agenthub replay <mission_id>`（`app/cli/runtime.py::
+   search_receipts`，纯读路径零 schema 变更；测试 `tests/cli/
+   test_cli_search.py` 17 例）。同时修复 `agenthub missions` 缺
+   `workspaceId` 查询参数导致 422 的存量缺陷，以及 v1 API camelCase
+   字段兼容。
 2. **Web 聊天迁移 Mission/v1 API**：聊天表面脱离 legacy orchestrator，
    记忆走 `build_compact_context`。验收：聊天任务与 CLI 同源同终态。
 
