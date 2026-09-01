@@ -323,6 +323,14 @@ def run_acceptance_command(
     timeout: float,
 ) -> tuple[int | None, str, bool]:
     """Replay the acceptance command in the workspace; (exit code, output tail, timed out)."""
+    # Same PATH contract as server_environment(): the in-mission VERIFY
+    # gate resolves `python` from the venv that runs this benchmark, so
+    # the replay must too — otherwise a machine whose `python` is a
+    # WindowsApps stub fails every case despite an honest in-mission
+    # PASS (exit 9009, "Python was not found").
+    env = os.environ.copy()
+    venv_bin = Path(sys.executable).resolve().parent
+    env["PATH"] = str(venv_bin) + os.pathsep + env.get("PATH", "")
     try:
         proc = subprocess.run(
             verify_command,
@@ -330,6 +338,7 @@ def run_acceptance_command(
             shell=True,
             capture_output=True,
             timeout=timeout,
+            env=env,
         )
         output = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
         return proc.returncode, output[-VERIFY_OUTPUT_TAIL_CHARS:], False
