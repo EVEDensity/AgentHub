@@ -7,11 +7,15 @@ from app.services.evidence_integrity_service import (
     EvidenceIntegrityHasher,
     Sha256EvidenceIntegrityHasher,
 )
-from app.services.mission._execution_mixin import MissionExecutionMixin
+from app.services.mission._artifacts_mixin import MissionArtifactsMixin
+from app.services.mission._checkpoint_mixin import MissionCheckpointMixin
+from app.services.mission._decisions_mixin import MissionDecisionsMixin
 from app.services.mission._fork_mixin import MissionForkMixin
 from app.services.mission._lifecycle_mixin import MissionLifecycleMixin
+from app.services.mission._runner_claim_mixin import MissionRunnerClaimMixin
 from app.services.mission._types import *  # noqa: F401,F403
-from app.services.mission._verification_mixin import MissionVerificationMixin
+from app.services.mission._verify_mixin import MissionVerifyMixin
+from app.services.mission._work_unit_lifecycle_mixin import MissionWorkUnitLifecycleMixin
 from app.services.verification_evaluator_service import (
     StrictVerificationEvaluator,
     VerificationEvaluator,
@@ -25,8 +29,12 @@ from app.services.verification_policy_service import (
 class MissionService(
     MissionLifecycleMixin,
     MissionForkMixin,
-    MissionExecutionMixin,
-    MissionVerificationMixin,
+    MissionWorkUnitLifecycleMixin,
+    MissionRunnerClaimMixin,
+    MissionCheckpointMixin,
+    MissionArtifactsMixin,
+    MissionDecisionsMixin,
+    MissionVerifyMixin,
 ):
     """Composed mission orchestration service."""
 
