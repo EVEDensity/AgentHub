@@ -16,7 +16,6 @@ from app.api import (
     system,
     tasks,
     user,
-    websocket,
     workspace,
 )
 from app.api.admin import router as admin_router
@@ -35,7 +34,6 @@ api_router.include_router(files.router)
 api_router.include_router(git.router)
 api_router.include_router(workspace.router)
 api_router.include_router(tasks.router)
-api_router.include_router(websocket.router)
 api_router.include_router(skills.router, prefix="/api")
 api_router.include_router(settings.router)
 api_router.include_router(artifacts.router)
