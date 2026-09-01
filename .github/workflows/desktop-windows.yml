@@ -162,13 +162,15 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────
   # Stack release publishing (north-star M3 / §4.0 baseline)
-  # On desktop-v* tags: collect the packaged runtime stack, generate a
-  # stack-manifest.json (sha256 per file), and attach both to the GitHub
-  # Release so the bootstrap downloader (desktop Rust module / CLI
-  # 'agenthub upgrade') can pull the stack from a real release source.
+  # On desktop-v* tags: build the FULL local-services runtime stack
+  # (mission-control, gateway, mcp-gateway, frontend, runner sidecar),
+  # generate a stack-manifest.json (sha256 per file), and attach both to
+  # the GitHub Release so the bootstrap downloader (desktop Rust module /
+  # first-run wizard / CLI 'agenthub upgrade') can pull the complete
+  # stack from a real release source.
   # ─────────────────────────────────────────────────────────────────────
   publish-stack:
-    name: Publish runtime stack to release
+    name: Publish full runtime stack to release
     runs-on: windows-latest
     needs: [package]
     if: startsWith(github.ref, 'refs/tags/desktop-v')
@@ -176,24 +178,57 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.0'
+          cache: true
+          cache-dependency-path: services/go/go.sum
       - name: Download packaged artifacts
         uses: actions/download-artifact@v4
         with:
           name: agenthub-desktop-windows-${{ github.sha }}
           path: dist
-      - name: Assemble runtime stack layout
+      - name: Prepare Python environment for the Mission Control freeze
+        shell: pwsh
+        run: |
+          # build-mission-control.ps1 imports dependencies from
+          # .venv\Lib\site-packages; the ambient python must be this venv
+          # so the PyInstaller freeze and the site-packages agree.
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Build the full local-services stack
         shell: pwsh
         run: |
           $stack = Join-Path $env:RUNNER_TEMP 'stack-release'
+          if (Test-Path $stack) { Remove-Item $stack -Recurse -Force }
           $services = Join-Path $stack 'local-services'
           New-Item -ItemType Directory -Force -Path $services | Out-Null
-          # Runtime sidecar is the long-lived stack component; the desktop
-          # shell itself updates through the Tauri updater, not the stack.
+          $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
+          desktop\local-services\build-windows.ps1 -OutputDirectory $services
+          # Runner runtime sidecar comes from the packaged artifact; the
+          # desktop shell itself updates through the Tauri updater, not
+          # the stack.
           Copy-Item dist\agenthub-runtime.exe -Destination $services -Force
-          Get-ChildItem dist -Recurse -File | Select-Object -First 20 | ForEach-Object { Write-Output "dist file: $($_.FullName)" }
+          # The bundled-stack manifest (services list, written by the
+          # build script) is a bundle artifact; downloaded stacks get
+          # their manifest copy from the downloader itself.
+          Remove-Item (Join-Path $services 'stack-manifest.json') -Force -ErrorAction SilentlyContinue
+          $count = (Get-ChildItem $services -Recurse -File).Count
+          Write-Output "stack files staged: $count"
           Write-Output "STACK_DIR=$stack" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Generate stack manifest
         shell: pwsh
@@ -206,8 +241,6 @@ jobs:
             --commit $commit `
             --out "$env:STACK_DIR\stack-manifest.json"
           Copy-Item "$env:STACK_DIR\stack-manifest.json" -Destination stack-manifest.json -Force
-          $stackDir = "$env:STACK_DIR" -replace '\\', '\\'
-          Write-Output "STACK_DIR_ESCAPED=$stackDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Attach stack to GitHub Release
         shell: pwsh
         env:
@@ -218,14 +251,22 @@ jobs:
           if (-not $release) {
             gh release create $tag --title "AgentHub Desktop $tag" --generate-notes --draft
           }
-          # The manifest lists files as "local-services/<name>"; release
-          # assets are flat, so each stack file uploads under its
-          # manifest path as the asset name. The downloader's base_url
-          # resolves "local-services/agenthub-runtime.exe" directly.
+          # The manifest lists files as "local-services/<relative-path>";
+          # release asset names keep that path so the downloader's
+          # base_url resolves every entry directly.
           gh release upload $tag stack-manifest.json --clobber
-          Get-ChildItem "$env:STACK_DIR\local-services" -File | ForEach-Object {
-            $assetName = "local-services/$($_.Name)"
-            gh release upload $tag "$($_.FullName)#$assetName" --clobber
+          $servicesRoot = Join-Path $env:STACK_DIR 'local-services'
+          Get-ChildItem $servicesRoot -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($servicesRoot.Length + 1) -replace '\\', '/'
+            gh release upload $tag "$($_.FullName)#local-services/$relative" --clobber
           }
-          Write-Output "Stack published to release $tag; bootstrap with:"
+          # Honest verification: the release must actually expose a
+          # nested asset name, otherwise the downloader cannot resolve it.
+          $assets = gh release view $tag --json assets --jq '.assets[].name'
+          $manifest = Get-Content stack-manifest.json -Raw | ConvertFrom-Json
+          $first = $manifest.files[0].path
+          if ($assets -notcontains $first) {
+            throw "asset verification failed: '$first' is not listed on release $tag"
+          }
+          Write-Output "Stack published to release $tag ($($assets.Count) assets); bootstrap with:"
           Write-Output "  agenthub upgrade https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/stack-manifest.json"
