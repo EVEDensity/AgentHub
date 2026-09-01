@@ -35,7 +35,7 @@ from app.services.websocket_manager import manager
 logger = logging.getLogger("agenthub.websocket")
 
 # ── lazy per-user memory singletons (owned by this lane) ─────────────
-_memory_extractors: dict[str, object] = {}
+# L0/L1 only (ADR-0107): user-scoped session summaries + durable turns.
 _session_mgrs: dict[str, object] = {}
 _session_stores: dict[str, object] = {}
 
@@ -65,18 +65,6 @@ async def _auto_name_and_broadcast(session_id: str) -> None:
             )
     except Exception:
         logger.debug("auto-name background task failed for %s", session_id, exc_info=True)
-
-def _get_memory_extractor(user_id: str = ""):
-    """Return a per-user MemoryExtractor backed by the user's memory directory."""
-    global _memory_extractors
-    uid = user_id or "local-admin"
-    if uid not in _memory_extractors:
-        from app.config import MEMORY_DIR
-        from app.services.memory import MemoryExtractor
-        from app.services.memory.storage import MemoryStorage
-        user_dir = MEMORY_DIR / "users" / uid
-        _memory_extractors[uid] = MemoryExtractor(MemoryStorage(user_dir))
-    return _memory_extractors[uid]
 
 def _get_session_mgr(user_id: str = ""):
     """Return a per-user SessionMemoryManager backed by the user's memory directory."""
@@ -122,14 +110,6 @@ async def _append_turn_to_session_memory(
             sender=sender or "user",
             agent_name=agent_name or "assistant",
         )
-        if turn_count >= 10 and turn_count % 10 == 0:
-            try:
-                from app.services.memory_summary_consumer import memory_summary_consumer
-                await memory_summary_consumer.request_compaction(
-                    session_id, user_id or "local-admin",
-                )
-            except Exception:
-                logger.debug("memory compaction request failed", exc_info=True)
         # Invalidate the memory context cache so the next agent call
         # picks up the updated session memory.
         try:
@@ -673,18 +653,10 @@ async def _process_and_stream(
             manager.remove_token(session_id, token)
 
     # ── Auto memory tasks (background, non-blocking, throttled) ───
-    # Both extraction and summarization fire in background after a message.
-    # Throttled: only run once every _THROTTLE_SECONDS per session to avoid
-    # firing expensive LLM calls on every single message.
+    # L1 session-summary update fires in background after a message
+    # (throttled per session). L2 semantic extraction was removed with
+    # the memory slimming (ADR-0107).
     if ws_state.should_run_memory_tasks(session_id):
-        try:
-            from app.config import AUTO_MEMORY_ENABLED
-            if AUTO_MEMORY_ENABLED:
-                extractor = _get_memory_extractor(user_id)
-                asyncio.create_task(extractor.extract_from_session(session_id))
-        except Exception:
-            logger.debug("auto-memory extraction init failed", exc_info=True)
-
         try:
             session_mgr = _get_session_mgr(user_id)
             asyncio.create_task(session_mgr.update_session_summary(session_id))

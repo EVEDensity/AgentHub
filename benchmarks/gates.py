@@ -8,7 +8,6 @@ Usage:
     python benchmarks/gates.py check-docs
     python benchmarks/gates.py check-links
     python benchmarks/gates.py run --name api_latency_p95 [--threshold-ms 200]
-    python benchmarks/gates.py run --name knowledge_retrieval_recall
     python benchmarks/gates.py run --name cn_tokenizer_precision
 """
 
@@ -33,8 +32,6 @@ if str(ROOT) not in sys.path:
 PERFORMANCE_CLAIMS: dict[str, str] = {
     "api_latency_p95": "docs/zh/advanced/performance.md (P95 < 200ms)",
     "token_compaction_ratio": "docs/zh/advanced/performance.md (compaction)",
-    "knowledge_retrieval_p95": "docs/zh/advanced/performance.md (P95 < 80ms target)",
-    "knowledge_retrieval_recall": "docs/architecture/components/memory.md (L2 recall > 85%)",
     "cn_tokenizer_precision": "docs/architecture/components/memory.md (CN token parity < 5%)",
     "streaming_ttft": "docs/zh/advanced/performance.md (streaming first token)",
 }
@@ -44,7 +41,6 @@ PERFORMANCE_CLAIMS: dict[str, str] = {
 # docs/zh/advanced/performance.md ("首 Token 延迟 P95 < 2s").
 DEFAULT_THRESHOLDS_MS: dict[str, float] = {
     "api_latency_p95": 200.0,
-    "knowledge_retrieval_p95": 80.0,
     "streaming_ttft": 2_000.0,
 }
 
@@ -179,10 +175,6 @@ def run_gate(name: str, threshold_ms: float, addr: str | None) -> GateResult:
         return _measure_api_latency(addr, threshold_ms)
     if name == "token_compaction_ratio":
         return _measure_token_compaction_ratio()
-    if name == "knowledge_retrieval_p95":
-        return _measure_knowledge_retrieval_p95(threshold_ms)
-    if name == "knowledge_retrieval_recall":
-        return _measure_knowledge_retrieval_recall()
     if name == "code_file_size":
         return _measure_code_file_size()
     if name == "code_complexity":
@@ -227,147 +219,6 @@ def _measure_token_compaction_ratio(min_ratio: float = 0.25) -> GateResult:
         detail=f"compaction ratio={ratio:.2%} (before={before} after={after} "
                f"min={min_ratio:.0%})",
     )
-
-
-# ─── R4: offline eval set ─────────────────────────────────────────────────
-
-# Offline retrieval eval set: distinct-topic Chinese documents with
-# vocabulary-overlapping queries. Expected result id must rank in the top-3.
-RETRIEVAL_EVAL_SET: list[tuple[str, str, str]] = [
-    ("doc-数据库索引", "PostgreSQL 数据库索引优化：为高频查询字段建立复合索引，避免全表扫描，使用 EXPLAIN 分析执行计划",
-     "如何优化数据库索引查询性能"),
-    ("doc-容器部署", "Kubernetes 集群部署与自动扩容：配置 HPA 指标、资源配额与滚动更新策略",
-     "Kubernetes 集群自动扩容配置方法"),
-    ("doc-认证授权", "JWT 令牌认证与 RBAC 权限控制：颁发短期令牌、按角色校验接口权限并支持令牌刷新",
-     "JWT 认证和 RBAC 权限控制实现方案"),
-    ("doc-分布式锁", "Redis 分布式锁：使用 SETNX 与过期时间防止重复提交，配合 Lua 脚本保证原子性",
-     "Redis 分布式锁防止重复请求"),
-    ("doc-缓存策略", "数据库与 Redis 缓存策略：缓存穿透、击穿与雪崩的防护以及缓存一致性更新",
-     "数据库缓存穿透与一致性更新"),
-    ("doc-消息队列", "消息队列与异步任务：引入队列解耦削峰、延迟任务与失败重试机制",
-     "消息队列解耦异步任务处理"),
-    ("doc-向量检索", "向量检索与相似度召回：将文档切块嵌入向量库，按余弦相似度召回并融合重排",
-     "向量检索相似度召回与重排"),
-]
-
-
-def _measure_knowledge_retrieval_recall(min_recall: float = 0.85) -> GateResult:
-    """Measure L2 retrieval recall on the internal eval set using the
-    production vector index and the default local embedder."""
-    import asyncio
-    import tempfile
-    from datetime import UTC, datetime
-
-    from app.services.memory.l2_vector import (
-        EmbeddingVersion,
-        L2VectorEntry,
-        L2VectorIndex,
-        LocalHashEmbedder,
-    )
-
-    async def measure() -> GateResult:
-        index = L2VectorIndex(tempfile.mkdtemp(prefix="agenthub-rec-gate-"))
-        embedder = LocalHashEmbedder()
-        now = datetime.now(UTC).isoformat()
-        version = EmbeddingVersion.current().tag
-
-        for record_id, text, _query in RETRIEVAL_EVAL_SET:
-            entry = L2VectorEntry(
-                record_id=record_id, text=text, scope="user", session_id="eval",
-                embedding_version=version, vector=embedder.embed(text),
-                created_at=now, updated_at=now,
-            )
-            await index.upsert(entry)
-
-        expected_ids = {record_id for record_id, _text, _query in RETRIEVAL_EVAL_SET}
-        hits = 0
-        for record_id, _text, query in RETRIEVAL_EVAL_SET:
-            results = await index.search(embedder.embed(query), limit=3)
-            if any(hit.record_id == record_id for _score, hit in results):
-                hits += 1
-        recall = hits / max(1, len(expected_ids))
-        passed = recall >= min_recall
-        return GateResult(
-            name="knowledge_retrieval_recall",
-            passed=passed,
-            detail=f"recall@{3}={recall:.0%} (hits={hits}/{len(expected_ids)} "
-                   f"min={min_recall:.0%})",
-        )
-
-    return asyncio.run(measure())
-
-
-def _measure_knowledge_retrieval_p95(threshold_ms: float = 80.0, repeats: int = 30) -> GateResult:
-    """Measure real ``L2VectorIndex.search()`` p95 latency over the eval set.
-
-    Seeds the production file-backed index with the same offline corpus as
-    the recall gate, then times repeated top-3 searches with the default
-    local embedder. Regression above *threshold_ms* fails the gate; a probe
-    that returns zero hits fails too (latency of an empty search is
-    meaningless).
-    """
-    import asyncio
-    import tempfile
-    from datetime import UTC, datetime
-
-    from app.services.memory.l2_vector import (
-        EmbeddingVersion,
-        L2VectorEntry,
-        L2VectorIndex,
-        LocalHashEmbedder,
-    )
-
-    async def measure() -> GateResult:
-        index = L2VectorIndex(tempfile.mkdtemp(prefix="agenthub-lat-gate-"))
-        embedder = LocalHashEmbedder()
-        now = datetime.now(UTC).isoformat()
-        version = EmbeddingVersion.current().tag
-
-        for record_id, text, _query in RETRIEVAL_EVAL_SET:
-            await index.upsert(L2VectorEntry(
-                record_id=record_id, text=text, scope="user", session_id="eval",
-                embedding_version=version, vector=embedder.embed(text),
-                created_at=now, updated_at=now,
-            ))
-
-        queries = [(record_id, embedder.embed(query)) for record_id, _t, query in RETRIEVAL_EVAL_SET]
-
-        # Warm-up (first read parses vectors.json) + correctness sanity:
-        # measuring empty-search latency proves nothing.
-        first_hits = 0
-        for record_id, vec in queries:
-            results = await index.search(vec, limit=3)
-            if any(hit.record_id == record_id for _score, hit in results):
-                first_hits += 1
-        if first_hits == 0:
-            return GateResult(
-                name="knowledge_retrieval_p95",
-                passed=False,
-                detail="probe produced zero hits — latency measurement invalid",
-            )
-
-        samples: list[float] = []
-        empty_seen = False
-        for _ in range(repeats):
-            for _record_id, vec in queries:
-                start = time.perf_counter()
-                results = await index.search(vec, limit=3)
-                samples.append((time.perf_counter() - start) * 1000.0)
-                if not results:
-                    empty_seen = True
-        samples.sort()
-        p95 = samples[max(0, int(len(samples) * 0.95) - 1)]
-        passed = (not empty_seen) and p95 <= threshold_ms
-        return GateResult(
-            name="knowledge_retrieval_p95",
-            passed=passed,
-            detail=f"p95={p95:.1f}ms threshold={threshold_ms:.0f}ms "
-                   f"samples={len(samples)} correctness@3={first_hits}/{len(queries)} "
-                   f"backend=L2VectorIndex(file-json)",
-            measured_ms=p95,
-        )
-
-    return asyncio.run(measure())
 
 
 def _measure_multimodal_e2e_probe() -> GateResult:

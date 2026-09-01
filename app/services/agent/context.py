@@ -118,12 +118,14 @@ async def _build_memory_context(
     section_budgets: dict[str, int] | None = None,
     force: bool = False,
 ) -> str:
-    """Build a budgeted, deduplicated L0/L1/L3 memory projection.
+    """Build a lightweight L0/L1 memory projection (ADR-0107).
 
-    DB history is treated as L0 working context and excluded from the memory
-    projection. Session summary is L1, file conversation is the recent durable
-    tail, and global summary is L3 cross-session memory. L2 knowledge remains
-    retrieval-only through memory_search.
+    DB history is the working transcript (L0) and is excluded here. L1 =
+    session summary (higher priority) plus recent durable conversation
+    turns. The heavy L2/semantic/L3-global/procedural layers and the
+    budgeted multi-class projection (memory_context) were removed with the
+    web-chat memory decommission (ADR-0107); the CLI/Mission path already
+    builds its own compact context (build_compact_context).
     """
     import hashlib
 
@@ -131,36 +133,25 @@ async def _build_memory_context(
     from app.services.memory.storage import MemoryStorage
     from app.services.memory.session_memory import SessionMemoryManager
     from app.services.memory.session_store import SessionMemoryStore
-    from app.services.memory.semantic_memory import SemanticMemoryStore
-    from app.services.memory.procedural_memory import ProceduralMemoryCatalog
-    from app.services.memory_context import MemoryContextSection, build_memory_context
-    from app.services.performance_monitor import monitor
 
     uid = user_id or "local-admin"
     history_fp = hashlib.sha256(history.encode("utf-8")).hexdigest()[:12]
-    query_fp = hashlib.sha256(query.encode("utf-8")).hexdigest()[:12]
-    budget_fp = hashlib.sha256(
-        json.dumps(section_budgets or {}, sort_keys=True).encode("utf-8")
-    ).hexdigest()[:8]
-    cache_key = f"{uid}:{session_id}:{provider}:{model}:{max_tokens}:{history_fp}:{query_fp}:{budget_fp}"
+    cache_key = f"l1:{uid}:{session_id}:{provider}:{model}:{max_tokens}:{history_fp}"
     now_ts = time.monotonic()
     cached = _MEMORY_CONTEXT_CACHE.get(cache_key)
     if not force and cached and now_ts - cached[0] < 60.0:
         return cached[1]
 
     user_memory_dir = MEMORY_DIR / "users" / uid
-    storage = MemoryStorage(user_memory_dir)
-    session_mgr = SessionMemoryManager(storage)
+    session_mgr = SessionMemoryManager(MemoryStorage(user_memory_dir))
     session_store = SessionMemoryStore(user_memory_dir)
-    semantic_store = SemanticMemoryStore(user_memory_dir)
-    procedural_catalog = ProceduralMemoryCatalog(uid, storage)
-    sections: list[MemoryContextSection] = []
+    parts: list[str] = []
 
     if session_id:
         try:
             session_summary = await session_mgr.get_session_summary(session_id)
             if session_summary:
-                sections.append(MemoryContextSection("session-summary", session_summary, 1, "episodic"))
+                parts.append(f"【会话摘要】\n{session_summary}")
         except Exception:
             logger.debug("memory context: session summary unavailable", exc_info=True)
 
@@ -169,56 +160,11 @@ async def _build_memory_context(
                 session_id, max_chars=max(2200, max_tokens * 4), recent_turns=6,
             )
             if conversation:
-                sections.append(MemoryContextSection("recent-durable-memory", conversation, 3, "episodic"))
+                parts.append(f"【近期持久对话】\n{conversation}")
         except Exception:
             logger.debug("memory context: durable conversation unavailable", exc_info=True)
 
-    try:
-        semantic_records = await semantic_store.search(query, limit=6)
-        if semantic_records:
-            semantic_text = "\n".join(
-                f"- [{record.category}] {record.value} "
-                f"(confidence={record.confidence:.2f}, source={record.source})"
-                for record in semantic_records
-            )
-            sections.append(MemoryContextSection("semantic-memory", semantic_text, 2, "semantic"))
-    except Exception:
-        logger.debug("memory context: semantic memory unavailable", exc_info=True)
-
-    try:
-        global_summary = await session_mgr.get_global_summary()
-        if global_summary:
-            sections.append(MemoryContextSection("global-summary", global_summary, 4, "semantic"))
-    except Exception:
-        logger.debug("memory context: global summary unavailable", exc_info=True)
-
-    if not section_budgets or section_budgets.get("procedural", 0) > 128:
-        try:
-            procedures = await procedural_catalog.search(query, limit=6)
-            if procedures:
-                procedure_text = "\n".join(
-                    f"- [{record.kind}] {record.name}: {record.description} "
-                    f"(source={record.source}, version={record.source_version})"
-                    for record in procedures
-                )
-                sections.append(MemoryContextSection("procedural-memory", procedure_text, 2, "procedural"))
-        except Exception:
-            logger.debug("memory context: procedural memory unavailable", exc_info=True)
-
-    result, stats = build_memory_context(
-        sections,
-        exclude_texts=[history],
-        max_tokens=max_tokens,
-        provider=provider,
-        model=model,
-        section_budgets=section_budgets,
-    )
-    monitor.record_token_compaction(
-        "memory",
-        int(stats["tokens_before"]),
-        int(stats["tokens_after"]),
-        bool(stats["truncated"]),
-    )
+    result = "\n\n".join(parts)
     _MEMORY_CONTEXT_CACHE[cache_key] = (now_ts, result)
     return result
 

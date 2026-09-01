@@ -11,7 +11,6 @@ from app.api import (
     files,
     git,
     im,
-    memory,
     settings,
     skills,
     system,
@@ -25,7 +24,6 @@ from app.api.v1 import router as v1_router
 
 api_router = APIRouter()
 api_router.include_router(system.router)
-api_router.include_router(memory.router)
 api_router.include_router(im.router)
 api_router.include_router(auth.router)
 api_router.include_router(user.router)

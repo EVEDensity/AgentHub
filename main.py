@@ -115,13 +115,6 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        from app.services.memory_summary_consumer import memory_summary_consumer
-        await memory_summary_consumer.start()
-        app.state.memory_summary_consumer = memory_summary_consumer
-    except Exception:
-        _log.warning("startup: memory summary consumer unavailable", exc_info=True)
-
-    try:
         from app.services.distributed_cache_versions import (
             distributed_cache_version_bus,
         )

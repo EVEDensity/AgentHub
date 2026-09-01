@@ -31,10 +31,6 @@ jobs:
         run: python benchmarks/gates.py check-docs
       - name: Real token-compaction gate (measured against production helpers)
         run: python benchmarks/gates.py run --name token_compaction_ratio
-      - name: L2 retrieval recall gate (offline eval set, recall > 85%)
-        run: python benchmarks/gates.py run --name knowledge_retrieval_recall
-      - name: Knowledge retrieval latency gate (L2 probe, p95 < 80ms)
-        run: python benchmarks/gates.py run --name knowledge_retrieval_p95
       - name: Code file-size gate (<=800 lines, legacy ratchet may only shrink)
         run: python benchmarks/gates.py run --name code_file_size
       - name: Code complexity gate (McCabe <=20, class-qualified exemptions)
