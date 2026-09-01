@@ -91,6 +91,8 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 
 **Observability** — Prometheus + Grafana + OTLP tracing. See what every agent is doing in real time.
 
+**Public benchmark score** — the developer CLI execution loop has a citable, replayable pass rate on a Terminal-Bench-style acceptance-command suite: **8/8 (100%) with deepseek-v4-flash (2026-09-01)**. See [`benchmarks/public-scores.md`](benchmarks/public-scores.md) for methodology and honest scope.
+
 ## Stack
 
 Go services over NATS JetStream. Rust for performance-critical paths (stream processing, retrieval, fanout). Python for offline/async tasks (model adaptation, document pipelines, evaluation). Next.js frontend. PostgreSQL, Redis, Qdrant, MinIO underneath.

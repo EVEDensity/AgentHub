@@ -91,6 +91,8 @@ failures.
 
 ## Rule
 
+- Citable real-model pass rates live in [`public-scores.md`](public-scores.md)
+  (date + model labeled honestly; failures must be recorded too).
 - A claim may appear as "implemented" only when the matching gate passes on CI.
 - A claim without a gate is a target value and must be worded as such.
 - Benchmark regressions fail the merge; the author reports before/after

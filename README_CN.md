@@ -89,6 +89,8 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 
 **可观测** — Prometheus + Grafana + OTLP 链路追踪。每个智能体在想什么、在做什么，一目了然。
 
+**公开基准分数** — 开发者 CLI 执行闭环在 Terminal-Bench 类"验收命令"评测集上有可引用、可复跑的通过率：**deepseek-v4-flash 8/8 (100%)（2026-09-01）**。方法与诚实范围见 [`benchmarks/public-scores.md`](benchmarks/public-scores.md)。
+
 ## 技术栈
 
 Go 服务跑在 NATS JetStream 上。Rust 扛性能关键路径（流处理、检索引擎、扇出）。Python 负责离线/异步任务（模型适配、文档管线、评估）。前端 Next.js。底层 PostgreSQL + Redis + Qdrant + MinIO。
