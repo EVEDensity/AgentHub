@@ -274,7 +274,7 @@ Aider、Cline、Goose）：
   闭环冒烟 → 双包发布，需 `NPM_TOKEN` secret）。
   结构契约测试：`tests/npm/test_npm_cli_package.py`、
   `tests/cli/test_cli_frozen.py`。
-  余项：打首个 `cli-v*` tag 实际发布（依赖 npm scope 与 NPM_TOKEN）。
+  余项：打首个 `cli-v*` tag 实际发布（依赖 npm scope 与 NPM\_TOKEN）。
 
 * PR 审查 Action：`agenthub review-pr` / GitHub Action，接入现有 verifier。
   —— 2026-09-01 已实现（I-4）：`app/cli/review.py` +
@@ -298,6 +298,20 @@ Aider、Cline、Goose）：
 
 * 桌面签名发布解阻塞：将 5 个签名 secrets 流程化提上日程；mac 不在当前
   范围（明确暂不投入）。
+  —— 2026-09-01 已流程化（I-5）：
+  `docs/operations/release-unblocking-runbook.md`（5 个 secrets 的获取、
+  配置、验证逐步手册：updater 密钥对本地
+  `tauri signer generate` 生成、证书三路线含零成本自签方案及其
+  诚实局限、tag 发布命令与故障排查）。
+  同时补上发布链路真实缺口：此前证书 secrets 仅用于策略门禁、
+  产物从未被真实签名——新增 `desktop/sign-windows-artifacts.ps1`
+  （tag 路径对 exe/msi/dll 逐一 Authenticode 签名 + 时间戳 + 签名后
+  复验，无 secrets 时本地开发路径不受影响），
+  `package-windows.ps1` 在 release manifest 之前调用。
+  测试 `tests/desktop/test_release_signing.py`（15 例）。
+  余项（需仓库管理员操作）：按 runbook §A 配置 secrets → 打
+  `desktop-v0.3.0` / `cli-v0.3.0` tag 完成首个公开 Release 与 npm
+  发布 → README 声明即全部兑现。
   验收标准：README 可声明"一行安装 + 有公开分数 + PR 审查可用"。
 
 ## 6. 硬性停止条件

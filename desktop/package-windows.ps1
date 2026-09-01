@@ -206,6 +206,17 @@ if ($Portable) {
     Write-Output "Portable package: $portableArchive"
 }
 $releaseManifestPath = Join-Path $installerDirectory "AgentHub-$TargetTriple-release.json"
+# Public release path: code-sign every distributable artifact with the
+# CI-injected certificate (ADR-0099). The release policy gates on secret
+# presence; this is where the certificate is actually applied.
+if ($env:AGENTHUB_UPDATE_ENABLED -eq '1') {
+    $signingScript = Join-Path $desktopDirectory "sign-windows-artifacts.ps1"
+    Write-Output "Signing distributable artifacts."
+    & $signingScript -Path $installerDirectory, (Join-Path $releaseDirectory 'agenthub-desktop.exe'), (Join-Path $releaseDirectory 'agenthub-runtime.exe')
+    if ($LASTEXITCODE -ne 0) {
+        throw "Artifact signing failed."
+    }
+}
 & $releaseManifestScript -TargetTriple $TargetTriple -OutputPath $releaseManifestPath
 if ($LASTEXITCODE -ne 0) {
     throw "Release manifest generation failed."
