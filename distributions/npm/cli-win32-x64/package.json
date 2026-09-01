@@ -1,0 +1,16 @@
+{
+  "name": "@agenthub/cli-win32-x64",
+  "version": "0.0.0",
+  "description": "Prebuilt AgentHub CLI binary for Windows x64. Install @agenthub/cli instead — this package is an internal platform target.",
+  "license": "Apache-2.0",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "agenthub.exe",
+    "README.md"
+  ]
+}

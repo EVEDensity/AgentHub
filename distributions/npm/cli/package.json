@@ -1,0 +1,23 @@
+{
+  "name": "@agenthub/cli",
+  "version": "0.0.0",
+  "description": "AgentHub developer CLI — verifier-gated agent missions from the terminal. Single frozen binary, zero runtime dependencies (Windows x64 first).",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EVEDensity/AgentHub.git"
+  },
+  "bin": {
+    "agenthub": "bin/agenthub.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "@agenthub/cli-win32-x64": "0.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

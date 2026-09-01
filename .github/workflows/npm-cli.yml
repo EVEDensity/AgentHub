@@ -1,0 +1,118 @@
+name: npm CLI release
+
+# North-star M3 / I-2: `npm i -g @agenthub/cli` — one-line install.
+# On cli-v* tags: freeze the developer CLI (python -m app.cli ->
+# agenthub.exe via PyInstaller), verify the frozen binary end to end on
+# the mock channel (closed loop without any Python on the host), then
+# publish @agenthub/cli-win32-x64 and @agenthub/cli to npm.
+#
+# Required secret: NPM_TOKEN (automation token of an account with
+# rights on the @agenthub npm scope).
+
+on:
+  push:
+    tags: ['cli-v*']
+
+concurrency:
+  group: npm-cli-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    name: Freeze, verify, publish
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Prepare Python environment for the CLI freeze
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+
+      - name: Freeze the CLI into a single binary
+        shell: pwsh
+        run: |
+          scripts\build-cli-windows.ps1 -OutputDirectory dist
+          if (-not (Test-Path 'dist\agenthub.exe')) { throw 'dist\agenthub.exe missing' }
+
+      - name: Frozen binary closed-loop smoke (mock channel, no host Python)
+        shell: pwsh
+        run: |
+          # The acceptance loop for I-2: the frozen binary must boot its
+          # own mission-control subprocess (_serve), run one mission on
+          # the offline mock channel, and exit with the contract code.
+          $workspace = Join-Path $env:RUNNER_TEMP 'cli-smoke-workspace'
+          New-Item -ItemType Directory -Force -Path $workspace | Out-Null
+          $env:AGENTHUB_CLI_PROVIDER = 'mock'
+          & dist\agenthub.exe exec "write a file pong.txt containing the word pong" `
+            --provider mock --workspace $workspace --json `
+            --mission-timeout 300 --runner-timeout-seconds 240
+          if ($LASTEXITCODE -ne 0) {
+            throw "frozen closed-loop smoke failed (exit $LASTEXITCODE; expected 0)"
+          }
+          if (-not (Test-Path (Join-Path $workspace 'pong.txt'))) {
+            throw 'frozen closed-loop smoke: verifier passed but pong.txt is missing'
+          }
+
+      - name: Stage npm packages with the tag version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".Substring('cli-v'.Length)
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "invalid version in tag: $version" }
+
+          # Platform package: inject version + the frozen binary.
+          $platformDir = 'distributions\npm\cli-win32-x64'
+          $pkg = Get-Content "$platformDir\package.json" -Raw | ConvertFrom-Json
+          $pkg.version = $version
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content "$platformDir\package.json" -Encoding utf8
+          Copy-Item dist\agenthub.exe -Destination "$platformDir\agenthub.exe" -Force
+
+          # Main package: version + matching optionalDependencies pin.
+          $mainDir = 'distributions\npm\cli'
+          $pkg = Get-Content "$mainDir\package.json" -Raw | ConvertFrom-Json
+          $pkg.version = $version
+          $pkg.optionalDependencies.'@agenthub/cli-win32-x64' = $version
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content "$mainDir\package.json" -Encoding utf8
+
+          # Honest verification: the platform tarball must actually
+          # contain the binary, or installs would ship an empty package.
+          Push-Location $platformDir
+          try {
+            npm pack --dry-run
+            if (-not (Test-Path 'agenthub.exe')) { throw 'agenthub.exe not staged into platform package' }
+          } finally { Pop-Location }
+          if (-not (Select-String -Path (Join-Path $platformDir 'package.json') -Pattern ([regex]::Escape($version)) -Quiet)) {
+            throw 'platform package.json version injection failed'
+          }
+
+      - name: Publish platform package (@agenthub/cli-win32-x64)
+        shell: pwsh
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+        working-directory: distributions/npm/cli-win32-x64
+
+      - name: Publish main package (@agenthub/cli)
+        shell: pwsh
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+        working-directory: distributions/npm/cli
+
+      - name: Publish summary
+        shell: pwsh
+        run: |
+          Write-Output "Published @agenthub/cli ${{ github.ref_name }} (win32-x64 binary included)."
+          Write-Output "Verify on a clean machine: npm i -g @agenthub/cli; agenthub run `"<objective>`""
