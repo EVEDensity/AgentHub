@@ -177,6 +177,26 @@ class DatabaseAgentBindingResolver:
             raise AgentBindingUnavailableError("Agent catalog returned invalid binding")
         return binding
 
+    async def list_enabled(self, *, scope_id: str) -> list[AgentBinding]:
+        """Return every enabled agent binding for this workspace.
+
+        Used by the unified member roster endpoint — the member model
+        (ADR-0108 §3.3) treats bound, enabled agents as first-class
+        session members alongside human users.
+        """
+        from app.db.session import afetch_all
+
+        rows = await afetch_all(
+            """
+            SELECT agent_id, adapter_type, capabilities
+            FROM agent_catalog_bindings
+            WHERE scope_id = $1 AND enabled = TRUE
+            ORDER BY agent_id ASC
+            """,
+            scope_id,
+        )
+        return [AgentBinding.from_mapping(row) for row in rows]
+
 
 async def _select_catalog_binding(
     scope_id: str,

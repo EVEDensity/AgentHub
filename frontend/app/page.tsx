@@ -36,6 +36,7 @@ import {
   isObserverRestrictedSession,
 } from '../lib/mention';
 import { authHeaders, fetchAuth as fetchAuthWithCallback } from '../lib/api';
+import { agentsFromMembers, fetchWorkspaceMembers } from '../lib/workspaceMembers';
 import { buildOutgoingMessageDraft } from '../lib/outgoingMessageDraft';
 import { clearDagSession, useDagState } from '../lib/dagStore';
 import { handleSharedWebSocketEvent } from '../lib/websocketSharedEvents';
@@ -334,10 +335,12 @@ export default function AgentHubIM(): JSX.Element {
           handleTokenExpired();
         }
       });
-    // ── Fetch agents ───────────────────────────────────────────────
-    fetch('/api/agent/registry', { headers: authHeaders() })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data: Agent[]) => setAgents(data.length ? data : FALLBACK_AGENTS))
+    // ── Fetch agents (v1 unified member roster — P1 ADR-0108 §3.3) ──
+    fetchWorkspaceMembers('local-admin')
+      .then((roster) => {
+        const mapped = agentsFromMembers(roster.members);
+        setAgents(mapped.length ? mapped : FALLBACK_AGENTS);
+      })
       .catch(() => setAgents(FALLBACK_AGENTS));
     // ── Fetch workflows ─────────────────────────────────────────────
     fetch('/api/chat/workflows', { headers: authHeaders() })

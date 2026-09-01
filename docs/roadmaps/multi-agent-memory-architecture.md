@@ -206,11 +206,25 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
    字段兼容。
 2. **Web 聊天迁移 Mission/v1 API**：聊天表面脱离 legacy orchestrator，
    记忆走 `build_compact_context`。验收：聊天任务与 CLI 同源同终态。
+   ✅ P0 切片（2026-09-01）：`POST /api/v1/chat/mission` 适配器
+   （`app/api/v1/chat_mission.py`，create+start 合并返回 SSE
+   streamUrl）；`GET /api/v1/workspaces/{scope_id}/members` 统一
+   成员目录（`app/api/v1/workspace_members.py`）；前端
+   `frontend/lib/workspaceMembers.ts` 替代硬编码 FALLBACK_AGENTS，
+   `frontend/lib/missionEventMapper.ts` 将 Mission 事件映射为聊天气泡
+   类型。legacy WebSocket/`websocket_processor.py` 暂保留，后续切片
+   逐步替换。
 
 ### 中期（P1）
 
 3. **Agent 成员化第一刀**：统一会话成员目录（人类/内部/外部），
    会话内 Agent 可见、可 @。验收：UserRoster 与成员目录一致。
+   ✅ P1 切片（2026-09-01）：`GET /api/v1/workspaces/{scope_id}/members`
+   返回统一成员视图（当前人类 + 启用的 Agent Catalog 绑定）；
+   `frontend/app/page.tsx` 改为从 v1 API 拉取 Agent 列表，替代
+   `/api/agent/registry` legacy 端点；`DatabaseAgentBindingResolver
+   .list_enabled` 新增批量查询方法。测试 `tests/api/
+   test_v1_workspace_members.py` 4 例 + 前端 vitest 3/6 例。
 4. **消息→Mission 触发路由**：mention 解析结果自动创建 Mission 并
    回写结果事件。验收：会话内 @dev 完成一次端到端任务闭环。
 5. **项目事实落地**：`.agenthub/memory.md` 键级覆盖语义 + 门控注入。
