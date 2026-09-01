@@ -5,7 +5,7 @@
 > lifecycle smoke, WebView2 GUI smoke); signed public release pending the
 > five signing secrets in the repository.
 > Owner: desktop maintainers
-> Last reviewed: 2026-08-24
+> Last reviewed: 2026-09-01
 
 `desktop/` is the native, user-facing entry point for AgentHub. It owns local
 Runtime lifecycle, redacted diagnostics, OS integration, and secure credential
@@ -49,7 +49,8 @@ still targets the first instance (single-instance limitation).
   screenshots under `output/playwright/`.
 - `updater-rollback-smoke.ps1`: verifies signed updater metadata and rehearses
   restoring the previous ready sidecar after a failed candidate launch.
-- `ui/`: dependency-free shell UI served by the desktop application.
+- `ui/`: dependency-free shell UI served by the desktop application,
+  including the first-run stack bootstrap wizard (below).
 - `src-tauri/src/bootstrap.rs`: stack bootstrap downloader (north-star
   M3). On first run the shell can fetch a runtime stack from a release
   source (`stack-manifest.json`, schemaVersion 1) into
@@ -61,6 +62,32 @@ still targets the first instance (single-instance limitation).
   The same manifest format is produced by
   `scripts/make_stack_manifest.py` and consumed by the developer CLI
   (`agenthub upgrade`), so desktop and CLI bootstrap identically.
+
+## First-run bootstrap wizard (M3)
+
+When no stack is pinned yet, the shell opens the first-run wizard
+(`ui/index.html` `#bootstrap-dialog`, wired in `ui/main.js`). The user
+confirms or edits the release-source manifest URL, then the wizard:
+
+- streams `bootstrap-progress` events into a per-file log and progress
+  bar (file index, total, verified/downloaded counts, resume flag);
+- shows per-file sha256 verification as it happens and only switches
+  the pin after every file verifies;
+- on failure, keeps already-verified files so "重试" resumes instead of
+  restarting, and never disturbs an existing pinned stack;
+- remembers the manifest URL and a dismissal choice in localStorage;
+  the wizard also stays reachable from Settings for later upgrades.
+
+The wizard reuses the same `bootstrap_stack` Tauri command and
+`stack-manifest.json` contract as the CLI bootstrap path. Structural
+UI tests live in `tests/desktop/test_bootstrap_wizard_ui.py`.
+
+The `desktop-v*` release pipeline (`.github/workflows/desktop-windows.yml`
+`publish-stack` job) builds the full local-services stack
+(mission-control, gateway, mcp-gateway, frontend, runner sidecar) and
+attaches it with the manifest to the GitHub Release, so a clean machine
+can install the complete local SQLite profile without preinstalled
+PG/Docker.
 
 ## Development
 
