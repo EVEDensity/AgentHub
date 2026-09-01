@@ -14,6 +14,7 @@ no model key is present, and structured result reporting.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -21,11 +22,12 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from app.cli.project_facts import facts_block_for_objective
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR_NAME = ".agenthub"
@@ -210,6 +212,20 @@ def resolve_model_settings(
 
 def state_dir(cwd: Path) -> Path:
     return cwd / STATE_DIR_NAME
+
+
+CONFIG_FILE_NAME = "config.json"
+
+
+def _load_config(cwd: Path) -> dict[str, Any]:
+    config_path = state_dir(cwd) / CONFIG_FILE_NAME
+    if not config_path.is_file():
+        return {}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def build_contract(contract_id: str, time_seconds: int) -> dict[str, Any]:
@@ -718,203 +734,6 @@ def list_recent_missions(
             return client.missions()[:limit]
 
 
-def _parse_timestamp(value: Any) -> datetime | None:
-    """Best-effort ISO-8601 parse of an API timestamp field."""
-    if not isinstance(value, str) or not value:
-        return None
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _field(record: dict[str, Any], *names: str) -> Any:
-    """Read the first present field name.
-
-    Tolerates snake_case and camelCase spellings — the v1 API serializes
-    with camelCase aliases while some call sites pass plain records.
-    """
-    for name in names:
-        if name in record:
-            return record[name]
-    return None
-
-
-def filter_missions_by_query(
-    missions: list[dict[str, Any]],
-    query: str,
-    *,
-    status: str | None = None,
-    days: int | None = None,
-    now: datetime | None = None,
-) -> list[dict[str, Any]]:
-    """Filter mission records for the receipts search (ADR-0108 P0).
-
-    Pure keyword view over the mission list — no invented history:
-
-    * every whitespace-separated query term must appear (case-insensitive
-      substring) in the mission's title or objective;
-    * ``status`` filters on the exact mission status when given;
-    * ``days`` keeps missions updated within the trailing window.
-    """
-    terms = [term.lower() for term in query.split() if term]
-    if status is not None:
-        wanted = status.strip().upper()
-        missions = [
-            m for m in missions if str(m.get("status") or "").upper() == wanted
-        ]
-    if days is not None and days >= 0:
-        reference = now or datetime.now(timezone.utc)
-        kept: list[dict[str, Any]] = []
-        for mission in missions:
-            updated = _parse_timestamp(
-                _field(mission, "updated_at", "updatedAt")
-            )
-            if updated is None:
-                # Unreadable timestamps are kept rather than silently
-                # dropped — search must not hide records it cannot date.
-                kept.append(mission)
-                continue
-            age = (reference - updated).total_seconds()
-            if age <= days * 86400:
-                kept.append(mission)
-        missions = kept
-    if not terms:
-        return list(missions)
-    matched = []
-    for mission in missions:
-        haystack = " ".join(
-            (
-                str(mission.get("title") or ""),
-                str(mission.get("objective") or ""),
-            )
-        ).lower()
-        if all(term in haystack for term in terms):
-            matched.append(mission)
-    return matched
-
-
-def summarize_verdicts(evidence: list[dict[str, Any]]) -> str:
-    """Compact verdict line for one mission's evidence records."""
-    if not evidence:
-        return "NO-EVIDENCE"
-    counts: dict[str, int] = {}
-    for item in evidence:
-        verdict = str(item.get("verdict") or "UNKNOWN").upper()
-        counts[verdict] = counts.get(verdict, 0) + 1
-    return " ".join(
-        f"{verdict}x{count}" for verdict, count in sorted(counts.items())
-    )
-
-
-def build_receipt(
-    mission: dict[str, Any], evidence: list[dict[str, Any]]
-) -> dict[str, Any]:
-    """One receipts entry: mission record plus its verifier evidence.
-
-    Every conclusion the search returns carries the mission link, the
-    verifier verdicts, and the evidence summaries it came from — answers
-    cite evidence, they do not free-associate (ADR-0108).
-    """
-    return {
-        "mission_id": mission.get("id") or "",
-        "status": mission.get("status") or "",
-        "title": mission.get("title") or "",
-        "objective": mission.get("objective") or "",
-        "updated_at": _field(mission, "updated_at", "updatedAt") or "",
-        "verdicts": summarize_verdicts(evidence),
-        "evidence": [
-            {
-                "verdict": _field(item, "verdict") or "",
-                "summary": _field(item, "summary") or "",
-                "generated_at": _field(
-                    item, "generated_at", "generatedAt"
-                )
-                or "",
-            }
-            for item in evidence
-        ],
-    }
-
-
-def search_receipts(
-    *,
-    query: str,
-    state_dir: Path,
-    workspace_root: Path,
-    model: CliModelSettings,
-    limit: int = 20,
-    status: str | None = None,
-    days: int | None = None,
-) -> list[dict[str, Any]]:
-    """Search local mission history and return receipts with evidence."""
-    with MissionControlProcess(
-        state_dir=state_dir,
-        workspace_root=workspace_root,
-        model=model,
-    ) as process:
-        with MissionControlClient(process.base_url) as client:
-            client.login()
-            missions = filter_missions_by_query(
-                client.missions(), query, status=status, days=days
-            )
-            receipts = []
-            for mission in missions[: max(limit, 0)]:
-                try:
-                    evidence = client.evidence(str(mission.get("id") or ""))
-                except httpx.HTTPError:
-                    evidence = []
-                receipts.append(build_receipt(mission, evidence))
-            return receipts
-
-
-def get_mission_receipt(
-    *,
-    mission_id: str,
-    state_dir: Path,
-    workspace_root: Path,
-    model: CliModelSettings,
-) -> dict[str, Any] | None:
-    """Load one mission with its evidence for `agenthub replay`."""
-    with MissionControlProcess(
-        state_dir=state_dir,
-        workspace_root=workspace_root,
-        model=model,
-    ) as process:
-        with MissionControlClient(process.base_url) as client:
-            client.login()
-            try:
-                mission = client.get_mission(mission_id)
-            except httpx.HTTPError:
-                return None
-            try:
-                evidence = client.evidence(mission_id)
-            except httpx.HTTPError:
-                evidence = []
-            try:
-                artifacts = client.artifacts(mission_id)
-            except httpx.HTTPError:
-                artifacts = []
-            receipt = build_receipt(mission, evidence)
-            receipt["artifacts"] = [
-                {
-                    "id": item.get("id") or "",
-                    "content_address": _field(
-                        item, "contentAddress", "content_address"
-                    )
-                    or "",
-                }
-                for item in artifacts
-            ]
-            return receipt
-
-
 def execute_objective(
     *,
     objective: str,
@@ -940,6 +759,15 @@ def execute_objective(
     by faking success.
     """
     title = objective.strip().splitlines()[0][:80] or "CLI mission"
+    # ADR-0107 gated facts injection: facts sharing a keyword with the
+    # current objective are appended to the layered AGENTS.md block.
+    facts_block = facts_block_for_objective(state_dir, objective)
+    if facts_block:
+        project_instructions = (
+            f"{project_instructions}\n\n{facts_block}"
+            if project_instructions
+            else facts_block
+        )
     with MissionControlProcess(
         state_dir=state_dir,
         workspace_root=workspace_root,

@@ -199,7 +199,7 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
 1. **Receipts 任务检索切片**：Mission/Evidence 上加 FTS/关键词视图 +
    `agenthub search "<query>"`（附 mission 链接与 VERIFY 结果）。
    ✅ 已交付（2026-09-01）：`agenthub search "<关键词>" [--status] [--days]
-   [--json]` + `agenthub replay <mission_id>`（`app/cli/runtime.py::
+   [--json]` + `agenthub replay <mission_id>`（`app/cli/receipts.py::
    search_receipts`，纯读路径零 schema 变更；测试 `tests/cli/
    test_cli_search.py` 17 例）。同时修复 `agenthub missions` 缺
    `workspaceId` 查询参数导致 422 的存量缺陷，以及 v1 API camelCase
@@ -214,6 +214,10 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
 4. **消息→Mission 触发路由**：mention 解析结果自动创建 Mission 并
    回写结果事件。验收：会话内 @dev 完成一次端到端任务闭环。
 5. **项目事实落地**：`.agenthub/memory.md` 键级覆盖语义 + 门控注入。
+   ✅ 已交付（2026-09-01）：`agenthub facts list|set|get|remove`
+   （`app/cli/project_facts.py`，键级覆盖原地生效、无关事实保序）；
+   `execute_objective` 注入前按当前目标关键词门控筛选，全库永不
+   整体注入（测试 `tests/cli/test_project_facts.py` 12 例）。
 6. **MCP 记忆工具**：`recall`/`retain` 只读暴露 L0/L1 与事实。
 
 ### 长期（P2/P3）

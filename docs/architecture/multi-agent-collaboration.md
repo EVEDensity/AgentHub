@@ -57,7 +57,7 @@
 │  记忆 = 事件日志：                                                             │
 │    L0 会话/Mission 转录（唯一可回放事实源，绝不复制到第二存储）        ✅               │
 │    L1 增量摘要（change-only fold，光标后新增轮次并入既有摘要）        ✅               │
-│    项目事实（.agenthub/memory.md，键级覆盖语义）                      🔵               │
+│    项目事实（.agenthub/memory.md，键级覆盖语义）                      ✅ facts 切片    │
 │  Receipts 检索：Mission/Evidence 上的 FTS/关键词视图 + 证据回溯        ✅ CLI 切片      │
 └──────┬──────────────────────────┬──────────────────────────────┬──────────────────────┘
        ▼                          ▼                              ▼
@@ -91,8 +91,8 @@ Artifact → Verifier → Decision → Evidence → 回写会话流**。会话�
 | 任务执行链路      | Mission→WorkUnit→Runner→Harness→Artifact | ✅            | `app/domain`、`app/services/runner_worker.py`、`harness_service.py` |
 | 独立验证        | Verifier + Decision + Evidence           | ✅            | ADR-0004/0059/0060、`verifier_service/`                            |
 | 记忆 L0/L1    | 转录 + 增量摘要                                | ✅            | ADR-0107、`app/services/memory/`                                   |
-| 项目事实        | `.agenthub/memory.md` 键级覆盖               | 🔵           | ADR-0107 §存储形态已定契约                                                |
-| Receipts 检索 | 跨会话任务检索带证据回溯                             | ✅ CLI 切片      | `agenthub search`/`replay`（`app/cli/main.py`、`app/cli/runtime.py::search_receipts`），测试 `tests/cli/test_cli_search.py` |
+| 项目事实        | `.agenthub/memory.md` 键级覆盖               | ✅ CLI 切片      | `agenthub facts`（`app/cli/project_facts.py`），门控注入见 `runtime.py::execute_objective`，测试 `tests/cli/test_project_facts.py` |
+| Receipts 检索 | 跨会话任务检索带证据回溯                             | ✅ CLI 切片      | `agenthub search`/`replay`（`app/cli/receipts.py::search_receipts`），测试 `tests/cli/test_cli_search.py` |
 | 前后端联动       | Web 面板走 v1/Mission API                   | 🔵 迁移中       | ADR-0107（web chat 下线重做）                                           |
 
 ***
@@ -222,7 +222,7 @@ artifact 引用；没有 Evidence 的完成公告不允许出现（延续
         │
         ▼
 Receipts 视图（Mission/Evidence 上的关键词视图 + 时间/状态过滤；
-当前实现：app/cli/runtime.py::search_receipts，纯读路径，零 schema 变更）
+当前实现：app/cli/receipts.py::search_receipts，纯读路径，零 schema 变更）
         │  命中记录：objective、终态、verdict、artifact 引用、时间
         ▼
 带证据回答：每条结论附 mission 链接 + VERIFY 结果 + Artifact 摘要
@@ -238,7 +238,7 @@ chat 内 /replay 沿执行检查点复现全过程
 | -------- | -------------------------- | ---------------------- | ---- |
 | L0       | 会话/Mission 转录              | 顺序回放 / replay          | ✅    |
 | L1       | 增量会话摘要                     | 门控注入 prompt            | ✅    |
-| 事实       | `.agenthub/memory.md` 项目事实 | 键级覆盖，关键词注入             | 🔵   |
+| 事实       | `.agenthub/memory.md` 项目事实 | 键级覆盖，关键词注入             | ✅ CLI 切片 |
 | Receipts | Mission/Evidence 跨会话检索 | FTS/关键词视图 | ✅ CLI 切片 |
 | 向量       | embedding 检索               | **默认关闭**，opt-in + 验收标准 | 禁止默认 |
 

@@ -12,7 +12,12 @@ boundary. It is not the permanent home of every Agent feature.
   maps the Mission terminal status (CI contract). `search "<keywords>"`
   returns receipts over mission history (mission id, status, verifier
   verdicts, evidence summaries; ADR-0108 P0) and `replay <mission_id>`
-  shows one mission with its evidence and artifacts. The model API key is
+  shows one mission with its evidence and artifacts. `facts
+  list|set|get|remove` manages flat key-scoped project facts in
+  `.agenthub/memory.md` (same key supersedes in place); before each run
+  only facts sharing a keyword with the objective are appended to the
+  injected project instructions — never the whole store (ADR-0107). The
+  model API key is
   env-only and never written to disk; without a key the CLI falls back
   to the mock provider. Covered by `tests/cli/` (unit + E2E gated by
   `AGENTHUB_CLI_E2E=1`).

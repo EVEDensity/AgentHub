@@ -33,36 +33,23 @@ from app.cli.review import (
     review_exit_code,
     stage_review_workspace,
 )
+from app.cli.receipts import cmd_replay, cmd_search
+from app.cli.facts_cli import cmd_facts
 from app.cli.runtime import (
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MISSION_TIMEOUT,
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
-    CliModelSettings,
     EXIT_INFRA_ERROR,
     EXIT_OK,
     MissionRunResult,
+    _load_config,
     collect_agents_md_layers,
     execute_objective,
-    get_mission_receipt,
     list_recent_missions,
     merge_project_instructions,
     resolve_model_settings,
-    search_receipts,
     state_dir,
 )
-
-CONFIG_FILE_NAME = "config.json"
-
-
-def _load_config(cwd: Path) -> dict[str, Any]:
-    config_path = state_dir(cwd) / CONFIG_FILE_NAME
-    if not config_path.is_file():
-        return {}
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -208,6 +195,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="emit a single JSON result document on stdout",
     )
+
+    facts_parser = subparsers.add_parser(
+        "facts",
+        help="manage flat key-scoped project facts "
+        "(.agenthub/memory.md, ADR-0107)",
+    )
+    facts_subparsers = facts_parser.add_subparsers(dest="facts_command")
+    facts_subparsers.add_parser("list", help="list all facts")
+    set_parser = facts_subparsers.add_parser("set", help="set or update a fact")
+    set_parser.add_argument(
+        "name",
+        metavar="SECTION.KEY",
+        help="fact address, e.g. python.interpreter",
+    )
+    set_parser.add_argument("value", help="fact value (same key supersedes)")
+    get_parser = facts_subparsers.add_parser("get", help="read one fact")
+    get_parser.add_argument("name", metavar="SECTION.KEY")
+    remove_parser = facts_subparsers.add_parser("remove", help="delete a fact")
+    remove_parser.add_argument("name", metavar="SECTION.KEY")
 
     review_parser = subparsers.add_parser(
         "review-pr",
@@ -509,119 +515,6 @@ def cmd_missions(args: argparse.Namespace, cwd: Path) -> int:
     return EXIT_OK
 
 
-def _print_receipt(receipt: dict[str, Any]) -> None:
-    mission_id = str(receipt.get("mission_id") or "")[:38]
-    status = str(receipt.get("status") or "")[:12]
-    verdicts = str(receipt.get("verdicts") or "")[:16]
-    objective = str(receipt.get("objective") or "").splitlines()
-    first_line = (objective[0] if objective else "")[:60]
-    print(f"{mission_id:40} {status:12} {verdicts:16} {first_line}")
-    for item in receipt.get("evidence") or []:
-        verdict = str(item.get("verdict") or "")[:12]
-        summary = " ".join(str(item.get("summary") or "").split())[:100]
-        if summary:
-            print(f"{'':40} evidence[{verdict}]: {summary}")
-    artifacts = receipt.get("artifacts") or []
-    if artifacts:
-        addresses = [str(a.get("content_address") or "") for a in artifacts]
-        print(f"{'':40} artifacts: {', '.join(addresses)}")
-
-
-def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
-    config = _load_config(cwd)
-    settings = resolve_model_settings(
-        provider=args.provider,
-        model=args.model,
-        base_url=args.model_base_url,
-        config=config,
-    )
-    workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
-    directory = state_dir(cwd)
-    if not (directory / "db" / "agenthub.db").is_file():
-        print("no local missions yet — run `agenthub run` first")
-        return EXIT_OK
-    try:
-        receipts = search_receipts(
-            query=args.query,
-            state_dir=directory,
-            workspace_root=workspace_root,
-            model=settings,
-            limit=args.limit,
-            status=args.status,
-            days=args.days,
-        )
-    except (RuntimeError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_INFRA_ERROR
-    if args.json:
-        print(json.dumps(receipts, ensure_ascii=False, indent=2))
-        return EXIT_OK
-    if not receipts:
-        print(f"no missions match: {args.query!r}")
-        return EXIT_OK
-    print(f"{'MISSION ID':40} {'STATUS':12} {'VERDICTS':16} OBJECTIVE")
-    print("-" * 100)
-    for receipt in receipts:
-        _print_receipt(receipt)
-    print()
-    print("replay with: agenthub replay <MISSION_ID>")
-    print('resume with: agenthub run "<objective>" --resume <MISSION_ID>')
-    return EXIT_OK
-
-
-def cmd_replay(args: argparse.Namespace, cwd: Path) -> int:
-    config = _load_config(cwd)
-    settings = resolve_model_settings(
-        provider=args.provider,
-        model=args.model,
-        base_url=args.model_base_url,
-        config=config,
-    )
-    workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
-    directory = state_dir(cwd)
-    if not (directory / "db" / "agenthub.db").is_file():
-        print("no local missions yet — run `agenthub run` first")
-        return EXIT_OK
-    try:
-        receipt = get_mission_receipt(
-            mission_id=args.mission_id,
-            state_dir=directory,
-            workspace_root=workspace_root,
-            model=settings,
-        )
-    except (RuntimeError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return EXIT_INFRA_ERROR
-    if receipt is None:
-        print(f"mission not found: {args.mission_id}")
-        return EXIT_INFRA_ERROR
-    if args.json:
-        print(json.dumps(receipt, ensure_ascii=False, indent=2))
-        return EXIT_OK
-    print(f"mission : {receipt.get('mission_id')}")
-    print(f"status  : {receipt.get('status')}")
-    print(f"updated : {receipt.get('updated_at')}")
-    print(f"verdicts: {receipt.get('verdicts')}")
-    objective = str(receipt.get("objective") or "").strip()
-    if objective:
-        print("objective:")
-        for line in objective.splitlines():
-            print(f"  {line}")
-    for item in receipt.get("evidence") or []:
-        verdict = str(item.get("verdict") or "")[:12]
-        summary = " ".join(str(item.get("summary") or "").split())[:200]
-        print(f"evidence[{verdict}]: {summary}")
-    for artifact in receipt.get("artifacts") or []:
-        print(
-            f"artifact: {artifact.get('id')} "
-            f"{artifact.get('content_address')}"
-        )
-    print()
-    print('resume with: agenthub run "<objective>" '
-          f"--resume {args.mission_id}")
-    return EXIT_OK
-
-
 def cmd_review_pr(args: argparse.Namespace, cwd: Path) -> int:
     json_mode = args.json
     config = _load_config(cwd)
@@ -879,6 +772,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_search(args, cwd)
     if args.command == "replay":
         return cmd_replay(args, cwd)
+    if args.command == "facts":
+        return cmd_facts(args, cwd)
     if args.command == "review-pr":
         return cmd_review_pr(args, cwd)
     if args.command == "chat":

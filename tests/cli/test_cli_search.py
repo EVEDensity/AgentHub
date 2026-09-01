@@ -12,7 +12,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from app.cli.main import build_parser
-from app.cli.runtime import (
+from app.cli.receipts import (
     build_receipt,
     filter_missions_by_query,
     summarize_verdicts,

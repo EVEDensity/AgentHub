@@ -9,12 +9,22 @@
 The multi-layer cognitive pipeline (L2 vector retrieval, L3 global
 summaries, semantic extraction/consolidation, procedural catalog, and the
 NATS→Rust→Python summarization consumer) was removed with the web-chat
-memory decommission. Memory is now a two-layer store:
+memory decommission. Memory is now a two-layer store plus a flat
+project-facts file:
 
-| Layer | Source | Online behavior |
-| --- | --- | --- |
-| L0 working memory | PostgreSQL `messages` / Mission SQLite transcript | Latest conversation transcript, deduplicated and token-budgeted |
-| L1 session memory | `users/{user}/sessions/{session}/conversation.md` + session summary | Recent durable turns plus a semantic session summary |
+| Layer             | Source                                                              | Online behavior                                                 |
+| ----------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| L0 working memory | PostgreSQL `messages` / Mission SQLite transcript                   | Latest conversation transcript, deduplicated and token-budgeted |
+| L1 session memory | `users/{user}/sessions/{session}/conversation.md` + session summary | Recent durable turns plus a semantic session summary            |
+| Project facts     | `.agenthub/memory.md` (flat, key-scoped)                            | Keyword-gated injection into project instructions              |
+
+Project facts are managed by `agenthub facts list|set|get|remove`
+(`app/cli/project_facts.py`): writing an existing `section.key`
+supersedes the value in place and unrelated facts keep their order.
+Before each run `execute_objective` appends only the facts sharing a
+keyword with the current objective to the injected instructions — the
+whole store is never injected (ADR-0107; covered by
+`tests/cli/test_project_facts.py`).
 
 Online projection for the legacy chat runtime is built by
 `app/services/agent/context.py::_build_memory_context` and is L0/L1 only:
@@ -39,9 +49,12 @@ DB history (L0)
 
 - DB history is limited before prompt construction using the selected
   model's tokenizer and context window.
+
 - Session summary has higher prompt priority than raw durable turns.
+
 - Raw durable turns that overlap the DB transcript are removed by
   normalized block/shingle similarity.
+
 - File-backed knowledge files are retrieval-only and do not consume every
   request's context window.
 
@@ -50,9 +63,12 @@ DB history (L0)
 `app/services/token_budget.py` is the single budget authority.
 
 - Uses `tiktoken` for supported OpenAI model families.
+
 - Uses a conservative multilingual fallback for providers without a bundled
   native tokenizer.
+
 - Resolves model context windows and reserves output capacity.
+
 - Applies section budgets for history, memory, preprocessing, collaboration,
   tools, and current user content.
 
@@ -86,7 +102,9 @@ slice:
 Strengths:
 
 - Tenant-scoped durable session memory with summaries.
+
 - Prompt projection is bounded, deduplicated, and retrieval-first.
+
 - Token economy has a single authority (`token_budget`) with explicit
   multilingual fallback.
 
@@ -104,6 +122,7 @@ Remaining gaps:
 
 - Add Qwen, DeepSeek, Doubao, GLM, and Claude native tokenizer adapters
   (load path exists; parity enforced by `cn_tokenizer_precision`).
+
 - ✅ Done (2026-09-01): L1 session summaries are now change-only folds —
   `SessionMemoryManager.update_session_summary` merges the existing digest
   with only the turns after its cursor
@@ -115,6 +134,7 @@ Remaining gaps:
 
 - Move the web surface onto Mission + v1 API and let it reuse
   `build_compact_context` end-to-end (removes the legacy L1 chat store).
+
 - Revisit vector retrieval only behind a concrete use case with acceptance
   criteria (ADR-0107).
 
@@ -122,3 +142,4 @@ Remaining gaps:
 
 - Knowledge-graph memory stays off the near-term plan (ADR-0106 / ADR-0107);
   revisit when a cross-mission entity-query consumer lands on the roadmap.
+
