@@ -92,6 +92,7 @@ DEFAULT_MOCK_MODEL = "mock-llm"
 AGENTS_MD_NAME = "AGENTS.md"
 _PROJECT_INSTRUCTIONS_FILE_ENV = "AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE"
 _WEB_SEARCH_ENV = "AGENTHUB_DESKTOP_WEB_SEARCH"
+_TOOL_PERMISSION_ENV = "AGENTHUB_TOOL_PERMISSION_MODE"
 
 
 def collect_agents_md_layers(workspace_root: Path, cwd: Path | None = None) -> list[Path]:
@@ -252,6 +253,7 @@ def build_server_env(
     runner_timeout_seconds: float,
     project_instructions_file: Path | None = None,
     web_search: bool = False,
+    tool_permission_mode: str | None = None,
 ) -> dict[str, str]:
     """Env for the isolated SQLite mission-control subprocess.
 
@@ -293,6 +295,10 @@ def build_server_env(
     # North-star M1: the developer CLI exposes the public-web search tool
     # by default; packaged desktop deployments keep it off.
     env[_WEB_SEARCH_ENV] = "1" if web_search else "0"
+    # North-star I-6b: Codex-style tool permission tiering. Only a
+    # resolved tier travels — an invalid tier fails fast at the CLI.
+    if tool_permission_mode is not None:
+        env[_TOOL_PERMISSION_ENV] = tool_permission_mode
     return env
 
 
@@ -328,6 +334,7 @@ class MissionControlProcess:
         port: int | None = None,
         project_instructions: str = "",
         web_search: bool = False,
+        tool_permission_mode: str | None = None,
     ) -> None:
         self._state_dir = state_dir
         self._workspace_root = workspace_root
@@ -336,6 +343,7 @@ class MissionControlProcess:
         self._runner_timeout_seconds = runner_timeout_seconds
         self._project_instructions = project_instructions.strip()
         self._web_search = web_search
+        self._tool_permission_mode = tool_permission_mode
         self.port = port or free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self._process: subprocess.Popen[bytes] | None = None
@@ -364,6 +372,7 @@ class MissionControlProcess:
             runner_timeout_seconds=self._runner_timeout_seconds,
             project_instructions_file=instructions_file,
             web_search=self._web_search,
+            tool_permission_mode=self._tool_permission_mode,
         )
         log_path = (
             logs_dir / f"mission-control-{time.strftime('%Y%m%d-%H%M%S')}.log"
@@ -651,6 +660,7 @@ def execute_objective(
     project_instructions: str = "",
     resume_mission_id: str = "",
     web_search: bool = True,
+    tool_permission_mode: str | None = None,
     on_status: Any = None,
 ) -> MissionRunResult:
     """Run one objective end to end and return the structured result.
@@ -670,6 +680,7 @@ def execute_objective(
         runner_timeout_seconds=runner_timeout_seconds,
         project_instructions=project_instructions,
         web_search=web_search,
+        tool_permission_mode=tool_permission_mode,
     ) as process:
         with MissionControlClient(process.base_url) as client:
             client.login()

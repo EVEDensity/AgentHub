@@ -117,6 +117,13 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="disable the public-web search tool for this run",
         )
+        run_parser.add_argument(
+            "--permission",
+            default=None,
+            choices=["suggest", "edit", "auto"],
+            help="tool permission tier (I-6b): suggest=read-only, "
+            "edit=read/write files (default), auto=full whitelist",
+        )
         if json_flag:
             run_parser.add_argument(
                 "--json",
@@ -380,6 +387,7 @@ def cmd_run(
             project_instructions=project_instructions,
             resume_mission_id=resume_mission_id,
             web_search=not args.no_web_search,
+            tool_permission_mode=getattr(args, "permission", None),
             on_status=_emit_status,
         )
     except (RuntimeError, OSError) as exc:

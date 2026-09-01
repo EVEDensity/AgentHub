@@ -670,6 +670,70 @@ def _build_web_search_executor(
 WEB_FETCH_TOOL_NAME = "web_fetch"
 
 
+# ── tool permission tiers (north-star I-6b, Codex-aligned) ────────────────
+#
+# suggest — read-only plus research tools; the agent can inspect and
+#           propose changes but every workspace mutation is denied.
+# edit    — full file read/write inside the workspace (the historical
+#           desktop default); code stays confined to objective-declared
+#           RUN:/VERIFY: acceptance commands.
+# auto    — the complete whitelist including code_execute.
+
+TOOL_PERMISSION_SUGGEST = "suggest"
+TOOL_PERMISSION_EDIT = "edit"
+TOOL_PERMISSION_AUTO = "auto"
+TOOL_PERMISSION_MODES = frozenset(
+    {TOOL_PERMISSION_SUGGEST, TOOL_PERMISSION_EDIT, TOOL_PERMISSION_AUTO}
+)
+TOOL_PERMISSION_ENV = "AGENTHUB_TOOL_PERMISSION_MODE"
+_TOOL_PERMISSION_DEFAULT = TOOL_PERMISSION_EDIT
+
+# Tools denied per tier. ``suggest`` keeps the read/research/memory set
+# and denies every workspace mutation; ``edit`` additionally unlocks the
+# file-write group but keeps code_execute locked (shell runs remain
+# objective-declared per the acceptance-command contract); ``auto``
+# denies nothing.
+_PERMISSION_DENIED_TOOLS: dict[str, frozenset[str]] = {
+    TOOL_PERMISSION_SUGGEST: frozenset(
+        {"file_write", "file_write_batch", "file_edit", "mkdir", "code_execute"}
+    ),
+    TOOL_PERMISSION_EDIT: frozenset({"code_execute"}),
+    TOOL_PERMISSION_AUTO: frozenset(),
+}
+
+
+def resolve_tool_permission_mode(value: str | None = None) -> str:
+    """Resolve the effective tool permission tier.
+
+    Explicit argument wins; otherwise the environment switch
+    (``AGENTHUB_TOOL_PERMISSION_MODE``) applies; the default tier is
+    ``edit`` — the historical desktop whitelist behaviour.
+    """
+    candidate = (value or os.environ.get(TOOL_PERMISSION_ENV) or "").strip().lower()
+    if not candidate:
+        return _TOOL_PERMISSION_DEFAULT
+    if candidate in TOOL_PERMISSION_MODES:
+        return candidate
+    raise ValueError(
+        f"unknown tool permission mode '{candidate}'; "
+        f"expected one of: {', '.join(sorted(TOOL_PERMISSION_MODES))}"
+    )
+
+
+def _build_permission_denied_executor(
+    tool_name: str, mode: str
+) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
+    async def execute(_: Mapping[str, Any]) -> str:
+        return (
+            f"错误：工具 {tool_name} 在当前权限档位（{mode}）下被禁用。"
+            f"suggest=只读；edit=可写工作区文件；auto=完整白名单。"
+            "如需该能力，请以更高权限档位重新运行，或在任务 objective "
+            "中以 'RUN: <command>' 声明命令（由验收阶段执行并计入证据）。"
+        )
+
+    return execute
+
+
 def _validate_web_fetch_arguments(
     arguments: Mapping[str, Any],
 ) -> Mapping[str, Any]:
@@ -861,6 +925,7 @@ def build_desktop_runner_tools(
     model_factory: HarnessModelFactoryPort | None = None,
     subtask_config: DelegateSubtaskConfig | None = None,
     sandbox_enabled: bool | None = None,
+    permission_mode: str | None = None,
 ) -> list[FunctionTool]:
     """Build the fixed desktop tool whitelist bound to *workspace_root*.
 
@@ -870,23 +935,34 @@ def build_desktop_runner_tools(
 
     ``sandbox_enabled`` routes ``code_execute`` through the OS-level sandbox
     runner when truthy; ``None`` resolves the env default switch.
+
+    ``permission_mode`` applies the Codex-style tiering
+    (suggest/edit/auto, default edit = the historical whitelist). Tools
+    denied by the tier are kept in the toolset with their schema but
+    wired to a denial executor, so the model sees an actionable denial
+    message instead of a silently missing tool.
     """
     if max_result_chars < 1:
         raise ValueError("max_result_chars must be positive")
+    mode = resolve_tool_permission_mode(permission_mode)
+    denied = _PERMISSION_DENIED_TOOLS[mode]
     resolved_root = workspace_root.resolve()
     resolved_root.mkdir(parents=True, exist_ok=True)
     tools: list[FunctionTool] = []
     for definition in _DESKTOP_TOOL_DEFINITIONS:
-        handler = definition.handler
-        if handler is None:
-            raise ValueError(f"desktop tool has no handler: {definition.name}")
-        executor = (
-            _build_code_execute_executor(
-                handler, resolved_root, max_result_chars, sandbox_enabled
+        if definition.name in denied:
+            executor = _build_permission_denied_executor(definition.name, mode)
+        else:
+            handler = definition.handler
+            if handler is None:
+                raise ValueError(f"desktop tool has no handler: {definition.name}")
+            executor = (
+                _build_code_execute_executor(
+                    handler, resolved_root, max_result_chars, sandbox_enabled
+                )
+                if definition is CODE_EXECUTE
+                else _build_tool_executor(handler, resolved_root, max_result_chars)
             )
-            if definition is CODE_EXECUTE
-            else _build_tool_executor(handler, resolved_root, max_result_chars)
-        )
         tools.append(
             FunctionTool(
                 name=definition.name,
