@@ -953,36 +953,21 @@ export default function AgentHubIM(): JSX.Element {
 
     setSessions((prev) => sortSessions(prev.map((s) => (s.id === activeSessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
 
-    // ── P0: Full migration — every message now routes through Mission/SSE ──
-    // Legacy WebSocket is kept as a feature-flagged fallback.  Mention
-    // detection above still drives the "AgentName is working" optimistic
-    // label and the participants banner, but no longer decides the route.
-    const USE_MISSION = true;  // TODO: gate on env var / feature flag
-
-    if (USE_MISSION) {
-      // Mission path: POST create → SSE stream, append events as they land.
-      // sendMission rejects on 4xx/5xx — we surface the error in-place
-      // and let the user retry rather than silently falling back to WS.
-      sendMission(draft.aiContent).then((result) => {
-        if (!result) {
-          setSendState('error');
-          setNotice('Mission create failed — check console for details');
-        } else {
-          setSendState('sent');
-        }
-      }).catch(() => {
+    // ── Mission/SSE is the only route — legacy WebSocket removed
+    //    P0 migration complete: every message creates a Mission and streams SSE events.
+    //    sendMission rejects on 4xx/5xx — we surface the error in-place and let
+    //    the user retry rather than silently falling back.
+    sendMission(draft.aiContent).then((result) => {
+      if (!result) {
         setSendState('error');
-        setNotice('Mission stream error — retry or refresh the page');
-      });
-    } else {
-      // Legacy WebSocket fallback — feature-flagged out in P0 migration.
-      const sendResult = sendOrQueue(activeSessionId, wsMsg);
-      if (sendResult === 'sent') {
-        setSendState('sent');
+        setNotice('Mission create failed — check console for details');
       } else {
-        setSendState('error');
+        setSendState('sent');
       }
-    }
+    }).catch(() => {
+      setSendState('error');
+      setNotice('Mission stream error — retry or refresh the page');
+    });
     setInput('');
     setAttachedFiles([]);
     setFileReferences([]);
