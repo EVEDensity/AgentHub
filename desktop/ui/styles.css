@@ -187,6 +187,13 @@ textarea::placeholder { color: #a6b0aa; }
 .secret-status { padding: 9px 11px; border-left: 3px solid var(--warn); border-radius: 0 7px 7px 0; background: #fffaf0; color: #80631f; font-size: 12px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
+/* First-run stack bootstrap wizard (north-star M3 / §4.0). */
+.bootstrap-bar { height: 8px; border-radius: 6px; background: #e7efe9; overflow: hidden; }
+.bootstrap-bar-fill { width: 0%; height: 100%; border-radius: 6px; background: var(--accent); transition: width .25s ease; }
+#bootstrap-progress-text { margin: 8px 0 4px; color: var(--text-2); font-size: 12px; }
+.bootstrap-log { max-height: 148px; overflow-y: auto; border: 1px solid var(--border-soft); border-radius: 7px; background: #f7faf8; padding: 6px 10px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--text-2); display: grid; gap: 2px; }
+.bootstrap-error { padding: 9px 11px; border-left: 3px solid #d64545; border-radius: 0 7px 7px 0; background: #fdf3f3; color: #8f2f2f; font-size: 12px; line-height: 1.6; }
+
 @media (max-width: 760px) {
   .sidebar { width: 60px; flex-basis: 60px; padding: 16px 8px; }
   .brand { padding: 0 6px 20px; }

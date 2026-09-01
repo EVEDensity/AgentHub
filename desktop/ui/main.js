@@ -20,7 +20,18 @@ const elements = {
   resultEvents: document.querySelector('#result-events'), executionFeed: document.querySelector('#execution-feed'), executionFeedToggle: document.querySelector('#execution-feed-toggle'),
   changedFiles: document.querySelector('#changed-files'), changedFilesBody: document.querySelector('#changed-files-body'),
   adminFrame: document.querySelector('#admin-frame'),
+  bootstrapDialog: document.querySelector('#bootstrap-dialog'), bootstrapForm: document.querySelector('#bootstrap-form'), closeBootstrap: document.querySelector('#close-bootstrap'),
+  bootstrapManifestUrl: document.querySelector('#bootstrap-manifest-url'), bootstrapProgress: document.querySelector('#bootstrap-progress'),
+  bootstrapBarFill: document.querySelector('#bootstrap-bar-fill'), bootstrapProgressText: document.querySelector('#bootstrap-progress-text'),
+  bootstrapLog: document.querySelector('#bootstrap-log'), bootstrapError: document.querySelector('#bootstrap-error'),
+  bootstrapSkip: document.querySelector('#bootstrap-skip'), bootstrapRetry: document.querySelector('#bootstrap-retry'), bootstrapStart: document.querySelector('#bootstrap-start'),
 };
+
+// Default release source for the first-run stack bootstrap wizard
+// (north-star M3 / §4.0: desktop exe is a bootstrap installer).
+const BOOTSTRAP_MANIFEST_URL_DEFAULT = 'https://github.com/EVEDensity/AgentHub/releases/latest/download/stack-manifest.json';
+const BOOTSTRAP_URL_STORAGE_KEY = 'agenthub-bootstrap-manifest-url';
+const BOOTSTRAP_DISMISS_KEY = 'agenthub-bootstrap-dismissed';
 
 function nativeInvoke(command, args) {
   const invoke = window.__TAURI__?.core?.invoke;
@@ -49,6 +60,7 @@ function nativeInvoke(command, args) {
   if (command === 'local_service_endpoint') return Promise.resolve('http://127.0.0.1:28000');
   if (command === 'frontend_endpoint') return Promise.resolve('http://127.0.0.1:28004/admin');
   if (command === 'stack_info') return Promise.resolve({ manifest: { schemaVersion: 1, version: '0.2.0', commit: 'preview', generatedAt: new Date().toISOString() }, source: 'bundled', persisted: [], pinned: null });
+  if (command === 'bootstrap_stack') return new Promise((resolve) => setTimeout(() => resolve({ directory: '0.2.0-preview', version: '0.2.0', commit: 'preview', files: 2, downloaded: 2 }), 600));
   return Promise.reject(new Error('桌面命令不可用'));
 }
 
@@ -699,4 +711,122 @@ elements.executionFeedToggle?.addEventListener('click', () => {
 for (const card of document.querySelectorAll('[data-prompt]')) card.addEventListener('click', () => { elements.taskInput.value = card.dataset.prompt; elements.taskInput.dispatchEvent(new Event('input')); elements.taskInput.focus(); });
 elements.settings.addEventListener('click', () => switchView('settings')); elements.settingsBack.addEventListener('click', () => switchView('home')); for (const item of elements.settingsItems) item.addEventListener('click', () => selectSettingsSection(item.dataset.settingsSection)); elements.closeConfiguration.addEventListener('click', closeConfiguration); elements.cancelConfiguration.addEventListener('click', closeConfiguration); elements.form.addEventListener('submit', saveConfiguration);
 
+// ── First-run stack bootstrap wizard (north-star M3 / §4.0) ─────────────
+// The desktop exe is a bootstrap installer: on first run it downloads the
+// full runtime stack from a release source via the `bootstrap_stack`
+// command. Per-file progress streams through the `bootstrap-progress`
+// channel; if no event arrives (older shell / preview), the UI falls back
+// to an indeterminate state and still reports the final BootstrapReport.
+
+const bootstrapState = { running: false, sawProgressEvent: false };
+
+function openBootstrapWizard() {
+  if (!elements.bootstrapDialog || bootstrapState.running) return;
+  elements.bootstrapManifestUrl.value =
+    localStorage.getItem(BOOTSTRAP_URL_STORAGE_KEY) || BOOTSTRAP_MANIFEST_URL_DEFAULT;
+  elements.bootstrapProgress.hidden = true;
+  elements.bootstrapError.hidden = true;
+  elements.bootstrapRetry.hidden = true;
+  elements.bootstrapStart.disabled = false;
+  elements.bootstrapStart.textContent = '下载并安装';
+  elements.bootstrapLog.replaceChildren();
+  elements.bootstrapBarFill.style.width = '0%';
+  elements.bootstrapProgressText.textContent = '';
+  elements.bootstrapDialog.showModal();
+}
+
+function closeBootstrapWizard() {
+  if (elements.bootstrapDialog?.open) elements.bootstrapDialog.close();
+}
+
+function renderBootstrapProgress(event) {
+  bootstrapState.sawProgressEvent = true;
+  const payload = event?.payload || event || {};
+  const index = Number(payload.index) || 0;
+  const total = Number(payload.total) || 0;
+  const percent = total > 0 ? Math.round((index / total) * 100) : 0;
+  elements.bootstrapBarFill.style.width = `${percent}%`;
+  elements.bootstrapProgressText.textContent = total > 0
+    ? `已校验 ${index}/${total} 个文件（${percent}%）`
+    : '正在下载…';
+  if (payload.path) {
+    const row = document.createElement('div');
+    row.textContent = `✓ ${payload.path}`;
+    elements.bootstrapLog.prepend(row);
+    while (elements.bootstrapLog.childElementCount > 30) elements.bootstrapLog.lastElementChild.remove();
+  }
+}
+
+async function runBootstrap(event) {
+  if (event) event.preventDefault();
+  const manifestUrl = elements.bootstrapManifestUrl.value.trim();
+  if (!/^https?:\/\/.+/i.test(manifestUrl)) {
+    elements.bootstrapError.hidden = false;
+    elements.bootstrapError.textContent = '请输入有效的发布源清单地址（http/https 开头的 stack-manifest.json URL）。';
+    return;
+  }
+  localStorage.setItem(BOOTSTRAP_URL_STORAGE_KEY, manifestUrl);
+  bootstrapState.running = true;
+  bootstrapState.sawProgressEvent = false;
+  elements.bootstrapStart.disabled = true;
+  elements.bootstrapRetry.hidden = true;
+  elements.bootstrapError.hidden = true;
+  elements.bootstrapProgress.hidden = false;
+  elements.bootstrapBarFill.style.width = '0%';
+  elements.bootstrapProgressText.textContent = '正在获取清单…';
+  elements.bootstrapLog.replaceChildren();
+  let unlistenProgress = null;
+  try {
+    const listen = window.__TAURI__?.event?.listen;
+    if (typeof listen === 'function') {
+      unlistenProgress = await listen('bootstrap-progress', renderBootstrapProgress);
+    }
+    const report = await nativeInvoke('bootstrap_stack', { manifestUrl });
+    elements.bootstrapBarFill.style.width = '100%';
+    const resumed = report.files - report.downloaded;
+    elements.bootstrapProgressText.textContent =
+      `安装完成：v${report.version}${report.commit ? ` · ${report.commit}` : ''}（${report.files} 个文件${resumed > 0 ? `，本次新下载 ${report.downloaded}，续传 ${resumed}` : ''}）`;
+    elements.bootstrapStart.textContent = '重新下载';
+    elements.feedback.textContent = `运行时栈 v${report.version} 已就绪并已钉住，重启桌面应用后生效。`;
+    loadMonitor();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || '未知错误');
+    elements.bootstrapError.hidden = false;
+    elements.bootstrapError.textContent = `下载失败：${message}（已校验的文件会保留，点击「重试」自动断点续传；失败不会影响当前使用的栈。）`;
+    elements.bootstrapRetry.hidden = false;
+    if (!bootstrapState.sawProgressEvent) elements.bootstrapProgress.hidden = true;
+  } finally {
+    unlistenProgress?.();
+    bootstrapState.running = false;
+    elements.bootstrapStart.disabled = false;
+  }
+}
+
+// First run: no stack manifest (bundled or persisted) and not dismissed
+// this session → show the wizard. Machines that already carry a stack go
+// straight to the app; the wizard stays reachable from 设置 → 本地服务.
+async function maybeShowFirstRunWizard() {
+  try {
+    const stack = await nativeInvoke('stack_info');
+    const hasStack = Boolean(stack?.manifest)
+      || (Array.isArray(stack?.persisted) && stack.persisted.length > 0);
+    const dismissed = sessionStorage.getItem(BOOTSTRAP_DISMISS_KEY) === '1';
+    if (!hasStack && !dismissed) {
+      document.querySelector('#bootstrap-intro').textContent = '尚未安装运行时栈（首次启动或引导包）。请输入发布源清单地址开始下载，完成后重启应用即可使用。';
+      openBootstrapWizard();
+    }
+  } catch { /* 桌面命令不可用（浏览器预览）时不打扰 */ }
+}
+
+elements.bootstrapForm?.addEventListener('submit', runBootstrap);
+elements.bootstrapRetry?.addEventListener('click', runBootstrap);
+elements.closeBootstrap?.addEventListener('click', closeBootstrapWizard);
+elements.bootstrapSkip?.addEventListener('click', () => {
+  sessionStorage.setItem(BOOTSTRAP_DISMISS_KEY, '1');
+  elements.feedback.textContent = '已跳过运行时栈下载；本地服务需要运行时栈才能启动，可稍后在「设置 → 本地服务」中重新下载。';
+  closeBootstrapWizard();
+});
+document.querySelector('#open-bootstrap-wizard')?.addEventListener('click', openBootstrapWizard);
+
 refresh();
+maybeShowFirstRunWizard();
