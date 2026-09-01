@@ -19,11 +19,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from app.cli.review import (
+    build_review_objective,
+    load_findings,
+    review_exit_code,
+    stage_review_workspace,
+)
 from app.cli.runtime import (
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MISSION_TIMEOUT,
@@ -131,6 +138,50 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=20,
         help="maximum missions to list (default: %(default)s)",
+    )
+
+    review_parser = subparsers.add_parser(
+        "review-pr",
+        help="review a pull-request diff through the verifier-gated mission loop",
+    )
+    _add_model_flags(review_parser)
+    review_parser.add_argument(
+        "--diff-file",
+        default=None,
+        help="unified diff of the PR (default: PR_DIFF_FILE env var, e.g. from `gh pr diff`)",
+    )
+    review_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="workspace root for the review mission (default: current directory)",
+    )
+    review_parser.add_argument(
+        "--max-total-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOTAL_TOKENS,
+        help="total token budget for the harness loop (default: %(default)s)",
+    )
+    review_parser.add_argument(
+        "--runner-timeout-seconds",
+        type=float,
+        default=DEFAULT_RUNNER_TIMEOUT_SECONDS,
+        help="harness timeout budget in seconds (default: %(default)s)",
+    )
+    review_parser.add_argument(
+        "--mission-timeout",
+        type=float,
+        default=DEFAULT_MISSION_TIMEOUT,
+        help="wall-clock wait before giving up (default: %(default)s)",
+    )
+    review_parser.add_argument(
+        "--no-web-search",
+        action="store_true",
+        help="disable the public-web search tool for this review",
+    )
+    review_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit a single JSON result document on stdout",
     )
 
     chat_parser = subparsers.add_parser(
@@ -388,6 +439,136 @@ def cmd_missions(args: argparse.Namespace, cwd: Path) -> int:
     return EXIT_OK
 
 
+def cmd_review_pr(args: argparse.Namespace, cwd: Path) -> int:
+    json_mode = args.json
+    config = _load_config(cwd)
+    settings = resolve_model_settings(
+        provider=args.provider,
+        model=args.model,
+        base_url=args.model_base_url,
+        config=config,
+    )
+    workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
+
+    diff_file = args.diff_file or os.environ.get("PR_DIFF_FILE")
+    if not diff_file:
+        print(
+            "error: no diff provided — pass --diff-file or set PR_DIFF_FILE "
+            '(e.g. gh pr diff > pr.diff)',
+            file=sys.stderr,
+        )
+        return EXIT_INFRA_ERROR
+    diff_path = Path(diff_file).resolve()
+    try:
+        diff_text = diff_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"error: cannot read diff file {diff_path}: {exc}", file=sys.stderr)
+        return EXIT_INFRA_ERROR
+    if not diff_text.strip():
+        if json_mode:
+            print(
+                json.dumps(
+                    {
+                        "review": "SKIPPED_EMPTY_DIFF",
+                        "blocking": [],
+                        "warnings": [],
+                        "nits": [],
+                        "exitCode": EXIT_OK,
+                    }
+                )
+            )
+        else:
+            print("empty diff — nothing to review")
+        return EXIT_OK
+
+    directory = state_dir(cwd)
+    directory.mkdir(parents=True, exist_ok=True)
+    # Stage the diff and the CLI-written verifier (the validator is
+    # authored by the CLI, never by the agent — independent verifier).
+    stage_review_workspace(workspace_root, diff_text)
+    instruction_paths = collect_agents_md_layers(workspace_root, cwd)
+    project_instructions = merge_project_instructions(instruction_paths)
+
+    if not json_mode:
+        print(f"review:   {diff_path.name} ({len(diff_text.splitlines())} diff lines)")
+        print(f"workspace: {workspace_root}")
+        print(f"model:     {settings.provider} / {settings.model}")
+        print("booting local mission-control (SQLite, desktop runner)...")
+
+    def _emit_status(status: str) -> None:
+        if not json_mode:
+            print(f"  mission status: {status}")
+
+    try:
+        result = execute_objective(
+            objective=build_review_objective(),
+            workspace_root=workspace_root,
+            state_dir=directory,
+            model=settings,
+            max_total_tokens=args.max_total_tokens,
+            runner_timeout_seconds=args.runner_timeout_seconds,
+            mission_timeout=args.mission_timeout,
+            project_instructions=project_instructions,
+            resume_mission_id="",
+            web_search=not args.no_web_search,
+            on_status=_emit_status,
+        )
+    except (RuntimeError, OSError) as exc:
+        if json_mode:
+            print(
+                json.dumps(
+                    {"review": "INFRA_ERROR", "error": str(exc), "exitCode": EXIT_INFRA_ERROR}
+                )
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return EXIT_INFRA_ERROR
+
+    findings = load_findings(workspace_root)
+    exit_code = review_exit_code(result, findings)
+
+    if json_mode:
+        print(
+            json.dumps(
+                {
+                    "review": result.status,
+                    "missionId": result.mission_id,
+                    "findings": findings,
+                    "exitCode": exit_code,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+    else:
+        _print_review_human(result, findings, exit_code)
+    return exit_code
+
+
+def _print_review_human(
+    result: MissionRunResult, findings: dict | None, exit_code: int
+) -> None:
+    print()
+    print("=" * 60)
+    print(f"review   {result.mission_id}")
+    print(f"status   {result.status}  (exit code {exit_code})")
+    print("=" * 60)
+    if findings is None:
+        print("no readable review-findings.json produced")
+        return
+    for severity in ("blocking", "warnings", "nits"):
+        items = findings.get(severity) or []
+        if not items:
+            continue
+        print(f"\n{severity.upper()} ({len(items)}):")
+        for item in items:
+            print(f"  {item.get('file', '?')} [{item.get('category', '?')}]")
+            print(f"    issue:      {item.get('issue', '')}")
+            print(f"    suggestion: {item.get('suggestion', '')}")
+    if not (findings.get("blocking") or []):
+        print("\nno blocking findings — review passes")
+
+
 def _print_human(result: MissionRunResult, *, elapsed: float) -> None:
     print()
     print("=" * 60)
@@ -511,6 +692,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_run(args, cwd, json_mode=True)
     if args.command == "missions":
         return cmd_missions(args, cwd)
+    if args.command == "review-pr":
+        return cmd_review_pr(args, cwd)
     if args.command == "chat":
         from app.cli.chat import run_chat_cli
 

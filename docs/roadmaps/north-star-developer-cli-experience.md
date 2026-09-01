@@ -277,6 +277,21 @@ Aider、Cline、Goose）：
   余项：打首个 `cli-v*` tag 实际发布（依赖 npm scope 与 NPM_TOKEN）。
 
 * PR 审查 Action：`agenthub review-pr` / GitHub Action，接入现有 verifier。
+  —— 2026-09-01 已实现（I-4）：`app/cli/review.py` +
+  `main.py` 的 `review-pr` 子命令（CLI 将 diff 与 CLI 自写的
+  `_agenthub_review_validate.py` 校验器写入 workspace —— 校验器由
+  CLI 提供、非被审 agent 生成，保持独立 verifier；agent 产出
+  `review-findings.json`（blocking/warnings/nits，每条含
+  file/category/issue/suggestion），VERIFY 门禁复跑校验器，且校验
+  器会拒绝引用 diff 之外的文件——agent 无法捏造评审）；
+  退出码复用契约：0 无 blocking / 1 有 blocking 或 mission FAILED /
+  2、3、4 照旧。`.github/workflows/review-pr.yml`（PR 触发：
+  `gh pr diff` → `review-pr --json` → findings 写入 job summary，
+  缺 `AGENTHUB_REVIEW_MODEL_API_KEY` secret 时诚实失败 exit 4）。
+  已用 deepseek-v4-flash 真实通道端到端验证：构造含 SQL 注入 +
+  XSS 的 bug diff，识别出 blocking 问题并 exit 1、给出可行动
+  issue/suggestion 列表。测试 `tests/cli/test_cli_review.py`
+  （17 例：staging/objective/退出码映射/校验器真实执行/解析器）。
 
 * 公开基准分数：把 benchmark cases 对接到 Terminal-Bench 类评测，给出可引用
   分数（诚实标注模型与日期）。
