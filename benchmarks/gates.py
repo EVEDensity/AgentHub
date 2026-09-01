@@ -40,10 +40,12 @@ PERFORMANCE_CLAIMS: dict[str, str] = {
 }
 
 # Hard thresholds (ms). Raise gates as hardware/CI evolves.
+# streaming_ttft matches the documented dev claim in
+# docs/zh/advanced/performance.md ("首 Token 延迟 P95 < 2s").
 DEFAULT_THRESHOLDS_MS: dict[str, float] = {
     "api_latency_p95": 200.0,
     "knowledge_retrieval_p95": 80.0,
-    "streaming_ttft": 3_000.0,
+    "streaming_ttft": 2_000.0,
 }
 
 
@@ -699,7 +701,7 @@ def _measure_cn_tokenizer_precision(max_error: float = 0.05) -> GateResult:
     )
 
 
-def _measure_streaming_ttft(max_ms: float = 3_000.0, samples: int = 6) -> GateResult:
+def _measure_streaming_ttft(max_ms: float = 2_000.0, samples: int = 6) -> GateResult:
     """Measure client-observed streaming time-to-first-token.
 
     Boots the repo's OpenAI-compatible mock upstream (deterministic, offline)

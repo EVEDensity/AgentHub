@@ -39,7 +39,7 @@ jobs:
         run: python benchmarks/gates.py run --name code_file_size
       - name: Code complexity gate (McCabe <=20, class-qualified exemptions)
         run: python benchmarks/gates.py run --name code_complexity
-      - name: Streaming first-token (TTFT) gate (pooled local mock, < 3s)
+      - name: Streaming first-token (TTFT) gate (pooled local mock, < 2s per docs claim)
         run: python benchmarks/gates.py run --name streaming_ttft
       - name: Restore native tokenizer assets
         id: tokcache

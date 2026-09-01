@@ -122,6 +122,12 @@ no new logic added to the legacy files.
 > set, min 85%) and `cn_tokenizer_precision` (measured when a native CN
 > tokenizer is configured, honest SKIP otherwise) — both wired into the
 > `docs-gates` CI job.
+> (2026-09-01 R4 closure check) `streaming_ttft` gate is wired into the
+> `docs-gates` CI job and its threshold is aligned with the documented dev
+> claim (P95 < 2s in `docs/zh/advanced/performance.md`; measured p95 = 15ms
+> on the pooled local mock). The code-quality ratchet was refreshed after
+> the I-6/I-7 slices grew several legacy modules; exemptions may only
+> shrink from the new baseline.
 
 | Task | Debt | Acceptance criteria |
 |---|---|---|
