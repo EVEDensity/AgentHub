@@ -1,0 +1,1348 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from app.domain import (
+    ActorRef,
+    ActorType,
+    Artifact,
+    ArtifactKind,
+    ArtifactRef,
+    ArtifactRetention,
+    ArtifactSensitivity,
+    Decision,
+    DecisionResolution,
+    DecisionStatus,
+    EventEnvelope,
+    Evidence,
+    EvidenceVerdict,
+    ExecutionCheckpoint,
+    ExecutionCheckpointPhase,
+    Lease,
+    Mission,
+    MissionContract,
+    MissionSource,
+    MissionSourceType,
+    MissionStatus,
+    OutputSpec,
+    VerifierRef,
+    WorkUnit,
+    WorkUnitStatus,
+    transition_mission,
+    transition_work_unit,
+)
+from app.repositories import MissionRepository
+from app.services.agent_binding_service import (
+    AgentBindingResolver,
+    AgentBindingUnavailableError,
+)
+from app.services.artifact_integrity_service import (
+    ArtifactBytesUnavailableError,
+    ArtifactByteVerifier,
+)
+from app.services.evidence_integrity_service import (
+    EvidenceIntegrityHasher,
+    EvidenceIntegrityMaterial,
+    Sha256EvidenceIntegrityHasher,
+)
+from app.services.verification_evaluator_service import (
+    StrictVerificationEvaluator,
+    VerificationEvaluationResult,
+    VerificationEvaluator,
+    canonicalize_artifact_byte_verifications,
+)
+from app.services.verification_policy_service import (
+    ArtifactSetEvaluationPlan,
+    EvaluationPolicyDecision,
+    StrictVerificationPolicyResolver,
+    VerificationPolicyResolver,
+)
+from app.services.workspace_admission_service import (
+    WorkspaceClaimAdmissionPolicy,
+    WorkspaceClaimAdmissionUnavailableError,
+    WorkspaceClaimStatus,
+)
+
+# Re-export types/errors/helpers from _types — MissionService uses them.
+# Note: `from module import *` skips underscore-prefixed names, so we list
+# the ones actually referenced by the MissionService implementation.
+from app.services.mission._types import *  # noqa: F401,F403  # surface errors/helpers
+from app.services.mission._types import (
+    _A2A_OUTBOUND_ADAPTER,
+    _DESKTOP_TASK_WORK_UNIT_KIND,
+    _MAX_VERIFICATION_ARTIFACTS,
+    _VERIFICATION_ARTIFACT_FIELDS,
+    _checkpoint_event_payload,
+)
+
+
+class MissionExecutionMixin:
+    """Mixin holding MissionService execution methods."""
+
+    async def create_work_unit(
+        self,
+        mission_id: str,
+        *,
+        work_unit_id: str | None,
+        kind: str,
+        dependencies: list[str],
+        input_refs: list[ArtifactRef],
+        expected_outputs: list[OutputSpec],
+        required_capabilities: list[str],
+        assigned_adapter: str | None,
+        actor: ActorRef,
+        assigned_agent_id: str | None = None,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise ValueError("work units require a RUNNING mission")
+
+            contract = await repository.get_contract(
+                mission.contract_id,
+                mission.contract_version,
+            )
+            if contract is None:
+                raise ValueError("mission contract not found")
+            allowed_capabilities = {
+                grant.capability for grant in contract.allowed_capabilities
+            }
+            unsupported = sorted(set(required_capabilities) - allowed_capabilities)
+            if unsupported:
+                raise ValueError(
+                    "work unit requires capabilities outside the mission contract: "
+                    + ", ".join(unsupported)
+                )
+            if assigned_agent_id is not None and assigned_adapter is None:
+                raise ValueError("an assigned Agent requires an execution adapter")
+            await self._validate_artifact_refs(repository, mission_id, input_refs)
+
+            identifier = work_unit_id or new_identifier("wu")
+            for dependency_id in dependencies:
+                dependency = await repository.get_work_unit(dependency_id)
+                if dependency is None or dependency.mission_id != mission_id:
+                    raise ValueError(
+                        f"work unit dependency is not part of the mission: {dependency_id}"
+                    )
+
+            work_unit = WorkUnit(
+                id=identifier,
+                mission_id=mission_id,
+                assigned_agent_id=assigned_agent_id,
+                kind=kind,
+                dependencies=dependencies,
+                input_refs=input_refs,
+                expected_outputs=expected_outputs,
+                required_capabilities=required_capabilities,
+                assigned_adapter=assigned_adapter,
+                status="PENDING",
+                attempt=0,
+            )
+            occurred_at = datetime.now(timezone.utc)
+            event_payload = {
+                "kind": work_unit.kind,
+                "missionId": mission_id,
+                "status": work_unit.status.value,
+            }
+            if work_unit.assigned_agent_id is not None:
+                event_payload["assignedAgentId"] = work_unit.assigned_agent_id
+            if work_unit.assigned_adapter is not None:
+                event_payload["assignedAdapter"] = work_unit.assigned_adapter
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=1,
+                event_type="work_unit.lifecycle.created",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload=event_payload,
+                schema_version=1,
+            )
+            await repository.add_work_unit(work_unit)
+            await repository.append_event(event)
+        return work_unit
+
+    async def delegate_work_unit(
+        self,
+        mission_id: str,
+        parent_work_unit_id: str,
+        *,
+        work_unit_id: str,
+        kind: str,
+        input_refs: list[ArtifactRef],
+        expected_outputs: list[OutputSpec],
+        required_capabilities: list[str],
+        agent_id: str,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("delegation requires a RUNNING mission")
+
+            parent = await repository.get_work_unit_for_update(parent_work_unit_id)
+            if parent is None or parent.mission_id != mission_id:
+                raise WorkUnitNotFoundError(parent_work_unit_id)
+            if parent.status != WorkUnitStatus.RUNNING:
+                raise WorkUnitNotReadyError(
+                    "only a RUNNING work unit can create a delegation"
+                )
+            if parent.lease is None:
+                raise LeaseOwnershipError("parent work unit has no active lease")
+            if parent.lease.id != lease_id:
+                raise LeaseOwnershipError(
+                    "lease id does not match the parent work unit"
+                )
+            if parent.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("parent lease belongs to another runner")
+
+            occurred_at = datetime.now(timezone.utc)
+            if parent.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("parent work unit lease has expired")
+
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
+            if contract is None:
+                raise ValueError("mission contract not found")
+            allowed_capabilities = {
+                grant.capability for grant in contract.allowed_capabilities
+            }
+            unsupported = sorted(set(required_capabilities) - allowed_capabilities)
+            if unsupported:
+                raise ValueError(
+                    "delegated work unit requires capabilities outside the mission "
+                    "contract: " + ", ".join(unsupported)
+                )
+            await self._validate_artifact_refs(repository, mission_id, input_refs)
+
+            resolver = self._agent_binding_resolver
+            if resolver is None:
+                raise AgentBindingUnavailableError(
+                    "tenant-scoped Agent binding resolver is not configured"
+                )
+            binding = await resolver.resolve(
+                scope_id=mission.workspace_id,
+                agent_id=agent_id,
+            )
+            if binding is None:
+                raise AgentBindingNotFoundError(
+                    f"Agent is not available in the mission scope: {agent_id}"
+                )
+            missing_binding_capabilities = sorted(
+                set(required_capabilities) - set(binding.capabilities)
+            )
+            if missing_binding_capabilities:
+                raise ValueError(
+                    "Agent binding does not grant required capabilities: "
+                    + ", ".join(missing_binding_capabilities)
+                )
+
+            candidate = WorkUnit(
+                id=work_unit_id,
+                mission_id=mission_id,
+                parent_work_unit_id=parent_work_unit_id,
+                assigned_agent_id=binding.agent_id,
+                kind=kind,
+                dependencies=[],
+                input_refs=input_refs,
+                expected_outputs=expected_outputs,
+                required_capabilities=required_capabilities,
+                assigned_adapter=binding.adapter_type,
+                status=WorkUnitStatus.PENDING,
+                attempt=0,
+            )
+            existing = await repository.get_work_unit_for_update(work_unit_id)
+            if existing is not None:
+                immutable_fields_match = all(
+                    getattr(existing, field_name) == getattr(candidate, field_name)
+                    for field_name in (
+                        "mission_id",
+                        "parent_work_unit_id",
+                        "assigned_agent_id",
+                        "kind",
+                        "dependencies",
+                        "input_refs",
+                        "expected_outputs",
+                        "required_capabilities",
+                        "assigned_adapter",
+                    )
+                )
+                if immutable_fields_match:
+                    return existing
+                raise ValueError(
+                    "delegation id already exists with different immutable fields"
+                )
+
+            parent_sequence = (
+                await repository.get_last_event_sequence(
+                    parent.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            delegation_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=parent.id,
+                sequence=parent_sequence,
+                event_type="work_unit.delegation.requested",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "childWorkUnitId": candidate.id,
+                    "parentAttempt": parent.attempt,
+                    "assignedAgentId": binding.agent_id,
+                    "assignedAdapter": binding.adapter_type,
+                    "inputRefs": [item.to_public_dict() for item in input_refs],
+                },
+                schema_version=1,
+            )
+            created_event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=candidate.id,
+                sequence=1,
+                event_type="work_unit.lifecycle.created",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                causation_id=delegation_event.event_id,
+                payload={
+                    "kind": candidate.kind,
+                    "missionId": mission_id,
+                    "parentWorkUnitId": parent.id,
+                    "status": candidate.status.value,
+                },
+                schema_version=1,
+            )
+            await repository.add_work_unit(candidate)
+            await repository.append_event(delegation_event)
+            await repository.append_event(created_event)
+        return candidate
+
+    async def fail_pending_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        actor: ActorRef,
+        reason: str,
+    ) -> WorkUnit:
+        return await self._transition_pending_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.FAILED,
+            event_type="work_unit.lifecycle.failed",
+            actor=actor,
+            reason=reason,
+        )
+
+    async def cancel_pending_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        return await self._transition_pending_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.CANCELLED,
+            event_type="work_unit.lifecycle.cancelled",
+            actor=actor,
+        )
+
+    async def _transition_pending_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        target: WorkUnitStatus,
+        event_type: str,
+        actor: ActorRef,
+        reason: str | None = None,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.status != WorkUnitStatus.PENDING:
+                raise WorkUnitNotReadyError(
+                    "only PENDING work units can use an adapter pre-execution transition"
+                )
+
+            occurred_at = datetime.now(timezone.utc)
+            updated = transition_work_unit(
+                work_unit,
+                target,
+                occurred_at=occurred_at,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            payload = {
+                "previousStatus": work_unit.status.value,
+                "status": updated.status.value,
+            }
+            if reason is not None:
+                payload["reason"] = reason
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type=event_type,
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload=payload,
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+            if target == WorkUnitStatus.FAILED:
+                await self._fail_mission_for_work_unit(
+                    repository,
+                    mission,
+                    work_unit_id=work_unit.id,
+                    actor=actor,
+                    reason=reason or "work unit failed before execution",
+                    occurred_at=occurred_at,
+                    causation_id=event.event_id,
+                )
+        return updated
+
+    async def lease_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit:
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+
+            occurred_at = datetime.now(timezone.utc)
+            for dependency_id in work_unit.dependencies:
+                dependency = await repository.get_work_unit(dependency_id)
+                if dependency is None:
+                    raise WorkUnitNotReadyError(
+                        f"work unit dependency is missing: {dependency_id}"
+                    )
+                if dependency.status != WorkUnitStatus.SUCCEEDED:
+                    raise WorkUnitNotReadyError(
+                        f"work unit dependency is not complete: {dependency_id}"
+                    )
+
+            lease = Lease(
+                id=new_identifier("lease"),
+                runner_id=runner_id,
+                expires_at=occurred_at + timedelta(seconds=lease_seconds),
+            )
+            updated = transition_work_unit(
+                work_unit,
+                WorkUnitStatus.LEASED,
+                occurred_at=occurred_at,
+                lease=lease,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.leased",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated.status.value,
+                    "leaseId": lease.id,
+                    "runnerId": lease.runner_id,
+                    "attempt": updated.attempt,
+                    "expiresAt": lease.expires_at.isoformat(),
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
+
+    async def claim_bound_work_unit(
+        self,
+        mission_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+        admission_policy: WorkspaceClaimAdmissionPolicy,
+    ) -> WorkUnitClaimOutcome:
+        """Atomically claim the next ready unit for one explicit binding."""
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
+        async with self._repository.transaction() as repository:
+            if not await self._runner_claim_is_admitted(
+                repository,
+                admission_policy,
+            ):
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.CAPACITY_SATURATED,
+                    work_unit=None,
+                )
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            allowed_root_kind = {
+                MissionSourceType.A2A_INBOUND: "a2a.inbound",
+                MissionSourceType.A2A: "a2a.delegate",
+                MissionSourceType.MISSION_FORK: "mission.fork",
+            }.get(mission.source.type)
+            work_unit = await repository.get_bound_work_unit_for_claim(
+                mission_id,
+                agent_id=agent_id,
+                adapter_type=adapter_type,
+                allowed_root_kind=allowed_root_kind,
+            )
+            if work_unit is None:
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.IDLE,
+                    work_unit=None,
+                )
+
+            return WorkUnitClaimOutcome(
+                status=WorkspaceClaimStatus.CLAIMED,
+                work_unit=await self._lease_bound_claim_candidate(
+                    repository,
+                    mission,
+                    work_unit,
+                    agent_id=agent_id,
+                    adapter_type=adapter_type,
+                    runner_id=runner_id,
+                    actor=actor,
+                    lease_seconds=lease_seconds,
+                ),
+            )
+
+    async def claim_workspace_bound_work_unit(
+        self,
+        workspace_id: str,
+        *,
+        agent_id: str,
+        adapter_type: str,
+        supported_work_unit_kinds: tuple[str, ...],
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+        admission_policy: WorkspaceClaimAdmissionPolicy,
+    ) -> WorkUnitClaimOutcome:
+        """Atomically discover and claim one bound unit in a workspace."""
+
+        if not workspace_id.strip():
+            raise ValueError("workspace_id must be non-empty")
+        if not supported_work_unit_kinds:
+            raise ValueError("supported_work_unit_kinds must be non-empty")
+        if len(supported_work_unit_kinds) > 32:
+            raise ValueError("supported_work_unit_kinds exceeds limit")
+        if len(supported_work_unit_kinds) != len(set(supported_work_unit_kinds)):
+            raise ValueError("supported_work_unit_kinds must be unique")
+        if any(
+            not isinstance(kind, str)
+            or not kind.strip()
+            or kind != kind.strip()
+            or len(kind) > 255
+            for kind in supported_work_unit_kinds
+        ):
+            raise ValueError("supported_work_unit_kinds is invalid")
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
+        async with self._repository.transaction() as repository:
+            if not await self._runner_claim_is_admitted(
+                repository,
+                admission_policy,
+            ):
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.CAPACITY_SATURATED,
+                    work_unit=None,
+                )
+            selection = await repository.get_workspace_bound_work_unit_for_claim(
+                workspace_id,
+                agent_id=agent_id,
+                adapter_type=adapter_type,
+                supported_work_unit_kinds=supported_work_unit_kinds,
+            )
+            if selection is None:
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.IDLE,
+                    work_unit=None,
+                )
+            mission, work_unit = selection
+            if mission.workspace_id != workspace_id:
+                raise WorkUnitNotReadyError(
+                    "claim repository returned a Mission from another workspace"
+                )
+            return WorkUnitClaimOutcome(
+                status=WorkspaceClaimStatus.CLAIMED,
+                work_unit=await self._lease_bound_claim_candidate(
+                    repository,
+                    mission,
+                    work_unit,
+                    agent_id=agent_id,
+                    adapter_type=adapter_type,
+                    runner_id=runner_id,
+                    actor=actor,
+                    lease_seconds=lease_seconds,
+                ),
+            )
+
+    @staticmethod
+    async def _runner_claim_is_admitted(
+        repository: MissionRepository,
+        policy: WorkspaceClaimAdmissionPolicy,
+    ) -> bool:
+        if policy.max_concurrent == 0:
+            return True
+        try:
+            await repository.lock_tenant_claim_admission(policy.tenant_id)
+            active_count = await repository.count_tenant_active_runner_work_units(
+                policy.tenant_id
+            )
+        except Exception as exc:
+            raise WorkspaceClaimAdmissionUnavailableError(
+                "Workspace claim admission state is unavailable"
+            ) from exc
+        return active_count < policy.max_concurrent
+
+    async def _lease_bound_claim_candidate(
+        self,
+        repository: MissionRepository,
+        mission: Mission,
+        work_unit: WorkUnit,
+        *,
+        agent_id: str,
+        adapter_type: str,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit:
+        if mission.status != MissionStatus.RUNNING:
+            raise WorkUnitNotReadyError("work units require a RUNNING mission")
+        if work_unit.mission_id != mission.id:
+            raise WorkUnitNotReadyError(
+                "claim repository returned a WorkUnit from another Mission"
+            )
+
+        if (
+            work_unit.assigned_agent_id != agent_id
+            or work_unit.assigned_adapter != adapter_type
+        ):
+            raise WorkUnitNotReadyError(
+                "claim repository returned a WorkUnit for another binding"
+            )
+        if work_unit.parent_work_unit_id is not None:
+            claim_mode = "delegated"
+        elif (
+            mission.source.type == MissionSourceType.A2A_INBOUND
+            and work_unit.kind == "a2a.inbound"
+            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+        ):
+            claim_mode = "a2a.inbound"
+        elif (
+            mission.source.type == MissionSourceType.A2A
+            and work_unit.kind == "a2a.delegate"
+            and work_unit.assigned_adapter == _A2A_OUTBOUND_ADAPTER
+        ):
+            claim_mode = "a2a.outbound"
+        elif (
+            mission.source.type == MissionSourceType.MISSION_FORK
+            and work_unit.kind == "mission.fork"
+            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+        ):
+            claim_mode = "mission.fork"
+        elif (
+            mission.source.type == MissionSourceType.MANUAL
+            and work_unit.parent_work_unit_id is None
+            and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
+            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+        ):
+            claim_mode = "desktop.task"
+        else:
+            raise WorkUnitNotReadyError(
+                "claim repository returned an ineligible root WorkUnit"
+            )
+
+        # Keep the application-level dependency check as a defense-in-depth
+        # guard for alternate repository implementations and test doubles.
+        for dependency_id in work_unit.dependencies:
+            dependency = await repository.get_work_unit(dependency_id)
+            if dependency is None or dependency.mission_id != mission.id:
+                raise WorkUnitNotReadyError(
+                    f"work unit dependency is missing: {dependency_id}"
+                )
+            if dependency.status != WorkUnitStatus.SUCCEEDED:
+                raise WorkUnitNotReadyError(
+                    f"work unit dependency is not complete: {dependency_id}"
+                )
+
+        occurred_at = datetime.now(timezone.utc)
+        lease = Lease(
+            id=new_identifier("lease"),
+            runner_id=runner_id,
+            expires_at=occurred_at + timedelta(seconds=lease_seconds),
+        )
+        updated = transition_work_unit(
+            work_unit,
+            WorkUnitStatus.LEASED,
+            occurred_at=occurred_at,
+            lease=lease,
+        )
+        sequence = (
+            await repository.get_last_event_sequence(
+                work_unit.id,
+                aggregate_type="work_unit",
+            )
+            + 1
+        )
+        event = EventEnvelope(
+            event_id=new_identifier("evt"),
+            aggregate_type="work_unit",
+            aggregate_id=work_unit.id,
+            sequence=sequence,
+            event_type="work_unit.lifecycle.leased",
+            actor=actor,
+            occurred_at=occurred_at,
+            correlation_id=mission.id,
+            payload={
+                "previousStatus": work_unit.status.value,
+                "status": updated.status.value,
+                "leaseId": lease.id,
+                "runnerId": lease.runner_id,
+                "attempt": updated.attempt,
+                "expiresAt": lease.expires_at.isoformat(),
+                "claimMode": claim_mode,
+                "assignedAgentId": updated.assigned_agent_id,
+                "assignedAdapter": updated.assigned_adapter,
+            },
+            schema_version=1,
+        )
+        await repository.update_work_unit(updated)
+        await repository.append_event(event)
+        return updated
+
+    async def get_claimed_execution_context(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+    ) -> ClaimedExecutionContext:
+        """Read a controlled root snapshot behind the active lease fence."""
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            is_inbound_root = (
+                mission.source.type == MissionSourceType.A2A_INBOUND
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == "a2a.inbound"
+                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+                and "a2a.receive" in work_unit.required_capabilities
+            )
+            is_outbound_root = (
+                mission.source.type == MissionSourceType.A2A
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == "a2a.delegate"
+                and work_unit.assigned_agent_id is not None
+                and work_unit.assigned_adapter == _A2A_OUTBOUND_ADAPTER
+                and "a2a.send" in work_unit.required_capabilities
+            )
+            is_mission_fork_root = (
+                mission.source.type == MissionSourceType.MISSION_FORK
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == "mission.fork"
+                and work_unit.assigned_agent_id is not None
+                and work_unit.assigned_adapter is not None
+                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+                and bool(work_unit.input_refs)
+            )
+            is_desktop_task_root = (
+                mission.source.type == MissionSourceType.MANUAL
+                and work_unit.parent_work_unit_id is None
+                and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
+                and work_unit.assigned_agent_id is not None
+                and work_unit.assigned_adapter is not None
+                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
+            )
+            if not (
+                is_inbound_root
+                or is_outbound_root
+                or is_mission_fork_root
+                or is_desktop_task_root
+            ):
+                raise WorkUnitNotReadyError(
+                    "execution context is only available for controlled roots"
+                )
+            if work_unit.status not in {
+                WorkUnitStatus.LEASED,
+                WorkUnitStatus.RUNNING,
+            }:
+                raise WorkUnitNotReadyError(
+                    "execution context requires a LEASED or RUNNING work unit"
+                )
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if work_unit.lease.id != lease_id or work_unit.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("work unit lease ownership mismatch")
+            if work_unit.lease.expires_at <= datetime.now(timezone.utc):
+                raise LeaseExpiredError("work unit lease has expired")
+
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
+            if contract is None:
+                raise WorkUnitNotReadyError("mission contract not found")
+            return ClaimedExecutionContext(
+                mission=mission,
+                contract=contract,
+                work_unit=work_unit,
+            )
+
+    async def heartbeat_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        lease_seconds: int,
+    ) -> WorkUnit:
+        if not 1 <= lease_seconds <= 3600:
+            raise ValueError("lease_seconds must be between 1 and 3600")
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.status not in {
+                WorkUnitStatus.LEASED,
+                WorkUnitStatus.RUNNING,
+            }:
+                raise WorkUnitNotReadyError(
+                    "only LEASED or RUNNING work units can send a heartbeat"
+                )
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if work_unit.lease.id != lease_id:
+                raise LeaseOwnershipError("lease id does not match the work unit")
+            if work_unit.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("lease belongs to another runner")
+
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("work unit lease has expired")
+            renewed_lease = Lease(
+                id=work_unit.lease.id,
+                runner_id=work_unit.lease.runner_id,
+                expires_at=occurred_at + timedelta(seconds=lease_seconds),
+            )
+            updated = work_unit.model_copy(update={"lease": renewed_lease})
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.heartbeat",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "status": updated.status.value,
+                    "leaseId": renewed_lease.id,
+                    "runnerId": renewed_lease.runner_id,
+                    "previousExpiresAt": work_unit.lease.expires_at.isoformat(),
+                    "expiresAt": renewed_lease.expires_at.isoformat(),
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+        return updated
+
+    async def record_execution_checkpoint(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        checkpoint_id: str,
+        lease_id: str,
+        runner_id: str,
+        sequence: int,
+        phase: ExecutionCheckpointPhase,
+        iteration: int,
+        tool_calls: int,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model_cost: float,
+        terminal: bool,
+        failure_reason: str | None,
+        actor: ActorRef,
+        tool_name: str | None = None,
+        tool_success: bool | None = None,
+    ) -> ExecutionCheckpoint:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError(
+                    "execution checkpoints require a RUNNING mission"
+                )
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.status != WorkUnitStatus.RUNNING:
+                raise WorkUnitNotReadyError(
+                    "execution checkpoints require a RUNNING work unit"
+                )
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if (
+                work_unit.lease.id != lease_id
+                or work_unit.lease.runner_id != runner_id
+            ):
+                raise LeaseOwnershipError("work unit lease ownership mismatch")
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("work unit lease has expired")
+
+            requested = {
+                "mission_id": mission_id,
+                "work_unit_id": work_unit_id,
+                "attempt": work_unit.attempt,
+                "sequence": sequence,
+                "phase": phase,
+                "iteration": iteration,
+                "tool_calls": tool_calls,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "model_cost": model_cost,
+                "terminal": terminal,
+                "failure_reason": failure_reason,
+            }
+            existing = await repository.get_execution_checkpoint(checkpoint_id)
+            if existing is not None:
+                if any(
+                    getattr(existing, field_name) != value
+                    for field_name, value in requested.items()
+                ):
+                    raise ValueError(
+                        "execution checkpoint id already exists with different content"
+                    )
+                return existing
+
+            latest = await repository.get_latest_execution_checkpoint(
+                work_unit_id,
+                work_unit.attempt,
+            )
+            if latest is not None and latest.terminal:
+                raise ValueError("terminal execution checkpoint already exists")
+            expected_sequence = 1 if latest is None else latest.sequence + 1
+            if sequence != expected_sequence:
+                raise ValueError(
+                    "execution checkpoint sequence must be contiguous "
+                    f"(expected={expected_sequence}, actual={sequence})"
+                )
+            if sequence == 1 and phase != ExecutionCheckpointPhase.EXECUTION_STARTED:
+                raise ValueError(
+                    "first execution checkpoint must mark execution start"
+                )
+
+            digest_material = {
+                "attempt": work_unit.attempt,
+                "completionTokens": completion_tokens,
+                "failureReason": failure_reason,
+                "iteration": iteration,
+                "missionId": mission_id,
+                "modelCost": model_cost,
+                "phase": phase.value,
+                "promptTokens": prompt_tokens,
+                "sequence": sequence,
+                "terminal": terminal,
+                "toolCalls": tool_calls,
+                "workUnitId": work_unit_id,
+            }
+            state_digest = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    digest_material,
+                    allow_nan=False,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            checkpoint = ExecutionCheckpoint(
+                id=checkpoint_id,
+                **requested,
+                state_digest=state_digest,
+                created_by=actor,
+                created_at=occurred_at,
+            )
+            await repository.add_execution_checkpoint(checkpoint)
+            event_sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit_id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            await repository.append_event(
+                EventEnvelope(
+                    event_id=new_identifier("evt"),
+                    aggregate_type="work_unit",
+                    aggregate_id=work_unit_id,
+                    sequence=event_sequence,
+                    event_type="work_unit.checkpoint.recorded",
+                    actor=actor,
+                    occurred_at=occurred_at,
+                    correlation_id=mission_id,
+                    payload=_checkpoint_event_payload(
+                        checkpoint,
+                        tool_name=tool_name,
+                        tool_success=tool_success,
+                    ),
+                    schema_version=1,
+                )
+            )
+        return checkpoint
+
+    async def start_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.RUNNING,
+            event_type="work_unit.lifecycle.started",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+        )
+
+    async def complete_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        artifact_refs: list[ArtifactRef],
+    ) -> WorkUnit:
+        if not artifact_refs:
+            raise ValueError("work unit completion requires at least one artifact")
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.VERIFYING,
+            event_type="work_unit.lifecycle.completed",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+            artifact_refs=artifact_refs,
+        )
+
+    async def _transition_execution_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        target: WorkUnitStatus,
+        event_type: str,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        reason: str | None = None,
+        artifact_refs: list[ArtifactRef] | None = None,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+            if work_unit.lease.id != lease_id:
+                raise LeaseOwnershipError("lease id does not match the work unit")
+            if work_unit.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("lease belongs to another runner")
+
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at <= occurred_at:
+                raise LeaseExpiredError("work unit lease has expired")
+            if target == WorkUnitStatus.RETRYING:
+                contract = await repository.get_contract(
+                    mission.contract_id, mission.contract_version
+                )
+                if contract is None:
+                    raise WorkUnitNotReadyError("mission contract not found")
+                if work_unit.attempt >= contract.budgets.retries + 1:
+                    raise WorkUnitNotReadyError("work unit retry budget is exhausted")
+            if target == WorkUnitStatus.VERIFYING and not artifact_refs:
+                raise WorkUnitNotReadyError(
+                    "work unit verification requires at least one artifact"
+                )
+            if target == WorkUnitStatus.VERIFYING:
+                await self._validate_artifact_refs(
+                    repository,
+                    mission_id,
+                    artifact_refs or [],
+                    work_unit_id=work_unit.id,
+                    attempt=work_unit.attempt,
+                )
+            updated = transition_work_unit(
+                work_unit,
+                target,
+                occurred_at=occurred_at,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type=event_type,
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated.status.value,
+                    "leaseId": lease_id,
+                    "attempt": updated.attempt,
+                    **(
+                        {
+                            "artifactRefs": [
+                                ref.to_public_dict() for ref in artifact_refs
+                            ]
+                        }
+                        if artifact_refs is not None
+                        else {}
+                    ),
+                    **({"reason": reason} if reason is not None else {}),
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+            if target == WorkUnitStatus.FAILED:
+                await self._fail_mission_for_work_unit(
+                    repository,
+                    mission,
+                    work_unit_id=work_unit.id,
+                    actor=actor,
+                    reason=reason or "work unit execution failed",
+                    occurred_at=occurred_at,
+                    causation_id=event.event_id,
+                )
+        return updated
+
+    async def recover_expired_lease(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        actor: ActorRef,
+    ) -> WorkUnit:
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            if mission is None:
+                raise MissionNotFoundError(mission_id)
+            if mission.status != MissionStatus.RUNNING:
+                raise WorkUnitNotReadyError("work units require a RUNNING mission")
+
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.lease is None:
+                raise LeaseOwnershipError("work unit has no active lease")
+
+            occurred_at = datetime.now(timezone.utc)
+            if work_unit.lease.expires_at > occurred_at:
+                raise LeaseExpiredError("work unit lease has not expired")
+            contract = await repository.get_contract(
+                mission.contract_id, mission.contract_version
+            )
+            if contract is None:
+                raise WorkUnitNotReadyError("mission contract not found")
+            retry_budget_exhausted = work_unit.attempt >= contract.budgets.retries + 1
+            updated = transition_work_unit(
+                work_unit,
+                (
+                    WorkUnitStatus.FAILED
+                    if retry_budget_exhausted
+                    else WorkUnitStatus.RETRYING
+                ),
+                occurred_at=occurred_at,
+            )
+            sequence = (
+                await repository.get_last_event_sequence(
+                    work_unit.id,
+                    aggregate_type="work_unit",
+                )
+                + 1
+            )
+            event = EventEnvelope(
+                event_id=new_identifier("evt"),
+                aggregate_type="work_unit",
+                aggregate_id=work_unit.id,
+                sequence=sequence,
+                event_type="work_unit.lifecycle.lease_expired",
+                actor=actor,
+                occurred_at=occurred_at,
+                correlation_id=mission_id,
+                payload={
+                    "previousStatus": work_unit.status.value,
+                    "status": updated.status.value,
+                    "leaseId": work_unit.lease.id,
+                    "attempt": updated.attempt,
+                    "retryBudgetExhausted": retry_budget_exhausted,
+                },
+                schema_version=1,
+            )
+            await repository.update_work_unit(updated)
+            await repository.append_event(event)
+            if retry_budget_exhausted:
+                await self._fail_mission_for_work_unit(
+                    repository,
+                    mission,
+                    work_unit_id=work_unit.id,
+                    actor=actor,
+                    reason="work unit retry budget exhausted after lease expiry",
+                    occurred_at=occurred_at,
+                    causation_id=event.event_id,
+                )
+        return updated
+
+    async def fail_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        reason: str | None = None,
+    ) -> WorkUnit:
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.FAILED,
+            event_type="work_unit.lifecycle.failed",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+            reason=reason,
+        )
+
+    async def retry_work_unit(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+        reason: str | None = None,
+    ) -> WorkUnit:
+        return await self._transition_execution_work_unit(
+            mission_id,
+            work_unit_id,
+            target=WorkUnitStatus.RETRYING,
+            event_type="work_unit.lifecycle.retrying",
+            lease_id=lease_id,
+            runner_id=runner_id,
+            actor=actor,
+            reason=reason,
+        )
