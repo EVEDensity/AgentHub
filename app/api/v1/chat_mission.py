@@ -37,8 +37,18 @@ from app.services.mission_service import (
     MissionService,
     build_human_actor,
 )
+from app.services.receipts import (
+    format_receipts_as_context,
+    search_receipts_inprocess,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+# ── Special (non-catalog) mentions ────────────────────────────────
+# These tokens are routed by the adapter itself — the adapter runs
+# pre-processing and injects context before the Mission is created.
+# They do NOT need to be registered in the Agent Catalog.
+_SPECIAL_MENTIONS = frozenset({"archivist"})
 
 # Matches ``@Identifier`` — identifier is alphanumeric + underscore/dash,
 # must be preceded by whitespace or line-start.  This mirrors the
@@ -221,6 +231,44 @@ async def _inline_derive_work_units(mission_id: str) -> None:
         pass
 
 
+async def _preprocess_archivist(
+    message: str,
+    repo: MissionRepository,
+    workspace_id: str,
+) -> tuple[str, list[dict]]:
+    """Run receipts pre-search for ``@archivist`` and return enriched context.
+
+    Extracts the query from the message (everything after ``@archivist``),
+    runs an in-process receipts search over the workspace's Mission
+    history, and returns ``(enriched_objective, receipts_list)``.  The
+    enriched objective prepends a markdown block describing the evidence
+    trail so the downstream agent answers **with provenance**, not by
+    free-associating from the history.
+
+    Returns the original message unchanged if no receipts are found —
+    the agent still answers but says "no matching records".
+    """
+    # Strip ``@archivist`` and surrounding whitespace → pure query
+    query = re.sub(r"@archivist\b", "", message, flags=re.IGNORECASE).strip()
+    if not query:
+        query = "all missions"
+
+    try:
+        receipts = await search_receipts_inprocess(
+            repo,
+            workspace_id=workspace_id,
+            query=query,
+            limit=10,
+            days=90,
+        )
+    except Exception:  # noqa: BLE001 - search failure is non-fatal
+        receipts = []
+
+    context_block = format_receipts_as_context(receipts, query=query)
+    enriched = f"{context_block}\n\n---\n\n{message}" if receipts else message
+    return enriched, receipts
+
+
 @router.post("/mission", status_code=202)
 async def create_chat_mission(
     request: ChatMissionRequest,
@@ -248,6 +296,22 @@ async def create_chat_mission(
 
     # ── P1: @mention parsing & resolution ──────────────────────────
     mention_names = _parse_mentions(message)
+
+    # ── T1-2: Special mentions (archivist) ──────────────────────────
+    # These are NOT resolved against the Agent Catalog — the adapter
+    # itself runs pre-processing and injects context before the Mission
+    # is created.  We strip them from mention_names so resolution below
+    # only sees real agent identifiers.
+    special_hit = [m for m in mention_names if m.lower() in _SPECIAL_MENTIONS]
+    mention_names = [m for m in mention_names if m.lower() not in _SPECIAL_MENTIONS]
+
+    enriched_objective = message
+    archivist_receipts: list[dict] = []
+    if "archivist" in [m.lower() for m in special_hit]:
+        enriched_objective, archivist_receipts = await _preprocess_archivist(
+            message, repository, request.workspace_id,
+        )
+
     resolved, unresolved = await _resolve_mentions(
         mention_names,
         request.workspace_id,
@@ -272,13 +336,21 @@ async def create_chat_mission(
             mission_id=mission_id,
             workspace_id=request.workspace_id,
             title=title,
-            objective=message,
+            objective=enriched_objective,
             source={
                 "type": "chat",
                 "session_id": request.session_id,
                 "created_at": now().isoformat(),
                 "participants": resolved,
                 "unresolved_mentions": unresolved,
+                "special_mentions": special_hit,
+                "archivist": {
+                    "query": (
+                        re.sub(r"@archivist\b", "", message, flags=re.IGNORECASE).strip()
+                        or "all missions"
+                    ),
+                    "receipts_count": len(archivist_receipts),
+                } if archivist_receipts else None,
             },
             contract=_build_chat_contract(contract_id),
             actor=build_human_actor(user),
@@ -314,5 +386,13 @@ async def create_chat_mission(
         "mentions": {
             "resolved": resolved,
             "unresolved": unresolved,
+            "special": special_hit,
         },
+        "archivist": {
+            "query": (
+                re.sub(r"@archivist\b", "", message, flags=re.IGNORECASE).strip()
+                or "all missions"
+            ),
+            "receipts": archivist_receipts[:5],  # top 5 receipts inline; rest live in Mission objective
+        } if special_hit and any(m.lower() == "archivist" for m in special_hit) else None,
     }
