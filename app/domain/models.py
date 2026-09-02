@@ -164,6 +164,8 @@ class MissionSource(DomainModel):
     type: MissionSourceType
     reference: Annotated[str, Field(max_length=2048)] | None = None
     external_id: Annotated[str, Field(max_length=255)] | None = None
+    session_id: Annotated[str, Field(max_length=128)] | None = None
+    metadata: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_fork_ancestry(self) -> MissionSource:
@@ -558,3 +560,101 @@ class Decision(DomainModel):
         if self.resolution not in self.options:
             raise ValueError("decision resolution was not an offered option")
         return self
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# T1-3: Session event stream model (multi-agent collaboration)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class SessionStatus(str, Enum):
+    """Lifecycle status of a chat session."""
+
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class Session(DomainModel):
+    """A chat session that groups messages, mentions, and Missions."""
+
+    id: Identifier
+    workspace_id: Identifier
+    title: Annotated[str, Field(min_length=1, max_length=255)]
+    status: SessionStatus = SessionStatus.ACTIVE
+    metadata: dict[str, Any] | None = None
+    created_by: ActorRef
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class SessionEventType(str, Enum):
+    """Immutable event types in the session event log.
+
+    Matches the architecture spec (multi-agent-collaboration.md §5).
+    Values are wire-stable — new types may be appended; renames or
+    removals require an ADR + data migration.
+    """
+    MEMBER_JOINED = "member.joined"
+    MEMBER_LEFT = "member.left"
+    MESSAGE_CREATED = "message.created"
+    MENTION_DETECTED = "mention.detected"
+    RULE_TRIGGERED = "rule.triggered"
+    MISSION_CREATED = "mission.created"
+    MISSION_COMPLETED = "mission.completed"
+    DECISION_RECORDED = "decision.recorded"
+
+
+class SessionEvent(DomainModel):
+    """One immutable event in a session's event stream.
+
+    The session event log is the conversation-domain counterpart to the
+    Mission event ledger.  Every chat message, @mention resolution,
+    mission creation, and milestone completion appends one record —
+    never updates, never deletes (ADR-0108 event-log-as-memory).
+    """
+    id: Identifier
+    session_id: Identifier
+    event_type: SessionEventType
+    actor: ActorRef
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: AwareDatetime
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# T5: Rule confirmation gate — pending rule-trigger records
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class PendingConfirmationStatus(str, Enum):
+    """Lifecycle of a pending rule-trigger confirmation."""
+
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+
+
+class PendingConfirmation(DomainModel):
+    """A rule-trigger that requires user confirmation before creating a Mission.
+
+    Created by :func:`chat_mission.create_chat_mission` when a matched
+    rule has ``require_confirmation: true`` and ``action.kind: create_mission``.
+    The user confirms or cancels via the dedicated endpoints; the record
+    auto-expires after ``expires_at`` (default 15 min).
+    """
+
+    id: Identifier
+    session_id: str | None = None
+    workspace_id: Identifier
+    rule_id: str
+    rule_description: str
+    action_kind: str                       # "create_mission"
+    target_agent: str | None = None
+    objective_template: str | None = None
+    message: str                           # original user message (replay on confirm)
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    status: PendingConfirmationStatus = PendingConfirmationStatus.PENDING
+    created_by: ActorRef
+    expires_at: AwareDatetime
+    created_at: AwareDatetime
+    resolved_at: AwareDatetime | None = None
