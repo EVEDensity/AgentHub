@@ -4,13 +4,6 @@ from collections.abc import AsyncGenerator
 
 from app.services.agent_service import call_agent, stream_agent_response
 
-# Legacy LangGraph orchestration was decommissioned in the P0 Mission/SSE
-# migration (T0-4 debt cleanup). route_message and stream_message now always
-# use agent_service directly — the bounded tool loop and enterprise
-# Mission/WorkUnit path are the execution-of-record.  The
-# AGENTHUB_ENABLE_LEGACY_LANGGRAPH env var is retained in config.py only so
-# existing deployments do not crash; it is intentionally ignored.
-
 
 async def route_message(
     session_id: str,
