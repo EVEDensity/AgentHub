@@ -177,9 +177,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     search_parser.add_argument(
         "--scope",
-        choices=["mission", "session", "both"],
+        choices=["mission", "session", "events", "both", "all"],
         default="mission",
-        help="search scope: mission receipts, session messages, or both (default: %(default)s)",
+        help=(
+            "search scope: mission receipts, session messages, event stream, "
+            "mission+session (both), or all three (all) "
+            "(default: %(default)s)"
+        ),
     )
 
     replay_parser = subparsers.add_parser(

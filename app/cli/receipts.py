@@ -337,13 +337,110 @@ def search_messages_sqlite(
     return filtered[: max(limit, 0)]
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# T6: Session events search (cross-domain search for event stream)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def filter_events_by_query(
+    events: list[dict[str, Any]],
+    query: str,
+    *,
+    days: int | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Filter session event rows by keyword (T6 cross-domain search).
+
+    Case-insensitive substring match across payload JSON text + event_type.
+    Mirrors ``filter_messages_by_query`` ranking semantics so mission,
+    session, and events search behave consistently.
+    """
+    terms = [term.lower() for term in query.split() if term]
+    if days is not None and days >= 0:
+        reference = now or datetime.now(timezone.utc)
+        kept: list[dict[str, Any]] = []
+        for evt in events:
+            created = _parse_timestamp(evt.get("created_at"))
+            if created is None:
+                kept.append(evt)
+                continue
+            age = (reference - created).total_seconds()
+            if age <= days * 86400:
+                kept.append(evt)
+        events = kept
+    if not terms:
+        return list(events)
+    matched = []
+    for evt in events:
+        haystack = " ".join(
+            (
+                str(evt.get("payload") or ""),
+                str(evt.get("event_type") or ""),
+            )
+        ).lower()
+        if all(term in haystack for term in terms):
+            matched.append(evt)
+    return matched
+
+
+def format_event_hit(evt: dict[str, Any]) -> str:
+    """Format one session event search hit as a readable string."""
+    event_type = str(evt.get("event_type") or "?")
+    session_id = str(evt.get("session_id") or "")
+    created = str(evt.get("created_at") or "")
+    payload_str = str(evt.get("payload") or "")
+    # Try to make the payload more readable
+    try:
+        payload_obj = json.loads(payload_str) if payload_str.startswith("{") else {}
+        snippet = json.dumps(payload_obj, ensure_ascii=False)[:100]
+    except (json.JSONDecodeError, TypeError):
+        snippet = payload_str[:100]
+    return f"[{event_type} session={session_id[:16]} {created}] {snippet}"
+
+
+def search_events_sqlite(
+    *,
+    db_path: Path,
+    query: str,
+    limit: int = 20,
+    days: int | None = None,
+) -> list[dict[str, Any]]:
+    """Search session_events directly in the local SQLite DB (T6).
+
+    Read-only path — zero subprocess, zero HTTP overhead.  Used by
+    ``agenthub search --scope events`` and ``--scope both``.
+    Falls back to in-Python filtering (LIKE would need FTS5 for
+    acceptable performance on large payloads).
+    """
+    if not db_path.is_file():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            "SELECT id, session_id, event_type, actor_type, actor_id, "
+            "actor_display_name, payload, created_at "
+            "FROM session_events ORDER BY created_at DESC"
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+    except sqlite3.OperationalError:
+        # Table may not exist in older DBs
+        return []
+    finally:
+        conn.close()
+
+    filtered = filter_events_by_query(rows, query, days=days)
+    return filtered[: max(limit, 0)]
+
+
 def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
-    """Cross-domain search (T1-4).
+    """Cross-domain search (T1-4 + T6).
 
     ``--scope mission`` (default) searches Mission/Evidence receipts via
     the MissionControl HTTP path.  ``--scope session`` searches session
-    messages directly in SQLite.  ``--scope both`` merges both result
-    sets, tagged by source.
+    messages directly in SQLite.  ``--scope events`` searches the
+    session_events event stream.  ``--scope both`` merges mission + session.
+    ``--scope all`` merges all three result sets.
     """
     config = _load_config(cwd)
     settings = resolve_model_settings(
@@ -358,13 +455,22 @@ def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
 
     scope = getattr(args, "scope", "mission") or "mission"
     scope = scope.lower()
-    if scope not in ("mission", "session", "both"):
-        print(f"error: unknown scope {scope!r} — use mission, session, or both", file=sys.stderr)
+    if scope not in ("mission", "session", "events", "both", "all"):
+        print(
+            f"error: unknown scope {scope!r} — use mission, session, "
+            f"events, both, or all",
+            file=sys.stderr,
+        )
         return EXIT_INFRA_ERROR
+
+    # both = mission + session; all = mission + session + events
+    scope_mission = scope in ("mission", "both", "all")
+    scope_session = scope in ("session", "both", "all")
+    scope_events = scope in ("events", "all")
 
     # ── Mission scope ──────────────────────────────────────────────
     receipts: list[dict[str, Any]] = []
-    if scope in ("mission", "both"):
+    if scope_mission:
         if not db_path.is_file():
             print("no local missions yet — run `agenthub run` first")
             return EXIT_OK
@@ -384,34 +490,47 @@ def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
 
     # ── Session scope ──────────────────────────────────────────────
     messages: list[dict[str, Any]] = []
-    if scope in ("session", "both"):
-        if db_path.is_file():
-            messages = search_messages_sqlite(
-                db_path=db_path,
-                query=args.query,
-                limit=args.limit,
-                days=args.days,
-            )
+    if scope_session and db_path.is_file():
+        messages = search_messages_sqlite(
+            db_path=db_path,
+            query=args.query,
+            limit=args.limit,
+            days=args.days,
+        )
+
+    # ── Events scope (T6) ──────────────────────────────────────────
+    events: list[dict[str, Any]] = []
+    if scope_events and db_path.is_file():
+        events = search_events_sqlite(
+            db_path=db_path,
+            query=args.query,
+            limit=args.limit,
+            days=args.days,
+        )
 
     # ── JSON output ────────────────────────────────────────────────
     if args.json:
-        if scope == "mission":
-            print(json.dumps(receipts, ensure_ascii=False, indent=2))
-        elif scope == "session":
-            print(json.dumps(messages, ensure_ascii=False, indent=2))
+        output: dict[str, Any] = {}
+        if scope_mission:
+            output["mission"] = receipts
+        if scope_session:
+            output["session"] = messages
+        if scope_events:
+            output["events"] = events
+        # Single-scope shortcut: emit the list directly
+        if len(output) == 1:
+            print(json.dumps(next(iter(output.values())), ensure_ascii=False, indent=2))
         else:
-            print(json.dumps({
-                "mission": receipts,
-                "session": messages,
-            }, ensure_ascii=False, indent=2))
+            print(json.dumps(output, ensure_ascii=False, indent=2))
         return EXIT_OK
 
     # ── Text output ────────────────────────────────────────────────
-    if not receipts and not messages:
+    has_results = bool(receipts or messages or events)
+    if not has_results:
         print(f"no results match: {args.query!r}")
         return EXIT_OK
 
-    if scope in ("mission", "both") and receipts:
+    if scope_mission and receipts:
         print(f"=== MISSION RECEIPTS ({len(receipts)}) ===")
         print(f"{'MISSION ID':40} {'STATUS':12} {'VERDICTS':16} OBJECTIVE")
         print("-" * 100)
@@ -420,15 +539,22 @@ def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
         print()
         print("replay with: agenthub replay <MISSION_ID>")
         print('resume with: agenthub run "<objective>" --resume <MISSION_ID>')
-        if scope == "both":
+        if scope_session or scope_events:
             print()
 
-    if scope in ("session", "both") and messages:
+    if scope_session and messages:
         print(f"=== SESSION MESSAGES ({len(messages)}) ===")
         print("-" * 80)
         for msg in messages:
             print(format_message_hit(msg))
-        print()
+        if scope_events:
+            print()
+
+    if scope_events and events:
+        print(f"=== SESSION EVENTS ({len(events)}) ===")
+        print("-" * 80)
+        for evt in events:
+            print(format_event_hit(evt))
 
     return EXIT_OK
 
