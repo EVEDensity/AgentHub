@@ -392,6 +392,10 @@ class MissionVerifyMixin:
                         )
                     )
                     await repository.update_mission(updated_mission)
+                    await self._emit_session_terminal(
+                        updated_mission,
+                        previous_status=mission.status.value,
+                    )
 
             return evidence, updated_work_unit, updated_mission
 

@@ -336,6 +336,13 @@ class MissionLifecycleMixin:
             )
             await repository.update_mission(updated)
             await repository.append_event(event)
+        # Emit mission.completed session event for terminal transitions.
+        if target in {MissionStatus.FAILED, MissionStatus.CANCELLED}:
+            await self._emit_session_terminal(
+                updated,
+                previous_status=mission.status.value,
+                reason=reason,
+            )
         return updated
 
     async def _fail_mission_for_work_unit(
@@ -381,6 +388,12 @@ class MissionLifecycleMixin:
         )
         await repository.update_mission(updated)
         await repository.append_event(event)
+        await self._emit_session_terminal(
+            updated,
+            previous_status=mission.status.value,
+            reason=reason,
+            extra={"work_unit_id": work_unit_id},
+        )
         return updated
 
     async def add_mission_guidance(
