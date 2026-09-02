@@ -14,7 +14,9 @@ from datetime import datetime, timedelta, timezone
 from app.cli.main import build_parser
 from app.cli.receipts import (
     build_receipt,
+    filter_messages_by_query,
     filter_missions_by_query,
+    format_message_hit,
     summarize_verdicts,
 )
 
@@ -221,3 +223,101 @@ class SearchParserTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# T1-4: Cross-domain message search tests
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _message(
+    msg_id: str,
+    *,
+    content: str = "",
+    sender: str = "agent",
+    session_id: str = "sess-1",
+    created_at: str = "2026-09-01T00:00:00+00:00",
+) -> dict:
+    return {
+        "id": msg_id,
+        "session_id": session_id,
+        "sender": sender,
+        "content": content,
+        "type": "text",
+        "created_at": created_at,
+    }
+
+
+class FilterMessagesByQueryTests(unittest.TestCase):
+    def test_matches_content_case_insensitive(self) -> None:
+        messages = [
+            _message("m1", content="Fixed the Login bug today"),
+            _message("m2", content="Deployed to prod"),
+        ]
+        matched = filter_messages_by_query(messages, "login")
+        self.assertEqual([m["id"] for m in matched], ["m1"])
+
+    def test_all_terms_must_match(self) -> None:
+        messages = [
+            _message("m1", content="Fixed login bug"),
+            _message("m2", content="Fixed deploy"),
+        ]
+        matched = filter_messages_by_query(messages, "fixed bug")
+        self.assertEqual([m["id"] for m in matched], ["m1"])
+
+    def test_sender_is_also_searched(self) -> None:
+        messages = [
+            _message("m1", content="hello", sender="dev-agent"),
+            _message("m2", content="hello", sender="archivist"),
+        ]
+        matched = filter_messages_by_query(messages, "dev-agent")
+        self.assertEqual([m["id"] for m in matched], ["m1"])
+
+    def test_days_window_keeps_recent_and_undated(self) -> None:
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        messages = [
+            _message("recent", content="x", created_at="2026-08-31T00:00:00+00:00"),
+            _message("old", content="x", created_at="2026-01-01T00:00:00+00:00"),
+            _message("undated", content="x", created_at=""),
+        ]
+        matched = filter_messages_by_query(messages, "", days=30, now=now)
+        self.assertEqual(
+            sorted(m["id"] for m in matched), ["recent", "undated"]
+        )
+
+    def test_no_terms_returns_all(self) -> None:
+        messages = [_message("m1"), _message("m2")]
+        matched = filter_messages_by_query(messages, "")
+        self.assertEqual(len(matched), 2)
+
+
+class FormatMessageHitTests(unittest.TestCase):
+    def test_includes_sender_and_content(self) -> None:
+        msg = _message("m1", content="Hello world", sender="dev", created_at="2026-09-01T00:00:00+00:00")
+        result = format_message_hit(msg)
+        self.assertIn("dev", result)
+        self.assertIn("Hello world", result)
+
+    def test_ellipsizes_long_content(self) -> None:
+        long_content = "x" * 200
+        msg = _message("m1", content=long_content)
+        result = format_message_hit(msg)
+        self.assertIn("…", result)
+
+
+class SearchScopeParserTests(unittest.TestCase):
+    def test_default_scope_is_mission(self) -> None:
+        args = build_parser().parse_args(["search", "test"])
+        self.assertEqual(args.scope, "mission")
+
+    def test_scope_session_parses(self) -> None:
+        args = build_parser().parse_args(["search", "test", "--scope", "session"])
+        self.assertEqual(args.scope, "session")
+
+    def test_scope_both_parses(self) -> None:
+        args = build_parser().parse_args(["search", "test", "--scope", "both"])
+        self.assertEqual(args.scope, "both")
+
+    def test_invalid_scope_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["search", "test", "--scope", "invalid"])

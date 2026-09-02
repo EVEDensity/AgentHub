@@ -175,6 +175,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="emit a single JSON result document on stdout",
     )
+    search_parser.add_argument(
+        "--scope",
+        choices=["mission", "session", "both"],
+        default="mission",
+        help="search scope: mission receipts, session messages, or both (default: %(default)s)",
+    )
 
     replay_parser = subparsers.add_parser(
         "replay",

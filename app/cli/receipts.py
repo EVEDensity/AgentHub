@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -245,7 +246,105 @@ def _print_receipt(receipt: dict[str, Any]) -> None:
         print(f"{'':40} artifacts: {', '.join(addresses)}")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# T1-4: Session messages search (cross-domain search, ADR-0108 P3)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def filter_messages_by_query(
+    messages: list[dict[str, Any]],
+    query: str,
+    *,
+    days: int | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Filter session message records by keyword (T1-4 cross-domain search).
+
+    Pure keyword view — mirrors ``filter_missions_by_query`` logic so
+    mission and session search share identical ranking semantics.
+    Every whitespace-separated term must appear (case-insensitive
+    substring) in the message's content or sender.
+    """
+    terms = [term.lower() for term in query.split() if term]
+    if days is not None and days >= 0:
+        reference = now or datetime.now(timezone.utc)
+        kept: list[dict[str, Any]] = []
+        for msg in messages:
+            created = _parse_timestamp(
+                _field(msg, "created_at", "createdAt")
+            )
+            if created is None:
+                kept.append(msg)
+                continue
+            age = (reference - created).total_seconds()
+            if age <= days * 86400:
+                kept.append(msg)
+        messages = kept
+    if not terms:
+        return list(messages)
+    matched = []
+    for msg in messages:
+        haystack = " ".join(
+            (
+                str(msg.get("content") or ""),
+                str(msg.get("sender") or ""),
+            )
+        ).lower()
+        if all(term in haystack for term in terms):
+            matched.append(msg)
+    return matched
+
+
+def format_message_hit(msg: dict[str, Any], *, include_session: bool = True) -> str:
+    """Format one message search hit as a readable string."""
+    sender = str(msg.get("sender") or "?")
+    content = str(msg.get("content") or "")
+    snippet = content[:120] + ("…" if len(content) > 120 else "")
+    session_info = ""
+    if include_session:
+        session_id = str(msg.get("session_id") or msg.get("sessionId") or "")
+        session_info = f" session={session_id[:16]}"
+    created = str(msg.get("created_at") or msg.get("createdAt") or "")
+    return f"[{sender}{session_info} {created}] {snippet}"
+
+
+def search_messages_sqlite(
+    *,
+    db_path: Path,
+    query: str,
+    limit: int = 20,
+    days: int | None = None,
+) -> list[dict[str, Any]]:
+    """Search session messages directly in the local SQLite DB (T1-4).
+
+    Read-only path — zero subprocess, zero HTTP overhead.  Used by
+    ``agenthub search --scope session``.  The ``messages`` table already
+    exists in the core schema (init_db.py).
+    """
+    if not db_path.is_file():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            "SELECT id, session_id, sender, content, type, created_at FROM messages ORDER BY created_at DESC"
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    filtered = filter_messages_by_query(rows, query, days=days)
+    return filtered[: max(limit, 0)]
+
+
 def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
+    """Cross-domain search (T1-4).
+
+    ``--scope mission`` (default) searches Mission/Evidence receipts via
+    the MissionControl HTTP path.  ``--scope session`` searches session
+    messages directly in SQLite.  ``--scope both`` merges both result
+    sets, tagged by source.
+    """
     config = _load_config(cwd)
     settings = resolve_model_settings(
         provider=args.provider,
@@ -255,35 +354,82 @@ def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
     )
     workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
     directory = state_dir(cwd)
-    if not (directory / "db" / "agenthub.db").is_file():
-        print("no local missions yet — run `agenthub run` first")
-        return EXIT_OK
-    try:
-        receipts = search_receipts(
-            query=args.query,
-            state_dir=directory,
-            workspace_root=workspace_root,
-            model=settings,
-            limit=args.limit,
-            status=args.status,
-            days=args.days,
-        )
-    except (RuntimeError, OSError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
+    db_path = directory / "db" / "agenthub.db"
+
+    scope = getattr(args, "scope", "mission") or "mission"
+    scope = scope.lower()
+    if scope not in ("mission", "session", "both"):
+        print(f"error: unknown scope {scope!r} — use mission, session, or both", file=sys.stderr)
         return EXIT_INFRA_ERROR
+
+    # ── Mission scope ──────────────────────────────────────────────
+    receipts: list[dict[str, Any]] = []
+    if scope in ("mission", "both"):
+        if not db_path.is_file():
+            print("no local missions yet — run `agenthub run` first")
+            return EXIT_OK
+        try:
+            receipts = search_receipts(
+                query=args.query,
+                state_dir=directory,
+                workspace_root=workspace_root,
+                model=settings,
+                limit=args.limit,
+                status=args.status,
+                days=args.days,
+            )
+        except (RuntimeError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_INFRA_ERROR
+
+    # ── Session scope ──────────────────────────────────────────────
+    messages: list[dict[str, Any]] = []
+    if scope in ("session", "both"):
+        if db_path.is_file():
+            messages = search_messages_sqlite(
+                db_path=db_path,
+                query=args.query,
+                limit=args.limit,
+                days=args.days,
+            )
+
+    # ── JSON output ────────────────────────────────────────────────
     if args.json:
-        print(json.dumps(receipts, ensure_ascii=False, indent=2))
+        if scope == "mission":
+            print(json.dumps(receipts, ensure_ascii=False, indent=2))
+        elif scope == "session":
+            print(json.dumps(messages, ensure_ascii=False, indent=2))
+        else:
+            print(json.dumps({
+                "mission": receipts,
+                "session": messages,
+            }, ensure_ascii=False, indent=2))
         return EXIT_OK
-    if not receipts:
-        print(f"no missions match: {args.query!r}")
+
+    # ── Text output ────────────────────────────────────────────────
+    if not receipts and not messages:
+        print(f"no results match: {args.query!r}")
         return EXIT_OK
-    print(f"{'MISSION ID':40} {'STATUS':12} {'VERDICTS':16} OBJECTIVE")
-    print("-" * 100)
-    for receipt in receipts:
-        _print_receipt(receipt)
-    print()
-    print("replay with: agenthub replay <MISSION_ID>")
-    print('resume with: agenthub run "<objective>" --resume <MISSION_ID>')
+
+    if scope in ("mission", "both") and receipts:
+        print(f"=== MISSION RECEIPTS ({len(receipts)}) ===")
+        print(f"{'MISSION ID':40} {'STATUS':12} {'VERDICTS':16} OBJECTIVE")
+        print("-" * 100)
+        for receipt in receipts:
+            _print_receipt(receipt)
+        print()
+        print("replay with: agenthub replay <MISSION_ID>")
+        print('resume with: agenthub run "<objective>" --resume <MISSION_ID>')
+        if scope == "both":
+            print()
+
+    if scope in ("session", "both") and messages:
+        print(f"=== SESSION MESSAGES ({len(messages)}) ===")
+        print("-" * 80)
+        for msg in messages:
+            print(format_message_hit(msg))
+        print()
+
     return EXIT_OK
 
 
