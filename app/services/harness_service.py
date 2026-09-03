@@ -5,6 +5,7 @@ import logging
 import math
 import re
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -263,6 +264,12 @@ class FunctionCallingHarness:
             raise HarnessError("Harness timeout must be positive")
 
         started_at = time.monotonic()
+        if request.on_text_delta is None and self._checkpoint_port is not None:
+            publish = getattr(self._checkpoint_port, "publish_text_delta", None)
+            if callable(publish):
+                async def publish_delta(text: str) -> None:
+                    await publish("evt-stream-" + uuid.uuid4().hex, text)
+                request = replace(request, on_text_delta=publish_delta)
         recorder = _HarnessRecorder(
             self._checkpoint_port,
             request.execution,
@@ -415,6 +422,14 @@ class FunctionCallingHarness:
                             message,
                             budget=budget,
                         )
+                    if not response.tool_calls and self._checkpoint_port is not None:
+                        publish = getattr(self._checkpoint_port, "publish_text_delta", None)
+                        if callable(publish) and response.content:
+                            await publish(
+                                "evt-stream-" + uuid.uuid4().hex,
+                                "",
+                                completed=True,
+                            )
                     if not response.tool_calls:
                         if not response.content:
                             return await failed(
