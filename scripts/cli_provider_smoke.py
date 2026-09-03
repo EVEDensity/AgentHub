@@ -20,7 +20,7 @@ def main() -> int:
         print("SKIP: AGENTHUB_CLI_MODEL_API_KEY is not set")
         return 0
     provider = os.environ.get("AGENTHUB_CLI_PROVIDER", "openai").strip()
-    model = os.environ.get("AGENTHUB_CLI_MODEL", "").strip() or "deepseek-chat"
+    model = os.environ.get("AGENTHUB_CLI_MODEL", "").strip() or "v4-flash"
     base = os.environ.get("AGENTHUB_CLI_MODEL_BASE_URL", "").strip().rstrip("/")
     if not base:
         base = "https://api.deepseek.com"
