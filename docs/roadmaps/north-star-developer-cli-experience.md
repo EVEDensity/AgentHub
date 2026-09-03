@@ -48,6 +48,13 @@ truth. The CLI never runs a parallel model loop or bypasses verification.
 - JSONL event output, public npm release, signed desktop release, shell
   completion, and public capability benchmarks are release work.
 
+### Delivered through Phase 3 (2026-09-03)
+
+- Interactive CLI now exposes `/diff`, `/changes`, and `/patch` for reviewable
+  repository state, plus confirmed `/undo` for tracked worktree changes.
+- `/undo` never removes untracked files and no command performs an implicit
+  commit; commit remains an explicit user workflow.
+
 ## 3. Competitive gap
 
 Compared with Claude Code, Codex CLI, Aider, Gemini CLI, OpenCode, and Goose,
