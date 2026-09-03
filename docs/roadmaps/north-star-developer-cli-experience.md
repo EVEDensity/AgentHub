@@ -78,6 +78,8 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：按工具/路径/命令分类，提供一次允许、会话允许、拒绝；所有决策写入 Mission Decision 并 fail-closed。  
 验收：危险命令拒绝后不执行；允许后同一 attempt 恢复；策略可回放。
 
+当前进度：CLI “Always allow” 已从全局会话开关收敛为按工具名的会话白名单，并在 `/status` 中可见；后端 PermissionManager 的路径/风险规则仍是最终裁决，逐路径策略 UI 待后续迭代。
+
 ### P4：CI 与发行
 
 困难：CLI 依赖本地服务、运行时栈和平台差异。  
