@@ -62,6 +62,8 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：纯函数 reducer 折叠为 `SessionViewState`；Rich、TUI、JSONL 只消费 state/event。  
 验收：同一 fixture 三种渲染一致；重复、乱序、重连测试通过。
 
+当前进度：已实现 `app/cli/reducer.py` 纯函数状态折叠，并接入 runtime 与 JSONL state 记录；Rich/TUI 仍需在后续迭代切换为该 reducer 的完整视图。
+
 ### P2：仓库变更安全模型
 
 困难：Git diff 不能表达一次 Mission 修改边界，恢复可能误伤既有改动。  
