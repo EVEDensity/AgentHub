@@ -29,6 +29,7 @@ import httpx
 
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event
+from app.cli.reducer import SessionViewState, reduce_event
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR_NAME = ".agenthub"
@@ -927,6 +928,7 @@ def execute_objective(
     on_status: Any = None,
     on_text: Any = None,
     on_event: Any = None,
+    on_view_state: Any = None,
     on_decision_request: Any = None,  # P0-3: 逐 tool-call HITL
     cancel_event: Any = None,  # threading.Event → P0-4 Esc 中途取消
 ) -> MissionRunResult:
@@ -993,6 +995,7 @@ def execute_objective(
             last_status = str(mission.get("status"))
             try:
                 cursor = EventCursor()
+                view_state = SessionViewState()
                 budget_notices: set[int] = set()
                 token_total_seen = 0
                 while mission.get("status") not in TERMINAL_MISSION_STATUSES:
@@ -1023,6 +1026,12 @@ def execute_objective(
                         normalized = normalize_event(event)
                         if normalized is None or not cursor.accept(normalized):
                             continue
+                        view_state = reduce_event(view_state, normalized)
+                        if on_view_state is not None:
+                            try:
+                                on_view_state(view_state)
+                            except Exception:  # noqa: BLE001
+                                pass
                         if on_event is not None:
                             try:
                                 on_event(normalized.raw)

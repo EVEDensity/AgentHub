@@ -494,6 +494,15 @@ def cmd_run(
         if jsonl_mode:
             print(json.dumps({"type": "event", "event": event}, ensure_ascii=False), flush=True)
 
+    def _emit_view_state(state: Any) -> None:
+        if jsonl_mode:
+            print(json.dumps({"type": "state", "state": {
+                "status": state.status,
+                "assistantText": state.assistant_text,
+                "eventCount": state.event_count,
+                "verificationStatus": state.verification_status,
+            }}, ensure_ascii=False), flush=True)
+
     if not json_mode and not jsonl_mode:
         print(f"objective: {args.objective}")
         print(f"workspace: {workspace_root}")
@@ -523,6 +532,7 @@ def cmd_run(
             tool_permission_mode=getattr(args, "permission", None),
             on_status=_emit_status,
             on_event=_emit_event,
+            on_view_state=_emit_view_state,
         )
     except (RuntimeError, OSError) as exc:
         if json_mode or jsonl_mode:
