@@ -213,6 +213,7 @@ def _run_slash_command(
     directory: Path,
     session: ChatSessionState,
     emit: Callable[..., None],
+    read_line: Callable[[str], str] | None = None,
 ) -> bool | str:
     """Handle one slash command. True=continue, 'quit'=exit, False=unknown."""
     parts = command.split()
@@ -284,6 +285,28 @@ def _run_slash_command(
         elif ui is not None:
             from rich.console import Console
             Console().print(ui.render_diff_panel(workspace_root))
+        return True
+    if name == "/undo":
+        tracked = ui.git_tracked_changed_files(workspace_root) if ui is not None else []
+        if not tracked:
+            emit("  （没有可撤销的已跟踪变更；未跟踪文件会保留）")
+            return True
+        if read_line is None:
+            emit("  /undo 需要交互确认；未执行")
+            return True
+        try:
+            answer = read_line(
+                f"将撤销 {len(tracked)} 个已跟踪文件变更，继续？ [y/N] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in {"y", "yes"}:
+            emit("已取消撤销")
+            return True
+        if ui.git_restore_tracked(workspace_root):
+            emit("已撤销已跟踪文件变更（未跟踪文件未删除）")
+        else:
+            emit("error: Git restore 执行失败")
         return True
     if name == "/compact":
         _compact_session_context(
@@ -420,6 +443,7 @@ def chat_session(
                 directory=directory,
                 session=session,
                 emit=emit,
+                read_line=read_line,
             )
             if handled is True:
                 continue

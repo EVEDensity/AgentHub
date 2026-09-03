@@ -126,6 +126,31 @@ def git_changed_files(root: Path) -> list[str]:
     return files
 
 
+def git_restore_tracked(root: Path) -> bool:
+    """Restore tracked worktree changes; untracked files are preserved."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "restore", "--worktree", "--", "."],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def git_tracked_changed_files(root: Path) -> list[str]:
+    """Return only tracked files with worktree or index changes."""
+    names: list[str] = []
+    for args in (("diff", "--name-only"), ("diff", "--cached", "--name-only")):
+        out = _git(root, *args) or ""
+        names.extend(line.strip() for line in out.splitlines() if line.strip())
+    return list(dict.fromkeys(names))
+
+
 # ── Header ─────────────────────────────────────────────────────────────
 
 
