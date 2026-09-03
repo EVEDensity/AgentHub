@@ -113,6 +113,11 @@ class GitContextTests(unittest.TestCase):
         with mock.patch.object(ui, "git_changed_files", return_value=["old.py", "new.py"]):
             self.assertEqual(ui.git_changes_since(self.root, frozenset({"old.py"})), ["new.py"])
 
+    def test_git_restore_paths_rejects_parent_escape(self) -> None:
+        with mock.patch.object(ui.subprocess, "run") as run:
+            self.assertTrue(ui.git_restore_paths(self.root, ["../outside.py"]))
+            run.assert_not_called()
+
     def test_git_diff_caps_lines(self) -> None:
         long_diff = "\n".join(f"+ line {i}" for i in range(500))
         # First call = git diff (long), second = untracked files (none).

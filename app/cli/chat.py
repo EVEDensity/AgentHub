@@ -298,7 +298,10 @@ def _run_slash_command(
             Console().print(ui.render_diff_panel(workspace_root))
         return True
     if name == "/undo":
-        tracked = ui.git_tracked_changed_files(workspace_root) if ui is not None else []
+        latest = session.session_records[-1] if session.session_records else {}
+        tracked = list(latest.get("mission_changed_files") or []) if latest else []
+        if not tracked and ui is not None:
+            tracked = ui.git_tracked_changed_files(workspace_root)
         if not tracked:
             emit("  （没有可撤销的已跟踪变更；未跟踪文件会保留）")
             return True
@@ -314,7 +317,7 @@ def _run_slash_command(
         if answer not in {"y", "yes"}:
             emit("已取消撤销")
             return True
-        if ui.git_restore_tracked(workspace_root):
+        if ui.git_restore_paths(workspace_root, tracked):
             emit("已撤销已跟踪文件变更（未跟踪文件未删除）")
         else:
             emit("error: Git restore 执行失败")

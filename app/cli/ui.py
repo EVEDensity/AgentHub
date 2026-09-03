@@ -142,6 +142,21 @@ def git_restore_tracked(root: Path) -> bool:
     return proc.returncode == 0
 
 
+def git_restore_paths(root: Path, paths: list[str]) -> bool:
+    """Restore only validated relative tracked paths; never delete untracked files."""
+    safe = [p for p in paths if p and not Path(p).is_absolute() and ".." not in Path(p).parts]
+    if not safe:
+        return True
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "restore", "--worktree", "--", *safe],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
 def git_tracked_changed_files(root: Path) -> list[str]:
     """Return only tracked files with worktree or index changes."""
     names: list[str] = []
