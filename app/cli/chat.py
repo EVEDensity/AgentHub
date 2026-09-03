@@ -25,11 +25,19 @@ is the terminal-interactive baseline.
 
 from __future__ import annotations
 
+import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from app.cli.main import _load_config
+
+try:  # rich ships with textual; guard anyway so chat never hard-fails.
+    from app.cli import ui
+except Exception:  # noqa: BLE001 - degrade to plain text without rich
+    ui = None  # type: ignore[assignment]
+
 from app.cli.runtime import (
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MISSION_TIMEOUT,
@@ -60,6 +68,8 @@ _HELP_LINES = (
     "/compact       将会话任务链压缩为一份上下文文档（下一轮注入摘要而非全链）",
     "/replay        回放本会话每个任务（目标/状态/耗时/产物）",
     "/new           开始全新会话（清除链式上下文）",
+    "/clear         同 /new（清空上下文开始新会话）",
+    "/cost          显示本会话成本摘要（任务数/产物/耗时）",
     "/status        显示当前会话设置",
     "/quit          退出",
 )
@@ -67,12 +77,13 @@ _HELP_LINES = (
 
 @dataclass
 class ChatSessionState:
-    """Mutable per-session state (chain + history)."""
+    """Mutable per-session state (chain + history + HITL flag)."""
 
     chained_mission_id: str | None = None
     session_missions: list[str] = field(default_factory=list)
     session_records: list[dict[str, Any]] = field(default_factory=list)
     compact_context: str | None = None
+    always_allow: bool = False
 
 
 def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
@@ -89,10 +100,16 @@ def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -
 
 
 def _print_result_compact(result: Any, emit: Callable[..., None]) -> None:
+    extra = ""
+    if getattr(result, "cancelled", False):
+        extra = " (cancelled)"
     emit(
-        f"  → {result.mission_id}  {result.status}  (exit {result.exit_code}, "
+        f"  → {result.mission_id}  {result.status}{extra}  (exit {result.exit_code}, "
         f"{result.wall_seconds:.1f}s, artifacts {len(result.artifacts)})"
     )
+    tokens = int(getattr(result, "total_tokens", 0) or 0)
+    if tokens:
+        emit(f"  tokens: {tokens} (prompt {int(getattr(result, 'prompt_tokens', 0) or 0)} / completion {int(getattr(result, 'completion_tokens', 0) or 0)})")
     if result.workspace_files:
         preview = ", ".join(result.workspace_files[:6])
         more = (
@@ -115,6 +132,10 @@ def _record_session_mission(session: ChatSessionState, result: Any) -> None:
             "wall_seconds": result.wall_seconds,
             "artifacts": len(result.artifacts),
             "workspace_files": list(result.workspace_files),
+            "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(result, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(result, "total_tokens", 0) or 0),
+            "cancelled": bool(getattr(result, "cancelled", False)),
         }
     )
 
@@ -209,15 +230,38 @@ def _run_slash_command(
             f"session missions: {len(session.session_missions)}"
         )
         return True
-    if name in ("/new", "/unresume"):
+    if name in ("/new", "/clear", "/unresume"):
         session.chained_mission_id = None
-        if name == "/new":
+        if name in ("/new", "/clear"):
             session.compact_context = None
         emit(
             "已清除链式上下文，下一轮从零开始"
-            if name == "/new"
+            if name in ("/new", "/clear")
             else "已清除链式上下文"
         )
+        return True
+    if name == "/cost":
+        if not session.session_records:
+            emit("本会话尚未运行任务（/cost 汇总本会话任务数/产物/耗时）")
+            return True
+        if ui is not None:
+            emit("")  # spacing before the rich render
+            # Reuse the shared cost renderer even in plain mode: it
+            # degrades to a single muted text line.
+            from rich.console import Console
+
+            console = Console()
+            console.print(ui.format_cost_line(session.session_records))
+        else:
+            missions = len(session.session_records)
+            artifacts = sum(
+                int(r.get("artifacts") or 0) for r in session.session_records
+            )
+            seconds = sum(
+                float(r.get("wall_seconds") or 0.0)
+                for r in session.session_records
+            )
+            emit(f"  ⌁ {missions} missions · {artifacts} artifacts · {seconds:.1f}s")
         return True
     if name == "/compact":
         _compact_session_context(
@@ -279,6 +323,19 @@ def chat_session(
     read_line = input_fn or input
     emit = output_fn or print
 
+    # Rich upgrade only when interactive on a TTY (tests inject
+    # output_fn and keep the plain-string contract).
+    use_rich = (
+        ui is not None
+        and output_fn is None
+        and sys.stdout.isatty()
+    )
+    console = None
+    if use_rich:
+        from rich.console import Console
+
+        console = Console()
+
     config = _load_config(cwd)
     settings = resolve_model_settings(
         provider=provider, model=model, base_url=base_url, config=config
@@ -290,18 +347,37 @@ def chat_session(
     project_instructions = merge_project_instructions(instruction_paths)
     session = ChatSessionState()
 
-    for line in _BANNER_LINES:
-        emit(line)
-    emit(
-        f"model: {settings.provider} / {settings.model}   "
-        f"workspace: {workspace_root}"
-    )
-    if instruction_paths:
-        emit(
-            "agents.md: "
-            + ", ".join(str(p.parent.name) or "/" for p in instruction_paths)
+    if use_rich and console is not None:
+        # Claude-Code-style header: cwd + git branch + model channel.
+        console.print(
+            ui.render_header(cwd, settings.provider, settings.model, workspace_root)
         )
-    emit()
+        if instruction_paths:
+            console.print(
+                "agents.md: "
+                + ", ".join(
+                    str(p.parent.name) or "/" for p in instruction_paths
+                ),
+                style=ui.STYLE_MUTED,
+            )
+        console.print(
+            "输入任务目标运行；/help 查看命令；/quit 退出。",
+            style=ui.STYLE_MUTED,
+        )
+        console.print()
+    else:
+        for line in _BANNER_LINES:
+            emit(line)
+        emit(
+            f"model: {settings.provider} / {settings.model}   "
+            f"workspace: {workspace_root}"
+        )
+        if instruction_paths:
+            emit(
+                "agents.md: "
+                + ", ".join(str(p.parent.name) or "/" for p in instruction_paths)
+            )
+        emit()
 
     while True:
         try:
@@ -331,8 +407,82 @@ def chat_session(
             emit(f"未知命令: {objective}（/help 查看可用命令）")
             continue
 
-        emit(f"… 运行任务（{settings.provider}/{settings.model}）")
+        # Human-in-the-loop: confirm side-effect missions (TTY only;
+        # headless paths exec/-p never enter this REPL).
+        if use_rich and console is not None and not session.always_allow:
+            choice = ui.confirm_side_effect(console, read_line, objective)
+            if choice == "no":
+                emit("已取消该任务")
+                continue
+            if choice == "always":
+                session.always_allow = True
+
         compact_context = session.compact_context
+        # P0-4: cancel signal — either set externally or via Esc/KbdInt
+        cancel_event = threading.Event()
+
+        def _on_decision(decision: dict[str, Any]) -> bool:
+            """P0-3: ask the user whether to allow this tool call."""
+            if session.always_allow:
+                return True
+            if not (use_rich and console is not None):
+                # Headless: degrade to allow (desktop profile)
+                return True
+            tool_name = str(decision.get("tool_name") or decision.get("tool") or "?")
+            reason = str(decision.get("reason") or decision.get("prompt") or "")
+            prompt_obj = type(
+                "D", (), {"tool_name": tool_name, "reason": reason, "objective": objective}
+            )()
+            # Reuse the side-effect panel for tool-call decisions too.
+            choice = ui.confirm_side_effect(
+                console,
+                read_line,
+                f"工具: {tool_name}\n原因: {reason}",
+            )
+            if choice == "always":
+                session.always_allow = True
+                return True
+            return choice == "yes"
+
+        status_cb: Callable[[str], None]
+        runner_ctx: Any = None
+        if use_rich and console is not None:
+            runner_ctx = ui.MissionRunner(
+                console, f"running · {settings.provider}/{settings.model}"
+            )
+            runner_ctx.__enter__()
+            status_cb = runner_ctx.on_status
+            text_cb = runner_ctx.on_text
+        else:
+            emit(f"… 运行任务（{settings.provider}/{settings.model}）")
+            status_cb = lambda status: emit(f"  [status] {status}")  # noqa: E731
+        def text_cb(text: str) -> None:
+                # Preserve injected output seams used by tests/callers that
+                # accept only one positional argument.
+                if output_fn is None:
+                    print(text, end="", flush=True)
+                else:
+                    emit(text)
+
+        def event_cb(event: dict[str, Any]) -> None:
+            """Render non-text SSE events as compact live progress lines."""
+            kind = str(event.get("eventType") or event.get("type") or "")
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
+            labels = {
+                "mission.lifecycle.created": "mission created",
+                "work_unit.lifecycle.leased": "work unit claimed",
+                "work_unit.lifecycle.started": "work unit running",
+                "harness.tool.started": "tool started",
+                "harness.tool.completed": "tool completed",
+                "work_unit.checkpoint.recorded": "checkpoint",
+                "artifact.lifecycle.registered": "artifact registered",
+                "mission.lifecycle.verifying": "verification started",
+                "work_unit.lifecycle.verified": "verification completed",
+                "mission.lifecycle.succeeded": "mission completed",
+            }
+            label = labels.get(kind)
+            if label and use_rich and console is not None:
+                console.print(f"  · {label}", style=ui.STYLE_MUTED)
         try:
             result = execute_objective(
                 objective=objective,
@@ -346,19 +496,47 @@ def chat_session(
                 resume_mission_id=session.chained_mission_id or "",
                 web_search=not no_web_search,
                 context_text=compact_context or "",
-                on_status=lambda status: emit(f"  [status] {status}"),
+                on_status=status_cb,
+                on_text=text_cb,
+                on_event=event_cb,
+                on_decision_request=_on_decision,
+                cancel_event=cancel_event,
             )
+        except KeyboardInterrupt:
+            # P0-4 last-ditch: execute_objective should have caught and
+            # turned this into a CANCELLED result; if we're here, the
+            # process aborted further up — surface and continue.
+            if runner_ctx is not None:
+                runner_ctx.__exit__(None, None, None)
+            emit("  已取消（mission 可能还在后台运行）")
+            continue
         except (RuntimeError, OSError) as exc:
+            if runner_ctx is not None:
+                runner_ctx.__exit__(None, None, None)
             emit(f"  error: {exc}")
             continue
-        _print_result_compact(result, emit)
-        session.session_missions.append(result.mission_id)
+        if runner_ctx is not None:
+            runner_ctx.__exit__(None, None, None)
+
+        if use_rich and console is not None:
+            console.print(ui.render_result_panel(result))
+            diff_panel = ui.render_diff_panel(workspace_root)
+            if diff_panel is not None:
+                console.print(diff_panel)
+            console.print(ui.format_cost_line(session.session_records))
+        else:
+            _print_result_compact(result, emit)
+        # P0-4: cancelled missions still record but don't chain
+        if getattr(result, "cancelled", False) or str(result.status).upper() == "CANCELLED":
+            emit("  mission 已取消 — 不链入下一轮")
+        else:
+            session.session_missions.append(result.mission_id)
+            # Chain the finished mission so the next turn continues the
+            # story. A compacted context is one-shot: after this turn the
+            # chain (which now includes this mission) takes over again.
+            session.chained_mission_id = result.mission_id
+            session.compact_context = None
         _record_session_mission(session, result)
-        # Chain the finished mission so the next turn continues the
-        # story. A compacted context is one-shot: after this turn the
-        # chain (which now includes this mission) takes over again.
-        session.chained_mission_id = result.mission_id
-        session.compact_context = None
         emit()
 
 

@@ -23,11 +23,12 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
 from app.cli.project_facts import facts_block_for_objective
+from app.cli.events import EventCursor, normalize_event
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR_NAME = ".agenthub"
@@ -169,8 +170,19 @@ def resolve_model_settings(
     environment > mock fallback.
     """
     config = config or {}
-    api_key = os.environ.get("AGENTHUB_CLI_MODEL_API_KEY") or os.environ.get(
-        "AGENTHUB_DESKTOP_MODEL_API_KEY", ""
+    # API key: 统一名优先 → 桌面版名 → provider 特定名
+    _PROVIDER_ENV_KEYS = {
+        "deepseek": "DEEPSEEK_API_KEY",
+        "qwen": "DASHSCOPE_API_KEY",
+        "zhipu": "ZHIPUAI_API_KEY",
+        "doubao": "DOUBAO_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "minimax": "MINIMAX_API_KEY",
+    }
+    api_key = (
+        os.environ.get("AGENTHUB_CLI_MODEL_API_KEY")
+        or os.environ.get("AGENTHUB_DESKTOP_MODEL_API_KEY", "")
     )
     provider = (
         provider
@@ -178,6 +190,9 @@ def resolve_model_settings(
         or os.environ.get("AGENTHUB_CLI_PROVIDER", "")
         or ("openai" if api_key else "mock")
     )
+    # 如果统一名没设，再检查 provider 特定名（wizard 会存这个）
+    if not api_key and provider in _PROVIDER_ENV_KEYS:
+        api_key = os.environ.get(_PROVIDER_ENV_KEYS[provider], "")
     model = (
         model
         or config.get("model")
@@ -549,6 +564,119 @@ class MissionControlClient:
         evidence = payload.get("evidence", [])
         return evidence if isinstance(evidence, list) else []
 
+    def cancel_mission(self, mission_id: str) -> dict[str, Any]:
+        """Ask the control plane to gracefully stop this mission (P0-4 Esc)."""
+        response = self._client.post(
+            f"/api/v1/missions/{mission_id}/cancel", headers=self.headers
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def checkpoints(self, mission_id: str) -> list[dict[str, Any]]:
+        """Return LLM checkpoint rows (token accounting, tool-calls, etc)."""
+        try:
+            response = self._client.get(
+                f"/api/v1/missions/{mission_id}/checkpoints",
+                headers=self.headers,
+                params={"limit": 200},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, RuntimeError):
+            # Endpoint may not be exposed on every deployment; degrade
+            # to an empty list so callers can still aggregate tokens
+            # from the artifacts/evidence path if available.
+            return []
+        rows = payload.get("checkpoints", payload.get("rows", []))
+        return rows if isinstance(rows, list) else []
+
+    def decisions(self, mission_id: str) -> list[dict[str, Any]]:
+        """Pending human-in-the-loop decisions (P0-3 tool-call HITL)."""
+        try:
+            response = self._client.get(
+                f"/api/v1/missions/{mission_id}/decisions", headers=self.headers
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, RuntimeError):
+            return []
+        rows = payload.get("decisions", [])
+        return rows if isinstance(rows, list) else []
+
+    def resolve_decision(
+        self, mission_id: str, decision_id: str, *, allow: bool, note: str = ""
+    ) -> dict[str, Any]:
+        """Answer a pending HITL decision and let the mission continue."""
+        response = self._client.post(
+            f"/api/v1/missions/{mission_id}/decisions/{decision_id}/resolve",
+            headers=self.headers,
+            json={"resolution": "ALLOW" if allow else "DENY", "note": note},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def events(
+        self, mission_id: str, *, after_sequence: int = 0, limit: int = 200
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Fetch the ledger of events so far (P0-3 streaming fallback)."""
+        response = self._client.get(
+            f"/api/v1/missions/{mission_id}/events",
+            headers=self.headers,
+            params={"afterSequence": after_sequence, "limit": limit},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        events = payload.get("events", [])
+        next_seq = int(payload.get("nextSequence", after_sequence))
+        if not isinstance(events, list):
+            events = []
+        return events, next_seq
+
+    def stream_events(
+        self,
+        mission_id: str,
+        *,
+        after_sequence: int = 0,
+        poll_seconds: float = 0.5,
+        max_seconds: float = 2.0,
+    ) -> Iterator[dict[str, Any]]:
+        """Consume the mission SSE endpoint for a bounded reconnect window.
+
+        The bounded window lets callers handle cancellation and reconnects
+        without a permanently blocked ``read`` on a quiet stream.
+        """
+        timeout = httpx.Timeout(connect=5.0, read=max(1.0, max_seconds + 1), write=10.0, pool=10.0)
+        try:
+            with self._client.stream(
+                "GET",
+                f"/api/v1/missions/{mission_id}/events/stream",
+                headers=self.headers,
+                params={
+                    "afterSequence": after_sequence,
+                    "pollSeconds": poll_seconds,
+                    "maxSeconds": max_seconds,
+                },
+                timeout=timeout,
+            ) as response:
+                response.raise_for_status()
+                data_lines: list[str] = []
+                for line in response.iter_lines():
+                    if not line:
+                        if data_lines:
+                            raw = "\n".join(data_lines)
+                            data_lines = []
+                            try:
+                                event = json.loads(raw)
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(event, dict):
+                                yield event
+                        continue
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].strip())
+        except (httpx.HTTPError, RuntimeError):
+            return
+
 
 @dataclass
 class MissionRunResult:
@@ -563,6 +691,10 @@ class MissionRunResult:
     wall_seconds: float = 0.0
     waited_timeout: bool = False
     exit_code: int = EXIT_INFRA_ERROR
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cancelled: bool = False  # True when the mission was gracefully stopped
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -576,6 +708,10 @@ class MissionRunResult:
             "wallSeconds": round(self.wall_seconds, 2),
             "waitedTimeout": self.waited_timeout,
             "exitCode": self.exit_code,
+            "promptTokens": self.prompt_tokens,
+            "completionTokens": self.completion_tokens,
+            "totalTokens": self.total_tokens,
+            "cancelled": self.cancelled,
         }
 
 
@@ -592,7 +728,27 @@ def status_to_exit_code(status: str, waited_timeout: bool) -> int:
     return EXIT_WAIT_TIMEOUT
 
 
+# Default exclude patterns — mirrors the repo's .gitignore.
+# Matched against the path relative to workspace_root (posix-style).
+_EXCLUDED_DIRS = frozenset({
+    ".git", ".agenthub",
+    "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    ".venv", ".env", "venv", "env",
+    "node_modules", "frontend/node_modules",
+    "frontend/.next", "frontend/.next-codex",
+    "data", "assets/tokenizers",
+    ".tmppytest", ".runs",
+})
+_EXCLUDED_SUFFIXES = (".pyc", ".pyo", ".sqlite3", ".db", ".key", ".key.pub")
+_EXCLUDED_PREFIXES = (".env",)
+
+
 def list_workspace_files(workspace_root: Path) -> list[str]:
+    """List all project files except common non-source directories.
+
+    Mirrors the repo's ``.gitignore`` — keeps Python source, configs, docs,
+    frontend TSX, and excludes caches, venvs, node_modules, runtime data.
+    """
     files: list[str] = []
     if not workspace_root.exists():
         return files
@@ -600,7 +756,21 @@ def list_workspace_files(workspace_root: Path) -> list[str]:
         if not path.is_file():
             continue
         relative = path.relative_to(workspace_root).as_posix()
+        # Dir-level exclude: any path component matches _EXCLUDED_DIRS
+        parts = relative.split("/")
+        if any(p in _EXCLUDED_DIRS for p in parts[:-1]):
+            continue
         if relative.startswith(".agenthub/") or relative.startswith(".git/"):
+            continue
+        # Suffix exclude
+        if any(relative.endswith(suf) for suf in _EXCLUDED_SUFFIXES):
+            continue
+        # Prefix exclude (e.g. .env.local, .env.production)
+        filename = parts[-1]
+        if any(filename.startswith(pfx) for pfx in _EXCLUDED_PREFIXES):
+            continue
+        # .tmp/ directory (our venv lives here)
+        if ".tmp/" in relative or relative.startswith(".tmp"):
             continue
         files.append(relative)
     return files
@@ -749,6 +919,10 @@ def execute_objective(
     tool_permission_mode: str | None = None,
     context_text: str = "",
     on_status: Any = None,
+    on_text: Any = None,
+    on_event: Any = None,
+    on_decision_request: Any = None,  # P0-3: 逐 tool-call HITL
+    cancel_event: Any = None,  # threading.Event → P0-4 Esc 中途取消
 ) -> MissionRunResult:
     """Run one objective end to end and return the structured result.
 
@@ -757,6 +931,14 @@ def execute_objective(
     on infrastructure failures (server did not start, HTTP errors);
     mission-level failure is reported through the result status, never
     by faking success.
+
+    Optional callbacks for the richer CLI UX (docs/internal/cli-ux-refactor.md):
+
+    - ``on_status``                — periodic status updates
+    - ``on_decision_request(dict)`` — a tool call needs user confirmation;
+                                      blocking (mission waits until answered)
+    - ``cancel_event``              — threading.Event; set it to gracefully
+                                      stop the mission mid-flight
     """
     title = objective.strip().splitlines()[0][:80] or "CLI mission"
     # ADR-0107 gated facts injection: facts sharing a keyword with the
@@ -768,6 +950,7 @@ def execute_objective(
             if project_instructions
             else facts_block
         )
+    cancelled_by_user = False
     with MissionControlProcess(
         state_dir=state_dir,
         workspace_root=workspace_root,
@@ -795,22 +978,143 @@ def execute_objective(
             )
             mission_id = str(mission["id"])
             created = time.monotonic()
+            if on_status:
+                try:
+                    on_status(f"启动 mission {mission_id[:20]}...")
+                except Exception:  # noqa: BLE001
+                    pass
             waited_timeout = False
             last_status = str(mission.get("status"))
-            while mission.get("status") not in TERMINAL_MISSION_STATUSES:
-                if time.monotonic() - created > mission_timeout:
-                    waited_timeout = True
-                    break
-                time.sleep(2.0)
-                mission = client.get_mission(mission_id)
-                status = str(mission.get("status"))
-                if status != last_status:
-                    last_status = status
-                    if on_status is not None:
-                        on_status(status)
+            try:
+                cursor = EventCursor()
+                while mission.get("status") not in TERMINAL_MISSION_STATUSES:
+                    # P0-4: check external cancel signal (Esc / Ctrl+C)
+                    if cancel_event is not None and cancel_event.is_set():
+                        try:
+                            client.cancel_mission(mission_id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        cancelled_by_user = True
+                        if on_status:
+                            try:
+                                on_status("status: CANCELLED (user requested)")
+                            except Exception:  # noqa: BLE001
+                                pass
+                        break
+                    if time.monotonic() - created > mission_timeout:
+                        waited_timeout = True
+                        break
+                    received = False
+                    for event in client.stream_events(
+                        mission_id,
+                        after_sequence=cursor.sequence,
+                        poll_seconds=0.5,
+                        max_seconds=min(2.0, max(0.5, mission_timeout)),
+                    ):
+                        received = True
+                        normalized = normalize_event(event)
+                        if normalized is None or not cursor.accept(normalized):
+                            continue
+                        if on_event is not None:
+                            try:
+                                on_event(normalized.raw)
+                            except Exception:  # noqa: BLE001
+                                pass
+                        # The server cursor advances only on mission
+                        # aggregate events; work-unit sequences are separate
+                        # and must not cause mission events to be skipped.
+                        event_type = normalized.event_type
+                        payload = normalized.payload
+                        text_delta = normalized.text_delta
+                        if on_text is not None and text_delta and event_type in {"assistant.delta", "message.delta", "text.delta", "model.output.delta"}:
+                            try:
+                                on_text(str(text_delta))
+                            except Exception:  # noqa: BLE001
+                                pass
+                        if event_type in {"decision.pending", "decision.lifecycle.requested"} and on_decision_request is not None:
+                            decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else payload
+                            try:
+                                allow = bool(on_decision_request(decision))
+                                decision_id = str(decision.get("id") or decision.get("decisionId") or "")
+                                if decision_id:
+                                    client.resolve_decision(mission_id, decision_id, allow=allow)
+                            except Exception:  # noqa: BLE001 - deny/fail closed
+                                pass
+                        status = normalized.status or ""
+                        if status and status != last_status:
+                            last_status = status
+                            if on_status is not None:
+                                try:
+                                    on_status(f"status: {status}")
+                                except Exception:  # noqa: BLE001
+                                    pass
+                    # SSE is the primary update path. A bounded mission read
+                    # closes the gap when an older deployment emits no events.
+                    mission = client.get_mission(mission_id)
+                    if not received:
+                        time.sleep(0.1)
+                if on_decision_request is not None:
+                    try:
+                        decisions = client.decisions(mission_id)
+                        pending = [
+                            d
+                            for d in decisions
+                            if str(d.get("status") or "").upper() in ("PENDING", "WAITING")
+                        ]
+                        if pending:
+                            decision = pending[0]
+                            try:
+                                allow = bool(on_decision_request(decision))
+                            except Exception:  # noqa: BLE001 - callback crash → deny safe
+                                allow = False
+                            try:
+                                client.resolve_decision(
+                                    mission_id,
+                                    str(decision.get("id") or ""),
+                                    allow=allow,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                    except Exception:  # noqa: BLE001
+                        pass
+            except KeyboardInterrupt:
+                # P0-4: graceful Esc / Ctrl+C mid-flight → don't exit REPL
+                # from here; propagate a CANCELLED result so callers see it.
+                try:
+                    client.cancel_mission(mission_id)
+                except Exception:  # noqa: BLE001
+                    pass
+                cancelled_by_user = True
+                if on_status:
+                    try:
+                        on_status("status: CANCELLED (user requested)")
+                    except Exception:  # noqa: BLE001
+                        pass
+                # Give the engine up to 3s to actually transition; then
+                # fall through and build the result with whatever state
+                # we observe.
+                for _ in range(6):
+                    time.sleep(0.5)
+                    try:
+                        mission = client.get_mission(mission_id)
+                    except Exception:  # noqa: BLE001
+                        break
+                    if str(mission.get("status")) in TERMINAL_MISSION_STATUSES:
+                        break
             wall_seconds = time.monotonic() - created
             units = client.work_units(mission_id)
             artifacts = client.artifacts(mission_id)
+
+            # P0-1: aggregate token usage from checkpoints
+            prompt_tokens = 0
+            completion_tokens = 0
+            try:
+                for cp in client.checkpoints(mission_id):
+                    prompt_tokens += int(cp.get("prompt_tokens") or 0)
+                    completion_tokens += int(cp.get("completion_tokens") or 0)
+            except Exception:  # noqa: BLE001 - degrade to 0 on missing endpoint
+                pass
+            total_tokens = prompt_tokens + completion_tokens
 
     status = str(mission.get("status"))
     return MissionRunResult(
@@ -823,4 +1127,8 @@ def execute_objective(
         wall_seconds=wall_seconds,
         waited_timeout=waited_timeout,
         exit_code=status_to_exit_code(status, waited_timeout),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        cancelled=cancelled_by_user,
     )
