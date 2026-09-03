@@ -115,7 +115,7 @@ cd frontend && npm install && npm run dev
 
 Bug reports, docs, new model providers — all count. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the details.
 
-## ⭐ Star History
+[## ⭐ Star History
 
 
 <a href="https://www.star-history.com/?type=date&repos=EVEDensity%2FAgentHub">
@@ -124,7 +124,7 @@ Bug reports, docs, new model providers — all count. [`CONTRIBUTING.md`](CONTRI
    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left&sealed_token=VgBpx74x_AENROSkwv9xsAKeMy89DIenqGq6nEM65HGnj2Ki2HV5MfNkJLxl5qafaHVcJueF-kUm3eGsTVUatiMUWtyuUaYtgk4dto6j0x1FKyRjt9JGDbiQMiOZnpGIpSDP7D7VIJu5W7dj2nUeDGDBDPqMrvFYWcKqRdk4cTzrAHc4-DT4f8qCizpb" />
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left&sealed_token=VgBpx74x_AENROSkwv9xsAKeMy89DIenqGq6nEM65HGnj2Ki2HV5MfNkJLxl5qafaHVcJueF-kUm3eGsTVUatiMUWtyuUaYtgk4dto6j0x1FKyRjt9JGDbiQMiOZnpGIpSDP7D7VIJu5W7dj2nUeDGDBDPqMrvFYWcKqRdk4cTzrAHc4-DT4f8qCizpb" />
  </picture>
-</a>
+</a>](https://www.star-history.com/?repos=EVEDensity%2FAgentHub&type=date&legend=top-left)
 
 ## Contributors
 
