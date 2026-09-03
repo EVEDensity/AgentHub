@@ -877,7 +877,9 @@ def build_compact_context(
         "目标/状态/总结均来自本地任务记录）：",
         *blocks,
     ]
-    return "\n".join(lines)
+    # Keep injected context bounded so compaction cannot consume the next
+    # turn's entire model budget when a session has many missions.
+    return "\n".join(lines)[:12_000]
 
 
 def _artifact_search_roots() -> list[Path]:

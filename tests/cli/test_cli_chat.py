@@ -199,6 +199,24 @@ class SlashCommandUnitTests(unittest.TestCase):
         self.assertIn("用法", outputs.text())
         self.assertIsNone(session.chained_mission_id)
 
+    def test_context_reports_usage_and_compact_state(self) -> None:
+        session = self._session()
+        session.session_missions = ["m-1"]
+        session.session_records = [{"total_tokens": 42}]
+        session.compact_context = "summary"
+        outputs = _CapturingOutput()
+        handled = _run_slash_command(
+            "/context",
+            settings=self._settings(),
+            workspace_root=Path("/ws"),
+            directory=Path("/ws/.agenthub"),
+            session=session,
+            emit=outputs,
+        )
+        self.assertTrue(handled)
+        self.assertIn("42", outputs.text())
+        self.assertIn("active", outputs.text())
+
 
 if __name__ == "__main__":
     unittest.main()
