@@ -62,7 +62,7 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：纯函数 reducer 折叠为 `SessionViewState`；Rich、TUI、JSONL 只消费 state/event。  
 验收：同一 fixture 三种渲染一致；重复、乱序、重连测试通过。
 
-当前进度：已实现 `app/cli/reducer.py` 纯函数状态折叠，并接入 runtime、JSONL、Rich 和 TUI；重复事件仍由 EventCursor 去重，完整乱序重排策略待后续验证。
+当前进度：已实现 `app/cli/reducer.py` 纯函数状态折叠，并接入 runtime、JSONL、Rich 和 TUI；EventCursor 负责去重，SSE 批次内 Mission 事件按 durable sequence 有界重排。
 
 ### P2：仓库变更安全模型
 

@@ -30,6 +30,13 @@
 - 解决：`--jsonl` 禁用人类状态文本，仅输出 event/result JSON 行；错误仍使用稳定退出码。
 - 验证：`python -m pytest tests/cli/test_cli_main.py tests/cli/test_cli_e2e.py -q`。
 
+### 2026-09-04：SSE 批次事件乱序
+
+- 症状：网络批次可能先收到较新的 Mission sequence，导致状态短暂回退。
+- 解决：仅在当前批次内对 Mission aggregate 按 durable sequence 排序；WorkUnit/Decision 保持各自到达顺序，避免混用独立序列空间。
+- 验证：`python -m pytest tests/cli/test_cli_events.py -q`。
+- 风险：跨批次乱序仍依赖服务端 afterSequence 和重连窗口，CLI 不无限缓存事件。
+
 ## 待记录问题
 
 - 真实供应商流式协议差异与重连行为。
