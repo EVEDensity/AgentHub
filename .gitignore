@@ -45,6 +45,7 @@ build_ws/
 .codegraph/
 .understand-anything/
 .playwright-cli/
+_search_probe.py
 
 # Local/private documentation
 # Stable public documentation remains tracked under docs/. Internal strategy,

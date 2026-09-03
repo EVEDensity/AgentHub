@@ -1,236 +1,97 @@
-# AgentHub CLI North Star and Delivery Plan
+# AgentHub CLI 追赶 Claude Code 路线图
 
-> Status: accepted baseline
-> Owner: CLI and architecture maintainers
-> Last reviewed: 2026-09-03
-> Scope: developer-facing CLI, streaming, repository workflow, CI, and release
+> 状态：accepted（实现基线，非完成声明）  
+> 版本：2026-09-03
 
-## 1. Product goal
+本文是 CLI 后续迭代的唯一公开进度文档。代码、契约和测试优先于本文；“已实现”只表示本地代码路径存在，不表示真实供应商端到端验收完成。
 
-After installing `agenthub`, a developer can run:
+## 北极星
 
-```bash
-agenthub "修复这个 bug，并运行测试证明"
-```
-
-inside a Git repository and receive a continuous, auditable workflow:
+开发者在任意 Git 仓库执行 `agenthub "修复这个问题并运行测试"`，即可获得连续、可恢复、可审计的：
 
 ```text
-plan -> edit -> sandbox/tool execution -> verification -> reviewable diff
+理解目标 -> 计划 -> 修改 -> 工具执行 -> 流式反馈 -> 独立验证 -> 可审查补丁
 ```
 
-The CLI is a projection and command surface. Mission Control remains the only
-source of durable Mission, WorkUnit, Artifact, Evidence, Decision, and Outcome
-truth. The CLI never runs a parallel model loop or bypasses verification.
+Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcome 的唯一业务真相；CLI 只消费事件和发出用户命令，不运行第二套模型循环。
 
-## 2. Current baseline (2026-09-03)
+## 真实现状
 
-### Implemented
+### 已验证（代码 + 自动化测试）
 
-- Mission/WorkUnit/Artifact/Evidence/Decision lifecycle and independent verifier.
-- Local SQLite execution through Runner and Harness with bounded budgets.
-- `agenthub init`, `run`, `exec --json`, `chat`, `tui`, `missions`, `search`,
-  `replay`, `facts`, and `review-pr`.
-- Layered `AGENTS.md`, skills loading, project facts, resume, compact context,
-  Git diff rendering, Rich panels, Spinner, and session cost summaries.
-- Mission and Session HTTP SSE endpoints with authenticated frontend consumers.
-- CLI Mission SSE consumer with cursor-based reconnect and polling fallback.
-- CLI hooks for `assistant.delta` events and immediate Decision handling.
+- Mission SSE 消费、`afterSequence` 游标、eventId 去重、断线后轮询降级。
+- Harness/Model Adapter 的 `assistant.delta` 与 `assistant.completed` 发布路径。
+- `tool.started`、有界 `tool.output`、`tool.completed` 事件。
+- `decision.pending` 实时确认；失败时 fail-closed；后端版本冲突受保护。
+- Rich Spinner、耗时状态、Git diff/changes/patch、确认式 `/undo`。
+- `/resume`、`/compact`、`/context` 和 70/85/95% token 提醒。
+- `exec --json`、`exec --jsonl`、稳定退出码、`doctor`、bash/zsh/PowerShell completion。
+- 独立 Verifier、Artifact/Evidence 与租约隔离仍是完成判定依据。
 
-### Known gaps
+### 尚未达到生产级
 
-- The CLI event stream is not yet the complete producer path for model text.
-  Harness/Model Adapter must publish real `assistant.delta` events during model
-  generation; durable checkpoints remain content-minimized.
-- Tool output and file-change events need a stable public streaming contract and
-  richer rendering (`tool.started`, `tool.output`, `tool.completed`, diff/undo).
-- REPL, one-shot prompt, and Textual TUI need one shared session/event reducer.
-- JSONL event output, public npm release, signed desktop release, shell
-  completion, and public capability benchmarks are release work.
+- 尚未在干净机器完成安装、升级、回滚和无 Python 环境验证。
+- REPL、TUI、JSONL 尚未完全共享同一 EventReducer。
+- 真实多供应商流式、工具调用、断线恢复矩阵尚未纳入 CI。
+- 文件变更尚未形成与 Mission attempt 绑定的快照/恢复模型；`/undo` 只恢复已跟踪工作区。
+- 权限 UX 仍是粗粒度 `suggest/edit/auto`。
+- JSONL schema、兼容策略、GitHub Action 和发布包尚未稳定化。
 
-### Delivered through Phase 3 (2026-09-03)
+## 与 Claude Code 的差距排序
 
-- Interactive CLI now exposes `/diff`, `/changes`, and `/patch` for reviewable
-  repository state, plus confirmed `/undo` for tracked worktree changes.
-- `/undo` never removes untracked files and no command performs an implicit
-  commit; commit remains an explicit user workflow.
+1. 安装即用和跨平台发布。
+2. 统一会话状态与稳定的流式文本/工具显示。
+3. 文件级 patch 审核、撤销和恢复。
+4. 细粒度权限确认与危险命令解释。
+5. 多供应商真实端到端验证和错误恢复。
+6. CI JSONL、插件生态、诊断和升级回滚。
 
-### Delivered through Phase 4 (2026-09-03)
+## 可落地迭代计划
 
-- Long sessions expose `/context` state, emit 70/85/95% token-budget notices,
-  and keep `/compact` output bounded to 12,000 characters before reinjection.
+### P0：真实性与发布阻断
 
-### Delivered through Phase 5 (2026-09-03)
+困难：mock 测试无法证明供应商流式协议；密钥不能进入仓库。  
+方案：env-only provider matrix；录制/模拟 SSE fixture 覆盖 chunk、tool call、超时、断线；真实密钥 opt-in 的 nightly smoke，日志脱敏。  
+验收：每个 provider 至少完成一次 `assistant.delta -> tool -> verification`；无密钥时明确 SKIP，不伪造成功。
 
-- `agenthub exec --jsonl` emits live normalized events as JSON Lines and a
-  final `result` record, while preserving the existing stable exit codes and
-  single-document `--json` mode.
+### P1：统一 EventReducer
 
-### Delivered through Phase 6 (2026-09-03)
+困难：回调分散在 runtime、chat、TUI，事件语义会漂移。  
+方案：纯函数 reducer 折叠为 `SessionViewState`；Rich、TUI、JSONL 只消费 state/event。  
+验收：同一 fixture 三种渲染一致；重复、乱序、重连测试通过。
 
-- Added non-mutating `agenthub doctor` readiness diagnostics with secret-safe
-  credential detection.
-- Added `agenthub completion bash|zsh|powershell` for shell integration.
+### P2：仓库变更安全模型
 
-## 3. Competitive gap
+困难：Git diff 不能表达一次 Mission 修改边界，恢复可能误伤既有改动。  
+方案：记录基线 commit/status；每次写入产生 attempt 变更清单；`/undo` 只反向应用本次 attempt 且默认确认。  
+验收：既有改动不被覆盖；失败任务仍可审查和恢复；绝不自动 commit。
 
-Compared with Claude Code, Codex CLI, Aider, Gemini CLI, OpenCode, and Goose,
-AgentHub's durable state, independent verification, evidence chain, and A2A
-boundaries are stronger. Mature tools are ahead in first-run installation,
-repository-centric interaction, continuous token/tool output, diff/undo flow,
-permission ergonomics, and published distribution.
+### P3：权限与 Decision 产品化
 
-The priority is productizing the existing engine, not creating another
-execution runtime.
+困难：不同工具风险不同，单一模式不足。  
+方案：按工具/路径/命令分类，提供一次允许、会话允许、拒绝；所有决策写入 Mission Decision 并 fail-closed。  
+验收：危险命令拒绝后不执行；允许后同一 attempt 恢复；策略可回放。
 
-| Dimension | AgentHub baseline | Target behavior |
-|---|---|---|
-| Entry | Python module plus prepared packaging | `agenthub` from a clean machine |
-| Interaction | `chat`, `run`, and `tui` overlap | one shared session and reducer |
-| Streaming | SSE consumer and status Spinner | text, tool, state, and verification events |
-| Permissions | mission/decision hooks and tiers | clear tool-level allow/deny/always UX |
-| Code workflow | changed-files and diff panel | `/diff`, `/changes`, `/undo`, patch preview |
-| Verification | independent verifier and Evidence | visible PASS/FAIL proof in every completion |
-| Context | AGENTS.md, facts, compact, resume | automatic budget signals and context state |
-| Automation | `exec --json`, review-pr | versioned JSONL stream and CI contract |
-| Distribution | build pipelines and manifests | public npm and signed desktop releases |
+### P4：CI 与发行
 
-## 4. Streaming contract (v1)
+困难：CLI 依赖本地服务、运行时栈和平台差异。  
+方案：固定 JSONL schema 和退出码；GitHub Action；Python/frozen/npm 包；doctor 无密钥诊断；升级可回滚。  
+验收：干净 Windows/macOS/Linux 安装并完成 mock 任务；CI 可增量消费并正确失败。
 
-All human, JSON, and JSONL renderers consume the same event shape:
+### P5：体验追平
 
-```json
-{
-  "schemaVersion": 1,
-  "eventId": "evt-...",
-  "sequence": 42,
-  "missionId": "mis-...",
-  "workUnitId": "wu-...",
-  "attempt": 1,
-  "type": "assistant.delta",
-  "occurredAt": "2026-09-03T00:00:00Z",
-  "payload": {"text": "正在检查登录逻辑..."}
-}
-```
+困难：成熟 CLI 的优势来自大量细节。  
+方案：真实开发任务 benchmark，比较首 token 延迟、工具反馈延迟、恢复成功率、误操作率和验证可见性。  
+验收：每次版本附 benchmark，未达标项进入下一迭代。
 
-Minimum event vocabulary:
+## 开发纪律
 
-```text
-mission.created / mission.started / mission.completed / mission.failed
-work_unit.claimed / work_unit.running
-assistant.delta / assistant.completed
-tool.started / tool.output / tool.completed
-checkpoint.created
-decision.pending / decision.resolved
-artifact.registered
-verification.started / verification.completed
-```
+- 每个小阶段独立提交；只在整个 Phase 完成后暂停汇报。
+- 新执行行为必须经过 Mission Control、租约、Artifact/Evidence 和独立 Verifier。
+- API Key 仅允许环境变量；禁止写入配置、测试、日志和文档。
+- “已完成”声明必须附代码路径、测试命令和已知缺口。
+- 遇到实现问题，先记录到 [AI 问题解决日志](../development/ai-problem-solving-log.md)。
 
-`assistant.delta` is a streaming event, not a durable checkpoint payload.
-Events are ordered and deduplicated by `eventId`; `afterSequence` (or an
-equivalent cursor) is required for reconnect. A disconnected SSE stream falls
-back to short polling and resumes the stream when available.
+## 当前阶段
 
-## 5. Target architecture
-
-```text
-Mission API -> StreamConsumer (SSE / JSONL / polling)
-                    |
-              EventReducer
-                    |
-       +------------+-------------+
-       |                          |
- Human Renderer (Rich/Textual)  JSON/JSONL Renderer
-```
-
-`MissionClient` owns HTTP commands only. `StreamConsumer` owns transport and
-cursor/reconnect. `EventReducer` owns transient CLI view state. Renderers own
-presentation and never mutate Mission state. Decision commands go back through
-Mission Control. Harness publishes model/tool callbacks through Runner; it
-does not call the CLI.
-
-## 6. Delivery phases and acceptance
-
-### Phase 0: protocol and baseline
-
-- Version the CLI event schema and cursor semantics.
-- Unify `chat`, bare prompt, and TUI around one session facade.
-- Add ordering, duplicate, reconnect, and old-server fallback tests.
-
-Acceptance: SSE disconnect/reconnect does not duplicate events; JSONL is
-machine-parseable; old deployments remain usable through polling.
-
-### Phase 1: real model streaming
-
-- Add an async stream callback to the Model Adapter/Harness boundary.
-- Publish real `assistant.delta` and `assistant.completed` events.
-- Keep checkpoint payloads content-minimized.
-- Render deltas immediately in Rich and Textual clients.
-
-Acceptance: text appears before model completion; the final Mission result and
-Verifier remain authoritative; reconnect does not duplicate text.
-
-### Phase 2: tools and human-in-the-loop
-
-- Publish `tool.started`, bounded `tool.output`, and `tool.completed`.
-- Publish `decision.pending` and resolve it immediately in the stream loop.
-- Expose clear `suggest`, `edit`, `auto`, and dangerous-command confirmation.
-
-Acceptance: denied tools never execute; allowed tools resume the same attempt;
-Decision failures fail closed.
-
-### Phase 3: repository workflow
-
-- Add `/diff`, `/changes`, `/undo`, `/patch`, and optional `/commit`.
-- Show file-level summaries and test output without flooding the terminal.
-- Protect paths outside the selected repository and preserve failed diffs.
-
-Acceptance: every modification is reviewable, reversible, and tied to the
-Mission attempt; the CLI never auto-commits without explicit user command.
-
-### Phase 4: context and long sessions
-
-- Add `/context` and automatic 70/85/95% budget notices.
-- Preserve objectives, acceptance criteria, recent edits, and verification when
-  compacting or resuming.
-- Keep receipts/replay/facts backed by Mission event truth.
-
-Acceptance: a ten-turn session can resume without invented history or lost
-acceptance criteria.
-
-### Phase 5: CI and integrations
-
-- Version `--json` and add `--jsonl` live events.
-- Keep stdout clean in machine modes and preserve stable exit codes.
-- Harden `review-pr` and GitHub Action around Evidence and Artifact summaries.
-
-Acceptance: CI can consume events incrementally and returns non-zero for failed
-verification, denied work, timeout, or infrastructure failure.
-
-### Phase 6: release and ecosystem
-
-- Publish the first npm CLI package and signed desktop release.
-- Add shell completion, upgrade/rollback, diagnostics, and public benchmarks.
-- Validate a clean machine with no Python, Node, Docker, or repository checkout.
-
-Acceptance: a new developer can install, enter a repository, run a real task,
-review the diff, and inspect verification evidence without Web UI setup.
-
-## 7. Non-goals and guardrails
-
-- No second model loop in the CLI.
-- No bypass of Mission Control, lease fencing, Evidence, or independent
-  verification.
-- No model正文 in durable checkpoints and no synthetic success events.
-- No default vector-memory dependency or heavy external memory service.
-- No automatic commit or unrestricted tool execution.
-- Legacy WebSocket and registry paths may remain for compatibility, but new CLI
-  behavior must use the versioned Mission/SSE contract.
-
-## 8. Work protocol
-
-Each Phase is a large task. Stop after completing a Phase and report evidence.
-Each independently verifiable small task is committed separately. Do not push
-from the implementation workflow. Update this document after every Phase with
-links to implementation and tests; claims without executable evidence remain
-targets rather than shipped capabilities.
+Phase 0-6 的核心代码骨架已落地，但 P0-P5 的生产验收仍未完成。下一顺序固定为：`真实 provider smoke -> EventReducer -> 变更安全模型 -> 权限产品化 -> 发布验证`。

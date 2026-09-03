@@ -938,7 +938,7 @@ def execute_objective(
     mission-level failure is reported through the result status, never
     by faking success.
 
-    Optional callbacks for the richer CLI UX (docs/internal/cli-ux-refactor.md):
+    Optional callbacks for the richer CLI UX (docs/roadmaps/north-star-developer-cli-experience.md):
 
     - ``on_status``                — periodic status updates
     - ``on_decision_request(dict)`` — a tool call needs user confirmation;

@@ -1,6 +1,6 @@
 ﻿"""Rich rendering layer for the developer CLI (Claude Code-style UX).
 
-Design contract (docs/internal/cli-ux-refactor.md):
+Design contract (docs/roadmaps/north-star-developer-cli-experience.md):
 
 - dark-mode theme: primary info bright white, secondary info (paths,
   timestamps) muted grey, success green, danger/warn red/yellow, tool
