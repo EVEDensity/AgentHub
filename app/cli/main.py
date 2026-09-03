@@ -127,16 +127,16 @@ def build_parser() -> argparse.ArgumentParser:
             help="tool permission tier (I-6b): suggest=read-only, "
             "edit=read/write files (default), auto=full whitelist",
         )
-            if json_flag:
-                run_parser.add_argument(
+        if json_flag:
+            run_parser.add_argument(
                     "--json",
                     action="store_true",
                     help="emit a single JSON result document on stdout",
-                )
-                run_parser.add_argument(
-                    "--jsonl", action="store_true",
-                    help="emit live events as JSON Lines, followed by the result",
-                )
+            )
+            run_parser.add_argument(
+                "--jsonl", action="store_true",
+                help="emit live events as JSON Lines, followed by the result",
+            )
 
     missions_parser = subparsers.add_parser(
         "missions", help="list missions recorded in the local state"
