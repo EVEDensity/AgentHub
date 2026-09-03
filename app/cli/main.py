@@ -36,6 +36,7 @@ from app.cli.review import (
 from app.cli.receipts import cmd_replay, cmd_search
 from app.cli.facts_cli import cmd_facts
 from app.cli.runtime import (
+    CONFIG_FILE_NAME,
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MISSION_TIMEOUT,
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
@@ -60,7 +61,18 @@ def build_parser() -> argparse.ArgumentParser:
             "bounded agent loop with sandboxed tools and the verifier gate."
         ),
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    # P0: Top-level -p/--print: single-execution without subcommand
+    parser.add_argument(
+        "-p", "--print",
+        dest="print_mode",
+        nargs="?",
+        const=True,
+        default=False,
+        help="Single-execution mode: run one task and exit (no REPL). "
+             "Usage: agenthub -p 'your task'  or  agenthub -p with_arg",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", required=False)
 
     init_parser = subparsers.add_parser(
         "init", help="initialize the local .agenthub state directory"
@@ -115,12 +127,16 @@ def build_parser() -> argparse.ArgumentParser:
             help="tool permission tier (I-6b): suggest=read-only, "
             "edit=read/write files (default), auto=full whitelist",
         )
-        if json_flag:
-            run_parser.add_argument(
-                "--json",
-                action="store_true",
-                help="emit a single JSON result document on stdout",
-            )
+            if json_flag:
+                run_parser.add_argument(
+                    "--json",
+                    action="store_true",
+                    help="emit a single JSON result document on stdout",
+                )
+                run_parser.add_argument(
+                    "--jsonl", action="store_true",
+                    help="emit live events as JSON Lines, followed by the result",
+                )
 
     missions_parser = subparsers.add_parser(
         "missions", help="list missions recorded in the local state"
@@ -416,6 +432,7 @@ def cmd_init(args: argparse.Namespace, cwd: Path) -> int:
 def cmd_run(
     args: argparse.Namespace, cwd: Path, *, json_mode: bool
 ) -> int:
+    jsonl_mode = bool(getattr(args, "jsonl", False))
     config = _load_config(cwd)
     settings = resolve_model_settings(
         provider=args.provider,
@@ -436,10 +453,14 @@ def cmd_run(
         resume_mission_id = ""
 
     def _emit_status(status: str) -> None:
-        if not json_mode:
+        if not json_mode and not jsonl_mode:
             print(f"  mission status: {status}")
 
-    if not json_mode:
+    def _emit_event(event: dict[str, Any]) -> None:
+        if jsonl_mode:
+            print(json.dumps({"type": "event", "event": event}, ensure_ascii=False), flush=True)
+
+    if not json_mode and not jsonl_mode:
         print(f"objective: {args.objective}")
         print(f"workspace: {workspace_root}")
         print(f"model:     {settings.provider} / {settings.model}")
@@ -467,9 +488,10 @@ def cmd_run(
             web_search=not args.no_web_search,
             tool_permission_mode=getattr(args, "permission", None),
             on_status=_emit_status,
+            on_event=_emit_event,
         )
     except (RuntimeError, OSError) as exc:
-        if json_mode:
+        if json_mode or jsonl_mode:
             print(
                 json.dumps(
                     {"status": "INFRA_ERROR", "error": str(exc), "exitCode": EXIT_INFRA_ERROR}
@@ -479,7 +501,9 @@ def cmd_run(
             print(f"error: {exc}", file=sys.stderr)
         return EXIT_INFRA_ERROR
 
-    if json_mode:
+    if jsonl_mode:
+        print(json.dumps({"type": "result", "result": result.to_json()}, ensure_ascii=False), flush=True)
+    elif json_mode:
         print(json.dumps(result.to_json(), ensure_ascii=False, indent=2))
     else:
         _print_human(result, elapsed=time.monotonic() - started)
@@ -765,12 +789,126 @@ def cli_main(argv: list[str] | None = None) -> int:
     if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        # noqa: BLE001 - best-effort, never block main path
         except Exception:
             pass
     parser = build_parser()
     args = parser.parse_args(argv)
     cwd = Path.cwd()
+
+    # 无 command → 自动引导 init / 单次执行 / 进入 chat
+    if args.command is None:
+        from app.cli.wizard import maybe_launch_wizard
+        handled = maybe_launch_wizard(cwd)
+        if handled:
+            return EXIT_OK
+        # 已配置好 → 构造完整的 args Namespace
+        import json
+        from app.cli.runtime import state_dir, CONFIG_FILE_NAME
+        cfg_path = state_dir(cwd) / CONFIG_FILE_NAME
+        cfg = {}
+        if cfg_path.is_file():
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        base_kwargs = dict(
+            provider=cfg.get("provider", "deepseek"),
+            model=cfg.get("model", "deepseek-chat"),
+            model_base_url=cfg.get("base_url", None),
+            workspace=None,
+            mission_timeout=300.0,
+            max_total_tokens=None,
+            runner_timeout_seconds=120,
+            no_web_search=False,
+        )
+        # P0-1: 没有 subcommand — 检查 argv 里有没有非 flag 的残留
+        # argparse 会把 "agenthub write hello.py" 解析成 command=None
+        # 然后位置参数留在 sys.argv 里（parser 只消费了 flags）
+        prompt_text = ""
+        if argv:
+            # argv 是原始输入（或 None = sys.argv[1:]）
+            raw = argv if argv is not None else sys.argv[1:]
+            # 过滤掉已被 argparse 消费的 subcommand 名和 flags
+            remaining = []
+            skip_next = False
+            known_flags = {"-p", "--print"}
+            for i, tok in enumerate(raw):
+                if tok in known_flags:
+                    skip_next = True
+                    continue
+                if tok.startswith("-"):
+                    continue
+                if skip_next:
+                    skip_next = False
+                    continue
+                remaining.append(tok)
+            if remaining:
+                prompt_text = " ".join(remaining).strip()
+        
+        if prompt_text:
+            print(f"Objective: {prompt_text[:80]}")
+            # 构造 print-mode args → 走 cmd_run(json_mode=False)
+            run_args = argparse.Namespace(
+                objective=prompt_text,
+                provider=base_kwargs["provider"],
+                model=base_kwargs["model"],
+                model_base_url=base_kwargs["model_base_url"],
+                workspace=None,
+                mission_timeout=base_kwargs["mission_timeout"],
+                max_total_tokens=None,
+                runner_timeout_seconds=base_kwargs["runner_timeout_seconds"],
+                no_web_search=False,
+                json=False,
+            )
+            return cmd_run(run_args, cwd, json_mode=False)
+        # P0-2: -p 模式（agenthub -p "task"）— 单次执行不进 REPL
+        # With nargs='?' const=True default=False:
+        #   print_mode=True  → -p with no arg (need prompt elsewhere)
+        #   print_mode=str   → -p "hello" (prompt is the string)
+        #   print_mode=False → no -p flag
+        pm = getattr(args, "print_mode", False)
+        if pm is not False:
+            prompt_text = ""
+            if isinstance(pm, str) and pm.strip():
+                prompt_text = pm.strip()
+            elif argv:
+                # -p was used without arg, try to find prompt in remaining argv
+                raw = argv if argv is not None else sys.argv[1:]
+                remaining = [t for t in raw if not t.startswith("-")]
+                if remaining:
+                    prompt_text = " ".join(remaining).strip()
+            if not prompt_text:
+                print("错误: -p 需要一个 prompt（agenthub -p 'your task'）")
+                return EXIT_USAGE_ERROR
+            run_args = argparse.Namespace(
+                objective=prompt_text,
+                provider=base_kwargs["provider"],
+                model=base_kwargs["model"],
+                model_base_url=base_kwargs["model_base_url"],
+                workspace=None,
+                mission_timeout=base_kwargs["mission_timeout"],
+                max_total_tokens=None,
+                runner_timeout_seconds=base_kwargs["runner_timeout_seconds"],
+                no_web_search=False,
+                json=False,
+            )
+            return cmd_run(run_args, cwd, json_mode=False)
+        # 纯无参数 → 进入交互式 chat
+        chat_args = argparse.Namespace(**base_kwargs)
+        from app.cli.chat import run_chat_cli
+        return run_chat_cli(chat_args)
+
     if args.command == "init":
+        # init 命令也支持无参数 → 交互式
+        has_flags = any(v is not None and v != "" for v in [
+            getattr(args, "provider", None),
+            getattr(args, "model", None),
+        ])
+        if not has_flags and sys.stdin.isatty():
+            from app.cli.wizard import _setup_interactive
+            try:
+                return _setup_interactive(cwd)
+            except (EOFError, KeyboardInterrupt):
+                print("\n已取消。可用 `agenthub init --provider deepseek --model deepseek-chat` 手动配置。")
+                return EXIT_INFRA_ERROR
         return cmd_init(args, cwd)
     if args.command == "run":
         return cmd_run(args, cwd, json_mode=False)
