@@ -64,6 +64,10 @@ class ParserTests(unittest.TestCase):
     def test_doctor_parser(self) -> None:
         args = build_parser().parse_args(["doctor"])
         self.assertEqual(args.command, "doctor")
+
+    def test_completion_parser(self) -> None:
+        args = build_parser().parse_args(["completion", "bash"])
+        self.assertEqual(args.shell, "bash")
         args = build_parser().parse_args(["run", "do it"])
         self.assertFalse(hasattr(args, "json"))
 

@@ -380,6 +380,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers.add_parser("doctor", help="diagnose local CLI and workspace readiness")
+    completion_parser = subparsers.add_parser("completion", help="print shell completion script")
+    completion_parser.add_argument("shell", choices=["bash", "zsh", "powershell"])
 
     # Internal: the frozen npm binary re-invokes itself with `_serve` to
     # boot the local mission-control subprocess (see
@@ -449,6 +451,16 @@ def cmd_doctor(cwd: Path) -> int:
     for name, ok, detail in checks:
         print(f"{'ok' if ok else 'missing':7} {name:20} {detail}")
     return EXIT_OK if all(ok for _, ok, _ in checks) else EXIT_INFRA_ERROR
+
+
+def cmd_completion(shell: str) -> int:
+    scripts = {
+        "bash": "_agenthub_complete() { COMPREPLY=($(compgen -W 'init run exec chat tui missions search replay facts review-pr stacks upgrade doctor completion' -- \"${COMP_WORDS[COMP_CWORD]}\")); }; complete -F _agenthub_complete agenthub",
+        "zsh": "#compdef agenthub\n_arguments '1:command:(init run exec chat tui missions search replay facts review-pr stacks upgrade doctor completion)'",
+        "powershell": "Register-ArgumentCompleter -CommandName agenthub -ScriptBlock { param($wordToComplete) 'init','run','exec','chat','tui','missions','search','replay','facts','review-pr','stacks','upgrade','doctor','completion' | Where-Object { $_ -like \"$wordToComplete*\" } }",
+    }
+    print(scripts[shell])
+    return EXIT_OK
 
 
 def cmd_run(
@@ -960,6 +972,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_upgrade(args, cwd)
     if args.command == "doctor":
         return cmd_doctor(cwd)
+    if args.command == "completion":
+        return cmd_completion(args.shell)
     if args.command == "_serve":
         return cmd_serve(args)
     parser.error(f"unknown command: {args.command}")
