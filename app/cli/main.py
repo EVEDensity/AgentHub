@@ -492,11 +492,11 @@ def cmd_run(
 
     def _emit_event(event: dict[str, Any]) -> None:
         if jsonl_mode:
-            print(json.dumps({"type": "event", "event": event}, ensure_ascii=False), flush=True)
+            print(json.dumps({"schemaVersion": 1, "type": "event", "event": event}, ensure_ascii=False), flush=True)
 
     def _emit_view_state(state: Any) -> None:
         if jsonl_mode:
-            print(json.dumps({"type": "state", "state": {
+            print(json.dumps({"schemaVersion": 1, "type": "state", "state": {
                 "status": state.status,
                 "assistantText": state.assistant_text,
                 "eventCount": state.event_count,
@@ -546,7 +546,7 @@ def cmd_run(
         return EXIT_INFRA_ERROR
 
     if jsonl_mode:
-        print(json.dumps({"type": "result", "result": result.to_json()}, ensure_ascii=False), flush=True)
+        print(json.dumps({"schemaVersion": 1, "type": "result", "result": result.to_json()}, ensure_ascii=False), flush=True)
     elif json_mode:
         print(json.dumps(result.to_json(), ensure_ascii=False, indent=2))
     else:
