@@ -108,6 +108,7 @@ class HarnessRequest:
     timeout: float
     cwd: Path | None = None
     execution: HarnessExecutionContext | None = None
+    on_text_delta: Callable[[str], Awaitable[None] | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,14 @@ class ModelPort(Protocol):
     """Model adapter used by a Harness without provider-specific state."""
 
     async def complete(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = True,
+    ) -> ModelResponse: ...
+
+    async def stream(
         self,
         request: HarnessRequest,
         tool_results: tuple[FunctionResult, ...],
@@ -383,9 +392,14 @@ class FunctionCallingHarness:
                         usage=usage,
                         tool_results=tuple(tool_results),
                     )
-                    response = await self._complete_with_retry(
-                        request, tuple(tool_results)
-                    )
+                    if request.on_text_delta is not None:
+                        response = await self._stream_with_retry(
+                            request, tuple(tool_results)
+                        )
+                    else:
+                        response = await self._complete_with_retry(
+                            request, tuple(tool_results)
+                        )
                     usage = usage.add(response.usage)
                     await recorder.record(
                         HarnessEventType.MODEL_COMPLETED,
@@ -507,12 +521,20 @@ class FunctionCallingHarness:
                 raise
             logger.warning(
                 "harness: transient model error (%s: %s), retrying once in %.1fs",
-                type(exc).__name__,
-                exc,
-                MODEL_RETRY_BACKOFF_SECONDS,
+                type(exc).__name__, exc, MODEL_RETRY_BACKOFF_SECONDS,
             )
             await asyncio.sleep(MODEL_RETRY_BACKOFF_SECONDS)
             return await invoke()
+
+    async def _stream_with_retry(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+    ) -> ModelResponse:
+        stream = getattr(self._model, "stream", None)
+        if not callable(stream):
+            return await self._complete_with_retry(request, tool_results)
+        return await stream(request, tool_results, tools_enabled=False)
 
     def _budget_error(self, usage: ModelUsage) -> tuple[str, str] | None:
         if (

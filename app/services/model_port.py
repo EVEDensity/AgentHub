@@ -41,6 +41,11 @@ class PromptAdapterPort(Protocol):
         tools: list[dict[str, Any]] | None = None,
     ) -> str: ...
 
+    async def stream_prompt(
+        self, prompt: str, model: str, api_key: str = "", base_url: str = "",
+        *, system_prompt: str = "",
+    ) -> Any: ...
+
 
 class ModelAdapterPort(ModelPort):
     """Adapt the existing stateless prompt adapters to Harness ModelPort."""
@@ -103,6 +108,44 @@ class ModelAdapterPort(ModelPort):
         return ModelResponse(
             content=response.content,
             tool_calls=response.tool_calls,
+            usage=self._usage(),
+        )
+
+    async def stream(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = True,
+    ) -> ModelResponse:
+        """Stream text deltas to the request callback, then return response.
+
+        Streaming is used for final text synthesis where tool-call parsing is
+        no longer needed. Adapters without a stream implementation fall back
+        to ``complete`` and still preserve the ModelPort contract.
+        """
+        prompt = _render_prompt(request.code, tool_results, context_char_budget=self._context_char_budget)
+        stream_method = getattr(self._adapter, "stream_prompt", None)
+        if not callable(stream_method):
+            return await self.complete(request, tool_results, tools_enabled=tools_enabled)
+        chunks: list[str] = []
+        async for chunk in stream_method(
+            prompt, self._model, self._api_key, self._base_url,
+            system_prompt=self._system_prompt,
+        ):
+            if not chunk:
+                continue
+            text = str(chunk)
+            chunks.append(text)
+            callback = request.on_text_delta
+            if callback is not None:
+                result = callback(text)
+                if hasattr(result, "__await__"):
+                    await result
+        normalized = normalize_model_response("".join(chunks))
+        return ModelResponse(
+            content=normalized.content,
+            tool_calls=normalized.tool_calls,
             usage=self._usage(),
         )
 
