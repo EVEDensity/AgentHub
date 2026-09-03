@@ -51,6 +51,7 @@ class ExecutionCheckpointControlPort(Protocol):
         event_type: str,
         text: str,
         attempt: int,
+        tool_name: str = "",
     ) -> dict[str, Any]: ...
 
 
@@ -199,6 +200,22 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
             event_id=event_id,
             event_type="harness.assistant.completed" if completed else "harness.assistant.delta",
             text=text,
+            attempt=self._execution.attempt,
+            tool_name=tool_name,
+        )
+
+    async def publish_tool_event(
+        self, event_id: str, event_type: str, tool_name: str, text: str = ""
+    ) -> dict[str, Any]:
+        return await self._control.publish_streaming_event(
+            self._execution.mission_id,
+            self._execution.work_unit_id,
+            runner_id=self._runner_id,
+            lease_id=self._lease_id,
+            event_id=event_id,
+            event_type="harness.tool." + event_type,
+            text=text[:4000],
+            tool_name=tool_name,
             attempt=self._execution.attempt,
         )
 

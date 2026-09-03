@@ -90,8 +90,12 @@ class StreamingEventRequest(BaseModel):
 
     lease_id: Annotated[str, Field(min_length=1, max_length=255)]
     event_id: Annotated[str, Field(min_length=1, max_length=255)]
-    event_type: Literal["harness.assistant.delta", "harness.assistant.completed"]
+    event_type: Literal[
+        "harness.assistant.delta", "harness.assistant.completed",
+        "harness.tool.started", "harness.tool.output", "harness.tool.completed",
+    ]
     text: Annotated[str, Field(max_length=4000)] = ""
+    tool_name: Annotated[str, Field(max_length=255)] = ""
     attempt: Annotated[int, Field(ge=1)]
 
 

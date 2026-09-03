@@ -12,6 +12,14 @@ from typing import Any, Mapping
 
 CLI_EVENT_SCHEMA_VERSION = 1
 
+_CANONICAL_TYPES = {
+    "harness.assistant.delta": "assistant.delta",
+    "harness.assistant.completed": "assistant.completed",
+    "harness.tool.started": "tool.started",
+    "harness.tool.output": "tool.output",
+    "harness.tool.completed": "tool.completed",
+}
+
 
 @dataclass(frozen=True)
 class CliEvent:
@@ -44,7 +52,8 @@ def normalize_event(value: Mapping[str, Any]) -> CliEvent | None:
     """Normalize a public SSE event; malformed frames are ignored safely."""
     if not isinstance(value, Mapping):
         return None
-    event_type = str(value.get("type") or value.get("eventType") or "").strip()
+    raw_event_type = str(value.get("type") or value.get("eventType") or "").strip()
+    event_type = _CANONICAL_TYPES.get(raw_event_type, raw_event_type)
     if not event_type:
         return None
     payload_value = value.get("payload")
@@ -82,4 +91,3 @@ class EventCursor:
         if event.aggregate_type == "mission":
             self.sequence = max(self.sequence, event.sequence)
         return True
-

@@ -473,8 +473,18 @@ class FunctionCallingHarness:
                             tool_results=tuple(tool_results),
                             tool_call=call,
                         )
+                        publish_tool = getattr(self._checkpoint_port, "publish_tool_event", None)
+                        if callable(publish_tool):
+                            await publish_tool("evt-tool-start-" + uuid.uuid4().hex, "started", call.name)
                         function_result = await self._execute_function_call(call)
                         tool_results.append(function_result)
+                        if callable(publish_tool):
+                            await publish_tool(
+                                "evt-tool-output-" + uuid.uuid4().hex,
+                                "output",
+                                call.name,
+                                str(function_result.content)[:4000],
+                            )
                         await recorder.record(
                             HarnessEventType.TOOL_COMPLETED,
                             iteration=iteration,
@@ -484,6 +494,8 @@ class FunctionCallingHarness:
                             tool_call=call,
                             tool_success=function_result.success,
                         )
+                        if callable(publish_tool):
+                            await publish_tool("evt-tool-complete-" + uuid.uuid4().hex, "completed", call.name)
 
                 # Falling out of the loop means every iteration ended with
                 # executed tool calls: append one no-tools summary round so

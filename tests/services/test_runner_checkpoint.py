@@ -68,6 +68,15 @@ class FakeControl:
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
 
+    async def publish_streaming_event(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.calls.append((mission_id, work_unit_id, {"stream": True, **kwargs}))
+        return {"eventId": kwargs["event_id"], "eventType": kwargs["event_type"]}
+
 
 class DriftingControl(FakeControl):
     async def record_execution_checkpoint(
@@ -86,6 +95,19 @@ class DriftingControl(FakeControl):
 
 
 class RunnerCheckpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_publishes_tool_event_with_lease_context(self) -> None:
+        execution = HarnessExecutionContext("mis-1", "wu-1", 2)
+        control = FakeControl()
+        port = MissionControlHarnessCheckpointPort(
+            control, execution=execution, runner_id="runner-1", lease_id="lease-1"
+        )
+        await port.publish_tool_event("evt-1", "output", "shell", "ok")
+        call = control.calls[-1][2]
+        self.assertEqual(call["event_type"], "harness.tool.output")
+        self.assertEqual(call["tool_name"], "shell")
+        self.assertEqual(call["text"], "ok")
+        self.assertEqual(call["attempt"], 2)
+
     async def test_maps_only_durable_fields_and_uses_stable_identity(self) -> None:
         execution = HarnessExecutionContext("mis-1", "wu-1", 2)
         control = FakeControl()

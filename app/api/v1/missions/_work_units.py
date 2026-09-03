@@ -23,6 +23,7 @@ async def publish_stream_event(
             event_id=request.event_id,
             event_type=request.event_type,
             text=request.text,
+            tool_name=request.tool_name,
             attempt=request.attempt,
             lease_id=request.lease_id,
             runner_id=str(user["id"]),

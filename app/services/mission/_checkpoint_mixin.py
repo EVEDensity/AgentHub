@@ -90,14 +90,20 @@ class MissionCheckpointMixin:
         event_id: str,
         event_type: str,
         text: str,
+        tool_name: str = "",
         attempt: int,
         lease_id: str,
         runner_id: str,
         actor: ActorRef,
     ) -> dict[str, Any]:
         """Append a bounded model-stream event behind the exact lease."""
-        if event_type not in {"harness.assistant.delta", "harness.assistant.completed"}:
+        if event_type not in {
+            "harness.assistant.delta", "harness.assistant.completed",
+            "harness.tool.started", "harness.tool.output", "harness.tool.completed",
+        }:
             raise ValueError("unsupported streaming event type")
+        if event_type.startswith("harness.tool.") and not tool_name.strip():
+            raise ValueError("tool streaming events require tool_name")
         if len(text) > 4000:
             raise ValueError("streaming event text exceeds 4000 characters")
         async with self._repository.transaction() as repository:
@@ -124,7 +130,7 @@ class MissionCheckpointMixin:
                 actor=actor,
                 occurred_at=datetime.now(timezone.utc),
                 correlation_id=mission_id,
-                payload={"attempt": attempt, "text": text},
+                payload={"attempt": attempt, "text": text, **({"toolName": tool_name} if tool_name else {})},
                 schema_version=1,
             )
             await repository.append_event(event)

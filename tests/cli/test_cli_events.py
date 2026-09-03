@@ -26,3 +26,16 @@ def test_cursor_deduplicates_without_advancing_on_work_unit():
 
 def test_malformed_event_is_ignored():
     assert normalize_event({"eventId": "bad", "sequence": "x"}) is None
+
+
+def test_normalize_harness_events_to_cli_types():
+    event = normalize_event({
+        "eventId": "e-tool",
+        "eventType": "harness.tool.output",
+        "sequence": 5,
+        "aggregateType": "work_unit",
+        "payload": {"toolName": "shell", "text": "ok"},
+    })
+    assert event is not None
+    assert event.event_type == "tool.output"
+    assert event.payload["toolName"] == "shell"
