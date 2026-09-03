@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -18,10 +19,9 @@ from app.cli.runtime import (
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("objective", nargs="?", default="Explain the repository structure")
-    parser.add_argument("--provider", default="mock")
-    parser.add_argument("--model", default="v4-flash")
-    parser.add_argument("--api-key", default="")
-    parser.add_argument("--base-url", default="")
+    parser.add_argument("--provider", default=os.environ.get("AGENTHUB_CLI_PROVIDER", "mock"))
+    parser.add_argument("--model", default=os.environ.get("AGENTHUB_CLI_MODEL", "v4-flash"))
+    parser.add_argument("--base-url", default=os.environ.get("AGENTHUB_CLI_MODEL_BASE_URL", ""))
     args = parser.parse_args()
     root = Path.cwd()
     started = time.perf_counter()
@@ -40,7 +40,11 @@ def main() -> int:
         if first_token is None:
             first_token = time.perf_counter() - started
 
-    model = CliModelSettings(args.provider, args.model, args.api_key or ("mock" if args.provider == "mock" else ""), args.base_url)
+    api_key = os.environ.get("AGENTHUB_CLI_MODEL_API_KEY", "")
+    if args.provider != "mock" and not api_key:
+        print(json.dumps({"status": "SKIP", "reason": "AGENTHUB_CLI_MODEL_API_KEY is not set"}))
+        return 0
+    model = CliModelSettings(args.provider, args.model, api_key or "mock", args.base_url)
     try:
         result = execute_objective(
             objective=args.objective,
