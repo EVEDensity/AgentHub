@@ -55,6 +55,11 @@ truth. The CLI never runs a parallel model loop or bypasses verification.
 - `/undo` never removes untracked files and no command performs an implicit
   commit; commit remains an explicit user workflow.
 
+### Delivered through Phase 4 (2026-09-03)
+
+- Long sessions expose `/context` state, emit 70/85/95% token-budget notices,
+  and keep `/compact` output bounded to 12,000 characters before reinjection.
+
 ## 3. Competitive gap
 
 Compared with Claude Code, Codex CLI, Aider, Gemini CLI, OpenCode, and Goose,
