@@ -82,6 +82,53 @@ from app.services.mission._types import (
 
 
 class MissionCheckpointMixin:
+    async def publish_streaming_event(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        event_id: str,
+        event_type: str,
+        text: str,
+        attempt: int,
+        lease_id: str,
+        runner_id: str,
+        actor: ActorRef,
+    ) -> dict[str, Any]:
+        """Append a bounded model-stream event behind the exact lease."""
+        if event_type not in {"harness.assistant.delta", "harness.assistant.completed"}:
+            raise ValueError("unsupported streaming event type")
+        if len(text) > 4000:
+            raise ValueError("streaming event text exceeds 4000 characters")
+        async with self._repository.transaction() as repository:
+            mission = await repository.get_mission_for_update(mission_id)
+            work_unit = await repository.get_work_unit_for_update(work_unit_id)
+            if mission is None or work_unit is None or work_unit.mission_id != mission_id:
+                raise WorkUnitNotFoundError(work_unit_id)
+            if work_unit.lease is None or work_unit.lease.id != lease_id or work_unit.lease.runner_id != runner_id:
+                raise LeaseOwnershipError("streaming event lease mismatch")
+            if work_unit.attempt != attempt or work_unit.status not in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING}:
+                raise WorkUnitNotReadyError("streaming event attempt is not active")
+            existing = next((e for e in await repository.list_work_unit_events(mission_id, limit=1000) if e.event_id == event_id), None)
+            if existing is not None:
+                if existing.aggregate_id != work_unit_id or existing.event_type != event_type:
+                    raise ValueError("streaming event id already exists with different content")
+                return existing.to_public_dict()
+            sequence = await repository.get_last_event_sequence(work_unit_id, aggregate_type="work_unit") + 1
+            event = EventEnvelope(
+                event_id=event_id,
+                aggregate_type="work_unit",
+                aggregate_id=work_unit_id,
+                sequence=sequence,
+                event_type=event_type,
+                actor=actor,
+                occurred_at=datetime.now(timezone.utc),
+                correlation_id=mission_id,
+                payload={"attempt": attempt, "text": text},
+                schema_version=1,
+            )
+            await repository.append_event(event)
+            return event.to_public_dict()
     """Mixin holding MissionService execution checkpoint methods."""
 
     async def record_execution_checkpoint(

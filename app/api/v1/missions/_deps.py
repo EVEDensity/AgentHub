@@ -33,6 +33,7 @@ from app.repositories import MissionRepository
 from app.schemas.mission import (
     ArtifactCreateRequest,
     ContractRevisionRequest,
+    StreamingEventRequest,
     DecisionResolutionRequest,
     ExecutionCheckpointCreateRequest,
     MissionCreateRequest,

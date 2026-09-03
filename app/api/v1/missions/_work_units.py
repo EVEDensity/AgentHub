@@ -6,6 +6,38 @@ from app.api.v1.missions._deps import *
 router = APIRouter()
 
 
+@router.post("/{mission_id}/work-units/{work_unit_id}/stream-events", status_code=status.HTTP_201_CREATED)
+async def publish_stream_event(
+    mission_id: str,
+    work_unit_id: str,
+    request: StreamingEventRequest,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+) -> dict:
+    """Publish one bounded assistant delta behind the Runner lease fence."""
+    service = MissionService(repository)
+    try:
+        return await service.publish_streaming_event(
+            mission_id,
+            work_unit_id,
+            event_id=request.event_id,
+            event_type=request.event_type,
+            text=request.text,
+            attempt=request.attempt,
+            lease_id=request.lease_id,
+            runner_id=str(user["id"]),
+            actor=_build_execution_actor(user),
+        )
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Mission not found") from exc
+    except WorkUnitNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
+    except LeaseOwnershipError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (ValueError, WorkUnitNotReadyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/{mission_id}/work-units", status_code=status.HTTP_201_CREATED)
 async def create_work_unit(
     mission_id: str,

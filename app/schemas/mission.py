@@ -83,6 +83,18 @@ class MissionGuidanceRequest(BaseModel):
     content: Annotated[str, Field(min_length=1, max_length=2000)]
 
 
+class StreamingEventRequest(BaseModel):
+    """Transient Runner event published behind an active lease."""
+
+    model_config = ConfigDict(alias_generator=_to_camel, extra="forbid", populate_by_name=True)
+
+    lease_id: Annotated[str, Field(min_length=1, max_length=255)]
+    event_id: Annotated[str, Field(min_length=1, max_length=255)]
+    event_type: Literal["harness.assistant.delta", "harness.assistant.completed"]
+    text: Annotated[str, Field(max_length=4000)] = ""
+    attempt: Annotated[int, Field(ge=1)]
+
+
 class MissionListResponse(BaseModel):
     missions: list[dict]
 

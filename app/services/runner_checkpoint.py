@@ -40,6 +40,19 @@ class ExecutionCheckpointControlPort(Protocol):
         tool_success: bool | None = None,
     ) -> dict[str, Any]: ...
 
+    async def publish_streaming_event(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        event_id: str,
+        event_type: str,
+        text: str,
+        attempt: int,
+    ) -> dict[str, Any]: ...
+
 
 def checkpoint_state_digest(
     checkpoint: HarnessCheckpoint,
@@ -175,6 +188,19 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
         if any(getattr(durable, field) != value for field, value in expected.items()):
             raise HarnessError("Mission Control checkpoint identity drifted")
         self._last_state_digest = state_digest
+
+    async def publish_text_delta(self, event_id: str, text: str, *, completed: bool = False) -> dict[str, Any]:
+        """Publish model text without adding it to the durable checkpoint."""
+        return await self._control.publish_streaming_event(
+            self._execution.mission_id,
+            self._execution.work_unit_id,
+            runner_id=self._runner_id,
+            lease_id=self._lease_id,
+            event_id=event_id,
+            event_type="harness.assistant.completed" if completed else "harness.assistant.delta",
+            text=text,
+            attempt=self._execution.attempt,
+        )
 
 
 class MissionControlHarnessCheckpointFactory:
