@@ -70,6 +70,8 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：记录基线 commit/status；每次写入产生 attempt 变更清单；`/undo` 只反向应用本次 attempt 且默认确认。  
 验收：既有改动不被覆盖；失败任务仍可审查和恢复；绝不自动 commit。
 
+当前进度：已记录 Mission 启动前 Git 基线，并在结果中提供 `missionChangedFiles`；`/undo` 优先仅恢复最近一次 Mission 的相对路径变更，拒绝路径穿越。完整 attempt 快照和 index 恢复仍待后续迭代。
+
 ### P3：权限与 Decision 产品化
 
 困难：不同工具风险不同，单一模式不足。  
