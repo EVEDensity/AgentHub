@@ -66,6 +66,12 @@ truth. The CLI never runs a parallel model loop or bypasses verification.
   final `result` record, while preserving the existing stable exit codes and
   single-document `--json` mode.
 
+### Delivered through Phase 6 (2026-09-03)
+
+- Added non-mutating `agenthub doctor` readiness diagnostics with secret-safe
+  credential detection.
+- Added `agenthub completion bash|zsh|powershell` for shell integration.
+
 ## 3. Competitive gap
 
 Compared with Claude Code, Codex CLI, Aider, Gemini CLI, OpenCode, and Goose,
