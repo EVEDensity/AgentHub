@@ -28,7 +28,7 @@ from typing import Any, Iterator
 import httpx
 
 from app.cli.project_facts import facts_block_for_objective
-from app.cli.events import EventCursor, normalize_event
+from app.cli.events import EventCursor, normalize_event, reorder_events
 from app.cli.reducer import SessionViewState, reduce_event
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1024,15 +1024,15 @@ def execute_objective(
                         waited_timeout = True
                         break
                     received = False
-                    for event in client.stream_events(
+                    batch = [normalize_event(event) for event in client.stream_events(
                         mission_id,
                         after_sequence=cursor.sequence,
                         poll_seconds=0.5,
                         max_seconds=min(2.0, max(0.5, mission_timeout)),
-                    ):
+                    )]
+                    for normalized in reorder_events(event for event in batch if event is not None):
                         received = True
-                        normalized = normalize_event(event)
-                        if normalized is None or not cursor.accept(normalized):
+                        if not cursor.accept(normalized):
                             continue
                         view_state = reduce_event(view_state, normalized)
                         if on_view_state is not None:

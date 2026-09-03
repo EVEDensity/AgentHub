@@ -8,7 +8,7 @@ small, deterministic view and keeps cursor/deduplication rules in one place.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 CLI_EVENT_SCHEMA_VERSION = 1
 
@@ -93,3 +93,19 @@ class EventCursor:
         if event.aggregate_type == "mission":
             self.sequence = max(self.sequence, event.sequence)
         return True
+
+
+def reorder_events(events: Iterable[CliEvent]) -> list[CliEvent]:
+    """Order a bounded SSE batch without mixing aggregate sequences.
+
+    Mission aggregate events are ordered by their durable sequence. Events
+    from WorkUnit/Decision aggregates retain arrival order because their
+    sequence spaces are independent.
+    """
+    values = list(events)
+    mission = sorted(
+        ((index, event) for index, event in enumerate(values) if event.aggregate_type == "mission"),
+        key=lambda item: (item[1].sequence, item[0]),
+    )
+    iterator = iter(mission)
+    return [next(iterator)[1] if event.aggregate_type == "mission" else event for event in values]

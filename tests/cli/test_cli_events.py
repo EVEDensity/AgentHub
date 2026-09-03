@@ -1,4 +1,4 @@
-from app.cli.events import EventCursor, normalize_event
+from app.cli.events import EventCursor, normalize_event, reorder_events
 
 
 def test_normalize_legacy_event_and_delta():
@@ -51,3 +51,13 @@ def test_normalize_decision_request_to_pending():
     })
     assert event is not None
     assert event.event_type == "decision.pending"
+
+
+def test_reorder_events_sorts_mission_sequences_only():
+    events = [
+        normalize_event({"eventId": "m2", "type": "mission.started", "sequence": 2, "aggregateType": "mission"}),
+        normalize_event({"eventId": "w1", "type": "tool.output", "sequence": 9, "aggregateType": "work_unit"}),
+        normalize_event({"eventId": "m1", "type": "mission.created", "sequence": 1, "aggregateType": "mission"}),
+    ]
+    ordered = reorder_events(event for event in events if event is not None)
+    assert [event.event_id for event in ordered] == ["m1", "w1", "m2"]
