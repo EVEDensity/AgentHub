@@ -89,6 +89,7 @@ class ChatSessionState:
     session_records: list[dict[str, Any]] = field(default_factory=list)
     compact_context: str | None = None
     always_allow: bool = False
+    allowed_tools: set[str] = field(default_factory=set)
 
 
 def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
@@ -235,6 +236,7 @@ def _run_slash_command(
             f"state: {directory}\n"
             f"chained mission: {session.chained_mission_id or '（无）'}\n"
             f"session missions: {len(session.session_missions)}"
+            f"\nallowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}"
         )
         return True
     if name in ("/new", "/clear", "/unresume"):
@@ -489,6 +491,8 @@ def chat_session(
                 # Headless: degrade to allow (desktop profile)
                 return True
             tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or "?")
+            if tool_name in session.allowed_tools:
+                return True
             reason = str(decision.get("reason") or decision.get("riskSummary") or decision.get("prompt") or "")
             prompt_obj = type(
                 "D", (), {"tool_name": tool_name, "reason": reason, "objective": objective}
@@ -500,7 +504,7 @@ def chat_session(
                 f"工具: {tool_name}\n原因: {reason}",
             )
             if choice == "always":
-                session.always_allow = True
+                session.allowed_tools.add(tool_name)
                 return True
             return choice == "yes"
 

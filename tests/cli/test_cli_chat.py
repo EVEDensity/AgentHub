@@ -217,6 +217,16 @@ class SlashCommandUnitTests(unittest.TestCase):
         self.assertIn("42", outputs.text())
         self.assertIn("active", outputs.text())
 
+    def test_status_reports_session_allowed_tools(self) -> None:
+        session = self._session()
+        session.allowed_tools.add("shell")
+        outputs = _CapturingOutput()
+        _run_slash_command(
+            "/status", settings=self._settings(), workspace_root=Path("/ws"),
+            directory=Path("/ws/.agenthub"), session=session, emit=outputs,
+        )
+        self.assertIn("allowed tools: shell", outputs.text())
+
 
 if __name__ == "__main__":
     unittest.main()
