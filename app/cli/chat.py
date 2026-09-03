@@ -428,8 +428,8 @@ def chat_session(
             if not (use_rich and console is not None):
                 # Headless: degrade to allow (desktop profile)
                 return True
-            tool_name = str(decision.get("tool_name") or decision.get("tool") or "?")
-            reason = str(decision.get("reason") or decision.get("prompt") or "")
+            tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or "?")
+            reason = str(decision.get("reason") or decision.get("riskSummary") or decision.get("prompt") or "")
             prompt_obj = type(
                 "D", (), {"tool_name": tool_name, "reason": reason, "objective": objective}
             )()

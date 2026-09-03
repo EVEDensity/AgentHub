@@ -18,6 +18,8 @@ _CANONICAL_TYPES = {
     "harness.tool.started": "tool.started",
     "harness.tool.output": "tool.output",
     "harness.tool.completed": "tool.completed",
+    "decision.lifecycle.requested": "decision.pending",
+    "decision.lifecycle.resolved": "decision.resolved",
 }
 
 

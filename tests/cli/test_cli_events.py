@@ -39,3 +39,15 @@ def test_normalize_harness_events_to_cli_types():
     assert event is not None
     assert event.event_type == "tool.output"
     assert event.payload["toolName"] == "shell"
+
+
+def test_normalize_decision_request_to_pending():
+    event = normalize_event({
+        "eventId": "e-decision",
+        "eventType": "decision.lifecycle.requested",
+        "sequence": 6,
+        "aggregateType": "decision",
+        "payload": {"id": "dec-1", "version": 2},
+    })
+    assert event is not None
+    assert event.event_type == "decision.pending"

@@ -604,13 +604,17 @@ class MissionControlClient:
         return rows if isinstance(rows, list) else []
 
     def resolve_decision(
-        self, mission_id: str, decision_id: str, *, allow: bool, note: str = ""
+        self, mission_id: str, decision_id: str, *, allow: bool, note: str = "", expected_version: int = 1
     ) -> dict[str, Any]:
         """Answer a pending HITL decision and let the mission continue."""
         response = self._client.post(
             f"/api/v1/missions/{mission_id}/decisions/{decision_id}/resolve",
             headers=self.headers,
-            json={"resolution": "ALLOW" if allow else "DENY", "note": note},
+            json={
+                "expectedVersion": expected_version,
+                "resolution": "RETRY_WORK_UNIT" if allow else "FAIL_MISSION",
+                "rationale": note or ("approved by CLI" if allow else "denied by CLI"),
+            },
         )
         response.raise_for_status()
         return response.json()
@@ -1033,13 +1037,33 @@ def execute_objective(
                                 pass
                         if event_type in {"decision.pending", "decision.lifecycle.requested"} and on_decision_request is not None:
                             decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else payload
+                            decision_id = str(decision.get("id") or decision.get("decisionId") or "")
+                            try:
+                                expected_version = int(decision.get("version") or 1)
+                            except (TypeError, ValueError):
+                                expected_version = 1
                             try:
                                 allow = bool(on_decision_request(decision))
-                                decision_id = str(decision.get("id") or decision.get("decisionId") or "")
                                 if decision_id:
-                                    client.resolve_decision(mission_id, decision_id, allow=allow)
+                                    client.resolve_decision(
+                                        mission_id,
+                                        decision_id,
+                                        allow=allow,
+                                        note="interactive CLI decision",
+                                        expected_version=expected_version,
+                                    )
                             except Exception:  # noqa: BLE001 - deny/fail closed
-                                pass
+                                if decision_id:
+                                    try:
+                                        client.resolve_decision(
+                                            mission_id,
+                                            decision_id,
+                                            allow=False,
+                                            note="CLI decision handling failed; denied safely",
+                                            expected_version=expected_version,
+                                        )
+                                    except Exception:
+                                        pass
                         status = normalized.status or ""
                         if status and status != last_status:
                             last_status = status
@@ -1053,30 +1077,6 @@ def execute_objective(
                     mission = client.get_mission(mission_id)
                     if not received:
                         time.sleep(0.1)
-                if on_decision_request is not None:
-                    try:
-                        decisions = client.decisions(mission_id)
-                        pending = [
-                            d
-                            for d in decisions
-                            if str(d.get("status") or "").upper() in ("PENDING", "WAITING")
-                        ]
-                        if pending:
-                            decision = pending[0]
-                            try:
-                                allow = bool(on_decision_request(decision))
-                            except Exception:  # noqa: BLE001 - callback crash → deny safe
-                                allow = False
-                            try:
-                                client.resolve_decision(
-                                    mission_id,
-                                    str(decision.get("id") or ""),
-                                    allow=allow,
-                                )
-                            except Exception:  # noqa: BLE001
-                                pass
-                    except Exception:  # noqa: BLE001
-                        pass
             except KeyboardInterrupt:
                 # P0-4: graceful Esc / Ctrl+C mid-flight → don't exit REPL
                 # from here; propagate a CANCELLED result so callers see it.
