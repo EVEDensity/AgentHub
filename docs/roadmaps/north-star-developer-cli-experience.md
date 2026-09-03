@@ -60,6 +60,12 @@ truth. The CLI never runs a parallel model loop or bypasses verification.
 - Long sessions expose `/context` state, emit 70/85/95% token-budget notices,
   and keep `/compact` output bounded to 12,000 characters before reinjection.
 
+### Delivered through Phase 5 (2026-09-03)
+
+- `agenthub exec --jsonl` emits live normalized events as JSON Lines and a
+  final `result` record, while preserving the existing stable exit codes and
+  single-document `--json` mode.
+
 ## 3. Competitive gap
 
 Compared with Claude Code, Codex CLI, Aider, Gemini CLI, OpenCode, and Goose,
