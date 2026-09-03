@@ -39,6 +39,7 @@ from app.cli.runtime import (
     resolve_model_settings,
     state_dir,
 )
+from app.cli.reducer import SessionViewState
 
 _PROMPT_PREFIX = "agenthub"
 _HELP_LINES = (
@@ -251,6 +252,15 @@ class AgentHubTUI(App[None]):
             # Called from the worker thread; marshal onto the UI thread.
             self.call_from_thread(self._log, f"  [status] {status}")
 
+        def emit_text(text: str) -> None:
+            self.call_from_thread(self._log, text)
+
+        def emit_state(state: SessionViewState) -> None:
+            hint = state.status
+            if state.tools:
+                hint += f" · tool:{state.tools[-1].name} {state.tools[-1].status}"
+            self.call_from_thread(self._log, f"  [state] {hint}")
+
         def thread_body() -> None:
             try:
                 result = execute(
@@ -265,6 +275,8 @@ class AgentHubTUI(App[None]):
                     resume_mission_id=chained,
                     web_search=not no_web,
                     on_status=emit_status,
+                    on_text=emit_text,
+                    on_view_state=emit_state,
                 )
             except Exception as exc:  # noqa: BLE001 - report, keep session
                 self.call_from_thread(self._on_mission_error, str(exc))

@@ -211,15 +211,27 @@ class _StatusRenderable:
         self._label = label
         self._t0 = time.monotonic()
         self._last_status = ""
+        self._state_hint = ""
 
     def update_status(self, status: str) -> None:
         self._last_status = status
+
+    def update_view_state(self, state: Any) -> None:
+        parts: list[str] = []
+        if getattr(state, "tools", None):
+            tool = state.tools[-1]
+            parts.append(f"tool:{tool.name} {tool.status}")
+        if getattr(state, "pending_decision", None) is not None:
+            parts.append("decision pending")
+        if getattr(state, "verification_status", ""):
+            parts.append(f"verification:{state.verification_status}")
+        self._state_hint = " · ".join(parts)
 
     def __rich_console__(self, console: Console, options: Any) -> Any:
         elapsed = time.monotonic() - self._t0
         spinner = Spinner("dots", Text(f" {self._label}", style=STYLE_TOOL))
         status_line = Text(
-            f"  {elapsed:5.1f}s  {self._last_status or 'booting…'}",
+            f"  {elapsed:5.1f}s  {self._last_status or 'booting…'}{(' · ' + self._state_hint) if self._state_hint else ''}",
             style=STYLE_MUTED,
         )
         yield spinner
@@ -252,6 +264,9 @@ class MissionRunner:
     def on_text(self, text: str) -> None:
         """Render assistant deltas without disturbing the live status line."""
         self._live.console.print(Text(text, style=STYLE_PRIMARY), end="")
+
+    def on_view_state(self, state: Any) -> None:
+        self._renderable.update_view_state(state)
 
     def __enter__(self) -> "MissionRunner":
         self._live.start()

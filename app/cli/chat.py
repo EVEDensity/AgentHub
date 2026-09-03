@@ -567,6 +567,7 @@ def chat_session(
                 on_status=status_cb,
                 on_text=text_cb,
                 on_event=event_cb,
+                on_view_state=(runner_ctx.on_view_state if runner_ctx is not None else None),
                 on_decision_request=_on_decision,
                 cancel_event=cancel_event,
             )
