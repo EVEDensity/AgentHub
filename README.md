@@ -115,7 +115,8 @@ cd frontend && npm install && npm run dev
 
 Bug reports, docs, new model providers — all count. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the details.
 
-<img width="1538" height="604" alt="image" src="https://github.com/user-attachments/assets/3068efae-764e-4bce-bd52-ba316bbcbfbd" />
+<img width="2608" height="2104" alt="star-history-202693" src="https://github.com/user-attachments/assets/09772f50-cee4-4211-afc7-3fa13557622c" />
+
 
 
 ## Contributors
