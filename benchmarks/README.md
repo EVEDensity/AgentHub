@@ -138,3 +138,23 @@ python benchmarks/gates.py run --name cn_tokenizer_precision
 2. Wire it into CI (`.github/workflows/ci.yml`) as a hard gate.
 3. Link the gate from the claim's documentation.
 4. Record before/after numbers in the PR.
+# CLI 体验基准
+
+使用仓库根目录运行：
+
+```powershell
+python scripts/cli_benchmark.py "修复并测试登录逻辑" --provider mock --model v4-flash
+```
+
+真实 DeepSeek 测试只从环境变量读取密钥：
+
+```powershell
+$env:AGENTHUB_CLI_MODEL_API_KEY="..."
+$env:AGENTHUB_CLI_PROVIDER="deepseek"
+$env:AGENTHUB_CLI_MODEL="v4-flash"  # 或 v4-pro
+python scripts/cli_benchmark.py "检查登录逻辑"
+```
+
+输出为 `schemaVersion: 1` JSON，重点指标为 `firstEventSeconds`、
+`firstTokenSeconds`、`wallSeconds`、`totalTokens`。不要提交含密钥、路径或
+用户数据的结果文件；结果目录已在 `.gitignore` 中排除。

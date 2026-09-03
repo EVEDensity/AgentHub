@@ -94,6 +94,8 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：真实开发任务 benchmark，比较首 token 延迟、工具反馈延迟、恢复成功率、误操作率和验证可见性。  
 验收：每次版本附 benchmark，未达标项进入下一迭代。
 
+当前进度：新增 `scripts/cli_benchmark.py` 与基准说明，可记录首事件、首 token、总耗时和 Token；真实任务对比数据仍需持续积累。
+
 ## 开发纪律
 
 - 每个小阶段独立提交；只在整个 Phase 完成后暂停汇报。
