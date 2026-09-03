@@ -379,6 +379,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="data directory holding stacks/ (default: local .agenthub)",
     )
 
+    subparsers.add_parser("doctor", help="diagnose local CLI and workspace readiness")
+
     # Internal: the frozen npm binary re-invokes itself with `_serve` to
     # boot the local mission-control subprocess (see
     # app.cli.runtime.server_command). Not part of the public surface.
@@ -427,6 +429,26 @@ def cmd_init(args: argparse.Namespace, cwd: Path) -> int:
         print(f"model channel: {settings.provider} / {settings.model}")
     print(f"workspace root: {cwd}")
     return EXIT_OK
+
+
+def cmd_doctor(cwd: Path) -> int:
+    """Run non-mutating local readiness checks for support and CI logs."""
+    import shutil
+    checks: list[tuple[str, bool, str]] = []
+    checks.append(("python", True, sys.version.split()[0]))
+    git = shutil.which("git")
+    checks.append(("git", bool(git), git or "not found"))
+    checks.append(("workspace", cwd.is_dir(), str(cwd)))
+    state = state_dir(cwd)
+    checks.append(("state directory", state.is_dir(), str(state)))
+    key_present = any(os.environ.get(name, "").strip() for name in (
+        "AGENTHUB_CLI_MODEL_API_KEY", "AGENTHUB_DESKTOP_MODEL_API_KEY",
+        "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+    ))
+    checks.append(("model credentials", key_present, "environment variable" if key_present else "not set (mock fallback available)"))
+    for name, ok, detail in checks:
+        print(f"{'ok' if ok else 'missing':7} {name:20} {detail}")
+    return EXIT_OK if all(ok for _, ok, _ in checks) else EXIT_INFRA_ERROR
 
 
 def cmd_run(
@@ -936,6 +958,8 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_stacks(args, cwd)
     if args.command == "upgrade":
         return cmd_upgrade(args, cwd)
+    if args.command == "doctor":
+        return cmd_doctor(cwd)
     if args.command == "_serve":
         return cmd_serve(args)
     parser.error(f"unknown command: {args.command}")

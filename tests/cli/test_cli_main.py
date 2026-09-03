@@ -60,6 +60,10 @@ class ParserTests(unittest.TestCase):
     def test_exec_supports_jsonl_flag(self) -> None:
         args = build_parser().parse_args(["exec", "do it", "--jsonl"])
         self.assertTrue(args.jsonl)
+
+    def test_doctor_parser(self) -> None:
+        args = build_parser().parse_args(["doctor"])
+        self.assertEqual(args.command, "doctor")
         args = build_parser().parse_args(["run", "do it"])
         self.assertFalse(hasattr(args, "json"))
 
