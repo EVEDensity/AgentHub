@@ -75,6 +75,7 @@ _HELP_LINES = (
     "/patch         输出当前变更补丁",
     "/undo          撤销当前已跟踪文件变更（需确认）",
     "/status        显示当前会话设置",
+    "/context       查看当前上下文与 token 使用",
     "/quit          退出",
 )
 
@@ -267,6 +268,15 @@ def _run_slash_command(
                 for r in session.session_records
             )
             emit(f"  ⌁ {missions} missions · {artifacts} artifacts · {seconds:.1f}s")
+        return True
+    if name == "/context":
+        tokens = sum(int(r.get("total_tokens") or 0) for r in session.session_records)
+        emit(
+            f"session missions: {len(session.session_missions)}\n"
+            f"tokens observed: {tokens:,}\n"
+            f"compact context: {'active' if session.compact_context else 'inactive'}\n"
+            f"resume mission: {session.chained_mission_id or '（无）'}"
+        )
         return True
     if name in ("/diff", "/changes", "/patch"):
         if ui is None:

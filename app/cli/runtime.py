@@ -991,6 +991,8 @@ def execute_objective(
             last_status = str(mission.get("status"))
             try:
                 cursor = EventCursor()
+                budget_notices: set[int] = set()
+                token_total_seen = 0
                 while mission.get("status") not in TERMINAL_MISSION_STATUSES:
                     # P0-4: check external cancel signal (Esc / Ctrl+C)
                     if cancel_event is not None and cancel_event.is_set():
@@ -1029,6 +1031,23 @@ def execute_objective(
                         # and must not cause mission events to be skipped.
                         event_type = normalized.event_type
                         payload = normalized.payload
+                        try:
+                            token_total_seen = max(
+                                token_total_seen,
+                                int(payload.get("promptTokens") or payload.get("prompt_tokens") or 0)
+                                + int(payload.get("completionTokens") or payload.get("completion_tokens") or 0),
+                            )
+                        except (TypeError, ValueError):
+                            pass
+                        if max_total_tokens > 0 and on_status is not None:
+                            ratio = token_total_seen / max_total_tokens
+                            for threshold in (70, 85, 95):
+                                if ratio >= threshold / 100 and threshold not in budget_notices:
+                                    budget_notices.add(threshold)
+                                    try:
+                                        on_status(f"token budget {threshold}% ({token_total_seen:,}/{max_total_tokens:,})")
+                                    except Exception:  # noqa: BLE001
+                                        pass
                         text_delta = normalized.text_delta
                         if on_text is not None and text_delta and event_type in {"assistant.delta", "message.delta", "text.delta", "model.output.delta"}:
                             try:
