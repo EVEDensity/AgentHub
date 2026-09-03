@@ -693,6 +693,7 @@ class MissionRunResult:
     work_unit_statuses: list[str] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     workspace_files: list[str] = field(default_factory=list)
+    mission_changed_files: list[str] = field(default_factory=list)
     wall_seconds: float = 0.0
     waited_timeout: bool = False
     exit_code: int = EXIT_INFRA_ERROR
@@ -710,6 +711,7 @@ class MissionRunResult:
             "artifactCount": len(self.artifacts),
             "artifactKinds": sorted({str(a.get("kind")) for a in self.artifacts}),
             "workspaceFiles": self.workspace_files,
+            "missionChangedFiles": self.mission_changed_files,
             "wallSeconds": round(self.wall_seconds, 2),
             "waitedTimeout": self.waited_timeout,
             "exitCode": self.exit_code,
@@ -901,6 +903,12 @@ def list_recent_missions(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """List missions recorded in the persistent local state database."""
+    baseline_files = frozenset()
+    try:
+        from app.cli.ui import git_status_snapshot
+        baseline_files = git_status_snapshot(workspace_root)
+    except Exception:  # noqa: BLE001
+        pass
     with MissionControlProcess(
         state_dir=state_dir,
         workspace_root=workspace_root,
@@ -1147,13 +1155,20 @@ def execute_objective(
             total_tokens = prompt_tokens + completion_tokens
 
     status = str(mission.get("status"))
+    changed_files = list_workspace_files(workspace_root)
+    try:
+        from app.cli.ui import git_changes_since
+        mission_changed_files = git_changes_since(workspace_root, baseline_files)
+    except Exception:  # noqa: BLE001
+        mission_changed_files = []
     return MissionRunResult(
         mission_id=mission_id,
         status=status,
         objective=objective,
         work_unit_statuses=[str(u.get("status")) for u in units],
         artifacts=artifacts,
-        workspace_files=list_workspace_files(workspace_root),
+        workspace_files=changed_files,
+        mission_changed_files=mission_changed_files,
         wall_seconds=wall_seconds,
         waited_timeout=waited_timeout,
         exit_code=status_to_exit_code(status, waited_timeout),

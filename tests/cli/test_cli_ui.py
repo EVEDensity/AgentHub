@@ -109,6 +109,10 @@ class GitContextTests(unittest.TestCase):
         with mock.patch.object(ui, "_git", side_effect=["app.py\n", "other.py\napp.py\n"]):
             self.assertEqual(ui.git_tracked_changed_files(self.root), ["app.py", "other.py"])
 
+    def test_git_changes_since_excludes_baseline(self) -> None:
+        with mock.patch.object(ui, "git_changed_files", return_value=["old.py", "new.py"]):
+            self.assertEqual(ui.git_changes_since(self.root, frozenset({"old.py"})), ["new.py"])
+
     def test_git_diff_caps_lines(self) -> None:
         long_diff = "\n".join(f"+ line {i}" for i in range(500))
         # First call = git diff (long), second = untracked files (none).

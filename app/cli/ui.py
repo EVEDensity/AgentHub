@@ -151,6 +151,16 @@ def git_tracked_changed_files(root: Path) -> list[str]:
     return list(dict.fromkeys(names))
 
 
+def git_status_snapshot(root: Path) -> frozenset[str]:
+    """Capture changed paths before a Mission starts."""
+    return frozenset(git_changed_files(root))
+
+
+def git_changes_since(root: Path, before: frozenset[str]) -> list[str]:
+    """Return paths changed after a baseline snapshot."""
+    return sorted(set(git_changed_files(root)) - set(before))
+
+
 # ── Header ─────────────────────────────────────────────────────────────
 
 
