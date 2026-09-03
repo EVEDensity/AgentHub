@@ -70,6 +70,10 @@ _HELP_LINES = (
     "/new           开始全新会话（清除链式上下文）",
     "/clear         同 /new（清空上下文开始新会话）",
     "/cost          显示本会话成本摘要（任务数/产物/耗时）",
+    "/diff          查看当前工作区 Git diff",
+    "/changes       列出当前变更文件",
+    "/patch         输出当前变更补丁",
+    "/undo          撤销当前已跟踪文件变更（需确认）",
     "/status        显示当前会话设置",
     "/quit          退出",
 )
@@ -262,6 +266,24 @@ def _run_slash_command(
                 for r in session.session_records
             )
             emit(f"  ⌁ {missions} missions · {artifacts} artifacts · {seconds:.1f}s")
+        return True
+    if name in ("/diff", "/changes", "/patch"):
+        if ui is None:
+            emit("当前终端不支持 Git 变更渲染")
+            return True
+        if name == "/changes":
+            files = ui.git_changed_files(workspace_root)
+            emit("  （暂无变更）" if not files else "\n".join(f"  {path}" for path in files))
+            return True
+        diff = ui.git_diff_text(workspace_root)
+        if not diff:
+            emit("  （工作区干净）")
+            return True
+        if name == "/patch":
+            emit(diff)
+        elif ui is not None:
+            from rich.console import Console
+            Console().print(ui.render_diff_panel(workspace_root))
         return True
     if name == "/compact":
         _compact_session_context(
