@@ -67,7 +67,7 @@ def _likely_side_effect_objective(objective: str) -> bool:
     """
     text = objective.lower()
     markers = (
-        "写入", "写文件", "修改文件", "创建文件", "删除文件", "重命名",
+        "写入", "写文件", "修改", "创建文件", "删除文件", "重命名",
         "运行命令", "执行命令", "执行脚本", "安装依赖", "提交代码", "格式化",
         "write ", "edit ", "modify ", "create ", "delete ", "remove ",
         "rename ", "run ", "execute ", "install ", "format ", "commit ",
