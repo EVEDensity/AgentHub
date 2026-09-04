@@ -28,6 +28,7 @@ from __future__ import annotations
 import sys
 import threading
 import fnmatch
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -97,6 +98,38 @@ class ChatSessionState:
     allowed_tools: set[str] = field(default_factory=set)
     allowed_paths: set[tuple[str, str]] = field(default_factory=set)
     denied_paths: set[tuple[str, str]] = field(default_factory=set)
+
+
+def _load_permission_policy(directory: Path, session: ChatSessionState) -> None:
+    path = directory / "permissions.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(payload, dict):
+        return
+    session.allowed_tools.update(str(item) for item in payload.get("allowedTools", []) if str(item).strip())
+    for key, target in (("allowedPaths", session.allowed_paths), ("deniedPaths", session.denied_paths)):
+        for item in payload.get(key, []):
+            if isinstance(item, list) and len(item) == 2:
+                target.add((str(item[0]), str(item[1])))
+
+
+def _save_permission_policy(directory: Path, session: ChatSessionState) -> None:
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "allowedTools": sorted(session.allowed_tools),
+            "allowedPaths": [list(item) for item in sorted(session.allowed_paths)],
+            "deniedPaths": [list(item) for item in sorted(session.denied_paths)],
+        }
+        tmp = directory / "permissions.json.tmp"
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(directory / "permissions.json")
+    except OSError:
+        # Read-only or synthetic test workspaces keep the in-memory policy.
+        return
 
 
 def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
@@ -292,7 +325,11 @@ def _run_slash_command(
         )
         return True
     if name == "/permissions":
-        emit(f"allowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}\nallowed paths: {', '.join(f'{t}:{p}' for t,p in sorted(session.allowed_paths)) or '（无）'}")
+        emit(
+            f"allowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}\n"
+            f"allowed paths: {', '.join(f'{t}:{p}' for t,p in sorted(session.allowed_paths)) or '（无）'}\n"
+            f"denied paths: {', '.join(f'{t}:{p}' for t,p in sorted(session.denied_paths)) or '（无）'}"
+        )
         return True
     if name in ("/allow", "/deny"):
         if len(args) < 2:
@@ -300,10 +337,12 @@ def _run_slash_command(
             return True
         rule = (args[0], " ".join(args[1:]))
         (session.allowed_paths if name == "/allow" else session.denied_paths).add(rule)
+        _save_permission_policy(directory, session)
         emit(f"已记录 {rule[0]}:{rule[1]}")
         return True
     if name == "/clear-permissions":
         session.allowed_tools.clear(); session.allowed_paths.clear(); session.denied_paths.clear()
+        _save_permission_policy(directory, session)
         emit("已清除本会话权限")
         return True
     if name in ("/diff", "/changes", "/patch"):
@@ -444,6 +483,7 @@ def chat_session(
     instruction_paths = collect_agents_md_layers(workspace_root, cwd)
     project_instructions = merge_project_instructions(instruction_paths)
     session = ChatSessionState()
+    _load_permission_policy(directory, session)
 
     if use_rich and console is not None:
         # Claude-Code-style header: cwd + git branch + model channel.

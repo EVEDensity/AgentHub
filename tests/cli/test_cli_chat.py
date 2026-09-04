@@ -232,6 +232,28 @@ class SlashCommandUnitTests(unittest.TestCase):
         outputs = _CapturingOutput()
         _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
         assert ("shell", "src/*") in session.allowed_paths
+
+    def test_permission_policy_persists_and_reloads(self) -> None:
+        import tempfile
+        from app.cli.chat import _load_permission_policy
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp_path = Path(raw)
+            session = self._session()
+            outputs = _CapturingOutput()
+            directory = tmp_path / ".agenthub"
+            _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=tmp_path, directory=directory, session=session, emit=outputs)
+            _run_slash_command("/deny shell secrets/*", settings=self._settings(), workspace_root=tmp_path, directory=directory, session=session, emit=outputs)
+            restored = self._session()
+            _load_permission_policy(directory, restored)
+            assert ("shell", "src/*") in restored.allowed_paths
+            assert ("shell", "secrets/*") in restored.denied_paths
+
+            _run_slash_command("/clear-permissions", settings=self._settings(), workspace_root=tmp_path, directory=directory, session=session, emit=outputs)
+            cleared = self._session()
+            _load_permission_policy(directory, cleared)
+            assert not cleared.allowed_paths
+            assert not cleared.denied_paths
         _run_slash_command("/permissions", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
         assert "allowed paths" in outputs.text()
 
