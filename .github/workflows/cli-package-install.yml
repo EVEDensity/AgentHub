@@ -1,0 +1,55 @@
+name: CLI package install and rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published @agenthub/cli version to verify
+        required: true
+        type: string
+      previous_version:
+        description: Previous published version used for rollback
+        required: true
+        type: string
+
+jobs:
+  package-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            supported: true
+          - os: macos-latest
+            supported: false
+          - os: ubuntu-latest
+            supported: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+      - name: Install target package
+        shell: bash
+        run: npm install --global "@agenthub/cli@${{ inputs.version }}"
+      - name: Verify platform launcher
+        shell: bash
+        run: |
+          set +e
+          agenthub --help > "$RUNNER_TEMP/agenthub-help.txt" 2>&1
+          code=$?
+          if [ "${{ matrix.supported }}" = "true" ]; then
+            test "$code" -eq 0 || { cat "$RUNNER_TEMP/agenthub-help.txt"; exit "$code"; }
+          else
+            test "$code" -eq 127 || { cat "$RUNNER_TEMP/agenthub-help.txt"; exit 1; }
+            grep -qi "no prebuilt binary" "$RUNNER_TEMP/agenthub-help.txt"
+          fi
+      - name: Upgrade and rollback package
+        if: matrix.supported == true
+        shell: bash
+        run: |
+          npm install --global "@agenthub/cli@${{ inputs.previous_version }}"
+          agenthub --help
+          npm install --global "@agenthub/cli@${{ inputs.version }}"
+          agenthub --help

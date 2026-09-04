@@ -86,7 +86,7 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：固定 JSONL schema 和退出码；GitHub Action；Python/frozen/npm 包；doctor 无密钥诊断；升级可回滚。  
 验收：干净 Windows/macOS/Linux 安装并完成 mock 任务；CI 可增量消费并正确失败。
 
-当前进度：已固化 JSONL 的 `schemaVersion: 1` 外层记录，并新增 `.github/workflows/cli-jsonl-smoke.yml`；已加入多 provider 流式/工具调用契约矩阵、`verify_cli_release.py` 发布前置检查和 DeepSeek v4-flash/v4-pro nightly workflow。跨平台打包、真实 provider nightly 的 secret 配置和干净机器安装仍需 CI 环境验收。
+当前进度：已固化 JSONL 的 `schemaVersion: 1` 外层记录，并新增 `.github/workflows/cli-jsonl-smoke.yml`；已加入多 provider 流式/工具调用契约矩阵、`verify_cli_release.py` 发布前置检查、DeepSeek v4-flash/v4-pro 文本与 tool-call nightly，以及手动触发的 Windows/macOS/Linux npm 安装验证。Windows job 覆盖目标版本与上一版本切换，真实 registry、升级和回滚结果仍需 CI 执行记录。
 
 ### P5：体验追平
 

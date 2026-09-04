@@ -74,3 +74,5 @@
 - frozen/npm 包在干净机器上的服务启动诊断。
 - npm 升级/回滚和跨平台安装的真实 CI 结果（本地仅完成 staging 结构与 `npm pack --dry-run` 门禁）。
 - CLI 权限规则已增加工作区 `.agenthub/permissions.json` 持久化；仅保存工具名和路径 glob，不保存凭据或决策正文。
+- provider nightly 现在分别验证文本流和声明式 tool call；本地无密钥只能验证 `SKIP`，真实结果必须来自 GitHub Secret 运行记录。
+- 新增 `.github/workflows/cli-package-install.yml` 覆盖三平台安装；只有 Windows x64 执行真实 `agenthub --help` 和版本切换，其他平台验证稳定的 unsupported-platform 诊断。
