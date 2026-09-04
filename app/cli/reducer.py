@@ -26,10 +26,11 @@ class SessionViewState:
     verification_status: str = ""
     event_count: int = 0
     diagnostics: tuple[str, ...] = ()
+    connection_status: str = "connected"
 
 
 def state_to_dict(state: SessionViewState) -> dict[str, Any]:
-    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count, "diagnostics": list(state.diagnostics)}
+    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count, "diagnostics": list(state.diagnostics), "connectionStatus": state.connection_status}
 
 
 def state_summary(state: SessionViewState) -> str:
@@ -42,6 +43,8 @@ def state_summary(state: SessionViewState) -> str:
         parts.append(f"verification:{state.verification_status}")
     if state.diagnostics:
         parts.append(f"diagnostics:{len(state.diagnostics)}")
+    if state.connection_status != "connected":
+        parts.append(f"stream:{state.connection_status}")
     return " · ".join(parts)
 
 
@@ -51,7 +54,7 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     payload = event.payload
     status = event.status or state.status
     if not event.status:
-        status = {"mission.created": "CREATED", "work_unit.claimed": "CLAIMED", "work_unit.running": "RUNNING", "mission.completed": "SUCCEEDED"}.get(kind, status)
+        status = {"mission.created": "CREATED", "work_unit.claimed": "CLAIMED", "work_unit.running": "RUNNING", "mission.completed": "SUCCEEDED", "mission.failed": "FAILED", "mission.cancelled": "CANCELLED", "mission.timeout": "TIMEOUT"}.get(kind, status)
     text = state.assistant_text
     if kind == "assistant.delta":
         text += event.text_delta or ""
@@ -72,8 +75,15 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     verification = state.verification_status
     if kind in {"verification.started", "verification.completed"}:
         verification = kind.removeprefix("verification.")
-    known = {"assistant.delta", "assistant.completed", "decision.pending", "decision.resolved", "decision.expired", "verification.started", "verification.completed", "mission.created", "mission.completed", "work_unit.claimed", "work_unit.running", "checkpoint.created", "artifact.registered"}
+    known = {"assistant.delta", "assistant.completed", "decision.pending", "decision.resolved", "decision.expired", "verification.started", "verification.completed", "mission.created", "mission.completed", "mission.failed", "mission.cancelled", "mission.timeout", "work_unit.claimed", "work_unit.running", "checkpoint.created", "artifact.registered", "sse.reconnecting", "sse.connected", "sse.polling"}
     diagnostics = state.diagnostics if (kind in known or kind.startswith("tool.")) else state.diagnostics + (f"unknown event: {kind}",)
+    connection = state.connection_status
+    if kind == "sse.reconnecting":
+        connection = "reconnecting"
+    elif kind == "sse.polling":
+        connection = "polling"
+    elif kind == "sse.connected":
+        connection = "connected"
     return replace(
         state,
         status=status,
@@ -83,6 +93,7 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
         verification_status=verification,
         event_count=state.event_count + 1,
         diagnostics=diagnostics,
+        connection_status=connection,
     )
 
 

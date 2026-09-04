@@ -28,6 +28,12 @@ _CANONICAL_TYPES = {
     "mission.lifecycle.verifying": "verification.started",
     "work_unit.lifecycle.verified": "verification.completed",
     "mission.lifecycle.succeeded": "mission.completed",
+    "mission.lifecycle.failed": "mission.failed",
+    "mission.lifecycle.cancelled": "mission.cancelled",
+    "mission.lifecycle.timeout": "mission.timeout",
+    "sse.lifecycle.reconnecting": "sse.reconnecting",
+    "sse.lifecycle.connected": "sse.connected",
+    "sse.lifecycle.polling": "sse.polling",
 }
 
 

@@ -30,3 +30,20 @@ def test_unknown_event_is_diagnostic_only():
     state = reduce_event(SessionViewState(), event)
     assert state.diagnostics == ("unknown event: future.event",)
     assert state.assistant_text == ""
+
+
+def test_connection_and_terminal_error_states_are_shared():
+    state = SessionViewState()
+    for raw in (
+        {"type": "sse.reconnecting", "payload": {}},
+        {"type": "sse.polling", "payload": {}},
+        {"type": "sse.connected", "payload": {}},
+        {"type": "mission.failed", "payload": {}},
+    ):
+        event = normalize_event(raw)
+        assert event is not None
+        state = reduce_event(state, event)
+    snapshot = state_to_dict(state)
+    assert snapshot["connectionStatus"] == "connected"
+    assert snapshot["status"] == "FAILED"
+    assert state_summary(state).startswith("FAILED")
