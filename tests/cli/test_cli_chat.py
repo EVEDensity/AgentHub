@@ -16,7 +16,13 @@ from typing import Any
 from unittest import mock
 
 from app.cli import chat as chat_module
-from app.cli.chat import ChatSessionState, chat_session, _run_slash_command
+from app.cli.chat import ChatSessionState, chat_session, _run_slash_command, _likely_side_effect_objective
+
+
+def test_normal_conversation_is_not_classified_as_side_effect():
+    assert not _likely_side_effect_objective("你好")
+    assert not _likely_side_effect_objective("请解释这段代码")
+    assert _likely_side_effect_objective("请修改 app.py 并运行测试")
 
 
 @dataclass

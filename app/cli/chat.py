@@ -57,6 +57,23 @@ from app.cli.runtime import (
 )
 
 _PROMPT = "agenthub> "
+
+
+def _likely_side_effect_objective(objective: str) -> bool:
+    """Return True only for explicit write/execute intent.
+
+    Normal conversation must not be interrupted. Tool-level Decision remains
+    the authoritative guard when the model actually requests a side effect.
+    """
+    text = objective.lower()
+    markers = (
+        "写入", "写文件", "修改文件", "创建文件", "删除文件", "重命名",
+        "运行命令", "执行命令", "执行脚本", "安装依赖", "提交代码", "格式化",
+        "write ", "edit ", "modify ", "create ", "delete ", "remove ",
+        "rename ", "run ", "execute ", "install ", "format ", "commit ",
+        "shell", "command",
+    )
+    return any(marker in text for marker in markers)
 _BANNER_LINES = (
     "AgentHub interactive session — engine: desktop runner + verifier gate",
     "Type an objective to run one mission; /help for commands; /quit to exit.",
@@ -644,7 +661,7 @@ def chat_session(
 
         # Human-in-the-loop: confirm side-effect missions (TTY only;
         # headless paths exec/-p never enter this REPL).
-        if use_rich and console is not None and not session.always_allow:
+        if use_rich and console is not None and not session.always_allow and _likely_side_effect_objective(objective):
             choice = ui.confirm_side_effect(console, read_line, objective)
             if choice == "no":
                 emit("已取消该任务")
