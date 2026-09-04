@@ -39,6 +39,7 @@ def test_unknown_event_is_diagnostic_only():
 def test_connection_and_terminal_error_states_are_shared():
     state = SessionViewState()
     for raw in (
+        {"type": "mission.created", "status": "RUNNING", "payload": {}},
         {"type": "sse.reconnecting", "payload": {}},
         {"type": "sse.polling", "payload": {}},
         {"type": "sse.connected", "payload": {}},
@@ -56,6 +57,7 @@ def test_connection_and_terminal_error_states_are_shared():
 def test_renderers_project_same_snapshot_after_reconnect_and_decision():
     state = SessionViewState()
     for raw in (
+        {"type": "mission.created", "status": "RUNNING", "payload": {}},
         {"type": "sse.reconnecting", "payload": {}},
         {"type": "decision.pending", "payload": {"decision": {"id": "d-1", "version": 2}}},
         {"type": "sse.connected", "payload": {}},
@@ -73,7 +75,7 @@ def test_renderers_project_same_snapshot_after_reconnect_and_decision():
     rendered = capture.get()
     assert "decision pending" in rendered
     # JSONL and Rich both consume the exact same reducer snapshot.
-    assert state_summary(state) == "CREATED · decision pending · stream:connected"
+    assert state_summary(state) == "CREATED · decision pending"
 
 
 def test_sse_client_surfaces_connected_and_reconnecting_states():
