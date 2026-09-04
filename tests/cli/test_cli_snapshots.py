@@ -84,3 +84,19 @@ def test_attempt_snapshot_restores_file_touched_by_multiple_work_units(tmp_path:
     ok, conflicts = snap.restore()
     assert ok and not conflicts
     assert (tmp_path / "shared.txt").read_text(encoding="utf-8") == "base"
+
+
+def test_attempt_snapshot_writes_review_manifest(tmp_path: Path):
+    import json, subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "a.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True)
+    snap = capture_attempt(tmp_path, tmp_path / ".snapshots")
+    (tmp_path / "a.txt").write_text("changed", encoding="utf-8")
+    snap = snap.finalize()
+    path = snap.write_manifest(work_units=[{"id": "wu-1", "status": "verified"}], artifacts=[{"id": "art-1", "kind": "patch"}])
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schemaVersion"] == 1
+    assert payload["changedFiles"] == ["a.txt"]
+    assert payload["workUnits"][0]["id"] == "wu-1"

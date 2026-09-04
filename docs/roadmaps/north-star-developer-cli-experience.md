@@ -217,8 +217,8 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 |---|---|---|
 | SSE/文本/工具流 | SSE cursor/去重/降级、`assistant.delta`、tool lifecycle 事件、batch 重排 | 将真实 `assistant.delta -> tool -> verification` 结果写入 nightly artifact |
 | EventReducer | reducer 已接入 runtime、Rich、TUI、JSONL | 用同 fixture 的 renderer 一致性测试替换剩余直接回调渲染 |
-| attempt 恢复 | 工作区和 index 快照、冲突预检、新文件删除、同文件多 WorkUnit 聚合测试 | 增加 WorkUnit 归属 manifest 与恢复前 UX 预览 |
-| 权限 | 路径 glob、会话持久化、导入导出 | 添加编辑/删除/匹配预览及服务端策略来源解释 |
+| attempt 恢复 | 工作区和 index 快照、冲突预检、新文件删除、同文件多 WorkUnit 聚合测试、内容最小化 manifest | 增加恢复前 UX 预览与更细的 WorkUnit 来源关联 |
+| 权限 | 路径 glob、会话持久化、导入导出、规则删除与匹配预览 | 增加服务端策略来源解释和受认证的同步 API |
 | provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow | 配置 CI Secret 并保留真实运行证据，补 verification 链路 |
 | npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
 | benchmark | 基础脚本与说明 | 建立版本化任务集和 release 对比阈值 |

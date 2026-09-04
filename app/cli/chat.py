@@ -81,6 +81,8 @@ _HELP_LINES = (
     "/permissions   查看当前会话工具/路径权限",
     "/permissions export <file>  导出权限策略",
     "/permissions import <file> [merge|replace]  导入权限策略",
+    "/permissions remove <allow|deny> <tool> <path>  删除权限规则",
+    "/permissions check <tool> <path>  预览规则匹配",
     "/allow <tool> <path>  允许工具访问路径（本会话）",
     "/deny <tool> <path>   拒绝工具访问路径（本会话）",
     "/clear-permissions    清除本会话权限",
@@ -389,6 +391,35 @@ def _run_slash_command(
             _apply_permission_payload(session, payload, replace=mode == "replace")
             _save_permission_policy(directory, session)
             emit(f"已导入权限策略 ({mode})")
+            return True
+        if args and args[0].lower() == "remove":
+            if len(args) < 4 or args[1].lower() not in {"allow", "deny"}:
+                emit("用法: /permissions remove <allow|deny> <tool> <path>")
+                return True
+            rule = (args[2], " ".join(args[3:]))
+            target = session.allowed_paths if args[1].lower() == "allow" else session.denied_paths
+            if rule in target:
+                target.remove(rule)
+                _save_permission_policy(directory, session)
+                emit(f"已删除规则: {args[1]} {rule[0]}:{rule[1]}")
+            else:
+                emit("未找到该权限规则")
+            return True
+        if args and args[0].lower() == "check":
+            if len(args) < 3:
+                emit("用法: /permissions check <tool> <path>")
+                return True
+            tool, path = args[1], " ".join(args[2:])
+            denied = next((pattern for item_tool, pattern in session.denied_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
+            allowed = next((pattern for item_tool, pattern in session.allowed_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
+            if denied:
+                emit(f"匹配: deny {tool}:{denied}（拒绝优先）")
+            elif allowed:
+                emit(f"匹配: allow {tool}:{allowed}")
+            elif tool in session.allowed_tools:
+                emit(f"匹配: allow-tool {tool}")
+            else:
+                emit("匹配: none（需要 Decision 确认）")
             return True
         emit(
             f"allowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}\n"

@@ -272,5 +272,17 @@ class SlashCommandUnitTests(unittest.TestCase):
             target = self._session()
             _run_slash_command(f"/permissions import {policy} replace", settings=self._settings(), workspace_root=root, directory=directory, session=target, emit=output)
             assert ("shell", "src/*") in target.allowed_paths
+
+    def test_permission_remove_and_check(self) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            session = self._session(); output = _CapturingOutput(); directory = root / ".agenthub"
+            _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
+            _run_slash_command("/permissions check shell src/a.py", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
+            assert "匹配: allow" in output.text()
+            _run_slash_command("/permissions remove allow shell src/*", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
+            _run_slash_command("/permissions check shell src/a.py", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
+            assert "需要 Decision" in output.text()
 if __name__ == "__main__":
     unittest.main()

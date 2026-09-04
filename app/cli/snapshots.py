@@ -62,6 +62,32 @@ class AttemptSnapshot:
     def metadata_path(self) -> Path:
         return self.store / "snapshot.json"
 
+    @property
+    def manifest_path(self) -> Path:
+        return self.store / "manifest.json"
+
+    def write_manifest(self, *, work_units: list[dict] | None = None, artifacts: list[dict] | None = None) -> Path:
+        """Write content-minimized attempt metadata for review and replay."""
+        changed = []
+        if self.post is not None:
+            changed = sorted(path for path in set(self.baseline) | set(self.post) if self.baseline.get(path) != self.post.get(path))
+        payload = {
+            "schemaVersion": 1,
+            "attemptId": self.id,
+            "changedFiles": changed,
+            "workUnits": [
+                {"id": str(item.get("id") or item.get("workUnitId") or ""), "status": str(item.get("status") or "")}
+                for item in (work_units or [])
+            ],
+            "artifacts": [
+                {"id": str(item.get("id") or item.get("artifactId") or ""), "kind": str(item.get("kind") or item.get("type") or "")}
+                for item in (artifacts or [])
+            ],
+        }
+        self.store.mkdir(parents=True, exist_ok=True)
+        self.manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return self.manifest_path
+
     def finalize(self) -> "AttemptSnapshot":
         status_paths = {
             line[3:].strip().split(" -> ")[-1]

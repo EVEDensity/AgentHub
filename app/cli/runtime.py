@@ -1169,6 +1169,11 @@ def execute_objective(
     changed_files = list_workspace_files(workspace_root)
     if attempt_snapshot is not None:
         attempt_snapshot = attempt_snapshot.finalize()
+        try:
+            attempt_snapshot.write_manifest(work_units=units, artifacts=artifacts)
+        except OSError:
+            # Snapshot restore remains valid even if review metadata cannot be written.
+            pass
     try:
         from app.cli.ui import git_changes_since
         mission_changed_files = git_changes_since(workspace_root, baseline_files)
