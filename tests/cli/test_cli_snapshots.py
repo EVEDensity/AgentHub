@@ -95,8 +95,10 @@ def test_attempt_snapshot_writes_review_manifest(tmp_path: Path):
     snap = capture_attempt(tmp_path, tmp_path / ".snapshots")
     (tmp_path / "a.txt").write_text("changed", encoding="utf-8")
     snap = snap.finalize()
-    path = snap.write_manifest(work_units=[{"id": "wu-1", "status": "verified"}], artifacts=[{"id": "art-1", "kind": "patch"}])
+    path = snap.write_manifest(work_units=[{"id": "wu-1", "status": "verified", "changedFiles": ["a.txt"]}], artifacts=[{"id": "art-1", "kind": "patch", "workUnitId": "wu-1", "sha256": "abc"}])
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schemaVersion"] == 1
     assert payload["changedFiles"] == ["a.txt"]
     assert payload["workUnits"][0]["id"] == "wu-1"
+    assert payload["workUnits"][0]["changedFiles"] == ["a.txt"]
+    assert payload["artifacts"][0]["workUnitId"] == "wu-1"

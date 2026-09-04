@@ -76,11 +76,21 @@ class AttemptSnapshot:
             "attemptId": self.id,
             "changedFiles": changed,
             "workUnits": [
-                {"id": str(item.get("id") or item.get("workUnitId") or ""), "status": str(item.get("status") or "")}
+                {
+                    "id": str(item.get("id") or item.get("workUnitId") or ""),
+                    "kind": str(item.get("kind") or item.get("workUnitKind") or ""),
+                    "status": str(item.get("status") or ""),
+                    "changedFiles": sorted(set(item.get("changedFiles") or item.get("changed_files") or [])),
+                }
                 for item in (work_units or [])
             ],
             "artifacts": [
-                {"id": str(item.get("id") or item.get("artifactId") or ""), "kind": str(item.get("kind") or item.get("type") or "")}
+                {
+                    "id": str(item.get("id") or item.get("artifactId") or ""),
+                    "kind": str(item.get("kind") or item.get("type") or ""),
+                    "workUnitId": str(item.get("workUnitId") or item.get("work_unit_id") or ""),
+                    "sha256": str(item.get("sha256") or item.get("digest") or ""),
+                }
                 for item in (artifacts or [])
             ],
         }
