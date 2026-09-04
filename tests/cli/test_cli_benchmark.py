@@ -15,6 +15,7 @@ def test_benchmark_emits_versioned_metrics(monkeypatch, capsys):
 
     def fake_execute(**kwargs):
         kwargs["on_event"]({"type": "mission.created"})
+        kwargs["on_event"]({"type": "tool.output", "payload": {"text": "ok"}})
         kwargs["on_text"]("hello")
         return Result()
 
@@ -23,5 +24,7 @@ def test_benchmark_emits_versioned_metrics(monkeypatch, capsys):
     assert cli_benchmark.main() == 0
     record = json.loads(capsys.readouterr().out)
     assert record["schemaVersion"] == 1
-    assert record["events"] == 1
+    assert record["events"] == 2
     assert record["firstTokenSeconds"] is not None
+    assert record["firstToolFeedbackSeconds"] is not None
+    assert record["recoverySucceeded"] is True

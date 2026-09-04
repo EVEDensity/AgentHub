@@ -27,13 +27,27 @@ def main() -> int:
     started = time.perf_counter()
     first_event: float | None = None
     first_token: float | None = None
+    first_tool_feedback: float | None = None
     events = 0
+    reconnects = 0
+    decisions = 0
+    denied_decisions = 0
 
     def on_event(_event: dict) -> None:
-        nonlocal first_event, events
+        nonlocal first_event, first_tool_feedback, events, reconnects, decisions, denied_decisions
         events += 1
+        event_type = str(_event.get("type") or _event.get("eventType") or "")
         if first_event is None:
             first_event = time.perf_counter() - started
+        if event_type in {"tool.output", "harness.tool.output"} and first_tool_feedback is None:
+            first_tool_feedback = time.perf_counter() - started
+        if event_type in {"sse.reconnecting", "sse.lifecycle.reconnecting"}:
+            reconnects += 1
+        if event_type in {"decision.pending", "decision.lifecycle.requested"}:
+            decisions += 1
+            payload = _event.get("payload") if isinstance(_event.get("payload"), dict) else _event
+            if payload.get("allow") is False or payload.get("resolution") in {"DENY", "FAIL_MISSION"}:
+                denied_decisions += 1
 
     def on_text(_text: str) -> None:
         nonlocal first_token
@@ -68,6 +82,11 @@ def main() -> int:
         "events": events,
         "firstEventSeconds": first_event,
         "firstTokenSeconds": first_token,
+        "firstToolFeedbackSeconds": first_tool_feedback,
+        "sseReconnects": reconnects,
+        "decisions": decisions,
+        "deniedDecisions": denied_decisions,
+        "recoverySucceeded": reconnects == 0 or result.status in {"SUCCEEDED", "FAILED", "CANCELLED"},
         "wallSeconds": result.wall_seconds,
         "totalTokens": result.total_tokens,
     }, ensure_ascii=False))
