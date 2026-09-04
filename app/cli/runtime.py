@@ -696,6 +696,7 @@ class MissionRunResult:
     mission_changed_files: list[str] = field(default_factory=list)
     baseline_commit: str | None = None
     baseline_changed_files: list[str] = field(default_factory=list)
+    attempt_snapshot_id: str | None = None
     wall_seconds: float = 0.0
     waited_timeout: bool = False
     exit_code: int = EXIT_INFRA_ERROR
@@ -716,6 +717,7 @@ class MissionRunResult:
             "missionChangedFiles": self.mission_changed_files,
             "baselineCommit": self.baseline_commit,
             "baselineChangedFiles": self.baseline_changed_files,
+            "attemptSnapshotId": self.attempt_snapshot_id,
             "wallSeconds": round(self.wall_seconds, 2),
             "waitedTimeout": self.waited_timeout,
             "exitCode": self.exit_code,
@@ -967,10 +969,13 @@ def execute_objective(
     cancelled_by_user = False
     baseline_files = frozenset()
     baseline_commit = None
+    attempt_snapshot = None
     try:
         from app.cli.ui import git_head_commit, git_status_snapshot
         baseline_commit = git_head_commit(workspace_root)
         baseline_files = git_status_snapshot(workspace_root)
+        from app.cli.snapshots import capture_attempt
+        attempt_snapshot = capture_attempt(workspace_root, state_dir / "attempt-snapshots")
     except Exception:  # noqa: BLE001
         pass
     with MissionControlProcess(
@@ -1162,6 +1167,8 @@ def execute_objective(
 
     status = str(mission.get("status"))
     changed_files = list_workspace_files(workspace_root)
+    if attempt_snapshot is not None:
+        attempt_snapshot = attempt_snapshot.finalize()
     try:
         from app.cli.ui import git_changes_since
         mission_changed_files = git_changes_since(workspace_root, baseline_files)
@@ -1177,6 +1184,7 @@ def execute_objective(
         mission_changed_files=mission_changed_files,
         baseline_commit=baseline_commit,
         baseline_changed_files=sorted(baseline_files),
+        attempt_snapshot_id=(attempt_snapshot.id if attempt_snapshot is not None else None),
         wall_seconds=wall_seconds,
         waited_timeout=waited_timeout,
         exit_code=status_to_exit_code(status, waited_timeout),

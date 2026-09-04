@@ -141,6 +141,7 @@ def _record_session_mission(session: ChatSessionState, result: Any) -> None:
             "mission_changed_files": list(getattr(result, "mission_changed_files", []) or []),
             "baseline_commit": getattr(result, "baseline_commit", None),
             "baseline_changed_files": list(getattr(result, "baseline_changed_files", []) or []),
+            "attempt_snapshot_id": getattr(result, "attempt_snapshot_id", None),
             "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
             "completion_tokens": int(getattr(result, "completion_tokens", 0) or 0),
             "total_tokens": int(getattr(result, "total_tokens", 0) or 0),
@@ -302,6 +303,18 @@ def _run_slash_command(
             Console().print(ui.render_diff_panel(workspace_root))
         return True
     if name == "/undo":
+        latest_snapshot_id = str((session.session_records[-1] if session.session_records else {}).get("attempt_snapshot_id") or "")
+        if latest_snapshot_id:
+            from app.cli.snapshots import load_snapshot
+            snapshot = load_snapshot(workspace_root, directory / "attempt-snapshots", latest_snapshot_id)
+            if snapshot is not None:
+                answer = read_line("将恢复最近一次 attempt 的文件，继续？ [y/N] ").strip().lower() if read_line else ""
+                if answer not in {"y", "yes"}:
+                    emit("已取消撤销")
+                    return True
+                ok, conflicts = snapshot.restore()
+                emit("已恢复最近一次 attempt" if ok else f"撤销被阻止，存在冲突: {', '.join(conflicts)}")
+                return True
         latest = session.session_records[-1] if session.session_records else {}
         tracked = list(latest.get("mission_changed_files") or []) if latest else []
         if not tracked and ui is not None:
