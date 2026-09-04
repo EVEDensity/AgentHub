@@ -907,14 +907,6 @@ def list_recent_missions(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """List missions recorded in the persistent local state database."""
-    baseline_files = frozenset()
-    baseline_commit = None
-    try:
-        from app.cli.ui import git_head_commit, git_status_snapshot
-        baseline_commit = git_head_commit(workspace_root)
-        baseline_files = git_status_snapshot(workspace_root)
-    except Exception:  # noqa: BLE001
-        pass
     with MissionControlProcess(
         state_dir=state_dir,
         workspace_root=workspace_root,
@@ -973,6 +965,14 @@ def execute_objective(
             else facts_block
         )
     cancelled_by_user = False
+    baseline_files = frozenset()
+    baseline_commit = None
+    try:
+        from app.cli.ui import git_head_commit, git_status_snapshot
+        baseline_commit = git_head_commit(workspace_root)
+        baseline_files = git_status_snapshot(workspace_root)
+    except Exception:  # noqa: BLE001
+        pass
     with MissionControlProcess(
         state_dir=state_dir,
         workspace_root=workspace_root,
