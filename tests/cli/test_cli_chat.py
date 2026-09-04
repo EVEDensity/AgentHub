@@ -232,6 +232,8 @@ class SlashCommandUnitTests(unittest.TestCase):
         outputs = _CapturingOutput()
         _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
         assert ("shell", "src/*") in session.allowed_paths
+        _run_slash_command("/permissions", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
+        assert "allowed paths" in outputs.text()
 
     def test_permission_policy_persists_and_reloads(self) -> None:
         import tempfile
@@ -254,9 +256,21 @@ class SlashCommandUnitTests(unittest.TestCase):
             _load_permission_policy(directory, cleared)
             assert not cleared.allowed_paths
             assert not cleared.denied_paths
-        _run_slash_command("/permissions", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
-        assert "allowed paths" in outputs.text()
 
+    def test_permission_policy_export_import_merge_and_replace(self) -> None:
+        import tempfile
+        from app.cli.chat import _run_slash_command
 
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            directory = root / ".agenthub"
+            source = self._session()
+            output = _CapturingOutput()
+            _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=root, directory=directory, session=source, emit=output)
+            policy = root / "policy.json"
+            _run_slash_command(f"/permissions export {policy}", settings=self._settings(), workspace_root=root, directory=directory, session=source, emit=output)
+            target = self._session()
+            _run_slash_command(f"/permissions import {policy} replace", settings=self._settings(), workspace_root=root, directory=directory, session=target, emit=output)
+            assert ("shell", "src/*") in target.allowed_paths
 if __name__ == "__main__":
     unittest.main()

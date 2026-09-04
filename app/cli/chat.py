@@ -79,6 +79,8 @@ _HELP_LINES = (
     "/status        显示当前会话设置",
     "/context       查看当前上下文与 token 使用",
     "/permissions   查看当前会话工具/路径权限",
+    "/permissions export <file>  导出权限策略",
+    "/permissions import <file> [merge|replace]  导入权限策略",
     "/allow <tool> <path>  允许工具访问路径（本会话）",
     "/deny <tool> <path>   拒绝工具访问路径（本会话）",
     "/clear-permissions    清除本会话权限",
@@ -130,6 +132,42 @@ def _save_permission_policy(directory: Path, session: ChatSessionState) -> None:
     except OSError:
         # Read-only or synthetic test workspaces keep the in-memory policy.
         return
+
+
+def _permission_payload(session: ChatSessionState) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "allowedTools": sorted(session.allowed_tools),
+        "allowedPaths": [list(item) for item in sorted(session.allowed_paths)],
+        "deniedPaths": [list(item) for item in sorted(session.denied_paths)],
+    }
+
+
+def _load_permission_payload(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return None
+    if not all(isinstance(payload.get(key, []), list) for key in ("allowedTools", "allowedPaths", "deniedPaths")):
+        return None
+    rules = payload.get("allowedPaths", []) + payload.get("deniedPaths", [])
+    if any(not isinstance(item, list) or len(item) != 2 or not all(isinstance(value, str) for value in item) for item in rules):
+        return None
+    if any(not isinstance(item, str) for item in payload.get("allowedTools", [])):
+        return None
+    return payload
+
+
+def _apply_permission_payload(session: ChatSessionState, payload: dict[str, Any], *, replace: bool) -> None:
+    if replace:
+        session.allowed_tools.clear()
+        session.allowed_paths.clear()
+        session.denied_paths.clear()
+    session.allowed_tools.update(item for item in payload.get("allowedTools", []) if item.strip())
+    session.allowed_paths.update((item[0], item[1]) for item in payload.get("allowedPaths", []) if item[0].strip() and item[1].strip())
+    session.denied_paths.update((item[0], item[1]) for item in payload.get("deniedPaths", []) if item[0].strip() and item[1].strip())
 
 
 def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
@@ -325,6 +363,33 @@ def _run_slash_command(
         )
         return True
     if name == "/permissions":
+        if args and args[0].lower() in {"export", "import"}:
+            if len(args) < 2:
+                emit("用法: /permissions export <file> 或 /permissions import <file> [merge|replace]")
+                return True
+            target = Path(args[1]).expanduser()
+            if args[0].lower() == "export":
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = target.with_name(target.name + ".tmp")
+                    tmp.write_text(json.dumps(_permission_payload(session), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    tmp.replace(target)
+                    emit(f"已导出权限策略: {target}")
+                except OSError as exc:
+                    emit(f"导出失败: {exc}")
+                return True
+            payload = _load_permission_payload(target)
+            if payload is None:
+                emit("导入失败: 权限策略格式无效或文件不可读")
+                return True
+            mode = args[2].lower() if len(args) > 2 else "merge"
+            if mode not in {"merge", "replace"}:
+                emit("用法: /permissions import <file> [merge|replace]")
+                return True
+            _apply_permission_payload(session, payload, replace=mode == "replace")
+            _save_permission_policy(directory, session)
+            emit(f"已导入权限策略 ({mode})")
+            return True
         emit(
             f"allowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}\n"
             f"allowed paths: {', '.join(f'{t}:{p}' for t,p in sorted(session.allowed_paths)) or '（无）'}\n"
