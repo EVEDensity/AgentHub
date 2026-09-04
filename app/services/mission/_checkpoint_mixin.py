@@ -115,7 +115,7 @@ class MissionCheckpointMixin:
                 raise LeaseOwnershipError("streaming event lease mismatch")
             if work_unit.attempt != attempt or work_unit.status not in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING}:
                 raise WorkUnitNotReadyError("streaming event attempt is not active")
-            existing = next((e for e in await repository.list_work_unit_events(mission_id, limit=1000) if e.event_id == event_id), None)
+            existing = next((e for e in await repository.list_work_unit_events(mission_id, limit=200) if e.event_id == event_id), None)
             if existing is not None:
                 if existing.aggregate_id != work_unit_id or existing.event_type != event_type:
                     raise ValueError("streaming event id already exists with different content")

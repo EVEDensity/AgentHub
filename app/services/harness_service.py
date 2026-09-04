@@ -511,6 +511,7 @@ class FunctionCallingHarness:
         except HarnessError:
             raise
         except Exception as exc:  # noqa: BLE001 - provider failures become safe results
+            logger.exception("harness model execution failed (%s)", type(exc).__name__)
             return await failed(f"Harness model execution failed: {type(exc).__name__}")
 
         return await failed(

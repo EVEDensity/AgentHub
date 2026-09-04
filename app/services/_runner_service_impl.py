@@ -554,6 +554,36 @@ class MissionControlRunnerClient:
             json=payload,
         )
 
+    async def publish_streaming_event(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        runner_id: str,
+        lease_id: str,
+        event_id: str,
+        event_type: str,
+        text: str,
+        attempt: int,
+        tool_name: str = "",
+    ) -> dict[str, Any]:
+        """Publish one bounded assistant/tool stream event for a leased run."""
+        del runner_id
+        payload: dict[str, Any] = {
+            "eventId": event_id,
+            "leaseId": lease_id,
+            "eventType": event_type,
+            "text": text,
+            "attempt": attempt,
+        }
+        if tool_name:
+            payload["toolName"] = tool_name
+        return await self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/stream-events",
+            json=payload,
+        )
+
     async def register_artifact(
         self,
         mission_id: str,

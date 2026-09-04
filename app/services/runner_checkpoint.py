@@ -201,7 +201,6 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
             event_type="harness.assistant.completed" if completed else "harness.assistant.delta",
             text=text,
             attempt=self._execution.attempt,
-            tool_name=tool_name,
         )
 
     async def publish_tool_event(

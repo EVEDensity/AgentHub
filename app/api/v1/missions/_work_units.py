@@ -1,7 +1,14 @@
 """v1 missions/_work_units.py — Work-unit full lifecycle."""
-from __future__ import annotations
+from fastapi import Body
 
 from app.api.v1.missions._deps import *
+from app.schemas.mission import StreamingEventRequest
+from app.services.mission._types import (
+    LeaseOwnershipError,
+    MissionNotFoundError,
+    WorkUnitNotFoundError,
+    WorkUnitNotReadyError,
+)
 
 router = APIRouter()
 
@@ -10,9 +17,9 @@ router = APIRouter()
 async def publish_stream_event(
     mission_id: str,
     work_unit_id: str,
-    request: StreamingEventRequest,
     user: CurrentUser,
     repository: MissionRepositoryDep,
+    request: StreamingEventRequest = Body(...),
 ) -> dict:
     """Publish one bounded assistant delta behind the Runner lease fence."""
     service = MissionService(repository)

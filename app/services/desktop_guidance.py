@@ -229,6 +229,34 @@ class GuidanceInjectingModel:
             return await self._inner.complete(request, tool_results)
         return await self._inner.complete(request, tool_results, tools_enabled=False)
 
+    async def stream(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = True,
+    ) -> ModelResponse:
+        """Forward streaming calls while injecting pending guidance.
+
+        ``FunctionCallingHarness`` prefers ``stream`` whenever a text-delta
+        callback is installed (including the Mission checkpoint publisher).
+        Keeping this method symmetric with ``complete`` prevents the wrapper
+        from breaking the normal desktop chat path.
+        """
+        guidance = await self._source.pending_guidance(self._mission_id)
+        if guidance:
+            block = format_guidance_block(guidance)
+            self.injected_blocks.append(block)
+            request = replace(request, code=f"{request.code}\n\n{block}")
+        stream = getattr(self._inner, "stream", None)
+        if not callable(stream):
+            if tools_enabled:
+                return await self._inner.complete(request, tool_results)
+            return await self._inner.complete(request, tool_results, tools_enabled=False)
+        if tools_enabled:
+            return await stream(request, tool_results)
+        return await stream(request, tool_results, tools_enabled=False)
+
 
 __all__ = [
     "GUIDANCE_CONTENT_KEY",
