@@ -221,9 +221,9 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 | 权限 | 路径 glob、会话持久化、导入导出、规则删除、匹配预览、认证策略同步 API、服务端来源字段 | 增加组织策略优先级的 CLI 可视化 |
 | provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow | 配置 CI Secret 并保留真实运行证据，补 verification 链路 |
 | npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
-| benchmark | 基础脚本与说明 | 建立版本化任务集和 release 对比阈值 |
+| benchmark | `scripts/cli_benchmark.py` 已输出首事件、首 token、首工具反馈、SSE 重连、Decision 拒绝和恢复成功指标；CLI fixture 测试通过 | 建立版本化任务集和 release 对比阈值 |
 
-下一开发阶段固定为 **CLI 鲁棒性重构**，执行基线见 [CLI 鲁棒性重构与边界说明](../development/cli-robustness-refactor.md)。当前已完成 SSE 独立分帧、连接状态事件、普通对话流式修复和 Planner 请求字段保留；stream/tools 彻底分离、工具 call_id、Transport/API 拆分、真实 TTY/断线/registry 验收仍未完成。真实 DeepSeek tool-call、断线恢复和验证链路必须由 CI 证据确认。
+下一开发阶段固定为 **CLI 鲁棒性重构**，执行基线见 [CLI 鲁棒性重构与边界说明](../development/cli-robustness-refactor.md)。Phase A/B 的源码 fixture 与 reducer/renderer 一致性测试已完成，当前剩余阻断项是真实 DeepSeek `v4-flash`/`v4-pro` tool-call、真实 TTY 录制、真实网络断线恢复及 npm registry 跨平台安装升级回滚；这些必须由 CI 或干净机器证据确认。
 
 ## 8. 质量、安全与文档纪律
 
