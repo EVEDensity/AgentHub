@@ -314,6 +314,18 @@ def render_result_panel(result: Any) -> Panel:
     )
 
 
+def render_state_panel(state: Any) -> Panel:
+    """Render canonical reducer state for stable terminal snapshots."""
+    from app.cli.reducer import state_summary
+    summary = state_summary(state) or "idle"
+    body = Text(summary, style=STYLE_PRIMARY)
+    if getattr(state, "assistant_text", ""):
+        body.append(f"\ntext: {state.assistant_text}", style=STYLE_PRIMARY)
+    if getattr(state, "diagnostics", ()):
+        body.append("\n" + "\n".join(state.diagnostics), style=Style(color=C_WARN))
+    return Panel(body, title="session state", border_style=Style(color=C_TOOL), box=ROUNDED, padding=(0, 1))
+
+
 def render_diff_panel(root: Path, max_lines: int = 240) -> Panel | None:
     """Git-diff style highlight (green +/red -) of workspace changes."""
     text = git_diff_text(root, max_lines=max_lines)

@@ -256,9 +256,8 @@ class AgentHubTUI(App[None]):
             self.call_from_thread(self._log, text)
 
         def emit_state(state: SessionViewState) -> None:
-            from app.cli.reducer import state_summary
-            hint = state_summary(state)
-            self.call_from_thread(self._log, f"  [state] {hint}")
+            from app.cli.ui import render_state_panel
+            self.call_from_thread(self._log, render_state_panel(state))
 
         def thread_body() -> None:
             try:
@@ -320,7 +319,7 @@ class AgentHubTUI(App[None]):
 
     # ── output ────────────────────────────────────────────────────────
 
-    def _log(self, text: str) -> None:
+    def _log(self, text: Any) -> None:
         self.query_one(RichLog).write(text)
 
 

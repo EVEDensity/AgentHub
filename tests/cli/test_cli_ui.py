@@ -162,6 +162,19 @@ class RenderTests(unittest.TestCase):
         text = _render_to_text(panel)
         self.assertIn("FAILED", text)
 
+    def test_state_panel_is_recordable_and_includes_diagnostics(self) -> None:
+        from app.cli.events import normalize_event
+        from app.cli.reducer import SessionViewState, reduce_event
+
+        state = SessionViewState()
+        for raw in ({"type": "sse.reconnecting", "payload": {}}, {"type": "future.event", "payload": {}}):
+            event = normalize_event(raw)
+            assert event is not None
+            state = reduce_event(state, event)
+        text = _render_to_text(ui.render_state_panel(state))
+        self.assertIn("stream:reconnecting", text)
+        self.assertIn("unknown event: future.event", text)
+
     def test_diff_panel_none_when_clean(self) -> None:
         with mock.patch.object(ui, "git_diff_text", return_value=None):
             self.assertIsNone(ui.render_diff_panel(Path("/ws")))
