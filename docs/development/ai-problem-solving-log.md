@@ -58,9 +58,17 @@
 - 验证：`python -m pytest tests/services/test_provider_streaming_matrix.py tests/services/test_provider_tool_call_matrix.py -q`。
 - 风险：fixture 只能证明归一化契约，真实供应商行为仍需 nightly secret smoke。
 
+### 2026-09-04：npm 发布前不能只验证 staging 脚本成功
+
+- 症状：平台包和入口包可能在 staging 阶段生成，但缺少对最终 tarball 文件清单的门禁，发布后才暴露遗漏文件或入口配置错误。
+- 解决：在 `.github/workflows/npm-cli.yml` 的 publish 前对两个 staging 目录执行 `npm pack --dry-run --json`；该检查复用 npm 自己的打包规则，不上传、不修改 registry。
+- 本地验证：`python -m pytest tests/npm/test_npm_cli_package.py tests/cli -q`。
+- 边界：Windows 工作区无法替代干净 Linux/macOS/npm frozen 安装；升级、回滚、全局 PATH 和服务启动诊断仍必须由 CI 的真实干净机 job 验收。
+
 ## 待记录问题
 
 - 真实供应商流式协议差异与重连行为。
 - EventReducer 在 TUI/REPL/JSONL 间的一致性。
 - attempt 级 Git 快照与用户既有改动保护。
 - frozen/npm 包在干净机器上的服务启动诊断。
+- npm 升级/回滚和跨平台安装的真实 CI 结果（本地仅完成 staging 结构与 `npm pack --dry-run` 门禁）。

@@ -101,6 +101,14 @@ jobs:
             throw 'platform package.json version injection failed'
           }
 
+      - name: Validate staged npm tarballs before publish
+        shell: pwsh
+        run: |
+          Push-Location distributions\npm\cli-win32-x64
+          try { npm pack --dry-run --json | Out-Null } finally { Pop-Location }
+          Push-Location distributions\npm\cli
+          try { npm pack --dry-run --json | Out-Null } finally { Pop-Location }
+
       - name: Publish platform package (@agenthub/cli-win32-x64)
         shell: pwsh
         env:

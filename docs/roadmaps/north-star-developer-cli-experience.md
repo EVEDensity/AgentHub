@@ -54,7 +54,7 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：env-only provider matrix；录制/模拟 SSE fixture 覆盖 chunk、tool call、超时、断线；真实密钥 opt-in 的 nightly smoke，日志脱敏。  
 验收：每个 provider 至少完成一次 `assistant.delta -> tool -> verification`；无密钥时明确 SKIP，不伪造成功。
 
-当前进度：已加入 `scripts/cli_provider_smoke.py` 与无密钥流式契约测试；2026-09-03 在受控环境完成 DeepSeek `deepseek-chat` 真实流式 smoke（返回 2 个文本 chunk）。完整 `assistant.delta -> tool -> verification` 矩阵仍需后续 CI 验收。
+当前进度：已加入 `scripts/cli_provider_smoke.py` 与无密钥流式契约测试；已在受控环境完成 DeepSeek 文本流 smoke。后续真实矩阵固定使用 `v4-flash`/`v4-pro`，完整 `assistant.delta -> tool -> verification` 仍需 CI 验收。
 
 ### P1：统一 EventReducer
 
