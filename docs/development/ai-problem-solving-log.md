@@ -44,6 +44,13 @@
 - 验证：`python -m pytest tests/cli/test_cli_chat_compact.py tests/cli/test_cli_ui.py -q`。
 - 风险：基线仍是路径集合，不是完整 Git index/文件快照；精确恢复属于后续 P2 迭代。
 
+### 2026-09-04：attempt 恢复必须防止外部覆盖
+
+- 症状：直接执行 `git restore` 可能覆盖任务开始前已有改动或任务完成后的外部改动。
+- 解决：快照保存基线 hash 与任务前修改文件副本；恢复仅在当前 hash 等于任务后 hash 时执行，冲突立即停止。
+- 验证：`python -m pytest tests/cli/test_cli_snapshots.py -q`。
+- 风险：当前不恢复 Git index，多个 WorkUnit 同文件的合并策略待后续实现。
+
 ## 待记录问题
 
 - 真实供应商流式协议差异与重连行为。
