@@ -1168,7 +1168,9 @@ def execute_objective(
             total_tokens = prompt_tokens + completion_tokens
 
     status = str(mission.get("status"))
-    changed_files = list_workspace_files(workspace_root)
+    # Report only files changed by this Mission.  ``list_workspace_files``
+    # describes the whole workspace and would incorrectly classify every
+    # repository source file as a Mission deliverable.
     if attempt_snapshot is not None:
         attempt_snapshot = attempt_snapshot.finalize()
         try:
@@ -1187,7 +1189,7 @@ def execute_objective(
         objective=objective,
         work_unit_statuses=[str(u.get("status")) for u in units],
         artifacts=artifacts,
-        workspace_files=changed_files,
+        workspace_files=mission_changed_files,
         mission_changed_files=mission_changed_files,
         baseline_commit=baseline_commit,
         baseline_changed_files=sorted(baseline_files),
