@@ -29,6 +29,7 @@ import httpx
 
 from app.cli.transport import HttpTransport
 from app.cli.sse_client import SseClient
+from app.cli.control_api import ArtifactApi, DecisionApi, MissionApi
 
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event, reorder_events
@@ -430,10 +431,11 @@ class MissionControlProcess:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._process is not None and self._process.poll() is not None:
+                log_path = self._log_handle.name if self._log_handle is not None else "<unavailable>"
                 raise RuntimeError(
                     "mission-control subprocess exited during startup "
                     f"(code {self._process.returncode}); see "
-                    f"{self._run_dir / 'mission-control.log'}"
+                    f"{log_path}"
                 )
             try:
                 response = httpx.get(self.base_url + "/", timeout=3)
@@ -474,6 +476,9 @@ class MissionControlClient:
         self._transport = HttpTransport(base_url, timeout)
         self._client = self._transport.client
         self._sse = SseClient(self._transport)
+        self.missions_api = MissionApi(self)
+        self.decisions_api = DecisionApi(self)
+        self.artifacts_api = ArtifactApi(self)
 
     def close(self) -> None:
         self._transport.close()
