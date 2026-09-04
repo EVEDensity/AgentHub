@@ -192,7 +192,10 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
 
     async def publish_text_delta(self, event_id: str, text: str, *, completed: bool = False) -> dict[str, Any]:
         """Publish model text without adding it to the durable checkpoint."""
-        return await self._control.publish_streaming_event(
+        publish = getattr(self._control, "publish_streaming_event", None)
+        if not callable(publish):
+            return {}
+        return await publish(
             self._execution.mission_id,
             self._execution.work_unit_id,
             runner_id=self._runner_id,
@@ -206,7 +209,10 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
     async def publish_tool_event(
         self, event_id: str, event_type: str, tool_name: str, text: str = ""
     ) -> dict[str, Any]:
-        return await self._control.publish_streaming_event(
+        publish = getattr(self._control, "publish_streaming_event", None)
+        if not callable(publish):
+            return {}
+        return await publish(
             self._execution.mission_id,
             self._execution.work_unit_id,
             runner_id=self._runner_id,
