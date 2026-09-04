@@ -51,6 +51,13 @@
 - 验证：`python -m pytest tests/cli/test_cli_snapshots.py -q`。
 - 风险：当前不恢复 Git index，多个 WorkUnit 同文件的合并策略待后续实现。
 
+### 2026-09-04：provider 矩阵测试不能依赖未声明插件
+
+- 症状：测试环境没有 `pytest-asyncio` 时，异步矩阵测试无法收集。
+- 解决：使用标准库 `asyncio.run` 驱动异步契约，避免隐式测试依赖。
+- 验证：`python -m pytest tests/services/test_provider_streaming_matrix.py tests/services/test_provider_tool_call_matrix.py -q`。
+- 风险：fixture 只能证明归一化契约，真实供应商行为仍需 nightly secret smoke。
+
 ## 待记录问题
 
 - 真实供应商流式协议差异与重连行为。
