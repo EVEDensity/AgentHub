@@ -70,7 +70,7 @@ Mission Control 是 Mission、WorkUnit、Artifact、Evidence、Decision、Outcom
 方案：记录基线 commit/status；每次写入产生 attempt 变更清单；`/undo` 只反向应用本次 attempt 且默认确认。  
 验收：既有改动不被覆盖；失败任务仍可审查和恢复；绝不自动 commit。
 
-当前进度：已记录 Mission 启动前 Git HEAD commit/status，并生成 `.agenthub/attempt-snapshots/<attempt-id>` 快照；结果提供 `missionChangedFiles`、`baselineCommit`、`baselineChangedFiles` 和 `attemptSnapshotId`。`/undo` 对最近 attempt 做 hash 冲突检测后精确恢复，冲突时 fail-closed。Git index 状态和跨 WorkUnit 合并恢复仍待后续迭代。
+当前进度：已记录 Mission 启动前 Git HEAD commit/status，并生成 `.agenthub/attempt-snapshots/<attempt-id>` 快照；结果提供 `missionChangedFiles`、`baselineCommit`、`baselineChangedFiles` 和 `attemptSnapshotId`。`/undo` 对最近 attempt 做工作区与 Git index 双重 hash 冲突检测后精确恢复，删除本次新增文件，冲突时 fail-closed。跨 WorkUnit 同文件的合并恢复仍待后续迭代。
 
 ### P3：权限与 Decision 产品化
 
