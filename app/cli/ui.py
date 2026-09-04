@@ -171,6 +171,12 @@ def git_status_snapshot(root: Path) -> frozenset[str]:
     return frozenset(git_changed_files(root))
 
 
+def git_head_commit(root: Path) -> str | None:
+    """Return the current HEAD commit, or None outside a Git repository."""
+    out = _git(root, "rev-parse", "HEAD")
+    return out.strip() if out else None
+
+
 def git_changes_since(root: Path, before: frozenset[str]) -> list[str]:
     """Return paths changed after a baseline snapshot."""
     return sorted(set(git_changed_files(root)) - set(before))

@@ -113,6 +113,10 @@ class GitContextTests(unittest.TestCase):
         with mock.patch.object(ui, "git_changed_files", return_value=["old.py", "new.py"]):
             self.assertEqual(ui.git_changes_since(self.root, frozenset({"old.py"})), ["new.py"])
 
+    def test_git_head_commit(self) -> None:
+        with mock.patch.object(ui, "_git", return_value="abc123\n"):
+            self.assertEqual(ui.git_head_commit(self.root), "abc123")
+
     def test_git_restore_paths_rejects_parent_escape(self) -> None:
         with mock.patch.object(ui.subprocess, "run") as run:
             self.assertTrue(ui.git_restore_paths(self.root, ["../outside.py"]))

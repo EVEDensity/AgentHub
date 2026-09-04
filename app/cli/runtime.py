@@ -694,6 +694,8 @@ class MissionRunResult:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     workspace_files: list[str] = field(default_factory=list)
     mission_changed_files: list[str] = field(default_factory=list)
+    baseline_commit: str | None = None
+    baseline_changed_files: list[str] = field(default_factory=list)
     wall_seconds: float = 0.0
     waited_timeout: bool = False
     exit_code: int = EXIT_INFRA_ERROR
@@ -712,6 +714,8 @@ class MissionRunResult:
             "artifactKinds": sorted({str(a.get("kind")) for a in self.artifacts}),
             "workspaceFiles": self.workspace_files,
             "missionChangedFiles": self.mission_changed_files,
+            "baselineCommit": self.baseline_commit,
+            "baselineChangedFiles": self.baseline_changed_files,
             "wallSeconds": round(self.wall_seconds, 2),
             "waitedTimeout": self.waited_timeout,
             "exitCode": self.exit_code,
@@ -904,8 +908,10 @@ def list_recent_missions(
 ) -> list[dict[str, Any]]:
     """List missions recorded in the persistent local state database."""
     baseline_files = frozenset()
+    baseline_commit = None
     try:
-        from app.cli.ui import git_status_snapshot
+        from app.cli.ui import git_head_commit, git_status_snapshot
+        baseline_commit = git_head_commit(workspace_root)
         baseline_files = git_status_snapshot(workspace_root)
     except Exception:  # noqa: BLE001
         pass
@@ -1169,6 +1175,8 @@ def execute_objective(
         artifacts=artifacts,
         workspace_files=changed_files,
         mission_changed_files=mission_changed_files,
+        baseline_commit=baseline_commit,
+        baseline_changed_files=sorted(baseline_files),
         wall_seconds=wall_seconds,
         waited_timeout=waited_timeout,
         exit_code=status_to_exit_code(status, waited_timeout),

@@ -139,6 +139,8 @@ def _record_session_mission(session: ChatSessionState, result: Any) -> None:
             "artifacts": len(result.artifacts),
             "workspace_files": list(result.workspace_files),
             "mission_changed_files": list(getattr(result, "mission_changed_files", []) or []),
+            "baseline_commit": getattr(result, "baseline_commit", None),
+            "baseline_changed_files": list(getattr(result, "baseline_changed_files", []) or []),
             "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
             "completion_tokens": int(getattr(result, "completion_tokens", 0) or 0),
             "total_tokens": int(getattr(result, "total_tokens", 0) or 0),
