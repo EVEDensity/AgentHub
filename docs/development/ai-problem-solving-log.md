@@ -73,3 +73,4 @@
 - attempt 级 Git 快照与用户既有改动保护。
 - frozen/npm 包在干净机器上的服务启动诊断。
 - npm 升级/回滚和跨平台安装的真实 CI 结果（本地仅完成 staging 结构与 `npm pack --dry-run` 门禁）。
+- CLI 权限规则已增加工作区 `.agenthub/permissions.json` 持久化；仅保存工具名和路径 glob，不保存凭据或决策正文。
