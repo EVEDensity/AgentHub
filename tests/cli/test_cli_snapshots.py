@@ -66,3 +66,21 @@ def test_restore_is_atomic_when_index_has_external_change(tmp_path: Path):
     ok, conflicts = snap.restore()
     assert not ok and "a.txt" in conflicts
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "external"
+
+
+def test_attempt_snapshot_restores_file_touched_by_multiple_work_units(tmp_path: Path):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "shared.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "shared.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True)
+    snap = capture_attempt(tmp_path, tmp_path / ".snapshots")
+    # WorkUnit A and B both touch the same path; the attempt snapshot owns
+    # the aggregate and restores the single pre-attempt version.
+    (tmp_path / "shared.txt").write_text("unit-a", encoding="utf-8")
+    (tmp_path / "shared.txt").write_text("unit-b-final", encoding="utf-8")
+    snap = snap.finalize()
+    ok, conflicts = snap.restore()
+    assert ok and not conflicts
+    assert (tmp_path / "shared.txt").read_text(encoding="utf-8") == "base"
