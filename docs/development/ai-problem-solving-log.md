@@ -37,6 +37,13 @@
 - 验证：`python -m pytest tests/cli/test_cli_events.py -q`。
 - 风险：跨批次乱序仍依赖服务端 afterSequence 和重连窗口，CLI 不无限缓存事件。
 
+### 2026-09-04：执行基线采集位置错误
+
+- 症状：基线变量被放入列表查询函数，执行结果构造时未定义。
+- 解决：基线只在 `execute_objective` 启动 Mission 前采集；列表查询保持无副作用。
+- 验证：`python -m pytest tests/cli/test_cli_chat_compact.py tests/cli/test_cli_ui.py -q`。
+- 风险：基线仍是路径集合，不是完整 Git index/文件快照；精确恢复属于后续 P2 迭代。
+
 ## 待记录问题
 
 - 真实供应商流式协议差异与重连行为。
