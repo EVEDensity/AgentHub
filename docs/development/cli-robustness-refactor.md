@@ -20,7 +20,7 @@
 | 第二阶段 | Mission/Decision/Artifact API 拆分 | partial | 已新增 API 门面，旧客户端仍作为兼容实现 |
 | 第二阶段 | 每个 API 的契约测试 | partial | Transport 和 API 门面已有契约测试，完整 HTTP 边界矩阵仍待补齐 |
 | 第二阶段 | 统一重试、超时、认证 | partial | Transport 已统一基础认证/GET 重试；SSE、写请求和错误映射仍待迁移 |
-| 第三阶段 | 可靠性测试矩阵 | partial | 已覆盖 parser、重复/乱序事件、同名工具 call_id 并发、GET 503 重试及 TTY 40/80/120；真实 TTY、断线期间 Decision、provider 和 registry 验收仍缺 |
+| 第三阶段 | 可靠性测试矩阵 | partial | 已覆盖 parser、重复/乱序事件、同名工具 call_id 并发、GET 503 重试、SSE 断线重连游标、启动失败诊断、HTTP 429/5xx/超时分类及 TTY 40/80/120；真实 TTY、真实 provider tool-call 和 registry 验收仍缺 |
 
 ## 不可突破的边界
 
@@ -104,6 +104,17 @@ app/cli/control/permissions.py
 - `provider`: 无效工具参数、超时、429、5xx、真实 provider tool-call。
 - `terminal`: TTY 宽度 40/80/120、spinner、换行和无 TTY 降级。
 - `release`: registry 安装、升级、回滚和稳定退出码。
+
+### 本阶段自动化证据
+
+以下命令在源码环境通过，属于 `fixture-verified`：
+
+```text
+python -m pytest tests/cli tests/services/test_model_port.py tests/services/test_harness_service.py -q
+244 passed, 2 skipped, 3 subtests passed
+```
+
+覆盖的新增边界包括：SSE 连接失败后产生可观测 reconnecting 事件并保留 `afterSequence`、服务进程提前退出时报告实际日志路径、provider `401/409/429/5xx` 的稳定错误分类。上述测试不等价于真实网络 provider、真实 TTY 或 npm registry 验收。
 
 没有真实 provider、真实 TTY 或真实 registry 证据时，只能标记 `fixture-verified`，不得标记 `production-verified`。
 
