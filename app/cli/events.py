@@ -13,6 +13,9 @@ from typing import Any, Iterable, Mapping
 CLI_EVENT_SCHEMA_VERSION = 1
 
 _CANONICAL_TYPES = {
+    "mission.lifecycle.created": "mission.created",
+    "work_unit.lifecycle.leased": "work_unit.claimed",
+    "work_unit.lifecycle.started": "work_unit.running",
     "harness.assistant.delta": "assistant.delta",
     "harness.assistant.completed": "assistant.completed",
     "harness.tool.started": "tool.started",
@@ -20,6 +23,11 @@ _CANONICAL_TYPES = {
     "harness.tool.completed": "tool.completed",
     "decision.lifecycle.requested": "decision.pending",
     "decision.lifecycle.resolved": "decision.resolved",
+    "work_unit.checkpoint.recorded": "checkpoint.created",
+    "artifact.lifecycle.registered": "artifact.registered",
+    "mission.lifecycle.verifying": "verification.started",
+    "work_unit.lifecycle.verified": "verification.completed",
+    "mission.lifecycle.succeeded": "mission.completed",
 }
 
 

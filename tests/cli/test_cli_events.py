@@ -61,3 +61,20 @@ def test_reorder_events_sorts_mission_sequences_only():
     ]
     ordered = reorder_events(event for event in events if event is not None)
     assert [event.event_id for event in ordered] == ["m1", "w1", "m2"]
+
+
+def test_normalize_all_mission_control_lifecycle_events():
+    pairs = {
+        "mission.lifecycle.created": "mission.created",
+        "work_unit.lifecycle.leased": "work_unit.claimed",
+        "work_unit.lifecycle.started": "work_unit.running",
+        "work_unit.checkpoint.recorded": "checkpoint.created",
+        "artifact.lifecycle.registered": "artifact.registered",
+        "mission.lifecycle.verifying": "verification.started",
+        "work_unit.lifecycle.verified": "verification.completed",
+        "mission.lifecycle.succeeded": "mission.completed",
+    }
+    for index, (raw_type, expected) in enumerate(pairs.items(), start=1):
+        event = normalize_event({"eventId": f"e{index}", "eventType": raw_type, "sequence": index, "aggregateType": "mission", "payload": {}})
+        assert event is not None
+        assert event.event_type == expected

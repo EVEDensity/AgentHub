@@ -47,6 +47,8 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     kind = event.event_type
     payload = event.payload
     status = event.status or state.status
+    if not event.status:
+        status = {"mission.created": "CREATED", "work_unit.claimed": "CLAIMED", "work_unit.running": "RUNNING", "mission.completed": "SUCCEEDED"}.get(kind, status)
     text = state.assistant_text
     if kind == "assistant.delta":
         text += event.text_delta or ""

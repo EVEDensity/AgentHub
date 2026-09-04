@@ -19,6 +19,6 @@ def test_all_renderers_share_canonical_reducer_snapshot():
         state = reduce_event(state, event)
     snapshot = state_to_dict(state)
     assert json.loads(json.dumps(snapshot, ensure_ascii=False)) == snapshot
-    assert state_summary(state) == "tool:file_read output · decision pending · verification:started"
+    assert state_summary(state) == "CREATED · tool:file_read output · decision pending · verification:started"
     assert snapshot["assistantText"] == "Inspecting"
     assert snapshot["tools"][0]["output"] == "README"
