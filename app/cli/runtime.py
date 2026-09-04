@@ -28,6 +28,8 @@ from typing import Any, Iterator
 import httpx
 
 from app.cli.sse import iter_sse_frames
+from app.cli.errors import classify_error
+from app.cli.transport import HttpTransport
 
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event, reorder_events
@@ -470,11 +472,11 @@ class MissionControlClient:
     """Typed convenience wrapper over the versioned Mission HTTP API."""
 
     def __init__(self, base_url: str, timeout: float = 30.0) -> None:
-        self._client = httpx.Client(base_url=base_url, timeout=timeout)
-        self._token: str | None = None
+        self._transport = HttpTransport(base_url, timeout)
+        self._client = self._transport.client
 
     def close(self) -> None:
-        self._client.close()
+        self._transport.close()
 
     def __enter__(self) -> MissionControlClient:
         return self
@@ -484,9 +486,15 @@ class MissionControlClient:
 
     @property
     def headers(self) -> dict[str, str]:
-        if self._token is None:
-            raise RuntimeError("not logged in")
-        return {"Authorization": f"Bearer {self._token}"}
+        return self._transport.headers
+
+    @property
+    def _token(self) -> str | None:  # compatibility for existing test seams
+        return self._transport._token
+
+    @_token.setter
+    def _token(self, value: str | None) -> None:
+        self._transport._token = value
 
     def login(self, name: str = "admin", password: str = "admin123") -> None:
         response = self._client.post(
@@ -496,7 +504,7 @@ class MissionControlClient:
         token = response.json().get("accessToken")
         if not isinstance(token, str) or not token:
             raise RuntimeError("login returned no access token")
-        self._token = token
+        self._transport.set_token(token)
 
     def create_and_start_mission(
         self,
@@ -689,7 +697,10 @@ class MissionControlClient:
             yield {
                 "type": "sse.reconnecting",
                 "eventId": f"sse-reconnecting-{uuid.uuid4().hex}",
-                "payload": {"errorType": type(exc).__name__},
+                "payload": {
+                    "errorType": type(exc).__name__,
+                    "errorKind": str(classify_error(exc)),
+                },
             }
 
 
