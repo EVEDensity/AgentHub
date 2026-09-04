@@ -12,14 +12,14 @@
 |---|---|---|---|
 | 第一阶段 | 修复 `on_text_delta` 在 Planner/Reflective 重试中丢失 | completed | 使用 `dataclasses.replace()`；Harness/CLI 测试通过 |
 | 第一阶段 | SSE 独立解析器 | completed | `app/cli/sse.py`；覆盖 id、event、多行 data、心跳、retry |
-| 第一阶段 | stream/tools 逻辑彻底分离 | partial | 当前 Harness 的 stream 与 tools 仍存在隐式耦合；必须补统一 `ModelRequest` |
-| 第一阶段 | 工具状态使用 `call_id` | not-started | 当前 reducer 主要按工具名合并，同名并发调用有覆盖风险 |
-| 第一阶段 | 稳定错误分类 | partial | 已有部分重试判断，尚未形成统一 Transport/Protocol/Auth/Retryable 错误层 |
-| 第二阶段 | 独立 HTTP transport | not-started | 当前 `MissionControlClient` 同时承担认证、HTTP、业务 API |
-| 第二阶段 | 独立 SSE client | partial | SSE parser 已独立，连接生命周期仍在 `MissionControlClient` |
-| 第二阶段 | Mission/Decision/Artifact API 拆分 | not-started | 仍是单一客户端门面 |
-| 第二阶段 | 每个 API 的契约测试 | partial | 已有 CLI/API 测试，尚未按 API 边界完整覆盖 |
-| 第二阶段 | 统一重试、超时、认证 | partial | 存在局部超时和 provider 重试，尚未集中到 Transport |
+| 第一阶段 | stream/tools 逻辑彻底分离 | partial | 已取消 Harness 强制关闭 tools；不支持流式工具的 Adapter 回退 completion；统一 `ModelRequest` 仍待后续 |
+| 第一阶段 | 工具状态使用 `call_id` | partial | Reducer 已按 `call_id` 关联；旧事件使用兼容 ID，生产事件仍需强制携带 call_id |
+| 第一阶段 | 稳定错误分类 | partial | 新增 `CliErrorKind` 与分类器；Transport/API 尚未全部迁移到统一错误层 |
+| 第二阶段 | 独立 HTTP transport | partial | 已新增 `app/cli/transport.py` 并接入认证和 GET 重试；旧客户端方法仍待全部迁移 |
+| 第二阶段 | 独立 SSE client | completed | `app/cli/sse_client.py` 负责连接生命周期、帧解析和连接状态事件；旧客户端保留兼容代理 |
+| 第二阶段 | Mission/Decision/Artifact API 拆分 | partial | 已新增 API 门面，旧客户端仍作为兼容实现 |
+| 第二阶段 | 每个 API 的契约测试 | partial | Transport 和 API 门面已有契约测试，完整 HTTP 边界矩阵仍待补齐 |
+| 第二阶段 | 统一重试、超时、认证 | partial | Transport 已统一基础认证/GET 重试；SSE、写请求和错误映射仍待迁移 |
 | 第三阶段 | 可靠性测试矩阵 | partial | 已覆盖部分 parser、重复/乱序事件；真实 TTY、断线恢复、registry 验收仍缺 |
 
 ## 不可突破的边界
@@ -116,4 +116,3 @@ app/cli/control/permissions.py
 5. 任何新增事件、字段、错误码或 provider 能力都必须版本化并有兼容测试。
 6. 真实失败记录到 `docs/development/ai-problem-solving-log.md`，包括根因、修复、验证命令和残余风险。
 7. 阶段完成前运行受影响模块和完整阶段矩阵；GitHub Actions、npm registry、provider nightly 未实际运行时必须明确写 `未验收`。
-
