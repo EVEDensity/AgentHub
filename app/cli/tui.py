@@ -49,6 +49,8 @@ _HELP_LINES = (
     "/unresume      清除链式上下文",
     "/new           开始全新会话（清除链式上下文）",
     "/status        显示当前会话设置",
+    "/cost          显示本会话成本摘要",
+    "/context       查看当前上下文与 token 使用",
     "/quit          退出",
 )
 
@@ -59,6 +61,7 @@ class TuiSessionState:
 
     chained_mission_id: str | None = None
     session_missions: list[str] = field(default_factory=list)
+    session_records: list[dict[str, Any]] = field(default_factory=list)
     running: bool = False
 
 
@@ -189,6 +192,21 @@ class AgentHubTUI(App[None]):
                 f"session missions: {len(self.session.session_missions)}"
             )
             return
+        if name == "/cost":
+            from app.cli.ui import format_cost_line
+            if not self.session.session_records:
+                self._log("本会话尚未运行任务")
+            else:
+                self._log(format_cost_line(self.session.session_records))
+            return
+        if name == "/context":
+            latest = self.session.session_records[-1] if self.session.session_records else {}
+            self._log(
+                f"chained mission: {self.session.chained_mission_id or '（无）'}\n"
+                f"missions: {len(self.session.session_records)}\n"
+                f"tokens: {int(latest.get('total_tokens') or 0):,} (latest)"
+            )
+            return
         if name in ("/new", "/unresume"):
             self.session.chained_mission_id = None
             self._log("已清除链式上下文")
@@ -315,6 +333,15 @@ class AgentHubTUI(App[None]):
             )
             self._log(f"  files: {preview}{more}")
         self.session.session_missions.append(result.mission_id)
+        self.session.session_records.append(
+            {
+                "mission_id": result.mission_id,
+                "status": str(result.status),
+                "wall_seconds": float(result.wall_seconds),
+                "artifacts": len(result.artifacts),
+                "total_tokens": int(getattr(result, "total_tokens", 0) or 0),
+            }
+        )
         self.session.chained_mission_id = result.mission_id
 
     # ── output ────────────────────────────────────────────────────────
