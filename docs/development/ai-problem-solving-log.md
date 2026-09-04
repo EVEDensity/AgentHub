@@ -76,3 +76,6 @@
 - CLI 权限规则已增加工作区 `.agenthub/permissions.json` 持久化；仅保存工具名和路径 glob，不保存凭据或决策正文。
 - provider nightly 现在分别验证文本流和声明式 tool call；本地无密钥只能验证 `SKIP`，真实结果必须来自 GitHub Secret 运行记录。
 - 新增 `.github/workflows/cli-package-install.yml` 覆盖三平台安装；只有 Windows x64 执行真实 `agenthub --help` 和版本切换，其他平台验证稳定的 unsupported-platform 诊断。
+- 权限同步 API 使用认证用户 ID 作为作用域，并在响应中保留数据库 `source/priority`；同步只能写入 user-owned 规则，不能覆盖组织全局规则。
+- Attempt manifest 只保存 WorkUnit/Artifact 标识、类型、状态、文件列表和摘要 hash，不保存内容；同一文件由多个 WorkUnit 修改时仍以 attempt 聚合恢复。
+- 三种 CLI renderer 通过 reducer 的 `state_to_dict` 与 `state_summary` 共享状态快照，避免 JSONL、Rich、TUI 各自推断终态。
