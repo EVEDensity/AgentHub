@@ -227,6 +227,14 @@ class SlashCommandUnitTests(unittest.TestCase):
         )
         self.assertIn("allowed tools: shell", outputs.text())
 
+    def test_path_permission_commands(self) -> None:
+        session = self._session()
+        outputs = _CapturingOutput()
+        _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
+        assert ("shell", "src/*") in session.allowed_paths
+        _run_slash_command("/permissions", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
+        assert "allowed paths" in outputs.text()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -76,6 +77,10 @@ _HELP_LINES = (
     "/undo          撤销当前已跟踪文件变更（需确认）",
     "/status        显示当前会话设置",
     "/context       查看当前上下文与 token 使用",
+    "/permissions   查看当前会话工具/路径权限",
+    "/allow <tool> <path>  允许工具访问路径（本会话）",
+    "/deny <tool> <path>   拒绝工具访问路径（本会话）",
+    "/clear-permissions    清除本会话权限",
     "/quit          退出",
 )
 
@@ -90,6 +95,8 @@ class ChatSessionState:
     compact_context: str | None = None
     always_allow: bool = False
     allowed_tools: set[str] = field(default_factory=set)
+    allowed_paths: set[tuple[str, str]] = field(default_factory=set)
+    denied_paths: set[tuple[str, str]] = field(default_factory=set)
 
 
 def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
@@ -283,6 +290,21 @@ def _run_slash_command(
             f"compact context: {'active' if session.compact_context else 'inactive'}\n"
             f"resume mission: {session.chained_mission_id or '（无）'}"
         )
+        return True
+    if name == "/permissions":
+        emit(f"allowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}\nallowed paths: {', '.join(f'{t}:{p}' for t,p in sorted(session.allowed_paths)) or '（无）'}")
+        return True
+    if name in ("/allow", "/deny"):
+        if len(args) < 2:
+            emit(f"用法: {name} <tool> <path>")
+            return True
+        rule = (args[0], " ".join(args[1:]))
+        (session.allowed_paths if name == "/allow" else session.denied_paths).add(rule)
+        emit(f"已记录 {rule[0]}:{rule[1]}")
+        return True
+    if name == "/clear-permissions":
+        session.allowed_tools.clear(); session.allowed_paths.clear(); session.denied_paths.clear()
+        emit("已清除本会话权限")
         return True
     if name in ("/diff", "/changes", "/patch"):
         if ui is None:
@@ -507,6 +529,11 @@ def chat_session(
                 return True
             tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or "?")
             if tool_name in session.allowed_tools:
+                return True
+            path = str(decision.get("path") or decision.get("filePath") or decision.get("file_path") or "")
+            if any(t == tool_name and fnmatch.fnmatch(path, pattern) for t, pattern in session.denied_paths):
+                return False
+            if any(t == tool_name and fnmatch.fnmatch(path, pattern) for t, pattern in session.allowed_paths):
                 return True
             reason = str(decision.get("reason") or decision.get("riskSummary") or decision.get("prompt") or "")
             prompt_obj = type(
