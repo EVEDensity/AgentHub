@@ -141,6 +141,13 @@ class RenderTests(unittest.TestCase):
         self.assertIn("deepseek/deepseek-chat", text)
         self.assertIn("workspace", text)
 
+    def test_header_renders_at_narrow_terminal_widths(self) -> None:
+        for width in (40, 80, 120):
+            console = Console(width=width, force_terminal=False)
+            with console.capture() as capture:
+                console.print(ui.render_header(Path("/workspace/project"), "mock", "v4-flash", Path("/workspace/project")))
+            self.assertIn("v4-flash", capture.get())
+
     def test_result_panel_success_uses_green_border(self) -> None:
         panel = ui.render_result_panel(
             _FakeResult(

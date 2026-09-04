@@ -20,7 +20,7 @@
 | 第二阶段 | Mission/Decision/Artifact API 拆分 | partial | 已新增 API 门面，旧客户端仍作为兼容实现 |
 | 第二阶段 | 每个 API 的契约测试 | partial | Transport 和 API 门面已有契约测试，完整 HTTP 边界矩阵仍待补齐 |
 | 第二阶段 | 统一重试、超时、认证 | partial | Transport 已统一基础认证/GET 重试；SSE、写请求和错误映射仍待迁移 |
-| 第三阶段 | 可靠性测试矩阵 | partial | 已覆盖部分 parser、重复/乱序事件；真实 TTY、断线恢复、registry 验收仍缺 |
+| 第三阶段 | 可靠性测试矩阵 | partial | 已覆盖 parser、重复/乱序事件、同名工具 call_id 并发、GET 503 重试及 TTY 40/80/120；真实 TTY、断线期间 Decision、provider 和 registry 验收仍缺 |
 
 ## 不可突破的边界
 

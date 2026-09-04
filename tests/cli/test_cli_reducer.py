@@ -39,3 +39,17 @@ def test_reducer_tracks_verification_status():
     state = reduce_event(SessionViewState(), started)
     assert state.verification_status == "started"
     assert reduce_event(state, completed).verification_status == "completed"
+
+
+def test_reducer_keeps_same_named_tools_separate_by_call_id():
+    state = SessionViewState()
+    for raw in (
+        {"type": "tool.started", "payload": {"toolName": "read", "callId": "c1"}},
+        {"type": "tool.started", "payload": {"toolName": "read", "callId": "c2"}},
+        {"type": "tool.output", "payload": {"toolName": "read", "callId": "c1", "text": "one"}},
+        {"type": "tool.output", "payload": {"toolName": "read", "callId": "c2", "text": "two"}},
+    ):
+        normalized = event(raw)
+        assert normalized is not None
+        state = reduce_event(state, normalized)
+    assert [(tool.call_id, tool.output) for tool in state.tools] == [("c1", "one"), ("c2", "two")]

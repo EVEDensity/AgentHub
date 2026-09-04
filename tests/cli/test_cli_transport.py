@@ -22,3 +22,18 @@ def test_transport_requires_auth_and_merges_headers():
         assert sent["X-Test"] == "1"
     finally:
         transport.close()
+
+
+def test_transport_retries_transient_get_once():
+    transport = HttpTransport("http://test", retries=1)
+    try:
+        transport.set_token("token")
+        first = Mock(spec=httpx.Response)
+        first.status_code = 503
+        second = Mock(spec=httpx.Response)
+        second.status_code = 200
+        transport.client.request = Mock(side_effect=[first, second])
+        assert transport.request("GET", "/health") is second
+        assert transport.client.request.call_count == 2
+    finally:
+        transport.close()
