@@ -78,3 +78,21 @@ def test_normalize_all_mission_control_lifecycle_events():
         event = normalize_event({"eventId": f"e{index}", "eventType": raw_type, "sequence": index, "aggregateType": "mission", "payload": {}})
         assert event is not None
         assert event.event_type == expected
+
+
+def test_empty_delta_is_valid_and_does_not_create_text():
+    event = normalize_event({"eventId": "empty", "type": "assistant.delta", "sequence": 1, "aggregateType": "mission", "payload": {"text": ""}})
+    assert event is not None
+    assert event.text_delta is None
+
+
+def test_reconnect_cursor_accepts_new_event_after_duplicate_batch():
+    cursor = EventCursor()
+    first = normalize_event({"eventId": "e1", "type": "assistant.delta", "sequence": 1, "aggregateType": "mission", "payload": {"text": "a"}})
+    duplicate = normalize_event({"eventId": "e1", "type": "assistant.delta", "sequence": 1, "aggregateType": "mission", "payload": {"text": "a"}})
+    resumed = normalize_event({"eventId": "e2", "type": "assistant.delta", "sequence": 2, "aggregateType": "mission", "payload": {"text": "b"}})
+    assert first is not None and duplicate is not None and resumed is not None
+    assert cursor.accept(first)
+    assert not cursor.accept(duplicate)
+    assert cursor.accept(resumed)
+    assert cursor.sequence == 2

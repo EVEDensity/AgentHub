@@ -22,3 +22,11 @@ def test_all_renderers_share_canonical_reducer_snapshot():
     assert state_summary(state) == "CREATED · tool:file_read output · decision pending · verification:started"
     assert snapshot["assistantText"] == "Inspecting"
     assert snapshot["tools"][0]["output"] == "README"
+
+
+def test_unknown_event_is_diagnostic_only():
+    event = normalize_event({"type": "future.event", "eventId": "x", "sequence": 1, "aggregateType": "mission", "payload": {}})
+    assert event is not None
+    state = reduce_event(SessionViewState(), event)
+    assert state.diagnostics == ("unknown event: future.event",)
+    assert state.assistant_text == ""

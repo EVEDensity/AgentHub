@@ -25,10 +25,11 @@ class SessionViewState:
     pending_decision: dict[str, Any] | None = None
     verification_status: str = ""
     event_count: int = 0
+    diagnostics: tuple[str, ...] = ()
 
 
 def state_to_dict(state: SessionViewState) -> dict[str, Any]:
-    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count}
+    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count, "diagnostics": list(state.diagnostics)}
 
 
 def state_summary(state: SessionViewState) -> str:
@@ -39,6 +40,8 @@ def state_summary(state: SessionViewState) -> str:
         parts.append("decision pending")
     if state.verification_status:
         parts.append(f"verification:{state.verification_status}")
+    if state.diagnostics:
+        parts.append(f"diagnostics:{len(state.diagnostics)}")
     return " · ".join(parts)
 
 
@@ -69,6 +72,8 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     verification = state.verification_status
     if kind in {"verification.started", "verification.completed"}:
         verification = kind.removeprefix("verification.")
+    known = {"assistant.delta", "assistant.completed", "decision.pending", "decision.resolved", "decision.expired", "verification.started", "verification.completed", "mission.created", "mission.completed", "work_unit.claimed", "work_unit.running", "checkpoint.created", "artifact.registered"}
+    diagnostics = state.diagnostics if (kind in known or kind.startswith("tool.")) else state.diagnostics + (f"unknown event: {kind}",)
     return replace(
         state,
         status=status,
@@ -77,6 +82,7 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
         pending_decision=decision,
         verification_status=verification,
         event_count=state.event_count + 1,
+        diagnostics=diagnostics,
     )
 
 
