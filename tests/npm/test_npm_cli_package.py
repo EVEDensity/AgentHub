@@ -121,6 +121,16 @@ class FreezeScriptTests(unittest.TestCase):
         # The frozen binary must pass a closed-loop smoke before publish.
         self.assertIn("--provider mock", workflow)
 
+    def test_workflow_validates_final_tarball_contents_before_publish(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[2]
+            / ".github"
+            / "workflows"
+            / "npm-cli.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Validate staged npm tarballs before publish", workflow)
+        self.assertGreaterEqual(workflow.count("npm pack --dry-run --json"), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
