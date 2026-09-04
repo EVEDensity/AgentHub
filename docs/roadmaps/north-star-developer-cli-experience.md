@@ -215,15 +215,15 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 
 | 范围 | 已落地基线 | 下一验收动作 |
 |---|---|---|
-| SSE/文本/工具流 | SSE cursor/去重/降级、`assistant.delta`、tool lifecycle 事件、batch 重排 | 将真实 `assistant.delta -> tool -> verification` 结果写入 nightly artifact |
-| EventReducer | reducer 已接入 runtime、Rich、TUI、JSONL；canonical `state_to_dict/state_summary` 与 renderer snapshot contract 已建立 | 增加终端快照的视觉基线和未知事件诊断 |
+| SSE/文本/工具流 | SSE cursor/去重/降级、`assistant.delta` 连续输出、Mission Control 生命周期事件规范化、tool lifecycle 事件、batch 重排 | 将真实 `assistant.delta -> tool -> verification` 结果写入 nightly artifact |
+| EventReducer | reducer 已接入 runtime、Rich、TUI、JSONL；canonical `state_to_dict/state_summary` 与 renderer snapshot contract 已建立；普通对话使用只读模型路径 | 增加终端快照的视觉基线和未知事件诊断 |
 | attempt 恢复 | 工作区和 index 快照、冲突预检、新文件删除、同文件多 WorkUnit 聚合测试、内容最小化 manifest、WorkUnit/Artifact provenance | 增加恢复前 UX 预览与更细的事件来源关联 |
 | 权限 | 路径 glob、会话持久化、导入导出、规则删除、匹配预览、认证策略同步 API、服务端来源字段 | 增加组织策略优先级的 CLI 可视化 |
 | provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow | 配置 CI Secret 并保留真实运行证据，补 verification 链路 |
 | npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
 | benchmark | 基础脚本与说明 | 建立版本化任务集和 release 对比阈值 |
 
-下一开发阶段固定为 **Phase A 的真实 provider 完整闭环与 renderer 一致性测试**。只有其 CI 证据稳定后，才进入未完成的 attempt manifest、权限策略编辑和跨设备受认证同步。
+下一开发阶段固定为 **Phase A 的真实 provider 完整闭环与终端视觉基线**。本地事件契约与 renderer 一致性已完成；真实 DeepSeek tool-call、断线恢复和验证链路必须由 CI 证据确认。
 
 ## 8. 质量、安全与文档纪律
 
