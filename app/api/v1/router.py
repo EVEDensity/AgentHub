@@ -9,6 +9,7 @@ from app.api.v1 import (
     agent_catalog,
     chat_mission,
     missions,
+    permissions,
     sessions,
     workspace_members,
 )
@@ -22,6 +23,7 @@ router.include_router(access.router)
 router.include_router(workspace_members.router)
 router.include_router(chat_mission.router)
 router.include_router(sessions.router)
+router.include_router(permissions.router)
 # Versioned skills mount: same implementation as the legacy /api/skills
 # surface, but authenticated (I-7a migration slice).
 router.include_router(skills.router, dependencies=[Depends(get_current_user)])

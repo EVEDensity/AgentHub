@@ -279,8 +279,8 @@ class PermissionManager:
             if self._match_rule(rule, tool_name, path_arg):
                 return PermissionResult(
                     behavior=PermissionBehavior.ALLOW,
-                    reason=f"Matched allow rule: {rule.tool_pattern}",
-                    source=f"always_allow_rule:{rule.source}",
+                    reason=f"Matched allow rule {rule.tool_pattern}:{rule.path_pattern} (source={rule.source}, priority={rule.priority})",
+                    source=f"rule:{rule.source}:allow:{rule.priority}",
                 )
 
         # ── Step 2: Check always_deny rules ───────────────────────────
@@ -288,8 +288,8 @@ class PermissionManager:
             if self._match_rule(rule, tool_name, path_arg):
                 return PermissionResult(
                     behavior=PermissionBehavior.DENY,
-                    reason=f"Matched deny rule: {rule.tool_pattern}",
-                    source=f"always_deny_rule:{rule.source}",
+                    reason=f"Matched deny rule {rule.tool_pattern}:{rule.path_pattern} (source={rule.source}, priority={rule.priority})",
+                    source=f"rule:{rule.source}:deny:{rule.priority}",
                 )
 
         # ── Step 3: Check always_ask rules ────────────────────────────
@@ -297,8 +297,8 @@ class PermissionManager:
             if self._match_rule(rule, tool_name, path_arg):
                 return PermissionResult(
                     behavior=PermissionBehavior.ASK,
-                    reason=f"Matched ask rule: {rule.tool_pattern}",
-                    source=f"always_ask_rule:{rule.source}",
+                    reason=f"Matched ask rule {rule.tool_pattern}:{rule.path_pattern} (source={rule.source}, priority={rule.priority})",
+                    source=f"rule:{rule.source}:ask:{rule.priority}",
                 )
 
         # ── Step 4: Tool requires explicit confirmation ───────────────
