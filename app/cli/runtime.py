@@ -27,9 +27,8 @@ from typing import Any, Iterator
 
 import httpx
 
-from app.cli.sse import iter_sse_frames
-from app.cli.errors import classify_error
 from app.cli.transport import HttpTransport
+from app.cli.sse_client import SseClient
 
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event, reorder_events
@@ -474,6 +473,7 @@ class MissionControlClient:
     def __init__(self, base_url: str, timeout: float = 30.0) -> None:
         self._transport = HttpTransport(base_url, timeout)
         self._client = self._transport.client
+        self._sse = SseClient(self._transport)
 
     def close(self) -> None:
         self._transport.close()
@@ -655,53 +655,16 @@ class MissionControlClient:
         poll_seconds: float = 0.5,
         max_seconds: float = 2.0,
     ) -> Iterator[dict[str, Any]]:
-        """Consume the mission SSE endpoint for a bounded reconnect window.
-
-        The bounded window lets callers handle cancellation and reconnects
-        without a permanently blocked ``read`` on a quiet stream.
-        """
-        timeout = httpx.Timeout(connect=5.0, read=max(1.0, max_seconds + 1), write=10.0, pool=10.0)
-        try:
-            with self._client.stream(
-                "GET",
-                f"/api/v1/missions/{mission_id}/events/stream",
-                headers=self.headers,
-                params={
-                    "afterSequence": after_sequence,
-                    "pollSeconds": poll_seconds,
-                    "maxSeconds": max_seconds,
-                },
-                timeout=timeout,
-            ) as response:
-                response.raise_for_status()
-                yield {
-                    "type": "sse.connected",
-                    "eventId": f"sse-connected-{uuid.uuid4().hex}",
-                    "payload": {"afterSequence": after_sequence},
-                }
-                for frame in iter_sse_frames(response.iter_lines()):
-                    try:
-                        event = json.loads(frame.data)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(event, dict):
-                        if frame.event_id and not event.get("eventId"):
-                            event["eventId"] = frame.event_id
-                        if frame.event and frame.event != "message" and not event.get("type"):
-                            event["type"] = frame.event
-                        yield event
-        except (httpx.HTTPError, RuntimeError) as exc:
-            # Surface transport state through the same event reducer used by
-            # every renderer; the caller can then display reconnecting/polling
-            # instead of appearing frozen.
-            yield {
-                "type": "sse.reconnecting",
-                "eventId": f"sse-reconnecting-{uuid.uuid4().hex}",
-                "payload": {
-                    "errorType": type(exc).__name__,
-                    "errorKind": str(classify_error(exc)),
-                },
-            }
+        """Consume the mission SSE endpoint through the dedicated client."""
+        # Preserve the historical test seam that replaces ``_client``.
+        if self._client is not self._transport.client:
+            self._transport.client = self._client
+        yield from self._sse.stream_events(
+            mission_id,
+            after_sequence=after_sequence,
+            poll_seconds=poll_seconds,
+            max_seconds=max_seconds,
+        )
 
 
 @dataclass
