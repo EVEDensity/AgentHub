@@ -223,7 +223,7 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 | npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
 | benchmark | 基础脚本与说明 | 建立版本化任务集和 release 对比阈值 |
 
-下一开发阶段固定为 **Phase B 的真实会话录制与错误态验收**。普通对话隔离、canonical 状态、生命周期事件、连接降级、Rich/TUI 状态面板和本地流式契约已完成；真实 DeepSeek tool-call、断线恢复和验证链路必须由 CI 证据确认。
+下一开发阶段固定为 **CLI 鲁棒性重构**，执行基线见 [CLI 鲁棒性重构与边界说明](../development/cli-robustness-refactor.md)。当前已完成 SSE 独立分帧、连接状态事件、普通对话流式修复和 Planner 请求字段保留；stream/tools 彻底分离、工具 call_id、Transport/API 拆分、真实 TTY/断线/registry 验收仍未完成。真实 DeepSeek tool-call、断线恢复和验证链路必须由 CI 证据确认。
 
 ## 8. 质量、安全与文档纪律
 
