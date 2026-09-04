@@ -26,7 +26,13 @@ def main() -> int:
         base = "https://api.deepseek.com"
     url = base + "/v1/chat/completions"
     body = {"model": model, "stream": True, "messages": [{"role": "user", "content": "Reply with the word READY."}]}
+    tool_smoke = os.environ.get("AGENTHUB_CLI_PROVIDER_TOOL_SMOKE", "").lower() in {"1", "true", "yes"}
+    if tool_smoke:
+        body["messages"] = [{"role": "user", "content": "Use the file_read tool to inspect README.md."}]
+        body["tools"] = [{"type": "function", "function": {"name": "file_read", "description": "Read a workspace file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}]
+        body["tool_choice"] = "required"
     chunks = 0
+    tool_calls = 0
     try:
         with httpx.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=60) as response:
             response.raise_for_status()
@@ -41,12 +47,18 @@ def main() -> int:
                 except json.JSONDecodeError:
                     continue
                 choices = payload.get("choices") or []
-                if choices and (choices[0].get("delta") or {}).get("content"):
-                    chunks += 1
+                if choices:
+                    delta = choices[0].get("delta") or {}
+                    if delta.get("content"):
+                        chunks += 1
+                    tool_calls += len(delta.get("tool_calls") or [])
     except (httpx.HTTPError, OSError) as exc:
         print(f"FAIL: {provider} streaming request failed ({type(exc).__name__})")
         return 1
-    if chunks == 0:
+    if tool_smoke and tool_calls == 0:
+        print(f"FAIL: {provider} returned no tool call")
+        return 1
+    if not tool_smoke and chunks == 0:
         print(f"FAIL: {provider} returned no text chunks")
         return 1
     print(f"PASS: {provider}/{model} returned {chunks} text chunks")

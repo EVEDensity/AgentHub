@@ -28,3 +28,10 @@ jobs:
           AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
         run: python scripts/cli_provider_smoke.py
+      - name: Tool-call smoke
+        env:
+          AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
+          AGENTHUB_CLI_MODEL: ${{ matrix.model }}
+          AGENTHUB_CLI_PROVIDER_TOOL_SMOKE: "1"
+        run: python scripts/cli_provider_smoke.py
