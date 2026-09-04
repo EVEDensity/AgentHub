@@ -74,6 +74,14 @@
 - frozen/npm 包在干净机器上的服务启动诊断。
 - npm 升级/回滚和跨平台安装的真实 CI 结果（本地仅完成 staging 结构与 `npm pack --dry-run` 门禁）。
 - CLI 权限规则已增加工作区 `.agenthub/permissions.json` 持久化；仅保存工具名和路径 glob，不保存凭据或决策正文。
+
+### 2026-09-04：mock 普通对话无响应
+
+- 症状：`python -m app.cli chat --provider mock` 输入 `hello` 后 Spinner 持续约 80 秒，最终没有正文。
+- 根因：Harness 的文本回调触发 `ModelPort.stream()`；桌面 guidance wrapper 未实现 `stream()`，且 Runner 客户端缺少流事件发布方法。补齐后，流事件 API 又暴露了请求体 forward-ref、异常导入和事件查询上限问题。
+- 解决：实现 guidance stream 转发和 Runner `publish_streaming_event`，显式声明 FastAPI 请求体及异常类型，将幂等查询限制为 200；同时让结果 `workspaceFiles` 仅报告 Mission 实际变更。
+- 验证：`AGENTHUB_CLI_E2E=1 python -m app.cli exec hello --provider mock --mission-timeout 20 --runner-timeout-seconds 20 --json` 返回 `SUCCEEDED`，耗时约 2 秒，`workspaceFiles: []`。
+- 风险：真实供应商的 token 粒度和断线恢复仍需 nightly/联网环境验证。
 - provider nightly 现在分别验证文本流和声明式 tool call；本地无密钥只能验证 `SKIP`，真实结果必须来自 GitHub Secret 运行记录。
 - 新增 `.github/workflows/cli-package-install.yml` 覆盖三平台安装；只有 Windows x64 执行真实 `agenthub --help` 和版本切换，其他平台验证稳定的 unsupported-platform 诊断。
 - 权限同步 API 使用认证用户 ID 作为作用域，并在响应中保留数据库 `source/priority`；同步只能写入 user-owned 规则，不能覆盖组织全局规则。
