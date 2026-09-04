@@ -223,15 +223,8 @@ class _StatusRenderable:
         self._last_status = status
 
     def update_view_state(self, state: Any) -> None:
-        parts: list[str] = []
-        if getattr(state, "tools", None):
-            tool = state.tools[-1]
-            parts.append(f"tool:{tool.name} {tool.status}")
-        if getattr(state, "pending_decision", None) is not None:
-            parts.append("decision pending")
-        if getattr(state, "verification_status", ""):
-            parts.append(f"verification:{state.verification_status}")
-        self._state_hint = " · ".join(parts)
+        from app.cli.reducer import state_summary
+        self._state_hint = state_summary(state)
 
     def __rich_console__(self, console: Console, options: Any) -> Any:
         elapsed = time.monotonic() - self._t0

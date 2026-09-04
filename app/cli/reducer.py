@@ -27,6 +27,21 @@ class SessionViewState:
     event_count: int = 0
 
 
+def state_to_dict(state: SessionViewState) -> dict[str, Any]:
+    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count}
+
+
+def state_summary(state: SessionViewState) -> str:
+    parts = [state.status] if state.status else []
+    if state.tools:
+        parts.append(f"tool:{state.tools[-1].name} {state.tools[-1].status}")
+    if state.pending_decision is not None:
+        parts.append("decision pending")
+    if state.verification_status:
+        parts.append(f"verification:{state.verification_status}")
+    return " · ".join(parts)
+
+
 def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     """Apply one normalized event idempotently at the renderer boundary."""
     kind = event.event_type
@@ -63,4 +78,4 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     )
 
 
-__all__ = ["SessionViewState", "ToolView", "reduce_event"]
+__all__ = ["SessionViewState", "ToolView", "reduce_event", "state_to_dict", "state_summary"]

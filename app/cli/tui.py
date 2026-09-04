@@ -256,9 +256,8 @@ class AgentHubTUI(App[None]):
             self.call_from_thread(self._log, text)
 
         def emit_state(state: SessionViewState) -> None:
-            hint = state.status
-            if state.tools:
-                hint += f" · tool:{state.tools[-1].name} {state.tools[-1].status}"
+            from app.cli.reducer import state_summary
+            hint = state_summary(state)
             self.call_from_thread(self._log, f"  [state] {hint}")
 
         def thread_body() -> None:
