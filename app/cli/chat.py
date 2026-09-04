@@ -670,6 +670,7 @@ def chat_session(
                 session.always_allow = True
 
         compact_context = session.compact_context
+        is_side_effect_task = _likely_side_effect_objective(objective)
         # P0-4: cancel signal — either set externally or via Esc/KbdInt
         cancel_event = threading.Event()
 
@@ -765,6 +766,8 @@ def chat_session(
                 on_view_state=(runner_ctx.on_view_state if runner_ctx is not None else None),
                 on_decision_request=_on_decision,
                 cancel_event=cancel_event,
+                capture_attempt_snapshot=is_side_effect_task,
+                tool_permission_mode=None if is_side_effect_task else "plan",
             )
         except KeyboardInterrupt:
             # P0-4 last-ditch: execute_objective should have caught and

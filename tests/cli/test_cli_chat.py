@@ -112,6 +112,11 @@ class ChatReplTests(unittest.TestCase):
         self.assertIn("创建 hello.py", calls[0]["objective"])
         self.assertIn("mis-1", text)
 
+    def test_normal_conversation_uses_read_only_without_attempt_snapshot(self) -> None:
+        _, _, calls = self._run(["你好", "/quit"])
+        self.assertFalse(calls[0]["capture_attempt_snapshot"])
+        self.assertEqual(calls[0]["tool_permission_mode"], "plan")
+
     def test_chaining_previous_mission(self) -> None:
         _, _, calls = self._run(
             ["第一个任务", "第二个任务", "/quit"]

@@ -939,6 +939,7 @@ def execute_objective(
     on_view_state: Any = None,
     on_decision_request: Any = None,  # P0-3: 逐 tool-call HITL
     cancel_event: Any = None,  # threading.Event → P0-4 Esc 中途取消
+    capture_attempt_snapshot: bool = True,
 ) -> MissionRunResult:
     """Run one objective end to end and return the structured result.
 
@@ -974,8 +975,9 @@ def execute_objective(
         from app.cli.ui import git_head_commit, git_status_snapshot
         baseline_commit = git_head_commit(workspace_root)
         baseline_files = git_status_snapshot(workspace_root)
-        from app.cli.snapshots import capture_attempt
-        attempt_snapshot = capture_attempt(workspace_root, state_dir / "attempt-snapshots")
+        if capture_attempt_snapshot:
+            from app.cli.snapshots import capture_attempt
+            attempt_snapshot = capture_attempt(workspace_root, state_dir / "attempt-snapshots")
     except Exception:  # noqa: BLE001
         pass
     with MissionControlProcess(
