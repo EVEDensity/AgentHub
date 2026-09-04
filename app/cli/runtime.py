@@ -27,6 +27,8 @@ from typing import Any, Iterator
 
 import httpx
 
+from app.cli.sse import iter_sse_frames
+
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event, reorder_events
 from app.cli.reducer import SessionViewState, reduce_event
@@ -664,23 +666,31 @@ class MissionControlClient:
                 timeout=timeout,
             ) as response:
                 response.raise_for_status()
-                data_lines: list[str] = []
-                for line in response.iter_lines():
-                    if not line:
-                        if data_lines:
-                            raw = "\n".join(data_lines)
-                            data_lines = []
-                            try:
-                                event = json.loads(raw)
-                            except json.JSONDecodeError:
-                                continue
-                            if isinstance(event, dict):
-                                yield event
+                yield {
+                    "type": "sse.connected",
+                    "eventId": f"sse-connected-{uuid.uuid4().hex}",
+                    "payload": {"afterSequence": after_sequence},
+                }
+                for frame in iter_sse_frames(response.iter_lines()):
+                    try:
+                        event = json.loads(frame.data)
+                    except json.JSONDecodeError:
                         continue
-                    if line.startswith("data:"):
-                        data_lines.append(line[5:].strip())
-        except (httpx.HTTPError, RuntimeError):
-            return
+                    if isinstance(event, dict):
+                        if frame.event_id and not event.get("eventId"):
+                            event["eventId"] = frame.event_id
+                        if frame.event and frame.event != "message" and not event.get("type"):
+                            event["type"] = frame.event
+                        yield event
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # Surface transport state through the same event reducer used by
+            # every renderer; the caller can then display reconnecting/polling
+            # instead of appearing frozen.
+            yield {
+                "type": "sse.reconnecting",
+                "eventId": f"sse-reconnecting-{uuid.uuid4().hex}",
+                "payload": {"errorType": type(exc).__name__},
+            }
 
 
 @dataclass
