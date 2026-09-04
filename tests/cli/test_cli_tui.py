@@ -103,6 +103,26 @@ class TuiTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(self.calls[1]["resume_mission_id"], "")
 
+    def test_cost_and_context_commands_use_recorded_session(self) -> None:
+        async def scenario() -> None:
+            app = self._make_app()
+            async with app.run_test() as pilot:
+                input_widget = app.query_one("Input")
+                input_widget.value = "任务"
+                await pilot.press("enter")
+                await pilot.pause()
+                input_widget.value = "/cost"
+                await pilot.press("enter")
+                await pilot.pause()
+                input_widget.value = "/context"
+                await pilot.press("enter")
+                await pilot.pause()
+            return app
+
+        app = asyncio.run(scenario())
+        self.assertEqual(len(app.session.session_records), 1)
+        self.assertEqual(app.session.session_records[0]["mission_id"], "mis-1")
+
     def test_running_guard_rejects_second_objective(self) -> None:
         import threading
 
