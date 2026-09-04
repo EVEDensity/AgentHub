@@ -47,6 +47,10 @@ jobs:
           scripts\build-cli-windows.ps1 -OutputDirectory dist
           if (-not (Test-Path 'dist\agenthub.exe')) { throw 'dist\agenthub.exe missing' }
 
+      - name: Validate CLI release prerequisites
+        shell: pwsh
+        run: python scripts/verify_cli_release.py
+
       - name: Frozen binary closed-loop smoke (mock channel, no host Python)
         shell: pwsh
         run: |
