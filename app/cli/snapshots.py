@@ -71,28 +71,41 @@ class AttemptSnapshot:
         changed = []
         if self.post is not None:
             changed = sorted(path for path in set(self.baseline) | set(self.post) if self.baseline.get(path) != self.post.get(path))
+        normalized_units = [
+            {
+                "id": str(item.get("id") or item.get("workUnitId") or ""),
+                "kind": str(item.get("kind") or item.get("workUnitKind") or ""),
+                "status": str(item.get("status") or ""),
+                "changedFiles": sorted(set(item.get("changedFiles") or item.get("changed_files") or [])),
+            }
+            for item in (work_units or [])
+        ]
+        normalized_artifacts = [
+            {
+                "id": str(item.get("id") or item.get("artifactId") or ""),
+                "kind": str(item.get("kind") or item.get("type") or ""),
+                "workUnitId": str(item.get("workUnitId") or item.get("work_unit_id") or ""),
+                "sha256": str(item.get("sha256") or item.get("digest") or ""),
+            }
+            for item in (artifacts or [])
+        ]
+        sources: dict[str, dict[str, list[str]]] = {}
+        for unit in normalized_units:
+            for path in unit["changedFiles"]:
+                sources.setdefault(path, {"workUnitIds": [], "artifactIds": []})["workUnitIds"].append(unit["id"])
+        for artifact in normalized_artifacts:
+            for path, source in sources.items():
+                if artifact["workUnitId"] in source["workUnitIds"]:
+                    source["artifactIds"].append(artifact["id"])
+        changed = sorted(set(self.baseline) | set(self.post or {}))
         payload = {
             "schemaVersion": 1,
             "attemptId": self.id,
             "changedFiles": changed,
-            "workUnits": [
-                {
-                    "id": str(item.get("id") or item.get("workUnitId") or ""),
-                    "kind": str(item.get("kind") or item.get("workUnitKind") or ""),
-                    "status": str(item.get("status") or ""),
-                    "changedFiles": sorted(set(item.get("changedFiles") or item.get("changed_files") or [])),
-                }
-                for item in (work_units or [])
-            ],
-            "artifacts": [
-                {
-                    "id": str(item.get("id") or item.get("artifactId") or ""),
-                    "kind": str(item.get("kind") or item.get("type") or ""),
-                    "workUnitId": str(item.get("workUnitId") or item.get("work_unit_id") or ""),
-                    "sha256": str(item.get("sha256") or item.get("digest") or ""),
-                }
-                for item in (artifacts or [])
-            ],
+            "hashes": {path: {"before": self.baseline.get(path), "after": (self.post or {}).get(path)} for path in changed},
+            "fileSources": sources,
+            "workUnits": normalized_units,
+            "artifacts": normalized_artifacts,
         }
         self.store.mkdir(parents=True, exist_ok=True)
         self.manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

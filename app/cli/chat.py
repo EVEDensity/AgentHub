@@ -489,6 +489,22 @@ def _run_slash_command(
                     return True
                 changed = sorted(set(snapshot.baseline) | set(snapshot.post or {}))
                 emit(f"撤销预览: attempt {latest_snapshot_id} 将恢复 {len(changed)} 个路径")
+                manifest = snapshot.manifest_path
+                if manifest.is_file():
+                    try:
+                        details = json.loads(manifest.read_text(encoding="utf-8"))
+                        hashes = details.get("hashes", {})
+                        sources = details.get("fileSources", {})
+                        for path in changed:
+                            digest = hashes.get(path, {})
+                            source = sources.get(path, {})
+                            before = str(digest.get("before") or "missing")[:12]
+                            after = str(digest.get("after") or "missing")[:12]
+                            units = ",".join(source.get("workUnitIds") or []) or "unknown"
+                            artifacts = ",".join(source.get("artifactIds") or []) or "none"
+                            emit(f"  {path}: {after} -> {before} · workUnits={units} · artifacts={artifacts}")
+                    except (OSError, ValueError, TypeError):
+                        emit("  来源 manifest 不可读，仍保持 fail-closed 预检")
                 answer = read_line("将恢复最近一次 attempt 的文件，继续？ [y/N] ").strip().lower() if read_line else ""
                 if answer not in {"y", "yes"}:
                     emit("已取消撤销")

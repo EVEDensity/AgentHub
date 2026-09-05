@@ -104,3 +104,6 @@ def test_attempt_snapshot_writes_review_manifest(tmp_path: Path):
     assert payload["workUnits"][0]["id"] == "wu-1"
     assert payload["workUnits"][0]["changedFiles"] == ["a.txt"]
     assert payload["artifacts"][0]["workUnitId"] == "wu-1"
+    assert payload["fileSources"]["a.txt"]["workUnitIds"] == ["wu-1"]
+    assert payload["fileSources"]["a.txt"]["artifactIds"] == ["art-1"]
+    assert payload["hashes"]["a.txt"]["before"]
