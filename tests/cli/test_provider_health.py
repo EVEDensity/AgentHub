@@ -44,3 +44,12 @@ def test_registry_roundtrip(tmp_path):
     registry.save(path)
     restored = ProviderHealthRegistry.load(path)
     assert restored.snapshot()[0]["lastError"] == "429"
+
+
+def test_consecutive_failures_raise_alert_and_success_clears_it():
+    health = ProviderHealth("deepseek", "deepseek-v4-flash")
+    for _ in range(3):
+        health.record(success=False, error_kind="http_5xx")
+    assert health.to_dict()["alert"] is True
+    health.record(success=True, text_stream=True)
+    assert health.to_dict()["alert"] is False
