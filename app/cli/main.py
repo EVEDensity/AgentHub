@@ -450,6 +450,19 @@ def cmd_doctor(cwd: Path) -> int:
     checks.append(("model credentials", key_present, "environment variable" if key_present else "not set (mock fallback available)"))
     for name, ok, detail in checks:
         print(f"{'ok' if ok else 'missing':7} {name:20} {detail}")
+    try:
+        from app.cli.provider_health import ProviderHealthRegistry, SUPPORTED_PROVIDER_MATRIX
+        registry = ProviderHealthRegistry.load(state / "provider-health.json")
+        records = registry.snapshot()
+        if records:
+            print("provider matrix:")
+            for record in records:
+                capabilities = ",".join(name for name, enabled in record["capabilities"].items() if enabled) or "none"
+                print(f"{'ok' if record['status'] == 'healthy' else 'degraded':7} {record['provider']}/{record['model']} {capabilities}")
+        else:
+            print(f"provider matrix       {len(SUPPORTED_PROVIDER_MATRIX)} providers declared; no runtime observations")
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"degraded provider matrix unavailable ({type(exc).__name__})")
     return EXIT_OK if all(ok for _, ok, _ in checks) else EXIT_INFRA_ERROR
 
 

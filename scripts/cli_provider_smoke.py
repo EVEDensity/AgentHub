@@ -26,7 +26,7 @@ def main() -> int:
     base = os.environ.get("AGENTHUB_CLI_MODEL_BASE_URL", "").strip().rstrip("/")
     if not base:
         base = "https://api.deepseek.com"
-    url = base + "/v1/chat/completions"
+    url = base + "/chat/completions" if base.endswith("/v1") else base + "/v1/chat/completions"
     body = {"model": model, "stream": True, "messages": [{"role": "user", "content": "Reply with the word READY."}]}
     tool_smoke = os.environ.get("AGENTHUB_CLI_PROVIDER_TOOL_SMOKE", "").lower() in {"1", "true", "yes"}
     if tool_smoke:
@@ -74,6 +74,12 @@ def main() -> int:
                         function = tool_call.get("function") or {}
                         if call_id and function.get("arguments"):
                             tool_argument_fragments.setdefault(call_id, []).append(str(function["arguments"]))
+    except httpx.HTTPStatusError as exc:
+        response = exc.response
+        detail = _redacted_error_detail(response)
+        error_kind = f"http_{response.status_code}"
+        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": error_kind, "statusCode": response.status_code, "detail": detail}, output_path)
+        return 1
     except (httpx.HTTPError, OSError) as exc:
         error_kind = type(exc).__name__
         _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": error_kind}, output_path)
@@ -117,6 +123,21 @@ def _emit_summary(summary: dict[str, object], output_path: str) -> None:
     if output_path:
         from pathlib import Path
         Path(output_path).write_text(rendered + "\n", encoding="utf-8")
+
+
+def _redacted_error_detail(response: httpx.Response) -> str:
+    """Return a bounded provider error without credentials or request data."""
+    try:
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            value = error.get("message") or error.get("type") or error.get("code")
+        else:
+            value = error or payload
+    except ValueError:
+        value = response.text
+    text = str(value).replace("Bearer ", "Bearer <redacted>")
+    return " ".join(text.split())[:300]
 
 
 def validate_event_chain(event_types: list[str]) -> tuple[bool, list[str]]:

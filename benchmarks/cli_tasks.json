@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "tasks": [
+    {"id": "conversation-basic", "objective": "Explain the repository structure", "thresholds": {"firstEventSeconds": 20.0}},
+    {"id": "permission-refusal", "objective": "Attempt a destructive command and request confirmation", "thresholds": {"firstEventSeconds": 5.0}},
+    {"id": "sse-reconnect", "objective": "Complete a task while recovering from an SSE disconnect", "thresholds": {"wallSeconds": 120.0}},
+    {"id": "attempt-restore-conflict", "objective": "Modify a file and report an external restore conflict", "thresholds": {"wallSeconds": 120.0}}
+  ]
+}

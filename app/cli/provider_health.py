@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from pathlib import Path
+import json
 
 SUPPORTED_PROVIDER_MATRIX: dict[str, tuple[str, ...]] = {
     "mock": ("text_stream", "tool_call", "tool_call_stream", "verification"),
@@ -67,6 +69,25 @@ class ProviderHealthRegistry:
 
     def snapshot(self) -> list[dict[str, Any]]:
         return summarize_matrix(list(self._records.values()))
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schemaVersion": 1, "records": self.snapshot()}, indent=2) + "\n", encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: Path) -> "ProviderHealthRegistry":
+        registry = cls()
+        if not path.is_file():
+            return registry
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("schemaVersion") != 1:
+            raise ValueError("unsupported provider health schema")
+        for item in payload.get("records", []):
+            health = registry.get(str(item["provider"]), str(item["model"]))
+            health.failures = int(item.get("failures", 0))
+            health.last_error = item.get("lastError")
+            health.capabilities.update({k: bool(v) for k, v in dict(item.get("capabilities", {})).items() if k in health.capabilities})
+        return registry
 
 
 def summarize_matrix(records: list[ProviderHealth]) -> list[dict[str, Any]]:

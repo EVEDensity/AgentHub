@@ -35,3 +35,12 @@ def test_declared_provider_matrix_has_stream_and_tool_capabilities():
     assert "deepseek" in SUPPORTED_PROVIDER_MATRIX
     assert "text_stream" in SUPPORTED_PROVIDER_MATRIX["deepseek"]
     assert "tool_call" in SUPPORTED_PROVIDER_MATRIX["deepseek"]
+
+
+def test_registry_roundtrip(tmp_path):
+    registry = ProviderHealthRegistry()
+    registry.get("deepseek", "deepseek-v4-flash").record(success=False, error_kind="429")
+    path = tmp_path / "provider-health.json"
+    registry.save(path)
+    restored = ProviderHealthRegistry.load(path)
+    assert restored.snapshot()[0]["lastError"] == "429"
