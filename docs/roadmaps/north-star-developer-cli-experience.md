@@ -220,7 +220,7 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 | attempt 恢复 | 工作区和 index 快照、冲突预检、新文件删除、同文件多 WorkUnit 聚合测试、内容最小化 manifest、WorkUnit/Artifact provenance；`/undo` 支持恢复前 hash/来源预览，`/undo preview` 非交互预览 | 增加更细的事件来源关联、冲突详情展示和恢复后审计状态 |
 | 权限 | 路径 glob、会话持久化、导入导出、规则删除、匹配预览、认证策略同步 API、服务端来源字段；`/permissions explain` 明确 CLI 来源与服务端优先级；同步 API 提供 `policyVersion`/`expectedPolicyVersion` 冲突保护 | 增加组织策略优先级的完整 CLI 可视化和服务端 Contract 能力查询 |
 | provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow；smoke 校验分片 call_id、参数 JSON、事件链并上传脱敏摘要；CLI 已有 provider capability matrix、degraded registry 和重复 call_id 门禁 | 确认仓库 CI 最近运行均为 PASS，并补 `assistant.delta -> tool -> verification` Mission 闭环证据；将 registry 接入 doctor/运行态 |
-| npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
+| npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow；安装 workflow 增加 doctor、目标版本/上一版本/回滚验证和诊断 artifact | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
 | benchmark | `scripts/cli_benchmark.py` 已输出首事件、首 token、首工具反馈、SSE 重连、Decision 拒绝和恢复成功指标；CLI fixture 测试通过 | 建立版本化任务集和 release 对比阈值 |
 
 下一开发阶段固定为 **CLI 鲁棒性重构**，执行基线见 [CLI 鲁棒性重构与边界说明](../development/cli-robustness-refactor.md)。Phase A/B 的源码 fixture 与 reducer/renderer 一致性测试已完成，当前剩余阻断项是真实 DeepSeek `v4-flash`/`v4-pro` tool-call、真实 TTY 录制、真实网络断线恢复及 npm registry 跨平台安装升级回滚；这些必须由 CI 或干净机器证据确认。
