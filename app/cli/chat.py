@@ -92,7 +92,8 @@ _HELP_LINES = (
     "/diff          查看当前工作区 Git diff",
     "/changes       列出当前变更文件",
     "/patch         输出当前变更补丁",
-    "/undo          撤销当前已跟踪文件变更（需确认）",
+    "/undo          撤销当前 attempt 变更（需确认）",
+    "/undo preview  仅预览恢复路径和冲突，不修改文件",
     "/status        显示当前会话设置",
     "/context       查看当前上下文与 token 使用",
     "/permissions   查看当前会话工具/路径权限",
@@ -492,6 +493,7 @@ def _run_slash_command(
             Console().print(ui.render_diff_panel(workspace_root))
         return True
     if name == "/undo":
+        preview_only = bool(args and args[0].lower() in {"preview", "--preview"})
         latest_snapshot_id = str((session.session_records[-1] if session.session_records else {}).get("attempt_snapshot_id") or "")
         if latest_snapshot_id:
             from app.cli.snapshots import load_snapshot
@@ -519,6 +521,9 @@ def _run_slash_command(
                             emit(f"  {path}: {after} -> {before} · workUnits={units} · artifacts={artifacts}")
                     except (OSError, ValueError, TypeError):
                         emit("  来源 manifest 不可读，仍保持 fail-closed 预检")
+                if preview_only:
+                    emit("撤销预览完成；未修改任何文件")
+                    return True
                 answer = read_line("将恢复最近一次 attempt 的文件，继续？ [y/N] ").strip().lower() if read_line else ""
                 if answer not in {"y", "yes"}:
                     emit("已取消撤销")

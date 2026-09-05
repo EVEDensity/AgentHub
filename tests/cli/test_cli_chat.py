@@ -304,6 +304,26 @@ class SlashCommandUnitTests(unittest.TestCase):
             _run_slash_command("/permissions check shell src/a.py", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
             assert "需要 Decision" in output.text()
 
+    def test_undo_preview_does_not_prompt_or_modify(self) -> None:
+        import tempfile
+        from app.cli.snapshots import capture_attempt
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); directory = root / ".agenthub"; directory.mkdir()
+            import subprocess
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "a.txt").write_text("base", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "init"], check=True)
+            snap = capture_attempt(root, directory / "attempt-snapshots")
+            (root / "a.txt").write_text("agent", encoding="utf-8")
+            snap.finalize()
+            self.session = self._session()
+            self.session.session_records = [{"attempt_snapshot_id": snap.id}]
+            output = _CapturingOutput()
+            _run_slash_command("/undo preview", settings=self._settings(), workspace_root=root, directory=directory, session=self.session, emit=output, read_line=None)
+            assert "撤销预览完成" in output.text()
+            assert (root / "a.txt").read_text(encoding="utf-8") == "agent"
+
     def test_permission_import_invalid_schema_preserves_existing_policy(self) -> None:
         import tempfile, json
         with tempfile.TemporaryDirectory() as raw:
