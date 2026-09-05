@@ -54,6 +54,16 @@ def test_connection_and_terminal_error_states_are_shared():
     assert state_summary(state).startswith("FAILED")
 
 
+def test_terminal_cancelled_and_timeout_states_are_canonical():
+    for event_type, expected in (("mission.cancelled", "CANCELLED"), ("mission.timeout", "TIMEOUT")):
+        event = normalize_event({"type": event_type, "payload": {}})
+        assert event is not None
+        state = reduce_event(SessionViewState(), event)
+        snapshot = state_to_dict(state)
+        assert snapshot["status"] == expected
+        assert state_summary(state).startswith(expected)
+
+
 def test_renderers_project_same_snapshot_after_reconnect_and_decision():
     state = SessionViewState()
     for raw in (

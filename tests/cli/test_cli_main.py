@@ -8,6 +8,7 @@ end-to-end mission loop is covered by tests/cli/test_cli_e2e.py.
 from __future__ import annotations
 
 import unittest
+import json
 from pathlib import Path
 
 from app.cli import runtime
@@ -114,6 +115,50 @@ class ExitCodeTests(unittest.TestCase):
         )
         self.assertEqual(status_to_exit_code("RUNNING", True), EXIT_WAIT_TIMEOUT)
         self.assertEqual(status_to_exit_code("VERIFYING", False), EXIT_WAIT_TIMEOUT)
+
+
+class JsonlProjectionTests(unittest.TestCase):
+    def test_jsonl_projection_keeps_stdout_machine_readable(self) -> None:
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+        from app.cli.reducer import SessionViewState
+
+        class Result:
+            status = "SUCCEEDED"
+            exit_code = 0
+            wall_seconds = 0.1
+            total_tokens = 3
+            prompt_tokens = 1
+            completion_tokens = 2
+            artifacts = []
+            workspace_files = []
+            mission_id = "mis-jsonl"
+            objective = "read only"
+            work_unit_statuses = []
+            mission_changed_files = []
+            baseline_commit = None
+            baseline_changed_files = []
+            attempt_snapshot_id = None
+            waited_timeout = False
+            cancelled = False
+
+            def to_json(self):
+                return {"missionId": self.mission_id, "status": self.status, "exitCode": self.exit_code}
+
+        def fake_execute(**kwargs):
+            kwargs["on_event"]({"type": "mission.created", "payload": {}})
+            kwargs["on_view_state"](SessionViewState())
+            return Result()
+
+        out = io.StringIO()
+        with mock.patch("app.cli.main.execute_objective", fake_execute), redirect_stdout(out):
+            code = cli_main(["exec", "read only", "--jsonl", "--provider", "mock"])
+        self.assertEqual(code, 0)
+        rows = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertTrue(rows)
+        self.assertTrue(all(row.get("schemaVersion") == 1 for row in rows))
+        self.assertFalse(any("mission status:" in line for line in out.getvalue().splitlines()))
 
 
 class ContractTests(unittest.TestCase):
