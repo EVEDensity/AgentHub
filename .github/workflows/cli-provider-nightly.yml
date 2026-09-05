@@ -13,9 +13,9 @@ jobs:
       matrix:
         include:
           - provider: deepseek
-            model: v4-flash
+            model: deepseek-v4-flash
           - provider: deepseek
-            model: v4-pro
+            model: deepseek-v4-pro
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,6 +27,7 @@ jobs:
           AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
+          AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/streaming-${{ matrix.model }}.json
         run: python scripts/cli_provider_smoke.py
       - name: Tool-call smoke
         env:
@@ -34,4 +35,12 @@ jobs:
           AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_TOOL_SMOKE: "1"
+          AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/tool-${{ matrix.model }}.json
         run: python scripts/cli_provider_smoke.py
+      - name: Upload redacted provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-provider-${{ matrix.model }}
+          path: ${{ runner.temp }}/*.json
+          if-no-files-found: ignore

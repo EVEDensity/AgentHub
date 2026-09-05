@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 
 import httpx
 
@@ -21,6 +22,7 @@ def main() -> int:
         return 0
     provider = os.environ.get("AGENTHUB_CLI_PROVIDER", "openai").strip()
     model = os.environ.get("AGENTHUB_CLI_MODEL", "").strip() or "v4-flash"
+    output_path = os.environ.get("AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT", "").strip()
     base = os.environ.get("AGENTHUB_CLI_MODEL_BASE_URL", "").strip().rstrip("/")
     if not base:
         base = "https://api.deepseek.com"
@@ -33,6 +35,11 @@ def main() -> int:
         body["tool_choice"] = "required"
     chunks = 0
     tool_calls = 0
+    tool_call_ids: set[str] = set()
+    tool_argument_fragments: dict[str, list[str]] = {}
+    started = time.perf_counter()
+    first_token_seconds: float | None = None
+    error_kind: str | None = None
     try:
         with httpx.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=60) as response:
             response.raise_for_status()
@@ -51,18 +58,59 @@ def main() -> int:
                     delta = choices[0].get("delta") or {}
                     if delta.get("content"):
                         chunks += 1
-                    tool_calls += len(delta.get("tool_calls") or [])
+                        if first_token_seconds is None:
+                            first_token_seconds = time.perf_counter() - started
+                    for tool_call in delta.get("tool_calls") or []:
+                        tool_calls += 1
+                        call_id = str(tool_call.get("id") or "")
+                        if call_id:
+                            tool_call_ids.add(call_id)
+                        function = tool_call.get("function") or {}
+                        if call_id and function.get("arguments"):
+                            tool_argument_fragments.setdefault(call_id, []).append(str(function["arguments"]))
     except (httpx.HTTPError, OSError) as exc:
-        print(f"FAIL: {provider} streaming request failed ({type(exc).__name__})")
+        error_kind = type(exc).__name__
+        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": error_kind}, output_path)
         return 1
     if tool_smoke and tool_calls == 0:
-        print(f"FAIL: {provider} returned no tool call")
+        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": "missing_tool_call", "textChunks": chunks}, output_path)
+        return 1
+    if tool_smoke and not tool_call_ids:
+        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": "missing_call_id", "toolCallChunks": tool_calls}, output_path)
         return 1
     if not tool_smoke and chunks == 0:
-        print(f"FAIL: {provider} returned no text chunks")
+        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": "missing_text_chunks"}, output_path)
         return 1
-    print(f"PASS: {provider}/{model} returned {chunks} text chunks")
+    _emit_summary({
+        "schemaVersion": 1,
+        "status": "PASS",
+        "provider": provider,
+        "model": model,
+        "textChunks": chunks,
+        "toolCallChunks": tool_calls,
+        "toolCallIds": len(tool_call_ids),
+        "toolArgumentsComplete": (bool(tool_argument_fragments) and all(_balanced_json_fragment("".join(parts)) for parts in tool_argument_fragments.values())) if tool_smoke else True,
+        "firstTokenSeconds": first_token_seconds,
+    }, output_path)
     return 0
+
+
+def _balanced_json_fragment(value: str) -> bool:
+    if not value.strip():
+        return False
+    try:
+        json.loads(value)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
+def _emit_summary(summary: dict[str, object], output_path: str) -> None:
+    rendered = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+    print(rendered)
+    if output_path:
+        from pathlib import Path
+        Path(output_path).write_text(rendered + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
