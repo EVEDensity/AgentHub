@@ -218,7 +218,7 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 | SSE/文本/工具流 | SSE cursor/去重/降级、`assistant.delta` 连续输出、Mission Control 生命周期事件规范化、tool lifecycle 事件、batch 重排 | 将真实 `assistant.delta -> tool -> verification` 结果写入 nightly artifact |
 | EventReducer | reducer 已接入 runtime、Rich、TUI、JSONL；canonical `state_to_dict/state_summary` 与 renderer snapshot contract 已建立；普通对话使用只读模型路径；未知事件进入 diagnostics；SSE connected/reconnecting/polling 和 FAILED/CANCELLED/TIMEOUT 统一投影；Rich/TUI 使用可录制状态面板；Phase B 终态、取消、超时、JSONL 机器可读、TTY/无 TTY/宽度自动化测试通过 | 在支持 pseudo-TTY 的 CI runner 上补物理终端录制 |
 | attempt 恢复 | 工作区和 index 快照、冲突预检、新文件删除、同文件多 WorkUnit 聚合测试、内容最小化 manifest、WorkUnit/Artifact provenance；`/undo` 支持恢复前 hash/来源预览，`/undo preview` 非交互预览 | 增加更细的事件来源关联、冲突详情展示和恢复后审计状态 |
-| 权限 | 路径 glob、会话持久化、导入导出、规则删除、匹配预览、认证策略同步 API、服务端来源字段；`/permissions explain` 明确 CLI 来源与服务端优先级 | 增加组织策略优先级的完整 CLI 可视化 |
+| 权限 | 路径 glob、会话持久化、导入导出、规则删除、匹配预览、认证策略同步 API、服务端来源字段；`/permissions explain` 明确 CLI 来源与服务端优先级；同步 API 提供 `policyVersion`/`expectedPolicyVersion` 冲突保护 | 增加组织策略优先级的完整 CLI 可视化和服务端 Contract 能力查询 |
 | provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow；smoke 校验分片 call_id、参数 JSON、事件链并上传脱敏摘要 | 确认仓库 CI 最近运行均为 PASS，并补 `assistant.delta -> tool -> verification` Mission 闭环证据 |
 | npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
 | benchmark | `scripts/cli_benchmark.py` 已输出首事件、首 token、首工具反馈、SSE 重连、Decision 拒绝和恢复成功指标；CLI fixture 测试通过 | 建立版本化任务集和 release 对比阈值 |
