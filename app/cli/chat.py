@@ -156,6 +156,7 @@ def _save_permission_policy(directory: Path, session: ChatSessionState) -> None:
 
 def _permission_payload(session: ChatSessionState) -> dict[str, Any]:
     return {
+        "schemaVersion": 1,
         "version": 1,
         "allowedTools": sorted(session.allowed_tools),
         "allowedPaths": [list(item) for item in sorted(session.allowed_paths)],
