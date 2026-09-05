@@ -801,7 +801,7 @@ def chat_session(
 
         compact_context = session.compact_context
         is_side_effect_task = _likely_side_effect_objective(objective)
-        if not is_side_effect_task and _is_simple_greeting(objective):
+        if output_fn is None and not is_side_effect_task and _is_simple_greeting(objective):
             if _direct_greeting(settings, objective, emit, console):
                 emit()
                 continue
