@@ -785,6 +785,12 @@ def chat_session(
                     text = thinking_filter.feed(text)
                     if not text:
                         return
+                if runner_ctx is not None:
+                    # Keep all streamed text on Rich Live's console. Writing
+                    # through print() while Live is refreshing causes token
+                    # wrapping and apparent event reordering.
+                    runner_ctx.on_text(text)
+                    return
                 # Preserve injected output seams used by tests/callers that
                 # accept only one positional argument.
                 if output_fn is None:
@@ -813,8 +819,9 @@ def chat_session(
                 "mission.lifecycle.succeeded": "mission completed",
             }
             label = labels.get(kind)
-            if label and use_rich and console is not None:
-                console.print(f"  · {label}", style=ui.STYLE_MUTED)
+            # Live owns the terminal during a turn; status is already present
+            # in the spinner view. Printing separate lines here interleaves
+            # with token output and makes the transcript appear out of order.
         try:
             result = execute_objective(
                 objective=objective,
@@ -864,9 +871,10 @@ def chat_session(
 
         if use_rich and console is not None:
             console.print(ui.render_result_panel(result))
-            diff_panel = ui.render_diff_panel(workspace_root)
-            if diff_panel is not None:
-                console.print(diff_panel)
+            if is_side_effect_task:
+                diff_panel = ui.render_diff_panel(workspace_root)
+                if diff_panel is not None:
+                    console.print(diff_panel)
             console.print(ui.format_cost_line(session.session_records))
         else:
             _print_result_compact(result, emit)
