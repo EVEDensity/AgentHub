@@ -32,7 +32,10 @@ def main() -> int:
     if tool_smoke:
         body["messages"] = [{"role": "user", "content": "Use the file_read tool to inspect README.md."}]
         body["tools"] = [{"type": "function", "function": {"name": "file_read", "description": "Read a workspace file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}]
-        body["tool_choice"] = "required"
+        # DeepSeek thinking models reject ``tool_choice=required``.  Keep the
+        # tool schema and let the model choose; missing invocation remains a
+        # hard smoke failure below, so this does not create a false PASS.
+        body["tool_choice"] = "auto"
     chunks = 0
     tool_calls = 0
     tool_call_ids: set[str] = set()

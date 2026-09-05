@@ -58,6 +58,21 @@ def test_provider_smoke_accepts_tool_argument_fragments_without_repeated_id(tmp_
     assert json.loads(output.read_text(encoding="utf-8"))["toolArgumentsComplete"] is True
 
 
+def test_tool_smoke_uses_thinking_compatible_auto_choice(monkeypatch, tmp_path):
+    captured = {}
+    def stream(*args, **kwargs):
+        captured.update(kwargs)
+        return _Stream()
+    monkeypatch.setenv("AGENTHUB_CLI_MODEL_API_KEY", "test-key")
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER", "deepseek")
+    monkeypatch.setenv("AGENTHUB_CLI_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER_TOOL_SMOKE", "1")
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT", str(tmp_path / "auto.json"))
+    with patch("httpx.stream", side_effect=stream):
+        assert cli_provider_smoke.main() == 0
+    assert captured["json"]["tool_choice"] == "auto"
+
+
 def test_validate_event_chain_requires_order_and_all_stages():
     ok, missing = cli_provider_smoke.validate_event_chain([
         "assistant.delta", "tool.started", "tool.output", "checkpoint.created",
