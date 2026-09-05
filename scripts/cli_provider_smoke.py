@@ -49,36 +49,36 @@ def main() -> int:
                     # closed and diagnostics would lose the provider detail.
                     response.read()
                 response.raise_for_status()
-            for line in response.iter_lines():
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    continue
-                try:
-                    payload = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                choices = payload.get("choices") or []
-                if choices:
-                    delta = choices[0].get("delta") or {}
-                    if delta.get("content"):
-                        chunks += 1
-                        if first_token_seconds is None:
-                            first_token_seconds = time.perf_counter() - started
-                    for tool_call in delta.get("tool_calls") or []:
-                        tool_calls += 1
-                        index = tool_call.get("index")
-                        call_id = str(tool_call.get("id") or "")
-                        if not call_id and isinstance(index, int):
-                            call_id = tool_call_indexes.get(index, "")
-                        if call_id:
-                            tool_call_ids.add(call_id)
-                            if isinstance(index, int):
-                                tool_call_indexes[index] = call_id
-                        function = tool_call.get("function") or {}
-                        if call_id and function.get("arguments"):
-                            tool_argument_fragments.setdefault(call_id, []).append(str(function["arguments"]))
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        continue
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = payload.get("choices") or []
+                    if choices:
+                        delta = choices[0].get("delta") or {}
+                        if delta.get("content"):
+                            chunks += 1
+                            if first_token_seconds is None:
+                                first_token_seconds = time.perf_counter() - started
+                        for tool_call in delta.get("tool_calls") or []:
+                            tool_calls += 1
+                            index = tool_call.get("index")
+                            call_id = str(tool_call.get("id") or "")
+                            if not call_id and isinstance(index, int):
+                                call_id = tool_call_indexes.get(index, "")
+                            if call_id:
+                                tool_call_ids.add(call_id)
+                                if isinstance(index, int):
+                                    tool_call_indexes[index] = call_id
+                            function = tool_call.get("function") or {}
+                            if call_id and function.get("arguments"):
+                                tool_argument_fragments.setdefault(call_id, []).append(str(function["arguments"]))
     except httpx.HTTPStatusError as exc:
         response = exc.response
         # Responses created by ``httpx.stream`` are not buffered yet. Read
