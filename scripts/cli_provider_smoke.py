@@ -11,8 +11,13 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import httpx
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
@@ -184,7 +189,6 @@ def _emit_summary(summary: dict[str, object], output_path: str) -> None:
     rendered = json.dumps(summary, ensure_ascii=False, sort_keys=True)
     print(rendered)
     if output_path:
-        from pathlib import Path
         Path(output_path).write_text(rendered + "\n", encoding="utf-8")
     registry_path = os.environ.get("AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT", "").strip()
     if registry_path:

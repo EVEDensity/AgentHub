@@ -95,6 +95,17 @@ def test_tool_loop_replays_tool_result_and_verifies_followup_text(monkeypatch, t
     assert captured[1]["messages"][-1]["role"] == "tool"
 
 
+def test_provider_smoke_can_write_health_registry_from_script_entrypoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTHUB_CLI_MODEL_API_KEY", "test-key")
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER", "deepseek")
+    monkeypatch.setenv("AGENTHUB_CLI_MODEL", "deepseek-v4-flash")
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT", str(tmp_path / "provider-health.json"))
+    with patch("httpx.stream", return_value=_Stream()):
+        assert cli_provider_smoke.main() == 0
+    health = json.loads((tmp_path / "provider-health.json").read_text(encoding="utf-8"))
+    assert health["records"][0]["status"] == "healthy"
+
+
 def test_validate_event_chain_requires_order_and_all_stages():
     ok, missing = cli_provider_smoke.validate_event_chain([
         "assistant.delta", "tool.started", "tool.output", "checkpoint.created",
