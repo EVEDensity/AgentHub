@@ -303,5 +303,15 @@ class SlashCommandUnitTests(unittest.TestCase):
             _run_slash_command("/permissions remove allow shell src/*", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
             _run_slash_command("/permissions check shell src/a.py", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
             assert "需要 Decision" in output.text()
+
+    def test_permission_import_invalid_schema_preserves_existing_policy(self) -> None:
+        import tempfile, json
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw); directory = root / ".agenthub"; session = self._session(); output = _CapturingOutput()
+            _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
+            bad = root / "bad.json"; bad.write_text(json.dumps({"version": 2, "allowedTools": []}), encoding="utf-8")
+            _run_slash_command(f"/permissions import {bad} replace", settings=self._settings(), workspace_root=root, directory=directory, session=session, emit=output)
+            assert ("shell", "src/*") in session.allowed_paths
+            assert "导入失败" in output.text()
 if __name__ == "__main__":
     unittest.main()

@@ -169,6 +169,8 @@ def _load_permission_payload(path: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(payload, dict) or payload.get("version") != 1:
         return None
+    if payload.get("schemaVersion", 1) != 1:
+        return None
     if not all(isinstance(payload.get(key, []), list) for key in ("allowedTools", "allowedPaths", "deniedPaths")):
         return None
     rules = payload.get("allowedPaths", []) + payload.get("deniedPaths", [])
@@ -405,8 +407,20 @@ def _run_slash_command(
             if mode not in {"merge", "replace"}:
                 emit("用法: /permissions import <file> [merge|replace]")
                 return True
+            previous = (
+                set(session.allowed_tools),
+                set(session.allowed_paths),
+                set(session.denied_paths),
+            )
             _apply_permission_payload(session, payload, replace=mode == "replace")
-            _save_permission_policy(directory, session)
+            try:
+                _save_permission_policy(directory, session)
+            except Exception as exc:  # noqa: BLE001 - restore in-memory state
+                session.allowed_tools, session.allowed_paths, session.denied_paths = (
+                    set(previous[0]), set(previous[1]), set(previous[2])
+                )
+                emit(f"导入失败，策略已回滚: {exc}")
+                return True
             emit(f"已导入权限策略 ({mode})")
             return True
         if args and args[0].lower() == "remove":
