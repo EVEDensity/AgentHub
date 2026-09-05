@@ -46,14 +46,14 @@ agenthub "修复登录失败并运行相关测试"
 
 | 能力 | 用户结果 | 实现基线 | 生产验收证据 |
 |---|---|---|---|
-| SSE 流式会话 | 逐 token 文本、工具与验证状态持续可见 | `assistant.delta`、Mission/WorkUnit/tool/decision 事件、游标、去重、轮询降级 | 真实 provider 连续任务、断线恢复记录 |
+| SSE 流式会话 | 逐 token 文本、工具与验证状态持续可见 | `assistant.delta`、Mission/WorkUnit/tool/decision 事件、游标、去重、轮询降级；provider nightly 上传脱敏摘要 | CI Secret 配置后运行两个 DeepSeek 模型并保留 artifact；真实网络断线仍需 runner 证据 |
 | 统一渲染状态 | REPL、Rich/TUI、JSONL 对同一事件得出同一状态 | `EventReducer`、版本化 JSONL 外层记录 | 共用 fixture 三种输出一致，兼容版本测试 |
 | 文件安全 | `/diff`、`/patch`、`/undo` 不误伤用户工作 | attempt 快照、hash/index 冲突预检、fail-closed | 多 WorkUnit 同文件、未跟踪文件、外部并发修改的恢复测试 |
 | 权限与 Decision | 高风险操作能解释、允许、拒绝和回放 | 路径 glob 策略、Decision API、`.agenthub/permissions.json` | 拒绝后无副作用、允许后同 attempt 继续、策略导入导出测试 |
 | 多模型可靠性 | 不同供应商在同一 CLI 体验中可用 | provider 归一化 fixture、DeepSeek `v4-flash`/`v4-pro` nightly | `assistant.delta -> tool -> verification` 真实 nightly 记录 |
 | 安装与升级 | 开发者不依赖仓库 Python 环境使用 CLI | frozen binary、npm wrapper、`doctor`、稳定退出码 | Windows/macOS/Linux 干净机安装；Windows 升级与回滚成功记录 |
 | 可验证交付 | 任务结果可被审查而非只看模型说法 | Artifact/Evidence、独立 Verifier、可审查 patch | mock 与真实仓库任务的证据包和失败路径测试 |
-| 体验质量 | 用户知道系统在做什么、为何暂停、结果如何 | Spinner、计时、Token/成本、错误摘要、benchmark | 首 token、工具反馈、恢复成功率、误操作率的版本趋势 |
+| 体验质量 | 用户知道系统在做什么、为何暂停、结果如何 | Spinner、计时、Token/成本、错误摘要、benchmark；TTY/无 TTY 契约已覆盖 | 首 token、工具反馈、恢复成功率、误操作率的版本趋势；物理终端录制仍待 CI |
 
 ## 4. 目标事件与数据契约
 
@@ -216,10 +216,10 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 | 范围 | 已落地基线 | 下一验收动作 |
 |---|---|---|
 | SSE/文本/工具流 | SSE cursor/去重/降级、`assistant.delta` 连续输出、Mission Control 生命周期事件规范化、tool lifecycle 事件、batch 重排 | 将真实 `assistant.delta -> tool -> verification` 结果写入 nightly artifact |
-| EventReducer | reducer 已接入 runtime、Rich、TUI、JSONL；canonical `state_to_dict/state_summary` 与 renderer snapshot contract 已建立；普通对话使用只读模型路径；未知事件进入 diagnostics；SSE connected/reconnecting/polling 和 FAILED/CANCELLED/TIMEOUT 统一投影；Rich/TUI 使用可录制状态面板 | 增加真实终端录制和更完整的错误态投影 |
+| EventReducer | reducer 已接入 runtime、Rich、TUI、JSONL；canonical `state_to_dict/state_summary` 与 renderer snapshot contract 已建立；普通对话使用只读模型路径；未知事件进入 diagnostics；SSE connected/reconnecting/polling 和 FAILED/CANCELLED/TIMEOUT 统一投影；Rich/TUI 使用可录制状态面板；Phase B 自动化 TTY/无 TTY/宽度测试通过 | 在支持 pseudo-TTY 的 CI runner 上补物理终端录制 |
 | attempt 恢复 | 工作区和 index 快照、冲突预检、新文件删除、同文件多 WorkUnit 聚合测试、内容最小化 manifest、WorkUnit/Artifact provenance | 增加恢复前 UX 预览与更细的事件来源关联 |
 | 权限 | 路径 glob、会话持久化、导入导出、规则删除、匹配预览、认证策略同步 API、服务端来源字段 | 增加组织策略优先级的 CLI 可视化 |
-| provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow | 配置 CI Secret 并保留真实运行证据，补 verification 链路 |
+| provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow；smoke 校验 call_id、参数 JSON 并上传脱敏摘要 | 确认仓库 CI 最近运行均为 PASS，并补 `assistant.delta -> tool -> verification` Mission 闭环证据 |
 | npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
 | benchmark | `scripts/cli_benchmark.py` 已输出首事件、首 token、首工具反馈、SSE 重连、Decision 拒绝和恢复成功指标；CLI fixture 测试通过 | 建立版本化任务集和 release 对比阈值 |
 
