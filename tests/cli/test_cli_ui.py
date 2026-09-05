@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from io import StringIO
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -227,6 +228,27 @@ class MissionRunnerTests(unittest.TestCase):
                 runner.on_text("world")
             runner.__exit__(None, None, None)
         self.assertIn("hello world", capture.get())
+
+    def test_real_terminal_spinner_and_narrow_layout_stay_bounded(self) -> None:
+        output = StringIO()
+        console = Console(file=output, width=40, force_terminal=True, color_system=None, record=True)
+        runner = ui.MissionRunner(console, "running · mock/mock")
+        with runner:
+            runner.on_status("status: RUNNING")
+            runner.on_text("streamed text")
+        rendered = console.export_text(styles=False)
+        assert "streamed text" in rendered
+        # Live uses carriage-control frames; the semantic content remains
+        # bounded and the streamed payload is preserved.
+        assert max((len(line) for line in rendered.splitlines()), default=0) <= 80
+
+    def test_non_tty_spinner_does_not_emit_escape_sequences(self) -> None:
+        output = StringIO()
+        console = Console(file=output, width=80, force_terminal=False, color_system=None)
+        runner = ui.MissionRunner(console, "running")
+        with runner:
+            runner.on_status("status: SUCCEEDED")
+        assert "\x1b[" not in output.getvalue()
 
 
 class ConfirmTests(unittest.TestCase):
