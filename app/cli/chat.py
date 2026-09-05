@@ -110,6 +110,14 @@ def _is_weather_question(objective: str) -> bool:
 def _weather_location(objective: str) -> str:
     """Extract an explicit place without guessing a user's location."""
     text = objective.strip()
+    # Generic questions such as “今天是什么天气” do not identify a place.
+    # Return an empty location so the tool can ask for one instead of sending
+    # words like “是什么” to the geocoder.
+    if re.search(r"^(?:请问|查询|查一下)?\s*(?:今天|当前|现在)?\s*(?:是)?\s*(?:什么|怎样|如何|怎么样|哪儿|哪里)?\s*(?:天气|气温|温度)\s*[吗嘛呢?？。！!]*$", text, re.IGNORECASE):
+        return ""
+    english = re.search(r"(?:weather|temperature)\s+(?:in|at)\s+(.+)$", text, re.IGNORECASE)
+    if english:
+        return re.sub(r"[,.!?]+$", "", english.group(1)).strip()
     match = re.search(r"(.+?)(?:今天|当前|现在)?(?:的)?(?:天气|气温|温度)", text, re.IGNORECASE)
     if match:
         candidate = match.group(1)

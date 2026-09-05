@@ -42,6 +42,8 @@ def test_builtin_fact_questions_are_routed_to_real_tools():
     assert _is_weather_question("上海今天的天气怎么样")
     assert _weather_location("上海今天的天气怎么样") == "上海"
     assert _weather_location("天气 北京") == "北京"
+    assert _weather_location("今天是什么天气") == ""
+    assert _weather_location("what is the weather in Shanghai") == "Shanghai"
 
 
 @dataclass
