@@ -30,6 +30,7 @@ import threading
 import fnmatch
 import json
 import asyncio
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -84,8 +85,13 @@ def _is_simple_greeting(objective: str) -> bool:
 def _is_conversational_objective(objective: str) -> bool:
     if _likely_side_effect_objective(objective):
         return False
-    operational = ("查看", "检查", "分析代码", "读取", "搜索", "列出文件", "测试代码", "调试", "实现", "修复")
+    operational = ("查看", "检查", "分析代码", "读取", "搜索", "列出文件", "测试代码", "调试", "实现", "修复", "天气", "气温", "weather")
     return not any(word in objective for word in operational)
+
+
+def _is_date_question(objective: str) -> bool:
+    text = objective.lower()
+    return any(token in text for token in ("今天是几号", "今天几号", "日期", "what date", "today's date"))
 
 
 def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[..., None], console: Any = None, history: list[dict[str, str]] | None = None) -> tuple[bool, str]:
@@ -812,6 +818,15 @@ def chat_session(
 
         compact_context = session.compact_context
         is_side_effect_task = _likely_side_effect_objective(objective)
+        if output_fn is None and not is_side_effect_task and _is_date_question(objective):
+            answer = datetime.now().astimezone().strftime("今天是 %Y-%m-%d（%A）")
+            if console is not None:
+                console.print(answer, style=ui.STYLE_PRIMARY)
+            else:
+                emit(answer)
+            session.conversation.extend(({"role": "user", "content": objective}, {"role": "assistant", "content": answer}))
+            emit()
+            continue
         if output_fn is None and _is_conversational_objective(objective):
             ok, answer = _direct_greeting(settings, objective, emit, console, session.conversation)
             if ok:
