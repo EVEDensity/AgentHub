@@ -229,6 +229,8 @@ def _save_permission_policy(directory: Path, session: ChatSessionState) -> None:
 
 
 CONVERSATION_FILE_NAME = "conversation.jsonl"
+CONVERSATION_SCHEMA_VERSION = 1
+_NO_RESUME_MARKER = object()
 
 
 def _conversation_path(directory: Path) -> Path:
@@ -243,17 +245,38 @@ def _load_conversation(directory: Path, session: ChatSessionState) -> None:
     except OSError:
         return
     loaded: list[dict[str, str]] = []
-    for line in lines[-100:]:
+    latest_resume: str | None | object = _NO_RESUME_MARKER
+    latest_mission_id = ""
+    for line in lines[-200:]:
         try:
             item = json.loads(line)
         except (TypeError, ValueError):
             continue
-        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+        if not isinstance(item, dict):
+            continue
+        if item.get("recordType") == "session":
+            event = str(item.get("event") or "")
+            if event == "resume.set" and str(item.get("missionId") or "").strip():
+                latest_resume = str(item["missionId"]).strip()
+            elif event == "resume.clear":
+                latest_resume = None
+            continue
+        if item.get("role") not in {"user", "assistant"}:
             continue
         content = str(item.get("content") or "").strip()
         if content:
             loaded.append({"role": str(item["role"]), "content": content})
+            mission_id = str(item.get("missionId") or "").strip()
+            if mission_id:
+                latest_mission_id = mission_id
     session.conversation = loaded[-40:]
+    # A session event is authoritative when present. For files written by
+    # older versions, continue the most recent Mission chain inferred from
+    # message metadata; direct-only conversations remain unchained.
+    if latest_resume is not _NO_RESUME_MARKER:
+        session.chained_mission_id = latest_resume if isinstance(latest_resume, str) else None
+    elif latest_mission_id:
+        session.chained_mission_id = latest_mission_id
 
 
 def _append_conversation(
@@ -269,7 +292,7 @@ def _append_conversation(
     if role not in {"user", "assistant"} or not content:
         return
     item = {
-        "schemaVersion": 1,
+        "schemaVersion": CONVERSATION_SCHEMA_VERSION,
         "role": role,
         "content": content,
         "source": source,
@@ -285,6 +308,30 @@ def _append_conversation(
         return
     session.conversation.append({"role": role, "content": content})
     del session.conversation[:-40]
+
+
+def _append_session_event(
+    directory: Path,
+    *,
+    event: str,
+    mission_id: str = "",
+) -> None:
+    """Persist non-message session state in the shared conversation log."""
+    item: dict[str, Any] = {
+        "schemaVersion": CONVERSATION_SCHEMA_VERSION,
+        "recordType": "session",
+        "event": event,
+        "timestamp": datetime.now().astimezone().isoformat(),
+    }
+    if mission_id:
+        item["missionId"] = mission_id
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with _conversation_path(directory).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+    except OSError:
+        # Session state remains usable in memory when the workspace is read-only.
+        return
 
 
 def _clear_conversation(directory: Path, session: ChatSessionState) -> None:
@@ -494,6 +541,8 @@ def _run_slash_command(
         return True
     if name in ("/new", "/clear", "/unresume"):
         session.chained_mission_id = None
+        if name == "/unresume":
+            _append_session_event(directory, event="resume.clear")
         if name in ("/new", "/clear"):
             session.compact_context = None
             _clear_conversation(directory, session)
@@ -752,6 +801,11 @@ def _run_slash_command(
             emit("用法: /resume <mission_id>")
             return True
         session.chained_mission_id = args[0].strip()
+        _append_session_event(
+            directory,
+            event="resume.set",
+            mission_id=session.chained_mission_id,
+        )
         emit(f"下一轮将链入任务 {session.chained_mission_id} 的上下文")
         return True
     if name == "/missions":
@@ -903,7 +957,8 @@ def chat_session(
                 console.print(answer, style=ui.STYLE_PRIMARY)
             else:
                 emit(answer)
-            session.conversation.extend(({"role": "user", "content": objective}, {"role": "assistant", "content": answer}))
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=answer, source="direct")
             emit()
             continue
         if output_fn is None and _is_conversational_objective(objective):
@@ -1060,6 +1115,8 @@ def chat_session(
             _print_result_compact(result, emit)
         # P0-4: cancelled missions still record but don't chain
         if getattr(result, "cancelled", False) or str(result.status).upper() == "CANCELLED":
+            session.chained_mission_id = None
+            _append_session_event(directory, event="resume.clear")
             emit("  mission 已取消 — 不链入下一轮")
         else:
             session.session_missions.append(result.mission_id)
@@ -1068,6 +1125,11 @@ def chat_session(
             # chain (which now includes this mission) takes over again.
             session.chained_mission_id = result.mission_id
             session.compact_context = None
+            _append_session_event(
+                directory,
+                event="resume.set",
+                mission_id=result.mission_id,
+            )
         _record_session_mission(session, result)
         _append_conversation(
             directory,

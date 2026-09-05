@@ -10,13 +10,22 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
 from app.cli import chat as chat_module
-from app.cli.chat import ChatSessionState, chat_session, _run_slash_command, _likely_side_effect_objective
+from app.cli.chat import (
+    ChatSessionState,
+    _conversation_path,
+    _load_conversation,
+    _run_slash_command,
+    _likely_side_effect_objective,
+    chat_session,
+)
 
 
 def test_normal_conversation_is_not_classified_as_side_effect():
@@ -117,6 +126,76 @@ class ChatReplTests(unittest.TestCase):
         self.assertFalse(calls[0]["capture_attempt_snapshot"])
         self.assertEqual(calls[0]["tool_permission_mode"], "suggest")
 
+    def test_conversation_jsonl_loads_messages_and_resume_state(self) -> None:
+        directory = self.cwd / ".agenthub"
+        directory.mkdir(parents=True)
+        _conversation_path(directory).write_text(
+            '{"role":"user","content":"first","source":"direct"}\n'
+            '{"recordType":"session","event":"resume.set","missionId":"mis-7"}\n'
+            '{"role":"assistant","content":"second","source":"mission","missionId":"mis-7"}\n'
+            '{not-json}\n',
+            encoding="utf-8",
+        )
+        session = ChatSessionState()
+        _load_conversation(directory, session)
+        self.assertEqual(
+            session.conversation,
+            [{"role": "user", "content": "first"}, {"role": "assistant", "content": "second"}],
+        )
+        self.assertEqual(session.chained_mission_id, "mis-7")
+
+    def test_direct_conversation_survives_new_process(self) -> None:
+        first_input = _ScriptedInput(["你好", "/quit"])
+        with redirect_stdout(StringIO()):
+            self.assertEqual(
+                chat_session(
+                    cwd=self.cwd,
+                    provider="mock",
+                    model=None,
+                    base_url=None,
+                    workspace=None,
+                    input_fn=first_input,
+                ),
+                0,
+            )
+        second_input = _ScriptedInput(["/context", "/quit"])
+        output = StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(
+                chat_session(
+                    cwd=self.cwd,
+                    provider="mock",
+                    model=None,
+                    base_url=None,
+                    workspace=None,
+                    input_fn=second_input,
+                ),
+                0,
+            )
+        self.assertIn("conversation messages: 2", output.getvalue())
+        self.assertIn(str(self.cwd / ".agenthub" / "conversation.jsonl"), output.getvalue())
+
+    def test_date_shortcut_is_persisted_as_direct_turn(self) -> None:
+        inputs = _ScriptedInput(["今天是几号", "/quit"])
+        with redirect_stdout(StringIO()):
+            self.assertEqual(
+                chat_session(
+                    cwd=self.cwd,
+                    provider="mock",
+                    model=None,
+                    base_url=None,
+                    workspace=None,
+                    input_fn=inputs,
+                ),
+                0,
+            )
+        session = ChatSessionState()
+        _load_conversation(self.cwd / ".agenthub", session)
+        self.assertEqual(len(session.conversation), 2)
+        self.assertEqual(session.conversation[0]["role"], "user")
+        self.assertIn("今天是几号", session.conversation[0]["content"])
+        self.assertEqual(session.conversation[1]["role"], "assistant")
+
     def test_chaining_previous_mission(self) -> None:
         _, _, calls = self._run(
             ["第一个任务", "第二个任务", "/quit"]
@@ -194,6 +273,26 @@ class SlashCommandUnitTests(unittest.TestCase):
         self.assertTrue(handled)
         self.assertEqual(session.chained_mission_id, "mis-42")
         self.assertIn("mis-42", outputs.text())
+
+    def test_resume_and_unresume_persist_shared_session_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw) / ".agenthub"
+            session = self._session()
+            outputs = _CapturingOutput()
+            _run_slash_command(
+                "/resume mis-42", settings=self._settings(), workspace_root=Path(raw),
+                directory=directory, session=session, emit=outputs,
+            )
+            restored = self._session()
+            _load_conversation(directory, restored)
+            self.assertEqual(restored.chained_mission_id, "mis-42")
+            _run_slash_command(
+                "/unresume", settings=self._settings(), workspace_root=Path(raw),
+                directory=directory, session=session, emit=outputs,
+            )
+            restored = self._session()
+            _load_conversation(directory, restored)
+            self.assertIsNone(restored.chained_mission_id)
 
     def test_resume_requires_id(self) -> None:
         session = self._session()
