@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from typing import Annotated
+import hashlib
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -25,6 +27,7 @@ class PolicyRule(BaseModel):
 class PolicySyncRequest(BaseModel):
     mode: str = Field(default="replace", pattern="^(merge|replace)$")
     rules: list[PolicyRule] = Field(default_factory=list, max_length=200)
+    expected_policy_version: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 def _project(row: dict) -> dict:
@@ -50,13 +53,25 @@ async def get_policy(user: CurrentUser) -> dict:
         "ORDER BY priority DESC, id ASC",
         str(user["id"]),
     )
-    return {"schemaVersion": 1, "userId": str(user["id"]), "rules": [_project(row) for row in rows]}
+    rules = [_project(row) for row in rows]
+    version = hashlib.sha256(json.dumps(rules, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+    return {
+        "schemaVersion": 1,
+        "userId": str(user["id"]),
+        "policyVersion": version,
+        "precedence": ["server_deny", "contract_capability", "server_policy", "cli_deny", "cli_allow", "user_confirmation"],
+        "rules": rules,
+    }
 
 
 @router.put("/policy")
 async def sync_policy(data: PolicySyncRequest, user: CurrentUser) -> dict:
     """Merge or replace user-owned rules; global rules cannot be overwritten."""
     user_id = str(user["id"])
+    if data.expected_policy_version:
+        current = await get_policy(user)
+        if data.expected_policy_version != current["policyVersion"]:
+            raise HTTPException(status_code=409, detail="permission policy version conflict")
     if data.mode == "replace":
         await aexecute("DELETE FROM tool_permission_rules WHERE agent_id=$1 AND source='user'", user_id)
     for rule in data.rules:
