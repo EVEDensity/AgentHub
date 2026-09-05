@@ -22,6 +22,22 @@ from app.cli import ui
 from app.cli.chat import ChatSessionState, _run_slash_command
 
 
+class TestThinkingFilter(unittest.TestCase):
+    def test_hides_thinking_and_preserves_answer(self) -> None:
+        stream = ui.ThinkingFilter()
+        visible = stream.feed("<thi") + stream.feed("nk>reason")
+        visible += stream.feed("ing</think>你好") + stream.flush()
+        self.assertIn("thinking hidden", visible)
+        self.assertIn("你好", visible)
+        self.assertNotIn("reason", visible)
+
+    def test_handles_unclosed_thinking_block(self) -> None:
+        stream = ui.ThinkingFilter()
+        visible = stream.feed("<think>long internal") + stream.flush()
+        self.assertIn("thinking hidden", visible)
+        self.assertNotIn("long internal", visible)
+
+
 @dataclass
 class _FakeResult:
     mission_id: str

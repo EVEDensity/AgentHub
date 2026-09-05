@@ -779,7 +779,12 @@ def chat_session(
         else:
             emit(f"… 运行任务（{settings.provider}/{settings.model}）")
             status_cb = lambda status: emit(f"  [status] {status}")  # noqa: E731
+        thinking_filter = ui.ThinkingFilter() if ui is not None else None
         def text_cb(text: str) -> None:
+                if thinking_filter is not None:
+                    text = thinking_filter.feed(text)
+                    if not text:
+                        return
                 # Preserve injected output seams used by tests/callers that
                 # accept only one positional argument.
                 if output_fn is None:
@@ -835,7 +840,12 @@ def chat_session(
                 # than the removed legacy "plan" mode; passing plan prevents
                 # the runner from starting and yields no assistant.delta.
                 tool_permission_mode=None if is_side_effect_task else "suggest",
+                disable_tools=not is_side_effect_task,
             )
+            if thinking_filter is not None:
+                trailing = thinking_filter.flush()
+                if trailing:
+                    text_cb(trailing)
         except KeyboardInterrupt:
             # P0-4 last-ditch: execute_objective should have caught and
             # turned this into a CANCELLED result; if we're here, the

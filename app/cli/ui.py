@@ -275,6 +275,63 @@ class MissionRunner:
         self._live.stop()
 
 
+class ThinkingFilter:
+    """Incrementally hide model ``<think>`` blocks from the main transcript.
+
+    Thinking is retained for an optional summary, but normal conversation only
+    renders a compact collapsed marker once the block closes. Tags may be
+    split across SSE chunks.
+    """
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._thinking = False
+        self._chars = 0
+        self._reported = False
+
+    def feed(self, text: str) -> str:
+        self._buffer += str(text)
+        out: list[str] = []
+        while self._buffer:
+            if self._thinking:
+                end = self._buffer.find("</think>")
+                if end < 0:
+                    self._chars += len(self._buffer)
+                    self._buffer = ""
+                    break
+                self._chars += end
+                self._buffer = self._buffer[end + len("</think>"):]
+                self._thinking = False
+                if not self._reported:
+                    out.append(f"\n▸ thinking hidden ({self._chars} chars)\n")
+                    self._reported = True
+                continue
+            start = self._buffer.find("<think>")
+            if start < 0:
+                keep = len("<think>") - 1
+                if len(self._buffer) <= keep:
+                    break
+                out.append(self._buffer[:-keep])
+                self._buffer = self._buffer[-keep:]
+                break
+            out.append(self._buffer[:start])
+            self._buffer = self._buffer[start + len("<think>"):]
+            self._thinking = True
+        return "".join(out)
+
+    def flush(self) -> str:
+        if self._thinking:
+            self._chars += len(self._buffer)
+            self._buffer = ""
+            if not self._reported:
+                self._reported = True
+                return f"\n▸ thinking hidden ({self._chars} chars)\n"
+            return ""
+        text = self._buffer
+        self._buffer = ""
+        return text
+
+
 # ── Result panel ───────────────────────────────────────────────────────
 
 

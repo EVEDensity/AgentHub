@@ -291,6 +291,7 @@ def build_server_env(
     project_instructions_file: Path | None = None,
     web_search: bool = False,
     tool_permission_mode: str | None = None,
+    disable_tools: bool = False,
 ) -> dict[str, str]:
     """Env for the isolated SQLite mission-control subprocess.
 
@@ -325,6 +326,7 @@ def build_server_env(
             # Keep the self-hosted adapter path even if a gateway is
             # configured in the ambient environment.
             "AGENTHUB_LLM_GATEWAY": "",
+            "AGENTHUB_DESKTOP_DISABLE_TOOLS": "1" if disable_tools else "0",
         }
     )
     if project_instructions_file is not None:
@@ -372,6 +374,7 @@ class MissionControlProcess:
         project_instructions: str = "",
         web_search: bool = False,
         tool_permission_mode: str | None = None,
+        disable_tools: bool = False,
     ) -> None:
         self._state_dir = state_dir
         self._workspace_root = workspace_root
@@ -381,6 +384,7 @@ class MissionControlProcess:
         self._project_instructions = project_instructions.strip()
         self._web_search = web_search
         self._tool_permission_mode = tool_permission_mode
+        self._disable_tools = disable_tools
         self.port = port or free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self._process: subprocess.Popen[bytes] | None = None
@@ -410,6 +414,7 @@ class MissionControlProcess:
             project_instructions_file=instructions_file,
             web_search=self._web_search,
             tool_permission_mode=self._tool_permission_mode,
+            disable_tools=self._disable_tools,
         )
         log_path = (
             logs_dir / f"mission-control-{time.strftime('%Y%m%d-%H%M%S')}.log"
@@ -929,6 +934,7 @@ def execute_objective(
     on_decision_request: Any = None,  # P0-3: 逐 tool-call HITL
     cancel_event: Any = None,  # threading.Event → P0-4 Esc 中途取消
     capture_attempt_snapshot: bool = True,
+    disable_tools: bool = False,
 ) -> MissionRunResult:
     # CLI argument namespaces may intentionally use None to mean "use the
     # configured default" (notably the no-subcommand chat entrypoint).
@@ -981,7 +987,8 @@ def execute_objective(
         runner_timeout_seconds=runner_timeout_seconds,
         project_instructions=project_instructions,
         web_search=web_search,
-        tool_permission_mode=tool_permission_mode,
+                tool_permission_mode=tool_permission_mode,
+                disable_tools=disable_tools,
     ) as process:
         with MissionControlClient(process.base_url) as client:
             client.login()
@@ -1033,8 +1040,11 @@ def execute_objective(
                     batch = [normalize_event(event) for event in client.stream_events(
                         mission_id,
                         after_sequence=cursor.sequence,
-                        poll_seconds=0.5,
-                        max_seconds=min(2.0, max(0.5, mission_timeout)),
+                        poll_seconds=0.2,
+                        # Keep reconnect windows short so a terminal mission
+                        # is observed promptly instead of waiting through
+                        # several two-second SSE batches.
+                        max_seconds=min(0.75, max(0.25, mission_timeout)),
                     )]
                     for normalized in reorder_events(event for event in batch if event is not None):
                         received = True

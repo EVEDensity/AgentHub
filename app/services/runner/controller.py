@@ -228,7 +228,13 @@ class DesktopLocalRunnerController:
         if model_factory is None:
             model_factory = await resolve_default_model_factory(settings)
 
-        if self._tools is not None:
+        # Plain conversational turns explicitly disable tool schemas so the
+        # model can answer immediately instead of entering the desktop tool
+        # loop. Read-only coding turns keep the normal suggest whitelist.
+        disable_tools = os.environ.get("AGENTHUB_DESKTOP_DISABLE_TOOLS", "0") == "1"
+        if disable_tools:
+            tools = []
+        elif self._tools is not None:
             tools = list(self._tools)
         elif self._max_result_chars is not None:
             tools = build_desktop_runner_tools(
