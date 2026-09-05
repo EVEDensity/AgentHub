@@ -246,6 +246,14 @@ class SlashCommandUnitTests(unittest.TestCase):
         _run_slash_command("/permissions", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
         assert "allowed paths" in outputs.text()
 
+    def test_permission_check_explains_cli_source_and_server_precedence(self) -> None:
+        session = self._session()
+        outputs = _CapturingOutput()
+        _run_slash_command("/allow shell src/*", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
+        _run_slash_command("/permissions explain shell src/main.py", settings=self._settings(), workspace_root=Path("/ws"), directory=Path("/ws/.agenthub"), session=session, emit=outputs)
+        assert "来源: cli-session allow" in outputs.text()
+        assert "服务端仍需再次校验" in outputs.text()
+
     def test_permission_policy_persists_and_reloads(self) -> None:
         import tempfile
         from app.cli.chat import _load_permission_policy

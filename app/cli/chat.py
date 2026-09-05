@@ -422,7 +422,7 @@ def _run_slash_command(
             else:
                 emit("未找到该权限规则")
             return True
-        if args and args[0].lower() == "check":
+        if args and args[0].lower() in {"check", "explain"}:
             if len(args) < 3:
                 emit("用法: /permissions check <tool> <path>")
                 return True
@@ -430,18 +430,19 @@ def _run_slash_command(
             denied = next((pattern for item_tool, pattern in session.denied_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
             allowed = next((pattern for item_tool, pattern in session.allowed_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
             if denied:
-                emit(f"匹配: deny {tool}:{denied}（拒绝优先）")
+                emit(f"来源: cli-session deny\n匹配: deny {tool}:{denied}（拒绝优先，服务端仍可强制拒绝）")
             elif allowed:
-                emit(f"匹配: allow {tool}:{allowed}")
+                emit(f"来源: cli-session allow\n匹配: allow {tool}:{allowed}（服务端仍需再次校验）")
             elif tool in session.allowed_tools:
-                emit(f"匹配: allow-tool {tool}")
+                emit(f"来源: cli-session allow-tool\n匹配: allow-tool {tool}（服务端仍需再次校验）")
             else:
-                emit("匹配: none（需要 Decision 确认）")
+                emit("来源: none\n匹配: none（需要 Decision 确认）")
             return True
         emit(
-            f"allowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}\n"
-            f"allowed paths: {', '.join(f'{t}:{p}' for t,p in sorted(session.allowed_paths)) or '（无）'}\n"
-            f"denied paths: {', '.join(f'{t}:{p}' for t,p in sorted(session.denied_paths)) or '（无）'}"
+            f"allowed tools (cli-session): {', '.join(sorted(session.allowed_tools)) or '（无）'}\n"
+            f"allowed paths (cli-session): {', '.join(f'{t}:{p}' for t,p in sorted(session.allowed_paths)) or '（无）'}\n"
+            f"denied paths (cli-session): {', '.join(f'{t}:{p}' for t,p in sorted(session.denied_paths)) or '（无）'}\n"
+            "note: server policy and Contract capabilities have higher priority"
         )
         return True
     if name in ("/allow", "/deny"):
