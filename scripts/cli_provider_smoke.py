@@ -37,6 +37,7 @@ def main() -> int:
     tool_calls = 0
     tool_call_ids: set[str] = set()
     tool_argument_fragments: dict[str, list[str]] = {}
+    tool_call_indexes: dict[int, str] = {}
     started = time.perf_counter()
     first_token_seconds: float | None = None
     error_kind: str | None = None
@@ -62,9 +63,14 @@ def main() -> int:
                             first_token_seconds = time.perf_counter() - started
                     for tool_call in delta.get("tool_calls") or []:
                         tool_calls += 1
+                        index = tool_call.get("index")
                         call_id = str(tool_call.get("id") or "")
+                        if not call_id and isinstance(index, int):
+                            call_id = tool_call_indexes.get(index, "")
                         if call_id:
                             tool_call_ids.add(call_id)
+                            if isinstance(index, int):
+                                tool_call_indexes[index] = call_id
                         function = tool_call.get("function") or {}
                         if call_id and function.get("arguments"):
                             tool_argument_fragments.setdefault(call_id, []).append(str(function["arguments"]))
@@ -111,6 +117,19 @@ def _emit_summary(summary: dict[str, object], output_path: str) -> None:
     if output_path:
         from pathlib import Path
         Path(output_path).write_text(rendered + "\n", encoding="utf-8")
+
+
+def validate_event_chain(event_types: list[str]) -> tuple[bool, list[str]]:
+    """Validate the minimum Mission Control event progression for Phase A."""
+    required = [
+        "assistant.delta", "tool.started", "tool.output", "checkpoint.created",
+        "verification.started", "verification.completed", "mission.completed",
+    ]
+    missing = [kind for kind in required if kind not in event_types]
+    positions = [event_types.index(kind) for kind in required if kind in event_types]
+    if positions != sorted(positions):
+        return False, missing + ["event_order"]
+    return not missing, missing
 
 
 if __name__ == "__main__":
