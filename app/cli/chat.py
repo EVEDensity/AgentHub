@@ -228,6 +228,81 @@ def _save_permission_policy(directory: Path, session: ChatSessionState) -> None:
         return
 
 
+CONVERSATION_FILE_NAME = "conversation.jsonl"
+
+
+def _conversation_path(directory: Path) -> Path:
+    return directory / CONVERSATION_FILE_NAME
+
+
+def _load_conversation(directory: Path, session: ChatSessionState) -> None:
+    """Load durable conversation messages, tolerating truncated JSONL tails."""
+    path = _conversation_path(directory)
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    loaded: list[dict[str, str]] = []
+    for line in lines[-100:]:
+        try:
+            item = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+            continue
+        content = str(item.get("content") or "").strip()
+        if content:
+            loaded.append({"role": str(item["role"]), "content": content})
+    session.conversation = loaded[-40:]
+
+
+def _append_conversation(
+    directory: Path,
+    session: ChatSessionState,
+    *,
+    role: str,
+    content: str,
+    source: str,
+    mission_id: str = "",
+) -> None:
+    content = str(content or "").strip()
+    if role not in {"user", "assistant"} or not content:
+        return
+    item = {
+        "schemaVersion": 1,
+        "role": role,
+        "content": content,
+        "source": source,
+        "timestamp": datetime.now().astimezone().isoformat(),
+    }
+    if mission_id:
+        item["missionId"] = mission_id
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with _conversation_path(directory).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+    except OSError:
+        return
+    session.conversation.append({"role": role, "content": content})
+    del session.conversation[:-40]
+
+
+def _clear_conversation(directory: Path, session: ChatSessionState) -> None:
+    session.conversation.clear()
+    try:
+        _conversation_path(directory).unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def _conversation_context(session: ChatSessionState) -> str:
+    if not session.conversation:
+        return ""
+    return "\n".join(
+        f"{item['role']}: {item['content']}" for item in session.conversation[-8:]
+    )
+
+
 def _permission_payload(session: ChatSessionState) -> dict[str, Any]:
     return {
         "schemaVersion": 1,
@@ -421,6 +496,7 @@ def _run_slash_command(
         session.chained_mission_id = None
         if name in ("/new", "/clear"):
             session.compact_context = None
+            _clear_conversation(directory, session)
         emit(
             "已清除链式上下文，下一轮从零开始"
             if name in ("/new", "/clear")
@@ -464,9 +540,11 @@ def _run_slash_command(
         tokens = sum(int(r.get("total_tokens") or 0) for r in session.session_records)
         emit(
             f"session missions: {len(session.session_missions)}\n"
+            f"conversation messages: {len(session.conversation)}\n"
             f"tokens observed: {tokens:,}\n"
             f"compact context: {'active' if session.compact_context else 'inactive'}\n"
-            f"resume mission: {session.chained_mission_id or '（无）'}"
+            f"resume mission: {session.chained_mission_id or '（无）'}\n"
+            f"persistent store: {_conversation_path(directory)}"
         )
         return True
     if name == "/permissions":
@@ -741,6 +819,7 @@ def chat_session(
     project_instructions = merge_project_instructions(instruction_paths)
     session = ChatSessionState()
     _load_permission_policy(directory, session)
+    _load_conversation(directory, session)
 
     if use_rich and console is not None:
         # Claude-Code-style header: cwd + git branch + model channel.
@@ -830,7 +909,8 @@ def chat_session(
         if output_fn is None and _is_conversational_objective(objective):
             ok, answer = _direct_greeting(settings, objective, emit, console, session.conversation)
             if ok:
-                session.conversation.extend(({"role": "user", "content": objective}, {"role": "assistant", "content": answer}))
+                _append_conversation(directory, session, role="user", content=objective, source="direct")
+                _append_conversation(directory, session, role="assistant", content=answer, source="direct")
                 emit()
                 continue
         # P0-4: cancel signal — either set externally or via Esc/KbdInt
@@ -933,7 +1013,7 @@ def chat_session(
                 project_instructions=project_instructions,
                 resume_mission_id=session.chained_mission_id or "",
                 web_search=not no_web_search,
-                context_text=compact_context or "",
+                context_text=compact_context or _conversation_context(session),
                 on_status=status_cb,
                 on_text=text_cb,
                 on_event=event_cb,
@@ -989,6 +1069,25 @@ def chat_session(
             session.chained_mission_id = result.mission_id
             session.compact_context = None
         _record_session_mission(session, result)
+        _append_conversation(
+            directory,
+            session,
+            role="user",
+            content=objective,
+            source="mission",
+            mission_id=result.mission_id,
+        )
+        mission_answer = getattr(result, "assistant_text", "") or ""
+        if not mission_answer:
+            mission_answer = "任务已完成，但模型未返回可显示的正文。"
+        _append_conversation(
+            directory,
+            session,
+            role="assistant",
+            content=mission_answer,
+            source="mission",
+            mission_id=result.mission_id,
+        )
         emit()
 
 

@@ -685,6 +685,7 @@ class MissionRunResult:
     mission_id: str
     status: str
     objective: str
+    assistant_text: str = ""
     work_unit_statuses: list[str] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     workspace_files: list[str] = field(default_factory=list)
@@ -705,6 +706,7 @@ class MissionRunResult:
             "missionId": self.mission_id,
             "status": self.status,
             "objective": self.objective,
+            "assistantText": self.assistant_text,
             "workUnitStatuses": self.work_unit_statuses,
             "artifactCount": len(self.artifacts),
             "artifactKinds": sorted({str(a.get("kind")) for a in self.artifacts}),
@@ -971,6 +973,7 @@ def execute_objective(
     baseline_files = frozenset()
     baseline_commit = None
     attempt_snapshot = None
+    assistant_text_seen = ""
     try:
         from app.cli.ui import git_head_commit, git_status_snapshot
         baseline_commit = git_head_commit(workspace_root)
@@ -1052,6 +1055,7 @@ def execute_objective(
                         if not cursor.accept(normalized):
                             continue
                         view_state = reduce_event(view_state, normalized)
+                        assistant_text_seen = view_state.assistant_text
                         if on_view_state is not None:
                             try:
                                 on_view_state(view_state)
@@ -1191,6 +1195,7 @@ def execute_objective(
         mission_id=mission_id,
         status=status,
         objective=objective,
+        assistant_text=assistant_text_seen,
         work_unit_statuses=[str(u.get("status")) for u in units],
         artifacts=artifacts,
         workspace_files=mission_changed_files,
