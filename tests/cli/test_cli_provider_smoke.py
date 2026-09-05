@@ -89,3 +89,19 @@ def test_provider_smoke_reports_http_status_and_redacted_detail(tmp_path: Path, 
     output = capsys.readouterr().out
     assert '"statusCode": 404' in output
     assert "model not found" in output
+
+
+def test_provider_smoke_stream_http_error_does_not_raise_response_not_read(tmp_path: Path, monkeypatch, capsys):
+    import httpx
+    request = httpx.Request("POST", "https://example.test")
+    response = httpx.Response(400, request=request, content=b'{"error":{"message":"invalid model"}}')
+    class ErrorStream(_Stream):
+        def __enter__(self):
+            raise httpx.HTTPStatusError("bad", request=request, response=response)
+    monkeypatch.setenv("AGENTHUB_CLI_MODEL_API_KEY", "test-key")
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER", "deepseek")
+    monkeypatch.setenv("AGENTHUB_CLI_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT", str(tmp_path / "error.json"))
+    with patch("httpx.stream", return_value=ErrorStream()):
+        assert cli_provider_smoke.main() == 1
+    assert "invalid model" in capsys.readouterr().out

@@ -76,6 +76,13 @@ def main() -> int:
                             tool_argument_fragments.setdefault(call_id, []).append(str(function["arguments"]))
     except httpx.HTTPStatusError as exc:
         response = exc.response
+        # Responses created by ``httpx.stream`` are not buffered yet. Read
+        # before inspecting JSON so diagnostics never mask the original HTTP
+        # status with ResponseNotRead.
+        try:
+            response.read()
+        except (AttributeError, httpx.ResponseNotRead, httpx.StreamError):
+            pass
         detail = _redacted_error_detail(response)
         error_kind = f"http_{response.status_code}"
         _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": error_kind, "statusCode": response.status_code, "detail": detail}, output_path)
@@ -134,8 +141,11 @@ def _redacted_error_detail(response: httpx.Response) -> str:
             value = error.get("message") or error.get("type") or error.get("code")
         else:
             value = error or payload
-    except ValueError:
-        value = response.text
+    except (ValueError, httpx.ResponseNotRead):
+        try:
+            value = response.text
+        except httpx.ResponseNotRead:
+            value = "response body unavailable"
     text = str(value).replace("Bearer ", "Bearer <redacted>")
     return " ".join(text.split())[:300]
 
