@@ -120,7 +120,8 @@ class AttemptSnapshot:
         self.metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return AttemptSnapshot(self.id, self.root, self.store, self.baseline, self.baseline_status, self.baseline_index, post, post_index)
 
-    def restore(self) -> tuple[bool, list[str]]:
+    def preview_restore(self) -> tuple[bool, list[str]]:
+        """Check whether restore can proceed without modifying the workspace."""
         if self.post is None:
             return False, ["snapshot is not finalized"]
         conflicts: list[str] = []
@@ -140,6 +141,15 @@ class AttemptSnapshot:
                 conflicts.append(f"index:{path}")
         if conflicts:
             return False, conflicts
+        return True, []
+
+    def restore(self) -> tuple[bool, list[str]]:
+        """Restore only when the complete workspace/index preflight is clean."""
+        ok, conflicts = self.preview_restore()
+        if not ok:
+            return False, conflicts
+        paths = set(self.baseline) | set(self.post or {})
+        post_index = self.post_index or {}
 
         for path in sorted(paths):
             before = self.baseline.get(path)

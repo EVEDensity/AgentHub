@@ -482,6 +482,12 @@ def _run_slash_command(
             from app.cli.snapshots import load_snapshot
             snapshot = load_snapshot(workspace_root, directory / "attempt-snapshots", latest_snapshot_id)
             if snapshot is not None:
+                preview_ok, preview_conflicts = snapshot.preview_restore()
+                if not preview_ok:
+                    emit("撤销预检失败，未修改任何文件。冲突: " + ", ".join(preview_conflicts))
+                    return True
+                changed = sorted(set(snapshot.baseline) | set(snapshot.post or {}))
+                emit(f"撤销预览: attempt {latest_snapshot_id} 将恢复 {len(changed)} 个路径")
                 answer = read_line("将恢复最近一次 attempt 的文件，继续？ [y/N] ").strip().lower() if read_line else ""
                 if answer not in {"y", "yes"}:
                     emit("已取消撤销")

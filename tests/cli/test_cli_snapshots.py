@@ -28,6 +28,8 @@ def test_attempt_snapshot_rejects_external_conflict(tmp_path: Path):
     (tmp_path / "a.txt").write_text("agent", encoding="utf-8")
     snap = snap.finalize()
     (tmp_path / "a.txt").write_text("external", encoding="utf-8")
+    preview_ok, preview_conflicts = snap.preview_restore()
+    assert not preview_ok and preview_conflicts == ["a.txt"]
     ok, conflicts = snap.restore()
     assert not ok and conflicts == ["a.txt"]
 
