@@ -6,6 +6,7 @@ import json
 import shutil
 import subprocess
 import uuid
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,6 +66,22 @@ class AttemptSnapshot:
     @property
     def manifest_path(self) -> Path:
         return self.store / "manifest.json"
+
+    @property
+    def audit_path(self) -> Path:
+        return self.store / "restore-audit.json"
+
+    def _write_audit(self, *, status: str, conflicts: list[str], sources: dict[str, str]) -> None:
+        payload = {
+            "schemaVersion": 1,
+            "attemptId": self.id,
+            "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "conflicts": sorted(set(conflicts)),
+            "sources": dict(sorted(sources.items())),
+        }
+        self.store.mkdir(parents=True, exist_ok=True)
+        self.audit_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def write_manifest(self, *, work_units: list[dict] | None = None, artifacts: list[dict] | None = None) -> Path:
         """Write content-minimized attempt metadata for review and replay."""
@@ -136,8 +153,10 @@ class AttemptSnapshot:
     def preview_restore(self) -> tuple[bool, list[str]]:
         """Check whether restore can proceed without modifying the workspace."""
         if self.post is None:
+            self._write_audit(status="not_finalized", conflicts=["snapshot is not finalized"], sources={})
             return False, ["snapshot is not finalized"]
         conflicts: list[str] = []
+        sources: dict[str, str] = {}
         paths = set(self.baseline) | set(self.post)
         for path in sorted(paths):
             before = self.baseline.get(path)
@@ -147,13 +166,20 @@ class AttemptSnapshot:
                 continue
             if current != after:
                 conflicts.append(path)
+                sources[path] = "external"
+            elif path in self.baseline_status:
+                sources[path] = "user"
+            else:
+                sources[path] = "agent"
         post_index = self.post_index or {}
         current_index = _index_entries(self.root, set(self.baseline_index) | set(post_index))
         for path in sorted(set(self.baseline_index) | set(post_index)):
             if current_index.get(path) != self.baseline_index.get(path) and current_index.get(path) != post_index.get(path):
                 conflicts.append(f"index:{path}")
         if conflicts:
+            self._write_audit(status="conflict", conflicts=conflicts, sources=sources)
             return False, conflicts
+        self._write_audit(status="preview_ok", conflicts=[], sources=sources)
         return True, []
 
     def restore(self) -> tuple[bool, list[str]]:
@@ -177,6 +203,7 @@ class AttemptSnapshot:
                 except FileNotFoundError:
                     pass
                 except OSError:
+                    self._write_audit(status="failed", conflicts=[path], sources={path: "agent"})
                     return False, [path]
             elif target.is_file():
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -188,6 +215,7 @@ class AttemptSnapshot:
                 restore_args.extend(["--worktree", "--", path])
                 proc = subprocess.run(restore_args, capture_output=True, timeout=10)
                 if proc.returncode != 0:
+                    self._write_audit(status="failed", conflicts=[path], sources={path: "agent"})
                     return False, [path]
 
         for path, entry in self.baseline_index.items():
@@ -199,11 +227,14 @@ class AttemptSnapshot:
                 timeout=10,
             )
             if proc.returncode != 0:
+                self._write_audit(status="failed", conflicts=[f"index:{path}"], sources={path: "agent"})
                 return False, [f"index:{path}"]
         for path in set(post_index) - set(self.baseline_index):
             proc = subprocess.run(["git", "-C", str(self.root), "update-index", "--force-remove", "--", path], capture_output=True, timeout=10)
             if proc.returncode != 0 and _index_entries(self.root, {path}).get(path):
+                self._write_audit(status="failed", conflicts=[f"index:{path}"], sources={path: "agent"})
                 return False, [f"index:{path}"]
+        self._write_audit(status="restored", conflicts=[], sources={path: ("user" if path in self.baseline_status else "agent") for path in paths})
         return True, []
 
 

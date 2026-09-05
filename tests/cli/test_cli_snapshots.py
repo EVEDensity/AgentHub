@@ -107,3 +107,72 @@ def test_attempt_snapshot_writes_review_manifest(tmp_path: Path):
     assert payload["fileSources"]["a.txt"]["workUnitIds"] == ["wu-1"]
     assert payload["fileSources"]["a.txt"]["artifactIds"] == ["art-1"]
     assert payload["hashes"]["a.txt"]["before"]
+
+
+def test_restore_writes_audit_with_user_and_agent_sources(tmp_path: Path):
+    import json, subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "a.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True)
+    (tmp_path / "a.txt").write_text("user", encoding="utf-8")
+    snap = capture_attempt(tmp_path, tmp_path / ".snapshots")
+    (tmp_path / "a.txt").write_text("agent", encoding="utf-8")
+    (tmp_path / "new.txt").write_text("agent", encoding="utf-8")
+    snap = snap.finalize()
+    assert snap.restore()[0]
+    audit = json.loads(snap.audit_path.read_text(encoding="utf-8"))
+    assert audit["status"] == "restored"
+    assert audit["sources"]["a.txt"] == "user"
+    assert audit["sources"]["new.txt"] == "agent"
+
+
+def test_restore_audit_marks_external_conflict(tmp_path: Path):
+    import json, subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "a.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True)
+    snap = capture_attempt(tmp_path, tmp_path / ".snapshots")
+    (tmp_path / "a.txt").write_text("agent", encoding="utf-8")
+    snap = snap.finalize()
+    (tmp_path / "a.txt").write_text("external", encoding="utf-8")
+    assert not snap.restore()[0]
+    audit = json.loads(snap.audit_path.read_text(encoding="utf-8"))
+    assert audit["status"] == "conflict"
+    assert audit["sources"]["a.txt"] == "external"
+
+
+def test_attempt_snapshot_restores_git_rename(tmp_path: Path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "old.txt").write_text("base", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "old.txt"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True)
+    snap = capture_attempt(tmp_path, tmp_path / ".snapshots")
+    (tmp_path / "old.txt").rename(tmp_path / "new.txt")
+    snap = snap.finalize()
+    assert snap.restore()[0]
+    assert (tmp_path / "old.txt").read_text(encoding="utf-8") == "base"
+    assert not (tmp_path / "new.txt").exists()
+
+
+def test_attempt_snapshot_detects_index_permission_change(tmp_path: Path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    path = tmp_path / "run.sh"
+    path.write_text("echo ok\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "run.sh"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "init"], check=True)
+    snap = capture_attempt(tmp_path, tmp_path / ".snapshots")
+    try:
+        path.chmod(0o755)
+    except OSError:
+        return
+    subprocess.run(["git", "-C", str(tmp_path), "add", "run.sh"], check=True)
+    snap = snap.finalize()
+    ok, conflicts = snap.preview_restore()
+    assert ok, conflicts
+    assert snap.restore()[0]
+    mode = subprocess.check_output(["git", "-C", str(tmp_path), "ls-files", "-s", "run.sh"], text=True).split()[0]
+    assert mode == "100644"
