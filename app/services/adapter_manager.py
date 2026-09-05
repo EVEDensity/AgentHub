@@ -622,9 +622,9 @@ class OpenAICompatibleAdapter(BaseAdapter):
                 try:
                     arguments = json.loads(args_str) if isinstance(args_str, str) else args_str
                 except (json.JSONDecodeError, TypeError):
-                    arguments = {}
+                    arguments = {"__raw_arguments__": str(args_str)}
                 if name:
-                    converted.append({"name": name, "arguments": arguments})
+                    converted.append({"id": str(tc.get("id") or ""), "name": name, "arguments": arguments})
             # Return in the same format our prompt-based parser expects
             return json.dumps({"tool_calls": converted}, ensure_ascii=False)
 
@@ -797,40 +797,48 @@ class OpenAICompatibleAdapter(BaseAdapter):
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://api.openai.com/v1"
+    env_api_key = "OPENAI_API_KEY"
     supports_stream_usage: bool = True
 
 
 class DeepSeekAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://api.deepseek.com/v1"
+    env_api_key = "DEEPSEEK_API_KEY"
     default_model = "deepseek-v4-flash"
 
 
 class MinimaxAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://api.minimax.chat/v1"
+    env_api_key = "MINIMAX_API_KEY"
     default_model = "abab6-chat"
 
 
 class ZhipuAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://open.bigmodel.cn/api/paas/v4"
+    env_api_key = "ZHIPU_API_KEY"
     default_model = "glm-4"
 
 
 class QwenAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    env_api_key = "DASHSCOPE_API_KEY"
     default_model = "qwen-turbo"
 
 
 class DoubaoAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://ark.cn-beijing.volces.com/api/v3"
+    env_api_key = "DOUBAO_API_KEY"
     default_model = "Doubao-3.5"
 
 
 class CustomOpenAIAdapter(OpenAICompatibleAdapter):
     default_base_url = ""
+    env_api_key = "CUSTOM_API_KEY"
 
 
 class KimiAdapter(OpenAICompatibleAdapter):
     default_base_url = "https://api.moonshot.cn/v1"
+    env_api_key = "KIMI_API_KEY"
     default_model = "kimi-k2.6"
     temperature: float = 1.0
     frequency_penalty: float = 0.0
@@ -838,6 +846,7 @@ class KimiAdapter(OpenAICompatibleAdapter):
 
 
 class AnthropicAdapter(BaseAdapter):
+    env_api_key = "ANTHROPIC_API_KEY"
     default_model = "claude-sonnet-4-6"
 
     async def execute_prompt(self, prompt: str | list[dict[str, Any]], model: str, api_key: str = "", base_url: str = "", *, system_prompt: str = "", **kwargs: Any) -> str:
