@@ -100,7 +100,8 @@ _HELP_LINES = (
     "/permissions export <file>  导出权限策略",
     "/permissions import <file> [merge|replace]  导入权限策略",
     "/permissions remove <allow|deny> <tool> <path>  删除权限规则",
-    "/permissions check <tool> <path>  预览规则匹配",
+    "/permissions check <tool> <path>  预览完整裁决链",
+    "/permissions replay [file]  回放权限审计",
     "/allow <tool> <path>  允许工具访问路径（本会话）",
     "/deny <tool> <path>   拒绝工具访问路径（本会话）",
     "/clear-permissions    清除本会话权限",
@@ -445,14 +446,31 @@ def _run_slash_command(
             tool, path = args[1], " ".join(args[2:])
             denied = next((pattern for item_tool, pattern in session.denied_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
             allowed = next((pattern for item_tool, pattern in session.allowed_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
-            if denied:
-                emit(f"来源: cli-session deny\n匹配: deny {tool}:{denied}（拒绝优先，服务端仍可强制拒绝）")
-            elif allowed:
-                emit(f"来源: cli-session allow\n匹配: allow {tool}:{allowed}（服务端仍需再次校验）")
-            elif tool in session.allowed_tools:
-                emit(f"来源: cli-session allow-tool\n匹配: allow-tool {tool}（服务端仍需再次校验）")
-            else:
-                emit("来源: none\n匹配: none（需要 Decision 确认）")
+            local = "deny" if denied else "allow" if allowed or tool in session.allowed_tools else "not_applicable"
+            legacy = (f"来源: cli-session deny\n匹配: deny {tool}:{denied}" if denied else
+                      f"来源: cli-session allow\n匹配: allow {tool}:{allowed}" if allowed else
+                      f"来源: cli-session allow-tool\n匹配: allow-tool {tool}" if tool in session.allowed_tools else
+                      "来源: none\n匹配: none")
+            emit("裁决链（高优先级到低优先级）:\n"
+                 "  server_deny: unknown（需 Mission Control 校验）\n"
+                 "  contract_capability: unknown（需 Contract 能力查询）\n"
+                 "  server_policy: unknown（需服务端策略查询）\n"
+                 f"  cli_session: {local}"
+                 + (f"（匹配 {denied or allowed}）" if denied or allowed else "")
+                 + "\n  user_confirmation: pending（服务端未知时默认拒绝）\n" + legacy)
+            return True
+        if args and args[0].lower() == "replay":
+            target = Path(args[1]).expanduser() if len(args) > 1 else directory / "permission-audit.jsonl"
+            if not target.is_file():
+                emit(f"权限审计文件不存在: {target}")
+                return True
+            try:
+                lines = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines() if line.strip()]
+                emit("权限审计回放:")
+                for item in lines:
+                    emit(f"  {item.get('timestamp', '?')} · {item.get('tool', '?')}:{item.get('path', '?')} · {item.get('decision', '?')} · {item.get('source', '?')}")
+            except (OSError, ValueError, TypeError):
+                emit("权限审计回放失败：文件格式无效")
             return True
         emit(
             f"allowed tools (cli-session): {', '.join(sorted(session.allowed_tools)) or '（无）'}\n"
