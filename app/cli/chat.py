@@ -81,7 +81,14 @@ def _is_simple_greeting(objective: str) -> bool:
     return objective.strip().lower() in {"hello", "hi", "你好", "您好", "嗨"}
 
 
-def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[..., None], console: Any = None) -> bool:
+def _is_conversational_objective(objective: str) -> bool:
+    if _likely_side_effect_objective(objective):
+        return False
+    operational = ("查看", "检查", "分析代码", "读取", "搜索", "列出文件", "测试代码", "调试", "实现", "修复")
+    return not any(word in objective for word in operational)
+
+
+def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[..., None], console: Any = None, history: list[dict[str, str]] | None = None) -> tuple[bool, str]:
     """Use the provider's text stream for a plain greeting.
 
     Greetings must not enter the desktop task planner: that path may emit
@@ -92,8 +99,11 @@ def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[
     async def run() -> str:
         adapter = adapter_manager.get_adapter(settings.provider)
         chunks: list[str] = []
+        prompt = objective
+        if history:
+            prompt = "\n".join(f"{item['role']}: {item['content']}" for item in history[-8:]) + f"\nuser: {objective}"
         stream = adapter.stream_prompt(
-            objective,
+            prompt,
             settings.model,
             settings.api_key,
             settings.base_url,
@@ -108,7 +118,7 @@ def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[
         response = asyncio.run(run())
     except Exception as exc:  # noqa: BLE001 - fall back to the durable mission path
         emit(f"  direct chat unavailable ({type(exc).__name__}); using mission runner")
-        return False
+        return False, ""
     # Remove reasoning and provider-specific tool markup before displaying.
     if ui is not None:
         filter_ = ui.ThinkingFilter()
@@ -127,7 +137,7 @@ def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[
         console.print(visible, style=ui.STYLE_PRIMARY)
     else:
         emit(visible)
-    return True
+    return True, visible
 _BANNER_LINES = (
     "AgentHub interactive session — engine: desktop runner + verifier gate",
     "Type an objective to run one mission; /help for commands; /quit to exit.",
@@ -177,6 +187,7 @@ class ChatSessionState:
     allowed_paths: set[tuple[str, str]] = field(default_factory=set)
     denied_paths: set[tuple[str, str]] = field(default_factory=set)
     last_thinking: str = ""
+    conversation: list[dict[str, str]] = field(default_factory=list)
 
 
 def _load_permission_policy(directory: Path, session: ChatSessionState) -> None:
@@ -675,7 +686,7 @@ def _run_slash_command(
             return True
         _print_missions(missions, emit)
         return True
-    return False
+        return False, ""
 
 
 def chat_session(
@@ -801,8 +812,10 @@ def chat_session(
 
         compact_context = session.compact_context
         is_side_effect_task = _likely_side_effect_objective(objective)
-        if output_fn is None and not is_side_effect_task and _is_simple_greeting(objective):
-            if _direct_greeting(settings, objective, emit, console):
+        if output_fn is None and _is_conversational_objective(objective):
+            ok, answer = _direct_greeting(settings, objective, emit, console, session.conversation)
+            if ok:
+                session.conversation.extend(({"role": "user", "content": objective}, {"role": "assistant", "content": answer}))
                 emit()
                 continue
         # P0-4: cancel signal — either set externally or via Esc/KbdInt
