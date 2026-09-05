@@ -447,10 +447,10 @@ def _run_slash_command(
             denied = next((pattern for item_tool, pattern in session.denied_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
             allowed = next((pattern for item_tool, pattern in session.allowed_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
             local = "deny" if denied else "allow" if allowed or tool in session.allowed_tools else "not_applicable"
-            legacy = (f"来源: cli-session deny\n匹配: deny {tool}:{denied}" if denied else
-                      f"来源: cli-session allow\n匹配: allow {tool}:{allowed}" if allowed else
+            legacy = (f"来源: cli-session deny\n匹配: deny {tool}:{denied}（服务端仍需再次校验）" if denied else
+                      f"来源: cli-session allow\n匹配: allow {tool}:{allowed}（服务端仍需再次校验）" if allowed else
                       f"来源: cli-session allow-tool\n匹配: allow-tool {tool}" if tool in session.allowed_tools else
-                      "来源: none\n匹配: none")
+                      "来源: none\n匹配: none（需要 Decision 确认）")
             emit("裁决链（高优先级到低优先级）:\n"
                  "  server_deny: unknown（需 Mission Control 校验）\n"
                  "  contract_capability: unknown（需 Contract 能力查询）\n"
