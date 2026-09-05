@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -198,6 +199,53 @@ def test_openai_stream_rejects_before_network(monkeypatch) -> None:
 
     with pytest.raises(VisionUnsupportedError):
         asyncio.run(drain_gated())
+
+
+def test_openai_stream_does_not_cut_reasoning_at_fixed_1500_chars(monkeypatch) -> None:
+    """Reasoning length is governed by provider tokens, never a char cap."""
+
+    reasoning = "推" * 1601
+
+    class _StreamResponse:
+        status_code = 200
+
+        async def aiter_lines(self):
+            yield 'data: ' + json.dumps({
+                "choices": [{"delta": {"reasoning_content": reasoning}}],
+            }, ensure_ascii=False)
+            yield 'data: ' + json.dumps({
+                "choices": [{"delta": {"content": "最终答案"}}],
+            }, ensure_ascii=False)
+            yield "data: [DONE]"
+
+        async def aread(self):
+            return b""
+
+    class _StreamContext:
+        async def __aenter__(self):
+            return _StreamResponse()
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _Client:
+        def stream(self, *args, **kwargs):
+            return _StreamContext()
+
+    monkeypatch.setattr(am, "ENABLE_REAL_LLM", True)
+    monkeypatch.setattr(am, "_get_client", lambda: _Client())
+    adapter = OpenAICompatibleAdapter()
+
+    async def collect() -> list[str]:
+        return [chunk async for chunk in adapter.stream_prompt(
+            "weather", "deepseek-v4-flash", api_key="unit-key"
+        )]
+
+    chunks = asyncio.run(collect())
+    rendered = "".join(chunks)
+    assert reasoning in rendered
+    assert "最终答案" in rendered
+    assert "思考已达到上限" not in rendered
 
 
 def test_anthropic_execute_converts_blocks_for_registered_vision(monkeypatch) -> None:

@@ -689,10 +689,6 @@ class OpenAICompatibleAdapter(BaseAdapter):
         self.last_usage = {}  # reset per call so stale data never leaks
         full_text = ""
         reasoning_open = False
-        # 防思考死循环：超过 1500 字符强制关闭 think 块，让模型进入正文。
-        _MAX_REASONING_CHARS = 1500
-        reasoning_chars = 0
-        reasoning_truncated = False
         client = _get_client()
         # Streaming uses raw client.stream (not _retry_request) because the
         # SSE body is consumed incrementally.  Retry on transient connection
@@ -725,26 +721,18 @@ class OpenAICompatibleAdapter(BaseAdapter):
                         reasoning = delta.get("reasoning_content", "")
                         content = delta.get("content", "")
                         if reasoning:
-                            if not reasoning_truncated:
-                                remaining = _MAX_REASONING_CHARS - reasoning_chars
-                                if remaining > 0:
-                                    chunk = reasoning[:remaining]
-                                    if not reasoning_open:
-                                        reasoning_open = True
-                                        full_text += "<think>"
-                                        yield "<think>"
-                                    full_text += chunk
-                                    yield chunk
-                                    reasoning_chars += len(chunk)
-                                if reasoning_chars >= _MAX_REASONING_CHARS:
-                                    reasoning_truncated = True
-                                    close_hint = (
-                                        "\n</think>\n\n"
-                                        "【思考已达到上限，请直接给出最终回复，不要再继续思考。】\n\n"
-                                    )
-                                    full_text += close_hint
-                                    yield close_hint
-                                    reasoning_open = False
+                            # Do not impose a client-side character limit on
+                            # reasoning. The provider's actual token budget and
+                            # finish reason are the source of truth; cutting a
+                            # stream at an arbitrary character count can drop
+                            # the final answer entirely (notably around 1500
+                            # characters for DeepSeek reasoning responses).
+                            if not reasoning_open:
+                                reasoning_open = True
+                                full_text += "<think>"
+                                yield "<think>"
+                            full_text += reasoning
+                            yield reasoning
                         if content:
                             if reasoning_open:
                                 reasoning_open = False
