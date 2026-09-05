@@ -77,6 +77,7 @@ def test_provider_smoke_reports_http_status_and_redacted_detail(tmp_path: Path, 
             request = httpx.Request("POST", "https://example.test")
             raise httpx.HTTPStatusError("bad", request=request, response=self)
         def iter_lines(self): return iter(())
+        def read(self): return None
     class ErrorStream(_Stream):
         def __enter__(self): return ErrorResponse()
     import httpx

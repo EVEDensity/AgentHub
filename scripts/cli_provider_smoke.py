@@ -42,8 +42,13 @@ def main() -> int:
     first_token_seconds: float | None = None
     error_kind: str | None = None
     try:
-        with httpx.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=60) as response:
-            response.raise_for_status()
+            with httpx.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=60) as response:
+                if response.status_code >= 400:
+                    # Buffer error responses while the streaming context is
+                    # still open; after raise_for_status the body may be
+                    # closed and diagnostics would lose the provider detail.
+                    response.read()
+                response.raise_for_status()
             for line in response.iter_lines():
                 if not line.startswith("data:"):
                     continue
