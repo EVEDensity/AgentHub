@@ -664,6 +664,7 @@ def chat_session(
         console.print(
             ui.render_header(cwd, settings.provider, settings.model, workspace_root)
         )
+        _print_provider_health(directory, settings.provider, settings.model, emit=console.print)
         if instruction_paths:
             console.print(
                 "agents.md: "
@@ -684,6 +685,7 @@ def chat_session(
             f"model: {settings.provider} / {settings.model}   "
             f"workspace: {workspace_root}"
         )
+        _print_provider_health(directory, settings.provider, settings.model, emit=emit)
         if instruction_paths:
             emit(
                 "agents.md: "
@@ -866,6 +868,17 @@ def chat_session(
             session.compact_context = None
         _record_session_mission(session, result)
         emit()
+
+
+def _print_provider_health(directory: Path, provider: str, model: str, *, emit: Callable[..., None]) -> None:
+    try:
+        from app.cli.provider_health import ProviderHealthRegistry
+        record = next((item for item in ProviderHealthRegistry.load(directory / "provider-health.json").snapshot() if item["provider"] == provider and item["model"] == model), None)
+        if record and record["status"] == "degraded":
+            suffix = " ALERT" if record.get("alert") else ""
+            emit(f"provider: degraded{suffix} · failures={record['failures']} · lastError={record.get('lastError') or 'unknown'}")
+    except (OSError, ValueError, TypeError):
+        return
 
 
 def run_chat_cli(args: Any) -> int:

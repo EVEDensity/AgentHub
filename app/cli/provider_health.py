@@ -33,22 +33,29 @@ class ProviderHealth:
         "verification": False,
     })
     executed_call_ids: set[str] = field(default_factory=set, repr=False)
+    consecutive_failures: int = 0
 
     @property
     def status(self) -> str:
         return "degraded" if self.failures else "healthy"
 
+    @property
+    def alert(self) -> bool:
+        return self.consecutive_failures >= 3
+
     def record(self, *, success: bool, error_kind: str | None = None, **capabilities: bool) -> None:
         if success:
             self.failures = 0
+            self.consecutive_failures = 0
             self.last_error = None
             self.capabilities.update({k: bool(v) for k, v in capabilities.items() if k in self.capabilities})
         else:
             self.failures += 1
+            self.consecutive_failures += 1
             self.last_error = error_kind or "unknown"
 
     def to_dict(self) -> dict[str, Any]:
-        return {"provider": self.provider, "model": self.model, "status": self.status, "failures": self.failures, "lastError": self.last_error, "capabilities": dict(self.capabilities), "toolCalls": len(self.executed_call_ids)}
+        return {"provider": self.provider, "model": self.model, "status": self.status, "failures": self.failures, "consecutiveFailures": self.consecutive_failures, "alert": self.alert, "lastError": self.last_error, "capabilities": dict(self.capabilities), "toolCalls": len(self.executed_call_ids)}
 
     def accept_call(self, call_id: str) -> bool:
         """Return false for duplicate call IDs (idempotent tool execution gate)."""
@@ -85,6 +92,7 @@ class ProviderHealthRegistry:
         for item in payload.get("records", []):
             health = registry.get(str(item["provider"]), str(item["model"]))
             health.failures = int(item.get("failures", 0))
+            health.consecutive_failures = int(item.get("consecutiveFailures", health.failures))
             health.last_error = item.get("lastError")
             health.capabilities.update({k: bool(v) for k, v in dict(item.get("capabilities", {})).items() if k in health.capabilities})
         return registry

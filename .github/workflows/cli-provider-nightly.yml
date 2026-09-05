@@ -28,6 +28,7 @@ jobs:
           AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/streaming-${{ matrix.model }}.json
+          AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT: ${{ runner.temp }}/provider-health.json
         run: python scripts/cli_provider_smoke.py
       - name: Tool-call smoke
         env:
@@ -36,6 +37,7 @@ jobs:
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_TOOL_SMOKE: "1"
           AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/tool-${{ matrix.model }}.json
+          AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT: ${{ runner.temp }}/provider-health.json
         run: python scripts/cli_provider_smoke.py
       - name: Upload redacted provider evidence
         if: always()

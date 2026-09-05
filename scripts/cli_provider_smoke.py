@@ -138,6 +138,14 @@ def _emit_summary(summary: dict[str, object], output_path: str) -> None:
     if output_path:
         from pathlib import Path
         Path(output_path).write_text(rendered + "\n", encoding="utf-8")
+    registry_path = os.environ.get("AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT", "").strip()
+    if registry_path:
+        from app.cli.provider_health import ProviderHealthRegistry
+        path = Path(registry_path)
+        registry = ProviderHealthRegistry.load(path)
+        health = registry.get(str(summary.get("provider", "")), str(summary.get("model", "")))
+        health.record(success=summary.get("status") == "PASS", error_kind=str(summary.get("errorType") or "provider_failure"), text_stream=bool(summary.get("textChunks")), tool_call=bool(summary.get("toolCallChunks")), tool_call_stream=bool(summary.get("toolCallChunks")), verification=False)
+        registry.save(path)
 
 
 def _redacted_error_detail(response: httpx.Response) -> str:
