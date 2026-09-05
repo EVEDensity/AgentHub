@@ -20,7 +20,11 @@ boundary. It is not the permanent home of every Agent feature.
   model API key is
   env-only and never written to disk; without a key the CLI falls back
   to the mock provider. Covered by `tests/cli/` (unit + E2E gated by
-  `AGENTHUB_CLI_E2E=1`).
+  `AGENTHUB_CLI_E2E=1`). The interactive `chat` command persists direct
+  user/assistant turns and session resume markers in the workspace-local
+  `.agenthub/conversation.jsonl`; `/context`, `/resume`, and subsequent
+  turns all read and update this same append-only JSONL store. `/new` and
+  `/clear` intentionally remove it.
 
 * `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
   transition models.
@@ -301,4 +305,3 @@ new business state to the legacy LangGraph task state machine.
 2. Append an event for every durable state transition.
 3. Add domain, persistence, and API tests as applicable.
 4. Update the nearest contract or ADR when ownership changes.
-
