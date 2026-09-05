@@ -20,6 +20,7 @@ working unchanged.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -288,6 +289,7 @@ class ThinkingFilter:
         self._thinking = False
         self._chars = 0
         self._thinking_text: list[str] = []
+        self._dsml = False
         self._reported = False
 
     def feed(self, text: str) -> str:
@@ -309,9 +311,25 @@ class ThinkingFilter:
                     out.append(f"\n▸ thinking hidden ({self._chars} chars)\n")
                     self._reported = True
                 continue
+            if self._dsml:
+                end = re.search(r"</[^>]*DSML[^>]*>", self._buffer)
+                if end is None:
+                    self._chars += len(self._buffer)
+                    self._buffer = ""
+                    break
+                self._chars += end.end()
+                self._buffer = self._buffer[end.end():]
+                self._dsml = False
+                continue
+            opening = re.search(r"<[^>]*DSML[^>]*>", self._buffer)
+            if opening is not None:
+                out.append(self._buffer[:opening.start()])
+                self._buffer = self._buffer[opening.end():]
+                self._dsml = True
+                continue
             start = self._buffer.find("<think>")
             if start < 0:
-                keep = len("<think>") - 1
+                keep = 32
                 if len(self._buffer) <= keep:
                     break
                 out.append(self._buffer[:-keep])

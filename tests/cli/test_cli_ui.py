@@ -37,6 +37,15 @@ class TestThinkingFilter(unittest.TestCase):
         self.assertIn("thinking hidden", visible)
         self.assertNotIn("long internal", visible)
 
+    def test_hides_split_dsml_tool_markup(self) -> None:
+        stream = ui.ThinkingFilter()
+        visible = stream.feed("<") + stream.feed("｜DSML｜tool_calls>")
+        visible += stream.feed("<｜DSML｜invoke name=\"list_files\">")
+        visible += stream.feed("</｜DSML｜invoke>")
+        visible += stream.feed("</｜DSML｜tool_calls>") + stream.flush()
+        self.assertNotIn("DSML", visible)
+        self.assertNotIn("list_files", visible)
+
 
 @dataclass
 class _FakeResult:
