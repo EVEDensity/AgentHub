@@ -29,6 +29,7 @@ def main() -> int:
     url = base + "/chat/completions" if base.endswith("/v1") else base + "/v1/chat/completions"
     body = {"model": model, "stream": True, "messages": [{"role": "user", "content": "Reply with the word READY."}]}
     tool_smoke = os.environ.get("AGENTHUB_CLI_PROVIDER_TOOL_SMOKE", "").lower() in {"1", "true", "yes"}
+    tool_loop = os.environ.get("AGENTHUB_CLI_PROVIDER_TOOL_LOOP", "").lower() in {"1", "true", "yes"}
     if tool_smoke:
         body["messages"] = [{"role": "user", "content": "Use the file_read tool to inspect README.md."}]
         body["tools"] = [{"type": "function", "function": {"name": "file_read", "description": "Read a workspace file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}]
@@ -41,6 +42,7 @@ def main() -> int:
     tool_call_ids: set[str] = set()
     tool_argument_fragments: dict[str, list[str]] = {}
     tool_call_indexes: dict[int, str] = {}
+    tool_call_payloads: list[dict] = []
     started = time.perf_counter()
     first_token_seconds: float | None = None
     error_kind: str | None = None
@@ -70,6 +72,7 @@ def main() -> int:
                             if first_token_seconds is None:
                                 first_token_seconds = time.perf_counter() - started
                         for tool_call in delta.get("tool_calls") or []:
+                            tool_call_payloads.append(dict(tool_call))
                             tool_calls += 1
                             index = tool_call.get("index")
                             call_id = str(tool_call.get("id") or "")
@@ -105,6 +108,50 @@ def main() -> int:
     if tool_smoke and not tool_call_ids:
         _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": "missing_call_id", "toolCallChunks": tool_calls}, output_path)
         return 1
+    if tool_smoke and tool_loop:
+        call_id = next(iter(tool_call_ids))
+        name = next((str(item.get("function", {}).get("name") or "file_read") for item in tool_call_payloads if item.get("function")), "file_read")
+        arguments = "".join(tool_argument_fragments.get(call_id, [])) or '{"path":"README.md"}'
+        followup = {
+            "model": model,
+            "stream": True,
+            "messages": [
+                {"role": "user", "content": "Use the file_read tool to inspect README.md."},
+                {"role": "assistant", "content": None, "tool_calls": [{"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}]},
+                {"role": "tool", "tool_call_id": call_id, "content": "README.md is present and readable."},
+            ],
+        }
+        try:
+            followup_chunks = 0
+            with httpx.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=followup, timeout=60) as response:
+                if getattr(response, "status_code", 200) >= 400:
+                    response.read()
+                response.raise_for_status()
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        continue
+                    try:
+                        payload = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = ((payload.get("choices") or [{}])[0].get("delta") or {})
+                    if delta.get("content"):
+                        followup_chunks += 1
+            if followup_chunks == 0:
+                _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": "tool_result_no_followup_text", "toolCallIds": len(tool_call_ids)}, output_path)
+                return 1
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            try: response.read()
+            except (AttributeError, httpx.ResponseNotRead, httpx.StreamError): pass
+            _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": f"tool_loop_http_{response.status_code}", "statusCode": response.status_code, "detail": _redacted_error_detail(response)}, output_path)
+            return 1
+        except (httpx.HTTPError, OSError) as exc:
+            _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": f"tool_loop_{type(exc).__name__}"}, output_path)
+            return 1
     if not tool_smoke and chunks == 0:
         _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": "missing_text_chunks"}, output_path)
         return 1
@@ -117,6 +164,7 @@ def main() -> int:
         "toolCallChunks": tool_calls,
         "toolCallIds": len(tool_call_ids),
         "toolArgumentsComplete": (bool(tool_argument_fragments) and all(_balanced_json_fragment("".join(parts)) for parts in tool_argument_fragments.values())) if tool_smoke else True,
+        "toolLoopVerified": bool(tool_smoke and tool_loop) if tool_smoke else False,
         "firstTokenSeconds": first_token_seconds,
     }, output_path)
     return 0
