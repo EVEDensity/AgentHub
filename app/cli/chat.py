@@ -96,6 +96,7 @@ _HELP_LINES = (
     "/undo preview  仅预览恢复路径和冲突，不修改文件",
     "/status        显示当前会话设置",
     "/context       查看当前上下文与 token 使用",
+    "/thinking      展开最近一轮已折叠的模型思考",
     "/permissions   查看当前会话工具/路径权限",
     "/permissions export <file>  导出权限策略",
     "/permissions import <file> [merge|replace]  导入权限策略",
@@ -121,6 +122,7 @@ class ChatSessionState:
     allowed_tools: set[str] = field(default_factory=set)
     allowed_paths: set[tuple[str, str]] = field(default_factory=set)
     denied_paths: set[tuple[str, str]] = field(default_factory=set)
+    last_thinking: str = ""
 
 
 def _load_permission_policy(directory: Path, session: ChatSessionState) -> None:
@@ -376,6 +378,16 @@ def _run_slash_command(
                 for r in session.session_records
             )
             emit(f"  ⌁ {missions} missions · {artifacts} artifacts · {seconds:.1f}s")
+        return True
+    if name == "/thinking":
+        if not session.last_thinking:
+            emit("最近一轮没有可展开的 thinking 内容")
+        elif ui is not None:
+            from rich.console import Console
+            from rich.panel import Panel
+            Console().print(Panel(session.last_thinking, title="thinking", border_style=ui.C_ACCENT))
+        else:
+            emit(session.last_thinking)
         return True
     if name == "/context":
         tokens = sum(int(r.get("total_tokens") or 0) for r in session.session_records)
@@ -853,6 +865,7 @@ def chat_session(
                 trailing = thinking_filter.flush()
                 if trailing:
                     text_cb(trailing)
+                session.last_thinking = thinking_filter.thinking_text
         except KeyboardInterrupt:
             # P0-4 last-ditch: execute_objective should have caught and
             # turned this into a CANCELLED result; if we're here, the

@@ -287,6 +287,7 @@ class ThinkingFilter:
         self._buffer = ""
         self._thinking = False
         self._chars = 0
+        self._thinking_text: list[str] = []
         self._reported = False
 
     def feed(self, text: str) -> str:
@@ -297,9 +298,11 @@ class ThinkingFilter:
                 end = self._buffer.find("</think>")
                 if end < 0:
                     self._chars += len(self._buffer)
+                    self._thinking_text.append(self._buffer)
                     self._buffer = ""
                     break
                 self._chars += end
+                self._thinking_text.append(self._buffer[:end])
                 self._buffer = self._buffer[end + len("</think>"):]
                 self._thinking = False
                 if not self._reported:
@@ -322,6 +325,7 @@ class ThinkingFilter:
     def flush(self) -> str:
         if self._thinking:
             self._chars += len(self._buffer)
+            self._thinking_text.append(self._buffer)
             self._buffer = ""
             if not self._reported:
                 self._reported = True
@@ -330,6 +334,10 @@ class ThinkingFilter:
         text = self._buffer
         self._buffer = ""
         return text
+
+    @property
+    def thinking_text(self) -> str:
+        return "".join(self._thinking_text)
 
 
 # ── Result panel ───────────────────────────────────────────────────────
