@@ -428,9 +428,10 @@ class MissionControlProcess:
             stderr=subprocess.STDOUT,
         )
         self._wait_ready(timeout)
-        # Give the post-startup desktop runner task time to log in
-        # before the first mission is created.
-        time.sleep(3.0)
+        # Give the post-startup desktop runner task a brief head start before
+        # creating the first mission.  The runner itself retries claims, so a
+        # long fixed sleep only adds latency to ordinary chat.
+        time.sleep(1.0)
 
     def _wait_ready(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
