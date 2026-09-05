@@ -29,6 +29,7 @@ import sys
 import threading
 import fnmatch
 import json
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -74,6 +75,59 @@ def _likely_side_effect_objective(objective: str) -> bool:
         "shell", "command",
     )
     return any(marker in text for marker in markers)
+
+
+def _is_simple_greeting(objective: str) -> bool:
+    return objective.strip().lower() in {"hello", "hi", "你好", "您好", "嗨"}
+
+
+def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[..., None], console: Any = None) -> bool:
+    """Use the provider's text stream for a plain greeting.
+
+    Greetings must not enter the desktop task planner: that path may emit
+    internal DSML tool markup and has unnecessary verification latency.
+    """
+    from app.services.adapter_manager import adapter_manager
+
+    async def run() -> str:
+        adapter = adapter_manager.get_adapter(settings.provider)
+        chunks: list[str] = []
+        stream = adapter.stream_prompt(
+            objective,
+            settings.model,
+            settings.api_key,
+            settings.base_url,
+            system_prompt="Reply to the user directly in plain text. Do not think aloud. Do not call tools or emit XML.",
+        )
+        async for chunk in stream:
+            if chunk:
+                chunks.append(str(chunk))
+        return "".join(chunks)
+
+    try:
+        response = asyncio.run(run())
+    except Exception as exc:  # noqa: BLE001 - fall back to the durable mission path
+        emit(f"  direct chat unavailable ({type(exc).__name__}); using mission runner")
+        return False
+    # Remove reasoning and provider-specific tool markup before displaying.
+    if ui is not None:
+        filter_ = ui.ThinkingFilter()
+        visible = filter_.feed(response) + filter_.flush()
+    else:
+        visible = response
+    if "DSML" in visible:
+        visible = ""
+    visible = visible.strip()
+    if not visible:
+        # A greeting must always produce a user-visible answer. This branch
+        # is reached only when the provider returned reasoning/tool markup
+        # without a final text message.
+        visible = "你好！" if any("你" in ch for ch in objective) else "Hello!"
+    if console is not None:
+        console.print(visible, style=ui.STYLE_PRIMARY)
+    else:
+        emit(visible)
+    return True
 _BANNER_LINES = (
     "AgentHub interactive session — engine: desktop runner + verifier gate",
     "Type an objective to run one mission; /help for commands; /quit to exit.",
@@ -712,7 +766,8 @@ def chat_session(
             emit()
             emit("bye")
             return 0
-        objective = (raw or "").strip()
+        # Windows redirected stdin may include a UTF-8 BOM on the first line.
+        objective = (raw or "").strip().lstrip("\ufeff")
         if not objective:
             continue
 
@@ -746,6 +801,10 @@ def chat_session(
 
         compact_context = session.compact_context
         is_side_effect_task = _likely_side_effect_objective(objective)
+        if not is_side_effect_task and _is_simple_greeting(objective):
+            if _direct_greeting(settings, objective, emit, console):
+                emit()
+                continue
         # P0-4: cancel signal — either set externally or via Esc/KbdInt
         cancel_event = threading.Event()
 
