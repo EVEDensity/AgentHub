@@ -46,7 +46,7 @@ agenthub "修复登录失败并运行相关测试"
 
 | 能力 | 用户结果 | 实现基线 | 生产验收证据 |
 |---|---|---|---|
-| SSE 流式会话 | 逐 token 文本、工具与验证状态持续可见 | `assistant.delta`、Mission/WorkUnit/tool/decision 事件、游标、去重、轮询降级；provider nightly 上传脱敏摘要 | CI Secret 配置后运行两个 DeepSeek 模型并保留 artifact；真实网络断线仍需 runner 证据 |
+| SSE 流式会话 | 逐 token 文本、工具与验证状态持续可见 | `assistant.delta`、Mission/WorkUnit/tool/decision 事件、游标、去重、轮询降级；provider smoke 校验分片 tool-call、`call_id`、参数 JSON 并上传脱敏摘要 | CI Secret 配置后运行两个 DeepSeek 模型并确认完整 Mission 事件链；真实网络断线仍需 runner 证据 |
 | 统一渲染状态 | REPL、Rich/TUI、JSONL 对同一事件得出同一状态 | `EventReducer`、版本化 JSONL 外层记录 | 共用 fixture 三种输出一致，兼容版本测试 |
 | 文件安全 | `/diff`、`/patch`、`/undo` 不误伤用户工作 | attempt 快照、hash/index 冲突预检、fail-closed | 多 WorkUnit 同文件、未跟踪文件、外部并发修改的恢复测试 |
 | 权限与 Decision | 高风险操作能解释、允许、拒绝和回放 | 路径 glob 策略、Decision API、`.agenthub/permissions.json` | 拒绝后无副作用、允许后同 attempt 继续、策略导入导出测试 |
@@ -219,7 +219,7 @@ Phase A 是阻断项：没有真实流式和断线语义，UI 优化没有可信
 | EventReducer | reducer 已接入 runtime、Rich、TUI、JSONL；canonical `state_to_dict/state_summary` 与 renderer snapshot contract 已建立；普通对话使用只读模型路径；未知事件进入 diagnostics；SSE connected/reconnecting/polling 和 FAILED/CANCELLED/TIMEOUT 统一投影；Rich/TUI 使用可录制状态面板；Phase B 自动化 TTY/无 TTY/宽度测试通过 | 在支持 pseudo-TTY 的 CI runner 上补物理终端录制 |
 | attempt 恢复 | 工作区和 index 快照、冲突预检、新文件删除、同文件多 WorkUnit 聚合测试、内容最小化 manifest、WorkUnit/Artifact provenance；`/undo` 已增加恢复前 fail-closed 预览 | 增加更细的事件来源关联和冲突详情展示 |
 | 权限 | 路径 glob、会话持久化、导入导出、规则删除、匹配预览、认证策略同步 API、服务端来源字段；`/permissions explain` 明确 CLI 来源与服务端优先级 | 增加组织策略优先级的完整 CLI 可视化 |
-| provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow；smoke 校验 call_id、参数 JSON 并上传脱敏摘要 | 确认仓库 CI 最近运行均为 PASS，并补 `assistant.delta -> tool -> verification` Mission 闭环证据 |
+| provider | fixture 矩阵、DeepSeek `v4-flash`/`v4-pro` 文本及 tool-call nightly workflow；smoke 校验分片 call_id、参数 JSON、事件链并上传脱敏摘要 | 确认仓库 CI 最近运行均为 PASS，并补 `assistant.delta -> tool -> verification` Mission 闭环证据 |
 | npm/发行 | frozen smoke、tarball gate、跨平台安装与 Windows rollback workflow | tag 后执行真实 registry 验收，支持 macOS/Linux binary 后升级为闭环 smoke |
 | benchmark | `scripts/cli_benchmark.py` 已输出首事件、首 token、首工具反馈、SSE 重连、Decision 拒绝和恢复成功指标；CLI fixture 测试通过 | 建立版本化任务集和 release 对比阈值 |
 
