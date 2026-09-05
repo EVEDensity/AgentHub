@@ -379,7 +379,7 @@ def _run_slash_command(
             )
             emit(f"  ⌁ {missions} missions · {artifacts} artifacts · {seconds:.1f}s")
         return True
-    if name == "/thinking":
+    if name in {"/thinking", "/think"}:
         if not session.last_thinking:
             emit("最近一轮没有可展开的 thinking 内容")
         elif ui is not None:
