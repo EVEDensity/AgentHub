@@ -41,7 +41,7 @@ def test_openai_compatible_adapter_preserves_tool_call_id_and_rejects_raw_argume
 
     adapter = OpenAICompatibleAdapter()
     adapter.provider_name = "deepseek"
-    raw = json.dumps({"choices": [{"message": {"tool_calls": [{"id": "provider-call-7", "function": {"name": "file_read", "arguments": "{bad"}}]}}}]})
+    raw = json.dumps({"choices": [{"message": {"tool_calls": [{"id": "provider-call-7", "function": {"name": "file_read", "arguments": "{bad"}}]}}]})
 
     class Fixture(OpenAICompatibleAdapter):
         async def _unused(self):
