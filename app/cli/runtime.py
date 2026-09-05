@@ -930,6 +930,10 @@ def execute_objective(
     cancel_event: Any = None,  # threading.Event → P0-4 Esc 中途取消
     capture_attempt_snapshot: bool = True,
 ) -> MissionRunResult:
+    # CLI argument namespaces may intentionally use None to mean "use the
+    # configured default" (notably the no-subcommand chat entrypoint).
+    if max_total_tokens is None:
+        max_total_tokens = DEFAULT_MAX_TOTAL_TOKENS
     """Run one objective end to end and return the structured result.
 
     ``resume_mission_id`` prepends the prior Mission's objective, status
