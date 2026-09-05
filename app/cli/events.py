@@ -7,6 +7,7 @@ small, deterministic view and keeps cursor/deduplication rules in one place.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
@@ -14,6 +15,8 @@ CLI_EVENT_SCHEMA_VERSION = 1
 
 _CANONICAL_TYPES = {
     "mission.lifecycle.created": "mission.created",
+    "mission.lifecycle.started": "mission.started",
+    "work_unit.lifecycle.created": "work_unit.created",
     "work_unit.lifecycle.leased": "work_unit.claimed",
     "work_unit.lifecycle.started": "work_unit.running",
     "harness.assistant.delta": "assistant.delta",
@@ -68,7 +71,15 @@ def normalize_event(value: Mapping[str, Any]) -> CliEvent | None:
     """Normalize a public SSE event; malformed frames are ignored safely."""
     if not isinstance(value, Mapping):
         return None
-    raw_event_type = str(value.get("type") or value.get("eventType") or "").strip()
+    # EventEnvelope.to_public_dict() uses Python snake_case names while
+    # older HTTP adapters emitted camelCase.  Accept both forms at the
+    # boundary so durable Mission Control events are never silently dropped.
+    raw_event_type = str(
+        value.get("type")
+        or value.get("eventType")
+        or value.get("event_type")
+        or ""
+    ).strip()
     event_type = _CANONICAL_TYPES.get(raw_event_type, raw_event_type)
     if not event_type:
         return None
@@ -79,13 +90,16 @@ def normalize_event(value: Mapping[str, Any]) -> CliEvent | None:
         attempt = int(value.get("attempt") or payload.get("attempt") or 0)
     except (TypeError, ValueError):
         return None
+    aggregate_type = str(value.get("aggregateType") or value.get("aggregate_type") or "")
+    aggregate_id = str(value.get("aggregateId") or value.get("aggregate_id") or "")
+    correlation_id = str(value.get("correlationId") or value.get("correlation_id") or "")
     return CliEvent(
         event_id=str(value.get("eventId") or value.get("event_id") or ""),
         sequence=sequence,
         event_type=event_type,
-        aggregate_type=str(value.get("aggregateType") or value.get("aggregate_type") or ""),
-        mission_id=str(value.get("missionId") or value.get("mission_id") or ""),
-        work_unit_id=str(value.get("workUnitId") or value.get("work_unit_id") or ""),
+        aggregate_type=aggregate_type,
+        mission_id=str(value.get("missionId") or value.get("mission_id") or (correlation_id if aggregate_type == "work_unit" else aggregate_id)),
+        work_unit_id=str(value.get("workUnitId") or value.get("work_unit_id") or (aggregate_id if aggregate_type == "work_unit" else "")),
         attempt=attempt,
         payload=payload,
         raw=dict(value),
@@ -95,15 +109,22 @@ def normalize_event(value: Mapping[str, Any]) -> CliEvent | None:
 class EventCursor:
     """Mission aggregate cursor plus event-id deduplication."""
 
-    def __init__(self, sequence: int = 0) -> None:
+    def __init__(self, sequence: int = 0, *, max_seen_ids: int = 4096) -> None:
+        if max_seen_ids < 1:
+            raise ValueError("max_seen_ids must be positive")
         self.sequence = max(0, int(sequence))
         self._seen: set[str] = set()
+        self._seen_order: deque[str] = deque()
+        self._max_seen_ids = max_seen_ids
 
     def accept(self, event: CliEvent) -> bool:
         if event.event_id and event.event_id in self._seen:
             return False
         if event.event_id:
             self._seen.add(event.event_id)
+            self._seen_order.append(event.event_id)
+            while len(self._seen_order) > self._max_seen_ids:
+                self._seen.discard(self._seen_order.popleft())
         if event.aggregate_type == "mission":
             self.sequence = max(self.sequence, event.sequence)
         return True

@@ -12,6 +12,26 @@ def test_normalize_legacy_event_and_delta():
     assert event.status is None
 
 
+def test_normalize_event_envelope_snake_case_and_delta():
+    """Mission Control's Pydantic public envelope is snake_case."""
+    event = normalize_event({
+        "event_id": "wu-e1",
+        "event_type": "harness.assistant.delta",
+        "sequence": 6,
+        "aggregate_type": "work_unit",
+        "aggregate_id": "wu-1",
+        "correlation_id": "mis-1",
+        "payload": {"attempt": 1, "text": "你好"},
+    })
+    assert event is not None
+    assert event.event_id == "wu-e1"
+    assert event.event_type == "assistant.delta"
+    assert event.aggregate_type == "work_unit"
+    assert event.mission_id == "mis-1"
+    assert event.work_unit_id == "wu-1"
+    assert event.text_delta == "你好"
+
+
 def test_cursor_deduplicates_without_advancing_on_work_unit():
     cursor = EventCursor()
     mission = normalize_event({"eventId": "m", "type": "mission.started", "sequence": 4, "aggregateType": "mission"})
@@ -96,3 +116,30 @@ def test_reconnect_cursor_accepts_new_event_after_duplicate_batch():
     assert not cursor.accept(duplicate)
     assert cursor.accept(resumed)
     assert cursor.sequence == 2
+
+
+def test_cursor_seen_id_window_is_bounded():
+    cursor = EventCursor(max_seen_ids=2)
+    for index in range(3):
+        event = normalize_event({
+            "eventId": f"e{index}",
+            "type": "assistant.delta",
+            "sequence": index + 1,
+            "aggregateType": "mission",
+            "payload": {"text": "x"},
+        })
+        assert event is not None
+        assert cursor.accept(event)
+    # The oldest ID is evicted, while the most recent duplicate remains
+    # protected during a reconnect window.
+    oldest = normalize_event({
+        "eventId": "e0", "type": "assistant.delta", "sequence": 1,
+        "aggregateType": "mission", "payload": {"text": "x"},
+    })
+    newest = normalize_event({
+        "eventId": "e2", "type": "assistant.delta", "sequence": 3,
+        "aggregateType": "mission", "payload": {"text": "x"},
+    })
+    assert oldest is not None and newest is not None
+    assert cursor.accept(oldest)
+    assert not cursor.accept(newest)

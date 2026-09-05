@@ -12,6 +12,7 @@ from app.cli.events import CliEvent
 
 @dataclass(frozen=True)
 class ToolView:
+    call_id: str
     name: str
     status: str
     output: str = ""
@@ -30,7 +31,7 @@ class SessionViewState:
 
 
 def state_to_dict(state: SessionViewState) -> dict[str, Any]:
-    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count, "diagnostics": list(state.diagnostics), "connectionStatus": state.connection_status}
+    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"callId": t.call_id, "name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count, "diagnostics": list(state.diagnostics), "connectionStatus": state.connection_status}
 
 
 def state_summary(state: SessionViewState) -> str:
@@ -66,17 +67,26 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     tools = list(state.tools)
     if kind.startswith("tool."):
         name = str(payload.get("toolName") or payload.get("tool_name") or "unknown")
-        index = next((i for i, item in enumerate(tools) if item.name == name and item.status != "completed"), None)
+        call_id = str(payload.get("callId") or payload.get("call_id") or payload.get("toolCallId") or "")
+        if not call_id:
+            # Legacy events can still be rendered with their event ID as a
+            # stable per-event fallback until all producers emit call_id.
+            call_id = f"legacy:{name}"
+        diagnostics = state.diagnostics
+        index = next((i for i, item in enumerate(tools) if item.call_id == call_id), None)
         if index is None:
-            tools.append(ToolView(name=name, status=kind.removeprefix("tool."), output=str(payload.get("text") or "")))
+            tools.append(ToolView(call_id=call_id, name=name, status=kind.removeprefix("tool."), output=str(payload.get("text") or "")))
         else:
             current = tools[index]
             tools[index] = replace(current, status=kind.removeprefix("tool."), output=(str(payload.get("text") or "") or current.output))
     verification = state.verification_status
     if kind in {"verification.started", "verification.completed"}:
         verification = kind.removeprefix("verification.")
-    known = {"assistant.delta", "assistant.completed", "decision.pending", "decision.resolved", "decision.expired", "verification.started", "verification.completed", "mission.created", "mission.completed", "mission.failed", "mission.cancelled", "mission.timeout", "work_unit.claimed", "work_unit.running", "checkpoint.created", "artifact.registered", "sse.reconnecting", "sse.connected", "sse.polling"}
-    diagnostics = state.diagnostics if (kind in known or kind.startswith("tool.")) else state.diagnostics + (f"unknown event: {kind}",)
+    known = {"assistant.delta", "assistant.completed", "decision.pending", "decision.resolved", "decision.expired", "verification.started", "verification.completed", "mission.created", "mission.started", "mission.completed", "mission.failed", "mission.cancelled", "mission.timeout", "work_unit.created", "work_unit.claimed", "work_unit.running", "checkpoint.created", "artifact.registered", "sse.reconnecting", "sse.connected", "sse.polling"}
+    if kind in known or kind.startswith("tool."):
+        diagnostics = diagnostics if "diagnostics" in locals() else state.diagnostics
+    else:
+        diagnostics = state.diagnostics + (f"unknown event: {kind}",)
     connection = state.connection_status
     if kind == "sse.reconnecting":
         connection = "reconnecting"
