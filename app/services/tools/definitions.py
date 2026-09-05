@@ -41,6 +41,11 @@ from app.services.tools.agent_tools import (
 from app.services.tools.network_tools import (
     http_request_handler,
 )
+from app.services.tools.utility_tools import (
+    current_date_handler,
+    current_time_handler,
+    weather_handler,
+)
 from app.services.tools.session_tools import (
     artifact_list_handler,
     artifact_read_handler,
@@ -85,6 +90,65 @@ WEB_SEARCH = ToolDefinition(
     risk_level="L1",
     handler=web_search_handler,
     is_concurrency_safe=True,  # Read-only, no side effects
+)
+
+# ── current_time / current_date / weather ────────────────────────────
+
+CURRENT_TIME = ToolDefinition(
+    name="current_time",
+    description="读取运行 CLI 的系统时钟，返回当前时间和时区；不得用模型记忆猜测时间。",
+    category="system",
+    parameters=[
+        ToolParameter(name="timezone", type="string", required=False,
+                      description="IANA 时区，例如 Asia/Shanghai；为空使用本机时区"),
+    ],
+    return_type='{"formatted": "YYYY-MM-DD HH:mm:ss", "iso": "ISO-8601", "timezone": "str"}',
+    examples=[
+        ToolExample(user_question="现在几点？", parameters={}),
+        ToolExample(user_question="现在东京几点？", parameters={"timezone": "Asia/Tokyo"}),
+    ],
+    risk_level="L1",
+    handler=current_time_handler,
+    is_concurrency_safe=True,
+)
+
+CURRENT_DATE = ToolDefinition(
+    name="current_date",
+    description="读取运行 CLI 的系统日期，返回当前日期和星期；不得用模型记忆猜测日期。",
+    category="system",
+    parameters=[
+        ToolParameter(name="timezone", type="string", required=False,
+                      description="IANA 时区，例如 Asia/Shanghai；为空使用本机时区"),
+    ],
+    return_type='{"formatted": "YYYY-MM-DD", "weekday": "str", "timezone": "str"}',
+    examples=[
+        ToolExample(user_question="今天是几号？", parameters={}),
+    ],
+    risk_level="L1",
+    handler=current_date_handler,
+    is_concurrency_safe=True,
+)
+
+WEATHER = ToolDefinition(
+    name="weather",
+    description="通过 Open-Meteo 查询指定地点的实时天气；没有地点时必须向用户询问城市，不得编造天气。",
+    category="search",
+    parameters=[
+        ToolParameter(name="location", type="string", required=False,
+                      description="城市或地点名称，例如 Beijing、上海"),
+        ToolParameter(name="latitude", type="number", required=False,
+                      description="纬度；与 longitude 一起提供时跳过地理编码"),
+        ToolParameter(name="longitude", type="number", required=False,
+                      description="经度；与 latitude 一起提供时跳过地理编码"),
+    ],
+    return_type='{"location": "str", "condition": "str", "temperature": "number", "time": "str"}',
+    examples=[
+        ToolExample(user_question="北京今天天气怎么样？", parameters={"location": "北京"}),
+        ToolExample(user_question="查询上海天气", parameters={"location": "上海"}),
+    ],
+    risk_level="L1",
+    handler=weather_handler,
+    is_concurrency_safe=True,
 )
 
 # ── file_read ─────────────────────────────────────────────────────────
@@ -993,6 +1057,9 @@ TASK = ToolDefinition(
 
 BUILTIN_TOOLS: list[ToolDefinition] = [
     WEB_SEARCH,
+    CURRENT_TIME,
+    CURRENT_DATE,
+    WEATHER,
     FILE_READ,
     FILE_WRITE,
     FILE_WRITE_BATCH,

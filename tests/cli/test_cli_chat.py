@@ -21,6 +21,9 @@ from app.cli import chat as chat_module
 from app.cli.chat import (
     ChatSessionState,
     _conversation_path,
+    _is_time_question,
+    _is_weather_question,
+    _weather_location,
     _load_conversation,
     _run_slash_command,
     _likely_side_effect_objective,
@@ -32,6 +35,13 @@ def test_normal_conversation_is_not_classified_as_side_effect():
     assert not _likely_side_effect_objective("你好")
     assert not _likely_side_effect_objective("请解释这段代码")
     assert _likely_side_effect_objective("请修改 app.py 并运行测试")
+
+
+def test_builtin_fact_questions_are_routed_to_real_tools():
+    assert _is_time_question("现在几点")
+    assert _is_weather_question("上海今天的天气怎么样")
+    assert _weather_location("上海今天的天气怎么样") == "上海"
+    assert _weather_location("天气 北京") == "北京"
 
 
 @dataclass
@@ -336,6 +346,27 @@ class SlashCommandUnitTests(unittest.TestCase):
             directory=Path("/ws/.agenthub"), session=session, emit=outputs,
         )
         self.assertIn("allowed tools: shell", outputs.text())
+
+    def test_tools_lists_runtime_registered_utility_tools(self) -> None:
+        session = self._session()
+        outputs = _CapturingOutput()
+        handled = _run_slash_command(
+            "/tools system", settings=self._settings(), workspace_root=Path("/ws"),
+            directory=Path("/ws/.agenthub"), session=session, emit=outputs,
+        )
+        self.assertTrue(handled)
+        rendered = outputs.text()
+        self.assertIn("current_time", rendered)
+        self.assertIn("current_date", rendered)
+
+    def test_tools_unknown_category_is_honest(self) -> None:
+        session = self._session()
+        outputs = _CapturingOutput()
+        _run_slash_command(
+            "/tools does-not-exist", settings=self._settings(), workspace_root=Path("/ws"),
+            directory=Path("/ws/.agenthub"), session=session, emit=outputs,
+        )
+        self.assertIn("未找到工具", outputs.text())
 
     def test_path_permission_commands(self) -> None:
         session = self._session()

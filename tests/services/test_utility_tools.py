@@ -1,0 +1,64 @@
+from __future__ import annotations
+
+import asyncio
+
+from app.services.tools.utility_tools import (
+    current_date_handler,
+    current_time_handler,
+    weather_handler,
+)
+
+
+def test_current_time_uses_requested_timezone() -> None:
+    result = asyncio.run(current_time_handler("Asia/Shanghai"))
+    assert result["success"] is True
+    assert result["result"]["timezone"] == "Asia/Shanghai"
+    assert len(result["result"]["formatted"]) == 19
+
+
+def test_current_time_rejects_unknown_timezone() -> None:
+    result = asyncio.run(current_time_handler("Not/ARealZone"))
+    assert result["success"] is False
+    assert "时区" in result["error"]
+
+
+def test_current_date_returns_system_date() -> None:
+    result = asyncio.run(current_date_handler("Asia/Shanghai"))
+    assert result["success"] is True
+    assert len(result["result"]["iso"]) == 10
+    assert result["metadata"]["source"] == "system-clock"
+
+
+def test_weather_requires_location_or_coordinates() -> None:
+    result = asyncio.run(weather_handler())
+    assert result["success"] is False
+    assert "location" in result["error"]
+
+
+def test_weather_resolves_location_and_returns_current_data(monkeypatch) -> None:
+    responses = [
+        {"results": [{"name": "上海", "country": "中国", "latitude": 31.23, "longitude": 121.47}]},
+        {
+            "current": {
+                "time": "2026-09-06T10:00",
+                "temperature_2m": 27.5,
+                "relative_humidity_2m": 70,
+                "apparent_temperature": 29.0,
+                "weather_code": 1,
+                "wind_speed_10m": 12.0,
+            },
+            "current_units": {"temperature_2m": "°C", "wind_speed_10m": "km/h"},
+        },
+    ]
+
+    async def fake_json_get(url, params):
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        "app.services.tools.utility_tools._json_get", fake_json_get
+    )
+    result = asyncio.run(weather_handler(location="上海"))
+    assert result["success"] is True
+    assert result["result"]["condition"] == "大致晴"
+    assert result["result"]["temperature"] == 27.5
+    assert result["metadata"]["source"] == "open-meteo"

@@ -30,6 +30,7 @@ import threading
 import fnmatch
 import json
 import asyncio
+import re
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -92,6 +93,72 @@ def _is_conversational_objective(objective: str) -> bool:
 def _is_date_question(objective: str) -> bool:
     text = objective.lower()
     return any(token in text for token in ("今天是几号", "今天几号", "日期", "what date", "today's date"))
+
+
+def _is_time_question(objective: str) -> bool:
+    text = objective.lower()
+    return any(token in text for token in (
+        "现在几点", "现在时间", "当前时间", "几点了", "what time", "current time",
+    ))
+
+
+def _is_weather_question(objective: str) -> bool:
+    text = objective.lower()
+    return any(token in text for token in ("天气", "气温", "温度", "weather", "temperature"))
+
+
+def _weather_location(objective: str) -> str:
+    """Extract an explicit place without guessing a user's location."""
+    text = objective.strip()
+    match = re.search(r"(.+?)(?:今天|当前|现在)?(?:的)?(?:天气|气温|温度)", text, re.IGNORECASE)
+    if match:
+        candidate = match.group(1)
+    else:
+        match = re.search(r"(?:天气|气温|温度)\s*(?:在|是)?\s*(.+)$", text, re.IGNORECASE)
+        candidate = match.group(1) if match else ""
+    candidate = re.sub(r"[，。！？?：:、\s]+", " ", candidate)
+    candidate = re.sub(r"^(今天|当前|现在|请问|查询|查一下)\s*", "", candidate)
+    candidate = re.sub(r"\s*(今天|当前|现在|怎么样|如何|呢)$", "", candidate)
+    return candidate.strip()
+
+
+def _format_utility_result(tool_name: str, outcome: dict[str, Any]) -> str:
+    if not outcome.get("success"):
+        return str(outcome.get("error") or f"{tool_name} 工具执行失败")
+    result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
+    if tool_name == "current_time":
+        return f"现在是 {result.get('formatted', '')}（{result.get('timezone', '')}）"
+    if tool_name == "current_date":
+        return f"今天是 {result.get('formatted', '')}（{result.get('weekday', '')}，{result.get('timezone', '')}）"
+    if tool_name == "weather":
+        return (
+            f"{result.get('location', '当前地点')}：{result.get('condition', '未知')}，"
+            f"{result.get('temperature', '未知')}{result.get('temperature_unit', '°C')}，"
+            f"体感 {result.get('apparent_temperature', '未知')}{result.get('temperature_unit', '°C')}，"
+            f"湿度 {result.get('humidity', '未知')}%，风速 {result.get('wind_speed', '未知')} "
+            f"{result.get('wind_speed_unit', 'km/h')}（数据时间 {result.get('time', '未知')}）"
+        )
+    return str(result)
+
+
+def _run_local_utility(tool_name: str, **arguments: Any) -> str:
+    from app.services.tools.utility_tools import (
+        current_date_handler,
+        current_time_handler,
+        weather_handler,
+    )
+
+    handlers = {
+        "current_time": current_time_handler,
+        "current_date": current_date_handler,
+        "weather": weather_handler,
+    }
+    handler = handlers[tool_name]
+    try:
+        outcome = asyncio.run(handler(**arguments))
+    except Exception as exc:  # noqa: BLE001 - surface a stable tool failure
+        return f"{tool_name} 工具执行失败: {type(exc).__name__}: {exc}"
+    return _format_utility_result(tool_name, outcome)
 
 
 def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[..., None], console: Any = None, history: list[dict[str, str]] | None = None) -> tuple[bool, str]:
@@ -165,6 +232,7 @@ _HELP_LINES = (
     "/undo          撤销当前 attempt 变更（需确认）",
     "/undo preview  仅预览恢复路径和冲突，不修改文件",
     "/status        显示当前会话设置",
+    "/tools [category] 列出当前可用工具（可按分类过滤）",
     "/context       查看当前上下文与 token 使用",
     "/thinking      展开最近一轮已折叠的模型思考",
     "/permissions   查看当前会话工具/路径权限",
@@ -596,6 +664,32 @@ def _run_slash_command(
             f"persistent store: {_conversation_path(directory)}"
         )
         return True
+    if name == "/tools":
+        # Read from the runtime registry so this view stays aligned with the
+        # actual handlers exposed to the application.  Registration is
+        # idempotent and also makes this command useful before a mission runs.
+        try:
+            from app.services.tools import register_builtin_tools
+            from app.services.tool_registry import tool_registry
+
+            register_builtin_tools()
+            category = args[0].lower() if args else ""
+            tools = tool_registry.list_all()
+            if category:
+                tools = [item for item in tools if item.category.lower() == category]
+            if not tools:
+                emit(
+                    f"未找到工具{f'（分类: {category}）' if category else ''}。"
+                    "使用 /tools 查看全部工具。"
+                )
+                return True
+            title = "当前可用工具" + (f"（分类: {category}）" if category else "")
+            emit(title + f"（{len(tools)} 个）")
+            for item in sorted(tools, key=lambda value: (value.category, value.name)):
+                emit(f"  {item.name:<24} [{item.category}/{item.risk_level}] {item.description}")
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not break REPL
+            emit(f"读取工具清单失败: {type(exc).__name__}: {exc}")
+        return True
     if name == "/permissions":
         if args and args[0].lower() in {"export", "import"}:
             if len(args) < 2:
@@ -952,7 +1046,28 @@ def chat_session(
         compact_context = session.compact_context
         is_side_effect_task = _likely_side_effect_objective(objective)
         if output_fn is None and not is_side_effect_task and _is_date_question(objective):
-            answer = datetime.now().astimezone().strftime("今天是 %Y-%m-%d（%A）")
+            answer = _run_local_utility("current_date")
+            if console is not None:
+                console.print(answer, style=ui.STYLE_PRIMARY)
+            else:
+                emit(answer)
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=answer, source="direct")
+            emit()
+            continue
+        if output_fn is None and not is_side_effect_task and _is_time_question(objective):
+            answer = _run_local_utility("current_time")
+            if console is not None:
+                console.print(answer, style=ui.STYLE_PRIMARY)
+            else:
+                emit(answer)
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=answer, source="direct")
+            emit()
+            continue
+        if output_fn is None and not is_side_effect_task and _is_weather_question(objective):
+            location = _weather_location(objective)
+            answer = _run_local_utility("weather", location=location)
             if console is not None:
                 console.print(answer, style=ui.STYLE_PRIMARY)
             else:

@@ -51,6 +51,9 @@ from app.services.tools.definitions import (
     MEMORY_SAVE,
     MEMORY_SEARCH,
     MKDIR,
+    CURRENT_TIME,
+    CURRENT_DATE,
+    WEATHER,
 )
 from app.services.workspace_context import workspace_root_override
 
@@ -83,6 +86,9 @@ _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     CODE_EXECUTE,
     MEMORY_SAVE,
     MEMORY_SEARCH,
+    CURRENT_TIME,
+    CURRENT_DATE,
+    WEATHER,
 )
 
 # ── delegate_subtask (G8): Codex-style spawn_agent for the desktop ───────
