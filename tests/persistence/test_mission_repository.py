@@ -229,6 +229,35 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(args[9]), event.payload)
         self.assertEqual(args[10], 1)
 
+    async def test_append_event_retries_sqlite_sequence_race(self) -> None:
+        class ConflictingDatabase(FakeDatabase):
+            def __init__(self) -> None:
+                super().__init__()
+                self.one = {"sequence": 1}
+                self.failed_once = False
+
+            async def execute(self, sql: str, *args: Any) -> None:
+                if "INSERT INTO mission_events" in sql and not self.failed_once:
+                    self.failed_once = True
+                    raise RuntimeError(
+                        "UNIQUE constraint failed: mission_events.aggregate_type, "
+                        "mission_events.aggregate_id, mission_events.sequence"
+                    )
+                await super().execute(sql, *args)
+
+        database = ConflictingDatabase()
+        repository = MissionRepository(
+            execute=database.execute,
+            fetch_one=database.fetch_one,
+            fetch_all=database.fetch_all,
+        )
+        event = build_event(sequence=1)
+
+        await repository.append_event(event)
+
+        self.assertEqual(len(database.executed), 1)
+        self.assertEqual(database.executed[0][1][3], 2)
+
     async def test_lock_and_update_mission_snapshot(self) -> None:
         mission = build_mission(status="RUNNING")
         self.database.one = self.build_mission_row(mission)

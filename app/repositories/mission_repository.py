@@ -246,25 +246,52 @@ class MissionRepository:
         )
 
     async def append_event(self, event: EventEnvelope) -> None:
-        await self._execute(
-            """INSERT INTO mission_events(
-                   event_id, aggregate_type, aggregate_id, sequence, event_type,
-                   actor, occurred_at, correlation_id, causation_id, payload,
-                   schema_version
-               ) VALUES(
-                   $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11
-               )""",
-            event.event_id,
-            event.aggregate_type.value,
-            event.aggregate_id,
-            event.sequence,
-            event.event_type,
-            _encode_json(event.actor.to_public_dict()),
-            event.occurred_at,
-            event.correlation_id,
-            event.causation_id,
-            _encode_json(event.payload),
-            event.schema_version,
+        statement = """INSERT INTO mission_events(
+                       event_id, aggregate_type, aggregate_id, sequence, event_type,
+                       actor, occurred_at, correlation_id, causation_id, payload,
+                       schema_version
+                   ) VALUES(
+                       $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10::jsonb, $11
+                   )"""
+        candidate = event
+        # The local SQLite profile serializes individual statements, not the
+        # whole read-max+insert sequence allocation. Concurrent heartbeats can
+        # therefore race on the same next sequence. Retry only that known
+        # conflict with the newly observed maximum; all other integrity errors
+        # remain fail-fast.
+        for _ in range(4):
+            try:
+                await self._execute(
+                    statement,
+                    candidate.event_id,
+                    candidate.aggregate_type.value,
+                    candidate.aggregate_id,
+                    candidate.sequence,
+                    candidate.event_type,
+                    _encode_json(candidate.actor.to_public_dict()),
+                    candidate.occurred_at,
+                    candidate.correlation_id,
+                    candidate.causation_id,
+                    _encode_json(candidate.payload),
+                    candidate.schema_version,
+                )
+                return
+            except Exception as exc:  # noqa: BLE001 - backend-specific integrity errors
+                detail = str(exc).lower()
+                sequence_conflict = (
+                    "mission_events" in detail
+                    and "sequence" in detail
+                    and ("unique constraint failed" in detail or "duplicate key" in detail)
+                )
+                if not sequence_conflict:
+                    raise
+                next_sequence = await self.get_last_event_sequence(
+                    candidate.aggregate_id,
+                    aggregate_type=candidate.aggregate_type.value,
+                ) + 1
+                candidate = candidate.model_copy(update={"sequence": next_sequence})
+        raise RuntimeError(
+            "could not allocate a unique mission event sequence after retries"
         )
 
     async def get_last_event_sequence(
