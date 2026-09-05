@@ -130,6 +130,7 @@ class FreezeScriptTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("Validate staged npm tarballs before publish", workflow)
         self.assertGreaterEqual(workflow.count("npm pack --dry-run --json"), 2)
+        self.assertIn("Upload release diagnostics", workflow)
 
     def test_cross_platform_install_workflow_covers_upgrade_and_rollback(self) -> None:
         workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "cli-package-install.yml").read_text(encoding="utf-8")
@@ -139,6 +140,9 @@ class FreezeScriptTests(unittest.TestCase):
         self.assertIn("previous_version", workflow)
         self.assertIn("Upgrade and rollback package", workflow)
         self.assertIn('test "$code" -eq 127', workflow)
+        self.assertIn("Run doctor and record release diagnostics", workflow)
+        self.assertIn("rollback-help.txt", workflow)
+        self.assertIn("Upload install diagnostics", workflow)
 
 
 if __name__ == "__main__":

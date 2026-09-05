@@ -45,11 +45,27 @@ jobs:
             test "$code" -eq 127 || { cat "$RUNNER_TEMP/agenthub-help.txt"; exit 1; }
             grep -qi "no prebuilt binary" "$RUNNER_TEMP/agenthub-help.txt"
           fi
+      - name: Run doctor and record release diagnostics
+        shell: bash
+        run: |
+          set +e
+          agenthub doctor > "$RUNNER_TEMP/agenthub-doctor.txt" 2>&1
+          echo "doctor_exit=$?" >> "$RUNNER_TEMP/agenthub-doctor.txt"
       - name: Upgrade and rollback package
         if: matrix.supported == true
         shell: bash
         run: |
+          set -euo pipefail
           npm install --global "@agenthub/cli@${{ inputs.previous_version }}"
-          agenthub --help
+          agenthub --help > "$RUNNER_TEMP/previous-help.txt"
           npm install --global "@agenthub/cli@${{ inputs.version }}"
-          agenthub --help
+          agenthub --help > "$RUNNER_TEMP/target-help.txt"
+          npm install --global "@agenthub/cli@${{ inputs.previous_version }}"
+          agenthub --help > "$RUNNER_TEMP/rollback-help.txt"
+      - name: Upload install diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-install-${{ matrix.os }}-${{ inputs.version }}
+          path: ${{ runner.temp }}/*-help.txt
+          if-no-files-found: ignore
