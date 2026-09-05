@@ -115,7 +115,7 @@ class ChatReplTests(unittest.TestCase):
     def test_normal_conversation_uses_read_only_without_attempt_snapshot(self) -> None:
         _, _, calls = self._run(["你好", "/quit"])
         self.assertFalse(calls[0]["capture_attempt_snapshot"])
-        self.assertEqual(calls[0]["tool_permission_mode"], "plan")
+        self.assertEqual(calls[0]["tool_permission_mode"], "suggest")
 
     def test_chaining_previous_mission(self) -> None:
         _, _, calls = self._run(

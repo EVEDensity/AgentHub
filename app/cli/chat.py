@@ -830,7 +830,11 @@ def chat_session(
                 on_decision_request=_on_decision,
                 cancel_event=cancel_event,
                 capture_attempt_snapshot=is_side_effect_task,
-                tool_permission_mode=None if is_side_effect_task else "plan",
+                # The desktop runner accepts auto/edit/suggest.  Ordinary
+                # conversation is read-only guidance, so use suggest rather
+                # than the removed legacy "plan" mode; passing plan prevents
+                # the runner from starting and yields no assistant.delta.
+                tool_permission_mode=None if is_side_effect_task else "suggest",
             )
         except KeyboardInterrupt:
             # P0-4 last-ditch: execute_objective should have caught and
