@@ -43,7 +43,7 @@ def main() -> int:
     error_kind: str | None = None
     try:
             with httpx.stream("POST", url, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=60) as response:
-                if response.status_code >= 400:
+                if getattr(response, "status_code", 200) >= 400:
                     # Buffer error responses while the streaming context is
                     # still open; after raise_for_status the body may be
                     # closed and diagnostics would lose the provider detail.
