@@ -100,6 +100,11 @@ def test_weather_auto_discovers_local_location(monkeypatch) -> None:
 
 
 def test_weather_uses_local_timezone_city_before_network(monkeypatch) -> None:
+    async def network_unavailable(url, params):
+        raise httpx.ConnectError("offline")
+
+    import httpx
+    monkeypatch.setattr("app.services.tools.utility_tools._json_get", network_unavailable)
     monkeypatch.setattr(
         "app.services.tools.utility_tools.datetime",
         type("Clock", (), {"now": staticmethod(lambda: type("Now", (), {

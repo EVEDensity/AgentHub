@@ -154,8 +154,11 @@ def _format_utility_result(tool_name: str, outcome: dict[str, Any]) -> str:
     if tool_name == "current_date":
         return f"今天是 {result.get('formatted', '')}（{result.get('weekday', '')}，{result.get('timezone', '')}）"
     if tool_name == "weather":
+        location = str(result.get("location", "当前地点"))
+        if isinstance(outcome.get("metadata"), dict) and outcome["metadata"].get("locationApproximate"):
+            location += "（位置为近似值，可设置 AGENTHUB_WEATHER_LOCATION）"
         return (
-            f"{result.get('location', '当前地点')}：{result.get('condition', '未知')}，"
+            f"{location}：{result.get('condition', '未知')}，"
             f"{result.get('temperature', '未知')}{result.get('temperature_unit', '°C')}，"
             f"体感 {result.get('apparent_temperature', '未知')}{result.get('temperature_unit', '°C')}，"
             f"湿度 {result.get('humidity', '未知')}%，风速 {result.get('wind_speed', '未知')} "

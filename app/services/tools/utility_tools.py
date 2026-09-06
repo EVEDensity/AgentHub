@@ -145,12 +145,9 @@ async def _discover_local_location() -> dict[str, Any] | None:
         "0", "false", "no", "off",
     }:
         return None
-    # Prefer a local timezone hint. It is offline, deterministic, and avoids
-    # sending a request merely to identify a common desktop location.
-    local_timezone = datetime.now().astimezone().tzname() or ""
-    timezone_location = _LOCAL_TIMEZONE_LOCATIONS.get(local_timezone)
-    if timezone_location:
-        return {"location": timezone_location, "source": "local-timezone"}
+    # Public-IP geolocation is generally more accurate than a timezone (for
+    # example, China Standard Time spans many provinces and must not imply
+    # Shanghai). It remains approximate and can be overridden explicitly.
     try:
         payload = await _json_get("https://ipapi.co/json/", {})
         latitude = payload.get("latitude")
@@ -168,7 +165,16 @@ async def _discover_local_location() -> dict[str, Any] | None:
             "source": "public-ip",
         }
     except (httpx.HTTPError, KeyError, TypeError, ValueError):
-        return None
+        pass
+
+    # Offline fallback: use a city hint from the local timezone only when the
+    # network lookup is unavailable. This keeps the CLI useful while making
+    # the approximation explicit in the metadata.
+    local_timezone = datetime.now().astimezone().tzname() or ""
+    timezone_location = _LOCAL_TIMEZONE_LOCATIONS.get(local_timezone)
+    if timezone_location:
+        return {"location": timezone_location, "source": "local-timezone"}
+    return None
 
 
 async def weather_handler(
