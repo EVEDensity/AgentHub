@@ -34,6 +34,13 @@ def state_to_dict(state: SessionViewState) -> dict[str, Any]:
     return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"callId": t.call_id, "name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count, "diagnostics": list(state.diagnostics), "connectionStatus": state.connection_status}
 
 
+RenderSnapshot = dict[str, Any]
+
+def render_snapshot(state: SessionViewState) -> RenderSnapshot:
+    """唯一 renderer 输入；渲染层不得直接消费原始事件。"""
+    return state_to_dict(state)
+
+
 def state_summary(state: SessionViewState) -> str:
     parts = [state.status] if state.status else []
     if state.tools:
@@ -107,4 +114,4 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     )
 
 
-__all__ = ["SessionViewState", "ToolView", "reduce_event", "state_to_dict", "state_summary"]
+__all__ = ["SessionViewState", "ToolView", "RenderSnapshot", "reduce_event", "state_to_dict", "render_snapshot", "state_summary"]

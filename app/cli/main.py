@@ -864,7 +864,7 @@ def cli_main(argv: list[str] | None = None) -> int:
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
         base_kwargs = dict(
             provider=cfg.get("provider", "deepseek"),
-            model=cfg.get("model", "deepseek-chat"),
+            model=cfg.get("model", "deepseek-v4-flash"),
             model_base_url=cfg.get("base_url", None),
             workspace=None,
             mission_timeout=300.0,
@@ -960,7 +960,7 @@ def cli_main(argv: list[str] | None = None) -> int:
             try:
                 return _setup_interactive(cwd)
             except (EOFError, KeyboardInterrupt):
-                print("\n已取消。可用 `agenthub init --provider deepseek --model deepseek-chat` 手动配置。")
+                print("\n已取消。可用 `agenthub init --provider deepseek --model deepseek-v4-flash` 手动配置。")
                 return EXIT_INFRA_ERROR
         return cmd_init(args, cwd)
     if args.command == "run":

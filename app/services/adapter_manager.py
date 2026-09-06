@@ -27,6 +27,7 @@ from app.services.message_content import (
     flatten_text_content,
     validate_dual_track_content,
 )
+from app.services.model_ids import canonical_model_id
 
 logger = logging.getLogger("agenthub.adapter")
 
@@ -562,7 +563,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
         key = api_key or self.env_api_key
         if not ENABLE_REAL_LLM or not key:
             return await MockAdapter().execute_prompt(flatten_text_content(prompt), model)
-        actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
+        actual_model = canonical_model_id(model, provider=self.provider_name) if model and model.strip() and model != "ping" else self.default_model
         # Dual-track (ADR-0105): image parts require a vision-capable model —
         # text-only models get an explicit error, never silent degradation.
         assert_parts_allowed_for_model(self.provider_name, actual_model, prompt)
@@ -674,7 +675,7 @@ class OpenAICompatibleAdapter(BaseAdapter):
             async for chunk in MockAdapter().stream_prompt(flatten_text_content(prompt), model, system_prompt=system_prompt):
                 yield chunk
             return
-        actual_model = model.strip() if model and model.strip() and model != "ping" else self.default_model
+        actual_model = canonical_model_id(model, provider=self.provider_name) if model and model.strip() and model != "ping" else self.default_model
         # Dual-track (ADR-0105): fail-closed vision gate before any network I/O.
         assert_parts_allowed_for_model(self.provider_name, actual_model, prompt)
         url = (base_url.rstrip("/") if base_url else self.default_base_url) + "//chat/completions"
