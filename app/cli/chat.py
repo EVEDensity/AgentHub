@@ -620,7 +620,8 @@ def _run_slash_command(
     if name in ("/new", "/clear", "/unresume"):
         session.chained_mission_id = None
         if name == "/unresume":
-            _append_session_event(directory, event="resume.clear")
+            from app.services.context_store import ContextStore
+            ContextStore(directory).clear_resume()
         if name in ("/new", "/clear"):
             session.compact_context = None
             _clear_conversation(directory, session)
@@ -664,6 +665,8 @@ def _run_slash_command(
             emit(session.last_thinking)
         return True
     if name == "/context":
+        from app.services.context_compiler import ContextCompiler
+        manifest = ContextCompiler(directory).compile(conversation=_conversation_context(session), compact=session.compact_context or "", mission=session.chained_mission_id or "")
         tokens = sum(int(r.get("total_tokens") or 0) for r in session.session_records)
         emit(
             f"session missions: {len(session.session_missions)}\n"
@@ -671,7 +674,9 @@ def _run_slash_command(
             f"tokens observed: {tokens:,}\n"
             f"compact context: {'active' if session.compact_context else 'inactive'}\n"
             f"resume mission: {session.chained_mission_id or '（无）'}\n"
-            f"persistent store: {_conversation_path(directory)}"
+            f"persistent store: {_conversation_path(directory)}\n"
+            f"context sources: {', '.join(source.kind for source in manifest.sources) or 'none'}\n"
+            f"context chars: {manifest.estimated_chars}/{manifest.token_budget * 4}"
         )
         return True
     if name == "/tools":
@@ -930,11 +935,8 @@ def _run_slash_command(
             emit("用法: /resume <mission_id>")
             return True
         session.chained_mission_id = args[0].strip()
-        _append_session_event(
-            directory,
-            event="resume.set",
-            mission_id=session.chained_mission_id,
-        )
+        from app.services.context_store import ContextStore
+        ContextStore(directory).set_resume(session.chained_mission_id)
         emit(f"下一轮将链入任务 {session.chained_mission_id} 的上下文")
         return True
     if name == "/missions":

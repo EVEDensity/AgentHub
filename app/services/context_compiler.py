@@ -5,6 +5,15 @@ from pathlib import Path
 from typing import Any
 
 @dataclass(frozen=True)
+class ContextBudget:
+    total_chars: int = 12000
+    reserved_output_chars: int = 4000
+
+    @property
+    def input_chars(self) -> int:
+        return max(1000, self.total_chars - self.reserved_output_chars)
+
+@dataclass(frozen=True)
 class ContextSource:
     kind: str
     source_id: str
@@ -27,9 +36,10 @@ class ContextManifest:
 
 class ContextCompiler:
     """Single read boundary; callers provide optional Mission/facts layers."""
-    def __init__(self, directory: Path, *, char_budget: int = 12000) -> None:
+    def __init__(self, directory: Path, *, char_budget: int = 12000, budget: ContextBudget | None = None) -> None:
         self.directory = Path(directory)
-        self.char_budget = max(1000, int(char_budget))
+        self.budget = budget or ContextBudget(total_chars=char_budget)
+        self.char_budget = self.budget.input_chars
 
     def compile(self, *, current: str = "", conversation: str = "", mission: str = "", compact: str = "", facts: str = "", memory: str = "") -> ContextManifest:
         candidates = [
@@ -48,6 +58,6 @@ class ContextCompiler:
             text = source.text[:remaining]
             selected.append(ContextSource(source.kind, source.source_id, text, source.priority, reason=source.reason if len(text) == len(source.text) else "budget truncated"))
             remaining -= len(text)
-        return ContextManifest(tuple(selected), token_budget=self.char_budget // 4, estimated_chars=self.char_budget - remaining)
+        return ContextManifest(tuple(selected), token_budget=self.budget.total_chars // 4, estimated_chars=self.char_budget - remaining)
 
-__all__ = ["ContextCompiler", "ContextManifest", "ContextSource"]
+__all__ = ["ContextBudget", "ContextCompiler", "ContextManifest", "ContextSource"]
