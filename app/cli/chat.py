@@ -315,7 +315,9 @@ def _conversation_path(directory: Path) -> Path:
 
 def _load_conversation(directory: Path, session: ChatSessionState) -> None:
     """Load durable conversation messages, tolerating truncated JSONL tails."""
-    path = _conversation_path(directory)
+    from app.services.context_store import ContextStore
+    store = ContextStore(directory)
+    path = store.path
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -345,7 +347,7 @@ def _load_conversation(directory: Path, session: ChatSessionState) -> None:
             mission_id = str(item.get("missionId") or "").strip()
             if mission_id:
                 latest_mission_id = mission_id
-    session.conversation = loaded[-40:]
+    session.conversation = store.messages(limit=40) or loaded[-40:]
     # A session event is authoritative when present. For files written by
     # older versions, continue the most recent Mission chain inferred from
     # message metadata; direct-only conversations remain unchained.
