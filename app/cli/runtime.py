@@ -30,6 +30,7 @@ import httpx
 from app.cli.transport import HttpTransport
 from app.cli.sse_client import SseClient
 from app.cli.control_api import ArtifactApi, DecisionApi, MissionApi
+from app.services.tools.policy import ToolExecutionPolicy, resolve_tool_execution_policy
 
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event, reorder_events
@@ -291,6 +292,7 @@ def build_server_env(
     project_instructions_file: Path | None = None,
     web_search: bool = False,
     tool_permission_mode: str | None = None,
+    tool_policy: ToolExecutionPolicy | None = None,
     disable_tools: bool = False,
 ) -> dict[str, str]:
     """Env for the isolated SQLite mission-control subprocess.
@@ -336,8 +338,13 @@ def build_server_env(
     env[_WEB_SEARCH_ENV] = "1" if web_search else "0"
     # North-star I-6b: Codex-style tool permission tiering. Only a
     # resolved tier travels — an invalid tier fails fast at the CLI.
-    if tool_permission_mode is not None:
-        env[_TOOL_PERMISSION_ENV] = tool_permission_mode
+    if tool_policy is None:
+        tool_policy = resolve_tool_execution_policy(
+            workspace_root,
+            mode=tool_permission_mode,
+            environment_value=env.get(_TOOL_PERMISSION_ENV),
+        )
+    env[_TOOL_PERMISSION_ENV] = tool_policy.mode.value
     return env
 
 
@@ -384,6 +391,11 @@ class MissionControlProcess:
         self._project_instructions = project_instructions.strip()
         self._web_search = web_search
         self._tool_permission_mode = tool_permission_mode
+        self._tool_policy = resolve_tool_execution_policy(
+            workspace_root,
+            mode=tool_permission_mode,
+            environment_value=os.environ.get(_TOOL_PERMISSION_ENV),
+        )
         self._disable_tools = disable_tools
         self.port = port or free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
@@ -414,6 +426,7 @@ class MissionControlProcess:
             project_instructions_file=instructions_file,
             web_search=self._web_search,
             tool_permission_mode=self._tool_permission_mode,
+            tool_policy=self._tool_policy,
             disable_tools=self._disable_tools,
         )
         log_path = (

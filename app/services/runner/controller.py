@@ -45,6 +45,7 @@ from app.services.desktop_runner_tools import (
     DelegateSubtaskConfig,
     build_desktop_runner_tools,
 )
+from app.services.tools.policy import resolve_tool_execution_policy
 from app.services.harness_service import FunctionTool
 from app.services.mission_service import DESKTOP_TASK_WORK_UNIT_KIND
 from app.services.runner.auth import DesktopAuthenticator
@@ -232,6 +233,10 @@ class DesktopLocalRunnerController:
         # model can answer immediately instead of entering the desktop tool
         # loop. Read-only coding turns keep the normal suggest whitelist.
         disable_tools = os.environ.get("AGENTHUB_DESKTOP_DISABLE_TOOLS", "0") == "1"
+        policy = resolve_tool_execution_policy(
+            self._workspace_root,
+            environment_value=os.environ.get("AGENTHUB_TOOL_PERMISSION_MODE"),
+        )
         if disable_tools:
             tools = []
         elif self._tools is not None:
@@ -247,6 +252,7 @@ class DesktopLocalRunnerController:
                     timeout_seconds=settings.timeout_seconds,
                 ),
                 sandbox_enabled=settings.sandbox_enabled,
+                policy=policy,
             )
         else:
             tools = build_desktop_runner_tools(
@@ -258,6 +264,7 @@ class DesktopLocalRunnerController:
                     timeout_seconds=settings.timeout_seconds,
                 ),
                 sandbox_enabled=settings.sandbox_enabled,
+                policy=policy,
             )
 
         mcp_bridge = await self._build_mcp_bridge()

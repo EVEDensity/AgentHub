@@ -76,6 +76,11 @@ from app.services.tools.definitions import (
     CHANGE_PLAN,
 )
 from app.services.workspace_context import workspace_root_override
+from app.services.tools.policy import (
+    ToolExecutionPolicy,
+    ToolPermissionMode,
+    resolve_tool_execution_policy,
+)
 
 # Token-economy first layer: rendered tool results are capped before they
 # reach the model. Configurable per runner via build_desktop_runner_tools.
@@ -295,7 +300,9 @@ def _clamp_desktop_timeout(timeout: float) -> int:
     return min(int(timeout), DESKTOP_CODE_EXECUTE_MAX_TIMEOUT)
 
 
-async def _desktop_code_execute_denial(arguments: Mapping[str, Any]) -> str | None:
+async def _desktop_code_execute_denial(
+    arguments: Mapping[str, Any], policy: ToolExecutionPolicy
+) -> str | None:
     """Decide ``code_execute`` approval through the PermissionManager flow.
 
     The desktop profile runs unattended, so the interactive ASK outcome is
@@ -312,6 +319,11 @@ async def _desktop_code_execute_denial(arguments: Mapping[str, Any]) -> str | No
         ToolPermissionContext,
     )
 
+    if not policy.allow_code_execute:
+        return (
+            f"工具执行失败: code_execute 在权限档位 {policy.mode} 下不可用。"
+            "请切换到 auto 后重试。"
+        )
     manager = PermissionManager()
     manager.add_rule(
         PermissionRule(
@@ -342,6 +354,7 @@ def _build_code_execute_executor(
     workspace_root: Path,
     max_result_chars: int,
     sandbox_enabled: bool | None = None,
+    policy: ToolExecutionPolicy | None = None,
 ) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
     """Desktop executor for code_execute: PermissionManager gate + 60s cap.
 
@@ -356,7 +369,9 @@ def _build_code_execute_executor(
     inner = _build_tool_executor(handler, workspace_root, max_result_chars)
 
     async def execute(arguments: Mapping[str, Any]) -> str:
-        denial = await _desktop_code_execute_denial(arguments)
+        if policy is None:
+            raise RuntimeError("desktop code executor requires ToolExecutionPolicy")
+        denial = await _desktop_code_execute_denial(arguments, policy)
         if denial is not None:
             return denial
         clamped = dict(arguments)
@@ -976,6 +991,7 @@ def build_desktop_runner_tools(
     subtask_config: DelegateSubtaskConfig | None = None,
     sandbox_enabled: bool | None = None,
     permission_mode: str | None = None,
+    policy: ToolExecutionPolicy | None = None,
 ) -> list[FunctionTool]:
     """Build the fixed desktop tool whitelist bound to *workspace_root*.
 
@@ -994,7 +1010,13 @@ def build_desktop_runner_tools(
     """
     if max_result_chars < 1:
         raise ValueError("max_result_chars must be positive")
-    mode = resolve_tool_permission_mode(permission_mode)
+    if policy is None:
+        policy = resolve_tool_execution_policy(
+            workspace_root,
+            mode=permission_mode,
+            environment_value=os.environ.get(TOOL_PERMISSION_ENV),
+        )
+    mode = policy.mode.value
     denied = _PERMISSION_DENIED_TOOLS[mode]
     resolved_root = workspace_root.resolve()
     resolved_root.mkdir(parents=True, exist_ok=True)
@@ -1008,7 +1030,7 @@ def build_desktop_runner_tools(
                 raise ValueError(f"desktop tool has no handler: {definition.name}")
             executor = (
                 _build_code_execute_executor(
-                    handler, resolved_root, max_result_chars, sandbox_enabled
+                    handler, resolved_root, max_result_chars, sandbox_enabled, policy
                 )
                 if definition is CODE_EXECUTE
                 else _build_tool_executor(handler, resolved_root, max_result_chars)

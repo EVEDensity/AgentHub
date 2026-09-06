@@ -260,6 +260,31 @@ async def file_write_handler(
 # ── file_write_batch ──────────────────────────────────────────────────
 
 async def file_write_batch_handler(
+    paths_contents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compatibility adapter using the atomic change-set contract."""
+    if not isinstance(paths_contents, list) or not paths_contents:
+        return {"success": False, "error": "paths_contents 必须是非空数组"}
+    changes: list[dict[str, Any]] = []
+    for index, item in enumerate(paths_contents):
+        if not isinstance(item, dict):
+            return {"success": False, "error": f"paths_contents[{index}] 必须是对象"}
+        if "expected_sha256" not in item:
+            return {
+                "success": False,
+                "error": f"paths_contents[{index}].expected_sha256 是必填参数；新文件传空字符串",
+                "error_type": "conflict",
+            }
+        changes.append({
+            "path": item.get("path"),
+            "content": item.get("content"),
+            "expected_sha256": item.get("expected_sha256"),
+        })
+    from app.services.tools.change_set import apply_change_set_handler
+
+    return await apply_change_set_handler(changes)
+
+async def _legacy_file_write_batch_handler(
     paths_contents: list[dict[str, str]],
 ) -> dict[str, Any]:
     """Write multiple files to the workspace in a single call.

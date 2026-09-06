@@ -5,7 +5,12 @@ import hashlib
 from pathlib import Path
 
 from app.services.tools.change_set import apply_change_set_handler
-from app.services.tools.file_ops import file_edit_handler, file_patch_handler, file_write_handler
+from app.services.tools.file_ops import (
+    file_edit_handler,
+    file_patch_handler,
+    file_write_batch_handler,
+    file_write_handler,
+)
 from app.services.workspace_context import workspace_root_override
 
 
@@ -71,6 +76,25 @@ def test_file_write_append_preserves_existing_content(tmp_path: Path) -> None:
         result = asyncio.run(file_write_handler("notes.txt", "after", mode="append", expected_sha256=_sha(target)))
     assert result["success"] is True
     assert target.read_text(encoding="utf-8") == "before\nafter"
+
+
+def test_file_write_batch_requires_hash_and_uses_transaction(tmp_path: Path) -> None:
+    target = tmp_path / "batch.py"
+    with workspace_root_override(tmp_path):
+        missing = asyncio.run(
+            file_write_batch_handler([{"path": "batch.py", "content": "x = 1\n"}])
+        )
+        assert missing["success"] is False
+        assert missing["error_type"] == "conflict"
+        assert not target.exists()
+
+        written = asyncio.run(
+            file_write_batch_handler(
+                [{"path": "batch.py", "content": "x = 1\n", "expected_sha256": ""}]
+            )
+        )
+    assert written["success"] is True
+    assert target.read_text(encoding="utf-8") == "x = 1\n"
 
 
 def test_file_patch_rejects_stale_context(tmp_path: Path) -> None:

@@ -134,7 +134,7 @@ class EditTierTests(unittest.TestCase):
 
     def test_file_write_executes(self) -> None:
         handler = self.tools["file_write"].handler
-        output = asyncio.run(handler({"path": "ok.txt", "content": "data"}))
+        output = asyncio.run(handler({"path": "ok.txt", "content": "data", "expected_sha256": ""}))
         self.assertNotIn("权限档位", output)
         self.assertEqual((self.root / "ok.txt").read_text(encoding="utf-8"), "data")
 
@@ -174,7 +174,7 @@ class ServerEnvTests(unittest.TestCase):
         )
         self.assertEqual(env.get("AGENTHUB_TOOL_PERMISSION_MODE"), "suggest")
 
-    def test_absent_mode_leaves_env_untouched(self) -> None:
+    def test_absent_mode_resolves_canonical_edit_policy(self) -> None:
         from app.cli.runtime import CliModelSettings
 
         env = build_server_env(
@@ -189,7 +189,7 @@ class ServerEnvTests(unittest.TestCase):
             runner_timeout_seconds=60.0,
             web_search=False,
         )
-        self.assertNotIn("AGENTHUB_TOOL_PERMISSION_MODE", env)
+        self.assertEqual(env["AGENTHUB_TOOL_PERMISSION_MODE"], "edit")
 
 
 class ParserTests(unittest.TestCase):

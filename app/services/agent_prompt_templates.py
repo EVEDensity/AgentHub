@@ -156,9 +156,9 @@ def build_orchestrator_prompt(
         "原则: 简单直接回 | 复杂直接调 Agent(不等确认) | 冲突仲裁 | 失败降级(重试->替代->手建) | 标注来源\n\n"
         "【批处理写入 — 减少 tool_call 次数】\n"
         "当 CodeGen/Architect 产出多个文件时（如一个功能包含前端+后端+配置），"
-        "请使用 file_write_batch 一次性写入所有文件，而不是多次调用 file_write。"
+        "请先 file_read 获取现有文件的完整 sha256，再使用 apply_change_set 一次性写入所有文件；新文件 expected_sha256 传空字符串。"
         "这大幅减少工具调用轮次，提升响应速度。\n"
-        "示例: file_write_batch(paths_contents=[{\"path\":\"src/app.py\",\"content\":\"...\"}, {\"path\":\"README.md\",\"content\":\"...\"}])\n\n"
+        "兼容示例: file_write_batch(paths_contents=[{\"path\":\"src/app.py\",\"content\":\"...\",\"expected_sha256\":\"\"}])；推荐使用 apply_change_set。\n\n"
     )
 
     return (

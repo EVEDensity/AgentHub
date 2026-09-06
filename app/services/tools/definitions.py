@@ -237,11 +237,11 @@ FILE_WRITE = ToolDefinition(
 
 FILE_WRITE_BATCH = ToolDefinition(
     name="file_write_batch",
-    description="批量写入多个文件到工作区，自动创建所需的父目录。一次调用可写入多个文件（如整个模块的代码文件），大幅减少 tool_call 次数。适合 CodeGen 输出多文件代码时使用。",
+    description="兼容入口：以 apply_change_set 的原子事务契约批量写入多个文件。每项必须携带 expected_sha256；推荐新代码直接使用 apply_change_set。",
     category="file",
     parameters=[
         ToolParameter(name="paths_contents", type="array", required=True,
-                      description="文件列表。每项为 {\"path\": \"相对路径\", \"content\": \"文件内容\"} 的对象。例如 [{\"path\": \"src/main.py\", \"content\": \"print('hi')\"}, {\"path\": \"src/utils.py\", \"content\": \"def f(): pass\"}]。最多支持 20 个文件。"),
+                      description="文件列表。每项必须为 {\"path\": \"相对路径\", \"content\": \"文件内容\", \"expected_sha256\": \"...\"}；新文件 hash 传空字符串。最多 20 个文件。"),
     ],
     return_type='批量写入结果摘要及每个文件的写入状态（success/fail + metadata）',
     examples=[
@@ -249,9 +249,9 @@ FILE_WRITE_BATCH = ToolDefinition(
             user_question="帮我创建一个博客项目的基础结构，包括前端和后端代码",
             parameters={
                 "paths_contents": [
-                    {"path": "backend/app.py", "content": "from flask import Flask\napp = Flask(__name__)\n..."},
-                    {"path": "frontend/index.html", "content": "<!DOCTYPE html>\n<html>...</html>"},
-                    {"path": "README.md", "content": "# Blog Project\n..."},
+                    {"path": "backend/app.py", "content": "from flask import Flask\napp = Flask(__name__)\n...", "expected_sha256": ""},
+                    {"path": "frontend/index.html", "content": "<!DOCTYPE html>\n<html>...</html>", "expected_sha256": ""},
+                    {"path": "README.md", "content": "# Blog Project\n...", "expected_sha256": ""},
                 ],
             },
         ),
@@ -259,8 +259,8 @@ FILE_WRITE_BATCH = ToolDefinition(
             user_question="创建 src/utils 目录并在其中写入 helpers.py 和 config.py",
             parameters={
                 "paths_contents": [
-                    {"path": "src/utils/helpers.py", "content": "def add(a, b): return a + b"},
-                    {"path": "src/utils/config.py", "content": "DEBUG = True"},
+                    {"path": "src/utils/helpers.py", "content": "def add(a, b): return a + b", "expected_sha256": ""},
+                    {"path": "src/utils/config.py", "content": "DEBUG = True", "expected_sha256": ""},
                 ],
             },
         ),
