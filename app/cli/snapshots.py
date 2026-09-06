@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -18,6 +19,8 @@ def _git(root: Path, *args: str) -> str:
 
 def _hash(path: Path) -> str | None:
     try:
+        if path.is_symlink():
+            return hashlib.sha256(("symlink:" + os.readlink(path)).encode("utf-8")).hexdigest()
         digest = hashlib.sha256()
         with path.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -25,6 +28,18 @@ def _hash(path: Path) -> str | None:
         return digest.hexdigest()
     except OSError:
         return None
+
+
+def _meta(path: Path) -> dict[str, object] | None:
+    try:
+        stat = path.lstat()
+    except OSError:
+        return None
+    kind = "symlink" if path.is_symlink() else "directory" if path.is_dir() else "file"
+    result: dict[str, object] = {"kind": kind, "mode": stat.st_mode & 0o7777}
+    if kind == "symlink":
+        result["target"] = os.readlink(path)
+    return result
 
 
 def _index_entries(root: Path, paths: set[str]) -> dict[str, str]:
@@ -58,6 +73,8 @@ class AttemptSnapshot:
     baseline_index: dict[str, str]
     post: dict[str, str | None] | None = None
     post_index: dict[str, str] | None = None
+    baseline_meta: dict[str, dict[str, object]] = field(default_factory=dict)
+    post_meta: dict[str, dict[str, object]] | None = None
 
     @property
     def metadata_path(self) -> Path:
@@ -120,6 +137,7 @@ class AttemptSnapshot:
             "attemptId": self.id,
             "changedFiles": changed,
             "hashes": {path: {"before": self.baseline.get(path), "after": (self.post or {}).get(path)} for path in changed},
+            "metadata": {path: {"before": self.baseline_meta.get(path), "after": (self.post_meta or {}).get(path)} for path in changed},
             "fileSources": sources,
             "workUnits": normalized_units,
             "artifacts": normalized_artifacts,
@@ -134,8 +152,18 @@ class AttemptSnapshot:
             for line in _git(self.root, "status", "--short").splitlines()
             if len(line) > 3
         }
+        try:
+            internal_prefix = str(self.store.parent.resolve().relative_to(self.root)).replace("\\", "/").rstrip("/")
+            status_paths = {
+                path for path in status_paths
+                if path.replace("\\", "/").rstrip("/") != internal_prefix
+                and not path.replace("\\", "/").startswith(internal_prefix + "/")
+            }
+        except ValueError:
+            pass
         paths = set(self.baseline) | status_paths
         post = {path: _hash(self.root / path) for path in paths if path}
+        post_meta = {path: meta for path in paths if path and (meta := _meta(self.root / path)) is not None}
         paths = set(self.baseline) | status_paths
         post_index = _index_entries(self.root, paths)
         payload = {
@@ -145,10 +173,12 @@ class AttemptSnapshot:
             "baselineIndex": self.baseline_index,
             "post": post,
             "postIndex": post_index,
+            "baselineMeta": self.baseline_meta,
+            "postMeta": post_meta,
         }
         self.store.mkdir(parents=True, exist_ok=True)
         self.metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return AttemptSnapshot(self.id, self.root, self.store, self.baseline, self.baseline_status, self.baseline_index, post, post_index)
+        return AttemptSnapshot(self.id, self.root, self.store, self.baseline, self.baseline_status, self.baseline_index, post, post_index, self.baseline_meta, post_meta)
 
     def preview_restore(self) -> tuple[bool, list[str]]:
         """Check whether restore can proceed without modifying the workspace."""
@@ -162,7 +192,8 @@ class AttemptSnapshot:
             before = self.baseline.get(path)
             current = _hash(self.root / path)
             after = self.post.get(path)
-            if current == before:
+            current_meta = _meta(self.root / path)
+            if current == before and current_meta == self.baseline_meta.get(path):
                 continue
             if current != after:
                 conflicts.append(path)
@@ -171,6 +202,10 @@ class AttemptSnapshot:
                 sources[path] = "user"
             else:
                 sources[path] = "agent"
+            if self.post_meta and self.baseline_meta.get(path) != self.post_meta.get(path):
+                if current_meta != self.post_meta.get(path):
+                    conflicts.append(f"metadata:{path}")
+                    sources[path] = "external"
         post_index = self.post_index or {}
         current_index = _index_entries(self.root, set(self.baseline_index) | set(post_index))
         for path in sorted(set(self.baseline_index) | set(post_index)):
@@ -194,7 +229,8 @@ class AttemptSnapshot:
             before = self.baseline.get(path)
             current = _hash(self.root / path)
             after = self.post.get(path)
-            if current == before:
+            current_meta = _meta(self.root / path)
+            if current == before and current_meta == self.baseline_meta.get(path):
                 continue
             target = self.store / "files" / path
             if before is None:
@@ -205,6 +241,10 @@ class AttemptSnapshot:
                 except OSError:
                     self._write_audit(status="failed", conflicts=[path], sources={path: "agent"})
                     return False, [path]
+            elif target.is_symlink():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                (self.root / path).unlink(missing_ok=True)
+                os.symlink(os.readlink(target), self.root / path)
             elif target.is_file():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(target, self.root / path)
@@ -217,6 +257,13 @@ class AttemptSnapshot:
                 if proc.returncode != 0:
                     self._write_audit(status="failed", conflicts=[path], sources={path: "agent"})
                     return False, [path]
+            meta = self.baseline_meta.get(path)
+            if meta and meta.get("kind") == "file":
+                try:
+                    os.chmod(self.root / path, int(meta.get("mode", 0o644)))
+                except OSError:
+                    self._write_audit(status="failed", conflicts=[f"metadata:{path}"], sources={path: "agent"})
+                    return False, [f"metadata:{path}"]
 
         for path, entry in self.baseline_index.items():
             meta, _ = entry.split("\t", 1)
@@ -249,17 +296,32 @@ def capture_attempt(root: Path, store_root: Path) -> AttemptSnapshot:
             status_paths.add(path)
             if line.startswith("??"):
                 untracked.add(path)
+    try:
+        internal_prefix = str(store_root.resolve().relative_to(root)).replace("\\", "/").rstrip("/")
+        status_paths = {
+            path for path in status_paths
+            if path.replace("\\", "/").rstrip("/") != internal_prefix
+            and not path.replace("\\", "/").startswith(internal_prefix + "/")
+        }
+        untracked = {path for path in untracked if path in status_paths}
+    except ValueError:
+        pass
     tracked = [line.strip() for line in _git(root, "ls-files").splitlines() if line.strip()]
     paths = set(tracked) | status_paths
     baseline = {path: (None if path in untracked else _hash(root / path)) for path in paths}
+    baseline_meta = {path: meta for path in paths if path and (meta := _meta(root / path)) is not None}
     snapshot_id = "att-" + uuid.uuid4().hex
     baseline_index = _index_entries(root, paths)
-    snapshot = AttemptSnapshot(snapshot_id, root, store_root / snapshot_id, baseline, frozenset(status_paths), baseline_index)
+    snapshot = AttemptSnapshot(snapshot_id, root, store_root / snapshot_id, baseline, frozenset(status_paths), baseline_index, baseline_meta=baseline_meta)
     snapshot.store.mkdir(parents=True, exist_ok=True)
     for path, digest in baseline.items():
         if digest is not None and path in status_paths:
             source = root / path
-            if source.is_file():
+            if source.is_symlink():
+                target = snapshot.store / "files" / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(os.readlink(source), target)
+            elif source.is_file():
                 target = snapshot.store / "files" / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
@@ -279,6 +341,8 @@ def load_snapshot(root: Path, store: Path, snapshot_id: str) -> AttemptSnapshot 
             dict(payload.get("baselineIndex", {})),
             dict(payload.get("post", {})),
             dict(payload.get("postIndex", {})),
+            dict(payload.get("baselineMeta", {})),
+            dict(payload.get("postMeta", {})),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None

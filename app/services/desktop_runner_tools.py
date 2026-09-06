@@ -41,6 +41,7 @@ from app.services.harness_service import (
 from app.services.runner_composition import HarnessModelFactoryPort
 from app.services.tool_registry import ToolDefinition, ToolParameter
 from app.services.tools.definitions import (
+    APPLY_CHANGE_SET,
     CODE_EXECUTE,
     FILE_EDIT,
     FILE_GLOB,
@@ -54,6 +55,14 @@ from app.services.tools.definitions import (
     CURRENT_TIME,
     CURRENT_DATE,
     WEATHER,
+    GIT_STATUS,
+    GIT_DIFF,
+    GIT_LOG,
+    GIT_BRANCH,
+    GIT_BRANCH_CREATE,
+    GIT_COMMIT,
+    GIT_REVERT,
+    GIT_CHERRY_PICK,
 )
 from app.services.workspace_context import workspace_root_override
 
@@ -76,6 +85,7 @@ _TRUNCATION_MARKER = "...[截断]"
 # confined to objective-declared acceptance commands) and the zero-dependency
 # ``lint_check`` Python syntax probe.
 _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
+    APPLY_CHANGE_SET,
     FILE_READ,
     FILE_WRITE,
     FILE_EDIT,
@@ -89,6 +99,14 @@ _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     CURRENT_TIME,
     CURRENT_DATE,
     WEATHER,
+    GIT_STATUS,
+    GIT_DIFF,
+    GIT_LOG,
+    GIT_BRANCH,
+    GIT_BRANCH_CREATE,
+    GIT_COMMIT,
+    GIT_REVERT,
+    GIT_CHERRY_PICK,
 )
 
 # ── delegate_subtask (G8): Codex-style spawn_agent for the desktop ───────
@@ -158,6 +176,10 @@ def _path_arguments(arguments: Mapping[str, Any]) -> list[str]:
         if isinstance(value, str) and ("path" in key or key == "cwd"):
             paths.append(value)
         elif key == "paths_contents" and isinstance(value, list):
+            for item in value:
+                if isinstance(item, Mapping) and isinstance(item.get("path"), str):
+                    paths.append(item["path"])
+        elif key == "changes" and isinstance(value, list):
             for item in value:
                 if isinstance(item, Mapping) and isinstance(item.get("path"), str):
                     paths.append(item["path"])

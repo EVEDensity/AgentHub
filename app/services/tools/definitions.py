@@ -46,6 +46,17 @@ from app.services.tools.utility_tools import (
     current_time_handler,
     weather_handler,
 )
+from app.services.tools.change_set import apply_change_set_handler
+from app.services.tools.git_tools import (
+    git_branch_handler,
+    git_branch_create_handler,
+    git_cherry_pick_handler,
+    git_commit_handler,
+    git_diff_handler,
+    git_log_handler,
+    git_revert_handler,
+    git_status_handler,
+)
 from app.services.tools.session_tools import (
     artifact_list_handler,
     artifact_read_handler,
@@ -194,14 +205,14 @@ FILE_WRITE = ToolDefinition(
                       description="要写入的完整文本内容"),
         ToolParameter(name="mode", type="string", required=False,
                       description="写入模式: 'overwrite' 覆写(默认) 或 'append' 追加", default="overwrite"),
-        ToolParameter(name="expected_sha256", type="string", required=False,
-                      description="上次 file_read 返回的 sha256 值，用于检测文件是否被其他用户修改过。不提供则跳过冲突检测。"),
+        ToolParameter(name="expected_sha256", type="string", required=True,
+                      description="file_read 返回的完整 sha256；新文件传空字符串。缺失或不匹配时拒绝写入。"),
     ],
     return_type='"写入结果描述文本" 及 metadata（path, size_bytes, mode, sha256, conflict 等）',
     examples=[
         ToolExample(
             user_question="帮我在 data 目录下创建一个 config.json 文件，内容是 {...}",
-            parameters={"path": "data/config.json", "content": "{...}", "mode": "overwrite"},
+                parameters={"path": "data/config.json", "content": "{...}", "mode": "overwrite", "expected_sha256": ""},
         ),
     ],
     risk_level="L2",
@@ -245,6 +256,39 @@ FILE_WRITE_BATCH = ToolDefinition(
     handler=file_write_batch_handler,
     is_concurrency_safe=False,  # Has side effects
 )
+
+APPLY_CHANGE_SET = ToolDefinition(
+    name="apply_change_set",
+    description="以一次可回滚事务写入多个文本文件。每项必须提供完整 expected_sha256；任一文件冲突或写入失败都会拒绝或回滚整个变更集。",
+    category="file",
+    parameters=[
+        ToolParameter(
+            name="changes", type="array", required=True,
+            description="变更数组，每项包含 path、content、expected_sha256；新文件的 expected_sha256 传空字符串。",
+        ),
+    ],
+    return_type='事务结果及 metadata（transaction_id, files[path, sha256, size_bytes]）',
+    examples=[
+        ToolExample(
+            user_question="同时更新两个模块，任何一个冲突就整体回滚",
+            parameters={"changes": [{"path": "a.py", "content": "print(1)\\n", "expected_sha256": ""}]},
+        ),
+    ],
+    risk_level="L2",
+    handler=apply_change_set_handler,
+    is_concurrency_safe=False,
+)
+
+_GIT_CWD = ToolParameter(name="cwd", type="string", required=False, description="工作区内目录", default=".")
+
+GIT_STATUS = ToolDefinition("git_status", "查看工作区状态和当前分支。", "git", [_GIT_CWD], "git status", [], handler=git_status_handler)
+GIT_DIFF = ToolDefinition("git_diff", "查看未暂存或已暂存的代码差异。", "git", [_GIT_CWD, ToolParameter("staged", "boolean", False, "是否查看暂存区", False), ToolParameter("path", "string", False, "可选文件路径")], "unified diff", [], handler=git_diff_handler)
+GIT_LOG = ToolDefinition("git_log", "查看最近提交记录。", "git", [_GIT_CWD, ToolParameter("count", "number", False, "提交数量", 10)], "commit log", [], handler=git_log_handler)
+GIT_BRANCH = ToolDefinition("git_branch", "列出当前仓库分支。", "git", [_GIT_CWD], "branch list", [], handler=git_branch_handler)
+GIT_BRANCH_CREATE = ToolDefinition("git_branch_create", "创建并切换到新分支。", "git", [ToolParameter("name", "string", True, "新分支名"), _GIT_CWD], "branch result", [], risk_level="L2", handler=git_branch_create_handler, is_concurrency_safe=False)
+GIT_COMMIT = ToolDefinition("git_commit", "显式创建 Git 提交；文件工具不会自动提交。", "git", [ToolParameter("message", "string", True, "提交说明"), _GIT_CWD], "commit result", [], risk_level="L2", handler=git_commit_handler, is_concurrency_safe=False)
+GIT_REVERT = ToolDefinition("git_revert", "为指定提交创建可审计的 revert 提交。", "git", [ToolParameter("commit", "string", True, "单个 commit id"), _GIT_CWD], "revert result", [], risk_level="L2", handler=git_revert_handler, is_concurrency_safe=False)
+GIT_CHERRY_PICK = ToolDefinition("git_cherry_pick", "应用指定提交并保留 Git 冲突状态。", "git", [ToolParameter("commit", "string", True, "单个 commit id"), _GIT_CWD], "cherry-pick result", [], risk_level="L2", handler=git_cherry_pick_handler, is_concurrency_safe=False)
 
 # ── code_execute ──────────────────────────────────────────────────────
 
@@ -607,6 +651,8 @@ FILE_PATCH = ToolDefinition(
                       description="要打补丁的文件路径（相对于工作区），例如 'app/main.py'"),
         ToolParameter(name="diff", type="string", required=True,
                       description="Unified diff 格式的补丁内容，包含 @@ -a,n +b,m @@ 块头"),
+        ToolParameter(name="expected_sha256", type="string", required=True,
+                      description="file_read 返回的完整 sha256；文件被修改或缺失时拒绝应用补丁。"),
     ],
     return_type='补丁应用结果描述 + 文件预览 + metadata（lines_added, lines_removed, total_lines）',
     examples=[
@@ -615,6 +661,7 @@ FILE_PATCH = ToolDefinition(
             parameters={
                 "path": "app/main.py",
                 "diff": "@@ -42,4 +42,5 @@\n def main():\n-    pass\n+    print('hello')\n+    return 0",
+                "expected_sha256": "<full sha256 from file_read>",
             },
         ),
     ],
@@ -916,12 +963,14 @@ FILE_EDIT = ToolDefinition(
                       description="替换后的新文本。如果不想做任何修改，设置与 old_string 相同。"),
         ToolParameter(name="replace_all", type="boolean", required=False,
                       description="是否替换所有匹配项。默认 false（只替换第一处）。当 old_string 在文件中出现多次且 replace_all=false 时，工具会拒绝执行并返回所有匹配位置。", default=False),
+        ToolParameter(name="expected_sha256", type="string", required=True,
+                      description="file_read 返回的完整 sha256；新文件传空字符串。缺失或不匹配时拒绝编辑。"),
     ],
     return_type='"替换结果描述文本" 及 metadata（path, occurrences, replaced, size_bytes, sha256 等）',
     examples=[
         ToolExample(
             user_question="把 app/main.py 中所有的 'user_name' 改成 'username'",
-            parameters={"path": "app/main.py", "old_string": "user_name", "new_string": "username", "replace_all": True},
+            parameters={"path": "app/main.py", "old_string": "user_name", "new_string": "username", "replace_all": True, "expected_sha256": "<full sha256 from file_read>"},
         ),
         ToolExample(
             user_question="在 config.py 的 DEBUG = False 改为 DEBUG = True",
@@ -1060,9 +1109,18 @@ BUILTIN_TOOLS: list[ToolDefinition] = [
     CURRENT_TIME,
     CURRENT_DATE,
     WEATHER,
+    GIT_STATUS,
+    GIT_DIFF,
+    GIT_LOG,
+    GIT_BRANCH,
+    GIT_BRANCH_CREATE,
+    GIT_COMMIT,
+    GIT_REVERT,
+    GIT_CHERRY_PICK,
     FILE_READ,
     FILE_WRITE,
     FILE_WRITE_BATCH,
+    APPLY_CHANGE_SET,
     FILE_SEARCH,
     FILE_PATCH,
     CODE_EXECUTE,
