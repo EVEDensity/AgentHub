@@ -209,6 +209,16 @@ async def git_cherry_pick_handler(commit: str, cwd: str = ".") -> dict[str, Any]
     return await _run_git(["cherry-pick", commit.strip()], cwd=safe)
 
 
+async def git_push_handler(cwd: str = ".") -> dict[str, Any]:
+    """Explicit capability boundary: desktop Runner never pushes remotely."""
+    return {
+        "success": False,
+        "errorType": "unsupported_capability",
+        "error": "git_push is not supported by the desktop Runner; review the local commit and push manually",
+        "metadata": {"readOnly": True, "requiresUserAction": True},
+    }
+
+
 HANDLERS = {
     "git_status": git_status_handler,
     "git_diff": git_diff_handler,
@@ -218,6 +228,7 @@ HANDLERS = {
     "git_branch_create": git_branch_create_handler,
     "git_revert": git_revert_handler,
     "git_cherry_pick": git_cherry_pick_handler,
+    "git_push": git_push_handler,
 }
 
 
@@ -236,4 +247,5 @@ __all__ = [
     "git_branch_create_handler",
     "git_revert_handler",
     "git_cherry_pick_handler",
+    "git_push_handler",
 ]

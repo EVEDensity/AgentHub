@@ -54,6 +54,7 @@ from app.services.tools.git_tools import (
     git_commit_handler,
     git_diff_handler,
     git_log_handler,
+    git_push_handler,
     git_revert_handler,
     git_status_handler,
 )
@@ -70,6 +71,7 @@ from app.services.tools.developer_tools import (
     test_discover_handler,
     type_check_handler,
 )
+from app.services.tools.project_tools import project_inspect_handler
 from app.services.tools.session_tools import (
     artifact_list_handler,
     artifact_read_handler,
@@ -302,8 +304,10 @@ GIT_BRANCH_CREATE = ToolDefinition("git_branch_create", "创建并切换到新�
 GIT_COMMIT = ToolDefinition("git_commit", "显式创建 Git 提交；文件工具不会自动提交。", "git", [ToolParameter("message", "string", True, "提交说明"), _GIT_CWD], "commit result", [], risk_level="L2", handler=git_commit_handler, is_concurrency_safe=False)
 GIT_REVERT = ToolDefinition("git_revert", "为指定提交创建可审计的 revert 提交。", "git", [ToolParameter("commit", "string", True, "单个 commit id"), _GIT_CWD], "revert result", [], risk_level="L2", handler=git_revert_handler, is_concurrency_safe=False)
 GIT_CHERRY_PICK = ToolDefinition("git_cherry_pick", "应用指定提交并保留 Git 冲突状态。", "git", [ToolParameter("commit", "string", True, "单个 commit id"), _GIT_CWD], "cherry-pick result", [], risk_level="L2", handler=git_cherry_pick_handler, is_concurrency_safe=False)
+GIT_PUSH = ToolDefinition("git_push", "声明当前 Desktop Runner 不支持远程 Git push；返回明确的人工操作提示。", "git", [_GIT_CWD], "unsupported capability result", [], risk_level="L2", handler=git_push_handler, is_concurrency_safe=False)
 
 DEV_CWD = ToolParameter(name="path", type="string", required=False, description="工作区内路径", default=".")
+PROJECT_INSPECT = ToolDefinition("project_inspect", "只读检查项目身份、技术栈、README 摘要、Git 分支和远程仓库。", "project", [DEV_CWD], "project manifest", [], handler=project_inspect_handler)
 AST_SYMBOLS = ToolDefinition("ast_symbols", "解析 Python AST，列出类和函数符号及行号。", "code", [ToolParameter("path", "string", True, "Python 文件路径"), ToolParameter("include_private", "boolean", False, "是否包含下划线私有符号", False)], "symbols", [], handler=ast_symbols_handler)
 TEST_DISCOVER = ToolDefinition("test_discover", "发现项目测试文件和 package.json scripts，不执行测试。", "code", [DEV_CWD], "test inventory", [], handler=test_discover_handler)
 FORMATTER = ToolDefinition("formatter", "运行已安装的 ruff/black/prettier；默认 check 模式不修改文件。", "code", [DEV_CWD, ToolParameter("formatter", "string", False, "auto/ruff/black/prettier", "auto"), ToolParameter("check", "boolean", False, "仅检查不写入", True)], "formatter result", [], risk_level="L2", handler=formatter_handler, is_concurrency_safe=False)
@@ -1143,6 +1147,8 @@ BUILTIN_TOOLS: list[ToolDefinition] = [
     GIT_COMMIT,
     GIT_REVERT,
     GIT_CHERRY_PICK,
+    GIT_PUSH,
+    PROJECT_INSPECT,
     AST_SYMBOLS,
     TEST_DISCOVER,
     FORMATTER,
