@@ -192,7 +192,7 @@ async def file_write_handler(
         await amkdir(safe.parent)
 
         if mode == "append" and original_text:
-            new_full = original_text + "\n" + content
+            new_full = original_text + ("" if original_text.endswith(("\n", "\r")) else "\n") + content
             await awrite_text(safe, new_full, encoding="utf-8")
             action = "追加"
         else:
@@ -207,7 +207,7 @@ async def file_write_handler(
             from app.services.file_version_tracker import file_version_tracker
             fv = file_version_tracker.record_write(
                 sid, path,
-                content if mode == "overwrite" else (original_text + "\n" + content),
+                content if mode == "overwrite" else (original_text + ("" if original_text.endswith(("\n", "\r")) else "\n") + content),
                 uid, "",
             )
             sha256_hash = file_sha256(safe) or fv.sha256
