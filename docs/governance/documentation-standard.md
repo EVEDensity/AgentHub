@@ -38,6 +38,8 @@ Architecture, ADR, roadmap, and runbook documents must state:
 Use ISO dates (`YYYY-MM-DD`). Avoid version numbers in filenames unless the
 document describes a versioned external contract.
 
+Capability claims also follow [Documentation Status and Evidence](../development/documentation-status.md).
+
 ## Review requirements
 
 - Architecture changes require an ADR before or with implementation.

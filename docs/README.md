@@ -43,6 +43,8 @@ Every architecture, roadmap, or operational document must declare one state:
 - `draft`: under discussion and not authoritative.
 - `accepted`: approved direction or decision.
 - `implemented`: verified against the current system.
+- `production-verified`: implemented plus recorded real-environment evidence.
+- `target`: planned or incomplete; not an implementation claim.
 - `superseded`: replaced, with a link to the replacement.
 - `archived`: retained only for historical context.
 

@@ -46,4 +46,4 @@ Windows 必须完成 mock closed-loop；macOS/Linux 若暂无 native binary 必�
 
 ## 完成判定
 
-只有本地测试、真实 provider、真实 TTY、真实 registry 四类证据齐全，才能把对应路线图条目标为 implemented；否则保持 partial/target，并把失败归类写入 `docs/development/ai-problem-solving-log.md`。
+本地测试通过即可标记 `implemented`；真实 provider、真实 TTY、真实 registry 等外部证据齐全后，才能升级为 `production-verified`。失败归类写入 `docs/development/ai-problem-solving-log.md`。

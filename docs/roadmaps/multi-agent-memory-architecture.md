@@ -3,7 +3,7 @@
 > Status: accepted（调研结论与选型已由 [ADR-0108](../architecture/decisions/0108-event-log-as-memory-multi-agent-collaboration.md) 采纳；
 > §8 分阶段计划为意图，不是实现证明）
 > Owner: architecture maintainers
-> Last reviewed: 2026-09-01
+> Last reviewed: 2026-09-02
 > Scope: 多Agent记忆架构调研、Buzz 对标、范式对比、差距分析、选型结论、分阶段演进
 > Related: [ADR-0107](../architecture/decisions/0107-memory-slimming-web-chat-decommission.md)、
 > [多Agent协作技术方案总图](../architecture/multi-agent-collaboration.md)、
@@ -248,11 +248,30 @@ FTS/关键词检索验收不达标时，按 ADR-0107 的 opt-in 条款重新评�
    整体注入（测试 `tests/cli/test_project_facts.py` 12 例）。
 4. **MCP 记忆工具**：`recall`/`retain` 只读暴露 L0/L1 与事实。
 
+### P1.5 补充切片（2026-09-02 追加）
+
+1. **会话事件流模型**：SessionEvent domain + migration + SSE 端点 +
+   Mission→Session milestone bridge。
+   ✅ 已交付：`message.created` / `mention.detected` / `rule.triggered` /
+   `mission.created` 四个 write point；`GET /api/v1/sessions/{id}/events/stream`。
+2. **规则确认门**：rule engine + YAML + confirm/cancel 端点。
+   ✅ 已交付：`RuleEngine` pattern match → `PendingConfirmation` 状态机
+   (PENDING→CONFIRMED/CANCELLED/EXPIRED)；`AGENT_RULES.yaml` 热加载。
+3. **跨域统一搜索**（原 P3 提前）：CLI `agenthub search --scope both`。
+   ✅ 已交付：scope={mission,session,both} + FTS-only per ADR-0108。
+
 ### 长期（P2/P3）
 
 1. 订阅/规则触发（先确认后执行）；
 2. 事件流统一索引（会话+任务跨域）；
 3. 会话事件流与 Agent 目录/工作台表面（Web 投影）。
+
+### T2 Runner 执行加固（2026-09-02 全完成）
+
+- ✅ T2-1: Chat Mission 端到端集成测试 19/19 passed（含 default participant / @mention / session 自动创建 / session_events 写入 / @archivist / rule confirm / cancel）。
+- ✅ T2-2: A2A outbound runner-based dispatch 固化（无 env 变量）；gateway 直派已硬删除；runner strict peer manifest。
+- ✅ T2-3: Runner claim fencing 10→1 压测通过；lease expiry + heartbeat gap 恢复测试通过；A2A inbound claim fencing 通过。
+- ✅ `_inline_derive_work_units` 清理（desktop runner loop 已覆盖 CHAT source）。
 
 ### 明确不做（停止条件）
 

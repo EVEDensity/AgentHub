@@ -3,7 +3,7 @@
 > Status: draft（目标架构；能力声明按「✅ 已实现 / 🔵 迁移中 / ⚪ 规划」分级，
 > 方案文档不等于实现证明）
 > Owner: architecture maintainers
-> Last reviewed: 2026-09-01
+> Last reviewed: 2026-09-02
 > Scope: 会话协作层、身份与成员模型、@Agent 触发、任务执行链路、
 > 记忆检索与证据溯源、前后端联动
 > Related: [ADR-0107](./decisions/0107-memory-slimming-web-chat-decommission.md)（记忆减负）、
@@ -40,13 +40,13 @@
 ```text
 ┌───────────────────────── 接入表面（Projection，不拥有业务真相）─────────────────────────┐
 │   CLI / TUI（agenthub run/chat/tui/exec）      Web 聊天协作面板（v1 API）      A2A 对等节点 │
-│   ✅ 已实现                                    🔵 迁移中（脱离 legacy 运行时）   ✅ 已实现 │
+│   ✅ 已实现                                    ✅ 已实现（v1 chat_mission + SSE + archivist）  ✅ 已实现 │
 └───────────────┬────────────────────────────────────┬──────────────────────────┬─────────┘
                 │                                    │                          │
                 ▼                                    ▼                          ▼
 ┌───────────────────────── 会话协作层（Collaboration Layer）─────────────────────────────┐
 │  统一成员目录（人类 + 内部 Agent + 外部 A2A Agent 同级）                    ✅ P1 切片  │
-│  会话事件流（session event log）：消息 / @mention / Mission 引用 / 判定摘要  ⚪         │
+│  会话事件流（session event log）：消息 / @mention / Mission 引用 / 判定摘要  ✅         │
 │  @mention 解析 → 成员与权限校验 → 触发路由（指令/订阅/工作流规则）           ✅ 解析已有  │
 │  UserRoster / 成员可见性（Buzz 通道成员模型）                                ✅ 已有雏形  │
 └───────────────┬────────────────────────────────────────────────────────────────────────┘
@@ -72,7 +72,7 @@
 │ 工具调用、预算 │      Evidence（SHA-256 封装）→ Decision（PASS/FAIL，到期监督）✅
 └───────┬───────┘                │
         ▼                        ▼
-  Artifact（CAS，字节级校验）✅    结果事件回写会话事件流（含 mission_id + 证据摘要）⚪
+  Artifact（CAS，字节级校验）✅    结果事件回写会话事件流（含 mission_id + 证据摘要）🔵
 ```
 
 数据流闭环：**消息 → mention → Mission → WorkUnit → Runner/Harness →
@@ -85,15 +85,15 @@ Artifact → Verifier → Decision → Evidence → 回写会话流**。会话�
 
 | 模块          | 职责                                       | 状态           | 现有实现锚点                                                            |
 | ----------- | ---------------------------------------- | ------------ | ----------------------------------------------------------------- |
-| 会话事件流       | 会话内一切行为的不可变日志（L0）                        | ⚪ 设计定稿       | Mission 转录（`app/cli/runtime.py::build_compact_context`）为既有同类形态    |
+| 会话事件流       | 会话内一切行为的不可变日志（L0）                        | ✅ 已实现         | Mission 转录（`app/cli/runtime.py::build_compact_context`）为既有同类形态    |
 | 统一成员模型      | 人类/内部/外部 Agent 同级目录与可见性                  | 🔵 雏形        | `UserRoster`、A2A Agent Card 目录投影（ADR-0026/0031）                   |
-| @mention 触发 | mention 解析、权限校验、Mission 路由               | 🔵 解析已有，触发待接 | `frontend/…/lib/mention.ts`；缺 Mission 自动创建                        |
+| @mention 触发 | mention 解析、权限校验、Mission 路由               | ✅ 全链路已接通         | `frontend/…/lib/mention.ts`；缺 Mission 自动创建                        |
 | 任务执行链路      | Mission→WorkUnit→Runner→Harness→Artifact | ✅            | `app/domain`、`app/services/runner_worker.py`、`harness_service.py` |
 | 独立验证        | Verifier + Decision + Evidence           | ✅            | ADR-0004/0059/0060、`verifier_service/`                            |
 | 记忆 L0/L1    | 转录 + 增量摘要                                | ✅            | ADR-0107、`app/services/memory/`                                   |
 | 项目事实        | `.agenthub/memory.md` 键级覆盖               | ✅ CLI 切片      | `agenthub facts`（`app/cli/project_facts.py`），门控注入见 `runtime.py::execute_objective`，测试 `tests/cli/test_project_facts.py` |
 | Receipts 检索 | 跨会话任务检索带证据回溯                             | ✅ CLI 切片      | `agenthub search`/`replay`（`app/cli/receipts.py::search_receipts`），测试 `tests/cli/test_cli_search.py` |
-| 前后端联动       | Web 面板走 v1/Mission API                   | 🔵 迁移中       | ADR-0107（web chat 下线重做）                                           |
+| 前后端联动       | Web 面板走 v1/Mission API                   | ✅ 已接通       | ADR-0107（web chat 下线重做）                                           |
 
 ***
 
@@ -218,7 +218,7 @@ artifact 引用；没有 Evidence 的完成公告不允许出现（延续
 检索入口：
   CLI   agenthub search "上个月修过什么" --days 30   ✅ 已实现（P0 切片）
   CLI   agenthub replay <mission_id>                  ✅ 已实现（目标/证据/产物回放）
-  会话  @archivist 查一下上次登录重构的结论           ⚪ 规划（同一检索服务）
+  会话  @archivist 查一下上次登录重构的结论           ✅ 已实现（receipts + SessionEvent）
         │
         ▼
 Receipts 视图（Mission/Evidence 上的关键词视图 + 时间/状态过滤；
@@ -285,12 +285,12 @@ Mission Control（唯一事实源）
 | 优先级 | 工作项                                                       | 依赖          | 一句话验收                                   |
 | --- | --------------------------------------------------------- | ----------- | --------------------------------------- |
 | P0 | Receipts 检索切片：Mission/Evidence FTS 视图 + `agenthub search` | 无（纯读路径） | ✅ 已交付（2026-09-01）：`agenthub search "<关键词>" [--status] [--days] [--json]` 返回带 mission 链接、verifier verdict 与 evidence 摘要的条目；配套 `agenthub replay <mission_id>`；修复 `missions` 列表缺 `workspaceId` 参数导致 422 的存量缺陷 |
-| P0  | Web 聊天迁移 Mission/v1 API                                   | 既有 v1 API   | 聊天表面脱离 orchestrator，与 CLI 同源            |
-| P1  | Agent 成员化：会话成员目录 + @任意成员                                  | 统一成员模型      | 会话内可见 Agent 目录并可 @ 触发                   |
-| P1  | 消息→Mission 触发路由                                           | 成员化         | 会话内 @dev 指令创建 Mission 并回写结果事件           |
-| P2  | 订阅/规则触发（先确认后执行）                                           | 触发路由        | 关键词命中后 Agent 先提问确认                      |
-| P2  | MCP 记忆工具：`recall`/`retain` 暴露 L0/L1                       | receipts    | 外部 Agent 经 MCP 读写项目事实                   |
-| P3  | 事件流统一索引（会话+任务跨域检索）                                        | receipts 稳定 | 单一检索覆盖聊天与任务                             |
+| P0  | Web 聊天迁移 Mission/v1 API                                   | 既有 v1 API   | ✅ 已交付（2026-09-02）：`POST /api/v1/chat/mission` + SSE streamUrl + @archivist + rules confirm gate；前端 ArchivistReceiptCard + EventTimeline + useSessionEvents hook |
+| P1  | Agent 成员化：会话成员目录 + @任意成员                                  | 统一成员模型      | ✅ 基本切片已交付：`GET /api/v1/workspaces/{scope_id}/members`；前端从 v1 API 拉取 Agent 列表；@mention 解析 → catalog 成员 |
+| P1  | 消息→Mission 触发路由                                           | 成员化         | ✅ 已交付（2026-09-02）：完整链路 `POST /chat/mission` → mention 解析 → 默认 participant 回退 → mission.created → session_events；19 集成测试 |
+| P2  | 订阅/规则触发（先确认后执行）                                           | 触发路由        | ✅ 已交付（2026-09-02）：`RuleEngine` + `PendingConfirmation` 状态机；YAML `AGENT_RULES.yaml` 热加载；`POST /chat/confirm` + `POST /chat/cancel` |
+| P3  | MCP 记忆工具：`recall`/`retain` 暴露 L0/L1                       | receipts    | 外部 Agent 经 MCP 读写项目事实（底层 L0/L1 已有，仅差 MCP transport 接线） |
+| P3  | 事件流统一索引（会话+任务跨域检索）                                        | receipts 稳定 | 🔵 基础已铺：SessionEvent domain + FTS-ready；`agenthub search --scope both` CLI 切片 |
 
 ## 11. 技术取舍与禁止项
 

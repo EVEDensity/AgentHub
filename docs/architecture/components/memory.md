@@ -1,7 +1,7 @@
 # AgentHub Memory Architecture
 
 > Status: slimmed to L0/L1 (ADR-0107)
-> Last reviewed: 2026-09-01
+> Last reviewed: 2026-09-02
 > ADR: [0107-memory-slimming-web-chat-decommission](../decisions/0107-memory-slimming-web-chat-decommission.md)
 
 ## 1. What remains
@@ -16,7 +16,7 @@ project-facts file:
 | ----------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- |
 | L0 working memory | PostgreSQL `messages` / Mission SQLite transcript                   | Latest conversation transcript, deduplicated and token-budgeted |
 | L1 session memory | `users/{user}/sessions/{session}/conversation.md` + session summary | Recent durable turns plus a semantic session summary            |
-| Project facts     | `.agenthub/memory.md` (flat, key-scoped)                            | Keyword-gated injection into project instructions              |
+| Project facts     | `.agenthub/memory.md` (flat, key-scoped)                            | Keyword-gated injection into project instructions               |
 
 Project facts are managed by `agenthub facts list|set|get|remove`
 (`app/cli/project_facts.py`): writing an existing `section.key`
@@ -135,7 +135,7 @@ Remaining gaps:
 - Move the web surface onto Mission + v1 API and let it reuse
   `build_compact_context` end-to-end (removes the legacy L1 chat store).
 
-- Revisit vector retrieval only behind a concrete use case with acceptance
+- Revisit vector retrieval is OFF by default (ADR-0107) and must have a concrete use case + acceptance
   criteria (ADR-0107).
 
 ### Long term

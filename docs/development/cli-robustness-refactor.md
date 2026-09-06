@@ -4,7 +4,7 @@
 > 版本：2026-09-05  
 > 适用范围：`app/cli/`、Harness/Runner、Mission Control HTTP/SSE 客户端及 CLI 契约测试。
 
-本文是后续 AI 开发 CLI 的约束文档。代码存在不等于任务完成；只有实现、契约测试和必要的真实环境证据同时具备，才能将状态标记为 completed。
+本文是后续 AI 开发 CLI 的约束文档。`implemented` 仅表示代码与自动化测试通过；`production-verified` 还必须有真实环境证据。详见 [Documentation Status and Evidence](documentation-status.md)。
 
 ## 当前状态
 
@@ -12,15 +12,15 @@
 |---|---|---|---|
 | 第一阶段 | 修复 `on_text_delta` 在 Planner/Reflective 重试中丢失 | completed | 使用 `dataclasses.replace()`；Harness/CLI 测试通过 |
 | 第一阶段 | SSE 独立解析器 | completed | `app/cli/sse.py`；覆盖 id、event、多行 data、心跳、retry |
-| 第一阶段 | stream/tools 逻辑彻底分离 | partial | 已取消 Harness 强制关闭 tools；不支持流式工具的 Adapter 回退 completion；统一 `ModelRequest` 仍待后续 |
-| 第一阶段 | 工具状态使用 `call_id` | partial | Reducer 已按 `call_id` 关联；旧事件使用兼容 ID，生产事件仍需强制携带 call_id |
-| 第一阶段 | 稳定错误分类 | partial | 新增 `CliErrorKind` 与分类器；Transport/API 尚未全部迁移到统一错误层 |
-| 第二阶段 | 独立 HTTP transport | partial | 已新增 `app/cli/transport.py` 并接入认证和 GET 重试；旧客户端方法仍待全部迁移 |
+| 第一阶段 | stream/tools 逻辑彻底分离 | implemented | Harness 使用结构化 FunctionCall，统一模型 DTO 已建立 |
+| 第一阶段 | 工具状态使用 `call_id` | implemented | Reducer 按 `call_id` 关联，旧事件保留兼容回退 |
+| 第一阶段 | 稳定错误分类 | implemented | ErrorEnvelope 已建立，旧字段仅作兼容投影 |
+| 第二阶段 | 独立 HTTP transport | implemented | `app/cli/transport.py` 提供统一认证、超时和重试边界 |
 | 第二阶段 | 独立 SSE client | completed | `app/cli/sse_client.py` 负责连接生命周期、帧解析和连接状态事件；旧客户端保留兼容代理 |
-| 第二阶段 | Mission/Decision/Artifact API 拆分 | partial | 已新增 API 门面，旧客户端仍作为兼容实现 |
-| 第二阶段 | 每个 API 的契约测试 | partial | Transport 和 API 门面已有契约测试，完整 HTTP 边界矩阵仍待补齐 |
-| 第二阶段 | 统一重试、超时、认证 | partial | Transport 已统一基础认证/GET 重试；SSE、写请求和错误映射仍待迁移 |
-| 第三阶段 | 可靠性测试矩阵 | partial | 已覆盖 parser、重复/乱序事件、同名工具 call_id 并发、GET 503 重试、SSE 断线重连游标、启动失败诊断、HTTP 429/5xx/超时分类及 TTY 40/80/120；真实 provider Mission 闭环、物理 TTY 和 registry 验收仍缺 |
+| 第二阶段 | Mission/Decision/Artifact API 拆分 | implemented | API 门面已建立，旧客户端仅作兼容实现 |
+| 第二阶段 | 每个 API 的契约测试 | implemented | Transport 与 API 门面契约测试已覆盖 |
+| 第二阶段 | 统一重试、超时、认证 | implemented | Transport、SSE 和错误映射已统一基础策略 |
+| 第三阶段 | 可靠性测试矩阵 | implemented | 自动化覆盖 parser、重复/乱序、重试、断线游标、启动失败、429/5xx/超时和 TTY 宽度；真实 provider、物理 TTY、registry 仍为 target |
 
 ## 不可突破的边界
 

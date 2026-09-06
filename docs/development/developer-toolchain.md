@@ -1,6 +1,8 @@
 # 开发者工具链
 
-> 状态：implemented（基础链路）；真实跨平台 provider/registry 验收仍为 pending
+> Status: implemented  
+> Evidence: unit, contract, integration  
+> Production evidence: real provider/registry cross-platform verification remains target
 > 适用范围：内置工具、Desktop Runner、Attempt 快照和 CLI 开发工作流
 
 ## 变更安全契约
