@@ -152,6 +152,15 @@ class ChatReplTests(unittest.TestCase):
         self.assertFalse(calls[0]["disable_tools"])
         self.assertEqual(calls[0]["tool_permission_mode"], "suggest")
 
+    def test_project_identity_query_uses_local_manifest(self) -> None:
+        (self.cwd / "README.md").write_text("# Local Project\nA real summary.", encoding="utf-8")
+        code, text, calls = self._run(["分析当前的项目是什么", "/quit"])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [])
+        self.assertIn("项目:", text)
+        self.assertIn(self.cwd.name, text)
+        self.assertIn("A real summary.", text)
+
     def test_normal_conversation_uses_read_only_without_attempt_snapshot(self) -> None:
         _, _, calls = self._run(["你好", "/quit"])
         self.assertFalse(calls[0]["capture_attempt_snapshot"])

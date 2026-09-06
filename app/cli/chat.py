@@ -1186,7 +1186,7 @@ def chat_session(
             _append_conversation(directory, session, role="assistant", content=report_text, source="direct")
             emit()
             continue
-        if output_fn is None and not is_side_effect_task and _is_project_identity_query(objective):
+        if not is_side_effect_task and _is_project_identity_query(objective):
             from app.services.project_manifest import ProjectManifest
 
             manifest = ProjectManifest.discover(
