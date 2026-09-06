@@ -18,6 +18,7 @@ import httpx
 
 LOCAL_TIMEZONE_ENV = "AGENTHUB_TIMEZONE"
 WEATHER_LOCATION_ENV = "AGENTHUB_WEATHER_LOCATION"
+WEATHER_AUTO_LOCATION_ENV = "AGENTHUB_WEATHER_AUTO_LOCATION"
 UTILITY_TIMEOUT_SECONDS = 12.0
 
 _WEATHER_CODES = {
@@ -55,6 +56,23 @@ _FIXED_TIMEZONES = {
     "Asia/Tokyo": timezone(timedelta(hours=9), "Asia/Tokyo"),
     "Asia/Seoul": timezone(timedelta(hours=9), "Asia/Seoul"),
     "Asia/Singapore": timezone(timedelta(hours=8), "Asia/Singapore"),
+}
+
+# Windows exposes names such as ``China Standard Time`` instead of IANA
+# zones. These are deliberately city-level hints, not precise GPS claims;
+# they let a local CLI answer a weather question without requiring the user
+# to configure a location explicitly.
+_LOCAL_TIMEZONE_LOCATIONS = {
+    "China Standard Time": "上海",
+    "中国标准时间": "上海",
+    "Tokyo Standard Time": "东京",
+    "日本标准时间": "东京",
+    "Taipei Standard Time": "台北",
+    "Singapore Standard Time": "新加坡",
+    "Pacific Standard Time": "西雅图",
+    "Eastern Standard Time": "纽约",
+    "Central European Standard Time": "柏林",
+    "GMT Standard Time": "伦敦",
 }
 
 
@@ -115,6 +133,44 @@ async def _json_get(url: str, params: dict[str, Any]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+async def _discover_local_location() -> dict[str, Any] | None:
+    """Best-effort location discovery for interactive local weather queries.
+
+    The CLI does not have permission to read OS GPS/location services. When
+    no explicit location is configured, use the public-IP geolocation service
+    as a fallback and keep the result clearly marked as approximate. Users
+    can disable this network lookup with ``AGENTHUB_WEATHER_AUTO_LOCATION=0``.
+    """
+    if os.environ.get(WEATHER_AUTO_LOCATION_ENV, "1").strip().lower() in {
+        "0", "false", "no", "off",
+    }:
+        return None
+    # Prefer a local timezone hint. It is offline, deterministic, and avoids
+    # sending a request merely to identify a common desktop location.
+    local_timezone = datetime.now().astimezone().tzname() or ""
+    timezone_location = _LOCAL_TIMEZONE_LOCATIONS.get(local_timezone)
+    if timezone_location:
+        return {"location": timezone_location, "source": "local-timezone"}
+    try:
+        payload = await _json_get("https://ipapi.co/json/", {})
+        latitude = payload.get("latitude")
+        longitude = payload.get("longitude")
+        if latitude is None or longitude is None:
+            return None
+        return {
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "location": ", ".join(
+                str(value)
+                for value in (payload.get("city"), payload.get("country_name"))
+                if value
+            ),
+            "source": "public-ip",
+        }
+    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+        return None
+
+
 async def weather_handler(
     location: str = "",
     latitude: float | None = None,
@@ -129,8 +185,20 @@ async def weather_handler(
         return {"success": False, "error": "latitude 和 longitude 必须是数字"}
     if (lat is None) != (lon is None):
         return {"success": False, "error": "latitude 和 longitude 必须同时提供"}
+    auto_source = False
     if lat is None and not location:
-        return {"success": False, "error": "天气查询需要 location，或同时提供 latitude/longitude"}
+        discovered = await _discover_local_location()
+        if discovered is not None:
+            lat = discovered.get("latitude")
+            lon = discovered.get("longitude")
+            location = str(discovered.get("location") or "当前位置")
+            if lat is None or lon is None:
+                # A timezone-derived city still needs normal geocoding.
+                auto_source = str(discovered.get("source") or "local")
+            else:
+                auto_source = str(discovered.get("source") or "public-ip")
+        else:
+            return {"success": False, "error": "天气查询需要 location，或同时提供 latitude/longitude"}
     if lat is not None and not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return {"success": False, "error": "经纬度超出有效范围"}
 
@@ -178,7 +246,18 @@ async def weather_handler(
                 "wind_speed": current.get("wind_speed_10m"),
                 "wind_speed_unit": units.get("wind_speed_10m", "km/h"),
             },
-            "metadata": {"source": "open-meteo", "latitude": lat, "longitude": lon},
+            "metadata": {
+                "source": (
+                    "open-meteo+local-timezone"
+                    if auto_source == "local-timezone"
+                    else "open-meteo+ip-geolocation"
+                    if auto_source
+                    else "open-meteo"
+                ),
+                "latitude": lat,
+                "longitude": lon,
+                "locationApproximate": bool(auto_source),
+            },
         }
     except httpx.TimeoutException:
         return {"success": False, "error": f"天气查询超时（{UTILITY_TIMEOUT_SECONDS:g}秒）"}
