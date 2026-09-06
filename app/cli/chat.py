@@ -59,7 +59,7 @@ from app.cli.runtime import (
     state_dir,
 )
 
-_PROMPT = "agenthub> "
+_PROMPT = "AgentHub ❯ "
 
 
 def _likely_side_effect_objective(objective: str) -> bool:
@@ -88,6 +88,21 @@ def _is_conversational_objective(objective: str) -> bool:
         return False
     operational = ("查看", "查询", "检查", "分析代码", "读取", "搜索", "列出文件", "文件分类", "文件列表", "项目结构", "目录", "测试代码", "调试", "实现", "修复", "天气", "气温", "weather")
     return not any(word in objective for word in operational)
+
+
+def _is_workspace_query(objective: str) -> bool:
+    """Recognize read-only requests that can be answered from the real tree."""
+    text = objective.lower()
+    if any(token in text for token in (
+        "文件分类", "文件列表", "项目结构", "目录结构", "列出文件",
+        "分类项目文件", "workspace files", "project files", "file tree",
+    )):
+        return True
+    # Cover natural variants such as “查询项目下有哪些文件” without
+    # routing arbitrary file-writing requests into the read-only walker.
+    return any(action in text for action in ("查询", "查看", "列出", "统计")) and any(
+        subject in text for subject in ("项目文件", "工作区文件", "目录", "文件")
+    )
 
 
 def _is_date_question(objective: str) -> bool:
@@ -644,9 +659,7 @@ def _run_slash_command(
             emit("")  # spacing before the rich render
             # Reuse the shared cost renderer even in plain mode: it
             # degrades to a single muted text line.
-            from rich.console import Console
-
-            console = Console()
+            console = ui.make_console()
             console.print(ui.format_cost_line(session.session_records))
         else:
             missions = len(session.session_records)
@@ -663,9 +676,10 @@ def _run_slash_command(
         if not session.last_thinking:
             emit("最近一轮没有可展开的 thinking 内容")
         elif ui is not None:
-            from rich.console import Console
-            from rich.panel import Panel
-            Console().print(Panel(session.last_thinking, title="thinking", border_style=ui.C_ACCENT))
+            from rich.rule import Rule
+            from rich.console import Group
+            from rich.text import Text
+            ui.make_console().print(Group(Rule("thinking", style=ui.STYLE_ACCENT), Text("│ " + session.last_thinking, style=ui.STYLE_MUTED)))
         else:
             emit(session.last_thinking)
         return True
@@ -860,8 +874,7 @@ def _run_slash_command(
         if name == "/patch":
             emit(diff)
         elif ui is not None:
-            from rich.console import Console
-            Console().print(ui.render_diff_panel(workspace_root))
+            ui.make_console().print(ui.render_diff_panel(workspace_root))
         return True
     if name == "/undo":
         preview_only = bool(args and args[0].lower() in {"preview", "--preview"})
@@ -997,9 +1010,7 @@ def chat_session(
     )
     console = None
     if use_rich:
-        from rich.console import Console
-
-        console = Console()
+        console = ui.make_console()
 
     config = _load_config(cwd)
     settings = resolve_model_settings(
@@ -1112,13 +1123,33 @@ def chat_session(
             continue
         if output_fn is None and not is_side_effect_task and _is_weather_question(objective):
             location = _weather_location(objective)
+            if console is not None and ui is not None:
+                console.print(ui.render_tool_started("weather", location or "location required"))
             answer = _run_local_utility("weather", location=location)
             if console is not None:
+                if ui is not None:
+                    console.print(ui.render_tool_completed("Weather lookup complete"))
                 console.print(answer, style=ui.STYLE_PRIMARY)
             else:
                 emit(answer)
             _append_conversation(directory, session, role="user", content=objective, source="direct")
             _append_conversation(directory, session, role="assistant", content=answer, source="direct")
+            emit()
+            continue
+        if output_fn is None and not is_side_effect_task and _is_workspace_query(objective):
+            if console is not None and ui is not None:
+                console.print(ui.render_tool_started("file_walker", "workspace"))
+                console.print(ui.render_workspace_classification(workspace_root))
+                console.print(ui.render_tool_completed("Workspace classification complete"))
+            else:
+                emit(f"workspace: {workspace_root}")
+                if ui is not None:
+                    report = ui.classify_workspace(workspace_root)
+                    for category, count in report["categories"].items():
+                        emit(f"  {category}: {count}")
+            report_text = f"已读取工作区并完成文件分类：{workspace_root}"
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=report_text, source="direct")
             emit()
             continue
         if output_fn is None and _is_conversational_objective(objective):
@@ -1216,6 +1247,8 @@ def chat_session(
             # Live owns the terminal during a turn; status is already present
             # in the spinner view. Printing separate lines here interleaves
             # with token output and makes the transcript appear out of order.
+            if runner_ctx is not None and "tool" in kind:
+                runner_ctx.on_tool_event(event)
         try:
             result = execute_objective(
                 objective=objective,
@@ -1266,10 +1299,13 @@ def chat_session(
             emit(f"  error: {exc}")
             continue
         if runner_ctx is not None:
-            runner_ctx.__exit__(None, None, None)
+            # Include provider usage in the collapsed thinking summary when
+            # the result exposes it; finish() remains idempotent for errors.
+            runner_ctx.finish(int(getattr(result, "total_tokens", 0) or 0))
 
         if use_rich and console is not None:
             console.print(ui.render_result_panel(result))
+            console.print(ui.render_artifact_summary(result))
             if is_side_effect_task:
                 diff_panel = ui.render_diff_panel(workspace_root)
                 if diff_panel is not None:
