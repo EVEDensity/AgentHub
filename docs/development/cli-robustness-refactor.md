@@ -1,10 +1,9 @@
-# CLI 鲁棒性重构与边界说明
+# CLI 鲁棒性重构与边界说明（已替代）
 
-> 状态：accepted（执行基线，能力按下表逐项验收）  
-> 版本：2026-09-05  
-> 适用范围：`app/cli/`、Harness/Runner、Mission Control HTTP/SSE 客户端及 CLI 契约测试。
+> Status: superseded
+> Replacement: [Production CLI Technical Specification](../architecture/production-cli-technical-spec.md)
 
-本文是后续 AI 开发 CLI 的约束文档。`implemented` 仅表示代码与自动化测试通过；`production-verified` 还必须有真实环境证据。详见 [Documentation Status and Evidence](documentation-status.md)。
+本文仅保留历史重构记录，不再作为后续 AI 的实施依据；请使用替代文档。状态定义仍见 [Documentation Status and Evidence](documentation-status.md)。
 
 ## 当前状态
 

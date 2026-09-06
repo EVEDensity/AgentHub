@@ -1,9 +1,9 @@
-# AgentHub 开发者 CLI 核心产品交付方案
+# AgentHub 开发者 CLI 核心产品交付方案（已替代）
 
-> 状态：accepted（执行基线，持续更新）
-> 版本：2026-09-04
-> 适用范围：`app/cli/`、Mission Control 事件契约、Harness/Runner 集成、CLI 发行与 CI。
-> 替换：本文件替换此前以 UI 重构和零散 P0-P5 为主的 CLI 路线图。旧实现记录不再作为后续排期依据。
+> Status: superseded
+> Replacement: [Production CLI Technical Specification](../architecture/production-cli-technical-spec.md)
+
+本文仅保留历史路线和迁移背景，不再作为实施依据；请使用替代文档。
 
 本文件定义将 AgentHub CLI 建设为程序员日常开发工具的实施顺序、架构约束和验收条件。路线图不是完成证明；任何能力声明必须由版本化契约、自动化测试和必要的真实 CI 运行记录共同支撑。
 

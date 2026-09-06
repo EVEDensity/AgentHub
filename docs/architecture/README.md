@@ -25,6 +25,9 @@ The detailed target design and migration sequence are stored locally under
 
 ## Contents
 
+- `production-cli-technical-spec.md`: implementation SSOT for the production
+  developer CLI, including contracts, boundaries, roadmap, and evidence gates.
+
 - `multi-agent-collaboration.md`: blueprint for the chat-shaped
   multi-agent collaboration system (session event log, @agent trigger,
   receipts retrieval) per ADR-0108.
