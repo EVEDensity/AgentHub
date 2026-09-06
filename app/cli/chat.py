@@ -1241,7 +1241,11 @@ def chat_session(
                 # than the removed legacy "plan" mode; passing plan prevents
                 # the runner from starting and yields no assistant.delta.
                 tool_permission_mode=None if is_side_effect_task else "suggest",
-                disable_tools=not is_side_effect_task,
+                # Read-only operational requests (for example file queries,
+                # searches, and diagnostics) must still expose the desktop
+                # tool set.  ``suggest`` governs side-effect permission; it
+                # must not disable read-only tools altogether.
+                disable_tools=False,
             )
             if thinking_filter is not None:
                 trailing = thinking_filter.flush()

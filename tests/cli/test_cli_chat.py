@@ -23,6 +23,7 @@ from app.cli.chat import (
     _conversation_path,
     _is_time_question,
     _is_weather_question,
+    _is_conversational_objective,
     _weather_location,
     _load_conversation,
     _run_slash_command,
@@ -134,6 +135,14 @@ class ChatReplTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("创建 hello.py", calls[0]["objective"])
         self.assertIn("mis-1", text)
+
+    def test_read_only_project_query_exposes_tools(self) -> None:
+        code, _, calls = self._run(["查询该项目下的文件分类", "/quit"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertFalse(calls[0]["capture_attempt_snapshot"])
+        self.assertFalse(calls[0]["disable_tools"])
+        self.assertEqual(calls[0]["tool_permission_mode"], "suggest")
 
     def test_normal_conversation_uses_read_only_without_attempt_snapshot(self) -> None:
         _, _, calls = self._run(["你好", "/quit"])
