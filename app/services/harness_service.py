@@ -24,6 +24,7 @@ from app.services.harness_checkpoint import (
     _HarnessRecorder,
 )
 from app.services.tools.sandbox_executor import SandboxResult
+from app.services.model_contract import ToolCall as CanonicalToolCall, ToolResult as CanonicalToolResult
 
 logger = logging.getLogger("agenthub.harness")
 
@@ -130,6 +131,9 @@ class FunctionCall:
     name: str
     arguments: Mapping[str, Any]
 
+    def to_model_contract(self) -> CanonicalToolCall:
+        return CanonicalToolCall(id=self.id, name=self.name, arguments=self.arguments)
+
 
 @dataclass(frozen=True)
 class FunctionResult:
@@ -139,6 +143,9 @@ class FunctionResult:
     name: str
     success: bool
     content: str
+
+    def to_model_contract(self) -> CanonicalToolResult:
+        return CanonicalToolResult(call_id=self.call_id, name=self.name, success=self.success, content=self.content)
 
 
 @dataclass(frozen=True)
@@ -401,7 +408,9 @@ class FunctionCallingHarness:
                     )
                     if request.on_text_delta is not None:
                         response = await self._stream_with_retry(
-                            request, tuple(tool_results)
+                            request,
+                            tuple(tool_results),
+                            tools_enabled=bool(self._tools),
                         )
                     else:
                         response = await self._complete_with_retry(
@@ -558,11 +567,15 @@ class FunctionCallingHarness:
         self,
         request: HarnessRequest,
         tool_results: tuple[FunctionResult, ...],
+        *,
+        tools_enabled: bool = False,
     ) -> ModelResponse:
         stream = getattr(self._model, "stream", None)
         if not callable(stream):
-            return await self._complete_with_retry(request, tool_results)
-        return await stream(request, tool_results, tools_enabled=False)
+            return await self._complete_with_retry(
+                request, tool_results, tools_enabled=tools_enabled
+            )
+        return await stream(request, tool_results, tools_enabled=tools_enabled)
 
     def _budget_error(self, usage: ModelUsage) -> tuple[str, str] | None:
         if (

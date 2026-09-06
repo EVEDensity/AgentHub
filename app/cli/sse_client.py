@@ -23,6 +23,7 @@ class SseClient:
         mission_id: str,
         *,
         after_sequence: int = 0,
+        after_event_id: str | None = None,
         poll_seconds: float = 0.5,
         max_seconds: float = 2.0,
     ) -> Iterator[dict[str, Any]]:
@@ -33,6 +34,7 @@ class SseClient:
             pool=10.0,
         )
         try:
+            headers = {"Last-Event-ID": after_event_id} if after_event_id else None
             with self._transport.stream(
                 "GET",
                 f"/api/v1/missions/{mission_id}/events/stream",
@@ -40,7 +42,9 @@ class SseClient:
                     "afterSequence": after_sequence,
                     "pollSeconds": poll_seconds,
                     "maxSeconds": max_seconds,
+                    **({"afterEventId": after_event_id} if after_event_id else {}),
                 },
+                headers=headers,
                 timeout=timeout,
             ) as response:
                 response.raise_for_status()

@@ -45,6 +45,12 @@ async def stream_mission_events(
     """
     mission = await _authorized_mission(mission_id, user=user, repository=repository)
     del mission
+    last_event_id = request.headers.get("last-event-id", "").strip()
+    if last_event_id and after_sequence == 0:
+        try:
+            after_sequence = await repository.event_sequence(last_event_id)
+        except Exception:  # noqa: BLE001 - stale/unknown IDs simply catch up from zero
+            after_sequence = 0
 
     async def event_stream() -> AsyncIterator[str]:
         from app.services.mission_event_bus import mission_event_bus
@@ -71,7 +77,7 @@ async def stream_mission_events(
                     # while the JSON event remains backwards compatible.
                     yield (
                         f"id: {event.get('event_id', '')}\n"
-                        f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        f"data: {json.dumps(_sse_public_event(event), ensure_ascii=False)}\n\n"
                     )
                 if deadline is not None and time.monotonic() >= deadline:
                     return
@@ -104,3 +110,32 @@ async def stream_mission_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _sse_public_event(event: dict) -> dict:
+    """Convert legacy repository dictionaries to the canonical SSE envelope."""
+    aggregate_type = event.get("aggregate_type", event.get("aggregateType", ""))
+    aggregate_id = event.get("aggregate_id", event.get("aggregateId", ""))
+    canonical = {
+        "schemaVersion": int(event.get("schema_version", event.get("schemaVersion", 1))),
+        "eventId": event.get("event_id", event.get("eventId", "")),
+        "missionId": event.get("correlation_id", event.get("correlationId", event.get("mission_id", ""))),
+        "aggregate": {
+            "type": getattr(aggregate_type, "value", aggregate_type),
+            "id": aggregate_id,
+            "sequence": int(event.get("sequence", 0)),
+        },
+        "type": event.get("event_type", event.get("eventType", event.get("type", ""))),
+        "payload": event.get("payload", {}),
+    }
+    # Keep legacy keys during the migration so older CLI/web consumers remain
+    # functional while new clients use the versioned envelope above.
+    canonical.update({
+        "event_id": canonical["eventId"],
+        "aggregate_type": canonical["aggregate"]["type"],
+        "aggregate_id": canonical["aggregate"]["id"],
+        "sequence": canonical["aggregate"]["sequence"],
+        "event_type": canonical["type"],
+        "correlation_id": canonical["missionId"],
+    })
+    return canonical

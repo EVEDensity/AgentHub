@@ -287,6 +287,18 @@ class MissionRepository:
                         else candidate.correlation_id
                     )
                     await mission_event_bus.notify(str(mission_id or ""))
+                    # PostgreSQL deployments can wake subscribers in other
+                    # processes. SQLite/HTTP SQL profiles reject pg_notify;
+                    # that optional failure is intentionally ignored.
+                    if mission_id:
+                        try:
+                            await self._execute(
+                                "SELECT pg_notify($1, $2)",
+                                "agenthub_mission_events",
+                                str(mission_id),
+                            )
+                        except Exception:
+                            pass
                 except Exception:
                     # Persistence must not fail because an optional local
                     # notification subscriber is unavailable.
@@ -351,6 +363,14 @@ class MissionRepository:
             limit,
         )
         return [self._event_from_row(row) for row in rows]
+
+    async def event_sequence(self, event_id: str) -> int:
+        """Return a durable cursor for a previously delivered event id."""
+        row = await self._fetch_one(
+            "SELECT sequence FROM mission_events WHERE event_id=$1",
+            event_id,
+        )
+        return int(row["sequence"]) if row is not None else 0
 
     async def list_work_unit_events(
         self,
