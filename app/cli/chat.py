@@ -264,6 +264,7 @@ class ChatSessionState:
     session_missions: list[str] = field(default_factory=list)
     session_records: list[dict[str, Any]] = field(default_factory=list)
     compact_context: str | None = None
+    compact_manifest: dict[str, Any] | None = None
     always_allow: bool = False
     allowed_tools: set[str] = field(default_factory=set)
     allowed_paths: set[tuple[str, str]] = field(default_factory=set)
@@ -548,6 +549,8 @@ def _compact_session_context(
                 document = build_compact_context(
                     client, list(session.session_missions)
                 )
+                from app.cli.runtime import build_compact_manifest
+                manifest = build_compact_manifest(client, list(session.session_missions))
     except (RuntimeError, OSError) as exc:
         emit(f"error: {exc}")
         return
@@ -555,6 +558,7 @@ def _compact_session_context(
         emit("压缩结果为空（本地任务记录不可读），链式上下文保持不变")
         return
     session.compact_context = document
+    session.compact_manifest = manifest
     emit(
         f"已压缩 {len(session.session_missions)} 个任务为一份上下文文档"
         f"（{len(document)} 字符）；下一轮将注入该摘要而非全链。"
@@ -624,6 +628,7 @@ def _run_slash_command(
             ContextStore(directory).clear_resume()
         if name in ("/new", "/clear"):
             session.compact_context = None
+            session.compact_manifest = None
             _clear_conversation(directory, session)
         emit(
             "已清除链式上下文，下一轮从零开始"
@@ -1280,6 +1285,7 @@ def chat_session(
             # chain (which now includes this mission) takes over again.
             session.chained_mission_id = result.mission_id
             session.compact_context = None
+            session.compact_manifest = None
             _append_session_event(
                 directory,
                 event="resume.set",
