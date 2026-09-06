@@ -667,6 +667,9 @@ def _run_slash_command(
     if name == "/context":
         from app.services.context_compiler import ContextCompiler
         manifest = ContextCompiler(directory).compile(conversation=_conversation_context(session), compact=session.compact_context or "", mission=session.chained_mission_id or "")
+        if args and args[0].lower() == "explain":
+            emit(json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2))
+            return True
         tokens = sum(int(r.get("total_tokens") or 0) for r in session.session_records)
         emit(
             f"session missions: {len(session.session_missions)}\n"

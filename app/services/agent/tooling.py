@@ -67,6 +67,7 @@ from app.services.agent.vision_turn import (  # noqa: E402
     extract_screenshot_uris,
 )
 from app.services.agent.circuit_breaker import ToolLoopCircuitBreaker  # noqa: E402
+from app.services.model_contract import ToolCall
 
 
 async def _log_tool_call(session_id: str, agent_id: str, tool_name: str, arguments: dict, result: dict) -> None:
@@ -85,6 +86,7 @@ async def _log_tool_call(session_id: str, agent_id: str, tool_name: str, argumen
             int(result.get("duration_ms", 0)),
             now(),
         )
+    # noqa: BLE001 - tool registry best-effort
     except Exception:
         pass  # table may not exist yet
 
@@ -192,6 +194,7 @@ async def _run_tool_call_loop(
                         "phase": "executing",
                         "details": f"正在执行第 {iteration + 1}/{executor.MAX_ITERATIONS} 轮工具调用...",
                     })
+                # noqa: BLE001 - tool registry best-effort
                 except Exception:
                     pass  # 进度事件失败不影响工具执行
 
@@ -424,11 +427,11 @@ async def _run_tool_call_loop(
                 iteration, has_tc, result[:200].replace("\n", "\\n"),
             )
             if has_tc:
-                tool_calls = executor.parse_tool_calls(result)
+                tool_calls = [ToolCall(id=str(tc.get("id") or f"legacy-call-{iteration}-{index}"), name=str(tc.get("name") or ""), arguments=tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {}) for index, tc in enumerate(executor.parse_tool_calls(result)) if isinstance(tc, dict) and tc.get("name")]
                 logger.info(
                     "tool_loop iter=%d: parsed %d tool_calls: %s",
                     iteration, len(tool_calls),
-                    [tc.get("name", "?") for tc in tool_calls],
+                    [tc.name for tc in tool_calls],
                 )
                 if tool_calls:
                     if token and token.cancelled:
@@ -453,6 +456,7 @@ async def _run_tool_call_loop(
                     if on_tool_event:
                         try:
                             await on_tool_event("calling", tool_calls, None)
+                        # noqa: BLE001 - tool registry best-effort
                         except Exception:
                             pass
 
@@ -465,11 +469,11 @@ async def _run_tool_call_loop(
                     )
                     high_risk_tools: list[dict] = []
                     for tc in tool_calls:
-                        risk = _ctr(tc.get("name", ""), tc.get("arguments", {}))
+                        risk = _ctr(tc.name, tc.arguments)
                         if risk.requires_confirmation:
                             high_risk_tools.append({
-                                "name": tc.get("name"),
-                                "arguments": tc.get("arguments", {}),
+                                "name": tc.name,
+                                "arguments": dict(tc.arguments),
                                 "risk": risk.to_dict(),
                             })
                     # BYPASS（跳过权限）模式下不重复弹风险警告：
@@ -490,10 +494,10 @@ async def _run_tool_call_loop(
                     if streaming_executor is not None:
                         streaming_executor.set_context(session_id=session_id, agent_id=agent["agent_id"], user_id=user_id)
                         for tc in tool_calls:
-                            name = tc.get("name", "")
+                            name = tc.name
                             streaming_executor.enqueue(
                                 name=name,
-                                arguments=tc.get("arguments", {}),
+                                arguments=dict(tc.arguments),
                                 is_concurrency_safe=tool_registry.get_concurrency_safety(name),
                             )
                         tool_results = await streaming_executor.process_queue()
@@ -513,13 +517,15 @@ async def _run_tool_call_loop(
                     if on_tool_event:
                         try:
                             await on_tool_event("done", tool_calls, tool_results)
+                        # noqa: BLE001 - tool registry best-effort
                         except Exception:
                             pass
 
                     # Log tool calls (best-effort)
                     try:
                         for tc, tr in zip(tool_calls, tool_results):
-                            await _log_tool_call(session_id, agent["agent_id"], tc["name"], tc.get("arguments", {}), tr)
+                            await _log_tool_call(session_id, agent["agent_id"], tc.name, dict(tc.arguments), tr)
+                    # noqa: BLE001 - tool registry best-effort
                     except Exception:
                         pass
 
@@ -535,6 +541,7 @@ async def _run_tool_call_loop(
                                 await on_tool_event(
                                     "circuit_breaker", tool_calls,
                                     _event.tools or [{"tier": _event.tier}])
+                            # noqa: BLE001 - tool registry best-effort
                             except Exception:
                                 pass
                         break
@@ -552,6 +559,7 @@ async def _run_tool_call_loop(
                                 "phase": "synthesizing",
                                 "details": "工具执行完成，正在综合结果生成回复...",
                             })
+                        # noqa: BLE001 - tool registry best-effort
                         except Exception:
                             pass
 
@@ -620,6 +628,7 @@ async def _run_tool_call_loop(
     try:
         from app.services.performance_monitor import monitor
         monitor.record_tool_call_loop(1)  # count each complete loop
+    # noqa: BLE001 - tool registry best-effort
     except Exception:
         pass
 
@@ -961,6 +970,7 @@ async def _run_cloudcode_post_hooks(session_id: str, agent_id: str) -> None:
                             "VALUES($1,$2,$3,$4,$5,$6)",
                             str(_uuid.uuid4()), session_id, file_path, content, 1, now(),
                         )
+                # noqa: BLE001 - tool registry best-effort
                 except Exception:
                     pass
 
@@ -987,6 +997,7 @@ def _read_file_content(file_path: str) -> str | None:
         full = ws_root / file_path if not Path(file_path).is_absolute() else Path(file_path)
         if full.exists() and full.is_file():
             return full.read_text(encoding="utf-8", errors="replace")
+    # noqa: BLE001 - tool registry best-effort
     except Exception:
         pass
     return None

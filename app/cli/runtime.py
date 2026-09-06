@@ -901,6 +901,26 @@ def build_compact_context(
     return "\n".join(lines)[:12_000]
 
 
+def build_compact_manifest(client: MissionControlClient, mission_ids: list[str]) -> dict[str, Any]:
+    """Return a source-addressable compact summary for observability."""
+    missions: list[dict[str, Any]] = []
+    for mission_id in [mid for mid in mission_ids if mid]:
+        try:
+            mission = client.get_mission(mission_id)
+        except httpx.HTTPError:
+            missions.append({"missionId": mission_id, "status": "unavailable", "limitations": ["mission read failed"]})
+            continue
+        missions.append({
+            "missionId": mission_id,
+            "coveredMissionIds": [mission_id],
+            "objective": str(mission.get("objective") or ""),
+            "status": str(mission.get("status") or "UNKNOWN"),
+            "decisions": [], "filesChanged": [], "artifacts": [],
+            "openQuestions": [], "failures": [], "eventIds": [],
+        })
+    return {"schemaVersion": 1, "coveredMessageRange": None, "coveredMissions": missions, "generatedBy": "context-compiler"}
+
+
 def _artifact_search_roots() -> list[Path]:
     """Candidate artifact CAS roots for the local state directory."""
     roots: list[Path] = []
