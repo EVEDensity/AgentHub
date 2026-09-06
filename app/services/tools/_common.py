@@ -144,7 +144,9 @@ async def _record_file_version(
 
 
 async def _auto_git_commit(path: str, user_id: str, operation: str) -> None:
-    """Auto-commit to git after a file write (fire-and-forget)."""
+    """Deprecated no-op retained for compatibility; commits are explicit."""
+    return
+    # Legacy implementation intentionally unreachable.
     try:
         from app.config import AGENTHUB_FILE_AUTO_GIT
         if not AGENTHUB_FILE_AUTO_GIT:

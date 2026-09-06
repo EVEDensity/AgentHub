@@ -209,7 +209,7 @@ FILE_READ = ToolDefinition(
 
 FILE_WRITE = ToolDefinition(
     name="file_write",
-    description="将内容写入工作区的文件。可以创建新文件或追加到现有文件。用于保存代码、配置、文档等。所有写入自动纳入 Git 版本控制，多人协作时自动检测文件冲突。",
+    description="将内容写入工作区的文件。可以创建新文件或追加到现有文件。写入后返回校验哈希和变更信息；Git 提交必须由用户显式调用 git_commit。",
     category="file",
     parameters=[
         ToolParameter(name="path", type="string", required=True,
@@ -1052,7 +1052,7 @@ FILE_GLOB = ToolDefinition(
 
 MKDIR = ToolDefinition(
     name="mkdir",
-    description="在用户的工作区中创建目录（类似 mkdir -p）。可以创建单个目录或嵌套的目录树。用于搭建项目代码的目录结构——例如创建 src/components/、app/api/、frontend/pages/ 等。成功创建后自动纳入 Git 版本控制。",
+    description="在用户的工作区中创建目录（类似 mkdir -p）。Git 提交必须由用户显式调用 git_commit。",
     category="file",
     parameters=[
         ToolParameter(name="path", type="string", required=True,

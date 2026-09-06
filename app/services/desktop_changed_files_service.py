@@ -2,8 +2,8 @@
 
 After a ``desktop.task`` WorkUnit succeeds, the desktop UI shows which files
 the task changed. The desktop local runner commits file writes to the git
-repository inside its execution workspace (auto-commit on ``file_write``),
-so the change set is read back with a read-only ``git show HEAD`` — the same
+repository inside its execution workspace. Changes are read back with a
+read-only ``git diff`` — the same
 workspace root the runner executes in, never a state source of its own.
 """
 
