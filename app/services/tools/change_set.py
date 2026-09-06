@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import os
 import shutil
 import uuid
@@ -79,6 +80,9 @@ async def apply_change_set_handler(changes: list[dict[str, Any]]) -> dict[str, A
             written.append(item)
             if item["mode"] is not None:
                 os.chmod(safe, item["mode"])
+        verification = _verify_written_files(root, [item["path"] for item in prepared])
+        if verification["syntax"] != "passed" or verification["git_diff_check"] not in {"passed", "not-a-git-repository"}:
+            raise OSError(f"写入后验证失败: {verification}")
         results = []
         for item in prepared:
             data = item["content"].encode("utf-8")
@@ -90,7 +94,7 @@ async def apply_change_set_handler(changes: list[dict[str, Any]]) -> dict[str, A
         return {
             "success": True,
             "result": f"已原子写入 {len(results)} 个文件",
-            "metadata": {"transaction_id": transaction.name, "files": results},
+            "metadata": {"transaction_id": transaction.name, "files": results, "verification": verification},
         }
     except (OSError, UnicodeError) as exc:
         rollback_errors: list[str] = []
@@ -115,3 +119,28 @@ async def apply_change_set_handler(changes: list[dict[str, Any]]) -> dict[str, A
 
 
 __all__ = ["apply_change_set_handler"]
+
+
+def _verify_written_files(root: Path, paths: list[str]) -> dict[str, Any]:
+    """Run deterministic post-write checks without mutating project files."""
+    syntax_errors: list[str] = []
+    for path in paths:
+        target = root / path
+        if target.suffix != ".py":
+            continue
+        try:
+            ast.parse(target.read_text(encoding="utf-8"), filename=str(target))
+        except (OSError, UnicodeDecodeError, SyntaxError) as exc:
+            syntax_errors.append(f"{path}: {exc}")
+    diff_check = "not-a-git-repository"
+    try:
+        import subprocess
+        proc = subprocess.run(
+            ["git", "-C", str(root), "diff", "--check", "--", *paths],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+        details = (proc.stdout + proc.stderr).strip()
+        diff_check = "passed" if not details else "not-a-git-repository" if "not a git repository" in details.lower() else details[:2000]
+    except (OSError, subprocess.TimeoutExpired):
+        diff_check = "unavailable"
+    return {"syntax": "passed" if not syntax_errors else syntax_errors, "git_diff_check": diff_check}

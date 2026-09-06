@@ -91,3 +91,15 @@ def test_file_patch_rejects_stale_context(tmp_path: Path) -> None:
             expected_sha256=_sha(target),
         ))
     assert stale["success"] is False
+
+
+def test_change_set_rolls_back_when_post_write_syntax_check_fails(tmp_path: Path) -> None:
+    target = tmp_path / "module.py"
+    target.write_text("value = 1\n", encoding="utf-8")
+    with workspace_root_override(tmp_path):
+        result = asyncio.run(apply_change_set_handler([
+            {"path": "module.py", "content": "def broken(:\n", "expected_sha256": _sha(target)},
+        ]))
+    assert result["success"] is False
+    assert "验证失败" in result["error"]
+    assert target.read_text(encoding="utf-8") == "value = 1\n"
