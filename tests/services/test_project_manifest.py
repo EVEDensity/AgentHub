@@ -38,3 +38,11 @@ def test_discover_uses_pyproject_and_redacts_remote(tmp_path, monkeypatch) -> No
 
 def test_discover_falls_back_to_directory_name(tmp_path) -> None:
     assert ProjectManifest.discover(tmp_path).name == tmp_path.name
+
+
+def test_discover_includes_root_instruction_files(tmp_path) -> None:
+    (tmp_path / "AGENTS.md").write_text("project rules", encoding="utf-8")
+
+    manifest = ProjectManifest.discover(tmp_path)
+
+    assert manifest.instruction_files == (str((tmp_path / "AGENTS.md").resolve()),)

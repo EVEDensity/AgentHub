@@ -94,6 +94,11 @@ class ProjectManifest:
     def discover(cls, workspace_root: Path, *, instruction_files=()) -> "ProjectManifest":
         root = workspace_root.resolve()
         stack = tuple(value for filename, value in _TECH_MANIFESTS.items() if (root / filename).is_file())
+        if not instruction_files:
+            instruction_files = tuple(
+                path for name in ("AGENTS.md", "CLAUDE.md")
+                if (path := root / name).is_file()
+            )
         return cls(
             name=_project_name(root), workspace_root=root,
             git_branch=_git(root, "branch", "--show-current"),
