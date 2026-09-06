@@ -34,44 +34,67 @@ async def stream_mission_events(
     poll_seconds: EventPollSeconds = 1.0,
     max_seconds: EventMaxSeconds = 0,
 ) -> StreamingResponse:
-    """Server-Sent Events stream over the mission event ledger (P3-4a).
+    """Low-latency SSE stream over the durable mission event ledger.
 
-    Reuses the ``GET /events`` query logic and polls it every
-    ``pollSeconds`` (default 1 s), pushing each new event as one
-    ``data: <json>`` frame. The mission-aggregate sequence acts as the
-    cursor; a client disconnect ends the stream. ``maxSeconds`` bounds the
-    stream server-side (0 = unlimited).
+    The stream subscribes to a process-local wake-up bus before performing
+    the initial catch-up read.  Event writes publish a coalesced notification;
+    the stream then rereads the ledger and therefore remains lossless even if
+    notifications are dropped.  ``pollSeconds`` is retained as the maximum
+    notification wait/heartbeat interval for backwards-compatible clients,
+    not as the normal database polling cadence.
     """
     mission = await _authorized_mission(mission_id, user=user, repository=repository)
     del mission
 
     async def event_stream() -> AsyncIterator[str]:
+        from app.services.mission_event_bus import mission_event_bus
+
         cursor = after_sequence
         seen_event_ids: set[str] = set()
         deadline = time.monotonic() + max_seconds if max_seconds > 0 else None
-        while True:
-            try:
-                batch, cursor = await _collect_mission_events(
-                    repository,
-                    mission_id,
-                    after_sequence=cursor,
-                    limit=limit,
-                    seen_event_ids=seen_event_ids,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception:  # noqa: BLE001 - a failed poll must not kill the stream
-                batch = []
-            for event in batch:
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            if deadline is not None and time.monotonic() >= deadline:
-                return
-            try:
-                if await request.is_disconnected():
+        async with mission_event_bus.subscribe(mission_id) as wakeups:
+            while True:
+                try:
+                    batch, cursor = await _collect_mission_events(
+                        repository,
+                        mission_id,
+                        after_sequence=cursor,
+                        limit=limit,
+                        seen_event_ids=seen_event_ids,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - keep stream alive for transient DB errors
+                    batch = []
+                for event in batch:
+                    # Include the SSE id so clients can persist Last-Event-ID
+                    # while the JSON event remains backwards compatible.
+                    yield (
+                        f"id: {event.get('event_id', '')}\n"
+                        f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    )
+                if deadline is not None and time.monotonic() >= deadline:
                     return
-            except Exception:  # noqa: BLE001 - transport already gone
-                return
-            await asyncio.sleep(poll_seconds)
+                try:
+                    if await request.is_disconnected():
+                        return
+                except Exception:  # noqa: BLE001 - transport already gone
+                    return
+                remaining = (
+                    max(0.0, deadline - time.monotonic())
+                    if deadline is not None
+                    else None
+                )
+                wait_for = poll_seconds if remaining is None else min(poll_seconds, remaining)
+                if wait_for <= 0:
+                    return
+                try:
+                    await asyncio.wait_for(wakeups.get(), timeout=wait_for)
+                except asyncio.TimeoutError:
+                    # Heartbeat keeps proxies aware of a live stream.  The
+                    # durable ledger is not queried unless a notification
+                    # arrives, eliminating per-connection DB polling.
+                    yield ": heartbeat\n\n"
 
     return StreamingResponse(
         event_stream(),

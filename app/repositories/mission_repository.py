@@ -275,6 +275,22 @@ class MissionRepository:
                     _encode_json(candidate.payload),
                     candidate.schema_version,
                 )
+                # Notify local SSE subscribers after the durable insert. The
+                # bus is a wake-up hint only; streams reread mission_events,
+                # so coalesced notifications remain lossless.
+                try:
+                    from app.services.mission_event_bus import mission_event_bus
+
+                    mission_id = (
+                        candidate.aggregate_id
+                        if candidate.aggregate_type.value == "mission"
+                        else candidate.correlation_id
+                    )
+                    await mission_event_bus.notify(str(mission_id or ""))
+                except Exception:
+                    # Persistence must not fail because an optional local
+                    # notification subscriber is unavailable.
+                    pass
                 return
             except Exception as exc:  # noqa: BLE001 - backend-specific integrity errors
                 detail = str(exc).lower()

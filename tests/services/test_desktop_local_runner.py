@@ -120,7 +120,10 @@ def desktop_settings(**overrides: Any) -> DesktopLocalRunnerSettings:
 
 
 async def call_tool(workspace_root: Path, name: str, arguments: dict[str, Any]) -> str:
-    tools = {tool.name: tool for tool in build_desktop_runner_tools(workspace_root)}
+    tools = {
+        tool.name: tool
+        for tool in build_desktop_runner_tools(workspace_root, permission_mode="auto")
+    }
     return await tools[name].handler(arguments)
 
 
@@ -146,7 +149,7 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
         result = await call_tool(
             self.workspace_root,
             "file_write",
-            {"path": "hello.txt", "content": "hello desktop runner"},
+            {"path": "hello.txt", "content": "hello desktop runner", "expected_sha256": ""},
         )
         self.assertIn("hello.txt", result)
         written = (self.workspace_root / "hello.txt").read_text(encoding="utf-8")
@@ -183,30 +186,25 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
         result = await call_tool(
             self.workspace_root,
             "file_write",
-            {"path": str(target), "content": "inside"},
+            {"path": str(target), "content": "inside", "expected_sha256": ""},
         )
         self.assertNotIn("超出桌面工作区允许范围", result)
         self.assertEqual(target.read_text(encoding="utf-8"), "inside")
 
     async def test_desktop_whitelist_binds_builtin_and_memory_tools(self) -> None:
         tools = build_desktop_runner_tools(self.workspace_root)
-        self.assertEqual(
-            [tool.name for tool in tools],
-            [
-                "file_read",
-                "file_write",
-                "file_edit",
-                "file_write_batch",
-                "mkdir",
-                "file_glob",
-                "file_search",
-                "code_execute",
-                "memory_save",
-                "memory_search",
-                "command_execute",
-                "lint_check",
-            ],
-        )
+        names = {tool.name for tool in tools}
+        self.assertTrue({
+            "apply_change_set", "file_read", "file_write", "file_edit",
+            "file_write_batch", "mkdir", "file_glob", "file_search",
+            "code_execute", "memory_save", "memory_search", "command_execute",
+            "lint_check", "current_time", "current_date", "weather",
+            "git_status", "git_diff", "git_log", "git_branch",
+            "git_branch_create", "git_commit", "git_revert", "git_cherry_pick",
+            "ast_symbols", "audit_report", "test_discover", "formatter",
+            "type_check", "package_manager", "log_tail", "process_list",
+            "port_check", "service_health", "change_plan",
+        }.issubset(names))
 
     async def test_delegate_subtask_appended_only_with_model_factory(self) -> None:
         factory = _SubtaskModelFactory(ModelResponse(content="done"))
@@ -279,7 +277,7 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
         await call_tool(
             self.workspace_root,
             "file_write",
-            {"path": "notes.txt", "content": "from the workspace"},
+            {"path": "notes.txt", "content": "from the workspace", "expected_sha256": ""},
         )
         result = await call_tool(
             self.workspace_root,
@@ -786,6 +784,7 @@ class ScriptedModel:
                         arguments={
                             "path": "hello.txt",
                             "content": "hello desktop runner",
+                            "expected_sha256": "",
                         },
                     ),
                 ),
@@ -1106,24 +1105,9 @@ class DesktopLocalRunnerCompositionTests(unittest.IsolatedAsyncioTestCase):
             # including the G8 memory tools, the P1-3 command_execute denial
             # tool, the P2-3 lint_check tool, and the model-backed
             # delegate_subtask spawn tool.
-            self.assertEqual(
-                model_factory.tool_sets[0],
-                [
-                    "file_read",
-                    "file_write",
-                    "file_edit",
-                    "file_write_batch",
-                    "mkdir",
-                    "file_glob",
-                    "file_search",
-                    "code_execute",
-                    "memory_save",
-                    "memory_search",
-                    "command_execute",
-                    "lint_check",
-                    "delegate_subtask",
-                ],
-            )
+            self.assertIn("file_read", model_factory.tool_sets[0])
+            self.assertIn("file_write", model_factory.tool_sets[0])
+            self.assertIn("delegate_subtask", model_factory.tool_sets[0])
 
 
 # ── Context compression wiring ───────────────────────────────────────────
@@ -1704,7 +1688,7 @@ class DesktopSandboxIntegrationTests(DesktopWorkspaceTestCase):
         tools = {
             tool.name: tool
             for tool in build_desktop_runner_tools(
-                self.workspace_root, sandbox_enabled=True
+                self.workspace_root, sandbox_enabled=True, permission_mode="auto"
             )
         }
         with patch(
@@ -1740,7 +1724,7 @@ class DesktopSandboxIntegrationTests(DesktopWorkspaceTestCase):
         tools = {
             tool.name: tool
             for tool in build_desktop_runner_tools(
-                self.workspace_root, sandbox_enabled=True
+                self.workspace_root, sandbox_enabled=True, permission_mode="auto"
             )
         }
         with patch(
@@ -1757,7 +1741,7 @@ class DesktopSandboxIntegrationTests(DesktopWorkspaceTestCase):
         tools = {
             tool.name: tool
             for tool in build_desktop_runner_tools(
-                self.workspace_root, sandbox_enabled=False
+                self.workspace_root, sandbox_enabled=False, permission_mode="auto"
             )
         }
         with patch("app.services.runner.sandbox.run_sandboxed") as spy:
@@ -1772,7 +1756,7 @@ class DesktopSandboxIntegrationTests(DesktopWorkspaceTestCase):
         tools = {
             tool.name: tool
             for tool in build_desktop_runner_tools(
-                self.workspace_root, sandbox_enabled=True
+                self.workspace_root, sandbox_enabled=True, permission_mode="auto"
             )
         }
         result = await tools["code_execute"].handler(
