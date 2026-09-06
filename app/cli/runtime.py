@@ -1002,6 +1002,19 @@ def execute_objective(
             if project_instructions
             else facts_block
         )
+    # Inject deterministic project identity into every Mission/Runner model
+    # request. The manifest is compact and contains no full file contents.
+    from app.services.project_manifest import ProjectManifest
+
+    manifest_prompt = ProjectManifest.discover(workspace_root).to_prompt(
+        provider=model.provider,
+        model=model.model,
+    )
+    project_instructions = (
+        f"{project_instructions}\n\n{manifest_prompt}"
+        if project_instructions
+        else manifest_prompt
+    )
     cancelled_by_user = False
     baseline_files = frozenset()
     baseline_commit = None

@@ -71,7 +71,8 @@ def _likely_side_effect_objective(objective: str) -> bool:
     text = objective.lower()
     markers = (
         "写入", "写文件", "修改", "创建文件", "删除文件", "重命名",
-        "运行命令", "执行命令", "执行脚本", "安装依赖", "提交代码", "格式化",
+        "运行命令", "执行命令", "执行脚本", "安装依赖", "提交代码", "提交当前项目", "提交当前的项目", "提交项目",
+        "推送", "推送到 github", "上传仓库", "github push", "git push", "push", "格式化",
         "write ", "edit ", "modify ", "create ", "delete ", "remove ",
         "rename ", "run ", "execute ", "install ", "format ", "commit ",
         "shell", "command",
@@ -84,7 +85,7 @@ def _is_simple_greeting(objective: str) -> bool:
 
 
 def _is_conversational_objective(objective: str) -> bool:
-    if _likely_side_effect_objective(objective):
+    if _likely_side_effect_objective(objective) or _is_project_identity_query(objective):
         return False
     operational = ("查看", "查询", "检查", "分析代码", "读取", "搜索", "列出文件", "文件分类", "文件列表", "项目结构", "目录", "测试代码", "调试", "实现", "修复", "天气", "气温", "weather")
     return not any(word in objective for word in operational)
@@ -103,6 +104,16 @@ def _is_workspace_query(objective: str) -> bool:
     return any(action in text for action in ("查询", "查看", "列出", "统计")) and any(
         subject in text for subject in ("项目文件", "工作区文件", "目录", "文件")
     )
+
+
+def _is_project_identity_query(objective: str) -> bool:
+    """Recognize requests for facts about the current repository itself."""
+    text = objective.lower()
+    return any(phrase in text for phrase in (
+        "分析当前的项目是什么", "分析当前项目是什么", "当前项目是什么",
+        "这个项目是什么", "介绍当前项目", "查看项目说明", "查看 readme",
+        "当前仓库是什么", "项目身份", "project identity", "what is this project",
+    ))
 
 
 def _is_date_question(objective: str) -> bool:
@@ -187,7 +198,15 @@ def _run_local_utility(tool_name: str, **arguments: Any) -> str:
     return _format_utility_result(tool_name, outcome)
 
 
-def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[..., None], console: Any = None, history: list[dict[str, str]] | None = None) -> tuple[bool, str]:
+def _direct_greeting(
+    settings: CliModelSettings,
+    objective: str,
+    emit: Callable[..., None],
+    console: Any = None,
+    history: list[dict[str, str]] | None = None,
+    workspace_root: Path | None = None,
+    instruction_files: list[Path] | tuple[Path, ...] = (),
+) -> tuple[bool, str]:
     """Use the provider's text stream for a plain greeting.
 
     Greetings must not enter the desktop task planner: that path may emit
@@ -201,12 +220,24 @@ def _direct_greeting(settings: CliModelSettings, objective: str, emit: Callable[
         prompt = objective
         if history:
             prompt = "\n".join(f"{item['role']}: {item['content']}" for item in history[-8:]) + f"\nuser: {objective}"
+        from app.services.project_manifest import ProjectManifest
+
+        manifest_prompt = ""
+        if workspace_root is not None:
+            manifest_prompt = ProjectManifest.discover(
+                workspace_root, instruction_files=instruction_files
+            ).to_prompt(provider=settings.provider, model=settings.model)
+        system_prompt = (
+            "Reply to the user directly in plain text. Do not think aloud. "
+            "Do not call tools or emit XML.\n\n"
+            + manifest_prompt
+        )
         stream = adapter.stream_prompt(
             prompt,
             settings.model,
             settings.api_key,
             settings.base_url,
-            system_prompt="Reply to the user directly in plain text. Do not think aloud. Do not call tools or emit XML.",
+            system_prompt=system_prompt,
         )
         async for chunk in stream:
             if chunk:
@@ -1155,8 +1186,42 @@ def chat_session(
             _append_conversation(directory, session, role="assistant", content=report_text, source="direct")
             emit()
             continue
+        if output_fn is None and not is_side_effect_task and _is_project_identity_query(objective):
+            from app.services.project_manifest import ProjectManifest
+
+            manifest = ProjectManifest.discover(
+                workspace_root, instruction_files=instruction_paths
+            )
+            data = manifest.to_dict()
+            if console is not None and ui is not None:
+                console.print(f"项目: {data['name']}", style=ui.STYLE_PRIMARY)
+                console.print(f"工作区: {data['workspaceRoot']}", style=ui.STYLE_MUTED)
+                console.print(f"Git: {data['gitBranch'] or '无分支'} · {data['gitRemote'] or '无 origin'}", style=ui.STYLE_MUTED)
+                console.print(f"技术栈: {', '.join(data['techStack']) or '未识别'}", style=ui.STYLE_PRIMARY)
+                if data["readmeSummary"]:
+                    console.print(f"说明: {data['readmeSummary']}", style=ui.STYLE_PRIMARY)
+            else:
+                emit(f"项目: {data['name']}")
+                emit(f"工作区: {data['workspaceRoot']}")
+                emit(f"Git: {data['gitBranch'] or '无分支'} · {data['gitRemote'] or '无 origin'}")
+                emit(f"技术栈: {', '.join(data['techStack']) or '未识别'}")
+                if data["readmeSummary"]:
+                    emit(f"说明: {data['readmeSummary']}")
+            report_text = f"项目身份：{data['name']}（{data['workspaceRoot']}）"
+            _append_conversation(directory, session, role="user", content=objective, source="project_inspect")
+            _append_conversation(directory, session, role="assistant", content=report_text, source="project_inspect")
+            emit()
+            continue
         if output_fn is None and _is_conversational_objective(objective):
-            ok, answer = _direct_greeting(settings, objective, emit, console, session.conversation)
+            ok, answer = _direct_greeting(
+                settings,
+                objective,
+                emit,
+                console,
+                session.conversation,
+                workspace_root,
+                instruction_paths,
+            )
             if ok:
                 _append_conversation(directory, session, role="user", content=objective, source="direct")
                 _append_conversation(directory, session, role="assistant", content=answer, source="direct")

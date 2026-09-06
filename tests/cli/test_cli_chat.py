@@ -28,6 +28,7 @@ from app.cli.chat import (
     _load_conversation,
     _run_slash_command,
     _likely_side_effect_objective,
+    _is_project_identity_query,
     chat_session,
 )
 
@@ -47,6 +48,13 @@ def test_builtin_fact_questions_are_routed_to_real_tools():
     assert _weather_location("天气 北京") == "北京"
     assert _weather_location("今天是什么天气") == ""
     assert _weather_location("what is the weather in Shanghai") == "Shanghai"
+
+
+def test_project_identity_and_git_push_are_classified_explicitly():
+    assert _is_project_identity_query("分析当前的项目是什么")
+    assert not _is_conversational_objective("分析当前的项目是什么")
+    assert _likely_side_effect_objective("提交当前的项目至GitHub")
+    assert _likely_side_effect_objective("git push")
 
 
 @dataclass

@@ -201,6 +201,7 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
             "lint_check", "current_time", "current_date", "weather",
             "git_status", "git_diff", "git_log", "git_branch",
             "git_branch_create", "git_commit", "git_revert", "git_cherry_pick",
+            "git_push", "project_inspect",
             "ast_symbols", "audit_report", "test_discover", "formatter",
             "type_check", "package_manager", "log_tail", "process_list",
             "port_check", "service_health", "change_plan",
