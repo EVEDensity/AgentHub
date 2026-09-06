@@ -30,6 +30,7 @@ async def stream_mission_events(
     user: CurrentUser,
     repository: MissionRepositoryDep,
     after_sequence: EventAfterSequence = 0,
+    after_event_id: str | None = None,
     limit: EventLimit = 100,
     poll_seconds: EventPollSeconds = 1.0,
     max_seconds: EventMaxSeconds = 0,
@@ -45,7 +46,7 @@ async def stream_mission_events(
     """
     mission = await _authorized_mission(mission_id, user=user, repository=repository)
     del mission
-    last_event_id = request.headers.get("last-event-id", "").strip()
+    last_event_id = (after_event_id or request.headers.get("last-event-id", "")).strip()
     if last_event_id and after_sequence == 0:
         try:
             after_sequence = await repository.event_sequence(last_event_id)
