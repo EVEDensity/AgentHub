@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes import api_router
 from app.core.config import get_settings
@@ -123,6 +124,19 @@ async def lifespan(app: FastAPI):
     except Exception:
         _log.warning("startup: distributed cache version bus unavailable", exc_info=True)
 
+    # Cross-process Mission SSE wakeups. Notifications are hints only; the
+    # durable mission_events ledger remains authoritative. SQLite/Neon HTTP
+    # profiles intentionally keep the in-process fallback.
+    try:
+        database_url = str(_cfg.DATABASE_URL or "")
+        if database_url.startswith(("postgres://", "postgresql://")):
+            from app.services.mission_event_bus import PostgresMissionEventNotifier, mission_event_bus
+            notifier = PostgresMissionEventNotifier(database_url, mission_event_bus)
+            await notifier.start()
+            app.state.mission_event_notifier = notifier
+    except Exception:
+        _log.warning("startup: PostgreSQL mission event listener unavailable", exc_info=True)
+
     # Desktop local runner — env-gated (AGENTHUB_DESKTOP_LOCAL_RUNNER=1),
     # never constructed in production or server deployments.
     # Scheduled as a post-startup task: the runner authenticates against this
@@ -156,6 +170,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         _log.warning("shutdown: desktop local runner stop failed", exc_info=True)
 
+    notifier = getattr(app.state, "mission_event_notifier", None)
+    if notifier is not None:
+        try:
+            await notifier.stop()
+        except Exception:
+            _log.warning("shutdown: PostgreSQL mission event listener stop failed", exc_info=True)
+        app.state.mission_event_notifier = None
+
     version_bus = getattr(app.state, "distributed_cache_version_bus", None)
     if version_bus is not None:
         await version_bus.close()
@@ -178,6 +200,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=_cfg.app_name, version=_cfg.app_version, lifespan=lifespan)
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error_envelope(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    from app.errors import error_envelope
+    envelope = error_envelope(exc, message=str(exc.detail))
+    body = envelope.to_dict()
+    body["detail"] = exc.detail  # compatibility for existing clients
+    return JSONResponse(status_code=exc.status_code, content=body)
 
 # ── Middleware (last added wraps outermost) ──────────────────────────
 app.add_middleware(_BodySizeLimitMiddleware)

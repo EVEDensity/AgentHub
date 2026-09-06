@@ -706,6 +706,8 @@ async def startup_desktop_local_runner(
     # runner. SQLite/Neon profiles simply omit DATABASE_URL and retain the
     # in-process bus fallback.
     database_url = os.environ.get("DATABASE_URL", "").strip()
+    if getattr(app.state, "mission_event_notifier", None) is not None:
+        database_url = ""
     if database_url.startswith(("postgres://", "postgresql://")):
         try:
             from app.services.mission_event_bus import PostgresMissionEventNotifier, mission_event_bus
