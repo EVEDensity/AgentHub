@@ -377,9 +377,8 @@ def _append_conversation(
     if mission_id:
         item["missionId"] = mission_id
     try:
-        directory.mkdir(parents=True, exist_ok=True)
-        with _conversation_path(directory).open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+        from app.services.context_store import ContextStore
+        ContextStore(directory).append(role, content, source=source, mission_id=mission_id)
     except OSError:
         return
     session.conversation.append({"role": role, "content": content})
