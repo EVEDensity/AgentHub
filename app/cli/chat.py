@@ -86,7 +86,7 @@ def _is_simple_greeting(objective: str) -> bool:
 def _is_conversational_objective(objective: str) -> bool:
     if _likely_side_effect_objective(objective):
         return False
-    operational = ("查看", "检查", "分析代码", "读取", "搜索", "列出文件", "测试代码", "调试", "实现", "修复", "天气", "气温", "weather")
+    operational = ("查看", "查询", "检查", "分析代码", "读取", "搜索", "列出文件", "文件分类", "文件列表", "项目结构", "目录", "测试代码", "调试", "实现", "修复", "天气", "气温", "weather")
     return not any(word in objective for word in operational)
 
 

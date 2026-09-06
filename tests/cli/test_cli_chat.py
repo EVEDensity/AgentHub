@@ -41,6 +41,7 @@ def test_builtin_fact_questions_are_routed_to_real_tools():
     assert _is_time_question("现在几点")
     assert _is_weather_question("上海今天的天气怎么样")
     assert _is_weather_question("今天下雨吗")
+    assert not _is_conversational_objective("查询该项目下的文件分类")
     assert _weather_location("上海今天的天气怎么样") == "上海"
     assert _weather_location("天气 北京") == "北京"
     assert _weather_location("今天是什么天气") == ""
