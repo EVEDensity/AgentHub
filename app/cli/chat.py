@@ -679,9 +679,34 @@ def _run_slash_command(
         try:
             from app.services.tools import register_builtin_tools
             from app.services.tool_registry import tool_registry
+            from app.services.tool_availability import resolve_tool_availability
 
             register_builtin_tools()
-            category = args[0].lower() if args else ""
+            subcommand = args[0].lower() if args else "available"
+            if subcommand in {"registered", "available", "denied", "explain"}:
+                if subcommand == "explain":
+                    if len(args) < 2:
+                        emit("用法: /tools explain <tool>")
+                        return True
+                    rows = resolve_tool_availability(workspace_root, names=[args[1]])
+                    if not rows:
+                        emit(f"未找到工具: {args[1]}")
+                        return True
+                    row = rows[0]
+                    emit(json.dumps(row.to_dict(), ensure_ascii=False, indent=2))
+                    return True
+                rows = resolve_tool_availability(workspace_root)
+                if subcommand == "registered":
+                    rows = [row for row in rows if row.registered]
+                elif subcommand == "available":
+                    rows = [row for row in rows if row.executable]
+                else:
+                    rows = [row for row in rows if not row.executable]
+                emit(f"工具 {subcommand}（{len(rows)} 个）")
+                for row in rows:
+                    emit(f"  {row.name:<24} executable={row.executable} runner={row.runner_exposed} permission={row.permission} contract={row.contract_capability} server={row.server_deny}")
+                return True
+            category = subcommand
             tools = tool_registry.list_all()
             if category:
                 tools = [item for item in tools if item.category.lower() == category]
