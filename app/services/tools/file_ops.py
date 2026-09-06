@@ -158,7 +158,7 @@ async def file_write_handler(
 
     # ── Pre-read original content (for diff + conflict + backup) ────────
     original_text = ""
-    if mode == "overwrite" and await aexists(safe):
+    if await aexists(safe):
         try:
             original_text = await aread_text(safe, encoding="utf-8")
         except UnicodeDecodeError:

@@ -64,6 +64,15 @@ def test_file_mutations_require_full_expected_hash_and_reject_conflict(tmp_path:
     assert target.read_text(encoding="utf-8") == "value = 1\n"
 
 
+def test_file_write_append_preserves_existing_content(tmp_path: Path) -> None:
+    target = tmp_path / "notes.txt"
+    target.write_text("before\n", encoding="utf-8")
+    with workspace_root_override(tmp_path):
+        result = asyncio.run(file_write_handler("notes.txt", "after", mode="append", expected_sha256=_sha(target)))
+    assert result["success"] is True
+    assert target.read_text(encoding="utf-8") == "before\nafter"
+
+
 def test_file_patch_rejects_stale_context(tmp_path: Path) -> None:
     target = tmp_path / "module.py"
     target.write_text("one\ntwo\n", encoding="utf-8")
