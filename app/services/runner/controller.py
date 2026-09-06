@@ -702,6 +702,18 @@ async def startup_desktop_local_runner(
     ``controller_factory`` exists for tests; production resolves the
     controller from the settings.
     """
+    # Start the optional cross-process Mission event listener alongside the
+    # runner. SQLite/Neon profiles simply omit DATABASE_URL and retain the
+    # in-process bus fallback.
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if database_url.startswith(("postgres://", "postgresql://")):
+        try:
+            from app.services.mission_event_bus import PostgresMissionEventNotifier, mission_event_bus
+            notifier = PostgresMissionEventNotifier(database_url, mission_event_bus)
+            await notifier.start()
+            app.state.mission_event_notifier = notifier
+        except Exception:
+            logger.debug("postgres mission listener unavailable; using local bus", exc_info=True)
     resolved = settings or desktop_local_runner_settings()
     if not resolved.enabled:
         return
@@ -714,6 +726,10 @@ async def startup_desktop_local_runner(
 
 
 async def shutdown_desktop_local_runner(app: Any) -> None:
+    notifier = getattr(app.state, "mission_event_notifier", None)
+    if notifier is not None:
+        await notifier.stop()
+        app.state.mission_event_notifier = None
     controller = getattr(app.state, "desktop_local_runner", None)
     if controller is None:
         return

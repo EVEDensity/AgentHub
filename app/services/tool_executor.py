@@ -74,6 +74,7 @@ class ToolExecutor:
 
     @staticmethod
     def parse_tool_calls(text: str) -> list[dict[str, Any]]:
+        """Legacy compatibility parser; new code must use structured ToolCall."""
         """Extract tool_calls from an LLM response.
 
         Handles common LLM quirks:

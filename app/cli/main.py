@@ -509,8 +509,8 @@ def cmd_run(
 
     def _emit_view_state(state: Any) -> None:
         if jsonl_mode:
-            from app.cli.reducer import state_to_dict
-            print(json.dumps({"schemaVersion": 1, "type": "state", "state": state_to_dict(state)}, ensure_ascii=False), flush=True)
+            from app.cli.reducer import render_snapshot
+            print(json.dumps({"schemaVersion": 1, "type": "state", "state": render_snapshot(state)}, ensure_ascii=False), flush=True)
 
     if not json_mode and not jsonl_mode:
         print(f"objective: {args.objective}")

@@ -422,9 +422,10 @@ def _clear_conversation(directory: Path, session: ChatSessionState) -> None:
 def _conversation_context(session: ChatSessionState) -> str:
     if not session.conversation:
         return ""
-    return "\n".join(
+    from app.services.context_compiler import ContextCompiler
+    return ContextCompiler(Path(".agenthub")).compile(conversation="\n".join(
         f"{item['role']}: {item['content']}" for item in session.conversation[-8:]
-    )
+    )).render()
 
 
 def _permission_payload(session: ChatSessionState) -> dict[str, Any]:
