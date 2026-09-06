@@ -59,6 +59,7 @@ from app.services.tools.git_tools import (
 )
 from app.services.tools.developer_tools import (
     ast_symbols_handler,
+    audit_report_handler,
     change_plan_handler,
     formatter_handler,
     log_tail_handler,
@@ -313,6 +314,7 @@ PROCESS_LIST = ToolDefinition("process_list", "列出当前操作系统进程。
 PORT_CHECK = ToolDefinition("port_check", "检查 TCP 端口是否可连接。", "diagnostic", [ToolParameter("host", "string", False, "主机", "127.0.0.1"), ToolParameter("port", "number", True, "端口"), ToolParameter("timeout", "number", False, "超时秒数", 1.0)], "port result", [], handler=port_check_handler)
 SERVICE_HEALTH = ToolDefinition("service_health", "对指定 HTTP 服务执行 GET 健康检查。", "diagnostic", [ToolParameter("url", "string", True, "HTTP URL"), ToolParameter("timeout", "number", False, "超时秒数", 5.0)], "health result", [], handler=service_health_handler)
 CHANGE_PLAN = ToolDefinition("change_plan", "将多文件修改整理为可审计的步骤和验证计划。", "workflow", [ToolParameter("changes", "array", True, "变更项列表")], "change plan", [], handler=change_plan_handler)
+AUDIT_REPORT = ToolDefinition("audit_report", "聚合 Attempt 文件来源和恢复审计记录。", "workflow", [ToolParameter("attempt_id", "string", False, "可选 Attempt ID")], "audit report", [], handler=audit_report_handler)
 
 # ── code_execute ──────────────────────────────────────────────────────
 
@@ -1151,6 +1153,7 @@ BUILTIN_TOOLS: list[ToolDefinition] = [
     PORT_CHECK,
     SERVICE_HEALTH,
     CHANGE_PLAN,
+    AUDIT_REPORT,
     FILE_READ,
     FILE_WRITE,
     FILE_WRITE_BATCH,

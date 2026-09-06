@@ -161,4 +161,26 @@ async def change_plan_handler(changes: list[dict[str, Any]]) -> dict[str, Any]:
     return {"success": True, "result": {"steps": plan, "count": len(plan)}}
 
 
+async def audit_report_handler(attempt_id: str = "") -> dict[str, Any]:
+    """Aggregate persisted Attempt manifests and restore audits."""
+    from app.services.workspace_context import get_workspace_root
+    root = get_workspace_root()
+    store = root / ".agenthub" / "attempt-snapshots"
+    stores = [store / attempt_id] if attempt_id else sorted(store.glob("att-*"))
+    reports: list[dict[str, Any]] = []
+    for item in stores:
+        if not item.is_dir():
+            continue
+        report: dict[str, Any] = {"attempt_id": item.name}
+        for filename, key in (("manifest.json", "manifest"), ("restore-audit.json", "restore")):
+            path = item / filename
+            if path.is_file():
+                try:
+                    report[key] = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    report[key] = {"error": "invalid json"}
+        reports.append(report)
+    return {"success": True, "result": {"attempts": reports, "count": len(reports)}}
+
+
 __all__ = [name for name in globals() if name.endswith("_handler")]
