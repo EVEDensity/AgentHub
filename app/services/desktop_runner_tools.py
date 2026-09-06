@@ -63,6 +63,16 @@ from app.services.tools.definitions import (
     GIT_COMMIT,
     GIT_REVERT,
     GIT_CHERRY_PICK,
+    AST_SYMBOLS,
+    TEST_DISCOVER,
+    FORMATTER,
+    TYPE_CHECK,
+    PACKAGE_MANAGER,
+    LOG_TAIL,
+    PROCESS_LIST,
+    PORT_CHECK,
+    SERVICE_HEALTH,
+    CHANGE_PLAN,
 )
 from app.services.workspace_context import workspace_root_override
 
@@ -107,6 +117,16 @@ _DESKTOP_TOOL_DEFINITIONS: tuple[ToolDefinition, ...] = (
     GIT_COMMIT,
     GIT_REVERT,
     GIT_CHERRY_PICK,
+    AST_SYMBOLS,
+    TEST_DISCOVER,
+    FORMATTER,
+    TYPE_CHECK,
+    PACKAGE_MANAGER,
+    LOG_TAIL,
+    PROCESS_LIST,
+    PORT_CHECK,
+    SERVICE_HEALTH,
+    CHANGE_PLAN,
 )
 
 # ── delegate_subtask (G8): Codex-style spawn_agent for the desktop ───────
