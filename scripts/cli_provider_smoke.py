@@ -11,9 +11,12 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import httpx
+
+from scripts.production_evidence import new_evidence, write_evidence
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -23,7 +26,15 @@ if str(ROOT) not in sys.path:
 def main() -> int:
     key = os.environ.get("AGENTHUB_CLI_MODEL_API_KEY", "").strip()
     if not key:
-        print("SKIP: AGENTHUB_CLI_MODEL_API_KEY is not set")
+        _emit_summary(
+            {
+                "status": "SKIP",
+                "errorType": "missing_credentials",
+                "provider": os.environ.get("AGENTHUB_CLI_PROVIDER", "openai"),
+                "model": os.environ.get("AGENTHUB_CLI_MODEL", "") or "v4-flash",
+            },
+            os.environ.get("AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT", "").strip(),
+        )
         return 0
     provider = os.environ.get("AGENTHUB_CLI_PROVIDER", "openai").strip()
     model = os.environ.get("AGENTHUB_CLI_MODEL", "").strip() or "v4-flash"
@@ -186,10 +197,15 @@ def _balanced_json_fragment(value: str) -> bool:
 
 
 def _emit_summary(summary: dict[str, object], output_path: str) -> None:
-    rendered = json.dumps(summary, ensure_ascii=False, sort_keys=True)
+    summary.setdefault("requestId", "req-" + uuid.uuid4().hex)
+    record = new_evidence(
+        scope="provider-protocol",
+        evidence_level="real-provider",
+        **summary,
+    )
+    rendered = json.dumps(record, ensure_ascii=False, sort_keys=True)
     print(rendered)
-    if output_path:
-        Path(output_path).write_text(rendered + "\n", encoding="utf-8")
+    write_evidence(record, scope="provider", mirror_path=output_path or None)
     registry_path = os.environ.get("AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT", "").strip()
     if registry_path:
         from app.cli.provider_health import ProviderHealthRegistry

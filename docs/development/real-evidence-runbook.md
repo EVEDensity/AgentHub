@@ -18,3 +18,33 @@ tool-call, physical TTY widths 40/80/120, an injected SSE disconnect followed
 by `Last-Event-ID` recovery, and clean Windows/macOS/Linux npm install,
 upgrade, and rollback. PostgreSQL evidence must use two application processes
 and prove that durable ledger replay still works when NOTIFY is delayed.
+
+## Evidence scripts
+
+All gates use `scripts/production_evidence.py`. A real run writes one redacted
+JSON file below `artifacts/production/<scope>/`; setting an explicit output
+environment variable additionally writes a CI-upload mirror. Each record has
+`runId`, `commit`, bounded `environment`, `evidenceLevel`, and `status`.
+
+```text
+python scripts/cli_provider_smoke.py
+python scripts/cli_provider_mission_smoke.py
+python scripts/cli_postgres_evidence.py
+python scripts/cli_sse_recovery_evidence.py
+python scripts/cli_tty_evidence.py
+python scripts/cli_benchmark.py --task-file benchmarks/cli_tasks.json \
+  --task-id conversation-basic --check-thresholds
+```
+
+The PostgreSQL gate requires `DATABASE_URL` and `asyncpg`. The SSE gate
+requires a deployed Mission Control endpoint, an auth token, a mission ID,
+and a proxy that closes the first stream after a durable event; it refuses to
+claim recovery unless `AGENTHUB_CLI_SSE_FAULT_INJECTED=1` is present. The TTY
+gate must be launched from a real terminal with
+`AGENTHUB_CLI_TTY_WIDTH=40`, `80`, or `120`; redirected output is `SKIP`.
+
+The scheduled workflow `.github/workflows/cli-production-evidence.yml` runs
+the PostgreSQL and benchmark gates and runs SSE only when its endpoint and
+secret variables are configured. The physical TTY gate remains a manual
+cross-platform acceptance step because a hosted CI pipe is not a physical
+terminal.

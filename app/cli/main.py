@@ -14,7 +14,8 @@ Exit codes (stable contract for CI):
     1  mission FAILED
     2  mission CANCELLED
     3  wait timeout / non-terminal status
-    4  infrastructure error (server boot, HTTP failure, bad config)
+    4  timeout/cancelled execution
+    70 infrastructure error (server boot, HTTP failure, bad config)
 """
 
 from __future__ import annotations
@@ -22,8 +23,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -41,9 +44,11 @@ from app.cli.runtime import (
     DEFAULT_MISSION_TIMEOUT,
     DEFAULT_RUNNER_TIMEOUT_SECONDS,
     EXIT_INFRA_ERROR,
+    EXIT_USAGE_ERROR,
     EXIT_OK,
     MissionRunResult,
     _load_config,
+    load_config,
     collect_agents_md_layers,
     execute_objective,
     list_recent_missions,
@@ -51,6 +56,9 @@ from app.cli.runtime import (
     resolve_model_settings,
     state_dir,
 )
+from app.cli.errors import error_exit_code, to_error_envelope
+from app.cli.lifecycle import cancellation_scope
+from app.errors import ConfigError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -137,6 +145,14 @@ def build_parser() -> argparse.ArgumentParser:
                 "--jsonl", action="store_true",
                 help="emit live events as JSON Lines, followed by the result",
             )
+        run_parser.add_argument(
+            "--quiet", action="store_true",
+            help="suppress human progress while preserving errors and final status",
+        )
+        run_parser.add_argument(
+            "--verbose", action="store_true",
+            help="emit additional structured diagnostics to stderr",
+        )
 
     missions_parser = subparsers.add_parser(
         "missions", help="list missions recorded in the local state"
@@ -480,13 +496,23 @@ def cmd_run(
     args: argparse.Namespace, cwd: Path, *, json_mode: bool
 ) -> int:
     jsonl_mode = bool(getattr(args, "jsonl", False))
-    config = _load_config(cwd)
-    settings = resolve_model_settings(
-        provider=args.provider,
-        model=args.model,
-        base_url=args.model_base_url,
-        config=config,
-    )
+    request_id = f"req-{uuid.uuid4().hex}"
+    try:
+        config = load_config(cwd, strict=True)
+        settings = resolve_model_settings(
+            provider=args.provider,
+            model=args.model,
+            base_url=args.model_base_url,
+            config=config,
+        )
+    except (ConfigError, SystemExit) as exc:
+        mapped = ConfigError(str(exc)) if isinstance(exc, SystemExit) else exc
+        envelope = to_error_envelope(mapped, request_id=request_id)
+        if json_mode or bool(getattr(args, "jsonl", False)):
+            print(json.dumps({"schemaVersion": 1, "type": "error", "status": "CONFIG_ERROR", "error": envelope.to_dict(), "exitCode": error_exit_code(envelope)}))
+        else:
+            print(f"error [{envelope.category}]: {envelope.message}", file=sys.stderr)
+        return error_exit_code(envelope)
     workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
     directory = state_dir(cwd)
     directory.mkdir(parents=True, exist_ok=True)
@@ -499,8 +525,12 @@ def cmd_run(
     else:
         resume_mission_id = ""
 
+    quiet = bool(getattr(args, "quiet", False))
+    verbose = bool(getattr(args, "verbose", False))
+    cancel_event = threading.Event()
+
     def _emit_status(status: str) -> None:
-        if not json_mode and not jsonl_mode:
+        if not json_mode and not jsonl_mode and not quiet:
             print(f"  mission status: {status}")
 
     def _emit_event(event: dict[str, Any]) -> None:
@@ -527,32 +557,46 @@ def cmd_run(
         started = time.monotonic()
 
     try:
-        result = execute_objective(
-            objective=args.objective,
-            workspace_root=workspace_root,
-            state_dir=directory,
-            model=settings,
-            max_total_tokens=args.max_total_tokens,
-            runner_timeout_seconds=args.runner_timeout_seconds,
-            mission_timeout=args.mission_timeout,
-            project_instructions=project_instructions,
-            resume_mission_id=resume_mission_id,
-            web_search=not args.no_web_search,
-            tool_permission_mode=getattr(args, "permission", None),
-            on_status=_emit_status,
-            on_event=_emit_event,
-            on_view_state=_emit_view_state,
-        )
-    except (RuntimeError, OSError) as exc:
+        with cancellation_scope(cancel_event):
+            result = execute_objective(
+                objective=args.objective,
+                workspace_root=workspace_root,
+                state_dir=directory,
+                model=settings,
+                max_total_tokens=args.max_total_tokens,
+                runner_timeout_seconds=args.runner_timeout_seconds,
+                mission_timeout=args.mission_timeout,
+                project_instructions=project_instructions,
+                resume_mission_id=resume_mission_id,
+                web_search=not args.no_web_search,
+                tool_permission_mode=getattr(args, "permission", None),
+                on_status=_emit_status,
+                on_event=_emit_event,
+                on_view_state=_emit_view_state,
+                cancel_event=cancel_event,
+            )
+    except Exception as exc:
+        envelope = to_error_envelope(exc, request_id=request_id)
+        exit_code = error_exit_code(envelope)
         if json_mode or jsonl_mode:
             print(
                 json.dumps(
-                    {"status": "INFRA_ERROR", "error": str(exc), "exitCode": EXIT_INFRA_ERROR}
+                    {"schemaVersion": 1, "type": "error", "status": "INFRA_ERROR", "error": envelope.to_dict(), "exitCode": exit_code}
                 )
             )
         else:
-            print(f"error: {exc}", file=sys.stderr)
-        return EXIT_INFRA_ERROR
+            print(f"error [{envelope.category}]: {envelope.message}", file=sys.stderr)
+            if verbose:
+                print(json.dumps(envelope.to_dict(), ensure_ascii=False), file=sys.stderr)
+        return exit_code
+    except KeyboardInterrupt:
+        cancel_event.set()
+        envelope = to_error_envelope(TimeoutError("cancelled by user"), request_id=request_id)
+        if json_mode or jsonl_mode:
+            print(json.dumps({"schemaVersion": 1, "type": "error", "status": "CANCELLED", "error": envelope.to_dict(), "exitCode": 4}))
+        else:
+            print("cancelled: cancellation requested", file=sys.stderr)
+        return 4
 
     if jsonl_mode:
         print(json.dumps({"schemaVersion": 1, "type": "result", "result": result.to_json()}, ensure_ascii=False), flush=True)
@@ -564,7 +608,7 @@ def cmd_run(
 
 
 def cmd_missions(args: argparse.Namespace, cwd: Path) -> int:
-    config = _load_config(cwd)
+    config = load_config(cwd, strict=True)
     settings = resolve_model_settings(
         provider=args.provider,
         model=args.model,
@@ -604,7 +648,7 @@ def cmd_missions(args: argparse.Namespace, cwd: Path) -> int:
 
 def cmd_review_pr(args: argparse.Namespace, cwd: Path) -> int:
     json_mode = args.json
-    config = _load_config(cwd)
+    config = load_config(cwd, strict=True)
     settings = resolve_model_settings(
         provider=args.provider,
         model=args.model,
@@ -838,7 +882,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def cli_main(argv: list[str] | None = None) -> int:
+def _cli_main_impl(argv: list[str] | None = None) -> int:
     if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -856,21 +900,20 @@ def cli_main(argv: list[str] | None = None) -> int:
         if handled:
             return EXIT_OK
         # 已配置好 → 构造完整的 args Namespace
-        import json
-        from app.cli.runtime import state_dir, CONFIG_FILE_NAME
-        cfg_path = state_dir(cwd) / CONFIG_FILE_NAME
-        cfg = {}
-        if cfg_path.is_file():
-            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg = load_config(cwd, strict=True)
         base_kwargs = dict(
             provider=cfg.get("provider", "deepseek"),
             model=cfg.get("model", "deepseek-v4-flash"),
             model_base_url=cfg.get("base_url", None),
             workspace=None,
+            resume=None,
             mission_timeout=300.0,
             max_total_tokens=None,
             runner_timeout_seconds=120,
             no_web_search=False,
+            permission=None,
+            quiet=False,
+            verbose=False,
         )
         # P0-1: 没有 subcommand — 检查 argv 里有没有非 flag 的残留
         # argparse 会把 "agenthub write hello.py" 解析成 command=None
@@ -909,6 +952,10 @@ def cli_main(argv: list[str] | None = None) -> int:
                 max_total_tokens=None,
                 runner_timeout_seconds=base_kwargs["runner_timeout_seconds"],
                 no_web_search=False,
+                resume=None,
+                permission=None,
+                quiet=False,
+                verbose=False,
                 json=False,
             )
             return cmd_run(run_args, cwd, json_mode=False)
@@ -941,6 +988,10 @@ def cli_main(argv: list[str] | None = None) -> int:
                 max_total_tokens=None,
                 runner_timeout_seconds=base_kwargs["runner_timeout_seconds"],
                 no_web_search=False,
+                resume=None,
+                permission=None,
+                quiet=False,
+                verbose=False,
                 json=False,
             )
             return cmd_run(run_args, cwd, json_mode=False)
@@ -997,6 +1048,40 @@ def cli_main(argv: list[str] | None = None) -> int:
         return cmd_serve(args)
     parser.error(f"unknown command: {args.command}")
     return EXIT_INFRA_ERROR  # unreachable
+
+
+def cli_main(argv: list[str] | None = None) -> int:
+    """Run the CLI and project uncaught execution failures consistently.
+
+    Command handlers retain their historical return codes and local output,
+    while failures that escape a handler are converted to the canonical
+    ``ErrorEnvelope`` at this single boundary.  ``argparse`` errors remain
+    ``SystemExit`` so shell usage and existing callers are unchanged.
+    """
+    try:
+        return _cli_main_impl(argv)
+    except KeyboardInterrupt:
+        # SIGINT is normally handled by ``cancellation_scope``.  This branch
+        # covers startup/dispatch interrupts before a scope is installed.
+        print("cancelled: cancellation requested", file=sys.stderr)
+        return 4
+    except Exception as exc:  # noqa: BLE001 - final CLI safety boundary
+        request_id = f"req-{uuid.uuid4().hex}"
+        envelope = to_error_envelope(exc, request_id=request_id)
+        exit_code = error_exit_code(envelope)
+        raw = argv if argv is not None else sys.argv[1:]
+        machine = any(token in {"--json", "--jsonl"} for token in raw)
+        if machine:
+            print(json.dumps({
+                "schemaVersion": 1,
+                "type": "error",
+                "status": "ERROR",
+                "error": envelope.to_dict(),
+                "exitCode": exit_code,
+            }, ensure_ascii=False))
+        else:
+            print(f"error [{envelope.category}]: {envelope.message}", file=sys.stderr)
+        return exit_code
 
 
 def main() -> None:

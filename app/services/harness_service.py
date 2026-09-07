@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
 import logging
 import math
 import re
@@ -24,7 +26,21 @@ from app.services.harness_checkpoint import (
     _HarnessRecorder,
 )
 from app.services.tools.sandbox_executor import SandboxResult
-from app.services.model_contract import ToolCall as CanonicalToolCall, ToolResult as CanonicalToolResult
+from app.services.model_contract import (
+    Message,
+    ModelPort,
+    ModelRequest,
+    ModelResponse,
+    ModelStreamEvent,
+    ModelUsage,
+    ToolCall,
+    ToolResult,
+)
+
+# Backwards-compatible import names. These are aliases of the canonical DTOs,
+# not a second protocol owned by Harness.
+FunctionCall = ToolCall
+FunctionResult = ToolResult
 
 logger = logging.getLogger("agenthub.harness")
 
@@ -67,41 +83,6 @@ def is_transient_model_error(exc: BaseException) -> bool:
 
 
 @dataclass(frozen=True)
-class ModelUsage:
-    """Provider-reported usage accumulated for one Harness execution."""
-
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    cost: float = 0.0
-
-    def __post_init__(self) -> None:
-        if (
-            isinstance(self.prompt_tokens, bool)
-            or not isinstance(self.prompt_tokens, int)
-            or self.prompt_tokens < 0
-            or isinstance(self.completion_tokens, bool)
-            or not isinstance(self.completion_tokens, int)
-            or self.completion_tokens < 0
-            or isinstance(self.cost, bool)
-            or not isinstance(self.cost, (int, float))
-            or not math.isfinite(self.cost)
-            or self.cost < 0
-        ):
-            raise ValueError("Model usage values must be non-negative")
-
-    @property
-    def total_tokens(self) -> int:
-        return self.prompt_tokens + self.completion_tokens
-
-    def add(self, other: ModelUsage) -> ModelUsage:
-        return ModelUsage(
-            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
-            completion_tokens=self.completion_tokens + other.completion_tokens,
-            cost=self.cost + other.cost,
-        )
-
-
-@dataclass(frozen=True)
 class HarnessRequest:
     """Request-scoped input for one bounded Harness execution."""
 
@@ -121,60 +102,6 @@ class HarnessResult:
     iterations: int = 1
     tool_calls: int = 0
     usage: ModelUsage = field(default_factory=ModelUsage)
-
-
-@dataclass(frozen=True)
-class FunctionCall:
-    """One model-requested function invocation in a Harness loop."""
-
-    id: str
-    name: str
-    arguments: Mapping[str, Any]
-
-    def to_model_contract(self) -> CanonicalToolCall:
-        return CanonicalToolCall(id=self.id, name=self.name, arguments=self.arguments)
-
-
-@dataclass(frozen=True)
-class FunctionResult:
-    """A structured function result returned to the model on its next turn."""
-
-    call_id: str
-    name: str
-    success: bool
-    content: str
-
-    def to_model_contract(self) -> CanonicalToolResult:
-        return CanonicalToolResult(call_id=self.call_id, name=self.name, success=self.success, content=self.content)
-
-
-@dataclass(frozen=True)
-class ModelResponse:
-    """Model output normalized by a provider adapter before Harness handling."""
-
-    content: str = ""
-    tool_calls: tuple[FunctionCall, ...] = ()
-    usage: ModelUsage = field(default_factory=ModelUsage)
-
-
-class ModelPort(Protocol):
-    """Model adapter used by a Harness without provider-specific state."""
-
-    async def complete(
-        self,
-        request: HarnessRequest,
-        tool_results: tuple[FunctionResult, ...],
-        *,
-        tools_enabled: bool = True,
-    ) -> ModelResponse: ...
-
-    async def stream(
-        self,
-        request: HarnessRequest,
-        tool_results: tuple[FunctionResult, ...],
-        *,
-        tools_enabled: bool = True,
-    ) -> ModelResponse: ...
 
 
 FunctionHandler = Callable[[Mapping[str, Any]], Awaitable[str]]
@@ -542,14 +469,21 @@ class FunctionCallingHarness:
         interrupts the backoff instead of being extended by it. Usage is
         only ever counted from the successful response by the caller.
         """
-        # Preserve the historical call shapes: the loop call passes no
-        # keyword (ModelPort defaults tools_enabled), the summary call
-        # disables tools explicitly. Adapter stubs may implement either
-        # signature only.
-        kwargs: dict[str, Any] = {} if tools_enabled else {"tools_enabled": False}
+        model_request = self._build_model_request(
+            request,
+            tool_results,
+            tools_enabled=tools_enabled,
+            stream=False,
+        )
 
-        def invoke() -> Any:
-            return self._model.complete(request, tool_results, **kwargs)
+        async def invoke() -> ModelResponse:
+            method = self._model.complete
+            if _uses_legacy_model_signature(method):
+                kwargs: dict[str, Any] = {}
+                if not tools_enabled and _accepts_keyword(method, "tools_enabled"):
+                    kwargs["tools_enabled"] = False
+                return await method(request, tool_results, **kwargs)  # type: ignore[call-arg]
+            return await method(model_request)
 
         try:
             return await invoke()
@@ -570,12 +504,132 @@ class FunctionCallingHarness:
         *,
         tools_enabled: bool = False,
     ) -> ModelResponse:
-        stream = getattr(self._model, "stream", None)
-        if not callable(stream):
+        stream_method = getattr(self._model, "stream", None)
+        if not callable(stream_method):
             return await self._complete_with_retry(
                 request, tool_results, tools_enabled=tools_enabled
             )
-        return await stream(request, tool_results, tools_enabled=tools_enabled)
+        if _uses_legacy_model_signature(stream_method):
+            return await stream_method(
+                request, tool_results, tools_enabled=tools_enabled
+            )
+        model_request = self._build_model_request(
+            request,
+            tool_results,
+            tools_enabled=tools_enabled,
+            stream=True,
+        )
+        async def consume_once() -> ModelResponse:
+            chunks: list[str] = []
+            calls: list[ToolCall] = []
+            usage = ModelUsage()
+            delivered = False
+            try:
+                async for event in stream_method(model_request):
+                    if not isinstance(event, ModelStreamEvent):
+                        raise HarnessError(
+                            "ModelPort.stream emitted a non-canonical event"
+                        )
+                    if event.kind == "error":
+                        raise HarnessError("model stream failed") from (
+                            event.error
+                            if isinstance(event.error, BaseException)
+                            else None
+                        )
+                    if event.kind == "text_delta" and event.text:
+                        delivered = True
+                        chunks.append(event.text)
+                        if request.on_text_delta is not None:
+                            callback_result = request.on_text_delta(event.text)
+                            if inspect.isawaitable(callback_result):
+                                await callback_result
+                    if event.kind == "tool_call" and event.tool_call is not None:
+                        delivered = True
+                        calls.append(event.tool_call)
+                    if event.kind == "completed":
+                        usage = ModelUsage.from_value(event.usage)
+            except Exception as exc:
+                setattr(exc, "_agenthub_stream_delivered", delivered)
+                raise
+            return ModelResponse(
+                text="".join(chunks),
+                tool_calls=tuple(calls),
+                usage=usage,
+            )
+
+        try:
+            return await consume_once()
+        except Exception as exc:
+            if (
+                getattr(exc, "_agenthub_stream_delivered", False)
+                or not is_transient_model_error(exc)
+            ):
+                raise
+            logger.warning(
+                "harness: transient pre-stream model error (%s), retrying once",
+                type(exc).__name__,
+            )
+            await asyncio.sleep(MODEL_RETRY_BACKOFF_SECONDS)
+            return await consume_once()
+
+    def _build_model_request(
+        self,
+        request: HarnessRequest,
+        tool_results: tuple[ToolResult, ...],
+        *,
+        tools_enabled: bool,
+        stream: bool,
+    ) -> ModelRequest:
+        messages: list[Message] = [
+            Message(role="user", content=request.code, source_id="work-unit")
+        ]
+        for result in tool_results:
+            messages.append(
+                Message(
+                    role="tool",
+                    source_id=result.call_id,
+                    content=json.dumps(
+                        {
+                            "callId": result.call_id,
+                            "name": result.name,
+                            "success": result.success,
+                            "content": result.content,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                )
+            )
+        metadata: dict[str, Any] = {"language": request.language}
+        if request.cwd is not None:
+            metadata["cwd"] = str(request.cwd)
+        if request.execution is not None:
+            metadata.update(
+                {
+                    "missionId": request.execution.mission_id,
+                    "workUnitId": request.execution.work_unit_id,
+                    "attempt": request.execution.attempt,
+                }
+            )
+        tools = tuple(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": dict(tool.parameters),
+                },
+            }
+            for tool in self._tools.values()
+        ) if tools_enabled else ()
+        return ModelRequest(
+            messages=tuple(messages),
+            tools=tools,
+            metadata=metadata,
+            stream=stream,
+            tool_choice="auto" if tools_enabled else "none",
+            timeout_seconds=request.timeout,
+        )
 
     def _budget_error(self, usage: ModelUsage) -> tuple[str, str] | None:
         if (
@@ -610,6 +664,13 @@ class FunctionCallingHarness:
                 name=call.name,
                 success=False,
                 content="function call arguments must be an object",
+            )
+        if not call.arguments_complete:
+            return FunctionResult(
+                call_id=call.id,
+                name=call.name,
+                success=False,
+                content="function call arguments are incomplete or invalid JSON",
             )
         tool = self._tools.get(call.name)
         if tool is None:
@@ -661,6 +722,27 @@ class FunctionCallingHarness:
 
 def _duration_ms(started_at: float) -> int:
     return int((time.monotonic() - started_at) * 1000)
+
+
+def _uses_legacy_model_signature(method: Any) -> bool:
+    """Isolate pre-canonical test/plugin adapters at the Harness boundary."""
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+    return "tool_results" in parameters
+
+
+def _accepts_keyword(method: Any, name: str) -> bool:
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.name == name
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    )
 
 
 def _failed_result(

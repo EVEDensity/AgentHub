@@ -176,13 +176,18 @@ async def file_write_handler(
         lock_result = file_lock_manager.acquire(sid, path, uid)
         lock_acquired = lock_result["ok"]
         if not lock_result["ok"]:
-            existing_lock = lock_result["lock"]
-            if not conflict_warning:
-                conflict_warning = ""
-            conflict_warning += (
-                f" 🔒 文件被 {existing_lock.holder_name or existing_lock.holder_user_id} 锁定"
-                f"（{existing_lock.remaining_seconds:.0f}秒后过期）。"
+            existing_lock = lock_result.get("lock")
+            holder = (
+                existing_lock.holder_name or existing_lock.holder_user_id
+                if existing_lock is not None
+                else "another actor"
             )
+            return {
+                "success": False,
+                "error": f"文件被 {holder} 锁定，拒绝覆盖",
+                "error_type": "conflict",
+                "metadata": {"path": path, "lock_conflict": True},
+            }
     # noqa: BLE001 - file-version tracking is best-effort, never block write
     except Exception:
         pass

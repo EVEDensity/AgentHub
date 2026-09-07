@@ -87,3 +87,28 @@
 - 权限同步 API 使用认证用户 ID 作为作用域，并在响应中保留数据库 `source/priority`；同步只能写入 user-owned 规则，不能覆盖组织全局规则。
 - Attempt manifest 只保存 WorkUnit/Artifact 标识、类型、状态、文件列表和摘要 hash，不保存内容；同一文件由多个 WorkUnit 修改时仍以 attempt 聚合恢复。
 - 三种 CLI renderer 通过 reducer 的 `state_to_dict` 与 `state_summary` 共享状态快照，避免 JSONL、Rich、TUI 各自推断终态。
+
+### 2026-09-06：Production CLI technical spec infrastructure slice
+
+- 症状：CLI 错误投影、Transport request-id/分层超时、严格配置读取和
+  SIGINT 生命周期分散，无法保证机器输出与运行时边界一致。
+- 解决：新增共享 `ErrorEnvelope` 分类与 CLI 退出码映射；Transport 统一
+  request-id、connect/read/write/pool timeout、响应大小上限和仅幂等请求重试；
+  `run`/`chat` 使用可恢复的 `cancellation_scope`；生产 `run` 使用 strict
+  config loader；Reducer 对缺失 call_id 的新工具事件隔离并记录诊断。
+- 验证：`python -m pytest tests/cli -q` → 263 passed, 2 skipped；新增
+  `test_cli_lifecycle.py`、错误/Transport/Reducer 契约测试。
+- 残余风险：真实 provider、物理 TTY、跨进程 PostgreSQL 通知和跨平台
+  registry 安装仍按规范标记为未验收；Mission 结果旧退出码保持兼容，
+  基础设施错误的规范码通过 `app.cli.errors.error_exit_code` 暴露。
+
+### 2026-09-06：SSE 与 DTO 边界继续收敛
+
+- 症状：Transport 重试会丢弃未关闭的 HTTP response；SSE 解析器对单个
+  `data:` 帧没有内存上限；模型契约仍缺少规范中的 Message、call_id 和
+  请求超时字段。
+- 解决：重试前显式关闭响应；SSE 增加行/帧大小上限并安全丢弃超限帧；
+  扩展 `model_contract`，增加规范字段及 `id`/`content` 兼容别名。
+- 验证：`python -m pytest tests/cli tests/services/test_model_contract_spec.py -q`。
+- 残余风险：旧 Harness 内部 DTO 尚未完全替换为 canonical ModelPort，
+  需要后续按适配器边界逐步迁移。

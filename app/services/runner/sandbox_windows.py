@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import tempfile
 import sys
 import time
 from dataclasses import dataclass
@@ -473,26 +474,48 @@ def _run_plain(
     run_arg: str | list[str] = (
         cmd if isinstance(cmd, str) else [str(part) for part in cmd]
     )
-    try:
-        finished = subprocess.run(
+    timed_out = False
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        process = subprocess.Popen(
             run_arg,
             cwd=str(cwd),
-            capture_output=True,
-            timeout=policy.timeout_seconds,
+            stdout=stdout_file,
+            stderr=stderr_file,
         )
-    except subprocess.TimeoutExpired as exc:
-        completed = subprocess.CompletedProcess(
-            args=cmd,
-            returncode=None,
-            stdout=_decode(exc.stdout),
-            stderr=_decode(exc.stderr),
-        )
-    else:
-        completed = subprocess.CompletedProcess(
-            args=cmd,
-            returncode=finished.returncode,
-            stdout=_decode(finished.stdout),
-            stderr=_decode(finished.stderr),
-        )
+        try:
+            process.wait(timeout=policy.timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_plain_process_tree(process)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+        stdout_file.seek(0)
+        stderr_file.seek(0)
+        stdout = stdout_file.read(MAX_OUTPUT_BYTES_PER_STREAM)
+        stderr = stderr_file.read(MAX_OUTPUT_BYTES_PER_STREAM)
+    completed = subprocess.CompletedProcess(
+        args=cmd,
+        returncode=None if timed_out else process.returncode,
+        stdout=_decode(stdout),
+        stderr=_decode(stderr),
+    )
     completed.sandboxed = False
     return completed
+
+
+def _kill_plain_process_tree(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()

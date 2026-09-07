@@ -34,7 +34,9 @@ and validates every response identity.
   lease-fenced Mission/Contract/WorkUnit projection. The peer objective is
   explicitly untrusted data; capability metadata in the document never grants
   a tool.
-- `ModelPort`: provider-independent model completion responses.
+- `ModelPort`: the canonical `app.services.model_contract` boundary. Harness
+  sends only `ModelRequest` and consumes `ModelResponse` or
+  `ModelStreamEvent`; tool feedback is represented as `tool` messages.
 - `FunctionTool`: explicit capability-granted handlers and argument validators.
 - Claimed inbound work supplies a request-scoped Harness as part of one
   execution plan. Its model factory receives the exact resolved `FunctionTool`
@@ -72,6 +74,12 @@ does not import Mission repositories, write WorkUnit state, persist prompts or
 tool arguments, or claim independent Evidence. Mission Control remains the
 durable source of lifecycle truth; future observability or event-ledger
 adapters consume this boundary without changing Harness policy.
+
+`FunctionCall`, `FunctionResult`, and `ModelUsage` imports from
+`harness_service` remain compatibility aliases only. Their classes are owned
+by `model_contract`; Harness does not define a second provider protocol.
+String-prompt providers are isolated behind `ModelAdapterPort`, after
+`ContextBoundModelPort` has attached compiler-produced messages.
 
 `SandboxHarness` does not execute inbound `text` as a shell or program. A
 deployment that accepts inbound A2A execution must explicitly configure a

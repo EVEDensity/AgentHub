@@ -3,6 +3,17 @@
 `app/` contains the Python application and the Mission domain migration
 boundary. It is not the permanent home of every Agent feature.
 
+## CLI terminal UI
+
+The interactive CLI uses `app/cli/ui.py` as its shared Rich rendering layer.
+The Tech Blue theme is deliberately borderless: `Rule` separators, `✦`/`✢`
+markers, and blue semantic styles are used for headers, thinking, tool calls,
+results, and artifact summaries. `chat` keeps the `AgentHub ❯` prompt and
+answers workspace-inventory questions through the read-only local file walker
+before falling back to the Mission runner. Run `python -m app.cli.ui_demo
+--workspace <path>` for a read-only rendering demonstration using the actual
+workspace tree.
+
 ## Ownership
 
 * `cli/`: developer CLI (`python -m app.cli`) — boots an isolated
@@ -25,6 +36,10 @@ boundary. It is not the permanent home of every Agent feature.
   `.agenthub/conversation.jsonl`; `/context`, `/resume`, and subsequent
   turns all read and update this same append-only JSONL store. `/new` and
   `/clear` intentionally remove it.
+  Model-facing project facts, layered instructions, project manifest,
+  conversation, compact, and resume layers are compiled by `ContextCompiler`.
+  The desktop model factory binds those canonical messages before the
+  provider adapter; the adapter no longer owns production context assembly.
 
 * `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
   transition models.

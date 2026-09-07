@@ -502,3 +502,49 @@ Every change must:
 The following are explicit non-goals for a production claim until evidence
 exists: real multi-process PostgreSQL notification, arbitrary provider tool
 reliability, physical TTY behavior, and cross-platform npm registry behavior.
+
+## Implementation Evidence (2026-09-06)
+
+The current source baseline implements the following fixture-verified slices:
+
+- `app.errors.ErrorEnvelope` is the shared classified error projection; CLI
+  errors expose stable category-to-exit mapping and operation `requestId`.
+- `HttpTransport` owns bearer headers, request IDs, connect/read/write/pool
+  timeouts, bounded response headers, and idempotent-only exponential-jitter
+  retries. Mission/Decision/Artifact facades route production calls through it.
+- `cancellation_scope` installs and restores a cooperative SIGINT handler for
+  `run` and interactive `chat`; cancellation propagates to the Mission loop.
+- strict `load_config()` rejects malformed JSON for production `run` paths while
+  the historical `_load_config()` remains a lenient compatibility shim.
+- Reducer tool state never merges distinct new events without `call_id`; such
+  events receive diagnostics and an event-scoped compatibility key.
+- SSE frame parsing enforces bounded line/frame sizes and discards oversized
+  frames without terminating the stream; Transport closes responses discarded
+  during idempotent retries.
+- `app.services.model_contract` now exposes the canonical `Message`,
+  `ModelRequest`, `ModelStreamEvent`, `ToolCall`, and `ModelResponse` fields
+  (`call_id`, `stream`, `tool_choice`, `timeout_seconds`, and `text`) while
+  retaining legacy `id`/`content` constructor aliases for staged migration.
+
+Validation: `python -m pytest tests/cli -q` (fixture-verified; real provider,
+physical TTY, and cross-platform release evidence remain outstanding).
+
+The canonical-model convergence keeps historical Harness symbol imports as
+aliases, while production Harness calls now use `ModelRequest`,
+`ModelResponse`, `ModelStreamEvent`, `ToolCall`, and `ToolResult` from
+`app.services.model_contract`. CLI project facts, instructions, manifest, chat
+context, and Mission resume text are compiled through `ContextCompiler` before
+they enter a model request. PostgreSQL notification reconnect and terminal
+width behavior are contract-tested; these remain fixture/integration evidence,
+not real PostgreSQL or physical-TTY evidence. The provider nightly now records
+separate protocol and Mission closed-loop artifacts and records missing
+credentials as `SKIP`.
+
+The shared `scripts/production_evidence.py` writer now emits redacted
+`schemaVersion: 2` records with `runId`, commit, and bounded environment
+metadata under `artifacts/production/<scope>/`. Provider, Mission closed-loop,
+PostgreSQL listener, SSE recovery, TTY, and benchmark gates use this writer;
+missing external prerequisites produce `SKIP`, never `PASS`. Single-file
+mutation now fails closed when another actor holds the advisory lock, and CLI
+model environment precedence is resolved through
+`app.cli.config.ConfigResolver`.

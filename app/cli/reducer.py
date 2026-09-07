@@ -72,14 +72,17 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
     elif kind in {"decision.resolved", "decision.expired"}:
         decision = None
     tools = list(state.tools)
+    diagnostics = state.diagnostics
     if kind.startswith("tool."):
         name = str(payload.get("toolName") or payload.get("tool_name") or "unknown")
         call_id = str(payload.get("callId") or payload.get("call_id") or payload.get("toolCallId") or "")
         if not call_id:
-            # Legacy events can still be rendered with their event ID as a
-            # stable per-event fallback until all producers emit call_id.
-            call_id = f"legacy:{name}"
-        diagnostics = state.diagnostics
+            # New events must carry call_id. Preserve the old no-ID fixture
+            # behavior when no event ID exists, but never merge two distinct
+            # event IDs under the same tool name.
+            if event.event_id:
+                diagnostics = diagnostics + (f"tool event missing call_id: {name}",)
+            call_id = f"legacy:{event.event_id}" if event.event_id else f"legacy:{name}"
         index = next((i for i, item in enumerate(tools) if item.call_id == call_id), None)
         if index is None:
             tools.append(ToolView(call_id=call_id, name=name, status=kind.removeprefix("tool."), output=str(payload.get("text") or "")))
@@ -91,7 +94,7 @@ def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
         verification = kind.removeprefix("verification.")
     known = {"assistant.delta", "assistant.completed", "decision.pending", "decision.resolved", "decision.expired", "verification.started", "verification.completed", "mission.created", "mission.started", "mission.completed", "mission.failed", "mission.cancelled", "mission.timeout", "work_unit.created", "work_unit.claimed", "work_unit.running", "checkpoint.created", "artifact.registered", "sse.reconnecting", "sse.connected", "sse.polling"}
     if kind in known or kind.startswith("tool."):
-        diagnostics = diagnostics if "diagnostics" in locals() else state.diagnostics
+        diagnostics = diagnostics
     else:
         diagnostics = state.diagnostics + (f"unknown event: {kind}",)
     connection = state.connection_status

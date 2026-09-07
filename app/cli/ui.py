@@ -2,11 +2,11 @@
 
 Design contract (docs/roadmaps/north-star-developer-cli-experience.md):
 
-- dark-mode theme: primary info bright white, secondary info (paths,
-  timestamps) muted grey, success green, danger/warn red/yellow, tool
-  calls blue, AI thinking purple
-- visual blocks: bordered panels isolate AI thinking / tool execution /
-  final output; code changes render as a git diff
+- dark-mode Tech Blue theme: cold-white body text, muted blue-grey metadata,
+  cyan success, red/yellow failure states, electric-blue tool calls, and
+  ice-blue thinking
+- visual blocks: lightweight rules and indentation isolate AI thinking /
+  tool execution / final output; code changes render as a git diff
 - feedback: live spinner + elapsed timer + streaming status events, so
   long missions never look frozen
 - human-in-the-loop: side-effect confirm menu (Yes / No / Always allow)
@@ -26,29 +26,50 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from rich.box import ROUNDED
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
-from rich.panel import Panel
+from rich.markup import escape
+from rich.rule import Rule
 from rich.spinner import Spinner
 from rich.style import Style
 from rich.syntax import Syntax
+from rich.theme import Theme
 from rich.text import Text
 
 # ── Theme ──────────────────────────────────────────────────────────────
 
-C_PRIMARY = "bright_white"  # 主信息
-C_MUTED = "grey62"  # 次要信息：路径、时间戳
-C_SUCCESS = "green3"
-C_DANGER = "red3"
-C_WARN = "yellow3"
-C_TOOL = "deep_sky_blue3"  # 工具调用
-C_ACCENT = "medium_purple3"  # AI 思考
+C_PRIMARY = "#E2E8F0"  # 冷白正文
+C_MUTED = "#64748B"  # 路径、时间戳、统计
+C_SUCCESS = "#06B6D4"  # 青蓝成功态
+C_DANGER = "#F87171"
+C_WARN = "#FBBF24"
+C_TOOL = "#3B82F6"  # 电光蓝工具态
+C_ACCENT = "#0EA5E9"  # 冰蓝动态高亮
+C_BRAND = "#2563EB"
 
 STYLE_PRIMARY = Style(color=C_PRIMARY)
 STYLE_MUTED = Style(color=C_MUTED)
 STYLE_TOOL = Style(color=C_TOOL)
 STYLE_ACCENT = Style(color=C_ACCENT)
+STYLE_BRAND = Style(color=C_BRAND, bold=True)
+
+TECH_BLUE_THEME = Theme(
+    {
+        "agenthub.primary": C_PRIMARY,
+        "agenthub.muted": C_MUTED,
+        "agenthub.brand": f"bold {C_BRAND}",
+        "agenthub.tool": C_TOOL,
+        "agenthub.accent": C_ACCENT,
+        "agenthub.success": C_SUCCESS,
+        "agenthub.warning": C_WARN,
+    }
+)
+
+
+def make_console(**kwargs: Any) -> Console:
+    """Create a Rich console with the shared Tech Blue semantic theme."""
+    kwargs.setdefault("theme", TECH_BLUE_THEME)
+    return Console(**kwargs)
 
 STATUS_COLOR = {
     "SUCCEEDED": C_SUCCESS,
@@ -191,21 +212,21 @@ def render_header(
     provider: str,
     model: str,
     workspace_root: Path,
-) -> Panel:
-    """Top header: working path + git branch + model channel."""
+) -> RenderableType:
+    """Compact Claude-Code-style header without a surrounding box."""
     branch = git_branch(cwd)
     line = Text()
-    line.append(str(cwd), style=STYLE_MUTED)
+    line.append("✦ AgentHub", style=STYLE_BRAND)
+    line.append(" v1.0.0", style=STYLE_MUTED)
     if branch:
-        line.append(f"  ({branch})", style=C_ACCENT)
-    line.append(f"  ·  {provider}/{model}", style=STYLE_PRIMARY)
-    line.append(f"\nworkspace: {workspace_root}", style=STYLE_MUTED)
-    return Panel(
-        line,
-        border_style=Style(color=C_ACCENT, dim=True),
-        box=ROUNDED,
-        padding=(0, 1),
-    )
+        line.append(" │ ", style=STYLE_MUTED)
+        line.append(f"🌿 {branch}", style=STYLE_ACCENT)
+    line.append(" │ ", style=STYLE_MUTED)
+    line.append(f"🌐 {provider}/{model}", style=STYLE_PRIMARY)
+    line.append(" │ ", style=STYLE_MUTED)
+    line.append("📁 workspace=", style=STYLE_ACCENT)
+    line.append(str(workspace_root), style=STYLE_MUTED)
+    return Group(line, Rule(style=Style(color=C_MUTED, dim=True)))
 
 
 # ── Live spinner + elapsed timer ──────────────────────────────────────
@@ -219,23 +240,48 @@ class _StatusRenderable:
         self._t0 = time.monotonic()
         self._last_status = ""
         self._state_hint = ""
+        self._tool_hint = ""
+        self._tool_result = ""
 
     def update_status(self, status: str) -> None:
         self._last_status = status
 
     def update_view_state(self, state: Any) -> None:
-        from app.cli.reducer import state_summary
+        from app.cli.reducer import render_snapshot, state_summary
         self._state_hint = state_summary(state)
+        snapshot = render_snapshot(state)
+        tools = snapshot.get("tools") if isinstance(snapshot, dict) else None
+        if tools:
+            latest = tools[-1]
+            if isinstance(latest, dict):
+                self.update_tool(
+                    str(latest.get("name") or "tool"),
+                    str(latest.get("output") or "") if latest.get("status") in {"completed", "output"} else "",
+                )
+
+    def update_tool(self, label: str, result: str = "") -> None:
+        self._tool_hint = label
+        self._tool_result = result
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self._t0
 
     def __rich_console__(self, console: Console, options: Any) -> Any:
         elapsed = time.monotonic() - self._t0
-        spinner = Spinner("dots", Text(f" {self._label}", style=STYLE_TOOL))
+        label = (
+            f"Executing: {self._tool_hint}..."
+            if self._tool_hint
+            else f"Thinking ({elapsed:.1f}s)..."
+        )
+        spinner = Spinner("dots", Text(f" {label}", style=STYLE_TOOL))
         status_line = Text(
-            f"  {elapsed:5.1f}s  {self._last_status or 'booting…'}{(' · ' + self._state_hint) if self._state_hint else ''}",
+            f"  {self._last_status or 'working'}{(' · ' + self._state_hint) if self._state_hint else ''}",
             style=STYLE_MUTED,
         )
         yield spinner
         yield status_line
+        if self._tool_result:
+            yield Text(f"  ✔ {self._tool_result}", style=STYLE_ACCENT)
 
 
 class MissionRunner:
@@ -251,6 +297,7 @@ class MissionRunner:
         self._console = console
         self._label = label
         self._renderable = _StatusRenderable(label)
+        self._closed = False
         self._live = Live(
             self._renderable,
             console=console,
@@ -273,7 +320,16 @@ class MissionRunner:
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        self.finish()
+
+    def finish(self, tokens: int | None = None) -> None:
+        if self._closed:
+            return
         self._live.stop()
+        self._closed = True
+        elapsed = self._renderable.elapsed()
+        token_text = f" ({tokens:,} tokens)" if tokens is not None and tokens > 0 else ""
+        self._console.print(Text(f"✢ Thought for {elapsed:.1f}s{token_text}", style=STYLE_MUTED))
 
 
 class ThinkingFilter:
@@ -308,7 +364,7 @@ class ThinkingFilter:
                 self._buffer = self._buffer[end + len("</think>"):]
                 self._thinking = False
                 if not self._reported:
-                    out.append(f"\n▸ thinking hidden ({self._chars} chars)\n")
+                    out.append(f"\n✢ Thought stream collapsed · thinking hidden ({self._chars} chars)\n")
                     self._reported = True
                 continue
             if self._dsml:
@@ -347,7 +403,7 @@ class ThinkingFilter:
             self._buffer = ""
             if not self._reported:
                 self._reported = True
-                return f"\n▸ thinking hidden ({self._chars} chars)\n"
+                return f"\n✢ Thought stream collapsed · thinking hidden ({self._chars} chars)\n"
             return ""
         text = self._buffer
         self._buffer = ""
@@ -365,12 +421,12 @@ def _status_style(status: str) -> str:
     return STATUS_COLOR.get(status.upper(), C_PRIMARY)
 
 
-def render_result_panel(result: Any) -> Panel:
-    """Bordered card for one finished mission (success/danger border)."""
+def render_result_panel(result: Any) -> RenderableType:
+    """Lightweight result summary using separators instead of box borders."""
     ok = str(result.status).upper() == "SUCCEEDED"
     border = C_SUCCESS if ok else C_DANGER
     head = Text()
-    head.append("● ", style=border)
+    head.append("✔ " if ok else "✕ ", style=border)
     head.append(str(result.status), style=border)
     head.append(f"  {result.mission_id}", style=STYLE_MUTED)
     head.append(f"  (exit {result.exit_code})", style=STYLE_MUTED)
@@ -388,16 +444,10 @@ def render_result_panel(result: Any) -> Panel:
         )
         body.append(f"\nfiles: {preview}{more}", style=STYLE_TOOL)
 
-    return Panel(
-        Group(head, body),
-        title="mission",
-        border_style=Style(color=border),
-        box=ROUNDED,
-        padding=(0, 1),
-    )
+    return Group(Rule("mission", style=Style(color=border)), head, body)
 
 
-def render_state_panel(state: Any) -> Panel:
+def render_state_panel(state: Any) -> RenderableType:
     """Render canonical reducer state for stable terminal snapshots."""
     from app.cli.reducer import state_summary, render_snapshot
     snapshot = render_snapshot(state)
@@ -407,22 +457,95 @@ def render_state_panel(state: Any) -> Panel:
         body.append(f"\ntext: {snapshot['assistantText']}", style=STYLE_PRIMARY)
     if snapshot.get("diagnostics"):
         body.append("\n" + "\n".join(snapshot["diagnostics"]), style=Style(color=C_WARN))
-    return Panel(body, title="session state", border_style=Style(color=C_TOOL), box=ROUNDED, padding=(0, 1))
+    return Group(Text("│ ", style=STYLE_MUTED) + body)
 
 
-def render_diff_panel(root: Path, max_lines: int = 240) -> Panel | None:
+def render_diff_panel(root: Path, max_lines: int = 240) -> RenderableType | None:
     """Git-diff style highlight (green +/red -) of workspace changes."""
     text = git_diff_text(root, max_lines=max_lines)
     if not text:
         return None
     syntax = Syntax(text, "diff", theme="ansi_dark", word_wrap=False)
-    return Panel(
-        syntax,
-        title="git diff",
-        border_style=Style(color=C_TOOL, dim=True),
-        box=ROUNDED,
-        padding=(0, 1),
-    )
+    return Group(Rule("git diff", style=Style(color=C_TOOL, dim=True)), syntax)
+
+
+def render_tool_started(tool: str, detail: str = "") -> Text:
+    """Render a compact live-tool line for event-driven callers."""
+    suffix = f" ({detail})" if detail else ""
+    return Text(f"⠋ Executing: {tool}{suffix}...", style=STYLE_TOOL)
+
+
+def render_tool_completed(summary: str, *, elapsed_ms: int | None = None) -> Text:
+    suffix = f" ({elapsed_ms}ms)" if elapsed_ms is not None else ""
+    return Text(f"✔ {summary}{suffix}", style=STYLE_ACCENT)
+
+
+def render_artifact_summary(result: Any) -> RenderableType:
+    """Render created/changed files as an indented artifact summary."""
+    files = list(getattr(result, "workspace_files", None) or [])
+    artifacts = list(getattr(result, "artifacts", None) or [])
+    if not files and not artifacts:
+        return Text("✢ No artifacts", style=STYLE_MUTED)
+    lines: list[Text] = [Text("✦ Artifacts", style=STYLE_BRAND)]
+    named_artifacts = [item for item in artifacts if isinstance(item, dict) and (item.get("name") or item.get("path"))]
+    if named_artifacts or not files:
+        items = [item for item in (named_artifacts or artifacts) if isinstance(item, dict)][:20]
+        for index, item in enumerate(items):
+            name = str(item.get("name") or item.get("path") or item.get("kind") or "artifact")
+            size = item.get("size_bytes") or item.get("size")
+            size_label = f" ({int(size) / 1024:.1f} KB)" if isinstance(size, (int, float)) and size else ""
+            prefix = "└ " if index == len(items) - 1 and not (item.get("styles") or item.get("action")) else "├ "
+            lines.append(Text(f"{prefix}📄 {escape(name)}{size_label}", style=STYLE_ACCENT))
+            if item.get("styles") or item.get("style"):
+                lines.append(Text(f"│ Styles: {escape(str(item.get('styles') or item.get('style')))}", style=STYLE_MUTED))
+            if item.get("action"):
+                lines.append(Text(f"└ Action: {escape(str(item['action']))}", style=STYLE_ACCENT))
+        if len(artifacts) > 20:
+            lines.append(Text(f"└ … +{len(artifacts) - 20} more", style=STYLE_MUTED))
+    else:
+        for index, name in enumerate(files[:20]):
+            prefix = "└ " if index == min(len(files), 20) - 1 else "├ "
+            lines.append(Text(f"{prefix}📄 {escape(str(name))}", style=STYLE_ACCENT))
+        if len(files) > 20:
+            lines.append(Text(f"└ … +{len(files) - 20} more", style=STYLE_MUTED))
+    return Group(*lines)
+
+
+def classify_workspace(root: Path, *, max_files: int = 5000) -> dict[str, Any]:
+    """Walk the real workspace and return deterministic category counts."""
+    ignored = {".git", ".agenthub", "node_modules", "__pycache__", ".venv", "venv", "target"}
+    categories: dict[str, int] = {}
+    extensions: dict[str, int] = {}
+    directories: set[str] = set()
+    total = 0
+    truncated = False
+    for path in root.rglob("*"):
+        if total >= max_files:
+            truncated = True
+            break
+        if not path.is_file() or any(part in ignored for part in path.relative_to(root).parts):
+            continue
+        total += 1
+        ext = path.suffix.lower() or "[no extension]"
+        extensions[ext] = extensions.get(ext, 0) + 1
+        category = {
+            ".py": "Python", ".pyi": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+            ".ts": "TypeScript", ".tsx": "TypeScript", ".rs": "Rust", ".go": "Go",
+            ".md": "Docs", ".json": "Config", ".yml": "Config", ".yaml": "Config",
+            ".css": "Styles", ".html": "Web", ".sql": "Database",
+        }.get(ext, "Other")
+        categories[category] = categories.get(category, 0) + 1
+        directories.add(str(path.parent.relative_to(root)) if path.parent != root else ".")
+    return {"root": str(root), "total": total, "truncated": truncated, "categories": dict(sorted(categories.items())), "extensions": dict(sorted(extensions.items())), "directories": sorted(directories)}
+
+
+def render_workspace_classification(root: Path) -> RenderableType:
+    report = classify_workspace(root)
+    count_label = f"at least {report['total']}" if report["truncated"] else str(report["total"])
+    lines = [Text(f"✦ Workspace · {report['root']}", style=STYLE_BRAND), Text(f"✔ Found {count_label} files across {len(report['directories'])} directories", style=STYLE_ACCENT)]
+    for category, count in report["categories"].items():
+        lines.append(Text(f"│ {category:<12} {count:>4}", style=STYLE_PRIMARY))
+    return Group(*lines)
 
 
 # ── Human-in-the-loop confirm ─────────────────────────────────────────
@@ -438,12 +561,10 @@ def confirm_side_effect(
     EOF or Ctrl+C at the prompt is treated as 'no' (fail-safe).
     """
     console.print(
-        Panel(
+        Group(
+            Rule("permission", style=Style(color=C_WARN)),
+            Text("该任务将在工作区执行写入/命令", style=Style(color=C_WARN, bold=True)),
             Text(objective, style=STYLE_PRIMARY),
-            title="该任务将在工作区执行写入/命令",
-            border_style=Style(color=C_WARN),
-            box=ROUNDED,
-            padding=(0, 1),
         )
     )
     while True:

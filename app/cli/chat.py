@@ -57,7 +57,11 @@ from app.cli.runtime import (
     merge_project_instructions,
     resolve_model_settings,
     state_dir,
+    load_config,
 )
+from app.cli.lifecycle import cancellation_scope
+from app.errors import ConfigError
+from app.cli.errors import EXIT_INFRASTRUCTURE
 
 _PROMPT = "AgentHub ❯ "
 
@@ -1046,7 +1050,11 @@ def chat_session(
     if use_rich:
         console = ui.make_console()
 
-    config = _load_config(cwd)
+    try:
+        config = load_config(cwd, strict=True)
+    except ConfigError as exc:
+        emit(f"error [config]: {exc}")
+        return EXIT_INFRASTRUCTURE
     settings = resolve_model_settings(
         provider=provider, model=model, base_url=base_url, config=config
     )
@@ -1315,39 +1323,30 @@ def chat_session(
             # Live owns the terminal during a turn; status is already present
             # in the spinner view. Printing separate lines here interleaves
             # with token output and makes the transcript appear out of order.
-            if runner_ctx is not None and "tool" in kind:
-                runner_ctx.on_tool_event(event)
         try:
-            result = execute_objective(
-                objective=objective,
-                workspace_root=workspace_root,
-                state_dir=directory,
-                model=settings,
-                max_total_tokens=max_total_tokens,
-                runner_timeout_seconds=runner_timeout_seconds,
-                mission_timeout=mission_timeout,
-                project_instructions=project_instructions,
-                resume_mission_id=session.chained_mission_id or "",
-                web_search=not no_web_search,
-                context_text=compact_context or _conversation_context(session),
-                on_status=status_cb,
-                on_text=text_cb,
-                on_event=event_cb,
-                on_view_state=(runner_ctx.on_view_state if runner_ctx is not None else None),
-                on_decision_request=_on_decision,
-                cancel_event=cancel_event,
-                capture_attempt_snapshot=is_side_effect_task,
-                # The desktop runner accepts auto/edit/suggest.  Ordinary
-                # conversation is read-only guidance, so use suggest rather
-                # than the removed legacy "plan" mode; passing plan prevents
-                # the runner from starting and yields no assistant.delta.
-                tool_permission_mode=None if is_side_effect_task else "suggest",
-                # Read-only operational requests (for example file queries,
-                # searches, and diagnostics) must still expose the desktop
-                # tool set.  ``suggest`` governs side-effect permission; it
-                # must not disable read-only tools altogether.
-                disable_tools=False,
-            )
+            with cancellation_scope(cancel_event):
+                result = execute_objective(
+                    objective=objective,
+                    workspace_root=workspace_root,
+                    state_dir=directory,
+                    model=settings,
+                    max_total_tokens=max_total_tokens,
+                    runner_timeout_seconds=runner_timeout_seconds,
+                    mission_timeout=mission_timeout,
+                    project_instructions=project_instructions,
+                    resume_mission_id=session.chained_mission_id or "",
+                    web_search=not no_web_search,
+                    context_text=compact_context or _conversation_context(session),
+                    on_status=status_cb,
+                    on_text=text_cb,
+                    on_event=event_cb,
+                    on_view_state=(runner_ctx.on_view_state if runner_ctx is not None else None),
+                    on_decision_request=_on_decision,
+                    cancel_event=cancel_event,
+                    capture_attempt_snapshot=is_side_effect_task,
+                    tool_permission_mode=None if is_side_effect_task else "suggest",
+                    disable_tools=False,
+                )
             if thinking_filter is not None:
                 trailing = thinking_filter.flush()
                 if trailing:

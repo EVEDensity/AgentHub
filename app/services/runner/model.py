@@ -28,6 +28,7 @@ from app.services.harness_service import (
     ModelPort,
 )
 from app.services.model_port import (
+    ContextBoundModelPort,
     DEFAULT_CONTEXT_CHAR_BUDGET,
     ModelAdapterPort,
     build_function_tool_schemas,
@@ -182,16 +183,26 @@ class DesktopModelFactory(HarnessModelFactoryPort):
         from app.services.adapter_manager import adapter_manager
 
         self._adapter = adapter_manager.get_adapter(config.provider)
+        from app.services.context_compiler import ContextCompiler
+
+        context = ContextCompiler(Path("."), char_budget=32_000).compile(
+            conversation="",
+            policy=DESKTOP_SYSTEM_PROMPT,
+            project=_load_project_instructions(),
+        )
+        self._context_messages = context.messages
 
     def build(self, tools: Sequence[FunctionTool]) -> ModelPort:
-        return ModelAdapterPort(
-            self._adapter,
-            model=self._config.model,
-            api_key=self._config.api_key,
-            base_url=self._config.base_url,
-            system_prompt=compose_desktop_system_prompt(DESKTOP_SYSTEM_PROMPT),
-            tools=build_function_tool_schemas(list(tools)),
-            context_char_budget=self._context_char_budget,
+        return ContextBoundModelPort(
+            ModelAdapterPort(
+                self._adapter,
+                model=self._config.model,
+                api_key=self._config.api_key,
+                base_url=self._config.base_url,
+                tools=build_function_tool_schemas(list(tools)),
+                context_char_budget=self._context_char_budget,
+            ),
+            self._context_messages,
         )
 
 

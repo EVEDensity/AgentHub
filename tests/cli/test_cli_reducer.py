@@ -53,3 +53,18 @@ def test_reducer_keeps_same_named_tools_separate_by_call_id():
         assert normalized is not None
         state = reduce_event(state, normalized)
     assert [(tool.call_id, tool.output) for tool in state.tools] == [("c1", "one"), ("c2", "two")]
+
+
+def test_reducer_does_not_merge_new_events_missing_call_id():
+    state = SessionViewState()
+    for event_id in ("e1", "e2"):
+        normalized = event({
+            "eventId": event_id,
+            "type": "tool.started",
+            "aggregateType": "work_unit",
+            "payload": {"toolName": "read"},
+        })
+        assert normalized is not None
+        state = reduce_event(state, normalized)
+    assert [tool.call_id for tool in state.tools] == ["legacy:e1", "legacy:e2"]
+    assert len(state.diagnostics) == 2

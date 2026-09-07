@@ -71,6 +71,12 @@ def normalize_event(value: Mapping[str, Any]) -> CliEvent | None:
     """Normalize a public SSE event; malformed frames are ignored safely."""
     if not isinstance(value, Mapping):
         return None
+    try:
+        schema_version = int(value.get("schemaVersion") or value.get("schema_version") or CLI_EVENT_SCHEMA_VERSION)
+    except (TypeError, ValueError):
+        return None
+    if schema_version != CLI_EVENT_SCHEMA_VERSION:
+        return None
     # EventEnvelope.to_public_dict() uses Python snake_case names while
     # older HTTP adapters emitted camelCase.  Accept both forms at the
     # boundary so durable Mission Control events are never silently dropped.

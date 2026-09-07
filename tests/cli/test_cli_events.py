@@ -48,6 +48,10 @@ def test_malformed_event_is_ignored():
     assert normalize_event({"eventId": "bad", "sequence": "x"}) is None
 
 
+def test_unsupported_event_schema_is_ignored_at_boundary():
+    assert normalize_event({"schemaVersion": 2, "type": "mission.created"}) is None
+
+
 def test_normalize_harness_events_to_cli_types():
     event = normalize_event({
         "eventId": "e-tool",

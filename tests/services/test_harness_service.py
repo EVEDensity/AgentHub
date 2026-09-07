@@ -240,6 +240,44 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(model.calls[1][1][0].success)
         self.assertIn("not permitted", model.calls[1][1][0].content)
 
+    async def test_incomplete_tool_arguments_never_reach_handler(self) -> None:
+        called = False
+
+        async def handler(_arguments: Mapping[str, Any]) -> str:
+            nonlocal called
+            called = True
+            return "unsafe"
+
+        model = ScriptedModel(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        FunctionCall(
+                            id="call-1",
+                            name="write",
+                            arguments={"__raw_arguments__": "{"},
+                            arguments_complete=False,
+                        ),
+                    )
+                ),
+                ModelResponse(content="rejected"),
+            ]
+        )
+        result = await FunctionCallingHarness(
+            model,
+            [
+                FunctionTool(
+                    name="write",
+                    handler=handler,
+                    validate_arguments=dict,
+                )
+            ],
+        ).execute(HarnessRequest(code="write", language="text", timeout=1))
+
+        self.assertTrue(result.sandbox.success)
+        self.assertFalse(called)
+        self.assertIn("invalid JSON", model.calls[1][1][0].content)
+
     async def test_function_calling_harness_stops_when_iteration_budget_is_exhausted(self) -> None:
         async def no_op(arguments: Mapping[str, Any]) -> str:
             return str(arguments["count"])

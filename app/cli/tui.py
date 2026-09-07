@@ -41,7 +41,7 @@ from app.cli.runtime import (
 )
 from app.cli.reducer import SessionViewState
 
-_PROMPT_PREFIX = "agenthub"
+_PROMPT_PREFIX = "AgentHub ❯"
 _HELP_LINES = (
     "/help          显示本帮助",
     "/missions      列出本地历史任务",
@@ -51,6 +51,7 @@ _HELP_LINES = (
     "/status        显示当前会话设置",
     "/cost          显示本会话成本摘要",
     "/context       查看当前上下文与 token 使用",
+    "/files         读取并分类当前工作区文件",
     "/quit          退出",
 )
 
@@ -70,8 +71,11 @@ class AgentHubTUI(App[None]):
 
     TITLE = "AgentHub"
     CSS = """
-    RichLog { border: round $primary; }
-    Input { border: round $accent; }
+    Screen { background: #0B1220; color: #E2E8F0; }
+    Header { background: #0F1B33; color: #60A5FA; }
+    RichLog { border: none; background: #0B1220; padding: 1 2; }
+    Input { border: none; border-top: solid #2563EB; background: #0F1B33; color: #E2E8F0; padding: 0 1; }
+    Footer { background: #0F1B33; color: #64748B; }
     """
     BINDINGS = [
         Binding("ctrl+c", "quit", "退出", priority=True),
@@ -139,9 +143,7 @@ class AgentHubTUI(App[None]):
             self._instruction_paths
         )
         log_widget = self.query_one(RichLog)
-        log_widget.write(
-            "AgentHub TUI — engine: desktop runner + verifier gate"
-        )
+        log_widget.write("✦ AgentHub · engine: desktop runner + verifier gate")
         log_widget.write(
             f"model: {self._settings.provider} / {self._settings.model}   "
             f"workspace: {workspace_root}"
@@ -169,7 +171,7 @@ class AgentHubTUI(App[None]):
         if self.session.running:
             self._log("× 已有任务在运行，请等待完成")
             return
-        self._log(f"{_PROMPT_PREFIX}> {objective}")
+        self._log(f"{_PROMPT_PREFIX} {objective}")
         await self._run_mission(objective)
 
     async def _handle_slash(self, command: str) -> None:
@@ -206,6 +208,12 @@ class AgentHubTUI(App[None]):
                 f"missions: {len(self.session.session_records)}\n"
                 f"tokens: {int(latest.get('total_tokens') or 0):,} (latest)"
             )
+            return
+        if name == "/files":
+            from app.cli.ui import render_tool_started, render_tool_completed, render_workspace_classification
+            self._log(render_tool_started("file_walker", "workspace"))
+            self._log(render_workspace_classification(self._workspace or self._cwd))
+            self._log(render_tool_completed("Workspace classification complete"))
             return
         if name in ("/new", "/unresume"):
             self.session.chained_mission_id = None
@@ -268,7 +276,7 @@ class AgentHubTUI(App[None]):
 
         def emit_status(status: str) -> None:
             # Called from the worker thread; marshal onto the UI thread.
-            self.call_from_thread(self._log, f"  [status] {status}")
+            self.call_from_thread(self._log, f"│ {status}")
 
         def emit_text(text: str) -> None:
             self.call_from_thread(self._log, text)

@@ -159,6 +159,24 @@ class GitContextTests(unittest.TestCase):
 
 
 class RenderTests(unittest.TestCase):
+    def test_workspace_classification_reads_real_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "app.py").write_text("print('ok')\n", encoding="utf-8")
+            (root / "README.md").write_text("# demo\n", encoding="utf-8")
+            ignored = root / "node_modules"
+            ignored.mkdir()
+            (ignored / "ignored.js").write_text("ignored", encoding="utf-8")
+            report = ui.classify_workspace(root)
+            self.assertEqual(report["total"], 2)
+            self.assertEqual(report["categories"], {"Docs": 1, "Python": 1})
+
+    def test_artifact_summary_is_borderless(self) -> None:
+        rendered = _render_to_text(ui.render_artifact_summary(_FakeResult(mission_id="demo", workspace_files=["resume.html"])))
+        self.assertIn("✦ Artifacts", rendered)
+        self.assertIn("resume.html", rendered)
+        self.assertNotIn("╭", rendered)
+
     def test_header_contains_cwd_and_model(self) -> None:
         panel = ui.render_header(
             Path("/ws"), "deepseek", "deepseek-chat", Path("/ws")
@@ -173,6 +191,40 @@ class RenderTests(unittest.TestCase):
             with console.capture() as capture:
                 console.print(ui.render_header(Path("/workspace/project"), "mock", "v4-flash", Path("/workspace/project")))
             self.assertIn("v4-flash", capture.get())
+
+    def test_complete_tech_blue_fixture_is_bounded_at_supported_widths(self) -> None:
+        from app.cli.events import normalize_event
+        from app.cli.reducer import SessionViewState, reduce_event
+
+        state = SessionViewState()
+        for raw in (
+            {"type": "assistant.delta", "payload": {"text": "Inspecting src/auth/session.py"}},
+            {"type": "tool.started", "payload": {"callId": "call-1", "toolName": "file_read"}},
+            {"type": "decision.pending", "payload": {"decision": {"id": "dec-1"}}},
+        ):
+            event = normalize_event(raw)
+            assert event is not None
+            state = reduce_event(state, event)
+        result = _FakeResult(
+            mission_id="mis-width-fixture",
+            workspace_files=["src/auth/session/refresh_token_handler.py"],
+        )
+        for width in (40, 80, 120):
+            output = StringIO()
+            console = Console(
+                file=output,
+                width=width,
+                force_terminal=False,
+                color_system=None,
+            )
+            console.print(ui.render_header(Path("/workspace/project"), "deepseek", "deepseek-v4-flash", Path("/workspace/project")))
+            console.print(ui.render_state_panel(state))
+            console.print(ui.render_result_panel(result))
+            console.print(ui.render_artifact_summary(result))
+            rendered = output.getvalue()
+            assert "deepseek-v4-flash" in rendered
+            assert "file_read" in rendered
+            assert max((len(line) for line in rendered.splitlines()), default=0) <= width
 
     def test_result_panel_success_uses_green_border(self) -> None:
         panel = ui.render_result_panel(
@@ -223,6 +275,17 @@ class RenderTests(unittest.TestCase):
 
 
 class MissionRunnerTests(unittest.TestCase):
+    def test_finish_includes_token_summary(self) -> None:
+        output = StringIO()
+        console = Console(file=output, width=100, force_terminal=False)
+        with mock.patch("rich.live.Live.start"), mock.patch("rich.live.Live.stop"):
+            runner = ui.MissionRunner(console, "running")
+            runner.__enter__()
+            runner.finish(312)
+            runner.finish(999)  # idempotent
+        self.assertIn("Thought for", output.getvalue())
+        self.assertIn("312 tokens", output.getvalue())
+
     def test_spinner_lifecycle_and_status_stream(self) -> None:
         console = Console(width=100, force_terminal=False)
         with mock.patch("rich.live.Live.start"), mock.patch(

@@ -1,0 +1,92 @@
+name: CLI production evidence gates
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * 1"
+
+jobs:
+  postgres-listener:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: agenthub
+          POSTGRES_USER: agenthub
+          POSTGRES_DB: agenthub
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agenthub -d agenthub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: PostgreSQL LISTEN/NOTIFY evidence
+        env:
+          DATABASE_URL: postgresql://agenthub:agenthub@127.0.0.1:5432/agenthub
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production
+          AGENTHUB_POSTGRES_EVIDENCE_OUTPUT: ${{ runner.temp }}/postgres.json
+        run: python scripts/cli_postgres_evidence.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-postgres-evidence
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/postgres.json
+          if-no-files-found: ignore
+
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Benchmark evidence
+        env:
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production
+          AGENTHUB_BENCHMARK_EVIDENCE_OUTPUT: ${{ runner.temp }}/benchmark.json
+        run: python scripts/cli_benchmark.py --task-file benchmarks/cli_tasks.json --task-id conversation-basic --check-thresholds
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-benchmark-evidence
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/benchmark.json
+          if-no-files-found: ignore
+
+  sse-recovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: SSE disconnect and cursor recovery evidence
+        env:
+          AGENTHUB_CLI_BASE_URL: ${{ vars.AGENTHUB_SSE_BASE_URL }}
+          AGENTHUB_CLI_AUTH_TOKEN: ${{ secrets.AGENTHUB_CLI_AUTH_TOKEN }}
+          AGENTHUB_CLI_SSE_MISSION_ID: ${{ vars.AGENTHUB_SSE_MISSION_ID }}
+          AGENTHUB_CLI_SSE_FAULT_INJECTED: "1"
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production
+          AGENTHUB_SSE_EVIDENCE_OUTPUT: ${{ runner.temp }}/sse-recovery.json
+        run: python scripts/cli_sse_recovery_evidence.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-sse-recovery-evidence
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/sse-recovery.json
+          if-no-files-found: ignore

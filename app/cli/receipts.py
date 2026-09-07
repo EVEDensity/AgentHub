@@ -25,7 +25,7 @@ from app.cli.runtime import (
     EXIT_OK,
     MissionControlClient,
     MissionControlProcess,
-    _load_config,
+    load_config,
     resolve_model_settings,
     state_dir,
 )
@@ -442,7 +442,7 @@ def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
     session_events event stream.  ``--scope both`` merges mission + session.
     ``--scope all`` merges all three result sets.
     """
-    config = _load_config(cwd)
+    config = load_config(cwd, strict=True)
     settings = resolve_model_settings(
         provider=args.provider,
         model=args.model,
@@ -560,7 +560,7 @@ def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
 
 
 def cmd_replay(args: argparse.Namespace, cwd: Path) -> int:
-    config = _load_config(cwd)
+    config = load_config(cwd, strict=True)
     settings = resolve_model_settings(
         provider=args.provider,
         model=args.model,

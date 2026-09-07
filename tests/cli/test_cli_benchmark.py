@@ -43,3 +43,25 @@ def test_benchmark_task_file_and_threshold_gate(monkeypatch, tmp_path, capsys):
     record = json.loads(capsys.readouterr().out)
     assert record["taskId"] == "t1"
     assert record["thresholdFailures"]
+
+
+def test_benchmark_writes_production_evidence_without_changing_stdout(monkeypatch, tmp_path, capsys):
+    class Result:
+        status = "SUCCEEDED"; exit_code = 0; wall_seconds = 0.2; total_tokens = 1
+
+    def fake_execute(**kwargs):
+        kwargs["on_event"]({"type": "mission.created"})
+        kwargs["on_text"]("ok")
+        return Result()
+
+    output = tmp_path / "benchmark.json"
+    monkeypatch.setenv("AGENTHUB_BENCHMARK_EVIDENCE_OUTPUT", str(output))
+    monkeypatch.setattr(cli_benchmark, "execute_objective", fake_execute)
+    monkeypatch.setattr("sys.argv", ["cli_benchmark", "task"])
+    assert cli_benchmark.main() == 0
+    json.loads(capsys.readouterr().out)
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert evidence["scope"] == "benchmark"
+    assert evidence["runId"].startswith("run-")
+    assert evidence["schemaVersion"] == 2
+    assert evidence["status"] == "PASS"

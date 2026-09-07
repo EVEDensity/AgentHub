@@ -6,7 +6,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
-    from app.services.harness_service import FunctionCall, FunctionResult, ModelUsage
+    from app.services.model_contract import ModelUsage, ToolCall, ToolResult
+
+    FunctionCall = ToolCall
+    FunctionResult = ToolResult
 
 
 class HarnessError(RuntimeError):

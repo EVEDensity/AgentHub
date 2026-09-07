@@ -19,6 +19,7 @@ from app.cli.runtime import (
     execute_objective,
     state_dir,
 )
+from scripts.production_evidence import new_evidence, write_evidence
 
 
 def main() -> int:
@@ -77,7 +78,9 @@ def main() -> int:
 
     api_key = os.environ.get("AGENTHUB_CLI_MODEL_API_KEY", "")
     if args.provider != "mock" and not api_key:
-        print(json.dumps({"status": "SKIP", "reason": "AGENTHUB_CLI_MODEL_API_KEY is not set"}))
+        record = {"status": "SKIP", "reason": "AGENTHUB_CLI_MODEL_API_KEY is not set"}
+        print(json.dumps(record))
+        _write_evidence(record, task_id=task.get("id"), provider=args.provider, model=args.model)
         return 0
     model = CliModelSettings(args.provider, args.model, api_key or "mock", args.base_url)
     try:
@@ -123,7 +126,36 @@ def main() -> int:
     record["thresholds"] = thresholds
     record["thresholdFailures"] = failures
     print(json.dumps(record, ensure_ascii=False))
+    _write_evidence(record, task_id=task.get("id"), provider=args.provider, model=args.model)
     return 1 if args.check_thresholds and failures else result.exit_code
+
+
+def _write_evidence(
+    record: dict[str, object],
+    *,
+    task_id: object,
+    provider: str,
+    model: str,
+) -> None:
+    fields = dict(record)
+    fields.update(taskId=task_id, provider=provider, model=model)
+    fields["gateStatus"] = (
+        "PASS"
+        if record.get("status") == "SUCCEEDED" and not record.get("thresholdFailures")
+        else "FAIL"
+    )
+    fields.pop("status", None)
+    evidence = new_evidence(
+        scope="benchmark",
+        evidence_level="production",
+        status=fields.pop("gateStatus"),
+        **fields,
+    )
+    write_evidence(
+        evidence,
+        scope="benchmark",
+        mirror_path=os.environ.get("AGENTHUB_BENCHMARK_EVIDENCE_OUTPUT", "").strip() or None,
+    )
 
 
 if __name__ == "__main__":

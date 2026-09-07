@@ -1,9 +1,8 @@
 """Advisory file locks for multi-user workspace coordination.
 
 Locks are in-memory (per-process) and auto-expire after LOCK_TTL seconds.
-They are **advisory** — they don't block writes; they warn.  This is
-intentional: in a collaborative coding environment users should always be
-able to override a stale lock.
+Mutation handlers treat a lock held by another actor as a hard conflict and
+must fail closed; read-only callers may still use the registry for status.
 
 Usage::
 

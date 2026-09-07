@@ -28,6 +28,7 @@ from typing import Any, Iterator
 import httpx
 
 from app.cli.transport import HttpTransport
+from app.cli.config import ConfigResolver
 from app.cli.sse_client import SseClient
 from app.cli.control_api import ArtifactApi, DecisionApi, MissionApi
 from app.services.tools.policy import ToolExecutionPolicy, resolve_tool_execution_policy
@@ -35,6 +36,7 @@ from app.services.tools.policy import ToolExecutionPolicy, resolve_tool_executio
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event, reorder_events
 from app.cli.reducer import SessionViewState, reduce_event
+from app.errors import ConfigError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR_NAME = ".agenthub"
@@ -88,6 +90,10 @@ EXIT_MISSION_FAILED = 1
 EXIT_MISSION_CANCELLED = 2
 EXIT_WAIT_TIMEOUT = 3
 EXIT_INFRA_ERROR = 4
+# Normative production code; EXIT_INFRA_ERROR remains as a compatibility alias
+# for legacy Mission-result callers and existing integrations.
+EXIT_USAGE_ERROR = 2
+EXIT_INFRASTRUCTURE = 70
 
 DEFAULT_SERVER_STARTUP_TIMEOUT = 120.0
 DEFAULT_MISSION_TIMEOUT = 420.0
@@ -175,41 +181,17 @@ def resolve_model_settings(
     Precedence: explicit flags > config file (no key material stored) >
     environment > mock fallback.
     """
-    config = config or {}
-    # API key: 统一名优先 → 桌面版名 → provider 特定名
-    _PROVIDER_ENV_KEYS = {
-        "deepseek": "DEEPSEEK_API_KEY",
-        "qwen": "DASHSCOPE_API_KEY",
-        "zhipu": "ZHIPUAI_API_KEY",
-        "doubao": "DOUBAO_API_KEY",
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "minimax": "MINIMAX_API_KEY",
-    }
-    api_key = (
-        os.environ.get("AGENTHUB_CLI_MODEL_API_KEY")
-        or os.environ.get("AGENTHUB_DESKTOP_MODEL_API_KEY", "")
+    resolved = ConfigResolver.from_environment().resolve_model(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        config=config,
+        default_model=DEFAULT_MOCK_MODEL,
     )
-    provider = (
-        provider
-        or config.get("provider")
-        or os.environ.get("AGENTHUB_CLI_PROVIDER", "")
-        or ("openai" if api_key else "mock")
-    )
-    # 如果统一名没设，再检查 provider 特定名（wizard 会存这个）
-    if not api_key and provider in _PROVIDER_ENV_KEYS:
-        api_key = os.environ.get(_PROVIDER_ENV_KEYS[provider], "")
-    model = (
-        model
-        or config.get("model")
-        or os.environ.get("AGENTHUB_CLI_MODEL", "")
-        or DEFAULT_MOCK_MODEL
-    )
-    base_url = (
-        base_url
-        or config.get("base_url")
-        or os.environ.get("AGENTHUB_CLI_MODEL_BASE_URL", "")
-    )
+    provider = resolved["provider"]
+    model = resolved["model"]
+    base_url = resolved["base_url"]
+    api_key = resolved["api_key"]
     if provider == "mock":
         # The mock adapter ignores credentials but the desktop runner
         # config loader requires a non-empty key; a sentinel keeps the
@@ -238,15 +220,32 @@ def state_dir(cwd: Path) -> Path:
 CONFIG_FILE_NAME = "config.json"
 
 
-def _load_config(cwd: Path) -> dict[str, Any]:
+def load_config(cwd: Path, *, strict: bool = False) -> dict[str, Any]:
+    """Load non-secret CLI configuration with optional strict validation.
+
+    Interactive compatibility callers may use the historical lenient mode;
+    production command paths pass ``strict=True`` so malformed state cannot
+    silently select a different provider or model.
+    """
     config_path = state_dir(cwd) / CONFIG_FILE_NAME
     if not config_path.is_file():
         return {}
     try:
         payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if strict:
+            raise ConfigError(f"unable to read {config_path}: {type(exc).__name__}") from exc
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        if strict:
+            raise ConfigError(f"configuration must be a JSON object: {config_path}")
+        return {}
+    return payload
+
+
+def _load_config(cwd: Path) -> dict[str, Any]:
+    """Backward-compatible lenient config accessor."""
+    return load_config(cwd, strict=False)
 
 
 def build_contract(contract_id: str, time_seconds: int) -> dict[str, Any]:
@@ -441,10 +440,6 @@ class MissionControlProcess:
             stderr=subprocess.STDOUT,
         )
         self._wait_ready(timeout)
-        # Give the post-startup desktop runner task a brief head start before
-        # creating the first mission.  The runner itself retries claims, so a
-        # long fixed sleep only adds latency to ordinary chat.
-        time.sleep(1.0)
 
     def _wait_ready(self, timeout: float) -> None:
         deadline = time.monotonic() + timeout
@@ -462,7 +457,9 @@ class MissionControlProcess:
                     return
             except httpx.HTTPError:
                 pass
-            time.sleep(1.0)
+            # Poll frequently enough to avoid adding a full second to the
+            # first-event benchmark when uvicorn becomes ready between polls.
+            time.sleep(0.1)
         raise RuntimeError(
             f"mission-control did not become ready at {self.base_url}"
         )
@@ -520,10 +517,28 @@ class MissionControlClient:
     def _token(self, value: str | None) -> None:
         self._transport._token = value
 
+    def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Route API calls through the shared transport.
+
+        A replaced ``_client`` remains a supported unit-test seam; production
+        calls cannot bypass request IDs, timeout policy, or retry classification.
+        """
+        if self._client is not self._transport.client:
+            return getattr(self._client, method.lower())(url, **kwargs)
+        return self._transport.request(method, url, **kwargs)
+
     def login(self, name: str = "admin", password: str = "admin123") -> None:
-        response = self._client.post(
-            "/api/auth/login", json={"name": name, "password": password}
-        )
+        if self._client is not self._transport.client:
+            response = self._client.post(
+                "/api/auth/login", json={"name": name, "password": password}
+            )
+        else:
+            response = self._transport.request(
+                "POST",
+                "/api/auth/login",
+                json={"name": name, "password": password},
+                require_auth=False,
+            )
         response.raise_for_status()
         token = response.json().get("accessToken")
         if not isinstance(token, str) or not token:
@@ -539,7 +554,7 @@ class MissionControlClient:
     ) -> dict[str, Any]:
         mission_id = f"mis-cli-{uuid.uuid4().hex[:12]}"
         contract_id = f"contract-cli-{uuid.uuid4().hex[:12]}"
-        response = self._client.post(
+        response = self._request("POST",
             "/api/v1/missions",
             headers=self.headers,
             json={
@@ -552,35 +567,35 @@ class MissionControlClient:
             },
         )
         response.raise_for_status()
-        response = self._client.post(
+        response = self._request("POST",
             f"/api/v1/missions/{mission_id}/start", headers=self.headers
         )
         response.raise_for_status()
         return response.json()
 
     def get_mission(self, mission_id: str) -> dict[str, Any]:
-        response = self._client.get(
+        response = self._request("GET",
             f"/api/v1/missions/{mission_id}", headers=self.headers
         )
         response.raise_for_status()
         return response.json()
 
     def work_units(self, mission_id: str) -> list[dict[str, Any]]:
-        response = self._client.get(
+        response = self._request("GET",
             f"/api/v1/missions/{mission_id}/work-units", headers=self.headers
         )
         response.raise_for_status()
         return response.json().get("workUnits", [])
 
     def artifacts(self, mission_id: str) -> list[dict[str, Any]]:
-        response = self._client.get(
+        response = self._request("GET",
             f"/api/v1/missions/{mission_id}/artifacts", headers=self.headers
         )
         response.raise_for_status()
         return response.json().get("artifacts", [])
 
     def missions(self) -> list[dict[str, Any]]:
-        response = self._client.get(
+        response = self._request("GET",
             "/api/v1/missions",
             params={"workspaceId": WORKSPACE_ID, "limit": 200},
             headers=self.headers,
@@ -591,7 +606,7 @@ class MissionControlClient:
         return missions if isinstance(missions, list) else []
 
     def evidence(self, mission_id: str) -> list[dict[str, Any]]:
-        response = self._client.get(
+        response = self._request("GET",
             f"/api/v1/missions/{mission_id}/evidence", headers=self.headers
         )
         response.raise_for_status()
@@ -601,7 +616,7 @@ class MissionControlClient:
 
     def cancel_mission(self, mission_id: str) -> dict[str, Any]:
         """Ask the control plane to gracefully stop this mission (P0-4 Esc)."""
-        response = self._client.post(
+        response = self._request("POST",
             f"/api/v1/missions/{mission_id}/cancel", headers=self.headers
         )
         response.raise_for_status()
@@ -610,7 +625,7 @@ class MissionControlClient:
     def checkpoints(self, mission_id: str) -> list[dict[str, Any]]:
         """Return LLM checkpoint rows (token accounting, tool-calls, etc)."""
         try:
-            response = self._client.get(
+            response = self._request("GET",
                 f"/api/v1/missions/{mission_id}/checkpoints",
                 headers=self.headers,
                 params={"limit": 200},
@@ -628,7 +643,7 @@ class MissionControlClient:
     def decisions(self, mission_id: str) -> list[dict[str, Any]]:
         """Pending human-in-the-loop decisions (P0-3 tool-call HITL)."""
         try:
-            response = self._client.get(
+            response = self._request("GET",
                 f"/api/v1/missions/{mission_id}/decisions", headers=self.headers
             )
             response.raise_for_status()
@@ -642,7 +657,7 @@ class MissionControlClient:
         self, mission_id: str, decision_id: str, *, allow: bool, note: str = "", expected_version: int = 1
     ) -> dict[str, Any]:
         """Answer a pending HITL decision and let the mission continue."""
-        response = self._client.post(
+        response = self._request("POST",
             f"/api/v1/missions/{mission_id}/decisions/{decision_id}/resolve",
             headers=self.headers,
             json={
@@ -658,7 +673,7 @@ class MissionControlClient:
         self, mission_id: str, *, after_sequence: int = 0, limit: int = 200
     ) -> tuple[list[dict[str, Any]], int]:
         """Fetch the ledger of events so far (P0-3 streaming fallback)."""
-        response = self._client.get(
+        response = self._request("GET",
             f"/api/v1/missions/{mission_id}/events",
             headers=self.headers,
             params={"afterSequence": after_sequence, "limit": limit},
@@ -993,27 +1008,22 @@ def execute_objective(
                                       stop the mission mid-flight
     """
     title = objective.strip().splitlines()[0][:80] or "CLI mission"
-    # ADR-0107 gated facts injection: facts sharing a keyword with the
-    # current objective are appended to the layered AGENTS.md block.
-    facts_block = facts_block_for_objective(state_dir, objective)
-    if facts_block:
-        project_instructions = (
-            f"{project_instructions}\n\n{facts_block}"
-            if project_instructions
-            else facts_block
-        )
-    # Inject deterministic project identity into every Mission/Runner model
-    # request. The manifest is compact and contains no full file contents.
+    from app.services.context_compiler import ContextCompiler
     from app.services.project_manifest import ProjectManifest
 
+    context_compiler = ContextCompiler(state_dir)
+    # ADR-0107 gated facts injection remains selective, but all model-facing
+    # layers now flow through the compiler instead of ad-hoc prompt joins.
+    facts_block = facts_block_for_objective(state_dir, objective)
     manifest_prompt = ProjectManifest.discover(workspace_root).to_prompt(
         provider=model.provider,
         model=model.model,
     )
-    project_instructions = (
-        f"{project_instructions}\n\n{manifest_prompt}"
-        if project_instructions
-        else manifest_prompt
+    compiled_project_context = context_compiler.compile(
+        conversation="",
+        project=project_instructions,
+        facts=facts_block,
+        manifest=manifest_prompt,
     )
     cancelled_by_user = False
     baseline_files = frozenset()
@@ -1035,24 +1045,25 @@ def execute_objective(
         model=model,
         max_total_tokens=max_total_tokens,
         runner_timeout_seconds=runner_timeout_seconds,
-        project_instructions=project_instructions,
+        project_instructions=compiled_project_context.render(),
         web_search=web_search,
                 tool_permission_mode=tool_permission_mode,
                 disable_tools=disable_tools,
     ) as process:
         with MissionControlClient(process.base_url) as client:
             client.login()
-            full_objective = objective
-            if context_text.strip():
-                # I-6c: pre-compacted session context (from /compact)
-                # replaces the per-turn chain when present.
-                full_objective = f"{context_text.strip()}\n\n---\n\n{objective}"
-            elif resume_mission_id:
-                context = build_resume_context(client, resume_mission_id)
-                full_objective = f"{context}\n\n---\n\n{objective}"
+            mission_context = ""
+            conversation_context = context_text.strip()
+            if not conversation_context and resume_mission_id:
+                mission_context = build_resume_context(client, resume_mission_id)
+            compiled_objective = context_compiler.compile(
+                current=objective,
+                conversation=conversation_context,
+                mission=mission_context,
+            )
             mission = client.create_and_start_mission(
                 title=title,
-                objective=full_objective,
+                objective=compiled_objective.render(),
                 time_seconds=int(runner_timeout_seconds),
             )
             mission_id = str(mission["id"])

@@ -108,6 +108,18 @@ class ModelPortTests(unittest.IsolatedAsyncioTestCase):
             '{"tool_calls":[{"name":"lookup","arguments":"not-json"}]}'
         )
         self.assertEqual(response.tool_calls[0].arguments, {"__raw_arguments__": "not-json"})
+        self.assertFalse(response.tool_calls[0].arguments_complete)
+
+    async def test_adapter_rejects_provider_tool_call_without_call_id(self) -> None:
+        adapter = FakeAdapter(
+            '{"tool_calls":[{"name":"lookup","arguments":{}}]}'
+        )
+        port = ModelAdapterPort(adapter, model="test-model")
+
+        with self.assertRaisesRegex(ValueError, "missing call_id"):
+            await port.complete(
+                HarnessRequest(code="lookup", language="text", timeout=1), ()
+            )
 
     def test_plain_text_is_preserved(self) -> None:
         self.assertEqual(normalize_model_response("plain answer").content, "plain answer")

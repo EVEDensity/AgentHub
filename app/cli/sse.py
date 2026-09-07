@@ -16,30 +16,51 @@ class SseFrame:
     retry: int | None = None
 
 
-def iter_sse_frames(lines: Iterable[str | bytes]) -> Iterator[SseFrame]:
-    """Yield frames according to the SSE field and blank-line rules."""
+def iter_sse_frames(
+    lines: Iterable[str | bytes],
+    *,
+    max_line_chars: int = 64 * 1024,
+    max_frame_chars: int = 1024 * 1024,
+) -> Iterator[SseFrame]:
+    """Yield bounded SSE frames according to the field and blank-line rules.
+
+    A malicious or faulty provider must not be able to grow an unbounded
+    ``data:`` list.  Oversized frames are discarded at the blank-line
+    boundary and parsing then resumes with the next frame.
+    """
+    if max_line_chars < 1 or max_frame_chars < 1:
+        raise ValueError("SSE size limits must be positive")
     data: list[str] = []
     event = "message"
     event_id = ""
     retry: int | None = None
+    frame_chars = 0
+    oversized = False
 
     def flush() -> SseFrame | None:
-        nonlocal data, event, event_id, retry
-        if not data:
+        nonlocal data, event, event_id, retry, frame_chars, oversized
+        if not data or oversized:
             event = "message"
             event_id = ""
             retry = None
+            data = []
+            frame_chars = 0
+            oversized = False
             return None
         frame = SseFrame("\n".join(data), event, event_id, retry)
         data = []
         event = "message"
         event_id = ""
         retry = None
+        frame_chars = 0
         return frame
 
     for raw_line in lines:
         line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else str(raw_line)
         line = line.rstrip("\r\n")
+        if len(line) > max_line_chars:
+            oversized = True
+            continue
         if not line:
             frame = flush()
             if frame is not None:
@@ -51,6 +72,10 @@ def iter_sse_frames(lines: Iterable[str | bytes]) -> Iterator[SseFrame]:
         if separator and value.startswith(" "):
             value = value[1:]
         if field == "data":
+            frame_chars += len(value) + (1 if data else 0)
+            if frame_chars > max_frame_chars:
+                oversized = True
+                continue
             data.append(value)
         elif field == "event":
             event = value

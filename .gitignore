@@ -37,6 +37,8 @@ data/
 assets/tokenizers/
 benchmarks/.runs/
 benchmarks/results/
+artifacts/production/*.json
+artifacts/production/**/*.json
 .tmppytest/
 coverage.xml
 htmlcov/

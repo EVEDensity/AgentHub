@@ -13,6 +13,7 @@ runner process.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
@@ -27,6 +28,7 @@ from app.services.harness_service import (
     ModelPort,
     ModelResponse,
 )
+from app.services.model_contract import Message, ModelRequest, ModelStreamEvent
 
 logger = logging.getLogger("agenthub.desktop_guidance")
 
@@ -215,47 +217,76 @@ class GuidanceInjectingModel:
 
     async def complete(
         self,
-        request: HarnessRequest,
-        tool_results: tuple[FunctionResult, ...],
-        *,
-        tools_enabled: bool = True,
+        request: ModelRequest | HarnessRequest,
+        *legacy_args: object,
+        **legacy_kwargs: object,
     ) -> ModelResponse:
         guidance = await self._source.pending_guidance(self._mission_id)
         if guidance:
             block = format_guidance_block(guidance)
             self.injected_blocks.append(block)
-            request = replace(request, code=f"{request.code}\n\n{block}")
-        if tools_enabled:
-            return await self._inner.complete(request, tool_results)
-        return await self._inner.complete(request, tool_results, tools_enabled=False)
+            if isinstance(request, ModelRequest):
+                request = replace(
+                    request,
+                    messages=request.messages
+                    + (Message(role="system", content=block, source_id="guidance"),),
+                )
+            else:
+                request = replace(request, code=f"{request.code}\n\n{block}")
+        if not isinstance(request, ModelRequest):
+            return await self._inner.complete(  # type: ignore[call-arg]
+                request, *legacy_args, **legacy_kwargs
+            )
+        if legacy_args or legacy_kwargs:
+            raise TypeError("canonical guidance call does not accept legacy arguments")
+        if _uses_legacy_signature(self._inner.complete):
+            legacy_request = HarnessRequest(
+                code="\n\n".join(message.content for message in request.messages),
+                language=str(request.metadata.get("language") or "text"),
+                timeout=request.timeout_seconds,
+            )
+            return await self._inner.complete(legacy_request, ())  # type: ignore[call-arg]
+        return await self._inner.complete(request)
 
-    async def stream(
-        self,
-        request: HarnessRequest,
-        tool_results: tuple[FunctionResult, ...],
-        *,
-        tools_enabled: bool = True,
-    ) -> ModelResponse:
-        """Forward streaming calls while injecting pending guidance.
+    def stream(self, request: ModelRequest) -> Any:
+        """Forward canonical events; guidance remains a typed system message."""
+        return self._stream_canonical(request)
 
-        ``FunctionCallingHarness`` prefers ``stream`` whenever a text-delta
-        callback is installed (including the Mission checkpoint publisher).
-        Keeping this method symmetric with ``complete`` prevents the wrapper
-        from breaking the normal desktop chat path.
-        """
+    async def _stream_canonical(self, request: ModelRequest) -> Any:
         guidance = await self._source.pending_guidance(self._mission_id)
         if guidance:
             block = format_guidance_block(guidance)
             self.injected_blocks.append(block)
-            request = replace(request, code=f"{request.code}\n\n{block}")
-        stream = getattr(self._inner, "stream", None)
-        if not callable(stream):
-            if tools_enabled:
-                return await self._inner.complete(request, tool_results)
-            return await self._inner.complete(request, tool_results, tools_enabled=False)
-        if tools_enabled:
-            return await stream(request, tool_results)
-        return await stream(request, tool_results, tools_enabled=False)
+            request = replace(
+                request,
+                messages=request.messages
+                + (Message(role="system", content=block, source_id="guidance"),),
+            )
+        stream_method = getattr(self._inner, "stream", None)
+        if callable(stream_method) and not _uses_legacy_signature(stream_method):
+            async for event in stream_method(request):
+                yield event
+            return
+        response = await self.complete(request)
+        if response.content:
+            yield ModelStreamEvent(kind="text_delta", text=response.content)
+        for call in response.tool_calls:
+            yield ModelStreamEvent(kind="tool_call", tool_call=call)
+        yield ModelStreamEvent(
+            kind="completed",
+            usage={
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "cost": response.usage.cost,
+            },
+        )
+
+
+def _uses_legacy_signature(method: Any) -> bool:
+    try:
+        return "tool_results" in inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 __all__ = [

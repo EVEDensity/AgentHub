@@ -23,6 +23,21 @@ class _Stream:
         return False
 
 
+def test_provider_smoke_records_missing_credentials_as_skip(tmp_path, monkeypatch):
+    output = tmp_path / "skip.json"
+    monkeypatch.delenv("AGENTHUB_CLI_MODEL_API_KEY", raising=False)
+    monkeypatch.setenv("AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT", str(output))
+
+    assert cli_provider_smoke.main() == 0
+
+    evidence = json.loads(output.read_text(encoding="utf-8"))
+    assert evidence["status"] == "SKIP"
+    assert evidence["errorType"] == "missing_credentials"
+    assert evidence["evidenceLevel"] == "real-provider"
+    assert evidence["scope"] == "provider-protocol"
+    assert evidence["requestId"].startswith("req-")
+
+
 def test_provider_smoke_writes_redacted_stream_summary(tmp_path: Path, monkeypatch, capsys):
     output = tmp_path / "summary.json"
     monkeypatch.setenv("AGENTHUB_CLI_MODEL_API_KEY", "test-key")

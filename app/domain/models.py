@@ -228,6 +228,21 @@ class EventEnvelope(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True, mode="json")
 
+    def to_sse_dict(self) -> dict[str, Any]:
+        """Versioned wire envelope used by Mission Control SSE clients."""
+        return {
+            "schemaVersion": self.schema_version,
+            "eventId": self.event_id,
+            "missionId": self.correlation_id,
+            "aggregate": {
+                "type": self.aggregate_type,
+                "id": self.aggregate_id,
+                "sequence": self.sequence,
+            },
+            "type": self.event_type,
+            "payload": self.payload,
+        }
+
 
 class Mission(DomainModel):
     id: Identifier

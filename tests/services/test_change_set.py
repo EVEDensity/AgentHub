@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from pathlib import Path
+from unittest.mock import patch
 
 from app.services.tools.change_set import apply_change_set_handler
 from app.services.tools.file_ops import (
@@ -76,6 +77,28 @@ def test_file_write_append_preserves_existing_content(tmp_path: Path) -> None:
         result = asyncio.run(file_write_handler("notes.txt", "after", mode="append", expected_sha256=_sha(target)))
     assert result["success"] is True
     assert target.read_text(encoding="utf-8") == "before\nafter"
+
+
+def test_file_write_fails_closed_when_another_actor_holds_lock(tmp_path: Path) -> None:
+    target = tmp_path / "locked.txt"
+    target.write_text("before\n", encoding="utf-8")
+    conflict = {
+        "ok": False,
+        "lock": type("Lock", (), {"holder_name": "other", "holder_user_id": "u-2"})(),
+    }
+    with workspace_root_override(tmp_path), patch(
+        "app.services.file_lock.file_lock_manager.acquire", return_value=conflict
+    ):
+        result = asyncio.run(
+            file_write_handler(
+                "locked.txt",
+                "after\n",
+                expected_sha256=_sha(target),
+            )
+        )
+    assert result["success"] is False
+    assert result["error_type"] == "conflict"
+    assert target.read_text(encoding="utf-8") == "before\n"
 
 
 def test_file_write_batch_requires_hash_and_uses_transaction(tmp_path: Path) -> None:

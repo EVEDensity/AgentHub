@@ -62,6 +62,11 @@ class ParserTests(unittest.TestCase):
         args = build_parser().parse_args(["exec", "do it", "--jsonl"])
         self.assertTrue(args.jsonl)
 
+    def test_run_supports_quiet_and_verbose_flags(self) -> None:
+        args = build_parser().parse_args(["run", "do it", "--quiet", "--verbose"])
+        self.assertTrue(args.quiet)
+        self.assertTrue(args.verbose)
+
     def test_doctor_parser(self) -> None:
         args = build_parser().parse_args(["doctor"])
         self.assertEqual(args.command, "doctor")
@@ -194,6 +199,18 @@ class ConfigLoadTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(_load_config(Path(tmp)), {})
+
+    def test_strict_config_rejects_malformed_json(self) -> None:
+        import tempfile
+        from app.cli.runtime import load_config
+        from app.errors import ConfigError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / ".agenthub"
+            state.mkdir()
+            (state / "config.json").write_text("{bad", encoding="utf-8")
+            with self.assertRaises(ConfigError):
+                load_config(Path(tmp), strict=True)
 
 
 class ServerEnvTests(unittest.TestCase):

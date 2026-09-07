@@ -16,17 +16,37 @@ python -m app.cli doctor
 
 `doctor` 不输出密钥；provider 状态来自 `.agenthub/provider-health.json`（若不存在则显示 declared/no observations）。benchmark 超阈值必须返回 1。
 
+所有 gate 现在通过 `scripts/production_evidence.py` 写入统一的
+`artifacts/production/<scope>/<runId>.json`（可用显式 output 环境变量生成
+CI 镜像）。证据包含 `runId`、当前 `commit`、受限环境元数据和
+`evidenceLevel`；敏感字段、Authorization、Prompt 和工作区内容会被拒绝。
+
 ## DeepSeek 真实闭环（人工/CI）
 
 在 GitHub Actions Secret 中设置 `AGENTHUB_CLI_MODEL_API_KEY`，运行 provider nightly workflow 两次，模型分别为 `deepseek-v4-flash` 和 `deepseek-v4-pro`。通过条件：artifact 中仅有脱敏 JSON，事件顺序包含 `assistant.delta`、`tool.started`、`tool.output`、`verification.started`、`verification.completed`、`mission.completed`，无重复 `call_id`。无 key 只能是 `SKIP`，不能伪造 PASS。
 
+nightly 先运行 `scripts/cli_provider_smoke.py` 验证 Provider 协议，再运行
+`scripts/cli_provider_mission_smoke.py` 驱动隔离临时仓库中的真实 Mission
+闭环。两者证据分别标记为 `provider-protocol` 与
+`mission-closed-loop`；只有后者的 Mission、事件顺序、独立验证和工具
+执行去重同时通过，才输出 `PASS`。
+
 ## SSE 断线恢复（人工/CI）
 
-使用可注入故障的 Mission Control 代理，在收到至少一个 durable sequence 后主动关闭连接，再恢复服务。日志必须出现 `reconnecting`，重连请求携带上次 `afterSequence`，重复事件不产生第二次工具执行；断线期间的 `decision.pending` 只能产生一次 `resolve` 请求。保存请求日志和 CLI JSONL 作为 artifact。
+使用 `scripts/cli_sse_recovery_evidence.py` 配合可注入故障的 Mission Control
+代理，在收到至少一个 durable sequence 后主动关闭连接，再恢复服务。日志
+必须出现 `reconnecting`，重连请求携带上次 `afterSequence`，重复事件不产生
+第二次工具执行；断线期间的 `decision.pending` 只能产生一次 `resolve` 请求。
+保存脱敏 JSON 证据、请求日志和 CLI JSONL 作为 artifact。缺少 endpoint、token、
+mission ID 或故障注入声明时脚本只能 `SKIP`。
 
 ## 真实 TTY（人工/CI）
 
-在 Windows Terminal、macOS Terminal、Linux PTY 各运行一次交互命令，终端宽度分别设置 40、80、120。录制 ANSI 输出并检查 Spinner 持续刷新、文本不越界、工具/Decision/终态不互相覆盖。PowerShell 可用 `mode con: cols=40`，Unix 使用 `stty cols 40`；无 TTY 的管道测试必须保持非阻塞。
+运行 `scripts/cli_tty_evidence.py`，在 Windows Terminal、macOS Terminal、Linux
+PTY 各运行一次交互命令，终端宽度分别设置 40、80、120。录制 ANSI 输出并检查
+Spinner 持续刷新、文本不越界、工具/Decision/终态不互相覆盖。PowerShell 可用
+`mode con: cols=40`，Unix 使用 `stty cols 40`；无 TTY 的管道测试必须保持非阻塞，
+脚本在重定向环境中只输出 `SKIP`。
 
 ## npm registry（发布后人工/CI）
 
