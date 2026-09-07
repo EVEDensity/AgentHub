@@ -11,6 +11,9 @@ $env:AGENTHUB_PRODUCTION_EVIDENCE_DIR = Join-Path $root ("artifacts\production\"
 
 foreach ($width in @(40, 80, 120)) {
     $env:AGENTHUB_CLI_TTY_WIDTH = [string]$width
-    python (Join-Path $root 'scripts\cli_tty_evidence.py') | Set-Content -Encoding utf8 (Join-Path $outputRoot "tty-$width.json")
+    # Keep stdout attached to the physical terminal so the gate can verify
+    # isatty(); the script writes its redacted JSON mirror through this env.
+    $env:AGENTHUB_TTY_EVIDENCE_OUTPUT = Join-Path $outputRoot "tty-$width.json"
+    python (Join-Path $root 'scripts\cli_tty_evidence.py')
     if ($LASTEXITCODE -ne 0) { throw "TTY evidence failed at width $width" }
 }

@@ -27,7 +27,8 @@ jobs:
           AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
-          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production
+          AGENTHUB_RELEASE_ID: nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/streaming-${{ matrix.model }}.json
           AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT: ${{ runner.temp }}/provider-health.json
         run: python scripts/cli_provider_smoke.py
@@ -38,7 +39,8 @@ jobs:
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_TOOL_SMOKE: "1"
           AGENTHUB_CLI_PROVIDER_TOOL_LOOP: "1"
-          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production
+          AGENTHUB_RELEASE_ID: nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/tool-${{ matrix.model }}.json
           AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT: ${{ runner.temp }}/provider-health.json
         run: python scripts/cli_provider_smoke.py
@@ -47,7 +49,8 @@ jobs:
           AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
           AGENTHUB_CLI_MODEL: ${{ matrix.model }}
-          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production
+          AGENTHUB_RELEASE_ID: nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_MISSION_OUTPUT: ${{ runner.temp }}/mission-${{ matrix.model }}.json
         run: python scripts/cli_provider_mission_smoke.py
       - name: Upload redacted provider evidence

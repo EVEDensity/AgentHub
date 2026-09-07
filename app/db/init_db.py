@@ -19,6 +19,11 @@ from app.db.sqlite_translator import (  # noqa: F401
 
 logger = logging.getLogger("agenthub.db.init")
 
+# SQLite is initialized by every local Mission Control subprocess boot.  Keep
+# a schema marker so already-initialized profiles avoid replaying the complete
+# compatibility DDL and seed pass on every CLI invocation.
+SQLITE_SCHEMA_VERSION = 2
+
 
 def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -350,6 +355,12 @@ async def _ainit_sqlite() -> None:
 
     pool = await aget_pool()
     async with pool.acquire() as conn:
+        current_version = await conn.fetchval(
+            "SELECT MAX(version) FROM schema_migrations"
+        )
+        if current_version is not None and int(current_version) >= SQLITE_SCHEMA_VERSION:
+            logger.debug("init_db: SQLite schema already initialized (version=%s)", current_version)
+            return
         for ddl in _PG_DDL:
             normalized = ddl.strip().upper()
             if normalized.startswith(("ALTER TABLE", "DO $$", "CREATE EXTENSION")):
@@ -374,7 +385,7 @@ async def _ainit_sqlite() -> None:
         await _create_mission_control_plane_sqlite(conn)
         await conn.execute(
             "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES($1, $2)",
-            1,
+            SQLITE_SCHEMA_VERSION,
             now(),
         )
     logger.info("init_db: SQLite local database initialized")

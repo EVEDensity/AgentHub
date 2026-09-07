@@ -41,3 +41,17 @@ def test_tty_gate_skips_when_process_is_not_a_tty(tmp_path, monkeypatch):
     record = json.loads(output.read_text(encoding="utf-8"))
     assert record["status"] == "SKIP"
     assert record["errorType"] == "physical_tty_required"
+
+
+def test_tty_gate_passes_at_supported_width_when_terminal_is_attached(tmp_path, monkeypatch):
+    output = tmp_path / "tty-pass.json"
+    monkeypatch.setenv("AGENTHUB_TTY_EVIDENCE_OUTPUT", str(output))
+    monkeypatch.setenv("AGENTHUB_CLI_TTY_WIDTH", "40")
+    monkeypatch.setattr(cli_tty_evidence.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli_tty_evidence.sys.stdout, "isatty", lambda: True)
+
+    assert cli_tty_evidence.main() == 0
+    record = json.loads(output.read_text(encoding="utf-8"))
+    assert record["status"] == "PASS"
+    assert record["width"] == 40
+    assert record["ansiRendered"] is True

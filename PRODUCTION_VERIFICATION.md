@@ -1,21 +1,21 @@
 # Production Verification
 
 > Status: implemented
-> Commit: 934ee8296e1cd5db13b0d4f6c587cbfad33a1025
-> Generated: 2026-09-07T13:40:33.081355+00:00
+> Commit: bffda0e55e5674574ac9ab887720e8db11ac1653
+> Generated: 2026-09-07T14:36:13.860731+00:00
 
 This report is generated from redacted JSON evidence under `artifacts/production/`.
 A scope is accepted only when its latest evidence record is `PASS`.
 
 | Scope | Latest status |
 |---|---|
-| `benchmark` | `FAIL` |
+| `benchmark` | `PASS` |
 | `postgres` | `SKIP` |
-| `provider` | `PASS` |
+| `provider` | `SKIP` |
 | `registry` | `MISSING` |
 | `sse-recovery` | `SKIP` |
 | `tty` | `SKIP` |
 
 ## Decision
 
-Project remains `implemented`; missing or non-passing scopes: `benchmark`, `postgres`, `registry`, `sse-recovery`, `tty`.
+Project remains `implemented`; missing or non-passing scopes: `postgres`, `provider`, `registry`, `sse-recovery`, `tty`.

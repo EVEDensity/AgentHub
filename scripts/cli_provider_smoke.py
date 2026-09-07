@@ -16,11 +16,11 @@ from pathlib import Path
 
 import httpx
 
-from scripts.production_evidence import new_evidence, write_evidence
-
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from scripts.production_evidence import new_evidence, write_evidence
 
 
 def main() -> int:

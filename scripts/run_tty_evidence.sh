@@ -15,6 +15,8 @@ fi
 for width in 40 80 120; do
   export AGENTHUB_CLI_TTY_WIDTH="$width"
   export AGENTHUB_PRODUCTION_EVIDENCE_DIR="$evidence_root"
-  python "$root/scripts/cli_tty_evidence.py" \
-    > "$evidence_root/tty/tty-${width}.json"
+  export AGENTHUB_TTY_EVIDENCE_OUTPUT="$evidence_root/tty/tty-${width}.json"
+  # Keep stdout attached to the physical terminal; the script writes the
+  # redacted JSON mirror through AGENTHUB_TTY_EVIDENCE_OUTPUT.
+  python "$root/scripts/cli_tty_evidence.py"
 done
