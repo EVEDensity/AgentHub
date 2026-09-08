@@ -11,8 +11,6 @@ def main() -> int:
     checks = {
         "python": sys.version_info >= (3, 11),
         "git": shutil.which("git") is not None,
-        "node": shutil.which("node") is not None,
-        "npm": shutil.which("npm") is not None,
     }
     result = subprocess.run([sys.executable, "-m", "app.cli", "--help"], capture_output=True, text=True)
     checks["cli_help"] = result.returncode == 0

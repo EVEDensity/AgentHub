@@ -31,9 +31,12 @@ jobs:
           scripts\build-cli-windows.ps1 -OutputDirectory dist
           python scripts/verify_cli_release.py
           $workspace = Join-Path $env:RUNNER_TEMP 'cli-smoke-workspace'
+          $resultFile = Join-Path $env:RUNNER_TEMP 'cli-smoke-result.json'
           New-Item -ItemType Directory -Force -Path $workspace | Out-Null
-          & dist\agenthub.exe exec "write pong.txt containing pong" --provider mock --workspace $workspace --json --mission-timeout 300 --runner-timeout-seconds 240
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $workspace 'pong.txt'))) {
+          & dist\agenthub.exe exec "complete the offline release smoke" --provider mock --workspace $workspace --json --quiet --mission-timeout 300 --runner-timeout-seconds 240 | Set-Content -LiteralPath $resultFile -Encoding utf8
+          $cliExit = $LASTEXITCODE
+          $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
+          if ($cliExit -ne 0 -or $result.status -ne 'SUCCEEDED' -or $result.exitCode -ne 0 -or $result.artifactCount -lt 1) {
             throw 'Frozen CLI closed-loop smoke failed.'
           }
       - name: Package checksummed assets
