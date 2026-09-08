@@ -37,8 +37,53 @@ def test_manifest_remains_implemented_when_any_scope_is_missing(tmp_path):
         sys.argv = old
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["status"] == "implemented"
-    assert "postgres" in manifest["missingOrNonPassingScopes"]
+    assert "postgres" not in manifest["requiredScopes"]
+    assert manifest["releaseProfile"] == "local-project"
     assert "implemented" in report.read_text(encoding="utf-8")
+
+
+def test_local_profile_ignores_optional_postgres_evidence(tmp_path):
+    root = tmp_path / "evidence"
+    postgres = root / "postgres"
+    postgres.mkdir(parents=True)
+    record = _record("postgres-listener", status="FAIL")
+    record["commit"] = "b" * 40
+    (postgres / "postgres.json").write_text(json.dumps(record), encoding="utf-8")
+    output = tmp_path / "release-manifest.json"
+    report = tmp_path / "PRODUCTION_VERIFICATION.md"
+    import sys
+    old = sys.argv
+    sys.argv = [
+        "generate_release_manifest", "--evidence-root", str(root),
+        "--output", str(output), "--report", str(report),
+        "--expected-commit", "a" * 40,
+    ]
+    try:
+        assert generate_release_manifest.main() == 1
+    finally:
+        sys.argv = old
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+    assert manifest["foreignCommitRecords"] == []
+    assert "postgres" not in manifest["scopeStatus"]
+
+
+def test_distributed_profile_requires_postgres(tmp_path):
+    output = tmp_path / "release-manifest.json"
+    report = tmp_path / "PRODUCTION_VERIFICATION.md"
+    import sys
+    old = sys.argv
+    sys.argv = [
+        "generate_release_manifest", "--profile", "distributed",
+        "--evidence-root", str(tmp_path / "missing"),
+        "--output", str(output), "--report", str(report),
+    ]
+    try:
+        assert generate_release_manifest.main() == 1
+    finally:
+        sys.argv = old
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+    assert manifest["releaseProfile"] == "distributed"
+    assert "postgres" in manifest["requiredScopes"]
 
 
 def test_manifest_production_verified_requires_all_pass_scopes(tmp_path):

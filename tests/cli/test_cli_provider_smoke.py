@@ -130,6 +130,18 @@ def test_validate_event_chain_requires_order_and_all_stages():
     ok, missing = cli_provider_smoke.validate_event_chain(["assistant.delta", "mission.completed"])
     assert not ok and "tool.started" in missing
 
+    ok, failures = cli_provider_smoke.validate_event_chain([
+        "tool.started", "tool.output", "checkpoint.created", "assistant.delta",
+        "verification.completed", "verification.started", "mission.completed",
+    ])
+    assert ok and not failures
+
+    ok, failures = cli_provider_smoke.validate_event_chain([
+        "tool.output", "tool.started", "checkpoint.created", "assistant.delta",
+        "verification.started", "verification.completed", "mission.completed",
+    ])
+    assert not ok and "tool_event_order" in failures
+
 
 def test_provider_smoke_reports_http_status_and_redacted_detail(tmp_path: Path, monkeypatch, capsys):
     class ErrorResponse:

@@ -16,6 +16,7 @@ created them.
 | Documentation governance | `docs/governance/` | Yes |
 | Product strategy and detailed internal design | `docs/internal/` | No |
 | Generated reports and diagrams | `docs/generated/` | No |
+| Local-first release inputs and operator checklist | `release/` | Yes |
 
 The private `docs/internal/` tree is ignored by Git. It may contain commercial
 strategy, competitive analysis, detailed architecture drafts, review records,

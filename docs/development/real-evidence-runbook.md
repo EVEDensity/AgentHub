@@ -3,10 +3,10 @@
 > Status: target  
 > Owner: CLI maintainers  
 > Last reviewed: 2026-09-06  
-> Scope: external provider, TTY, PostgreSQL, and npm acceptance
+> Scope: external provider, TTY, SSE recovery, and npm acceptance
 
 Run `python scripts/verify_real_evidence.py` first. `SKIP` is an honest result
-when a secret, TTY, database, or package manager is unavailable.
+when a secret, TTY, deployed SSE endpoint, or package manager is unavailable.
 
 The CI workflows `.github/workflows/cli-provider-nightly.yml`,
 `npm-cli.yml`, and `cli-package-install.yml` are the authoritative places for
@@ -16,8 +16,9 @@ URLs before upgrading a capability to `production-verified`.
 Required evidence includes DeepSeek v4-flash/v4-pro text streaming and native
 tool-call, physical TTY widths 40/80/120, an injected SSE disconnect followed
 by `Last-Event-ID` recovery, and clean Windows/macOS/Linux npm install,
-upgrade, and rollback. PostgreSQL evidence must use two application processes
-and prove that durable ledger replay still works when NOTIFY is delayed.
+upgrade, and rollback. The default `local-project` release profile does not
+require PostgreSQL. PostgreSQL remains an optional compatibility gate for the
+`distributed` profile and is not part of current local-first release work.
 
 ## Evidence scripts
 
@@ -29,22 +30,20 @@ environment variable additionally writes a CI-upload mirror. Each record has
 ```text
 python scripts/cli_provider_smoke.py
 python scripts/cli_provider_mission_smoke.py
-python scripts/cli_postgres_evidence.py
 python scripts/cli_sse_recovery_evidence.py
 python scripts/cli_tty_evidence.py
 python scripts/cli_benchmark.py --task-file benchmarks/cli_tasks.json \
   --task-id conversation-basic --check-thresholds
 ```
 
-The PostgreSQL gate requires `DATABASE_URL` and `asyncpg`. The SSE gate
-requires a deployed Mission Control endpoint, an auth token, a mission ID,
+The SSE gate requires a deployed Mission Control endpoint, an auth token, a mission ID,
 and a proxy that closes the first stream after a durable event; it refuses to
 claim recovery unless `AGENTHUB_CLI_SSE_FAULT_INJECTED=1` is present. The TTY
 gate must be launched from a real terminal with
 `AGENTHUB_CLI_TTY_WIDTH=40`, `80`, or `120`; redirected output is `SKIP`.
 
 The scheduled workflow `.github/workflows/cli-production-evidence.yml` runs
-the PostgreSQL and benchmark gates and runs SSE only when its endpoint and
+the benchmark gate and runs SSE only when its endpoint and
 secret variables are configured. The physical TTY gate remains a manual
 cross-platform acceptance step because a hosted CI pipe is not a physical
 terminal.

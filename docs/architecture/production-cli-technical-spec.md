@@ -470,6 +470,10 @@ and no provider is called production-ready without recent evidence.
 
 ### Milestone 5: Packaging and release
 
+The active `local-project` release profile uses the local/in-process event bus
+and does not require PostgreSQL evidence. PostgreSQL remains an optional
+`distributed` deployment profile and must not block local project delivery.
+
 - Publish frozen binaries and npm wrapper from one version source.
 - Run post-publish clean-machine install/upgrade/rollback jobs on each
   supported OS; unsupported platforms must report a stable diagnostic.

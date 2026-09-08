@@ -235,16 +235,28 @@ def _redacted_error_detail(response: httpx.Response) -> str:
 
 
 def validate_event_chain(event_types: list[str]) -> tuple[bool, list[str]]:
-    """Validate the minimum Mission Control event progression for Phase A."""
+    """Validate required events and only causal ordering across aggregates.
+
+    Mission and WorkUnit sequences are independent, so their verification
+    events may be delivered in either relative order. Both must precede the
+    terminal Mission event, and tool output must follow tool start.
+    """
     required = [
         "assistant.delta", "tool.started", "tool.output", "checkpoint.created",
         "verification.started", "verification.completed", "mission.completed",
     ]
     missing = [kind for kind in required if kind not in event_types]
-    positions = [event_types.index(kind) for kind in required if kind in event_types]
-    if positions != sorted(positions):
-        return False, missing + ["event_order"]
-    return not missing, missing
+    ordering_errors: list[str] = []
+    if not missing:
+        completed = event_types.index("mission.completed")
+        if event_types.index("tool.started") > event_types.index("tool.output"):
+            ordering_errors.append("tool_event_order")
+        if event_types.index("verification.started") > completed:
+            ordering_errors.append("verification_started_after_terminal")
+        if event_types.index("verification.completed") > completed:
+            ordering_errors.append("verification_completed_after_terminal")
+    failures = missing + ordering_errors
+    return not failures, failures
 
 
 if __name__ == "__main__":

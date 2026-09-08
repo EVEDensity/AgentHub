@@ -2,7 +2,29 @@ from __future__ import annotations
 
 import json
 
-from scripts import cli_postgres_evidence, cli_sse_recovery_evidence, cli_tty_evidence
+from scripts import (
+    cli_postgres_evidence,
+    cli_provider_mission_smoke,
+    cli_sse_recovery_evidence,
+    cli_tty_evidence,
+)
+
+
+def test_provider_mission_smoke_uses_canonical_edit_permission(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_execute_objective(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after argument capture")
+
+    monkeypatch.setenv("AGENTHUB_CLI_MODEL_API_KEY", "test-secret")
+    monkeypatch.setenv(
+        "AGENTHUB_CLI_PROVIDER_MISSION_OUTPUT", str(tmp_path / "mission.json")
+    )
+    monkeypatch.setattr(cli_provider_mission_smoke, "execute_objective", fake_execute_objective)
+
+    assert cli_provider_mission_smoke.main() == 1
+    assert captured["tool_permission_mode"] == "edit"
 
 
 def test_postgres_gate_is_honest_without_database(tmp_path, monkeypatch):

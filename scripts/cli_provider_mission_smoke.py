@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 from app.cli.events import normalize_event
 from app.cli.runtime import CliModelSettings, execute_objective
+from scripts.cli_provider_smoke import validate_event_chain
 from scripts.production_evidence import new_evidence, write_evidence
 
 REQUIRED_EVENTS = (
@@ -87,17 +88,17 @@ def main() -> int:
                 ),
                 mission_timeout=240,
                 runner_timeout_seconds=180,
-                tool_permission_mode="accept-edits",
+                tool_permission_mode="edit",
                 on_decision_request=lambda _decision: True,
                 on_event=record,
             )
         missing = [name for name in REQUIRED_EVENTS if name not in event_types]
-        ordered = [event_types.index(name) for name in REQUIRED_EVENTS if name in event_types]
+        event_order_valid, event_chain_failures = validate_event_chain(event_types)
         duplicate_execution = len(started_call_ids) != len(set(started_call_ids))
         passed = (
             result.status == "SUCCEEDED"
             and not missing
-            and ordered == sorted(ordered)
+            and event_order_valid
             and not duplicate_execution
         )
         evidence.update(
@@ -107,7 +108,8 @@ def main() -> int:
             durationSeconds=round(time.perf_counter() - started, 3),
             eventTypes=event_types,
             missingEvents=missing,
-            eventOrderValid=ordered == sorted(ordered),
+            eventOrderValid=event_order_valid,
+            eventOrderFailures=event_chain_failures,
             duplicateToolExecution=duplicate_execution,
             artifactCount=len(result.artifacts),
         )

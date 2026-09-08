@@ -15,14 +15,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REQUIRED_SCOPES = {
+LOCAL_PROJECT_REQUIRED_SCOPES = {
     "provider",
-    "postgres",
     "sse-recovery",
     "tty",
     "registry",
     "benchmark",
 }
+
+DISTRIBUTED_REQUIRED_SCOPES = LOCAL_PROJECT_REQUIRED_SCOPES | {"postgres"}
+RELEASE_PROFILES = {
+    "local-project": LOCAL_PROJECT_REQUIRED_SCOPES,
+    "distributed": DISTRIBUTED_REQUIRED_SCOPES,
+}
+
+# Compatibility for callers importing the default profile's scope set.
+REQUIRED_SCOPES = LOCAL_PROJECT_REQUIRED_SCOPES
 
 SCOPE_ALIASES = {
     "provider-protocol": "provider",
@@ -37,8 +45,20 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("artifacts/production/release-manifest.json"))
     parser.add_argument("--report", type=Path, default=Path("PRODUCTION_VERIFICATION.md"))
     parser.add_argument("--expected-commit", default=_commit_sha())
+    parser.add_argument(
+        "--profile",
+        choices=sorted(RELEASE_PROFILES),
+        default="local-project",
+        help="Evidence policy; local-project does not require PostgreSQL.",
+    )
     args = parser.parse_args()
-    records = _load_records(args.evidence_root)
+    required_scopes = RELEASE_PROFILES[args.profile]
+    records = [
+        record
+        for record in _load_records(args.evidence_root)
+        if SCOPE_ALIASES.get(str(record.get("scope") or ""), str(record.get("scope") or ""))
+        in required_scopes
+    ]
     foreign_commits = sorted({
         str(record.get("commit"))
         for record in records
@@ -51,7 +71,7 @@ def main() -> int:
         by_scope.setdefault(scope, []).append(record)
     scope_status = {
         scope: _latest_status(by_scope.get(scope, []))
-        for scope in sorted(REQUIRED_SCOPES)
+        for scope in sorted(required_scopes)
     }
     missing = sorted(scope for scope, status in scope_status.items() if status != "PASS")
     provider_kind_status = {
@@ -71,11 +91,12 @@ def main() -> int:
     )
     manifest = {
         "schemaVersion": 1,
+        "releaseProfile": args.profile,
         "status": "production-verified" if verified else "implemented",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "commit": _commit_sha(),
         "environment": {"platform": platform.platform(), "python": platform.python_version()},
-        "requiredScopes": sorted(REQUIRED_SCOPES),
+        "requiredScopes": sorted(required_scopes),
         "scopeStatus": scope_status,
         "missingOrNonPassingScopes": missing,
         "foreignCommitRecords": foreign_commits,
@@ -104,6 +125,7 @@ def _render_report(manifest: dict[str, Any]) -> str:
         "# Production Verification",
         "",
         f"> Status: {status}",
+        f"> Release profile: {manifest['releaseProfile']}",
         f"> Commit: {manifest['commit']}",
         f"> Generated: {manifest['generatedAt']}",
         "",
