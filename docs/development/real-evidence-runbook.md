@@ -3,22 +3,23 @@
 > Status: target  
 > Owner: CLI maintainers  
 > Last reviewed: 2026-09-06  
-> Scope: external provider, TTY, SSE recovery, and npm acceptance
+> Scope: external provider, TTY, and GitHub Release acceptance; distributed SSE recovery
 
 Run `python scripts/verify_real_evidence.py` first. `SKIP` is an honest result
 when a secret, TTY, deployed SSE endpoint, or package manager is unavailable.
 
 The CI workflows `.github/workflows/cli-provider-nightly.yml`,
-`npm-cli.yml`, and `cli-package-install.yml` are the authoritative places for
-real provider and registry evidence. Attach their redacted artifacts and run
+`github-cli-release.yml`, and `cli-package-install.yml` are the authoritative places for
+real provider and GitHub Release evidence. Attach their redacted artifacts and run
 URLs before upgrading a capability to `production-verified`.
 
 Required evidence includes DeepSeek v4-flash/v4-pro text streaming and native
 tool-call, physical TTY widths 40/80/120, an injected SSE disconnect followed
 by `Last-Event-ID` recovery, and clean Windows/macOS/Linux npm install,
 upgrade, and rollback. The default `local-project` release profile does not
-require PostgreSQL. PostgreSQL remains an optional compatibility gate for the
-`distributed` profile and is not part of current local-first release work.
+require PostgreSQL or deployed SSE recovery. Both remain compatibility gates
+for the `distributed` profile and are not part of current local-first release
+work.
 
 ## Evidence scripts
 

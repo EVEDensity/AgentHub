@@ -15,8 +15,9 @@
   `publish-stack` job 构建完整 local-services 栈并附到 GitHub Release
   （manifest + 逐文件 sha256 + 资产名校验）。
 
-- `cli-v*` tag → `.github/workflows/npm-cli.yml`：冻结 `agenthub.exe`
-  → mock 通道闭环冒烟 → 发布 `@agenthub/cli` + `@agenthub/cli-win32-x64`。
+- `cli-v*` tag → `.github/workflows/github-cli-release.yml`：冻结
+  `agenthub.exe` → mock 通道闭环冒烟 → 生成 SHA-256 校验文件并发布到
+  GitHub Releases。该路径使用仓库内建 `GITHUB_TOKEN`，不需要 npm。
 
 唯一阻塞是 5 个签名 secrets 未配置（`release-policy.ps1` 会诚实拒绝）。
 本手册把它们逐个流程化。
@@ -37,8 +38,8 @@
 | -------------------------------------- | ---------------- |
 | `AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD` | 私钥口令（生成时设了密码才需要） |
 
-npm 发布线另需 `NPM_TOKEN`（npm automation token，对 `@agenthub` scope
-有发布权）。PR 审查线另需 `AGENTHUB_REVIEW_MODEL_API_KEY`（模型通道 key）。
+CLI GitHub Release 不需要额外发布 secret。PR 审查线另需
+`AGENTHUB_REVIEW_MODEL_API_KEY`（模型通道 key）。
 
 ## §A 五步解阻塞（按顺序执行）
 
@@ -110,7 +111,6 @@ AGENTHUB_UPDATE_ENDPOINT             = <§步骤2 的 URL（可后回填）>
 AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD = <私钥口令（若设置）>
 ```
 
-npm 线（I-2 发布需要）：`NPM_TOKEN`。
 PR 审查线（I-4 需要）：`AGENTHUB_REVIEW_MODEL_API_KEY`。
 
 ### 步骤 5：打 tag 发布
@@ -120,7 +120,7 @@ PR 审查线（I-4 需要）：`AGENTHUB_REVIEW_MODEL_API_KEY`。
 git tag desktop-v0.3.0
 git push origin desktop-v0.3.0
 
-# CLI npm 发布（触发 npm-cli.yml）
+# CLI GitHub Release 发布（触发 github-cli-release.yml）
 git tag cli-v0.3.0
 git push origin cli-v0.3.0
 ```
@@ -132,7 +132,7 @@ Release 并附上完整栈资产）。
 
 | 项       | 验证命令                                                              |
 | ------- | ----------------------------------------------------------------- |
-| 一行安装    | 干净机器 `npm i -g @agenthub/cli && agenthub run "<目标>"`              |
+| 一行安装    | 下载并审查 Release 的 `install.ps1`，再执行脚本并运行 `agenthub doctor` |
 | 有公开分数   | `benchmarks/public-scores.md` 已有 2026-09-01 deepseek-v4-flash 8/8 |
 | PR 审查可用 | 提交一个 PR，观察 review-pr.yml 运行与 findings summary                     |
 | 桌面完整栈   | 新机器下载 Release 栈 → `agenthub upgrade <manifest-url>` 或首启向导         |
@@ -145,8 +145,8 @@ Release 并附上完整栈资产）。
   `AGENTHUB_UPDATE_PRIVATE_KEY`（workflow 已做映射），口令 secret 是否
   需要配。
 
-- **npm publish 403**：`@agenthub` scope 未被账号拥有——先在 npmjs.com
-  创建 org `agenthub`，或改用非 scope 名并同步改 `distributions/npm/`。
+- **Release 资产缺失**：确认 tag 匹配 `cli-v*`，workflow 具有
+  `contents: write`，且 ZIP、`checksums.txt`、`install.ps1` 均已上传。
 
 - **cli 冒烟失败**：看 frozen binary 的 `_serve` 日志（workspace 下
   `.agenthub/logs/`）。

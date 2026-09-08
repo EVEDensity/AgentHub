@@ -62,7 +62,7 @@ objective -> Mission/Contract -> WorkUnit -> Harness/Runner
 | Observability | Every operation has request/mission/attempt identifiers and classified errors | structured logs and receipts |
 
 `production-verified` is never inferred from a fixture. It requires evidence
-from a real provider, physical TTY, released registry artifact, or deployed
+from a real provider, physical TTY, released GitHub artifact, or deployed
 multi-process service as defined in `docs/development/documentation-status.md`.
 
 ## 2. Architecture
@@ -418,7 +418,7 @@ Every capability has an evidence level: `unit`, `contract`, `integration`,
 | File safety | hash conflict, binary/symlink/mode, same file in multiple WorkUnits, atomic rollback | integration |
 | Permission | server deny, local allow, Contract deny, import conflict, audit replay | contract/integration |
 | Provider | DeepSeek v4-flash/v4-pro text and tool loop, degraded state | real-provider nightly |
-| Release | frozen install, npm registry install/upgrade/rollback on supported OSes | cross-platform |
+| Release | frozen GitHub Release install/upgrade/rollback on supported OSes | cross-platform |
 | Benchmark | first event/token/tool feedback, recovery success, false-operation rate | production trend |
 
 Tests must use explicit names for their evidence level. A fixture or mock can
@@ -471,14 +471,15 @@ and no provider is called production-ready without recent evidence.
 ### Milestone 5: Packaging and release
 
 The active `local-project` release profile uses the local/in-process event bus
-and does not require PostgreSQL evidence. PostgreSQL remains an optional
-`distributed` deployment profile and must not block local project delivery.
+and does not require PostgreSQL or deployed SSE recovery evidence. PostgreSQL
+and deployed SSE recovery remain gates for the optional `distributed` profile
+and must not block local project delivery.
 
-- Publish frozen binaries and npm wrapper from one version source.
+- Publish frozen binaries and checksum-verified installers to GitHub Releases from one version source.
 - Run post-publish clean-machine install/upgrade/rollback jobs on each
   supported OS; unsupported platforms must report a stable diagnostic.
 - Gate release promotion on tests, provider evidence, TTY evidence, and
-  registry evidence.
+  GitHub Release evidence.
 
 **Exit gate:** a release manifest links all evidence and rollback instructions.
 
@@ -505,7 +506,7 @@ Every change must:
 
 The following are explicit non-goals for a production claim until evidence
 exists: real multi-process PostgreSQL notification, arbitrary provider tool
-reliability, physical TTY behavior, and cross-platform npm registry behavior.
+reliability, physical TTY behavior, and cross-platform release behavior.
 
 ## Implementation Evidence (2026-09-06)
 

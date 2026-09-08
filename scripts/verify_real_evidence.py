@@ -13,7 +13,7 @@ def main() -> int:
     results = [
         check("real-provider", bool(os.environ.get("AGENTHUB_CLI_MODEL_API_KEY")), "secret configured" if os.environ.get("AGENTHUB_CLI_MODEL_API_KEY") else "AGENTHUB_CLI_MODEL_API_KEY missing"),
         check("real-tty", sys.stdin.isatty() and sys.stdout.isatty(), f"stdin={sys.stdin.isatty()} stdout={sys.stdout.isatty()}"),
-        check("npm-registry", bool(shutil.which("npm")), shutil.which("npm") or "npm missing"),
+        check("github-release", bool(shutil.which("powershell.exe") or shutil.which("pwsh")), "PowerShell installer available" if shutil.which("powershell.exe") or shutil.which("pwsh") else "PowerShell missing"),
     ]
     payload = {"schemaVersion": 1, "verificationLevel": "external", "platform": platform.platform(), "timestamp": datetime.now(timezone.utc).isoformat(), "results": results}
     print(json.dumps(payload, ensure_ascii=False, indent=2))

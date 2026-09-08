@@ -38,6 +38,7 @@ def test_manifest_remains_implemented_when_any_scope_is_missing(tmp_path):
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["status"] == "implemented"
     assert "postgres" not in manifest["requiredScopes"]
+    assert "sse-recovery" not in manifest["requiredScopes"]
     assert manifest["releaseProfile"] == "local-project"
     assert "implemented" in report.read_text(encoding="utf-8")
 
@@ -84,6 +85,7 @@ def test_distributed_profile_requires_postgres(tmp_path):
     manifest = json.loads(output.read_text(encoding="utf-8"))
     assert manifest["releaseProfile"] == "distributed"
     assert "postgres" in manifest["requiredScopes"]
+    assert "sse-recovery" in manifest["requiredScopes"]
 
 
 def test_manifest_production_verified_requires_all_pass_scopes(tmp_path):

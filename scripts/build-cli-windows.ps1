@@ -1,5 +1,5 @@
 # Freeze the AgentHub developer CLI into a single onefile Windows binary
-# (north-star M3 / I-2: `npm i -g @agenthub/cli` distribution).
+# (north-star M3 / I-2: checksummed GitHub Release distribution).
 #
 # Usage:
 #   scripts\build-cli-windows.ps1 [-OutputDirectory <dir>]   # default: dist

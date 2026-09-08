@@ -17,12 +17,11 @@ provide only the prerequisites needed by the gate being run:
 |---|---|---|
 | Benchmark | Python dependencies and `benchmarks/cli_tasks.json` | `FAIL` on threshold breach |
 | Provider | `AGENTHUB_CLI_MODEL_API_KEY`, provider base URL/model configuration | `SKIP` |
-| SSE recovery | deployed endpoint, auth token, Mission ID, real fault injection | `SKIP` |
 | TTY | a physical terminal at widths 40, 80, and 120 | `SKIP` |
-| Registry | published npm package/version and clean install target | `MISSING` until recorded |
+| GitHub Release | two published `cli-v*` releases for install/upgrade/rollback | `MISSING` until recorded |
 
-No `DATABASE_URL`, PostgreSQL service, or PostgreSQL credential is needed for
-the `local-project` profile.
+No deployed SSE endpoint, `DATABASE_URL`, PostgreSQL service, or PostgreSQL
+credential is needed for the `local-project` profile.
 
 ## Local sequence
 
@@ -44,5 +43,24 @@ do not replace `SKIP`, `MISSING`, or `FAIL` evidence manually.
 Always use a fresh release ID. Scanning the shared evidence root mixes records
 from older commits and correctly fails the commit-consistency gate.
 
-Use `--profile distributed` only when PostgreSQL becomes a deployment
-requirement again.
+Use `--profile distributed` only when deployed SSE recovery and PostgreSQL
+become release requirements.
+
+## Personal developer distribution
+
+Windows x64 is the only currently supported binary target. Push a tag such as
+`cli-v0.2.0`; GitHub Actions builds and verifies `agenthub.exe`, publishes a
+ZIP, `checksums.txt`, and `install.ps1` to GitHub Releases using the repository
+`GITHUB_TOKEN`. No npm account or additional publishing token is required.
+
+Install the latest release after reviewing the script:
+
+```powershell
+$script = Join-Path $env:TEMP 'agenthub-install.ps1'
+Invoke-WebRequest https://github.com/EVEDensity/AgentHub/releases/latest/download/install.ps1 -OutFile $script
+Get-Content $script
+& $script
+```
+
+The installer downloads the selected release, verifies its SHA-256 from the
+release checksum file, and atomically replaces the user-local executable.

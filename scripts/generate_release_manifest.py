@@ -17,13 +17,15 @@ from typing import Any
 
 LOCAL_PROJECT_REQUIRED_SCOPES = {
     "provider",
-    "sse-recovery",
     "tty",
-    "registry",
+    "github-release",
     "benchmark",
 }
 
-DISTRIBUTED_REQUIRED_SCOPES = LOCAL_PROJECT_REQUIRED_SCOPES | {"postgres"}
+DISTRIBUTED_REQUIRED_SCOPES = LOCAL_PROJECT_REQUIRED_SCOPES | {
+    "postgres",
+    "sse-recovery",
+}
 RELEASE_PROFILES = {
     "local-project": LOCAL_PROJECT_REQUIRED_SCOPES,
     "distributed": DISTRIBUTED_REQUIRED_SCOPES,

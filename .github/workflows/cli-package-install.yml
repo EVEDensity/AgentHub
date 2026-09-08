@@ -1,71 +1,42 @@
-name: CLI package install and rollback
+name: CLI GitHub Release install and rollback
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Published @agenthub/cli version to verify
+        description: Target cli-v* GitHub Release version
         required: true
         type: string
       previous_version:
-        description: Previous published version used for rollback
+        description: Previous cli-v* version used for rollback
         required: true
         type: string
 
 jobs:
-  package-install:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            supported: true
-          - os: macos-latest
-            supported: false
-          - os: ubuntu-latest
-            supported: false
-    runs-on: ${{ matrix.os }}
+  windows-install-upgrade-rollback:
+    runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: "20"
-          registry-url: https://registry.npmjs.org
-      - name: Install target package
-        shell: bash
-        run: npm install --global "@agenthub/cli@${{ inputs.version }}"
-      - name: Verify platform launcher
-        shell: bash
-        run: |
-          set +e
-          agenthub --help > "$RUNNER_TEMP/agenthub-help.txt" 2>&1
-          code=$?
-          if [ "${{ matrix.supported }}" = "true" ]; then
-            test "$code" -eq 0 || { cat "$RUNNER_TEMP/agenthub-help.txt"; exit "$code"; }
-          else
-            test "$code" -eq 127 || { cat "$RUNNER_TEMP/agenthub-help.txt"; exit 1; }
-            grep -qi "no prebuilt binary" "$RUNNER_TEMP/agenthub-help.txt"
-          fi
-      - name: Run doctor and record release diagnostics
-        shell: bash
-        run: |
-          set +e
-          agenthub doctor > "$RUNNER_TEMP/agenthub-doctor.txt" 2>&1
-          echo "doctor_exit=$?" >> "$RUNNER_TEMP/agenthub-doctor.txt"
-      - name: Upgrade and rollback package
-        if: matrix.supported == true
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm install --global "@agenthub/cli@${{ inputs.previous_version }}"
-          agenthub --help > "$RUNNER_TEMP/previous-help.txt"
-          npm install --global "@agenthub/cli@${{ inputs.version }}"
-          agenthub --help > "$RUNNER_TEMP/target-help.txt"
-          npm install --global "@agenthub/cli@${{ inputs.previous_version }}"
-          agenthub --help > "$RUNNER_TEMP/rollback-help.txt"
-      - name: Upload install diagnostics
+          python-version: '3.12'
+      - name: Verify checksummed GitHub Release lifecycle
+        shell: pwsh
+        env:
+          AGENTHUB_RELEASE_ID: github-${{ github.run_id }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}\artifacts\production\github-${{ github.run_id }}
+        run: >-
+          python scripts/verify_github_release.py
+          --target "${{ inputs.version }}"
+          --previous "${{ inputs.previous_version }}"
+          --output "${{ runner.temp }}\github-release.json"
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: cli-install-${{ matrix.os }}-${{ inputs.version }}
-          path: ${{ runner.temp }}/*-help.txt
+          name: cli-github-release-${{ inputs.version }}
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/github-release.json
           if-no-files-found: ignore
