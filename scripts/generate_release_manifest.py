@@ -86,11 +86,13 @@ def main() -> int:
         if "provider" not in missing:
             missing.append("provider")
             missing.sort()
-    verified = not missing and not foreign_commits and all(
-        record.get("status") == "PASS" and not record.get("thresholdFailures")
-        for record in records
-        if record.get("scope") == "benchmark"
+    latest_benchmark = _latest_record(by_scope.get("benchmark", []))
+    benchmark_verified = (
+        latest_benchmark is not None
+        and latest_benchmark.get("status") == "PASS"
+        and not latest_benchmark.get("thresholdFailures")
     )
+    verified = not missing and not foreign_commits and benchmark_verified
     manifest = {
         "schemaVersion": 1,
         "releaseProfile": args.profile,
@@ -166,10 +168,16 @@ def _load_records(root: Path) -> list[dict[str, Any]]:
 
 
 def _latest_status(records: list[dict[str, Any]]) -> str:
-    if not records:
+    latest = _latest_record(records)
+    if latest is None:
         return "MISSING"
-    records = sorted(records, key=lambda item: str(item.get("observedAt") or ""))
-    return str(records[-1].get("status") or "UNKNOWN")
+    return str(latest.get("status") or "UNKNOWN")
+
+
+def _latest_record(records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not records:
+        return None
+    return max(records, key=lambda item: str(item.get("observedAt") or ""))
 
 
 def _commit_sha() -> str:

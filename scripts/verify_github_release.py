@@ -26,6 +26,10 @@ def main() -> int:
     parser.add_argument("--previous", required=True)
     parser.add_argument("--repository", default="EVEDensity/AgentHub")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--previous-archive", type=Path)
+    parser.add_argument("--previous-checksums", type=Path)
+    parser.add_argument("--target-archive", type=Path)
+    parser.add_argument("--target-checksums", type=Path)
     args = parser.parse_args()
     powershell = shutil.which("powershell.exe") or shutil.which("pwsh")
     if platform.system() != "Windows":
@@ -39,7 +43,28 @@ def main() -> int:
         temporary_root = Path(temporary)
         install_dir = temporary_root / "bin"
         cached: dict[str, tuple[Path, Path]] = {}
+        supplied = {
+            args.previous: (args.previous_archive, args.previous_checksums),
+            args.target: (args.target_archive, args.target_checksums),
+        }
         for version in (args.previous, args.target):
+            archive, checksums = supplied[version]
+            if bool(archive) != bool(checksums):
+                return _emit(
+                    args.output, status="FAIL", errorType="incomplete_local_assets",
+                    failedStep=f"resolve_{version}", target=args.target,
+                    previous=args.previous, repository=args.repository, steps=steps,
+                )
+            if archive and checksums:
+                if not archive.is_file() or not checksums.is_file():
+                    return _emit(
+                        args.output, status="FAIL", errorType="local_asset_missing",
+                        failedStep=f"resolve_{version}", target=args.target,
+                        previous=args.previous, repository=args.repository, steps=steps,
+                    )
+                cached[version] = (archive.resolve(), checksums.resolve())
+                steps.append({"name": f"resolve_{version}", "source": "local"})
+                continue
             try:
                 cached[version] = _download_release_assets(
                     temporary_root, repository=args.repository, version=version

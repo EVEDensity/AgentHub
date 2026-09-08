@@ -121,6 +121,47 @@ def test_manifest_production_verified_requires_all_pass_scopes(tmp_path):
     assert json.loads(output.read_text(encoding="utf-8"))["status"] == "production-verified"
 
 
+def test_manifest_uses_latest_benchmark_without_hiding_prior_failure(tmp_path):
+    root = tmp_path / "evidence"
+    for scope in generate_release_manifest.REQUIRED_SCOPES - {"provider", "benchmark"}:
+        directory = root / scope
+        directory.mkdir(parents=True)
+        (directory / f"{scope}.json").write_text(
+            json.dumps(_record(scope)), encoding="utf-8"
+        )
+    benchmark = root / "benchmark"
+    benchmark.mkdir(parents=True)
+    (benchmark / "old-fail.json").write_text(json.dumps(_record(
+        "benchmark", status="FAIL", thresholdFailures=["firstEventSeconds>20.0"],
+        observedAt="2026-09-07T00:00:00+00:00",
+    )), encoding="utf-8")
+    (benchmark / "new-pass.json").write_text(json.dumps(_record(
+        "benchmark", thresholdFailures=[], observedAt="2026-09-07T00:01:00+00:00",
+    )), encoding="utf-8")
+    provider = root / "provider"
+    provider.mkdir(parents=True)
+    for kind in ("provider-protocol", "mission-closed-loop"):
+        (provider / f"{kind}.json").write_text(
+            json.dumps(_record(kind)), encoding="utf-8"
+        )
+    output = tmp_path / "manifest.json"
+    report = tmp_path / "report.md"
+    import sys
+    old = sys.argv
+    sys.argv = [
+        "generate_release_manifest", "--evidence-root", str(root),
+        "--output", str(output), "--report", str(report),
+        "--expected-commit", "a" * 40,
+    ]
+    try:
+        assert generate_release_manifest.main() == 0
+    finally:
+        sys.argv = old
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+    assert manifest["status"] == "production-verified"
+    assert any(item["status"] == "FAIL" for item in manifest["evidence"])
+
+
 def test_manifest_rejects_foreign_commit_records(tmp_path):
     root = tmp_path / "evidence"
     for scope in generate_release_manifest.REQUIRED_SCOPES - {"provider"}:

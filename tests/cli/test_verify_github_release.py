@@ -46,3 +46,20 @@ def test_installer_timeout_is_structured_failure(tmp_path, monkeypatch):
     record = json.loads(output.read_text(encoding="utf-8"))
     assert record["errorType"] == "release_install_timeout"
     assert record["failedStep"] == "install_previous"
+
+
+def test_incomplete_local_assets_fail_closed(tmp_path, monkeypatch):
+    output = tmp_path / "release.json"
+    archive = tmp_path / "previous.zip"
+    archive.write_bytes(b"zip")
+    monkeypatch.setattr(verify_github_release.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(verify_github_release.shutil, "which", lambda _name: "powershell.exe")
+    monkeypatch.setattr(sys, "argv", [
+        "verify_github_release", "--target", "0.3.3",
+        "--previous", "0.3.2", "--previous-archive", str(archive),
+        "--output", str(output),
+    ])
+
+    assert verify_github_release.main() == 1
+    record = json.loads(output.read_text(encoding="utf-8"))
+    assert record["errorType"] == "incomplete_local_assets"
