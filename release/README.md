@@ -53,7 +53,18 @@ Windows x64 is the only currently supported binary target. Push a tag such as
 ZIP, `checksums.txt`, and `install.ps1` to GitHub Releases using the repository
 `GITHUB_TOKEN`. No npm account or additional publishing token is required.
 
-Install the latest release after reviewing the script:
+One-line installation for Windows x64:
+
+```powershell
+irm https://github.com/EVEDensity/AgentHub/releases/latest/download/install.ps1 | iex
+```
+
+The command installs for the current user and updates the user `PATH`; it does
+not require administrator access, npm, or Python. Open a new terminal after
+installation and run `agenthub --help`.
+
+For security-sensitive environments, download and review the script before
+running it:
 
 ```powershell
 $script = Join-Path $env:TEMP 'agenthub-install.ps1'

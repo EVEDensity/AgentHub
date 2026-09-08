@@ -37,6 +37,25 @@ AgentHub 把整个编排循环给你做好了 — 任务规划、执行、审查
 
 ## 快速开始
 
+### 一键安装 CLI（Windows x64）
+
+在 PowerShell 中运行以下命令，即可为当前用户安装最新的、带校验和的
+GitHub Release。无需管理员权限、npm 或 Python：
+
+```powershell
+irm https://github.com/EVEDensity/AgentHub/releases/latest/download/install.ps1 | iex
+```
+
+打开一个新的终端，然后验证安装：
+
+```powershell
+agenthub --help
+```
+
+目前只正式发布 Windows x64 CLI 二进制文件，尚未声明支持其他平台。
+
+### 在本地运行完整平台
+
 ```bash
 git clone https://github.com/EVEDensity/AgentHub.git
 cd AgentHub

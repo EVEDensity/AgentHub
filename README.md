@@ -37,6 +37,26 @@ AgentHub gives you the full loop out of the box — orchestration, IAM, sandbox 
 
 ## Quick start
 
+### Install the CLI (Windows x64)
+
+Run this in PowerShell to install the latest checksummed GitHub Release for
+the current user. It does not require administrator access, npm, or Python:
+
+```powershell
+irm https://github.com/EVEDensity/AgentHub/releases/latest/download/install.ps1 | iex
+```
+
+Open a new terminal, then verify the installation:
+
+```powershell
+agenthub --help
+```
+
+Only Windows x64 CLI binaries are published today. Other platforms are not yet
+claimed as supported.
+
+### Run the full platform locally
+
 ```bash
 git clone https://github.com/EVEDensity/AgentHub.git
 cd AgentHub
