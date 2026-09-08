@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,7 +36,23 @@ def main() -> int:
     installer = ROOT / "release" / "install.ps1"
     steps: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="agenthub-release-") as temporary:
-        install_dir = Path(temporary) / "bin"
+        temporary_root = Path(temporary)
+        install_dir = temporary_root / "bin"
+        cached: dict[str, tuple[Path, Path]] = {}
+        for version in (args.previous, args.target):
+            try:
+                cached[version] = _download_release_assets(
+                    temporary_root, repository=args.repository, version=version
+                )
+            except (OSError, urllib.error.URLError, TimeoutError) as exc:
+                steps.append({"name": f"download_{version}", "status": "FAIL"})
+                return _emit(
+                    args.output, status="FAIL",
+                    errorType="release_download_failed",
+                    failedStep=f"download_{version}",
+                    failureClass=type(exc).__name__, target=args.target,
+                    previous=args.previous, repository=args.repository, steps=steps,
+                )
         for name, version in (
             ("install_previous", args.previous),
             ("upgrade_target", args.target),
@@ -45,8 +63,20 @@ def main() -> int:
                 "-File", str(installer), "-Version", version,
                 "-Repository", args.repository,
                 "-InstallDirectory", str(install_dir), "-NoPathUpdate",
+                "-ArchivePath", str(cached[version][0]),
+                "-ChecksumsPath", str(cached[version][1]),
             ]
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=300)
+            try:
+                completed = subprocess.run(
+                    command, capture_output=True, text=True, timeout=720
+                )
+            except subprocess.TimeoutExpired:
+                steps.append({"name": name, "status": "TIMEOUT"})
+                return _emit(
+                    args.output, status="FAIL", errorType="release_install_timeout",
+                    failedStep=name, target=args.target, previous=args.previous,
+                    repository=args.repository, steps=steps,
+                )
             steps.append({"name": name, "exitCode": completed.returncode})
             if completed.returncode != 0:
                 return _emit(
@@ -67,6 +97,29 @@ def main() -> int:
         args.output, status="PASS", target=args.target, previous=args.previous,
         repository=args.repository, steps=steps,
     )
+
+
+def _download_release_assets(
+    root: Path, *, repository: str, version: str
+) -> tuple[Path, Path]:
+    """Download each release once; the installer remains the checksum authority."""
+    tag = version if version.startswith("cli-v") else f"cli-v{version}"
+    version_dir = root / tag
+    version_dir.mkdir(parents=True, exist_ok=True)
+    archive = version_dir / "agenthub-windows-x64.zip"
+    checksums = version_dir / "checksums.txt"
+    base = f"https://github.com/{repository}/releases/download/{tag}"
+    for name, destination in (
+        (archive.name, archive),
+        (checksums.name, checksums),
+    ):
+        request = urllib.request.Request(
+            f"{base}/{name}", headers={"User-Agent": "AgentHub-Release-Verifier/1"}
+        )
+        with urllib.request.urlopen(request, timeout=120) as response:
+            with destination.open("wb") as output:
+                shutil.copyfileobj(response, output, length=1024 * 1024)
+    return archive, checksums
 
 
 def _emit(output: Path | None, **fields: object) -> int:
