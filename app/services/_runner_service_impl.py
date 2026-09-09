@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
@@ -25,6 +27,8 @@ from app.services.harness_service import (
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
 from app.services.workspace_admission_service import WorkspaceClaimStatus
 from app.services.workspace_fingerprint import context_manifest_digest, workspace_revision
+
+logger = logging.getLogger("agenthub.runner")
 
 
 class RunnerError(RuntimeError):
@@ -331,12 +335,12 @@ class _ClaimedModelWorkResolver:
             if idempotency_key and not receipt_decision:
                 import os
                 from pathlib import Path
-                from app.services.tools.receipts import ToolReceiptStore
+                from app.services.tools.receipts import SQLiteToolReceiptStore
 
                 data_root = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
                 if data_root:
-                    receipt_decision = ToolReceiptStore(
-                        Path(data_root).parent / "tool-receipts.json"
+                    receipt_decision = SQLiteToolReceiptStore(
+                        Path(data_root).parent / "tool-receipts.sqlite3"
                     ).replay_decision(idempotency_key, strict=True)
             if receipt_decision in {"unknown_outcome", "previous_failure"}:
                 raise ClaimedWorkResolutionError(
@@ -359,6 +363,10 @@ class _ClaimedModelWorkResolver:
                 recovered_tool_results=recovered,
                 start_iteration=int(checkpoint.get("iteration") or 0),
             ) if checkpoint.get("id") or checkpoint.get("checkpointId") else None
+            if resume_input is not None and resume_input.start_iteration < 1:
+                raise ClaimedWorkResolutionError(
+                    "checkpoint resume iteration must be greater than zero"
+                )
         return ClaimedWorkExecution(
             execution_input=RunnerExecutionInput(
                 code=prompt,
@@ -1040,6 +1048,21 @@ class WorkUnitRunner:
             )
             raise RunnerExecutionError("claimed WorkUnit resolver returned invalid plan")
         execution_input = execution.execution_input
+        if execution_input.resume is not None:
+            return await self.resume(
+                mission_id,
+                work_unit_id,
+                leased=work_unit_payload,
+                code=execution_input.code,
+                language=execution_input.language,
+                timeout=execution_input.timeout,
+                cwd=execution_input.cwd,
+                resume=execution_input.resume,
+                lease_seconds=lease_seconds,
+                artifact_kind=artifact_kind,
+                media_type=media_type,
+                harness=execution.harness,
+            )
         return await self._run_leased(
             mission_id,
             work_unit_id,
@@ -1232,6 +1255,7 @@ class WorkUnitRunner:
                     )
                 execution_task.cancel()
                 await _drain_cancelled_task(execution_task)
+                await self._flush_supervisor_state(harness)
                 if isinstance(heartbeat_error, RunnerHeartbeatError):
                     raise heartbeat_error
                 raise RunnerHeartbeatError(
@@ -1241,11 +1265,32 @@ class WorkUnitRunner:
         except asyncio.CancelledError:
             execution_task.cancel()
             await _drain_cancelled_task(execution_task)
+            await self._flush_supervisor_state(harness)
             raise
         finally:
             if not heartbeat_task.done():
                 heartbeat_task.cancel()
             await _drain_cancelled_task(heartbeat_task)
+            await self._flush_supervisor_state(harness)
+
+    async def _flush_supervisor_state(self, harness: HarnessPort) -> None:
+        """Flush request-scoped receipts/checkpoints before Runner exits.
+
+        Harness implementations may expose either an async or synchronous
+        ``flush_*`` hook. Missing hooks are valid for stateless test Harnesses;
+        flush failures are logged but never turn a lease-loss path into a
+        second uncontrolled execution.
+        """
+        for name in ("flush_receipts", "flush_checkpoints", "flush"):
+            callback = getattr(harness, name, None)
+            if not callable(callback):
+                continue
+            try:
+                result = callback()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("runner supervisor state flush failed: %s", name)
 
     async def _heartbeat_loop(
         self,

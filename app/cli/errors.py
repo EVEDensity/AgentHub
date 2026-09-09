@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from app.errors import ErrorCategory, ErrorEnvelope, error_envelope
+from app.errors import ErrorCategory, ErrorEnvelope, error_envelope, provider_error_matrix
 from enum import StrEnum
 
 
@@ -98,4 +98,5 @@ __all__ = [
     "CliErrorKind", "ErrorCategory", "ErrorEnvelope", "classify_error",
     "to_error_envelope", "error_exit_code", "EXIT_SUCCESS", "EXIT_FAILURE",
     "EXIT_USAGE", "EXIT_PERMISSION", "EXIT_TIMEOUT", "EXIT_INFRASTRUCTURE",
+    "provider_error_matrix",
 ]

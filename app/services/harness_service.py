@@ -25,6 +25,7 @@ from app.services.harness_checkpoint import (
     HarnessExecutionContext,
     InMemoryHarnessCheckpointPort,
     _HarnessRecorder,
+    build_tool_idempotency_key,
 )
 from app.services.tools.sandbox_executor import SandboxResult
 from app.services.model_contract import (
@@ -37,6 +38,7 @@ from app.services.model_contract import (
     ToolCall,
     ToolResult,
 )
+from app.services.tool_executor import ToolExecutor, tool_executor as default_tool_executor
 
 # Backwards-compatible import names. These are aliases of the canonical DTOs,
 # not a second protocol owned by Harness.
@@ -395,6 +397,9 @@ class FunctionCallingHarness:
         max_total_tokens: int | None = None,
         max_model_cost: float | None = None,
         checkpoint_port: HarnessCheckpointPort | None = None,
+        tool_executor: ToolExecutor | None = None,
+        receipt_store: Any = None,
+        approval_callback: Callable[[str, Mapping[str, Any]], Awaitable[bool] | bool] | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -416,6 +421,9 @@ class FunctionCallingHarness:
         self._max_total_tokens = max_total_tokens
         self._max_model_cost = max_model_cost
         self._checkpoint_port = checkpoint_port
+        self._tool_executor = tool_executor or default_tool_executor
+        self._receipt_store = receipt_store
+        self._approval_callback = approval_callback
 
     async def execute(self, request: HarnessRequest) -> HarnessResult:
         if request.timeout <= 0:
@@ -647,7 +655,7 @@ class FunctionCallingHarness:
                         publish_tool = getattr(self._checkpoint_port, "publish_tool_event", None)
                         if callable(publish_tool):
                             await publish_tool("evt-tool-start-" + uuid.uuid4().hex, "started", call.name)
-                        function_result = await self._execute_function_call(call)
+                        function_result = await self._execute_function_call(call, request.execution)
                         tool_results.append(function_result)
                         if callable(publish_tool):
                             await publish_tool(
@@ -885,7 +893,11 @@ class FunctionCallingHarness:
             return "model_cost", "Harness model-cost budget exhausted"
         return None
 
-    async def _execute_function_call(self, call: FunctionCall) -> FunctionResult:
+    async def _execute_function_call(
+        self,
+        call: FunctionCall,
+        execution: HarnessExecutionContext | None = None,
+    ) -> FunctionResult:
         if not call.id or not call.name:
             return FunctionResult(
                 call_id=call.id,
@@ -932,21 +944,49 @@ class FunctionCallingHarness:
                 content="function argument validator must return an object",
             )
         try:
-            content = await tool.handler(arguments)
-        except Exception as exc:  # noqa: BLE001 - tool failures become model feedback
+            idempotency_key = build_tool_idempotency_key(
+                execution,
+                call.name,
+                arguments,
+            )
+            execution_result = await self._tool_executor.execute_gateway(
+                call.name,
+                arguments,
+                tool.handler,
+                idempotency_key=idempotency_key,
+                receipt_store=self._receipt_store,
+                approval_callback=self._approval_callback,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - executor failures become model feedback
             return FunctionResult(
                 call_id=call.id,
                 name=call.name,
                 success=False,
                 content=f"function execution failed: {type(exc).__name__}",
             )
-        if not isinstance(content, str):
+        if not isinstance(execution_result, Mapping):
             return FunctionResult(
                 call_id=call.id,
                 name=call.name,
                 success=False,
                 content="function handler must return text",
             )
+        content = execution_result.get("result", execution_result.get("content", ""))
+        if not execution_result.get("success", False):
+            return FunctionResult(
+                call_id=call.id,
+                name=call.name,
+                success=False,
+                content=(
+                    f"function execution failed: {execution_result.get('exception_type')}"
+                    if execution_result.get("exception_type")
+                    else str(execution_result.get("error") or "function execution failed")
+                ),
+            )
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
         return FunctionResult(
             call_id=call.id,
             name=call.name,
@@ -1008,6 +1048,7 @@ __all__ = [
     "RepairAttemptRunner",
     "RepairAttemptState",
     "RepairErrorType",
+    "build_tool_idempotency_key",
     "classify_repair_error",
     "FunctionCall",
     "FunctionCallingHarness",

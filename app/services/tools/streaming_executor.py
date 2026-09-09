@@ -5,10 +5,11 @@ import logging
 import time
 import uuid
 import hashlib
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Awaitable
-from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus, ToolReceiptStore
+from app.services.tools.receipts import ToolReceiptStore
 
 logger = logging.getLogger("agenthub.tools.streaming_executor")
 
@@ -69,12 +70,14 @@ class StreamingToolExecutor:
         hook_manager: Any = None,
         progress_tracker: Any = None,
         receipt_store: ToolReceiptStore | None = None,
+        approval_callback: Callable[[str, dict[str, Any]], Awaitable[bool] | bool] | None = None,
     ) -> None:
         self._queue: list[ToolExecutionItem] = []
         self._permission_manager = permission_manager
         self._hook_manager = hook_manager
         self._progress_tracker = progress_tracker
         self._receipt_store = receipt_store
+        self._approval_callback = approval_callback
         self._on_state_change: Callable[[ToolExecutionItem], Awaitable[None]] | None = None
         self._context_overrides: dict[str, str] = {}
 
@@ -200,16 +203,6 @@ class StreamingToolExecutor:
         start_time = time.time()
         await self._notify_state_change(item)
         receipt_key = self._receipt_key(item)
-        if self._receipt_store is not None:
-            decision = self._receipt_store.replay_decision(receipt_key, strict=True)
-            if decision != "execute":
-                item.status = ToolState.ERROR
-                item.error_type = "idempotency"
-                item.error = f"工具调用未重放（{decision}）"
-                item.duration_ms = (time.time() - start_time) * 1000
-                await self._notify_state_change(item)
-                return
-            self._receipt_store.mark_started(receipt_key, item.name, time.time())
 
         try:
             from app.services.tool_registry import tool_registry
@@ -318,12 +311,25 @@ class StreamingToolExecutor:
                         item.name, exc,
                     )
 
+            # The receipt key must describe the exact argument object sent to
+            # the handler, including any deterministic pre-hook normalization.
+            receipt_key = self._receipt_key(item, effective_args)
+
             # ── 3. Execute with timeout ────────────────────────────
             from app.services.tool_executor import tool_executor
 
             try:
                 result = await asyncio.wait_for(
-                    tool_executor.execute(item.name, effective_args),
+                    tool_executor.execute_gateway(
+                        item.name,
+                        effective_args,
+                        None,
+                        idempotency_key=receipt_key,
+                        receipt_store=self._receipt_store,
+                        risk_level=tool.risk_level,
+                        requires_user_confirmation=tool.requires_user_confirmation,
+                        approval_callback=self._approval_callback,
+                    ),
                     timeout=self.PER_TOOL_TIMEOUT,
                 )
                 item.result = result
@@ -354,20 +360,6 @@ class StreamingToolExecutor:
                     if not isinstance(result, dict) or result.get("success", True)
                     else ToolState.ERROR
                 )
-                if self._receipt_store is not None:
-                    digest = hashlib.sha256(repr(item.result).encode("utf-8")).hexdigest() if item.result is not None else None
-                    self._receipt_store.put(ToolReceipt(
-                        receipt_key,
-                        item.name,
-                        ToolReceiptStatus.SUCCEEDED if item.status is ToolState.COMPLETED else ToolReceiptStatus.FAILED,
-                        time.time(),
-                        result_digest=digest if item.status is ToolState.COMPLETED else None,
-                        error_type=(
-                            str(result.get("error_type") or "tool_failure")
-                            if item.status is ToolState.ERROR and isinstance(result, dict)
-                            else None
-                        ),
-                    ))
 
             except asyncio.TimeoutError:
                 item.status = ToolState.ERROR
@@ -408,12 +400,6 @@ class StreamingToolExecutor:
                 item.name, safe_msg, error_type.value,
             )
 
-        if self._receipt_store is not None and item.status is ToolState.ERROR:
-            # Reaching this branch means the executor observed a classified
-            # failure.  UNKNOWN is reserved for a process crash or an
-            # operator-reconciled STARTED receipt, never for a handled error.
-            self._receipt_store.put(ToolReceipt(receipt_key, item.name, ToolReceiptStatus.FAILED, time.time(), error_type=item.error_type))
-
         item.duration_ms = (time.time() - start_time) * 1000
 
         # ── Ensure result dict has metadata ─────────────────────────
@@ -423,11 +409,22 @@ class StreamingToolExecutor:
 
         await self._notify_state_change(item)
 
-    def _receipt_key(self, item: ToolExecutionItem) -> str:
+    def _receipt_key(
+        self,
+        item: ToolExecutionItem,
+        arguments: dict[str, Any] | None = None,
+    ) -> str:
         mission = self._context_overrides.get("mission_id", "local")
         work_unit = self._context_overrides.get("work_unit_id", "default")
         attempt = self._context_overrides.get("attempt", "1")
-        return f"{mission}/{work_unit}/{attempt}/{item.id}"
+        payload = json.dumps(
+            item.arguments if arguments is None else arguments,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        return f"{mission}/{work_unit}/{attempt}/{item.name}/{digest}"
 
     # ── Context injection ─────────────────────────────────────────────
 

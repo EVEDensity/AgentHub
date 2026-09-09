@@ -23,6 +23,22 @@
 
 ---
 
+## Local CLI installation
+
+For a personal, local-first setup, use an isolated virtual environment and an
+editable install while developing:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\agenthub.exe --help
+.\.venv\Scripts\agenthub.exe doctor
+```
+
+`pipx install .` creates a clean global command environment for regular use.
+Provider credentials remain environment-only; `agenthub doctor --json` reports
+only whether credentials are configured and never prints their values.
+
 ## What is this?
 
 AgentHub lets you spin up a team of AI agents that actually work together — the Orchestrator decomposes your goal and dispatches roles, code-review and verification agents check the work, and deploy/implementation agents finish it. Not a single-agent-with-tools trick. A real team.

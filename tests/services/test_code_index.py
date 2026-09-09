@@ -32,6 +32,8 @@ def test_incremental_indexer_updates_only_changed_files_and_removes_deleted(tmp_
     assert unchanged.unchanged == 1
     assert changed.indexed == 1
     assert store.search_symbols("second")[0]["symbol"] == "second"
+    assert store.find_symbol("second")[0]["symbol"] == "second"
+    assert store.get_definition("second")[0]["line_start"] == 1
 
     source.unlink()
     deleted = indexer.update(["module.py"])
@@ -62,3 +64,15 @@ def test_code_index_failure_returns_none_so_callers_can_fall_back(tmp_path: Path
 
     assert service.update(["missing.py"]) is None
     assert service.search_symbols("Service") is None
+
+
+def test_syntax_error_is_reported_without_blocking_indexer(tmp_path: Path) -> None:
+    broken = tmp_path / "broken.py"
+    broken.write_text("def broken(:\n", encoding="utf-8")
+    store = CodeIndexStore(tmp_path / ".agenthub" / "index.sqlite3")
+
+    report = IncrementalIndexer(tmp_path, store).update(["broken.py"])
+
+    assert report.failed == 1
+    assert store.search_symbols("broken") == []
+    store.close()

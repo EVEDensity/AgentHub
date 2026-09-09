@@ -145,12 +145,12 @@ def _build_receipt_store():
     """
     import os
     from pathlib import Path
-    from app.services.tools.receipts import ToolReceiptStore
+    from app.services.tools.receipts import SQLiteToolReceiptStore
 
     root = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
     if not root:
         return None
-    return ToolReceiptStore(Path(root).parent / "tool-receipts.json")
+    return SQLiteToolReceiptStore(Path(root).parent / "tool-receipts.sqlite3")
 
 
 def get_streaming_executor() -> StreamingToolExecutor | None:

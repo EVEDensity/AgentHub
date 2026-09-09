@@ -461,18 +461,293 @@ def _doctor_version(binary: str) -> str | None:
     return value[0][:120] if completed.returncode == 0 and value else None
 
 
+def _doctor_python_dependencies() -> dict[str, Any]:
+    """Check the small set of distributions required by the CLI itself.
+
+    The full application has optional server/document integrations.  Doctor
+    reports those separately from the CLI foundation so a local source
+    checkout remains diagnosable before every optional extra is installed.
+    """
+    import re
+    from importlib.metadata import PackageNotFoundError, version
+
+    required = {
+        "fastapi": "fastapi",
+        "uvicorn": "uvicorn",
+        "textual": "textual",
+        "asyncpg": "asyncpg",
+        "alembic": "alembic",
+        "psycopg2-binary": "psycopg2",
+        "httpx": "httpx",
+        "pydantic": "pydantic",
+        "pydantic-settings": "pydantic_settings",
+        "cryptography": "cryptography",
+        "minio": "minio",
+        "nats-py": "nats",
+        "tiktoken": "tiktoken",
+        "tokenizers": "tokenizers",
+        "redis": "redis",
+        "langgraph": "langgraph",
+        "pluggy": "pluggy",
+        "python-docx": "docx",
+        "pypdf": "pypdf",
+        "Pillow": "PIL",
+        "markdown": "markdown",
+        "python-dotenv": "dotenv",
+        "rich": "rich",
+    }
+    # Keep the report aligned with the checked-in runtime lock file.  A
+    # missing requirements file is tolerated for frozen installations.
+    requirements_file = Path(__file__).resolve().parents[2] / "requirements.txt"
+    if requirements_file.is_file():
+        for raw_line in requirements_file.read_text(encoding="utf-8").splitlines():
+            marker = raw_line.split(";", 1)[1].strip().lower() if ";" in raw_line else ""
+            if "sys_platform == \"win32\"" in marker and os.name != "nt":
+                continue
+            line = raw_line.split("#", 1)[0].split(";", 1)[0].strip()
+            if not line or line.startswith("-"):
+                continue
+            match = re.match(r"([A-Za-z0-9_.-]+)", line)
+            if match:
+                required.setdefault(match.group(1), "")
+    missing: list[str] = []
+    invalid: list[str] = []
+    installed: dict[str, str] = {}
+    for distribution, module in required.items():
+        try:
+            installed[distribution] = version(distribution)
+            if module:
+                __import__(module)
+        except PackageNotFoundError:
+            missing.append(distribution)
+        except Exception:
+            invalid.append(distribution)
+    return {
+        "ok": not missing and not invalid,
+        "required": len(required),
+        "installed": installed,
+        "missing": missing,
+        "invalid": invalid,
+    }
+
+
+def _doctor_git(cwd: Path) -> dict[str, Any]:
+    """Return repository metadata without exposing remotes or credentials."""
+    import shutil
+    import subprocess
+
+    git = shutil.which("git")
+    if not git:
+        return {"ok": False, "available": False, "version": None}
+
+    def run(*args: str) -> str | None:
+        try:
+            result = subprocess.run(
+                [git, *args], cwd=cwd, capture_output=True, text=True,
+                timeout=3, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
+
+    branch = run("branch", "--show-current")
+    head = run("rev-parse", "--short", "HEAD")
+    status = run("status", "--porcelain")
+    inside = run("rev-parse", "--is-inside-work-tree") == "true"
+    if not inside:
+        return {
+            "ok": True,
+            "available": True,
+            "repository": False,
+            "skipped": True,
+            "reason": "workspace_not_git_repository",
+            "version": _doctor_version(git),
+        }
+    changed = len(status.splitlines()) if status else 0
+    return {
+        "ok": inside,
+        "available": True,
+        "version": _doctor_version(git),
+        "repository": inside,
+        "branch": branch or None,
+        "head": head or None,
+        "dirty": bool(changed),
+        "changedFiles": changed,
+    }
+
+
+def _doctor_sqlite(cwd: Path, state: Path) -> dict[str, Any]:
+    """Check the local SQLite store without modifying business tables."""
+    import sqlite3
+
+    configured = os.environ.get("AGENTHUB_SQLITE_PATH", "").strip()
+    configured_path = None
+    if configured:
+        configured_path = Path(configured)
+        if not configured_path.is_absolute():
+            configured_path = cwd / configured_path
+    candidates = [
+        configured_path,
+        state / "db" / "agenthub.db",
+        cwd / ".agenthub" / "db" / "agenthub.db",
+        cwd / ".agenthub" / "agenthub.db",
+    ]
+    database = next((path for path in candidates if path and path.is_file()), None)
+    if database is None:
+        return {"ok": True, "skipped": True, "reason": "database_not_created"}
+
+    relative = str(database)
+    try:
+        relative = str(database.resolve().relative_to(cwd.resolve()))
+        relative = "<workspace>/" + relative.replace("\\", "/")
+    except (OSError, ValueError):
+        relative = "<configured-sqlite>"
+    connection = None
+    try:
+        connection = sqlite3.connect(database, timeout=3)
+        quick = connection.execute("PRAGMA quick_check").fetchone()
+        integrity = str(quick[0]) if quick else "unknown"
+        connection.execute("CREATE TEMP TABLE __agenthub_doctor_probe (value INTEGER)")
+        connection.execute("INSERT INTO __agenthub_doctor_probe(value) VALUES (1)")
+        readback = connection.execute(
+            "SELECT value FROM __agenthub_doctor_probe"
+        ).fetchone()
+        connection.rollback()
+        healthy = integrity.lower() == "ok" and readback == (1,)
+        return {
+            "ok": healthy,
+            "path": relative,
+            "integrity": integrity,
+            "readWrite": readback == (1,),
+        }
+    except (OSError, sqlite3.DatabaseError) as exc:
+        return {
+            "ok": False,
+            "path": relative,
+            "integrity": "error",
+            "readWrite": False,
+            "errorType": type(exc).__name__,
+        }
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _doctor_provider(cwd: Path) -> dict[str, Any]:
+    """Probe the configured provider while returning only redacted metadata."""
+    import time as _time
+    from urllib.parse import urlsplit
+
+    from app.cli.config import ConfigResolver
+
+    config = load_config(cwd, strict=False)
+    resolved = ConfigResolver.from_environment().resolve_model(
+        provider=None,
+        model=None,
+        base_url=None,
+        config=config,
+        default_model="deepseek-v4-flash",
+    )
+    provider = resolved["provider"] or "mock"
+    model = resolved["model"] or None
+    api_key_present = bool(resolved.get("api_key")) and provider != "mock"
+    defaults = {
+        "deepseek": "https://api.deepseek.com/v1",
+        "openai": "https://api.openai.com/v1",
+        "anthropic": "https://api.anthropic.com",
+    }
+    endpoint = resolved.get("base_url") or defaults.get(provider, "")
+    if provider == "mock":
+        return {
+            "ok": True,
+            "skipped": True,
+            "provider": provider,
+            "model": model,
+            "credentials": {"configured": False},
+            "reason": "mock_provider",
+        }
+    if not api_key_present:
+        return {
+            "ok": False,
+            "provider": provider,
+            "model": model,
+            "credentials": {"configured": False},
+            "errorType": "missing_credentials",
+        }
+    if not endpoint:
+        return {
+            "ok": False,
+            "provider": provider,
+            "model": model,
+            "credentials": {"configured": True},
+            "errorType": "missing_base_url",
+        }
+    parsed = urlsplit(endpoint)
+    safe_endpoint = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "<invalid-url>"
+    if safe_endpoint == "<invalid-url>":
+        return {
+            "ok": False,
+            "provider": provider,
+            "model": model,
+            "endpoint": safe_endpoint,
+            "credentials": {"configured": True},
+            "errorType": "invalid_base_url",
+        }
+    try:
+        import httpx
+
+        started = _time.monotonic()
+        response = httpx.get(
+            endpoint.rstrip("/") + "/models",
+            headers={"Authorization": f"Bearer {resolved['api_key']}"},
+            timeout=3.0,
+            follow_redirects=False,
+        )
+        latency = round((_time.monotonic() - started) * 1000, 1)
+        return {
+            "ok": 200 <= response.status_code < 400,
+            "provider": provider,
+            "model": model,
+            "endpoint": safe_endpoint,
+            "credentials": {"configured": True},
+            "latencyMs": latency,
+            "statusCode": response.status_code,
+        }
+    except Exception as exc:  # network failures are summarized, never dumped
+        return {
+            "ok": False,
+            "provider": provider,
+            "model": model,
+            "endpoint": safe_endpoint,
+            "credentials": {"configured": True},
+            "latencyMs": None,
+            "errorType": type(exc).__name__,
+        }
+
+
 def _doctor_report(cwd: Path) -> dict[str, Any]:
     """Build a redacted, deterministic local readiness report."""
     import shutil
-    import time as _time
     checks: dict[str, dict[str, Any]] = {}
+    from app.version import __version__
+
     checks["python"] = {"ok": True, "version": sys.version.split()[0]}
-    for name in ("node", "git"):
+    checks["python_dependencies"] = _doctor_python_dependencies()
+    for name in ("node",):
         path = shutil.which(name)
         checks[name] = {"ok": bool(path), "version": _doctor_version(path) if path else None}
+    checks["git"] = _doctor_git(cwd)
     checks["workspace"] = {"ok": cwd.is_dir(), "path": str(cwd)}
     state = state_dir(cwd)
-    checks["state_directory"] = {"ok": state.is_dir(), "path": str(state)}
+    checks["state_directory"] = {
+        "ok": True,
+        "path": str(state),
+        "initialized": state.is_dir(),
+        "skipped": not state.is_dir(),
+        **({} if state.is_dir() else {"reason": "run_agenthub_init_to_create"}),
+    }
     checks["write_access"] = {"ok": os.access(cwd, os.W_OK)}
     try:
         usage = shutil.disk_usage(cwd)
@@ -490,22 +765,16 @@ def _doctor_report(cwd: Path) -> dict[str, Any]:
         checks["provider_matrix"] = {"ok": True, "declared": len(SUPPORTED_PROVIDER_MATRIX), "observed": records}
     except (OSError, ValueError, TypeError):
         checks["provider_matrix"] = {"ok": False, "declared": 0, "observed": []}
-    provider = os.environ.get("AGENTHUB_CLI_MODEL_PROVIDER", "").strip()
-    base_url = os.environ.get("AGENTHUB_CLI_MODEL_BASE_URL", "").strip()
-    if base_url:
-        try:
-            import httpx
-            started = _time.monotonic()
-            response = httpx.get(base_url, timeout=3.0, follow_redirects=False)
-            latency = round((_time.monotonic() - started) * 1000, 1)
-            checks["provider_network"] = {"ok": response.status_code < 500, "provider": provider or "configured", "latencyMs": latency, "statusCode": response.status_code}
-        except Exception:
-            checks["provider_network"] = {"ok": False, "provider": provider or "configured", "latencyMs": None}
-    else:
-        checks["provider_network"] = {"ok": True, "provider": provider or "mock", "skipped": True}
+    checks["sqlite"] = _doctor_sqlite(cwd, state)
+    checks["provider_network"] = _doctor_provider(cwd)
+    # The offline mock channel is a valid local configuration and should not
+    # be reported as missing credentials.  Real providers still require a key.
+    checks["model_credentials"]["ok"] = bool(
+        key_present or checks["provider_network"].get("provider") == "mock"
+    )
     checks["sandbox"] = {"ok": bool(shutil.which("python")), "available": bool(shutil.which("python"))}
     overall = all(bool(item.get("ok")) for item in checks.values() if not item.get("skipped"))
-    return {"schemaVersion": 1, "status": "ok" if overall else "degraded", "checks": checks}
+    return {"schemaVersion": 2, "version": __version__, "status": "ok" if overall else "degraded", "checks": checks}
 
 
 def cmd_doctor(cwd: Path, *, json_mode: bool = False) -> int:
@@ -516,8 +785,24 @@ def cmd_doctor(cwd: Path, *, json_mode: bool = False) -> int:
     else:
         checks = report["checks"]
         for name, item in checks.items():
-            detail = item.get("version") or item.get("path") or ("present" if item.get("present") else "not set")
-            print(f"{'ok' if item.get('ok') else 'missing':7} {name:20} {detail}")
+            if item.get("skipped"):
+                status = "SKIP"
+            elif item.get("ok"):
+                status = "PASS"
+            else:
+                status = "FAIL"
+            if name == "python_dependencies":
+                detail = f"{len(item.get('installed', {}))}/{item.get('required', 0)} installed"
+                if item.get("missing"):
+                    detail += f"; missing: {', '.join(item['missing'])}"
+            elif name == "git" and item.get("repository"):
+                detail = f"{item.get('branch') or '(detached)'} @ {item.get('head') or 'unknown'}"
+            else:
+                detail = (
+                    item.get("version") or item.get("path") or item.get("reason")
+                    or item.get("errorType") or ("configured" if item.get("present") else "not configured")
+                )
+            print(f"{status:4} {name:24} {detail}")
     return EXIT_OK if report["status"] == "ok" else EXIT_INFRA_ERROR
 
 

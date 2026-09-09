@@ -221,6 +221,7 @@ class RunnerCheckpointTests(unittest.IsolatedAsyncioTestCase):
             execution=execution,
             runner_id="runner-1",
             lease_id="lease-1",
+            slim_identical=True,
         )
 
         first = _checkpoint(execution=execution)
@@ -319,6 +320,7 @@ class RunnerCheckpointTests(unittest.IsolatedAsyncioTestCase):
             execution=execution,
             runner_id="runner-1",
             lease_id="lease-1",
+            slim_identical=True,
         )
 
         for sequence in (1, 2, 3):

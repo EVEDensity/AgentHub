@@ -22,7 +22,7 @@ class ContextBudget:
     total_chars: int = 12000
     reserved_output_chars: int = 4000
     total_tokens: int | None = None
-    compression_threshold: float = 0.70
+    compression_threshold: float = 0.75
 
     @property
     def input_chars(self) -> int:
@@ -77,6 +77,11 @@ class ContextManifest:
     estimated_tokens: int = 0
     compression_triggered: bool = False
     tokenizer_backend: str = "legacy-char-budget"
+    manifest_version: int = 1
+    compression_policy_version: str = "context-compression-v1"
+    tokenizer_exact: bool = False
+    source_digests: tuple[str, ...] = ()
+    summary_digests: tuple[str, ...] = ()
 
     def render(self) -> str:
         return "\n\n".join(message.content for message in self.messages)
@@ -99,6 +104,11 @@ class ContextManifest:
             "estimatedTokens": self.estimated_tokens,
             "compressionTriggered": self.compression_triggered,
             "tokenizerBackend": self.tokenizer_backend,
+            "manifestVersion": self.manifest_version,
+            "compressionPolicyVersion": self.compression_policy_version,
+            "tokenizerExact": self.tokenizer_exact,
+            "sourceDigests": list(self.source_digests),
+            "summaryDigests": list(self.summary_digests),
         }
 
 
@@ -155,23 +165,34 @@ class ContextCompiler:
         # ceiling using the selected provider tokenizer.
         return max(1, count_tokens("x" * self.char_budget, self.provider, self.model))
 
-    @staticmethod
-    def _tool_sources(tool_results: Sequence[Mapping[str, Any]]) -> list[ContextSource]:
+    def _tool_sources(self, tool_results: Sequence[Mapping[str, Any]]) -> list[ContextSource]:
         """Project tool output into raw, summary and lazy-reference layers."""
         sources: list[ContextSource] = []
+        tool_log_dir = self.directory / ".agenthub" / "context" / "tool-results"
         for index, result in enumerate(tool_results):
             name = str(result.get("tool_name") or result.get("name") or "tool")
             call_id = str(result.get("call_id") or result.get("callId") or index)
             raw_value = result.get("result", result.get("content", result.get("error", "")))
             raw = raw_value if isinstance(raw_value, str) else json.dumps(raw_value, ensure_ascii=False, sort_keys=True)
             digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-            success = bool(result.get("success", "error" not in result))
             summary = str(result.get("summary") or result.get("error") or compact_text(raw, max_chars=320))
             reference = f"[tool-result-ref] name={name} call_id={call_id} sha256={digest} chars={len(raw)}"
+            if len(raw) > 4000:
+                try:
+                    tool_log_dir.mkdir(parents=True, exist_ok=True)
+                    log_path = tool_log_dir / f"{digest}.log"
+                    if not log_path.exists():
+                        log_path.write_text(raw, encoding="utf-8")
+                    reference += f" path={log_path.as_posix()}"
+                except OSError:
+                    reference += " path=unavailable"
+                raw_for_prompt = ""
+            else:
+                raw_for_prompt = raw
             sources.extend((
                 ContextSource("tool_summary", f"tool-summary:{call_id}", f"{name}: {summary}", 58, reason="structured tool summary"),
                 ContextSource("tool_reference", f"tool-reference:{call_id}", reference, 56, reason="lazy tool result reference"),
-                ContextSource("tool_raw", f"tool-raw:{call_id}", raw, 52, reason="raw tool result"),
+                ContextSource("tool_raw", f"tool-raw:{call_id}", raw_for_prompt, 52, reason="raw tool result"),
             ))
         return sources
 
@@ -324,6 +345,9 @@ class ContextCompiler:
             estimated_tokens=sum(source.token_count for source in selected),
             compression_triggered=compression_triggered,
             tokenizer_backend=tokenizer_backend(self.provider, self.model),
+            tokenizer_exact=tokenizer_backend(self.provider, self.model) in {"tiktoken", "provider-custom"},
+            source_digests=tuple(_digest_source(source) for source in selected),
+            summary_digests=tuple(_digest_source(source) for source in selected if source.kind.endswith("summary") or source.reason == "auto-compressed"),
         )
 
     def _compile_legacy(self, candidates: list[ContextSource], records: list[Any]) -> ContextManifest:
@@ -376,7 +400,14 @@ class ContextCompiler:
             estimated_chars=self.char_budget - remaining,
             estimated_tokens=count_tokens("\n\n".join(item.text for item in selected), self.provider, self.model),
             tokenizer_backend="legacy-char-budget",
+            tokenizer_exact=False,
+            source_digests=tuple(_digest_source(source) for source in selected),
+            summary_digests=tuple(_digest_source(source) for source in selected if source.kind.endswith("summary")),
         )
+
+
+def _digest_source(source: ContextSource) -> str:
+    return hashlib.sha256(source.text.encode("utf-8")).hexdigest()
 
 
 __all__ = ["ContextBudget", "ContextCompiler", "ContextManifest", "ContextSource"]

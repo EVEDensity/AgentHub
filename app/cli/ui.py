@@ -37,6 +37,8 @@ from rich.syntax import Syntax
 from rich.theme import Theme
 from rich.text import Text
 
+from app.version import __version__
+
 # ── Theme ──────────────────────────────────────────────────────────────
 
 C_PRIMARY = "#E2E8F0"  # 冷白正文
@@ -123,7 +125,7 @@ def render_tool_approval(request: ToolApprovalRequest) -> RenderableType:
         lines.append(Text("Diff preview:", style=STYLE_ACCENT))
         for line in request.diff_preview.splitlines()[:80]:
             lines.append(Text(f"│ {line[:240]}", style=STYLE_MUTED))
-    lines.append(Text("[y] Allow Once  [a] Allow for Attempt  [s] Allow for Session  [e] Edit Command  [n] Deny", style=STYLE_ACCENT))
+    lines.append(Text("[y] Allow Once  [a] Allow Writes for Task  [n] Deny", style=STYLE_ACCENT))
     return Group(*lines)
 
 
@@ -292,7 +294,7 @@ def render_header(
     branch = git_branch(cwd)
     line = Text()
     line.append("✦ AgentHub", style=STYLE_BRAND)
-    line.append(" v1.0.0", style=STYLE_MUTED)
+    line.append(f" v{__version__}", style=STYLE_MUTED)
     if branch:
         line.append(" │ ", style=STYLE_MUTED)
         line.append(f"🌿 {branch}", style=STYLE_ACCENT)
@@ -557,6 +559,33 @@ def render_state_panel(state: Any) -> RenderableType:
         body.append(f"\ntext: {snapshot['assistantText']}", style=STYLE_PRIMARY)
     if snapshot.get("diagnostics"):
         body.append("\n" + "\n".join(snapshot["diagnostics"]), style=Style(color=C_WARN))
+    return Group(Text("│ ", style=STYLE_MUTED) + body)
+
+
+def render_snapshot_panel(snapshot: Any) -> RenderableType:
+    """Render a reducer ``RenderSnapshot`` without re-interpreting events."""
+    if not isinstance(snapshot, dict):
+        return Text("│ invalid render snapshot", style=Style(color=C_WARN))
+    summary_parts: list[str] = []
+    status = str(snapshot.get("status") or "idle")
+    if status:
+        summary_parts.append(status)
+    tools = snapshot.get("tools")
+    if isinstance(tools, list) and tools:
+        latest = tools[-1] if isinstance(tools[-1], dict) else {}
+        summary_parts.append(f"tool:{latest.get('name', 'unknown')} {latest.get('status', '')}".strip())
+    if snapshot.get("pendingDecision") is not None:
+        summary_parts.append("decision pending")
+    verification = str(snapshot.get("verificationStatus") or "")
+    if verification:
+        summary_parts.append(f"verification:{verification}")
+    body = Text(" · ".join(summary_parts) or "idle", style=STYLE_PRIMARY)
+    assistant_text = str(snapshot.get("assistantText") or "")
+    if assistant_text:
+        body.append(f"\n{assistant_text}", style=STYLE_PRIMARY)
+    diagnostics = snapshot.get("diagnostics")
+    if isinstance(diagnostics, list) and diagnostics:
+        body.append("\n" + "\n".join(str(item) for item in diagnostics), style=Style(color=C_WARN))
     return Group(Text("│ ", style=STYLE_MUTED) + body)
 
 

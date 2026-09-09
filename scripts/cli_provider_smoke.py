@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import uuid
+import re
 from pathlib import Path
 
 import httpx
@@ -21,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.production_evidence import new_evidence, write_evidence
+from app.errors import provider_error_matrix
 
 
 def main() -> int:
@@ -111,12 +113,10 @@ def main() -> int:
         except (AttributeError, httpx.ResponseNotRead, httpx.StreamError):
             pass
         detail = _redacted_error_detail(response)
-        error_kind = f"http_{response.status_code}"
-        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": error_kind, "statusCode": response.status_code, "detail": detail}, output_path)
+        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "detail": detail, **provider_error_matrix(exc, status_code=response.status_code)}, output_path)
         return 1
     except (httpx.HTTPError, OSError) as exc:
-        error_kind = type(exc).__name__
-        _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": error_kind}, output_path)
+        _emit_summary({"status": "FAIL", "provider": provider, "model": model, **provider_error_matrix(exc)}, output_path)
         return 1
     if tool_smoke and tool_calls == 0:
         _emit_summary({"status": "FAIL", "provider": provider, "model": model, "errorType": "missing_tool_call", "textChunks": chunks}, output_path)
@@ -231,6 +231,7 @@ def _redacted_error_detail(response: httpx.Response) -> str:
         except httpx.ResponseNotRead:
             value = "response body unavailable"
     text = str(value).replace("Bearer ", "Bearer <redacted>")
+    text = re.sub(r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|secret)\\s*[:=]\\s*[^\\s,;]+", r"\\1=<redacted>", text)
     return " ".join(text.split())[:300]
 
 

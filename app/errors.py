@@ -11,6 +11,8 @@ from enum import StrEnum
 from typing import Any
 
 import httpx
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 
 class ErrorCategory(StrEnum):
@@ -107,4 +109,61 @@ def error_envelope(
         return ErrorEnvelope("transport_error", ErrorCategory.TRANSPORT, True, safe_message, extra, request_id)
     return ErrorEnvelope("internal_error", ErrorCategory.INTERNAL, False, safe_message, extra, request_id)
 
-__all__ = ["ConfigError", "ErrorCategory", "ErrorEnvelope", "error_envelope"]
+
+def provider_error_matrix(
+    error: BaseException | None = None,
+    *,
+    status_code: int | None = None,
+    request_id: str = "",
+    retry_after: str | None = None,
+) -> dict[str, Any]:
+    """Return the stable, redacted provider error contract."""
+    response = getattr(error, "response", None) if error is not None else None
+    if status_code is None and error is not None:
+        status_code = _status_code(error)
+    if retry_after is None and response is not None:
+        retry_after = str((getattr(response, "headers", {}) or {}).get("retry-after", "")) or None
+    if not request_id and response is not None:
+        headers = getattr(response, "headers", {}) or {}
+        request_id = str(headers.get("x-request-id") or headers.get("request-id") or "")
+    if status_code == 429:
+        error_type, retryable = "rate_limited", True
+    elif status_code in {401, 403}:
+        error_type, retryable = ("authentication" if status_code == 401 else "permission_denied"), False
+    elif status_code in {408, 504} or isinstance(error, (httpx.TimeoutException, TimeoutError)):
+        error_type, retryable = "timeout", True
+    elif status_code is not None and 500 <= status_code <= 599:
+        error_type, retryable = "upstream_unavailable", True
+    elif isinstance(error, (httpx.ConnectError, httpx.ReadError, httpx.NetworkError)):
+        error_type, retryable = "transport_error", True
+    elif status_code in {400, 422}:
+        error_type, retryable = "invalid_request", False
+    else:
+        error_type, retryable = "provider_error", False
+    value: dict[str, Any] = {
+        "errorType": error_type,
+        "retryable": retryable,
+        "statusCode": status_code,
+        "requestId": request_id if request_id.startswith("req-") else "<redacted>",
+    }
+    seconds = _retry_after_seconds(retry_after)
+    if seconds is not None:
+        value["retryAfterSeconds"] = seconds
+    return value
+
+
+def _retry_after_seconds(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return max(0, int(float(value.strip())))
+    except (TypeError, ValueError):
+        try:
+            target = parsedate_to_datetime(value)
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=timezone.utc)
+            return max(0, int((target - datetime.now(timezone.utc)).total_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+__all__ = ["ConfigError", "ErrorCategory", "ErrorEnvelope", "error_envelope", "provider_error_matrix"]

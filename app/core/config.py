@@ -20,6 +20,8 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.version import __version__
+
 # ── Derive base paths ──────────────────────────────────────────────────
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent  # app/core → app → project root
 
@@ -252,7 +254,7 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────
     app_name: str = "AgentHub 多智能体协作平台"
-    app_version: str = "3.0-modular"
+    app_version: str = __version__
 
     # ── Environment ────────────────────────────────────────────────────
     env: Literal["development", "production", "test"] = Field(

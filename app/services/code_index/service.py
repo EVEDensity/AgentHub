@@ -7,6 +7,7 @@ glob implementation and callers receive ``None`` when they should fall back.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable
 
@@ -21,11 +22,23 @@ class CodeIndexService:
         self.workspace_root = Path(workspace_root).resolve()
         self.database_path = database_path or self.workspace_root / ".agenthub" / "code-index.sqlite3"
         self._store: CodeIndexStore | None = None
+        self._background_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agenthub-index")
+        self._closed = False
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._background_executor.shutdown(wait=True, cancel_futures=True)
         if self._store is not None:
             self._store.close()
             self._store = None
+
+    def update_background(self, changed_paths: Iterable[str | Path] | None = None, *, max_files: int | None = None) -> Future[IndexReport | None]:
+        """Schedule best-effort indexing without blocking CLI startup."""
+        if self._closed:
+            raise RuntimeError("code index service is closed")
+        return self._background_executor.submit(self.update, changed_paths, max_files=max_files)
 
     def update(self, changed_paths: Iterable[str | Path] | None = None, *, max_files: int | None = None) -> IndexReport | None:
         try:
@@ -45,3 +58,15 @@ class CodeIndexService:
             logger.warning("code index query unavailable; use file_search/file_glob fallback: %s", type(exc).__name__)
             return None
 
+    def find_symbol(self, query: str, *, limit: int = 50) -> list[dict[str, object]] | None:
+        """Best-effort symbol lookup for tool integrations."""
+        return self.search_symbols(query, limit=limit)
+
+    def get_definition(self, symbol: str, *, path: str | None = None) -> list[dict[str, object]] | None:
+        try:
+            store = self._store or CodeIndexStore(self.database_path)
+            self._store = store
+            return store.get_definition(symbol, path=path)
+        except (OSError, ValueError, RuntimeError):
+            logger.warning("code index definition lookup unavailable; use file search fallback")
+            return None

@@ -54,3 +54,25 @@ def test_context_length_error_uses_the_same_compression_trigger(tmp_path: Path) 
     )
 
     assert manifest.compression_triggered is True
+
+
+def test_large_tool_output_is_replaced_by_local_digest_reference(tmp_path: Path) -> None:
+    compiler = ContextCompiler(
+        tmp_path,
+        provider="openai",
+        model="gpt-4o",
+        token_budget=800,
+    )
+    raw = "line with durable evidence\n" * 400
+    manifest = compiler.compile(
+        current="inspect output",
+        tool_results=[{"name": "shell", "call_id": "c1", "result": raw}],
+    )
+
+    raw_sources = [source for source in manifest.sources if source.kind == "tool_raw"]
+    references = [source for source in manifest.sources if source.kind == "tool_reference"]
+    assert not raw_sources or raw_sources[0].text == ""
+    assert references and "sha256=" in references[0].text
+    reference_path = references[0].text.split(" path=", 1)[-1]
+    assert Path(reference_path).is_file()
+    assert Path(reference_path).read_text(encoding="utf-8") == raw

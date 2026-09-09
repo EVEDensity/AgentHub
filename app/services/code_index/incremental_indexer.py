@@ -48,15 +48,22 @@ class IncrementalIndexer:
                     continue
                 if not path.is_file() or path.stat().st_size > self.max_file_bytes:
                     continue
+                mtime_ns = path.stat().st_mtime_ns
+                signature = self.store.file_signature(relative)
+                if signature is not None and signature[1] == mtime_ns:
+                    unchanged += 1
+                    continue
                 digest = _sha256(path)
-                if self.store.file_hash(relative) == digest:
+                if signature is not None and signature[0] == digest:
+                    # A timestamp-only change does not require reparsing.
+                    self.store.touch_file(relative, mtime_ns)
                     unchanged += 1
                     continue
                 result = extract_symbols(path)
                 if result.parse_error:
                     failed += 1
                     continue
-                self.store.replace_file(relative, digest, result)
+                self.store.replace_file(relative, digest, result, mtime_ns=mtime_ns)
                 indexed += 1
             except (OSError, ValueError):
                 failed += 1

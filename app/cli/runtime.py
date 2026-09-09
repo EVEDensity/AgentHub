@@ -1064,6 +1064,14 @@ def prepare_resume_execution(
     resume_input = None
     if can_resume:
         from app.services.harness_service import HarnessResumeInput
+        checkpoint_iteration = int(checkpoint.get("iteration") or 0)
+        if checkpoint_iteration < 1:
+            return ResumeExecutionPlan(
+                mission_id, work_unit_id, attempt, lease_id, checkpoint,
+                related[0] if related else None, gate["receiptDecision"],
+                False, "checkpoint iteration must be greater than zero",
+                None, execution_context,
+            )
         recovered: tuple[Any, ...] = ()
         if isinstance(next_action, dict) and next_call_id and gate["receiptDecision"] == "already_succeeded":
             from app.services.model_contract import ToolResult
@@ -1073,7 +1081,7 @@ def prepare_resume_execution(
             attempt=attempt,
             next_action=next_action if isinstance(next_action, dict) else None,
             recovered_tool_results=recovered,
-            start_iteration=int(checkpoint.get("iteration") or 0),
+            start_iteration=checkpoint_iteration,
         )
     return ResumeExecutionPlan(
         mission_id,
@@ -1506,14 +1514,14 @@ def execute_objective(
                 # Resume is an execution handoff, never a new Mission.  The
                 # strict gate validates workspace/context fences, reacquires
                 # the WorkUnit lease and reconciles receipts before polling.
-                from app.services.tools.receipts import ToolReceiptStore
+                from app.services.tools.receipts import SQLiteToolReceiptStore
                 try:
                     resume_plan = prepare_resume_execution(
                         client,
                         resume_mission_id,
                         workspace_root,
                         expected_context_manifest_digest=None,
-                        receipt_store=ToolReceiptStore(state_dir / "receipts.json"),
+                        receipt_store=SQLiteToolReceiptStore(state_dir / "tool-receipts.sqlite3"),
                     )
                 except Exception as exc:
                     raise RuntimeError(f"cannot safely resume mission {resume_mission_id}: {type(exc).__name__}") from exc

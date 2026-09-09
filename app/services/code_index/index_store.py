@@ -28,6 +28,7 @@ class CodeIndexStore:
             CREATE TABLE IF NOT EXISTS files (
                 path TEXT PRIMARY KEY,
                 file_hash TEXT NOT NULL,
+                file_mtime_ns INTEGER NOT NULL DEFAULT 0,
                 language TEXT NOT NULL,
                 indexed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -59,23 +60,39 @@ class CodeIndexStore:
             CREATE INDEX IF NOT EXISTS idx_imports_module ON imports_index(module);
             """
         )
+        columns = {str(row["name"]) for row in self._connection.execute("PRAGMA table_info(files)")}
+        if "file_mtime_ns" not in columns:
+            self._connection.execute("ALTER TABLE files ADD COLUMN file_mtime_ns INTEGER NOT NULL DEFAULT 0")
         self._connection.commit()
 
     def file_hash(self, relative_path: str) -> str | None:
         row = self._connection.execute("SELECT file_hash FROM files WHERE path=?", (relative_path,)).fetchone()
         return str(row["file_hash"]) if row is not None else None
 
+    def file_signature(self, relative_path: str) -> tuple[str, int] | None:
+        row = self._connection.execute(
+            "SELECT file_hash, file_mtime_ns FROM files WHERE path=?", (relative_path,)
+        ).fetchone()
+        return None if row is None else (str(row["file_hash"]), int(row["file_mtime_ns"] or 0))
+
     def remove_file(self, relative_path: str) -> None:
         with self._connection:
             for table in ("definitions", "references_index", "imports_index", "files"):
                 self._connection.execute(f"DELETE FROM {table} WHERE path=?", (relative_path,))
 
-    def replace_file(self, relative_path: str, file_hash: str, result: ExtractionResult) -> None:
+    def touch_file(self, relative_path: str, mtime_ns: int) -> None:
+        with self._connection:
+            self._connection.execute(
+                "UPDATE files SET file_mtime_ns=?, indexed_at=CURRENT_TIMESTAMP WHERE path=?",
+                (mtime_ns, relative_path),
+            )
+
+    def replace_file(self, relative_path: str, file_hash: str, result: ExtractionResult, *, mtime_ns: int = 0) -> None:
         with self._connection:
             self.remove_file(relative_path)
             self._connection.execute(
-                "INSERT INTO files(path, file_hash, language) VALUES(?, ?, ?)",
-                (relative_path, file_hash, result.language),
+                "INSERT INTO files(path, file_hash, file_mtime_ns, language) VALUES(?, ?, ?, ?)",
+                (relative_path, file_hash, mtime_ns, result.language),
             )
             self._connection.executemany(
                 """INSERT INTO definitions(path, symbol, qualified_name, kind, line_start, line_end, signature)
@@ -102,6 +119,19 @@ class CodeIndexStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def find_symbol(self, query: str, *, limit: int = 50) -> list[dict[str, object]]:
+        """Find declarations by name or qualified name."""
+        return self.search_symbols(query, limit=limit)
+
+    def get_definition(self, symbol: str, *, path: str | None = None) -> list[dict[str, object]]:
+        query = "SELECT path, symbol, qualified_name, kind, line_start, line_end, signature FROM definitions WHERE (symbol=? OR qualified_name=?)"
+        params: list[object] = [symbol, symbol]
+        if path:
+            query += " AND path=?"
+            params.append(path)
+        query += " ORDER BY path, line_start LIMIT 50"
+        return [dict(row) for row in self._connection.execute(query, params).fetchall()]
+
     def search_references(self, symbol: str, *, limit: int = 100) -> list[dict[str, object]]:
         rows = self._connection.execute(
             """SELECT path, symbol, kind, line, column_number FROM references_index
@@ -112,4 +142,3 @@ class CodeIndexStore:
 
     def indexed_paths(self) -> set[str]:
         return {str(row["path"]) for row in self._connection.execute("SELECT path FROM files")}
-

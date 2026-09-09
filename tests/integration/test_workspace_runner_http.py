@@ -429,15 +429,13 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(repository.work_units[0].status.value, "VERIFYING")
         self.assertEqual(
             [checkpoint.sequence for checkpoint in repository.execution_checkpoints],
-            [1, 2, 3, 4, 5],
+            [1, 2, 3],
         )
         self.assertEqual(
             [checkpoint.phase.value for checkpoint in repository.execution_checkpoints],
             [
                 "harness.execution.started",
                 "harness.iteration.started",
-                "harness.model.started",
-                "harness.model.completed",
                 "harness.execution.completed",
             ],
         )
@@ -446,7 +444,7 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
             for event in repository.events
             if event.event_type == "work_unit.checkpoint.recorded"
         ]
-        self.assertEqual(len(checkpoint_events), 5)
+        self.assertEqual(len(checkpoint_events), 3)
         self.assertTrue(
             all("toolResults" not in event.payload for event in checkpoint_events)
         )
@@ -458,7 +456,7 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             [event.payload["sequence"] for event in checkpoint_events],
-            [1, 2, 3, 4, 5],
+            [1, 2, 3],
         )
         self.assertTrue(
             all(event.actor.id == "runner-a" for event in checkpoint_events)
@@ -606,10 +604,10 @@ class WorkspaceRunnerHttpIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([checkpoint.sequence for checkpoint in attempt_one], [1])
         self.assertEqual(
             [checkpoint.sequence for checkpoint in attempt_two],
-            [1, 2, 3, 4, 5],
+            [1, 2, 3],
         )
         self.assertNotEqual(attempt_one_checkpoint_id, attempt_two[0].id)
-        self.assertEqual(len(repository.execution_checkpoints), 6)
+        self.assertEqual(len(repository.execution_checkpoints), 4)
 
     async def test_concurrent_runners_execute_distinct_missions_then_observe_empty(self) -> None:
         repository = _AtomicMissionRepository(

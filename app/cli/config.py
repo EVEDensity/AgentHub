@@ -53,6 +53,9 @@ class ConfigResolver:
             provider
             or str(stored.get("provider") or "")
             or self.get("AGENTHUB_CLI_PROVIDER")
+            # Keep the pre-ConfigResolver variable as a read-only compatibility
+            # alias; all subsequent resolution still happens here.
+            or self.get("AGENTHUB_CLI_MODEL_PROVIDER")
             or ("openai" if api_key else "mock")
         )
         if not api_key and resolved_provider in provider_keys:

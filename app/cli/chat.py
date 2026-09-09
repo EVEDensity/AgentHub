@@ -66,6 +66,32 @@ from app.cli.errors import EXIT_INFRASTRUCTURE
 
 _PROMPT = "AgentHub ❯ "
 
+_LOCAL_WRITE_TOOLS = frozenset({
+    "file_write", "file_write_batch", "file_edit", "file_patch", "file_delete",
+    "apply_change_set", "code_execute", "command_execute", "shell", "git",
+})
+
+
+def _is_local_write_tool(tool_name: str, arguments: dict[str, Any]) -> bool:
+    """Classify side effects from structured tool metadata, never user prose."""
+    normalized = tool_name.strip().lower()
+    if normalized in _LOCAL_WRITE_TOOLS:
+        return True
+    if normalized in {"http_request", "network_request"}:
+        return str(arguments.get("method") or "GET").upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    return False
+
+
+def _tool_risk_summary(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Return a redacted local risk summary for approval metadata."""
+    try:
+        from app.services.guardrails import classify_tool_risk
+
+        result = classify_tool_risk(tool_name, arguments)
+        return "; ".join(flag.message for flag in result.flags[:3])
+    except Exception:  # noqa: BLE001 - approval UI must never block execution
+        return ""
+
 
 def _likely_side_effect_objective(objective: str) -> bool:
     """Return True only for explicit write/execute intent.
@@ -343,6 +369,7 @@ class ChatSessionState:
     compact_context: str | None = None
     compact_manifest: dict[str, Any] | None = None
     always_allow: bool = False
+    session_allow_writes: bool = False
     allowed_tools: set[str] = field(default_factory=set)
     allowed_paths: set[tuple[str, str]] = field(default_factory=set)
     denied_paths: set[tuple[str, str]] = field(default_factory=set)
@@ -1254,9 +1281,11 @@ def chat_session(
                 continue
         # P0-4: cancel signal — either set externally or via Esc/KbdInt
         cancel_event = threading.Event()
+        attempt_allow_writes = False
 
         def _on_decision(decision: dict[str, Any]) -> bool:
             """P0-3: ask the user whether to allow this tool call."""
+            nonlocal attempt_allow_writes
             if not (use_rich and console is not None and sys.stdin.isatty()):
                 # CI, redirected stdin, and JSON/headless paths fail closed.
                 return False
@@ -1264,6 +1293,9 @@ def chat_session(
                 return True
             arguments = decision.get("arguments") if isinstance(decision.get("arguments"), dict) else {}
             tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or arguments.get("tool_name") or "?")
+            write_tool = _is_local_write_tool(tool_name, arguments)
+            if write_tool and (attempt_allow_writes or session.session_allow_writes):
+                return True
             if tool_name in session.allowed_tools:
                 return True
             path = str(decision.get("path") or decision.get("filePath") or decision.get("file_path") or arguments.get("path") or arguments.get("file_path") or "")
@@ -1272,6 +1304,8 @@ def chat_session(
             if any(t == tool_name and fnmatch.fnmatch(path, pattern) for t, pattern in session.allowed_paths):
                 return True
             reason = str(decision.get("reason") or decision.get("riskSummary") or "")
+            if not reason:
+                reason = _tool_risk_summary(tool_name, arguments)
             request = ui.ToolApprovalRequest(
                 tool_name=tool_name,
                 path=path,
@@ -1284,11 +1318,10 @@ def chat_session(
             )
             choice = ui.confirm_tool_approval(console, read_line, request, is_tty=True)
             if choice == "session":
-                session.always_allow = True
-                session.allowed_tools.add(tool_name)
+                session.session_allow_writes = True
                 return True
             if choice == "attempt":
-                session.allowed_tools.add(tool_name)
+                attempt_allow_writes = True
                 return True
             if choice == "once":
                 return True

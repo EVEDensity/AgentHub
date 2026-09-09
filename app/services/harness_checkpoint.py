@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol
@@ -16,6 +17,25 @@ if TYPE_CHECKING:
 
 class HarnessError(RuntimeError):
     """Raised when a Harness cannot execute a bounded WorkUnit request."""
+
+
+def build_tool_idempotency_key(
+    execution: "HarnessExecutionContext | None",
+    tool_name: str,
+    arguments: dict[str, object] | Mapping[str, object],
+) -> str:
+    """Build the canonical execution-scoped tool receipt key."""
+    encoded = json.dumps(
+        dict(arguments),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    mission_id = execution.mission_id if execution is not None else "local"
+    work_unit_id = execution.work_unit_id if execution is not None else "default"
+    attempt = execution.attempt if execution is not None else 1
+    return f"{mission_id}/{work_unit_id}/{attempt}/{tool_name}/{digest}"
 
 
 @dataclass(frozen=True)
@@ -216,7 +236,11 @@ class _HarnessRecorder:
                 else None
             ),
             idempotency_key=(
-                f"{self._execution.mission_id}/{self._execution.work_unit_id}/{self._execution.attempt}/{tool_call.id}"
+                build_tool_idempotency_key(
+                    self._execution,
+                    tool_call.name,
+                    tool_call.arguments,
+                )
                 if event_type is HarnessEventType.TOOL_STARTED and tool_call is not None and self._execution is not None
                 else None
             ),

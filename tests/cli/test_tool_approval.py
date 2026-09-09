@@ -50,3 +50,8 @@ def test_interactive_options_are_tool_scoped() -> None:
     console = Console(file=StringIO(), force_terminal=False)
     decision = ui.confirm_tool_approval(console, lambda _prompt: next(answers), request, is_tty=True)
     assert decision == "session"
+
+
+def test_approval_card_uses_task_write_scope_label() -> None:
+    rendered = _render(ui.render_tool_approval(ui.ToolApprovalRequest(tool_name="file_write")), 80)
+    assert "Allow Writes for Task" in rendered

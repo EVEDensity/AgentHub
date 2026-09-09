@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -141,4 +143,136 @@ class ToolReceiptStore:
                 pass
 
 
-__all__ = ["ToolReceipt", "ToolReceiptStatus", "ToolReceiptStore"]
+class SQLiteToolReceiptStore:
+    """Multi-process local Receipt store backed by SQLite transactions.
+
+    ``claim_started`` uses ``BEGIN IMMEDIATE`` and a primary-key row so only
+    one process can acquire an absent idempotency key. Existing STARTED and
+    UNKNOWN rows are returned as ``unknown_outcome`` and are never replayed.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            self.path, timeout=10.0, isolation_level=None,
+            check_same_thread=False,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 10000")
+        return connection
+
+    def _initialize(self) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS tool_receipts (
+                    idempotency_key TEXT PRIMARY KEY,
+                    tool_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    error_type TEXT,
+                    result_digest TEXT
+                )"""
+            )
+
+    @staticmethod
+    def _from_row(row: sqlite3.Row | None, key: str) -> ToolReceipt | None:
+        if row is None:
+            return None
+        try:
+            return ToolReceipt(
+                idempotency_key=key,
+                tool_name=str(row["tool_name"]),
+                status=ToolReceiptStatus(str(row["status"])),
+                updated_at=float(row["updated_at"]),
+                error_type=row["error_type"],
+                result_digest=row["result_digest"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("tool receipt database contains an invalid row") from exc
+
+    def get(self, idempotency_key: str) -> ToolReceipt | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM tool_receipts WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+        return self._from_row(row, idempotency_key)
+
+    def claim_started(self, key: str, tool_name: str, now: float) -> str:
+        """Atomically claim a receipt row, returning a replay decision."""
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM tool_receipts WHERE idempotency_key = ?",
+                (key,),
+            ).fetchone()
+            if row is not None:
+                status = ToolReceiptStatus(str(row["status"]))
+                connection.execute("COMMIT")
+                if status is ToolReceiptStatus.SUCCEEDED:
+                    return "already_succeeded"
+                if status is ToolReceiptStatus.FAILED:
+                    return "previous_failure"
+                return "unknown_outcome"
+            connection.execute(
+                "INSERT INTO tool_receipts"
+                "(idempotency_key, tool_name, status, updated_at) VALUES (?, ?, ?, ?)",
+                (key, tool_name, ToolReceiptStatus.STARTED.value, now),
+            )
+            connection.execute("COMMIT")
+            return "execute"
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
+        finally:
+            connection.close()
+
+    def put(self, receipt: ToolReceipt) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO tool_receipts"
+                "(idempotency_key, tool_name, status, updated_at, error_type, result_digest)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(idempotency_key) DO UPDATE SET"
+                " tool_name=excluded.tool_name, status=excluded.status,"
+                " updated_at=excluded.updated_at, error_type=excluded.error_type,"
+                " result_digest=excluded.result_digest",
+                (receipt.idempotency_key, receipt.tool_name, receipt.status.value,
+                 receipt.updated_at, receipt.error_type, receipt.result_digest),
+            )
+            connection.execute("COMMIT")
+
+    def mark_started(self, key: str, tool_name: str, now: float) -> ToolReceipt:
+        decision = self.claim_started(key, tool_name, now)
+        if decision != "execute":
+            raise RuntimeError(f"receipt claim rejected: {decision}")
+        return self.get(key) or ToolReceipt(key, tool_name, ToolReceiptStatus.STARTED, now)
+
+    def mark_unknown(self, key: str, tool_name: str, now: float, *, error_type: str = "cancelled") -> ToolReceipt:
+        receipt = ToolReceipt(key, tool_name, ToolReceiptStatus.UNKNOWN, now, error_type=error_type)
+        self.put(receipt)
+        return receipt
+
+    def mark_failed(self, key: str, tool_name: str, now: float, *, error_type: str | None = None) -> ToolReceipt:
+        receipt = ToolReceipt(key, tool_name, ToolReceiptStatus.FAILED, now, error_type=error_type)
+        self.put(receipt)
+        return receipt
+
+    def replay_decision(self, key: str, *, strict: bool = False) -> str:
+        receipt = self.get(key)
+        if receipt is None or receipt.status is ToolReceiptStatus.NOT_STARTED:
+            return "execute"
+        if receipt.status is ToolReceiptStatus.SUCCEEDED:
+            return "already_succeeded"
+        if receipt.status is ToolReceiptStatus.FAILED:
+            return "previous_failure"
+        return "unknown_outcome"
+
+
+__all__ = ["ToolReceipt", "ToolReceiptStatus", "ToolReceiptStore", "SQLiteToolReceiptStore"]
