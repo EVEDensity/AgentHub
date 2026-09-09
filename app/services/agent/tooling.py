@@ -867,7 +867,10 @@ async def _stream_cloudcode_response(
                         # Execute the tool via AgentHub's tool executor
                         tool_args = tool_calls_list[0].get("arguments", {}) if tool_calls_list else {}
                         tool_result = await _execute_cli_tool(
-                            tool_name, tool_args, session_id,
+                            tool_name,
+                            tool_args,
+                            session_id,
+                            idempotency_key=f"cloudcode/{session_id}/{turn_id}/{tool_use_id}",
                         )
                         success = tool_result.get("success", False)
 
@@ -922,6 +925,8 @@ async def _execute_cli_tool(
     tool_name: str,
     arguments: dict[str, Any],
     session_id: str,
+    *,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Execute a tool on behalf of a CLI subprocess agent.
 
@@ -934,7 +939,11 @@ async def _execute_cli_tool(
     """
     try:
         from app.services.tool_executor import tool_executor
-        result = await tool_executor.execute(tool_name, arguments)
+        result = await tool_executor.execute(
+            tool_name,
+            arguments,
+            idempotency_key=idempotency_key,
+        )
         return result
     except Exception as exc:
         logger.warning(

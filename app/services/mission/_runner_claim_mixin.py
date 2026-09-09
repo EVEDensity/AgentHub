@@ -260,12 +260,25 @@ class MissionRunnerClaimMixin:
                     status=WorkspaceClaimStatus.CAPACITY_SATURATED,
                     work_unit=None,
                 )
-            selection = await repository.get_workspace_bound_work_unit_for_claim(
-                workspace_id,
-                agent_id=agent_id,
-                adapter_type=adapter_type,
-                supported_work_unit_kinds=supported_work_unit_kinds,
-            )
+            try:
+                selection = await repository.get_workspace_bound_work_unit_for_claim(
+                    workspace_id,
+                    agent_id=agent_id,
+                    adapter_type=adapter_type,
+                    supported_work_unit_kinds=supported_work_unit_kinds,
+                    runner_id=runner_id,
+                )
+            except TypeError as exc:
+                # Older repository adapters/test doubles do not expose the
+                # optional resume fence; retain their normal claim behavior.
+                if "runner_id" not in str(exc):
+                    raise
+                selection = await repository.get_workspace_bound_work_unit_for_claim(
+                    workspace_id,
+                    agent_id=agent_id,
+                    adapter_type=adapter_type,
+                    supported_work_unit_kinds=supported_work_unit_kinds,
+                )
             if selection is None:
                 return WorkUnitClaimOutcome(
                     status=WorkspaceClaimStatus.IDLE,
@@ -275,6 +288,19 @@ class MissionRunnerClaimMixin:
             if mission.workspace_id != workspace_id:
                 raise WorkUnitNotReadyError(
                     "claim repository returned a Mission from another workspace"
+                )
+            # A resume claim may return an existing unexpired lease owned by
+            # this runner. Preserve its attempt/lease instead of incrementing
+            # the attempt through the normal leasing transition.
+            if (
+                work_unit.status in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING}
+                and work_unit.lease is not None
+                and work_unit.lease.runner_id == runner_id
+                and work_unit.lease.expires_at > datetime.now(timezone.utc)
+            ):
+                return WorkUnitClaimOutcome(
+                    status=WorkspaceClaimStatus.CLAIMED,
+                    work_unit=work_unit,
                 )
             return WorkUnitClaimOutcome(
                 status=WorkspaceClaimStatus.CLAIMED,

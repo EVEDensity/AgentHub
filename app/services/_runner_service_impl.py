@@ -19,10 +19,12 @@ from app.services.harness_service import (
     HarnessExecutionContext,
     HarnessPort,
     HarnessRequest,
+    HarnessResumeInput,
     SandboxHarness,
 )
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
 from app.services.workspace_admission_service import WorkspaceClaimStatus
+from app.services.workspace_fingerprint import context_manifest_digest, workspace_revision
 
 
 class RunnerError(RuntimeError):
@@ -123,6 +125,11 @@ class MissionControlRunnerPort(Protocol):
         failure_reason: str | None,
         tool_name: str | None = None,
         tool_success: bool | None = None,
+        resume_protocol_version: int | None = None,
+        next_action: dict[str, object] | None = None,
+        idempotency_key: str | None = None,
+        workspace_revision: str | None = None,
+        context_manifest_digest: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def register_artifact(
@@ -181,6 +188,7 @@ class RunnerExecutionInput:
     language: str = "python"
     timeout: float = 30.0
     cwd: Path | None = None
+    resume: HarnessResumeInput | None = None
 
 
 @dataclass(frozen=True)
@@ -304,11 +312,59 @@ class _ClaimedModelWorkResolver:
             raise ClaimedWorkResolutionError(
                 "claimed Harness factory returned an invalid Harness"
             )
+        resume_input = None
+        checkpoint = context.get("checkpoint")
+        if isinstance(checkpoint, Mapping):
+            from app.services.harness_service import HarnessResumeInput
+            from app.services.model_contract import ToolResult
+            action = checkpoint.get("nextAction") or checkpoint.get("next_action")
+            call_id = str((action or {}).get("callId") or (action or {}).get("call_id") or "") if isinstance(action, Mapping) else ""
+            idempotency_key = str(
+                checkpoint.get("idempotencyKey")
+                or checkpoint.get("idempotency_key")
+                or ""
+            )
+            receipt_decision = str(checkpoint.get("receiptDecision") or "")
+            # The local receipt journal is authoritative for side-effecting
+            # tools. STARTED/UNKNOWN/FAILED outcomes are ambiguous and must
+            # stop recovery rather than replaying a command or file write.
+            if idempotency_key and not receipt_decision:
+                import os
+                from pathlib import Path
+                from app.services.tools.receipts import ToolReceiptStore
+
+                data_root = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
+                if data_root:
+                    receipt_decision = ToolReceiptStore(
+                        Path(data_root).parent / "tool-receipts.json"
+                    ).replay_decision(idempotency_key, strict=True)
+            if receipt_decision in {"unknown_outcome", "previous_failure"}:
+                raise ClaimedWorkResolutionError(
+                    "checkpoint tool receipt is not safely replayable"
+                )
+            recovered = ()
+            if call_id and receipt_decision == "already_succeeded":
+                recovered = (
+                    ToolResult(
+                        call_id=call_id,
+                        name=str((action or {}).get("toolName") or "recovered-tool"),
+                        success=True,
+                        content="[recovered receipt; side effect not replayed]",
+                    ),
+                )
+            resume_input = HarnessResumeInput(
+                checkpoint_id=str(checkpoint.get("id") or checkpoint.get("checkpointId") or ""),
+                attempt=int(checkpoint.get("attempt") or claimed_work_unit.get("attempt") or 0),
+                next_action=dict(action) if isinstance(action, Mapping) else None,
+                recovered_tool_results=recovered,
+                start_iteration=int(checkpoint.get("iteration") or 0),
+            ) if checkpoint.get("id") or checkpoint.get("checkpointId") else None
         return ClaimedWorkExecution(
             execution_input=RunnerExecutionInput(
                 code=prompt,
                 language="text",
                 timeout=timeout,
+                resume=resume_input,
             ),
             harness=harness,
         )
@@ -528,6 +584,11 @@ class MissionControlRunnerClient:
         failure_reason: str | None,
         tool_name: str | None = None,
         tool_success: bool | None = None,
+        resume_protocol_version: int | None = None,
+        next_action: dict[str, object] | None = None,
+        idempotency_key: str | None = None,
+        workspace_revision: str | None = None,
+        context_manifest_digest: str | None = None,
     ) -> dict[str, Any]:
         del runner_id
         payload: dict[str, Any] = {
@@ -548,6 +609,16 @@ class MissionControlRunnerClient:
             payload["toolName"] = tool_name
         if tool_success is not None:
             payload["toolSuccess"] = tool_success
+        if resume_protocol_version is not None:
+            payload["resumeProtocolVersion"] = resume_protocol_version
+        if next_action is not None:
+            payload["nextAction"] = next_action
+        if idempotency_key is not None:
+            payload["idempotencyKey"] = idempotency_key
+        if workspace_revision is not None:
+            payload["workspaceRevision"] = workspace_revision
+        if context_manifest_digest is not None:
+            payload["contextManifestDigest"] = context_manifest_digest
         return await self._request(
             "POST",
             f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/checkpoints",
@@ -787,6 +858,40 @@ class WorkUnitRunner:
             harness=self._harness,
         )
 
+    async def resume(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        leased: Mapping[str, Any],
+        code: str,
+        language: str = "text",
+        timeout: float = 30.0,
+        cwd: Path | None = None,
+        resume: HarnessResumeInput,
+        lease_seconds: int = 300,
+        artifact_kind: str = "test-result",
+        media_type: str = "text/plain",
+        harness: HarnessPort | None = None,
+    ) -> RunnerRunResult:
+        """Continue a checkpointed turn under an existing lease."""
+        if not isinstance(resume, HarnessResumeInput):
+            raise TypeError("resume must be a HarnessResumeInput")
+        return await self._run_leased(
+            mission_id,
+            work_unit_id,
+            leased,
+            code=code,
+            language=language,
+            timeout=timeout,
+            cwd=cwd,
+            lease_seconds=lease_seconds,
+            artifact_kind=artifact_kind,
+            media_type=media_type,
+            harness=harness or self._harness,
+            resume=resume,
+        )
+
     async def claim_and_run(
         self,
         mission_id: str,
@@ -896,6 +1001,9 @@ class WorkUnitRunner:
         if not isinstance(work_unit_id, str) or not work_unit_id:
             raise RunnerControlError("Mission Control claim response has no WorkUnit id")
         lease = _lease_context(work_unit_payload)
+        lease_payload = work_unit_payload.get("lease")
+        if not isinstance(lease_payload, Mapping) or str(lease_payload.get("runnerId") or "") != self._runner_id:
+            raise RunnerControlError("claimed WorkUnit lease belongs to another runner")
         resolver = self._claimed_work_resolver
         if resolver is None:
             await self._fail(
@@ -940,6 +1048,7 @@ class WorkUnitRunner:
             language=execution_input.language,
             timeout=execution_input.timeout,
             cwd=execution_input.cwd,
+            resume=execution_input.resume,
             lease_seconds=lease_seconds,
             artifact_kind=artifact_kind,
             media_type=media_type,
@@ -960,15 +1069,22 @@ class WorkUnitRunner:
         artifact_kind: str,
         media_type: str,
         harness: HarnessPort,
+        resume: HarnessResumeInput | None = None,
     ) -> RunnerRunResult:
         lease = _lease_context(leased)
-        started = await self._control.start_work_unit(
-            mission_id,
-            work_unit_id,
-            runner_id=self._runner_id,
-            lease_id=lease.lease_id,
-        )
-        _assert_lease_context(started, lease)
+        # A resumed claim may already be RUNNING. Starting it again would be
+        # an invalid transition and could lose the checkpoint lineage.
+        current_status = str(leased.get("status") or "").upper()
+        if current_status == "RUNNING":
+            started = leased
+        else:
+            started = await self._control.start_work_unit(
+                mission_id,
+                work_unit_id,
+                runner_id=self._runner_id,
+                lease_id=lease.lease_id,
+            )
+            _assert_lease_context(started, lease)
 
         try:
             result = await self._execute_with_supervision(
@@ -981,6 +1097,7 @@ class WorkUnitRunner:
                 cwd=cwd,
                 lease_seconds=lease_seconds,
                 harness=harness,
+                resume=resume,
             )
         except asyncio.CancelledError:
             with suppress(RunnerControlError):
@@ -1073,6 +1190,7 @@ class WorkUnitRunner:
         cwd: Path | None,
         lease_seconds: int,
         harness: HarnessPort,
+        resume: HarnessResumeInput | None = None,
     ) -> SandboxResult:
         execution_task = asyncio.create_task(
             harness.execute(
@@ -1087,6 +1205,9 @@ class WorkUnitRunner:
                         attempt=lease.attempt,
                     ),
                     on_text_delta=self._on_text_delta,
+                    resume=resume,
+                    workspace_revision=workspace_revision(cwd or Path.cwd()),
+                    context_manifest_digest=context_manifest_digest(code),
                 )
             )
         )

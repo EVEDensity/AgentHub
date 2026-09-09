@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ast
+import asyncio
 import os
 import shutil
 import uuid
@@ -70,6 +71,20 @@ async def apply_change_set_handler(changes: list[dict[str, Any]]) -> dict[str, A
     transaction = root / ".agenthub" / "change-transactions" / uuid.uuid4().hex
     transaction.mkdir(parents=True, exist_ok=True)
     written: list[dict[str, Any]] = []
+    def rollback_written() -> list[str]:
+        errors: list[str] = []
+        for item in reversed(written):
+            safe = item["safe"]
+            try:
+                if item["before"] is None:
+                    safe.unlink(missing_ok=True)
+                else:
+                    safe.write_bytes(item["before"])
+                    if item["mode"] is not None:
+                        os.chmod(safe, item["mode"])
+            except OSError:
+                errors.append(item["path"])
+        return errors
     try:
         for item in prepared:
             safe = item["safe"]
@@ -96,19 +111,14 @@ async def apply_change_set_handler(changes: list[dict[str, Any]]) -> dict[str, A
             "result": f"已原子写入 {len(results)} 个文件",
             "metadata": {"transaction_id": transaction.name, "files": results, "verification": verification},
         }
+    except asyncio.CancelledError:
+        # Cancellation is a hard stop, but never leave a partially applied
+        # change set behind. Restore every file written in this transaction
+        # before propagating cancellation to the Runner.
+        rollback_written()
+        raise
     except (OSError, UnicodeError) as exc:
-        rollback_errors: list[str] = []
-        for item in reversed(written):
-            safe = item["safe"]
-            try:
-                if item["before"] is None:
-                    safe.unlink(missing_ok=True)
-                else:
-                    safe.write_bytes(item["before"])
-                    if item["mode"] is not None:
-                        os.chmod(safe, item["mode"])
-            except OSError:
-                rollback_errors.append(item["path"])
+        rollback_errors = rollback_written()
         return {
             "success": False,
             "error": f"变更集写入失败，已回滚{('，回滚失败: ' + ', '.join(rollback_errors)) if rollback_errors else ''}: {exc}",

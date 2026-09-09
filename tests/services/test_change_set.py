@@ -150,3 +150,30 @@ def test_change_set_rolls_back_when_post_write_syntax_check_fails(tmp_path: Path
     assert result["success"] is False
     assert "验证失败" in result["error"]
     assert target.read_text(encoding="utf-8") == "value = 1\n"
+
+
+def test_change_set_cancellation_rolls_back_partial_writes(tmp_path: Path) -> None:
+    first = tmp_path / "first.txt"
+    first.write_text("before\n", encoding="utf-8")
+    real_replace = __import__("os").replace
+    calls = 0
+
+    def cancel_on_second_replace(src, dst):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise asyncio.CancelledError()
+        return real_replace(src, dst)
+
+    with workspace_root_override(tmp_path), patch("app.services.tools.change_set.os.replace", side_effect=cancel_on_second_replace):
+        try:
+            asyncio.run(apply_change_set_handler([
+                {"path": "first.txt", "content": "after\n", "expected_sha256": _sha(first)},
+                {"path": "second.txt", "content": "new\n", "expected_sha256": ""},
+            ]))
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("cancellation was swallowed")
+    assert first.read_text(encoding="utf-8") == "before\n"
+    assert not (tmp_path / "second.txt").exists()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -287,18 +288,8 @@ class MissionRepository:
                         else candidate.correlation_id
                     )
                     await mission_event_bus.notify(str(mission_id or ""))
-                    # PostgreSQL deployments can wake subscribers in other
-                    # processes. SQLite/HTTP SQL profiles reject pg_notify;
-                    # that optional failure is intentionally ignored.
-                    if mission_id:
-                        try:
-                            await self._execute(
-                                "SELECT pg_notify($1, $2)",
-                                "agenthub_mission_events",
-                                str(mission_id),
-                            )
-                        except Exception:
-                            pass
+                    # Cross-process notifications are handled by the runner
+                    # controller listener; the repository remains storage-only.
                 except Exception:
                     # Persistence must not fail because an optional local
                     # notification subscriber is unavailable.
@@ -708,10 +699,11 @@ class MissionRepository:
                    id, mission_id, work_unit_id, attempt, sequence, phase,
                    iteration, tool_calls, prompt_tokens, completion_tokens,
                    model_cost, terminal, failure_reason, state_digest,
-                   created_by, created_at
+                   resume_protocol_version, next_action, idempotency_key,
+                   workspace_revision, context_manifest_digest, created_by, created_at
                ) VALUES(
                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                   $13, $14, $15::jsonb, $16
+                   $13, $14, $15, $16::jsonb, $17, $18, $19, $20::jsonb, $21
                )""",
             checkpoint.id,
             checkpoint.mission_id,
@@ -727,6 +719,11 @@ class MissionRepository:
             checkpoint.terminal,
             checkpoint.failure_reason,
             checkpoint.state_digest,
+            checkpoint.resume_protocol_version,
+            _encode_json(checkpoint.next_action) if checkpoint.next_action is not None else None,
+            checkpoint.idempotency_key,
+            checkpoint.workspace_revision,
+            checkpoint.context_manifest_digest,
             _encode_json(checkpoint.created_by.to_public_dict()),
             checkpoint.created_at,
         )
@@ -739,7 +736,8 @@ class MissionRepository:
             """SELECT id, mission_id, work_unit_id, attempt, sequence, phase,
                       iteration, tool_calls, prompt_tokens, completion_tokens,
                       model_cost, terminal, failure_reason, state_digest,
-                      created_by, created_at
+                      resume_protocol_version, next_action, idempotency_key,
+                      workspace_revision, context_manifest_digest, created_by, created_at
                FROM execution_checkpoints WHERE id=$1""",
             checkpoint_id,
         )
@@ -754,7 +752,8 @@ class MissionRepository:
             """SELECT id, mission_id, work_unit_id, attempt, sequence, phase,
                       iteration, tool_calls, prompt_tokens, completion_tokens,
                       model_cost, terminal, failure_reason, state_digest,
-                      created_by, created_at
+                      resume_protocol_version, next_action, idempotency_key,
+                      workspace_revision, context_manifest_digest, created_by, created_at
                FROM execution_checkpoints
                WHERE work_unit_id=$1 AND attempt=$2
                ORDER BY sequence DESC LIMIT 1""",
@@ -762,6 +761,34 @@ class MissionRepository:
             attempt,
         )
         return self._execution_checkpoint_from_row(row) if row is not None else None
+
+    async def list_execution_checkpoints(
+        self,
+        mission_id: str,
+        *,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[ExecutionCheckpoint]:
+        """List durable execution checkpoints for resume and diagnostics."""
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        rows = await self._fetch_all(
+            """SELECT id, mission_id, work_unit_id, attempt, sequence, phase,
+                      iteration, tool_calls, prompt_tokens, completion_tokens,
+                      model_cost, terminal, failure_reason, state_digest,
+                      resume_protocol_version, next_action, idempotency_key,
+                      workspace_revision, context_manifest_digest, created_by, created_at
+               FROM execution_checkpoints
+               WHERE mission_id=$1
+               ORDER BY created_at ASC, id ASC
+               LIMIT $2 OFFSET $3""",
+            mission_id,
+            limit,
+            offset,
+        )
+        return [self._execution_checkpoint_from_row(row) for row in rows]
 
     async def get_artifact(self, artifact_id: str) -> Artifact | None:
         row = await self._fetch_one(
@@ -923,6 +950,10 @@ class MissionRepository:
         now = datetime.now(timezone.utc)
         for row in rows:
             expires_at = self._sqlite_lease_expires_at(row)
+            if str(row.get("status") or "") == "LEASED" and expires_at is None:
+                # A leased row without a parseable expiry is ambiguous; never
+                # hand it to a Runner for replay.
+                continue
             if expires_at is not None and expires_at <= now:
                 continue
             return row
@@ -1039,16 +1070,37 @@ class MissionRepository:
         agent_id: str,
         adapter_type: str,
         supported_work_unit_kinds: tuple[str, ...],
+        runner_id: str | None = None,
     ) -> tuple[Mission, WorkUnit] | None:
-        """Lock one fairly ordered ready unit and its owning Mission."""
+        """Lock one ready unit, optionally reopening this runner's lease.
+
+        A normal claim only considers ``PENDING``/``RETRYING`` rows.  Resume
+        callers may pass ``runner_id`` to include a still-valid ``LEASED``
+        row, but only when its durable lease belongs to that same runner.
+        This prevents another process from stealing an in-flight execution.
+        """
+        include_leased = bool(runner_id and runner_id.strip())
 
         if self._is_sqlite_connection():
             kinds = list(supported_work_unit_kinds)
+            kind_offset = 5 if include_leased else 4
             kind_placeholders = ", ".join(
-                f"${4 + index}" for index in range(len(kinds))
+                f"${kind_offset + index}" for index in range(len(kinds))
             )
-            row = self._first_claimable_row(
-                await self._fetch_all(
+            status_clause = (
+                "AND (candidate.status IN ('PENDING', 'RETRYING') OR ("
+                "candidate.status IN ('LEASED', 'RUNNING') AND candidate.lease IS NOT NULL "
+                "AND json_extract(candidate.lease, '$.runnerId')=$4))"
+                if include_leased
+                else "AND candidate.status IN ('PENDING', 'RETRYING')"
+            )
+            query_args = (
+                [workspace_id, agent_id, adapter_type, runner_id, *kinds]
+                if include_leased
+                else [workspace_id, agent_id, adapter_type, *kinds]
+            )
+            try:
+                candidate_rows = await self._fetch_all(
                     f"""SELECT
                               mission.id AS selected_mission_id,
                               mission.workspace_id AS selected_workspace_id,
@@ -1103,7 +1155,7 @@ class MissionRepository:
                          AND candidate.assigned_agent_id=$2
                          AND candidate.assigned_adapter=$3
                          AND candidate.kind IN ({kind_placeholders})
-                         AND candidate.status IN ('PENDING', 'RETRYING')
+                         {status_clause}
                          AND NOT EXISTS (
                              SELECT 1
                              FROM json_each(candidate.dependencies) AS dep
@@ -1123,17 +1175,35 @@ class MissionRepository:
                        mission.id ASC,
                        candidate.id ASC
                        LIMIT 32""",
-                    workspace_id,
-                    agent_id,
-                    adapter_type,
-                    *kinds,
+                    *query_args,
                 )
-            )
+            except sqlite3.OperationalError as exc:
+                # SQLite's json_extract raises on corrupt lease JSON. Such a
+                # row is ambiguous and must be treated as unavailable rather
+                # than allowing a claim path to crash or replay work.
+                if "malformed JSON" in str(exc):
+                    return None
+                raise
+            row = self._first_claimable_row(candidate_rows)
             if row is None:
                 return None
             return self._mission_from_claim_row(row), self._work_unit_from_row(row)
+        status_clause = (
+            "AND (candidate.status IN ('PENDING', 'RETRYING') OR ("
+            "candidate.status IN ('LEASED', 'RUNNING') AND candidate.lease IS NOT NULL "
+            "AND candidate.lease->>'runnerId'=$4 "
+            "AND (candidate.lease->>'expiresAt')::timestamptz > CURRENT_TIMESTAMP))"
+            if include_leased
+            else "AND candidate.status IN ('PENDING', 'RETRYING')"
+        )
+        kind_array_placeholder = "$5" if include_leased else "$4"
+        query_args = (
+            [workspace_id, agent_id, adapter_type, runner_id, list(supported_work_unit_kinds)]
+            if include_leased
+            else [workspace_id, agent_id, adapter_type, list(supported_work_unit_kinds)]
+        )
         row = await self._fetch_one(
-            """SELECT
+            f"""SELECT
                       mission.id AS selected_mission_id,
                       mission.workspace_id AS selected_workspace_id,
                       mission.title AS selected_title,
@@ -1186,8 +1256,8 @@ class MissionRepository:
                  )
                  AND candidate.assigned_agent_id=$2
                  AND candidate.assigned_adapter=$3
-                 AND candidate.kind = ANY($4::text[])
-                 AND candidate.status IN ('PENDING', 'RETRYING')
+                 AND candidate.kind = ANY({kind_array_placeholder}::text[])
+               {status_clause}
                  AND NOT EXISTS (
                      SELECT 1
                      FROM jsonb_array_elements_text(candidate.dependencies) AS dep(id)
@@ -1208,10 +1278,7 @@ class MissionRepository:
                candidate.id ASC
                LIMIT 1
                FOR UPDATE OF mission, candidate SKIP LOCKED""",
-            workspace_id,
-            agent_id,
-            adapter_type,
-            list(supported_work_unit_kinds),
+            *query_args,
         )
         if row is None:
             return None
@@ -1414,6 +1481,11 @@ class MissionRepository:
                 "terminal": row["terminal"],
                 "failure_reason": row["failure_reason"],
                 "state_digest": row["state_digest"],
+                "resume_protocol_version": row.get("resume_protocol_version"),
+                "next_action": _decode_json_object(row["next_action"], "next_action") if row.get("next_action") is not None else None,
+                "idempotency_key": row.get("idempotency_key"),
+                "workspace_revision": row.get("workspace_revision"),
+                "context_manifest_digest": row.get("context_manifest_digest"),
                 "created_by": _decode_json_object(row["created_by"], "created_by"),
                 "created_at": row["created_at"],
             }

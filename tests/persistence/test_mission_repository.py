@@ -794,6 +794,47 @@ class MissionRepositoryTests(unittest.IsolatedAsyncioTestCase):
             ("workspace-1", "reviewer", "local_codex", ["code_change"]),
         )
 
+    async def test_workspace_resume_claim_is_fenced_to_runner_and_lease(self) -> None:
+        mission = build_mission(workspace_id="workspace-1", status="RUNNING")
+        lease = Lease(
+            id="lease-1",
+            runner_id="runner-1",
+            expires_at=datetime.now().astimezone() + timedelta(minutes=5),
+        )
+        work_unit = build_work_unit(
+            id="wu-resume",
+            mission_id=mission.id,
+            status="LEASED",
+            attempt=2,
+            lease=lease,
+            assigned_agent_id="reviewer",
+            assigned_adapter="local_codex",
+        )
+        row = self.build_work_unit_row(work_unit)
+        row.update(
+            {
+                f"selected_{'mission_id' if name == 'id' else name}": value
+                for name, value in self.build_mission_row(mission).items()
+            }
+        )
+        self.database.one = row
+
+        selection = await self.repository.get_workspace_bound_work_unit_for_claim(
+            "workspace-1",
+            agent_id="reviewer",
+            adapter_type="local_codex",
+            supported_work_unit_kinds=("code_change",),
+            runner_id="runner-1",
+        )
+
+        assert selection == (mission, work_unit)
+        sql, args = self.database.fetched_one[-1]
+        assert "candidate.status IN ('LEASED', 'RUNNING')" in sql
+        assert "candidate.lease->>'runnerId'=$4" in sql
+        assert "expiresAt" in sql
+        assert "candidate.kind = ANY($5::text[])" in sql
+        assert args == ("workspace-1", "reviewer", "local_codex", "runner-1", ["code_change"])
+
     async def test_verification_candidate_is_scoped_ordered_and_short_locked(
         self,
     ) -> None:

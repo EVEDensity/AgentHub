@@ -25,6 +25,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable
+from dataclasses import dataclass
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
@@ -82,6 +83,80 @@ STATUS_COLOR = {
 _CONFIRM_YES = ("y", "yes", "1")
 _CONFIRM_NO = ("n", "no", "2")
 _CONFIRM_ALWAYS = ("a", "always", "3")
+_TOOL_ALLOW_ONCE = ("y", "yes", "1")
+_TOOL_ALLOW_ATTEMPT = ("a", "attempt")
+_TOOL_ALLOW_SESSION = ("s", "session")
+_TOOL_EDIT = ("e", "edit")
+_TOOL_DENY = ("n", "no", "2")
+
+
+@dataclass(frozen=True)
+class ToolApprovalRequest:
+    """Structured metadata shown before a side-effecting tool executes."""
+
+    tool_name: str
+    path: str = ""
+    expected_sha256: str = ""
+    action: str = ""
+    command: str = ""
+    url: str = ""
+    diff_preview: str = ""
+    risk: str = ""
+
+
+def render_tool_approval(request: ToolApprovalRequest) -> RenderableType:
+    """Render a narrow, metadata-only approval card with optional diff."""
+    lines = [Text(f"[Tool: {request.tool_name}]", style=STYLE_BRAND)]
+    if request.path:
+        lines.append(Text(f"Path: {request.path}", style=STYLE_PRIMARY))
+    if request.expected_sha256:
+        lines.append(Text(f"Expected SHA: {request.expected_sha256[:16]}", style=STYLE_MUTED))
+    if request.action:
+        lines.append(Text(f"Action: {request.action}", style=STYLE_PRIMARY))
+    if request.command:
+        lines.append(Text(f"Command: {request.command[:240]}", style=STYLE_PRIMARY))
+    if request.url:
+        lines.append(Text(f"URL: {request.url[:240]}", style=STYLE_PRIMARY))
+    if request.risk:
+        lines.append(Text(f"Risk: {request.risk[:240]}", style=Style(color=C_WARN)))
+    if request.diff_preview:
+        lines.append(Text("Diff preview:", style=STYLE_ACCENT))
+        for line in request.diff_preview.splitlines()[:80]:
+            lines.append(Text(f"│ {line[:240]}", style=STYLE_MUTED))
+    lines.append(Text("[y] Allow Once  [a] Allow for Attempt  [s] Allow for Session  [e] Edit Command  [n] Deny", style=STYLE_ACCENT))
+    return Group(*lines)
+
+
+def confirm_tool_approval(
+    console: Console,
+    read_line: Callable[[str], str],
+    request: ToolApprovalRequest,
+    *,
+    is_tty: bool = True,
+) -> str:
+    """Return one of ``once``, ``attempt``, ``session``, ``edit``, ``deny``.
+
+    Non-interactive callers fail closed without reading stdin.
+    """
+    if not is_tty:
+        return "deny"
+    console.print(render_tool_approval(request))
+    while True:
+        try:
+            answer = read_line("approval > " ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return "deny"
+        if answer in _TOOL_ALLOW_ONCE:
+            return "once"
+        if answer in _TOOL_ALLOW_ATTEMPT:
+            return "attempt"
+        if answer in _TOOL_ALLOW_SESSION:
+            return "session"
+        if answer in _TOOL_EDIT:
+            return "edit"
+        if answer in _TOOL_DENY:
+            return "deny"
+        console.print("  choose y/a/s/e/n", style=STYLE_MUTED)
 
 
 # ── Git context ───────────────────────────────────────────────────────
@@ -242,6 +317,7 @@ class _StatusRenderable:
         self._state_hint = ""
         self._tool_hint = ""
         self._tool_result = ""
+        self._assistant_text = ""
 
     def update_status(self, status: str) -> None:
         self._last_status = status
@@ -258,6 +334,24 @@ class _StatusRenderable:
                     str(latest.get("name") or "tool"),
                     str(latest.get("output") or "") if latest.get("status") in {"completed", "output"} else "",
                 )
+
+    def update_snapshot(self, snapshot: Any) -> str:
+        """Consume the canonical JSON snapshot and return new text delta."""
+        if not isinstance(snapshot, dict):
+            return ""
+        text = str(snapshot.get("assistantText") or "")
+        delta = text[len(self._assistant_text):] if text.startswith(self._assistant_text) else text
+        self._assistant_text = text
+        self._state_hint = ""
+        status = str(snapshot.get("status") or "")
+        tools = snapshot.get("tools")
+        if status:
+            self._state_hint = status
+        if isinstance(tools, list) and tools:
+            latest = tools[-1]
+            if isinstance(latest, dict):
+                self.update_tool(str(latest.get("name") or "tool"), str(latest.get("output") or "") if latest.get("status") in {"completed", "output"} else "")
+        return delta
 
     def update_tool(self, label: str, result: str = "") -> None:
         self._tool_hint = label
@@ -314,6 +408,12 @@ class MissionRunner:
 
     def on_view_state(self, state: Any) -> None:
         self._renderable.update_view_state(state)
+
+    def on_snapshot(self, snapshot: Any) -> None:
+        """Render only the canonical reducer snapshot projection."""
+        delta = self._renderable.update_snapshot(snapshot)
+        if delta:
+            self.on_text(delta)
 
     def __enter__(self) -> "MissionRunner":
         self._live.start()

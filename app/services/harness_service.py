@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -52,6 +53,7 @@ logger = logging.getLogger("agenthub.harness")
 MODEL_RETRY_BACKOFF_SECONDS = 2.0
 
 _TRANSIENT_STATUS_PATTERN = re.compile(r"\bHTTP\s*[:/ ]?\s*(\d{3})\b", re.IGNORECASE)
+_SECRET_PATTERN = re.compile(r"(?i)(api[_-]?key|token|authorization|bearer)\s*[:=]\s*[^\s,;]+")
 
 
 def is_transient_model_error(exc: BaseException) -> bool:
@@ -92,6 +94,36 @@ class HarnessRequest:
     cwd: Path | None = None
     execution: HarnessExecutionContext | None = None
     on_text_delta: Callable[[str], Awaitable[None] | None] | None = None
+    workspace_revision: str | None = None
+    context_manifest_digest: str | None = None
+    resume: "HarnessResumeInput" | None = None
+
+
+@dataclass(frozen=True)
+class HarnessResumeInput:
+    """Durable execution state used to re-enter a Harness turn safely.
+
+    ``recovered_tool_results`` contains only canonical, content-bounded tool
+    results whose receipts were already reconciled by the Runner.  A Harness
+    never reconstructs a side effect from this object and therefore cannot
+    accidentally replay a tool during resume.
+    """
+
+    checkpoint_id: str
+    attempt: int
+    next_action: Mapping[str, object] | None = None
+    recovered_tool_results: tuple[ToolResult, ...] = ()
+    start_iteration: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.checkpoint_id:
+            raise ValueError("resume checkpoint_id must be non-empty")
+        if isinstance(self.attempt, bool) or self.attempt < 1:
+            raise ValueError("resume attempt must be a positive integer")
+        if self.start_iteration < 0:
+            raise ValueError("resume start_iteration must be non-negative")
+        if self.next_action is not None and not isinstance(self.next_action, Mapping):
+            raise TypeError("resume next_action must be an object")
 
 
 @dataclass(frozen=True)
@@ -102,6 +134,69 @@ class HarnessResult:
     iterations: int = 1
     tool_calls: int = 0
     usage: ModelUsage = field(default_factory=ModelUsage)
+
+
+class RepairErrorType(StrEnum):
+    """Stable error classes eligible for a bounded repair attempt."""
+
+    SYNTAX = "syntax"
+    DEPENDENCY = "dependency"
+    TEST_FAILURE = "test_failure"
+    PERMISSION = "permission"
+    TIMEOUT = "timeout"
+    WORKSPACE_CONFLICT = "workspace_conflict"
+    UNKNOWN = "unknown"
+
+
+class RepairAttemptState(StrEnum):
+    """Terminally observable states for one repair transaction."""
+
+    PENDING = "pending"
+    ROOT_CAUSE_EXTRACTED = "root_cause_extracted"
+    PLAN_READY = "plan_ready"
+    APPLYING = "applying"
+    VERIFYING = "verifying"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    ROLLED_BACK = "rolled_back"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+
+
+@dataclass(frozen=True)
+class RepairAttempt:
+    """Bounded repair state; no implicit retries or side effects are hidden."""
+
+    attempt: int
+    error_type: RepairErrorType
+    state: RepairAttemptState = RepairAttemptState.PENDING
+    root_cause: str = ""
+    plan: str = ""
+    token_budget: int = 0
+    tokens_used: int = 0
+    time_budget_seconds: float = 0.0
+    elapsed_seconds: float = 0.0
+    side_effect_budget: int = 0
+    side_effects_used: int = 0
+    message: str = ""
+
+    def transition(self, state: RepairAttemptState, **changes: Any) -> "RepairAttempt":
+        if state is RepairAttemptState.APPLYING and not self.plan:
+            raise ValueError("repair plan is required before applying changes")
+        return replace(self, state=state, **changes)
+
+    @property
+    def budget_exhausted(self) -> bool:
+        return (
+            (self.token_budget > 0 and self.tokens_used > self.token_budget)
+            or (self.time_budget_seconds > 0 and self.elapsed_seconds >= self.time_budget_seconds)
+            or (self.side_effect_budget > 0 and self.side_effects_used >= self.side_effect_budget)
+        )
+
+
+Verifier = Callable[[HarnessResult], Awaitable[bool] | bool]
+RepairPlanner = Callable[[RepairAttempt, HarnessResult], Awaitable[str | None] | str | None]
+RepairApplier = Callable[[RepairAttempt], Awaitable[HarnessResult] | HarnessResult]
+RepairRollback = Callable[[RepairAttempt], Awaitable[None] | None]
 
 
 FunctionHandler = Callable[[Mapping[str, Any]], Awaitable[str]]
@@ -158,6 +253,135 @@ class SandboxHarness:
         return HarnessResult(sandbox=result)
 
 
+def classify_repair_error(error: object) -> RepairErrorType:
+    """Classify a tool/verifier failure without exposing raw error text."""
+    text = str(error).lower()
+    if any(token in text for token in ("syntaxerror", "syntax error", "parse error")):
+        return RepairErrorType.SYNTAX
+    if any(token in text for token in ("modulenotfound", "no module named", "dependency", "importerror")):
+        return RepairErrorType.DEPENDENCY
+    if any(token in text for token in ("assertionerror", "test failed", "pytest", "test_failure")):
+        return RepairErrorType.TEST_FAILURE
+    if any(token in text for token in ("permission denied", "access denied", "permission")):
+        return RepairErrorType.PERMISSION
+    if any(token in text for token in ("timed out", "timeout", "deadline")):
+        return RepairErrorType.TIMEOUT
+    if any(token in text for token in ("workspace conflict", "sha256", "concurrent modification", "conflict")):
+        return RepairErrorType.WORKSPACE_CONFLICT
+    return RepairErrorType.UNKNOWN
+
+
+def _safe_repair_message(error: object) -> str:
+    """Keep repair state useful while removing common credential formats."""
+    value = _SECRET_PATTERN.sub(r"\1=<redacted>", str(error))
+    return value[:500]
+
+
+class RepairAttemptRunner:
+    """Execute at most one bounded repair transaction and verify it independently.
+
+    The planner and applier are injected so this class never invents model
+    prompts or bypasses the Harness tool-permission boundary. A failed
+    verification invokes rollback when supplied; no automatic second attempt
+    is performed by this runner.
+    """
+
+    def __init__(
+        self,
+        planner: RepairPlanner,
+        applier: RepairApplier,
+        verifier: Verifier,
+        rollback: RepairRollback | None = None,
+        *,
+        max_attempts: int = 1,
+        token_budget: int = 1024,
+        time_budget_seconds: float = 60.0,
+        side_effect_budget: int = 1,
+    ) -> None:
+        if max_attempts < 1 or token_budget < 1 or time_budget_seconds <= 0 or side_effect_budget < 1:
+            raise ValueError("repair budgets must be positive")
+        self._planner = planner
+        self._applier = applier
+        self._verifier = verifier
+        self._rollback = rollback
+        self._max_attempts = max_attempts
+        self._token_budget = token_budget
+        self._time_budget = time_budget_seconds
+        self._side_effect_budget = side_effect_budget
+
+    async def run(
+        self,
+        failed_result: HarnessResult,
+        error: object,
+        *,
+        attempt: int = 1,
+    ) -> tuple[RepairAttempt, HarnessResult]:
+        started = time.monotonic()
+        error_type = classify_repair_error(error)
+        current = RepairAttempt(
+            attempt=attempt,
+            error_type=error_type,
+            token_budget=self._token_budget,
+            time_budget_seconds=self._time_budget,
+            side_effect_budget=self._side_effect_budget,
+            root_cause=_safe_repair_message(error),
+        ).transition(RepairAttemptState.ROOT_CAUSE_EXTRACTED)
+        if current.attempt > self._max_attempts:
+            return current.transition(RepairAttemptState.BUDGET_EXHAUSTED, message="repair attempt limit exhausted"), failed_result
+        try:
+            plan_value = self._planner(current, failed_result)
+            plan = await plan_value if inspect.isawaitable(plan_value) else plan_value
+            if not plan:
+                return current.transition(RepairAttemptState.FAILED, message="no repair plan produced"), failed_result
+            plan_text = str(plan)[:2000]
+            estimated_tokens = max(1, len(plan_text) // 4)
+            current = current.transition(RepairAttemptState.PLAN_READY, plan=plan_text, tokens_used=estimated_tokens)
+            if current.budget_exhausted:
+                return current.transition(RepairAttemptState.BUDGET_EXHAUSTED), failed_result
+            current = current.transition(RepairAttemptState.APPLYING, side_effects_used=1)
+            repaired = self._applier(current)
+            repaired_result = await repaired if inspect.isawaitable(repaired) else repaired
+            current = current.transition(RepairAttemptState.VERIFYING, elapsed_seconds=time.monotonic() - started)
+            verified = self._verifier(repaired_result)
+            ok = await verified if inspect.isawaitable(verified) else bool(verified)
+            elapsed = time.monotonic() - started
+            if elapsed > self._time_budget:
+                raise TimeoutError("repair time budget exhausted")
+            if ok:
+                return current.transition(RepairAttemptState.SUCCEEDED, elapsed_seconds=elapsed), repaired_result
+            await self._rollback_safely(current)
+            return current.transition(RepairAttemptState.ROLLED_BACK, elapsed_seconds=elapsed, message="independent verifier rejected repair"), failed_result
+        except TimeoutError:
+            await self._rollback_safely(current)
+            return current.transition(RepairAttemptState.BUDGET_EXHAUSTED, elapsed_seconds=time.monotonic() - started, message="repair time budget exhausted"), failed_result
+        except Exception as exc:  # noqa: BLE001 - repair fails closed
+            await self._rollback_safely(current)
+            return current.transition(RepairAttemptState.FAILED, elapsed_seconds=time.monotonic() - started, message=f"repair failed: {type(exc).__name__}"), failed_result
+
+    async def _rollback_safely(self, attempt: RepairAttempt) -> None:
+        if self._rollback is None:
+            return
+        try:
+            rollback = self._rollback(attempt)
+            if inspect.isawaitable(rollback):
+                await rollback
+        except Exception:  # noqa: BLE001 - rollback cannot escape repair boundary
+            logger.exception("repair rollback failed")
+
+    async def run_loop(self, failed_result: HarnessResult, error: object) -> tuple[RepairAttempt, HarnessResult]:
+        """Retry failed repairs up to ``max_attempts`` with rollback between tries."""
+        latest_attempt: RepairAttempt | None = None
+        result = failed_result
+        for number in range(1, self._max_attempts + 1):
+            latest_attempt, result = await self.run(result, error, attempt=number)
+            if latest_attempt.state is RepairAttemptState.SUCCEEDED:
+                return latest_attempt, result
+            if latest_attempt.state in {RepairAttemptState.BUDGET_EXHAUSTED, RepairAttemptState.FAILED}:
+                return latest_attempt, result
+        assert latest_attempt is not None
+        return latest_attempt.transition(RepairAttemptState.BUDGET_EXHAUSTED, message="repair attempt limit exhausted"), result
+
+
 class FunctionCallingHarness:
     """Bounded model/function-call loop with an explicit per-run tool allowlist."""
 
@@ -208,10 +432,20 @@ class FunctionCallingHarness:
             self._checkpoint_port,
             request.execution,
             started_at,
+            workspace_revision=request.workspace_revision,
+            context_manifest_digest=request.context_manifest_digest,
         )
-        tool_results: list[FunctionResult] = []
+        resume_input = request.resume
+        if resume_input is not None:
+            if request.execution is None:
+                raise HarnessError("resume requires an execution context")
+            if resume_input.attempt != request.execution.attempt:
+                raise HarnessError("resume attempt does not match execution context")
+        tool_results: list[FunctionResult] = list(
+            resume_input.recovered_tool_results if resume_input is not None else ()
+        )
         tool_calls = 0
-        iterations = 0
+        iterations = resume_input.start_iteration if resume_input is not None else 0
         usage = ModelUsage()
 
         async def failed(
@@ -277,7 +511,7 @@ class FunctionCallingHarness:
             usage = usage.add(response.usage)
             if not response.content:
                 return None
-            summary_iteration = self._max_iterations + 1
+            summary_iteration = max(self._max_iterations + 1, iterations + 1)
             await recorder.record(
                 HarnessEventType.ITERATION_STARTED,
                 iteration=summary_iteration,
@@ -317,7 +551,8 @@ class FunctionCallingHarness:
                     usage=usage,
                     tool_results=tuple(tool_results),
                 )
-                for iteration in range(1, self._max_iterations + 1):
+                first_iteration = iterations + 1
+                for iteration in range(first_iteration, self._max_iterations + 1):
                     iterations = iteration
                     await recorder.record(
                         HarnessEventType.ITERATION_STARTED,
@@ -769,6 +1004,11 @@ def _failed_result(
 
 
 __all__ = [
+    "RepairAttempt",
+    "RepairAttemptRunner",
+    "RepairAttemptState",
+    "RepairErrorType",
+    "classify_repair_error",
     "FunctionCall",
     "FunctionCallingHarness",
     "FunctionResult",
@@ -781,6 +1021,7 @@ __all__ = [
     "HarnessExecutionContext",
     "HarnessPort",
     "HarnessRequest",
+    "HarnessResumeInput",
     "HarnessResult",
     "InMemoryHarnessCheckpointPort",
     "ModelPort",

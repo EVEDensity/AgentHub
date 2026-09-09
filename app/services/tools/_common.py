@@ -27,6 +27,39 @@ from app.utils.async_file import (
     amkdir,
 )
 
+
+async def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """Write text via a same-directory temp file and atomic replace.
+
+    The temporary file is fsynced before replacement so cancellation or a
+    process crash cannot expose a truncated destination file.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.agenthub-", dir=path.parent)
+    try:
+        data = content.encode(encoding)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+        try:
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            dir_fd = None
+        if dir_fd is not None:
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
 logger = logging.getLogger("agenthub.tools.builtin")
 
 # ── Security constraints ──────────────────────────────────────────────

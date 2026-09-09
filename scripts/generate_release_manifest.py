@@ -38,6 +38,9 @@ SCOPE_ALIASES = {
     "provider-protocol": "provider",
     "mission-closed-loop": "provider",
     "postgres-listener": "postgres",
+    # npm registry verification is the local release-install contract;
+    # retain github-release as the historical canonical manifest scope.
+    "registry": "github-release",
 }
 
 
@@ -157,6 +160,11 @@ def _load_records(root: Path) -> list[dict[str, Any]]:
         return records
     for path in root.rglob("*.json"):
         if path.name == "release-manifest.json":
+            continue
+        # Evidence writers may create optional mirror files directly under
+        # the release root. Canonical records live in a scope directory;
+        # ignoring root-level mirrors prevents duplicate run accounting.
+        if path.parent == root:
             continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))

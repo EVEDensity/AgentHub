@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import json
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -438,6 +439,13 @@ class ExecutionCheckpoint(DomainModel):
     terminal: bool = False
     failure_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
     state_digest: Digest
+    # Versioned, content-minimized execution resume protocol.  Legacy rows
+    # may omit these fields; strict resume validation rejects such rows.
+    resume_protocol_version: Annotated[int, Field(ge=1, le=10)] | None = None
+    next_action: dict[str, Any] | None = None
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    workspace_revision: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    context_manifest_digest: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     created_by: ActorRef
     created_at: AwareDatetime
 
@@ -454,6 +462,16 @@ class ExecutionCheckpoint(DomainModel):
                 raise ValueError("failed checkpoint requires a failure reason")
         elif self.failure_reason is not None:
             raise ValueError("only a failed checkpoint can carry a failure reason")
+        if self.next_action is not None:
+            if len(json.dumps(self.next_action, ensure_ascii=True, separators=(",", ":"))) > 8192:
+                raise ValueError("checkpoint next_action exceeds 8 KiB")
+            keys = {"toolName", "tool_name", "callId", "call_id"}
+            if not any(key in self.next_action for key in keys):
+                raise ValueError("checkpoint next_action must identify a tool call")
+            if self.resume_protocol_version is None:
+                raise ValueError("next_action requires resume_protocol_version")
+        if self.idempotency_key is not None and "/" not in self.idempotency_key:
+            raise ValueError("idempotency_key must be execution scoped")
         return self
 
 

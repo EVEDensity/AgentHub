@@ -185,7 +185,12 @@ class DesktopModelFactory(HarnessModelFactoryPort):
         self._adapter = adapter_manager.get_adapter(config.provider)
         from app.services.context_compiler import ContextCompiler
 
-        context = ContextCompiler(Path("."), char_budget=32_000).compile(
+        context = ContextCompiler(
+            Path("."),
+            char_budget=32_000,
+            provider=config.provider,
+            model=config.model,
+        ).compile(
             conversation="",
             policy=DESKTOP_SYSTEM_PROMPT,
             project=_load_project_instructions(),

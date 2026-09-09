@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -43,12 +44,14 @@ class ToolExecutor:
         self.permission_manager = None
         self.hook_manager = None
         self.result_storage = None
+        self.receipt_store = None
 
     def configure(
         self,
         permission_manager: Any = None,
         hook_manager: Any = None,
         result_storage: Any = None,
+        receipt_store: Any = None,
     ) -> None:
         """Inject optional enhancements. Called during app startup.
 
@@ -61,6 +64,8 @@ class ToolExecutor:
             self.hook_manager = hook_manager
         if result_storage is not None:
             self.result_storage = result_storage
+        if receipt_store is not None:
+            self.receipt_store = receipt_store
 
     # ── JSON parsing ──────────────────────────────────────────────────
 
@@ -225,29 +230,54 @@ class ToolExecutor:
 
     # ── Execution ─────────────────────────────────────────────────────
 
-    async def execute(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def execute(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
         """Execute a single tool call.
 
         Returns:
             {"success": bool, "result": Any, "error": str|null, "tool_name": str}
         """
         start_time = time.time()
+        receipt_store = getattr(self, "receipt_store", None)
+        receipt_key = idempotency_key.strip() if isinstance(idempotency_key, str) else ""
+        if receipt_store is not None and receipt_key:
+            decision = receipt_store.replay_decision(receipt_key, strict=True)
+            if decision != "execute":
+                return {
+                    "success": decision == "already_succeeded",
+                    "error": None if decision == "already_succeeded" else f"工具调用未重放（{decision}）",
+                    "error_type": "idempotency" if decision != "already_succeeded" else None,
+                    "tool_name": tool_name,
+                    "recovered": decision == "already_succeeded",
+                }
+            from app.services.tools.receipts import ToolReceiptStatus
+
+            receipt_store.mark_started(receipt_key, tool_name, start_time)
 
         tool = tool_registry.get(tool_name)
         if tool is None:
             logger.warning("tool_executor: unknown tool '%s'", tool_name)
-            return {
+            result = {
                 "success": False,
                 "error": f"未知工具: {tool_name}。可用的工具有: {', '.join(tool_registry.list_names())}",
                 "tool_name": tool_name,
                 "duration_ms": (time.time() - start_time) * 1000,
             }
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceiptStatus, ToolReceipt
+                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type="unknown_tool"))
+            return result
 
         # Validate parameters
         missing = self.validate_params(tool, arguments)
         if missing:
             logger.info("tool_executor: tool '%s' missing params: %s", tool_name, missing)
-            return {
+            result = {
                 "success": False,
                 "error": f"工具 '{tool_name}' 缺少必填参数: {', '.join(missing)}。"
                          f"请向用户询问这些参数的值。",
@@ -255,16 +285,24 @@ class ToolExecutor:
                 "missing_params": missing,
                 "duration_ms": (time.time() - start_time) * 1000,
             }
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceiptStatus, ToolReceipt
+                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type="invalid_arguments"))
+            return result
 
         # Execute handler
         if tool.handler is None:
             logger.error("tool_executor: tool '%s' has no handler", tool_name)
-            return {
+            result = {
                 "success": False,
                 "error": f"工具 '{tool_name}' 尚未实现执行处理器。",
                 "tool_name": tool_name,
                 "duration_ms": (time.time() - start_time) * 1000,
             }
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceiptStatus, ToolReceipt
+                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type="missing_handler"))
+            return result
 
         try:
             result = await tool.handler(**arguments)
@@ -280,6 +318,17 @@ class ToolExecutor:
                 # Apply result storage budget if configured
                 if self.result_storage is not None:
                     result = self.result_storage.process(result)
+                if receipt_store is not None and receipt_key:
+                    from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                    digest = hashlib.sha256(repr(result).encode("utf-8")).hexdigest()
+                    receipt_store.put(ToolReceipt(
+                        receipt_key,
+                        tool_name,
+                        ToolReceiptStatus.SUCCEEDED if result.get("success", True) else ToolReceiptStatus.FAILED,
+                        time.time(),
+                        result_digest=digest if result.get("success", True) else None,
+                        error_type=str(result.get("error_type") or "tool_failure") if not result.get("success", True) else None,
+                    ))
                 return result
 
             final_result = {
@@ -290,7 +339,20 @@ class ToolExecutor:
             }
             if self.result_storage is not None:
                 final_result = self.result_storage.process(final_result)
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                digest = hashlib.sha256(repr(final_result).encode("utf-8")).hexdigest()
+                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.SUCCEEDED, time.time(), result_digest=digest))
             return final_result
+        except asyncio.CancelledError:
+            if receipt_store is not None and receipt_key:
+                receipt_store.mark_unknown(
+                    receipt_key,
+                    tool_name,
+                    time.time(),
+                    error_type="cancelled",
+                )
+            raise
         except Exception as exc:
             duration_ms = (time.time() - start_time) * 1000
             logger.exception("tool_executor: tool '%s' raised exception", tool_name)
@@ -299,13 +361,17 @@ class ToolExecutor:
             from app.services.tools.errors import classify_tool_error
 
             error_type, safe_message = classify_tool_error(exc, tool_name)
-            return {
+            result = {
                 "success": False,
                 "error": safe_message,
                 "error_type": error_type.value,
                 "tool_name": tool_name,
                 "duration_ms": duration_ms,
             }
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type=error_type.value))
+            return result
 
     async def execute_all(
         self,
@@ -343,7 +409,15 @@ class ToolExecutor:
             args = tc.get("arguments", {})
             try:
                 return await asyncio.wait_for(
-                    self.execute(name, args),
+                    self.execute(
+                        name,
+                        args,
+                        idempotency_key=(
+                            str(tc.get("idempotency_key") or tc.get("idempotencyKey"))
+                            if tc.get("idempotency_key") or tc.get("idempotencyKey")
+                            else None
+                        ),
+                    ),
                     timeout=PER_TOOL_TIMEOUT,
                 )
             except asyncio.TimeoutError:

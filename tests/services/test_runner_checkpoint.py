@@ -12,7 +12,12 @@ from app.services.harness_checkpoint import (
     HarnessExecutionContext,
 )
 from app.services.harness_service import ModelUsage
-from app.services.runner_checkpoint import MissionControlHarnessCheckpointPort
+from app.services.runner_checkpoint import (
+    MissionControlHarnessCheckpointPort,
+    ResumeProtocol,
+    ResumeValidationError,
+    validate_resume_protocol,
+)
 
 
 def _checkpoint(*, execution: HarnessExecutionContext) -> HarnessCheckpoint:
@@ -95,6 +100,39 @@ class DriftingControl(FakeControl):
 
 
 class RunnerCheckpointTests(unittest.IsolatedAsyncioTestCase):
+    def test_resume_protocol_requires_matching_workspace_and_action_identity(self) -> None:
+        protocol = ResumeProtocol(
+            next_action={"toolName": "file_write", "callId": "call-1"},
+            idempotency_key="mis-1/wu-1/1/call-1",
+            workspace_revision="sha256:workspace",
+            context_manifest_digest="sha256:context",
+        )
+        validate_resume_protocol(
+            protocol,
+            workspace_revision="sha256:workspace",
+            expected_idempotency_prefix="mis-1/",
+        )
+
+        with self.assertRaisesRegex(ResumeValidationError, "workspace revision"):
+            validate_resume_protocol(protocol, workspace_revision="sha256:changed")
+
+        with self.assertRaisesRegex(ResumeValidationError, "idempotency key"):
+            validate_resume_protocol(
+                protocol,
+                workspace_revision="sha256:workspace",
+                expected_idempotency_prefix="mis-other/",
+            )
+
+    def test_resume_protocol_rejects_incomplete_pending_action(self) -> None:
+        protocol = ResumeProtocol(
+            next_action={"toolName": "shell"},
+            idempotency_key="mis-1/wu-1/1/call-1",
+            workspace_revision="sha256:workspace",
+            context_manifest_digest=None,
+        )
+        with self.assertRaisesRegex(ResumeValidationError, "tool name and call id"):
+            validate_resume_protocol(protocol, workspace_revision="sha256:workspace")
+
     async def test_publishes_tool_event_with_lease_context(self) -> None:
         execution = HarnessExecutionContext("mis-1", "wu-1", 2)
         control = FakeControl()

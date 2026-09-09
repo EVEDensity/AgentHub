@@ -30,8 +30,8 @@ CONTRACT_REVISION_BINDING_REVISION = "e4b8c9d0f1a2"
 CONTRACT_REVISION_BINDING_DOWN_REVISION = ARTIFACT_TABLE_OWNERSHIP_REVISION
 CONTRACT_LINEAGE_OWNERSHIP_REVISION = "f5c9d0e1a2b3"
 CONTRACT_LINEAGE_OWNERSHIP_DOWN_REVISION = CONTRACT_REVISION_BINDING_REVISION
-EXECUTION_CHECKPOINT_REVISION = "a6d0e1f2b3c4"
-EXECUTION_CHECKPOINT_DOWN_REVISION = CONTRACT_LINEAGE_OWNERSHIP_REVISION
+EXECUTION_CHECKPOINT_REVISION = "b7e1f203c4d5"
+EXECUTION_CHECKPOINT_DOWN_REVISION = "a6d0e1f2b3c4"
 
 MISSION_CONTROL_PLANE_UPGRADE = (
     """
@@ -936,6 +936,11 @@ EXECUTION_CHECKPOINT_UPGRADE = (
         state_digest TEXT NOT NULL CHECK (
             state_digest ~ '^sha256:[a-fA-F0-9]{64}$'
         ),
+        resume_protocol_version INTEGER,
+        next_action JSONB,
+        idempotency_key TEXT,
+        workspace_revision TEXT,
+        context_manifest_digest TEXT,
         created_by JSONB NOT NULL CHECK (jsonb_typeof(created_by) = 'object'),
         created_at TIMESTAMPTZ NOT NULL,
         FOREIGN KEY (work_unit_id, mission_id)
@@ -971,6 +976,11 @@ EXECUTION_CHECKPOINT_UPGRADE = (
     CREATE INDEX IF NOT EXISTS idx_execution_checkpoints_work_unit_attempt
     ON execution_checkpoints(work_unit_id, attempt, sequence)
     """,
+    "ALTER TABLE execution_checkpoints ADD COLUMN IF NOT EXISTS resume_protocol_version INTEGER",
+    "ALTER TABLE execution_checkpoints ADD COLUMN IF NOT EXISTS next_action JSONB",
+    "ALTER TABLE execution_checkpoints ADD COLUMN IF NOT EXISTS idempotency_key TEXT",
+    "ALTER TABLE execution_checkpoints ADD COLUMN IF NOT EXISTS workspace_revision TEXT",
+    "ALTER TABLE execution_checkpoints ADD COLUMN IF NOT EXISTS context_manifest_digest TEXT",
 )
 
 EXECUTION_CHECKPOINT_DOWNGRADE = (

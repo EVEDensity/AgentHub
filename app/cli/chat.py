@@ -28,6 +28,7 @@ from __future__ import annotations
 import sys
 import threading
 import fnmatch
+import difflib
 import json
 import asyncio
 import re
@@ -180,6 +181,29 @@ def _format_utility_result(tool_name: str, outcome: dict[str, Any]) -> str:
             f"{result.get('wind_speed_unit', 'km/h')}（数据时间 {result.get('time', '未知')}）"
         )
     return str(result)
+
+
+def _decision_diff_preview(decision: dict[str, Any], workspace_root: Path) -> str:
+    """Build a bounded preflight diff without mutating the workspace."""
+    arguments = decision.get("arguments") if isinstance(decision.get("arguments"), dict) else {}
+    tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or "").lower()
+    if tool_name not in {"file_write", "file_edit", "file_patch", "write", "edit"}:
+        return ""
+    path_value = decision.get("path") or decision.get("filePath") or decision.get("file_path") or arguments.get("path") or arguments.get("file_path")
+    content_value = decision.get("content") or decision.get("new_content") or decision.get("newContent") or arguments.get("content") or arguments.get("new_content") or arguments.get("newContent")
+    if not isinstance(path_value, str) or not isinstance(content_value, str) or len(content_value) > 100_000:
+        return ""
+    candidate = (workspace_root / path_value).resolve()
+    try:
+        candidate.relative_to(workspace_root.resolve())
+        old = candidate.read_text(encoding="utf-8", errors="replace") if candidate.is_file() else ""
+    except (OSError, ValueError):
+        return ""
+    diff = difflib.unified_diff(
+        old.splitlines(), content_value.splitlines(),
+        fromfile=str(path_value), tofile=str(path_value), lineterm="",
+    )
+    return "\n".join(list(diff)[:80])
 
 
 def _run_local_utility(tool_name: str, **arguments: Any) -> str:
@@ -1131,17 +1155,10 @@ def chat_session(
             emit(f"未知命令: {objective}（/help 查看可用命令）")
             continue
 
-        # Human-in-the-loop: confirm side-effect missions (TTY only;
-        # headless paths exec/-p never enter this REPL).
-        if use_rich and console is not None and not session.always_allow and _likely_side_effect_objective(objective):
-            choice = ui.confirm_side_effect(console, read_line, objective)
-            if choice == "no":
-                emit("已取消该任务")
-                continue
-            if choice == "always":
-                session.always_allow = True
-
         compact_context = session.compact_context
+        # Objective text only controls diagnostic snapshot/policy defaults; it
+        # is never used as authorization. Mission Control Decisions remain the
+        # sole side-effect gate in `_on_decision`.
         is_side_effect_task = _likely_side_effect_objective(objective)
         if output_fn is None and not is_side_effect_task and _is_date_question(objective):
             answer = _run_local_utility("current_date")
@@ -1240,33 +1257,49 @@ def chat_session(
 
         def _on_decision(decision: dict[str, Any]) -> bool:
             """P0-3: ask the user whether to allow this tool call."""
+            if not (use_rich and console is not None and sys.stdin.isatty()):
+                # CI, redirected stdin, and JSON/headless paths fail closed.
+                return False
             if session.always_allow:
                 return True
-            if not (use_rich and console is not None):
-                # Headless: degrade to allow (desktop profile)
-                return True
-            tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or "?")
+            arguments = decision.get("arguments") if isinstance(decision.get("arguments"), dict) else {}
+            tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or arguments.get("tool_name") or "?")
             if tool_name in session.allowed_tools:
                 return True
-            path = str(decision.get("path") or decision.get("filePath") or decision.get("file_path") or "")
+            path = str(decision.get("path") or decision.get("filePath") or decision.get("file_path") or arguments.get("path") or arguments.get("file_path") or "")
             if any(t == tool_name and fnmatch.fnmatch(path, pattern) for t, pattern in session.denied_paths):
                 return False
             if any(t == tool_name and fnmatch.fnmatch(path, pattern) for t, pattern in session.allowed_paths):
                 return True
-            reason = str(decision.get("reason") or decision.get("riskSummary") or decision.get("prompt") or "")
-            prompt_obj = type(
-                "D", (), {"tool_name": tool_name, "reason": reason, "objective": objective}
-            )()
-            # Reuse the side-effect panel for tool-call decisions too.
-            choice = ui.confirm_side_effect(
-                console,
-                read_line,
-                f"工具: {tool_name}\n原因: {reason}",
+            reason = str(decision.get("reason") or decision.get("riskSummary") or "")
+            request = ui.ToolApprovalRequest(
+                tool_name=tool_name,
+                path=path,
+                expected_sha256=str(decision.get("expected_sha256") or decision.get("expectedSha256") or arguments.get("expected_sha256") or arguments.get("expectedSha256") or ""),
+                action=str(decision.get("action") or arguments.get("action") or ""),
+                command=str(decision.get("command") or arguments.get("command") or ""),
+                url=str(decision.get("url") or arguments.get("url") or ""),
+                diff_preview=str(decision.get("diff_preview") or decision.get("diffPreview") or arguments.get("diff_preview") or arguments.get("diffPreview") or _decision_diff_preview(decision, workspace_root)),
+                risk=reason,
             )
+            choice = ui.confirm_tool_approval(console, read_line, request, is_tty=True)
+            if choice == "session":
+                session.always_allow = True
+                session.allowed_tools.add(tool_name)
+                return True
+            if choice == "attempt":
+                session.allowed_tools.add(tool_name)
+                return True
+            if choice == "once":
+                return True
+            if choice == "edit":
+                # Editing is intentionally fail-closed until a typed command
+                # editor is available; no original command is executed.
+                return False
             if choice == "always":
                 session.allowed_tools.add(tool_name)
                 return True
-            return choice == "yes"
+            return False
 
         status_cb: Callable[[str], None]
         runner_ctx: Any = None
@@ -1281,6 +1314,7 @@ def chat_session(
             emit(f"… 运行任务（{settings.provider}/{settings.model}）")
             status_cb = lambda status: emit(f"  [status] {status}")  # noqa: E731
         thinking_filter = ui.ThinkingFilter() if ui is not None else None
+        snapshot_text_seen = ""
         def text_cb(text: str) -> None:
                 if thinking_filter is not None:
                     text = thinking_filter.feed(text)
@@ -1299,30 +1333,22 @@ def chat_session(
                 else:
                     emit(text)
 
+        def snapshot_cb(snapshot: Any) -> None:
+            nonlocal snapshot_text_seen
+            if runner_ctx is not None:
+                runner_ctx.on_snapshot(snapshot)
+                return
+            if not isinstance(snapshot, dict):
+                return
+            full_text = str(snapshot.get("assistantText") or "")
+            delta = full_text[len(snapshot_text_seen):] if full_text.startswith(snapshot_text_seen) else full_text
+            snapshot_text_seen = full_text
+            if delta:
+                text_cb(delta)
+
         def event_cb(event: dict[str, Any]) -> None:
-            """Render non-text SSE events as compact live progress lines."""
-            kind = str(event.get("eventType") or event.get("type") or "")
-            payload = event.get("payload") if isinstance(event.get("payload"), dict) else event
-            labels = {
-                "mission.lifecycle.created": "mission created",
-                "work_unit.lifecycle.leased": "work unit claimed",
-                "work_unit.lifecycle.started": "work unit running",
-                "harness.tool.started": "tool started",
-                "tool.started": "tool started",
-                "harness.tool.output": "tool output",
-                "tool.output": "tool output",
-                "harness.tool.completed": "tool completed",
-                "tool.completed": "tool completed",
-                "work_unit.checkpoint.recorded": "checkpoint",
-                "artifact.lifecycle.registered": "artifact registered",
-                "mission.lifecycle.verifying": "verification started",
-                "work_unit.lifecycle.verified": "verification completed",
-                "mission.lifecycle.succeeded": "mission completed",
-            }
-            label = labels.get(kind)
-            # Live owns the terminal during a turn; status is already present
-            # in the spinner view. Printing separate lines here interleaves
-            # with token output and makes the transcript appear out of order.
+            # Deprecated compatibility sink; canonical rendering uses snapshot.
+            return None
         try:
             with cancellation_scope(cancel_event):
                 result = execute_objective(
@@ -1338,13 +1364,21 @@ def chat_session(
                     web_search=not no_web_search,
                     context_text=compact_context or _conversation_context(session),
                     on_status=status_cb,
-                    on_text=text_cb,
+                    on_text=None,
                     on_event=event_cb,
-                    on_view_state=(runner_ctx.on_view_state if runner_ctx is not None else None),
+                    # Keep the legacy callback populated for injected test
+                    # seams and third-party callers; Rich itself consumes
+                    # only the canonical snapshot sink above.
+                    on_view_state=(lambda _state: None),
+                    on_snapshot=snapshot_cb,
                     on_decision_request=_on_decision,
                     cancel_event=cancel_event,
                     capture_attempt_snapshot=is_side_effect_task,
-                    tool_permission_mode=None if is_side_effect_task else "suggest",
+                    # Policy controls capability availability; each side effect
+                    # is still gated by its concrete Decision callback above.
+                    tool_permission_mode=(
+                        None if is_side_effect_task else "suggest"
+                    ),
                     disable_tools=False,
                 )
             if thinking_filter is not None:

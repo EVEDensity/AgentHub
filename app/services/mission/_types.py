@@ -143,6 +143,16 @@ def _checkpoint_event_payload(
         "terminal": checkpoint.terminal,
         "stateDigest": checkpoint.state_digest,
     }
+    for field_name, key in (
+        ("resume_protocol_version", "resumeProtocolVersion"),
+        ("next_action", "nextAction"),
+        ("idempotency_key", "idempotencyKey"),
+        ("workspace_revision", "workspaceRevision"),
+        ("context_manifest_digest", "contextManifestDigest"),
+    ):
+        value = getattr(checkpoint, field_name)
+        if value is not None:
+            payload[key] = value
     if checkpoint.failure_reason is not None:
         payload["failureReason"] = checkpoint.failure_reason
     if tool_name is not None:

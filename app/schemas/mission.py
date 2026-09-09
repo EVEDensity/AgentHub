@@ -257,6 +257,25 @@ class ExecutionCheckpointCreateRequest(BaseModel):
     failure_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
     tool_name: Annotated[str, Field(min_length=1, max_length=255)] | None = None
     tool_success: bool | None = None
+    resume_protocol_version: Annotated[int, Field(ge=1, le=10)] | None = None
+    next_action: dict[str, object] | None = None
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    workspace_revision: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    context_manifest_digest: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+
+    @field_validator("next_action")
+    @classmethod
+    def validate_next_action(cls, value: dict[str, object] | None) -> dict[str, object] | None:
+        if value is None:
+            return None
+        if len(str(value).encode("utf-8")) > 8192:
+            raise ValueError("next_action exceeds 8 KiB")
+        allowed = {"toolName", "tool_name", "callId", "call_id", "argumentsDigest"}
+        if any(key not in allowed for key in value):
+            raise ValueError("next_action contains unsupported fields")
+        if not any(key in value for key in ("toolName", "tool_name")) or not any(key in value for key in ("callId", "call_id")):
+            raise ValueError("next_action requires toolName and callId")
+        return value
 
 
 class WorkUnitExecutionRequest(BaseModel):

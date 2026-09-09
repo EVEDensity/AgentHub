@@ -49,6 +49,9 @@ workspace tree.
   immutable execution metadata in the separate `mission_artifacts` table.
 
 * `services/`: application use cases, compatibility adapters, and storage ports.
+  The optional `services/code_index/` package maintains a fail-open,
+  workspace-local SQLite symbol index for faster repository discovery; file
+  search and glob remain the fallback and source of truth for reads.
   Artifact byte verification reads Runner-owned content through this boundary;
   Mission Control retains only immutable Artifact metadata.
   Peer-facing A2A result export is a separate all-or-nothing service. It emits
@@ -84,6 +87,12 @@ workspace tree.
   input, and a missing resolver fails the claimed unit without synthetic
   success. Harness
   owns bounded model/tool loops and explicit per-run tool
+  grants. Bounded repair flows use the typed `RepairAttempt` state machine
+  with an independently injected verifier and fail-closed rollback; repair
+  budgets are separate from normal model/tool retries. `agenthub doctor --json`
+  emits a redacted readiness report covering runtime versions, storage, disk,
+  provider reachability, and sandbox availability; skipped external probes do
+  not fail the local gate.
   grants resolved from Mission Contract and WorkUnit capabilities;
   ModelAdapterPort normalizes provider responses and reports provider usage;
   Harness enforces per-run token and model-cost budgets and emits request-scoped
@@ -107,6 +116,13 @@ workspace tree.
   attempt one. The lease owner can read the same versioned, lease-fenced
   execution projection used by controlled A2A roots; it contains immutable
   ArtifactRefs but does not read Artifact bytes or source checkpoint content.
+  The CLI `resume_work_unit()` gate compares workspace and context fingerprints
+  and consults ToolReceipt state before any replay; strict mode rejects legacy
+  checkpoints until the versioned durable resume fields are persisted end to
+  end. Side-effecting calls through both the streaming and legacy ToolExecutor
+  entry points accept the same execution-scoped idempotency key and consult
+  the local ToolReceipt journal before starting work; ambiguous or corrupt
+  receipts fail closed.
   A pure fork-specific compiler now revalidates the complete claim/projection
   identity and emits a bounded, content-minimized model input. It preserves
   source Mission/checkpoint ancestry and Artifact ID/digest pairs while

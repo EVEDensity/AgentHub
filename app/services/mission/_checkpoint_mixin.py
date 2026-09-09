@@ -157,6 +157,11 @@ class MissionCheckpointMixin:
         actor: ActorRef,
         tool_name: str | None = None,
         tool_success: bool | None = None,
+        resume_protocol_version: int | None = None,
+        next_action: dict[str, object] | None = None,
+        idempotency_key: str | None = None,
+        workspace_revision: str | None = None,
+        context_manifest_digest: str | None = None,
     ) -> ExecutionCheckpoint:
         async with self._repository.transaction() as repository:
             mission = await repository.get_mission_for_update(mission_id)
@@ -197,6 +202,11 @@ class MissionCheckpointMixin:
                 "model_cost": model_cost,
                 "terminal": terminal,
                 "failure_reason": failure_reason,
+                "resume_protocol_version": resume_protocol_version,
+                "next_action": next_action,
+                "idempotency_key": idempotency_key,
+                "workspace_revision": workspace_revision,
+                "context_manifest_digest": context_manifest_digest,
             }
             existing = await repository.get_execution_checkpoint(checkpoint_id)
             if existing is not None:
@@ -239,6 +249,11 @@ class MissionCheckpointMixin:
                 "terminal": terminal,
                 "toolCalls": tool_calls,
                 "workUnitId": work_unit_id,
+                "resumeProtocolVersion": resume_protocol_version,
+                "nextAction": next_action,
+                "idempotencyKey": idempotency_key,
+                "workspaceRevision": workspace_revision,
+                "contextManifestDigest": context_manifest_digest,
             }
             state_digest = "sha256:" + hashlib.sha256(
                 json.dumps(

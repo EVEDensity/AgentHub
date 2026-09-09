@@ -110,10 +110,12 @@ async def initialize_tool_system() -> StreamingToolExecutor:
     _progress_tracker = _pt
 
     # ── 5. Configure tool executor with enhancements ───────────────────
+    receipt_store = _build_receipt_store()
     tool_executor.configure(
         permission_manager=_permission_manager,
         hook_manager=_hook_manager,
         result_storage=_result_storage,
+        receipt_store=receipt_store,
     )
 
     # ── 6. Build streaming executor ────────────────────────────────────
@@ -121,6 +123,7 @@ async def initialize_tool_system() -> StreamingToolExecutor:
         permission_manager=_permission_manager,
         hook_manager=_hook_manager,
         progress_tracker=_progress_tracker,
+        receipt_store=receipt_store,
     )
 
     logger.info(
@@ -132,6 +135,22 @@ async def initialize_tool_system() -> StreamingToolExecutor:
     )
 
     return _streaming_executor
+
+
+def _build_receipt_store():
+    """Create the local receipt journal when a state directory is configured.
+
+    The optional store keeps existing callers (and stateless deployments)
+    unchanged while enabling crash recovery for the desktop CLI.
+    """
+    import os
+    from pathlib import Path
+    from app.services.tools.receipts import ToolReceiptStore
+
+    root = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
+    if not root:
+        return None
+    return ToolReceiptStore(Path(root).parent / "tool-receipts.json")
 
 
 def get_streaming_executor() -> StreamingToolExecutor | None:

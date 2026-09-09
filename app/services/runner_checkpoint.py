@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any, Mapping, Protocol
 
 from pydantic import ValidationError
 
@@ -14,6 +15,51 @@ from app.services.harness_checkpoint import (
     HarnessEvent,
     HarnessExecutionContext,
 )
+
+
+@dataclass(frozen=True)
+class ResumeProtocol:
+    """Content-minimized execution resume contract.
+
+    ``next_action`` contains only the tool identity and call metadata; callers
+    must obtain arguments from the authoritative Harness journal.  This keeps
+    durable Mission records free of prompts and tool output while still
+    allowing a Runner to fence a resumed action.
+    """
+
+    next_action: Mapping[str, object] | None
+    idempotency_key: str | None
+    workspace_revision: str | None
+    context_manifest_digest: str | None
+
+
+class ResumeValidationError(ValueError):
+    """Raised when a checkpoint cannot be safely resumed."""
+
+
+def validate_resume_protocol(
+    protocol: ResumeProtocol,
+    *,
+    workspace_revision: str,
+    expected_idempotency_prefix: str | None = None,
+) -> None:
+    """Fail closed unless all execution fencing fields are present and match."""
+    if not workspace_revision.strip():
+        raise ResumeValidationError("current workspace revision is missing")
+    if not protocol.workspace_revision:
+        raise ResumeValidationError("checkpoint has no workspace revision")
+    if protocol.workspace_revision != workspace_revision:
+        raise ResumeValidationError("workspace revision changed since checkpoint")
+    if protocol.next_action is not None:
+        name = str(protocol.next_action.get("toolName") or protocol.next_action.get("tool_name") or "").strip()
+        call_id = str(protocol.next_action.get("callId") or protocol.next_action.get("call_id") or "").strip()
+        if not name or not call_id:
+            raise ResumeValidationError("pending action requires tool name and call id")
+        if not protocol.idempotency_key:
+            raise ResumeValidationError("pending action requires idempotency key")
+    if expected_idempotency_prefix and protocol.idempotency_key and not protocol.idempotency_key.startswith(expected_idempotency_prefix):
+        raise ResumeValidationError("idempotency key does not match execution scope")
+
 
 
 class ExecutionCheckpointControlPort(Protocol):
@@ -38,6 +84,11 @@ class ExecutionCheckpointControlPort(Protocol):
         failure_reason: str | None,
         tool_name: str | None = None,
         tool_success: bool | None = None,
+        resume_protocol_version: int | None = None,
+        next_action: Mapping[str, object] | None = None,
+        idempotency_key: str | None = None,
+        workspace_revision: str | None = None,
+        context_manifest_digest: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def publish_streaming_event(
@@ -105,6 +156,7 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
         execution: HarnessExecutionContext,
         runner_id: str,
         lease_id: str,
+        slim_identical: bool = False,
     ) -> None:
         if not runner_id.strip() or not lease_id.strip():
             raise ValueError("Runner and lease ids must be non-empty")
@@ -112,8 +164,20 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
         self._execution = execution
         self._runner_id = runner_id
         self._lease_id = lease_id
+        # Keep event-complete audit trails by default in the Runner factory;
+        # callers that need lower write volume can explicitly enable slimming.
+        self._slim_identical = slim_identical
         self._last_state_digest: str | None = None
         self._uploaded_count = 0
+
+    def _resume_fields(self, checkpoint: HarnessCheckpoint) -> dict[str, object]:
+        return {
+            "resume_protocol_version": checkpoint.resume_protocol_version,
+            "next_action": checkpoint.next_action,
+            "idempotency_key": checkpoint.idempotency_key,
+            "workspace_revision": checkpoint.workspace_revision,
+            "context_manifest_digest": checkpoint.context_manifest_digest,
+        }
 
     async def record(
         self,
@@ -139,8 +203,11 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
             )
 
         state_digest = checkpoint_state_digest(checkpoint, event)
-        if not checkpoint.terminal and state_digest == self._last_state_digest:
-            # Identical execution state: skip the upload (P3-4b).
+        if (
+            self._slim_identical
+            and not checkpoint.terminal
+            and state_digest == self._last_state_digest
+        ):
             return
 
         self._uploaded_count += 1
@@ -163,6 +230,11 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
             failure_reason=checkpoint.failure_reason,
             tool_name=event.tool_name,
             tool_success=event.tool_success,
+            resume_protocol_version=checkpoint.resume_protocol_version,
+            next_action=checkpoint.next_action,
+            idempotency_key=checkpoint.idempotency_key,
+            workspace_revision=checkpoint.workspace_revision,
+            context_manifest_digest=checkpoint.context_manifest_digest,
         )
         try:
             durable = ExecutionCheckpoint.model_validate(payload)
@@ -233,11 +305,13 @@ class MissionControlHarnessCheckpointFactory:
         control: ExecutionCheckpointControlPort,
         *,
         runner_id: str,
+        slim_identical: bool = True,
     ) -> None:
         if not runner_id.strip():
             raise ValueError("runner_id must be non-empty")
         self._control = control
         self._runner_id = runner_id
+        self._slim_identical = slim_identical
 
     def build(
         self,
@@ -250,6 +324,7 @@ class MissionControlHarnessCheckpointFactory:
             execution=execution,
             runner_id=self._runner_id,
             lease_id=lease_id,
+            slim_identical=self._slim_identical,
         )
 
 
@@ -262,6 +337,9 @@ def _checkpoint_id(execution: HarnessExecutionContext, sequence: int) -> str:
 
 
 __all__ = [
+    "ResumeProtocol",
+    "ResumeValidationError",
+    "validate_resume_protocol",
     "ExecutionCheckpointControlPort",
     "MissionControlHarnessCheckpointFactory",
     "MissionControlHarnessCheckpointPort",

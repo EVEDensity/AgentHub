@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import hashlib
+import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Protocol
@@ -76,6 +78,26 @@ class HarnessCheckpoint:
     tool_results: tuple[FunctionResult, ...]
     terminal: bool = False
     failure_reason: str | None = None
+    # Optional execution-resume protocol.  These fields are deliberately
+    # content-minimized and default to empty values for backwards compatibility
+    # with existing in-memory and HTTP checkpoint callers.
+    next_action: dict[str, object] | None = None
+    resume_protocol_version: int | None = None
+    idempotency_key: str | None = None
+    workspace_revision: str | None = None
+    context_manifest_digest: str | None = None
+
+    def resume_fingerprint(self) -> str:
+        """Return a stable digest for safe resume comparisons."""
+        material = {
+            "execution": self.execution.__dict__ if self.execution else None,
+            "sequence": self.sequence,
+            "next_action": self.next_action,
+            "idempotency_key": self.idempotency_key,
+            "workspace_revision": self.workspace_revision,
+            "context_manifest_digest": self.context_manifest_digest,
+        }
+        return hashlib.sha256(json.dumps(material, sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
 
 
 class HarnessCheckpointPort(Protocol):
@@ -129,11 +151,15 @@ class _HarnessRecorder:
         port: HarnessCheckpointPort | None,
         execution: HarnessExecutionContext | None,
         started_at: float,
+        workspace_revision: str | None = None,
+        context_manifest_digest: str | None = None,
     ) -> None:
         self._port = port
         self._execution = execution
         self._started_at = started_at
         self._sequence = 0
+        self._workspace_revision = workspace_revision
+        self._context_manifest_digest = context_manifest_digest
 
     async def record(
         self,
@@ -177,6 +203,25 @@ class _HarnessRecorder:
             tool_results=tool_results,
             terminal=terminal,
             failure_reason=reason if terminal else None,
+            resume_protocol_version=1 if event_type is HarnessEventType.TOOL_STARTED else None,
+            next_action=(
+                {
+                    "toolName": tool_call.name,
+                    "callId": tool_call.id,
+                    "argumentsDigest": hashlib.sha256(
+                        json.dumps(tool_call.arguments, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+                    ).hexdigest(),
+                }
+                if event_type is HarnessEventType.TOOL_STARTED and tool_call is not None
+                else None
+            ),
+            idempotency_key=(
+                f"{self._execution.mission_id}/{self._execution.work_unit_id}/{self._execution.attempt}/{tool_call.id}"
+                if event_type is HarnessEventType.TOOL_STARTED and tool_call is not None and self._execution is not None
+                else None
+            ),
+            workspace_revision=self._workspace_revision,
+            context_manifest_digest=self._context_manifest_digest,
         )
         try:
             await self._port.record(checkpoint, event)

@@ -395,7 +395,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="data directory holding stacks/ (default: local .agenthub)",
     )
 
-    subparsers.add_parser("doctor", help="diagnose local CLI and workspace readiness")
+    doctor_parser = subparsers.add_parser("doctor", help="diagnose local CLI and workspace readiness")
+    doctor_parser.add_argument("--json", action="store_true", help="emit a redacted JSON diagnostic report")
     completion_parser = subparsers.add_parser("completion", help="print shell completion script")
     completion_parser.add_argument("shell", choices=["bash", "zsh", "powershell"])
 
@@ -449,37 +450,75 @@ def cmd_init(args: argparse.Namespace, cwd: Path) -> int:
     return EXIT_OK
 
 
-def cmd_doctor(cwd: Path) -> int:
-    """Run non-mutating local readiness checks for support and CI logs."""
+def _doctor_version(binary: str) -> str | None:
+    """Return a bounded, sanitized executable version string."""
+    import subprocess
+    try:
+        completed = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = (completed.stdout or completed.stderr or "").strip().splitlines()
+    return value[0][:120] if completed.returncode == 0 and value else None
+
+
+def _doctor_report(cwd: Path) -> dict[str, Any]:
+    """Build a redacted, deterministic local readiness report."""
     import shutil
-    checks: list[tuple[str, bool, str]] = []
-    checks.append(("python", True, sys.version.split()[0]))
-    git = shutil.which("git")
-    checks.append(("git", bool(git), git or "not found"))
-    checks.append(("workspace", cwd.is_dir(), str(cwd)))
+    import time as _time
+    checks: dict[str, dict[str, Any]] = {}
+    checks["python"] = {"ok": True, "version": sys.version.split()[0]}
+    for name in ("node", "git"):
+        path = shutil.which(name)
+        checks[name] = {"ok": bool(path), "version": _doctor_version(path) if path else None}
+    checks["workspace"] = {"ok": cwd.is_dir(), "path": str(cwd)}
     state = state_dir(cwd)
-    checks.append(("state directory", state.is_dir(), str(state)))
+    checks["state_directory"] = {"ok": state.is_dir(), "path": str(state)}
+    checks["write_access"] = {"ok": os.access(cwd, os.W_OK)}
+    try:
+        usage = shutil.disk_usage(cwd)
+        checks["disk"] = {"ok": usage.free > 100 * 1024 * 1024, "freeBytes": usage.free}
+    except OSError:
+        checks["disk"] = {"ok": False, "freeBytes": None}
     key_present = any(os.environ.get(name, "").strip() for name in (
         "AGENTHUB_CLI_MODEL_API_KEY", "AGENTHUB_DESKTOP_MODEL_API_KEY",
         "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
     ))
-    checks.append(("model credentials", key_present, "environment variable" if key_present else "not set (mock fallback available)"))
-    for name, ok, detail in checks:
-        print(f"{'ok' if ok else 'missing':7} {name:20} {detail}")
+    checks["model_credentials"] = {"ok": key_present, "present": key_present}
     try:
         from app.cli.provider_health import ProviderHealthRegistry, SUPPORTED_PROVIDER_MATRIX
-        registry = ProviderHealthRegistry.load(state / "provider-health.json")
-        records = registry.snapshot()
-        if records:
-            print("provider matrix:")
-            for record in records:
-                capabilities = ",".join(name for name, enabled in record["capabilities"].items() if enabled) or "none"
-                print(f"{'ok' if record['status'] == 'healthy' else 'degraded':7} {record['provider']}/{record['model']} {capabilities}")
-        else:
-            print(f"provider matrix       {len(SUPPORTED_PROVIDER_MATRIX)} providers declared; no runtime observations")
-    except (OSError, ValueError, TypeError) as exc:
-        print(f"degraded provider matrix unavailable ({type(exc).__name__})")
-    return EXIT_OK if all(ok for _, ok, _ in checks) else EXIT_INFRA_ERROR
+        records = ProviderHealthRegistry.load(state / "provider-health.json").snapshot()
+        checks["provider_matrix"] = {"ok": True, "declared": len(SUPPORTED_PROVIDER_MATRIX), "observed": records}
+    except (OSError, ValueError, TypeError):
+        checks["provider_matrix"] = {"ok": False, "declared": 0, "observed": []}
+    provider = os.environ.get("AGENTHUB_CLI_MODEL_PROVIDER", "").strip()
+    base_url = os.environ.get("AGENTHUB_CLI_MODEL_BASE_URL", "").strip()
+    if base_url:
+        try:
+            import httpx
+            started = _time.monotonic()
+            response = httpx.get(base_url, timeout=3.0, follow_redirects=False)
+            latency = round((_time.monotonic() - started) * 1000, 1)
+            checks["provider_network"] = {"ok": response.status_code < 500, "provider": provider or "configured", "latencyMs": latency, "statusCode": response.status_code}
+        except Exception:
+            checks["provider_network"] = {"ok": False, "provider": provider or "configured", "latencyMs": None}
+    else:
+        checks["provider_network"] = {"ok": True, "provider": provider or "mock", "skipped": True}
+    checks["sandbox"] = {"ok": bool(shutil.which("python")), "available": bool(shutil.which("python"))}
+    overall = all(bool(item.get("ok")) for item in checks.values() if not item.get("skipped"))
+    return {"schemaVersion": 1, "status": "ok" if overall else "degraded", "checks": checks}
+
+
+def cmd_doctor(cwd: Path, *, json_mode: bool = False) -> int:
+    """Run local readiness checks without exposing secrets or response bodies."""
+    report = _doctor_report(cwd)
+    if json_mode:
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    else:
+        checks = report["checks"]
+        for name, item in checks.items():
+            detail = item.get("version") or item.get("path") or ("present" if item.get("present") else "not set")
+            print(f"{'ok' if item.get('ok') else 'missing':7} {name:20} {detail}")
+    return EXIT_OK if report["status"] == "ok" else EXIT_INFRA_ERROR
 
 
 def cmd_completion(shell: str) -> int:
@@ -534,13 +573,15 @@ def cmd_run(
             print(f"  mission status: {status}")
 
     def _emit_event(event: dict[str, Any]) -> None:
-        if jsonl_mode:
-            print(json.dumps({"schemaVersion": 1, "type": "event", "event": event}, ensure_ascii=False), flush=True)
+        # Deprecated compatibility sink. JSONL projections use snapshots.
+        return None
 
     def _emit_view_state(state: Any) -> None:
-        if jsonl_mode:
-            from app.cli.reducer import render_snapshot
-            print(json.dumps({"schemaVersion": 1, "type": "state", "state": render_snapshot(state)}, ensure_ascii=False), flush=True)
+        return None
+
+    def _emit_snapshot(snapshot: Any) -> None:
+        if jsonl_mode and isinstance(snapshot, dict):
+            print(json.dumps({"schemaVersion": 1, "type": "snapshot", "snapshot": snapshot}, ensure_ascii=False), flush=True)
 
     if not json_mode and not jsonl_mode:
         print(f"objective: {args.objective}")
@@ -573,6 +614,7 @@ def cmd_run(
                 on_status=_emit_status,
                 on_event=_emit_event,
                 on_view_state=_emit_view_state,
+                on_snapshot=_emit_snapshot,
                 cancel_event=cancel_event,
             )
     except Exception as exc:
@@ -1041,7 +1083,7 @@ def _cli_main_impl(argv: list[str] | None = None) -> int:
     if args.command == "upgrade":
         return cmd_upgrade(args, cwd)
     if args.command == "doctor":
-        return cmd_doctor(cwd)
+        return cmd_doctor(cwd, json_mode=bool(getattr(args, "json", False)))
     if args.command == "completion":
         return cmd_completion(args.shell)
     if args.command == "_serve":

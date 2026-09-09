@@ -17,6 +17,7 @@ from app.services.tools._common import (
     _auto_git_commit,
     _broadcast_workspace_change,
     _compute_unified_diff,
+    atomic_write_text,
     file_sha256,
     validate_expected_sha256,
     _get_sid_fast,
@@ -198,10 +199,10 @@ async def file_write_handler(
 
         if mode == "append" and original_text:
             new_full = original_text + ("" if original_text.endswith(("\n", "\r")) else "\n") + content
-            await awrite_text(safe, new_full, encoding="utf-8")
+            await atomic_write_text(safe, new_full)
             action = "追加"
         else:
-            await awrite_text(safe, content, encoding="utf-8")
+            await atomic_write_text(safe, content)
             action = "覆写"
 
         size = await astat_size(safe)
@@ -685,7 +686,7 @@ async def file_patch_handler(
 
     # ── Write the patched file ──────────────────────────────────────────
     try:
-        await awrite_text(safe, patched, encoding="utf-8")
+        await atomic_write_text(safe, patched)
     except OSError as exc:
         return {"success": False, "error": f"写入补丁文件失败: {exc}"}
 
@@ -786,7 +787,7 @@ async def file_edit_handler(
     if not await aexists(safe):
         try:
             await amkdir(safe.parent)
-            await awrite_text(safe, new_string, encoding="utf-8")
+            await atomic_write_text(safe, new_string)
             size = await astat_size(safe)
         except OSError as exc:
             return {"success": False, "error": f"创建文件失败: {exc}"}
@@ -873,7 +874,7 @@ async def file_edit_handler(
 
     # ── Write ──────────────────────────────────────────────────────────
     try:
-        await awrite_text(safe, new_text, encoding="utf-8")
+        await atomic_write_text(safe, new_text)
         size = await astat_size(safe)
 
         # ── Track version ─────────────────────────────────────────────

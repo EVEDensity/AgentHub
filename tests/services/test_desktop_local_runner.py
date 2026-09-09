@@ -1937,6 +1937,77 @@ class DesktopSqliteClaimTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["status"], "PENDING")
         self.assertIn("runner-ghost", row["lease"])
 
+    async def test_same_runner_reuses_valid_leased_unit_without_incrementing_attempt(self) -> None:
+        await self._seed_desktop_mission("mis-claim-resume")
+        await self._seed_desktop_task_unit("mis-claim-resume")
+        lease = {
+            "id": "lease-resume",
+            "runnerId": RUNNER_USER_ID,
+            "expiresAt": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+        }
+        await self._conn.execute(
+            "UPDATE work_units SET status=$2, attempt=$3, lease=$4 WHERE id=$1",
+            "wu-desktop-1",
+            "LEASED",
+            1,
+            json.dumps(lease),
+        )
+
+        outcome = await self._claim()
+
+        self.assertEqual(outcome.status, WorkspaceClaimStatus.CLAIMED)
+        assert outcome.work_unit is not None
+        self.assertEqual(outcome.work_unit.status, WorkUnitStatus.LEASED)
+        self.assertEqual(outcome.work_unit.attempt, 1)
+        assert outcome.work_unit.lease is not None
+        self.assertEqual(outcome.work_unit.lease.id, "lease-resume")
+        row = await self._conn.fetchrow(
+            "SELECT attempt, lease FROM work_units WHERE id=$1", "wu-desktop-1"
+        )
+        self.assertEqual(row["attempt"], 1)
+        self.assertIn("lease-resume", row["lease"])
+
+    async def test_other_runner_cannot_reclaim_valid_leased_unit(self) -> None:
+        await self._seed_desktop_mission("mis-claim-fence")
+        await self._seed_desktop_task_unit("mis-claim-fence")
+        lease = {
+            "id": "lease-owned",
+            "runnerId": "runner-owner",
+            "expiresAt": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).isoformat(),
+        }
+        await self._conn.execute(
+            "UPDATE work_units SET status=$2, attempt=$3, lease=$4 WHERE id=$1",
+            "wu-desktop-1",
+            "LEASED",
+            1,
+            json.dumps(lease),
+        )
+
+        outcome = await self._claim()
+
+        self.assertEqual(outcome.status, WorkspaceClaimStatus.IDLE)
+        self.assertIsNone(outcome.work_unit)
+
+    async def test_malformed_resume_lease_is_fail_closed(self) -> None:
+        await self._seed_desktop_mission("mis-claim-corrupt")
+        await self._seed_desktop_task_unit("mis-claim-corrupt")
+        await self._conn.execute(
+            "UPDATE work_units SET status=$2, attempt=$3, lease=$4 WHERE id=$1",
+            "wu-desktop-1",
+            "LEASED",
+            1,
+            "{not-json}",
+        )
+
+        outcome = await self._claim()
+
+        self.assertEqual(outcome.status, WorkspaceClaimStatus.IDLE)
+        self.assertIsNone(outcome.work_unit)
+
     async def test_unsatisfied_dependency_unit_is_not_claimed(self) -> None:
         await self._seed_desktop_mission("mis-claim-deps")
         await self._seed_desktop_task_unit(

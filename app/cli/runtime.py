@@ -21,6 +21,9 @@ import subprocess
 import sys
 import time
 import uuid
+import hashlib
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
@@ -35,8 +38,9 @@ from app.services.tools.policy import ToolExecutionPolicy, resolve_tool_executio
 
 from app.cli.project_facts import facts_block_for_objective
 from app.cli.events import EventCursor, normalize_event, reorder_events
-from app.cli.reducer import SessionViewState, reduce_event
+from app.cli.reducer import SessionViewState, reduce_event, render_snapshot
 from app.errors import ConfigError
+from app.services.workspace_fingerprint import workspace_revision as compute_workspace_revision
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_DIR_NAME = ".agenthub"
@@ -466,7 +470,24 @@ class MissionControlProcess:
 
     def stop(self) -> None:
         if self._process is not None:
-            self._process.terminate()
+            # Terminate the complete child tree.  A shell-spawned uvicorn or
+            # PyInstaller child can otherwise survive and keep SQLite/HTTP
+            # resources open after Ctrl-C.
+            if os.name == "nt" and self._process.poll() is None:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(self._process.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    # Fall through to the bounded wait/kill path below. The
+                    # CLI must never print a traceback during shutdown.
+                    pass
+            else:
+                self._process.terminate()
             try:
                 self._process.wait(timeout=15)
             except subprocess.TimeoutExpired:
@@ -476,6 +497,7 @@ class MissionControlProcess:
         if self._log_handle is not None:
             self._log_handle.close()
             self._log_handle = None
+        _cleanup_local_runtime_artifacts(self._workspace_root)
 
     def __enter__(self) -> MissionControlProcess:
         self.start()
@@ -483,6 +505,38 @@ class MissionControlProcess:
 
     def __exit__(self, *exc_info: object) -> None:
         self.stop()
+
+
+def _cleanup_local_runtime_artifacts(workspace_root: Path) -> None:
+    """Remove only AgentHub-owned transient files after a local run.
+
+    Cleanup is intentionally narrow: user files and externally-created files
+    are never traversed or removed.  A failed cleanup is diagnostic-only and
+    must not mask the mission result.
+    """
+    exec_dir = workspace_root / ".agenthub_exec"
+    if exec_dir.is_dir():
+        for name in ("script.py", "script.sh"):
+            try:
+                (exec_dir / name).unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            exec_dir.rmdir()
+        except OSError:
+            pass
+    transaction_root = workspace_root / ".agenthub" / "change-transactions"
+    if transaction_root.is_dir():
+        for child in transaction_root.iterdir():
+            if child.is_dir() and not any(child.iterdir()):
+                try:
+                    child.rmdir()
+                except OSError:
+                    pass
+        try:
+            transaction_root.rmdir()
+        except OSError:
+            pass
 
 
 class MissionControlClient:
@@ -640,6 +694,71 @@ class MissionControlClient:
         rows = payload.get("checkpoints", payload.get("rows", []))
         return rows if isinstance(rows, list) else []
 
+    def lease_work_unit(self, mission_id: str, work_unit_id: str, *, lease_seconds: int = 300) -> dict[str, Any]:
+        response = self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/lease",
+            headers=self.headers,
+            json={"leaseSeconds": lease_seconds},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def recover_work_unit(self, mission_id: str, work_unit_id: str) -> dict[str, Any]:
+        response = self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/recover",
+            headers=self.headers,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def start_work_unit(self, mission_id: str, work_unit_id: str, *, lease_id: str) -> dict[str, Any]:
+        response = self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/start",
+            headers=self.headers,
+            json={"leaseId": lease_id},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def heartbeat_work_unit(
+        self, mission_id: str, work_unit_id: str, *, lease_id: str, lease_seconds: int = 300
+    ) -> dict[str, Any]:
+        response = self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/heartbeat",
+            headers=self.headers,
+            json={"leaseId": lease_id, "leaseSeconds": lease_seconds},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def execution_context(
+        self,
+        mission_id: str,
+        work_unit_id: str,
+        *,
+        lease_id: str,
+    ) -> dict[str, Any]:
+        """Read the lease-fenced execution projection used by the Runner.
+
+        Resume validation and execution must observe the same durable
+        projection.  This endpoint deliberately returns the bounded prompt
+        projection plus the content-minimized checkpoint; it never returns
+        raw model prompts, tool arguments, or tool output.
+        """
+        response = self._request(
+            "POST",
+            f"/api/v1/missions/{mission_id}/work-units/{work_unit_id}/execution-context",
+            headers=self.headers,
+            json={"leaseId": lease_id},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
     def decisions(self, mission_id: str) -> list[dict[str, Any]]:
         """Pending human-in-the-loop decisions (P0-3 tool-call HITL)."""
         try:
@@ -753,6 +872,224 @@ class MissionRunResult:
         }
 
 
+@dataclass(frozen=True)
+class ResumeExecutionPlan:
+    """Fail-closed execution handoff produced before Harness re-entry."""
+
+    mission_id: str
+    work_unit_id: str
+    attempt: int
+    lease_id: str | None
+    checkpoint: dict[str, Any] | None
+    pending_decision: dict[str, Any] | None
+    receipt_decision: str
+    can_resume: bool
+    refusal_reason: str | None = None
+    resume_input: Any | None = None
+    execution_context: dict[str, Any] | None = None
+
+
+def prepare_resume_execution(
+    client: MissionControlClient,
+    mission_id: str,
+    workspace_root: Path,
+    *,
+    runner_id: str = WORKSPACE_ID,
+    lease_seconds: int = 300,
+    expected_context_manifest_digest: str | None = None,
+    receipt_store: Any | None = None,
+) -> ResumeExecutionPlan:
+    """Acquire a fresh lease and validate all execution resume fences.
+
+    This function performs no tool or model work.  It is the only safe handoff
+    into a Harness resume: a stale lease is recovered, a new lease is claimed,
+    pending decisions are surfaced, and ambiguous receipts fail closed.
+    """
+    gate = resume_work_unit(
+        client,
+        mission_id,
+        workspace_root,
+        strict=True,
+        expected_context_manifest_digest=expected_context_manifest_digest,
+        receipt_store=receipt_store,
+    )
+    units = [u for u in gate["workUnits"] if isinstance(u, dict)]
+    checkpoint = gate.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        return ResumeExecutionPlan(mission_id, "", 0, None, None, None, "not_checked", False, "no durable checkpoint")
+    work_unit_id = str(checkpoint.get("workUnitId") or checkpoint.get("work_unit_id") or "")
+    unit = next((u for u in units if str(u.get("id")) == work_unit_id), None)
+    if unit is None:
+        return ResumeExecutionPlan(mission_id, work_unit_id, 0, None, checkpoint, None, "not_checked", False, "checkpoint work unit is not part of mission")
+    checkpoint_attempt = int(checkpoint.get("attempt") or 0)
+    attempt = int(unit.get("attempt") or checkpoint_attempt or 0)
+    if attempt < 1:
+        return ResumeExecutionPlan(mission_id, work_unit_id, attempt, None, checkpoint, None, "not_checked", False, "invalid execution attempt")
+    status = str(unit.get("status") or "")
+    def _lease_expired(payload: Mapping[str, Any]) -> bool:
+        value = payload.get("expiresAt") or payload.get("expires_at")
+        if not isinstance(value, str) or not value:
+            return True
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed <= datetime.now(timezone.utc)
+
+    def _lease_from_unit(value: Mapping[str, Any]) -> Mapping[str, Any]:
+        lease_value = value.get("lease")
+        return lease_value if isinstance(lease_value, Mapping) else {}
+
+    try:
+        if status == "RUNNING":
+            lease = _lease_from_unit(unit)
+            lease_id = str(lease.get("id") or lease.get("leaseId") or "")
+            if not lease_id:
+                return ResumeExecutionPlan(mission_id, work_unit_id, attempt, None, checkpoint, None, gate["receiptDecision"], False, "running work unit has no lease")
+            if _lease_expired(lease):
+                client.recover_work_unit(mission_id, work_unit_id)
+                renewed = client.lease_work_unit(mission_id, work_unit_id, lease_seconds=lease_seconds)
+            else:
+                renewed = client.heartbeat_work_unit(mission_id, work_unit_id, lease_id=lease_id, lease_seconds=lease_seconds)
+        else:
+            if status == "LEASED":
+                lease = _lease_from_unit(unit)
+                lease_id = str(lease.get("id") or lease.get("leaseId") or "")
+                if lease_id and not _lease_expired(lease):
+                    renewed = client.heartbeat_work_unit(mission_id, work_unit_id, lease_id=lease_id, lease_seconds=lease_seconds)
+                else:
+                    if lease_id:
+                        client.recover_work_unit(mission_id, work_unit_id)
+                    renewed = client.lease_work_unit(mission_id, work_unit_id, lease_seconds=lease_seconds)
+            else:
+                if status in {"FAILED", "RETRYING"}:
+                    client.recover_work_unit(mission_id, work_unit_id)
+                renewed = client.lease_work_unit(mission_id, work_unit_id, lease_seconds=lease_seconds)
+        lease_payload = renewed.get("lease") if isinstance(renewed, dict) else None
+        lease_id = str((lease_payload or {}).get("id") or (lease_payload or {}).get("leaseId") or renewed.get("leaseId") or "")
+        if not lease_id:
+            raise RuntimeError("lease response did not contain a lease id")
+        leased_attempt = int((lease_payload or {}).get("attempt") or renewed.get("attempt") or attempt)
+        if leased_attempt < 1:
+            raise RuntimeError("lease response contained an invalid attempt")
+        if checkpoint_attempt and leased_attempt != checkpoint_attempt:
+            return ResumeExecutionPlan(mission_id, work_unit_id, leased_attempt, lease_id, checkpoint, None, gate["receiptDecision"], False, "checkpoint belongs to a different execution attempt")
+        attempt = leased_attempt
+    except (httpx.HTTPError, RuntimeError, KeyError, TypeError, ValueError) as exc:
+        return ResumeExecutionPlan(mission_id, work_unit_id, attempt, None, checkpoint, None, gate["receiptDecision"], False, f"lease acquisition failed: {exc}")
+
+    decisions = client.decisions(mission_id)
+    pending = [d for d in decisions if isinstance(d, dict) and str(d.get("status") or d.get("decisionStatus") or "PENDING") == "PENDING"]
+    next_action = checkpoint.get("nextAction") or checkpoint.get("next_action") or {}
+    next_call_id = str(next_action.get("callId") or next_action.get("call_id") or "") if isinstance(next_action, dict) else ""
+    checkpoint_key = str(checkpoint.get("idempotencyKey") or checkpoint.get("idempotency_key") or "")
+    def _decision_related(item: dict[str, Any]) -> bool:
+        if str(item.get("workUnitId") or item.get("work_unit_id") or work_unit_id) != work_unit_id:
+            return False
+        decision_attempt = item.get("attempt") or item.get("executionAttempt")
+        if decision_attempt is not None and int(decision_attempt) != attempt:
+            return False
+        decision_call = str(item.get("callId") or item.get("toolCallId") or item.get("tool_call_id") or "")
+        decision_key = str(item.get("idempotencyKey") or item.get("idempotency_key") or "")
+        if next_call_id and decision_call and decision_call != next_call_id:
+            return False
+        if checkpoint_key and decision_key and decision_key != checkpoint_key:
+            return False
+        return True
+    related = [d for d in pending if _decision_related(d)]
+    if len(related) > 1:
+        return ResumeExecutionPlan(mission_id, work_unit_id, attempt, lease_id, checkpoint, None, gate["receiptDecision"], False, "multiple pending decisions for work unit")
+    if gate["receiptDecision"] in {"unknown_outcome", "already_succeeded"}:
+        can_resume = gate["receiptDecision"] == "already_succeeded"
+        reason = None if can_resume else "tool receipt outcome is unknown"
+    else:
+        can_resume, reason = True, None
+    execution_context: dict[str, Any] | None = None
+    context_reader = getattr(client, "execution_context", None)
+    if callable(context_reader):
+        try:
+            context_payload = context_reader(
+                mission_id,
+                work_unit_id,
+                lease_id=lease_id,
+            )
+            if isinstance(context_payload, dict):
+                execution_context = context_payload
+                projected = context_payload.get("executionContext")
+                projected_checkpoint = (
+                    projected.get("checkpoint")
+                    if isinstance(projected, dict)
+                    else None
+                )
+                if isinstance(projected_checkpoint, dict) and isinstance(checkpoint, dict):
+                    projected_id = str(
+                        projected_checkpoint.get("id")
+                        or projected_checkpoint.get("checkpointId")
+                        or ""
+                    )
+                    checkpoint_id = str(
+                        checkpoint.get("id")
+                        or checkpoint.get("checkpointId")
+                        or ""
+                    )
+                    projected_attempt = int(projected_checkpoint.get("attempt") or 0)
+                    if checkpoint_id and projected_id and checkpoint_id != projected_id:
+                        return ResumeExecutionPlan(
+                            mission_id, work_unit_id, attempt, lease_id, checkpoint,
+                            None, gate["receiptDecision"], False,
+                            "execution checkpoint changed during lease acquisition",
+                            None, execution_context,
+                        )
+                    if projected_attempt and projected_attempt != attempt:
+                        return ResumeExecutionPlan(
+                            mission_id, work_unit_id, attempt, lease_id, checkpoint,
+                            None, gate["receiptDecision"], False,
+                            "execution checkpoint attempt changed during lease acquisition",
+                            None, execution_context,
+                        )
+        except (httpx.HTTPError, RuntimeError, KeyError, TypeError, ValueError) as exc:
+            return ResumeExecutionPlan(
+                mission_id,
+                work_unit_id,
+                attempt,
+                lease_id,
+                checkpoint,
+                None,
+                gate["receiptDecision"],
+                False,
+                f"execution context acquisition failed: {exc}",
+            )
+    resume_input = None
+    if can_resume:
+        from app.services.harness_service import HarnessResumeInput
+        recovered: tuple[Any, ...] = ()
+        if isinstance(next_action, dict) and next_call_id and gate["receiptDecision"] == "already_succeeded":
+            from app.services.model_contract import ToolResult
+            recovered = (ToolResult(call_id=next_call_id, name=str(next_action.get("toolName") or next_action.get("tool_name") or "recovered-tool"), success=True, content="[tool result recovered from durable receipt; side effect not replayed]"),)
+        resume_input = HarnessResumeInput(
+            checkpoint_id=str(checkpoint.get("id") or checkpoint.get("checkpointId") or ""),
+            attempt=attempt,
+            next_action=next_action if isinstance(next_action, dict) else None,
+            recovered_tool_results=recovered,
+            start_iteration=int(checkpoint.get("iteration") or 0),
+        )
+    return ResumeExecutionPlan(
+        mission_id,
+        work_unit_id,
+        attempt,
+        lease_id,
+        checkpoint,
+        related[0] if related else None,
+        gate["receiptDecision"],
+        can_resume,
+        reason,
+        resume_input,
+        execution_context,
+    )
+
+
 def status_to_exit_code(status: str, waited_timeout: bool) -> int:
     """Map the Mission terminal status onto the CLI exit-code contract."""
     if waited_timeout:
@@ -856,6 +1193,111 @@ def build_resume_context(client: MissionControlClient, mission_id: str) -> str:
     if summary:
         lines += ["先前任务的执行总结：", summary]
     return "\n".join(lines)
+
+
+def workspace_revision(workspace_root: Path) -> str:
+    """Return a deterministic workspace revision for resume fencing.
+
+    The revision combines the current Git commit and porcelain status.  It is
+    content-free and therefore safe to include in checkpoints and diagnostics.
+    Non-Git workspaces still receive a stable hash of relative file metadata.
+    """
+    return compute_workspace_revision(workspace_root)
+
+
+def resume_work_unit(
+    client: MissionControlClient,
+    mission_id: str,
+    workspace_root: Path,
+    *,
+    strict: bool = False,
+    expected_context_manifest_digest: str | None = None,
+    receipt_store: Any | None = None,
+) -> dict[str, Any]:
+    """Validate an execution checkpoint before a resume can replay work.
+
+    This is deliberately a read-only gate.  It never starts a WorkUnit or
+    executes a tool.  Callers must acquire a fresh lease and pass the returned
+    identity to the Runner.  Legacy checkpoints without a workspace fence are
+    reported as ``legacy`` and are rejected when ``strict`` is true.
+    """
+    mission = client.get_mission(mission_id)
+    if not isinstance(mission, dict):
+        raise RuntimeError(f"cannot safely resume mission {mission_id}: invalid mission payload")
+    units = client.work_units(mission_id) if callable(getattr(client, "work_units", None)) else []
+    checkpoints = client.checkpoints(mission_id) if callable(getattr(client, "checkpoints", None)) else []
+    current_revision = workspace_revision(workspace_root)
+    latest = max(
+        (row for row in checkpoints if isinstance(row, dict)),
+        key=lambda row: int(row.get("sequence", 0) or 0),
+        default=None,
+    )
+    recorded_revision = "" if latest is None else str(latest.get("workspaceRevision") or latest.get("workspace_revision") or "")
+    recorded_context_digest = "" if latest is None else str(
+        latest.get("contextManifestDigest")
+        or latest.get("context_manifest_digest")
+        or ""
+    )
+    # A checkpoint is legacy when either execution fence is absent. Strict
+    # resume rejects these rows until the durable schema carries both
+    # fingerprints; lenient callers retain historical summary behavior.
+    legacy = not bool(recorded_revision and recorded_context_digest)
+    revision_matches = bool(recorded_revision) and recorded_revision == current_revision
+    context_matches = (
+        expected_context_manifest_digest is None
+        or recorded_context_digest == expected_context_manifest_digest
+    )
+    if strict and (legacy or not revision_matches or not context_matches):
+        if legacy:
+            reason = "checkpoint has no workspace revision"
+        elif not revision_matches:
+            reason = "workspace revision changed since checkpoint"
+        else:
+            reason = "context manifest changed since checkpoint"
+        raise RuntimeError(f"cannot safely resume mission {mission_id}: {reason}")
+
+    next_action = (latest or {}).get("nextAction") or (latest or {}).get("next_action")
+    idempotency_key = (latest or {}).get("idempotencyKey") or (latest or {}).get("idempotency_key")
+    receipt_decision = "not_checked"
+    if receipt_store is not None and idempotency_key:
+        replay = getattr(receipt_store, "replay_decision", None)
+        if callable(replay):
+            receipt_decision = str(replay(str(idempotency_key), strict=True))
+    if strict and next_action is not None:
+        from app.services.runner_checkpoint import (
+            ResumeProtocol,
+            ResumeValidationError,
+            validate_resume_protocol,
+        )
+
+        if not isinstance(next_action, dict):
+            raise ResumeValidationError("checkpoint next action must be an object")
+
+        validate_resume_protocol(
+            ResumeProtocol(
+                next_action=next_action,
+                idempotency_key=str(idempotency_key) if idempotency_key else None,
+                workspace_revision=recorded_revision or None,
+                context_manifest_digest=recorded_context_digest or None,
+            ),
+            workspace_revision=current_revision,
+            expected_idempotency_prefix=f"{mission_id}/",
+        )
+    return {
+        "missionId": mission_id,
+        "missionStatus": mission.get("status"),
+        "workUnits": units,
+        "checkpoint": latest,
+        "workspaceRevision": current_revision,
+        "recordedWorkspaceRevision": recorded_revision or None,
+        "revisionMatches": revision_matches,
+        "recordedContextManifestDigest": recorded_context_digest or None,
+        "contextManifestMatches": context_matches,
+        "legacy": legacy,
+        "nextAction": next_action,
+        "idempotencyKey": idempotency_key,
+        "receiptDecision": receipt_decision,
+    }
 
 
 def _mission_digest(client: MissionControlClient, mission_id: str) -> str:
@@ -982,6 +1424,7 @@ def execute_objective(
     on_text: Any = None,
     on_event: Any = None,
     on_view_state: Any = None,
+    on_snapshot: Any = None,
     on_decision_request: Any = None,  # P0-3: 逐 tool-call HITL
     cancel_event: Any = None,  # threading.Event → P0-4 Esc 中途取消
     capture_attempt_snapshot: bool = True,
@@ -1011,7 +1454,11 @@ def execute_objective(
     from app.services.context_compiler import ContextCompiler
     from app.services.project_manifest import ProjectManifest
 
-    context_compiler = ContextCompiler(state_dir)
+    context_compiler = ContextCompiler(
+        state_dir,
+        provider=model.provider,
+        model=model.model,
+    )
     # ADR-0107 gated facts injection remains selective, but all model-facing
     # layers now flow through the compiler instead of ad-hoc prompt joins.
     facts_block = facts_block_for_objective(state_dir, objective)
@@ -1054,18 +1501,48 @@ def execute_objective(
             client.login()
             mission_context = ""
             conversation_context = context_text.strip()
-            if not conversation_context and resume_mission_id:
-                mission_context = build_resume_context(client, resume_mission_id)
+            resume_plan: ResumeExecutionPlan | None = None
+            if resume_mission_id and not conversation_context:
+                # Resume is an execution handoff, never a new Mission.  The
+                # strict gate validates workspace/context fences, reacquires
+                # the WorkUnit lease and reconciles receipts before polling.
+                from app.services.tools.receipts import ToolReceiptStore
+                try:
+                    resume_plan = prepare_resume_execution(
+                        client,
+                        resume_mission_id,
+                        workspace_root,
+                        expected_context_manifest_digest=None,
+                        receipt_store=ToolReceiptStore(state_dir / "receipts.json"),
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f"cannot safely resume mission {resume_mission_id}: {type(exc).__name__}") from exc
+                if not resume_plan.can_resume:
+                    raise RuntimeError(
+                        f"cannot safely resume mission {resume_mission_id}: {resume_plan.refusal_reason or 'resume gate rejected'}"
+                    )
+                # The prior Mission objective remains authoritative.  Do not
+                # inject a lossy summary or create a replacement Mission.
+                mission_context = ""
+            elif resume_mission_id and conversation_context:
+                # Explicit compact context is a compatibility projection
+                # used by chat chaining; it is not an execution resume.
+                mission_context = conversation_context
             compiled_objective = context_compiler.compile(
                 current=objective,
                 conversation=conversation_context,
                 mission=mission_context,
             )
-            mission = client.create_and_start_mission(
-                title=title,
-                objective=compiled_objective.render(),
-                time_seconds=int(runner_timeout_seconds),
-            )
+            if resume_plan is not None:
+                mission = client.get_mission(resume_mission_id)
+                if not isinstance(mission, dict) or str(mission.get("id") or "") != resume_mission_id:
+                    raise RuntimeError("resume mission payload does not match requested mission")
+            else:
+                mission = client.create_and_start_mission(
+                    title=title,
+                    objective=compiled_objective.render(),
+                    time_seconds=int(runner_timeout_seconds),
+                )
             mission_id = str(mission["id"])
             created = time.monotonic()
             if on_status:
@@ -1073,6 +1550,38 @@ def execute_objective(
                     on_status(f"启动 mission {mission_id[:20]}...")
                 except Exception:  # noqa: BLE001
                     pass
+            # A crash can leave an already-persisted Decision without a new
+            # SSE event. Resolve that decision before polling so resume never
+            # hangs waiting for an event that was emitted before the restart.
+            if resume_plan is not None and resume_plan.pending_decision is not None:
+                decision = resume_plan.pending_decision
+                decision_id = str(decision.get("id") or decision.get("decisionId") or "")
+                try:
+                    expected_version = int(decision.get("version") or 1)
+                except (TypeError, ValueError):
+                    expected_version = 1
+                try:
+                    allow = bool(on_decision_request(decision)) if on_decision_request is not None else False
+                    if decision_id:
+                        client.resolve_decision(
+                            mission_id,
+                            decision_id,
+                            allow=allow,
+                            note="resumed CLI decision",
+                            expected_version=expected_version,
+                        )
+                except Exception:  # noqa: BLE001 - resume decisions fail closed
+                    if decision_id:
+                        try:
+                            client.resolve_decision(
+                                mission_id,
+                                decision_id,
+                                allow=False,
+                                note="resume decision handling failed; denied safely",
+                                expected_version=expected_version,
+                            )
+                        except Exception:
+                            pass
             waited_timeout = False
             last_status = str(mission.get("status"))
             try:
@@ -1113,12 +1622,18 @@ def execute_objective(
                             continue
                         view_state = reduce_event(view_state, normalized)
                         assistant_text_seen = view_state.assistant_text
-                        if on_view_state is not None:
+                        snapshot = render_snapshot(view_state)
+                        if on_snapshot is not None:
+                            try:
+                                on_snapshot(snapshot)
+                            except Exception:  # noqa: BLE001 - renderer must not break execution
+                                pass
+                        if on_view_state is not None and on_snapshot is None:
                             try:
                                 on_view_state(view_state)
                             except Exception:  # noqa: BLE001
                                 pass
-                        if on_event is not None:
+                        if on_event is not None and on_snapshot is None:
                             try:
                                 on_event(normalized.raw)
                             except Exception:  # noqa: BLE001
@@ -1146,12 +1661,12 @@ def execute_objective(
                                     except Exception:  # noqa: BLE001
                                         pass
                         text_delta = normalized.text_delta
-                        if on_text is not None and text_delta and event_type in {"assistant.delta", "message.delta", "text.delta", "model.output.delta"}:
+                        if on_text is not None and on_snapshot is None and text_delta and event_type in {"assistant.delta", "message.delta", "text.delta", "model.output.delta"}:
                             try:
                                 on_text(str(text_delta))
                             except Exception:  # noqa: BLE001
                                 pass
-                        if event_type in {"decision.pending", "decision.lifecycle.requested"} and on_decision_request is not None:
+                        if event_type in {"decision.pending", "decision.lifecycle.requested"}:
                             decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else payload
                             decision_id = str(decision.get("id") or decision.get("decisionId") or "")
                             try:
@@ -1159,7 +1674,10 @@ def execute_objective(
                             except (TypeError, ValueError):
                                 expected_version = 1
                             try:
-                                allow = bool(on_decision_request(decision))
+                                # Headless/CI callers do not provide an
+                                # interactive callback: deny by default so a
+                                # pending Decision can never hang a mission.
+                                allow = bool(on_decision_request(decision)) if on_decision_request is not None else False
                                 if decision_id:
                                     client.resolve_decision(
                                         mission_id,

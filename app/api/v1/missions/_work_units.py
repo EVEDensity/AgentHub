@@ -13,6 +13,25 @@ from app.services.mission._types import (
 router = APIRouter()
 
 
+@router.get("/{mission_id}/checkpoints")
+async def list_execution_checkpoints(
+    mission_id: str,
+    user: CurrentUser,
+    repository: MissionRepositoryDep,
+    limit: int = 200,
+    offset: int = 0,
+) -> dict:
+    """Return content-minimized checkpoints used by safe resume."""
+    await _authorized_mission(mission_id, user=user, repository=repository)
+    try:
+        checkpoints = await repository.list_execution_checkpoints(
+            mission_id, limit=limit, offset=offset
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"checkpoints": [checkpoint.to_public_dict() for checkpoint in checkpoints]}
+
+
 @router.post("/{mission_id}/work-units/{work_unit_id}/stream-events", status_code=status.HTTP_201_CREATED)
 async def publish_stream_event(
     mission_id: str,
@@ -291,7 +310,20 @@ async def get_claimed_execution_context(
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"executionContext": context.to_public_dict()}
+    payload = context.to_public_dict()
+    # Include only the latest content-minimized checkpoint.  This allows a
+    # Runner that reacquired the lease after a crash to re-enter the same
+    # Harness turn; prompts, arguments and tool output remain excluded by the
+    # checkpoint contract.
+    try:
+        checkpoints = await repository.list_execution_checkpoints(mission_id, limit=200, offset=0)
+    except Exception:
+        checkpoints = []
+    checkpoints = [item for item in checkpoints if item.work_unit_id == work_unit_id]
+    if checkpoints:
+        latest = max(checkpoints, key=lambda item: item.sequence)
+        payload["checkpoint"] = latest.to_public_dict()
+    return {"executionContext": payload}
 
 @router.post("/{mission_id}/work-units/{work_unit_id}/start")
 async def start_work_unit(
@@ -395,6 +427,11 @@ async def record_execution_checkpoint(
             failure_reason=request.failure_reason,
             tool_name=request.tool_name,
             tool_success=request.tool_success,
+            resume_protocol_version=request.resume_protocol_version,
+            next_action=request.next_action,
+            idempotency_key=request.idempotency_key,
+            workspace_revision=request.workspace_revision,
+            context_manifest_digest=request.context_manifest_digest,
             actor=_build_execution_actor(user),
         )
     except MissionNotFoundError as exc:

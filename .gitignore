@@ -31,6 +31,7 @@ kite-update.key.pub
 data/
 !frontend/data/
 .agenthub/
+attempt-snapshots/
 .kite/
 *.sqlite3
 *.db
