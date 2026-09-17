@@ -3,6 +3,9 @@ name: CLI JSONL smoke
 on:
   workflow_dispatch:
   pull_request:
+    branches:
+      - main
+      - 'main*'
     paths:
       - "app/cli/**"
       - "app/services/model_port.py"

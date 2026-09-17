@@ -2,6 +2,9 @@ name: Public contracts
 
 on:
   push:
+    branches:
+      - main
+      - 'main*'
     paths:
       - "platform/contracts/v1/**"
       - "app/domain/**"
@@ -16,6 +19,9 @@ on:
       - "tests/persistence/**"
       - ".github/workflows/contracts.yml"
   pull_request:
+    branches:
+      - main
+      - 'main*'
     paths:
       - "platform/contracts/v1/**"
       - "app/domain/**"
