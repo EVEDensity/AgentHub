@@ -1,0 +1,103 @@
+{
+  "name": "agenthub",
+  "displayName": "AgentHub — Multi-Agent Collaboration",
+  "description": "Chat with AgentHub agents inside VS Code. @agent to wake them up, watch Mission events in real time, and review Artifacts + Evidence.",
+  "version": "0.1.0",
+  "publisher": "agenthub",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:agenthub.missions",
+    "onCommand:agenthub.openChat",
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "AgentHub",
+      "properties": {
+        "agenthub.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "AgentHub backend base URL (no trailing slash)."
+        },
+        "agenthub.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional API key for protected deployments."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "agenthub.openChat",
+        "title": "AgentHub: Open Chat Panel"
+      },
+      {
+        "command": "agenthub.createMission",
+        "title": "AgentHub: Create Mission…"
+      },
+      {
+        "command": "agenthub.refreshMissions",
+        "title": "AgentHub: Refresh Mission List",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "agenthub.sendSelection",
+        "title": "AgentHub: Send Selection to Chat"
+      },
+      {
+        "command": "agenthub.watchDiff",
+        "title": "AgentHub: Watch Current File Diff"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agenthub",
+          "title": "AgentHub",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agenthub": [
+        {
+          "type": "tree",
+          "id": "agenthub.missions",
+          "name": "Missions"
+        },
+        {
+          "type": "webview",
+          "id": "agenthub.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "agenthub.sendSelection",
+          "group": "navigation@99"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "node ./node_modules/@vscode/vsce/vsce.js package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.3.3"
+  }
+}

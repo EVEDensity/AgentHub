@@ -1,0 +1,64 @@
+name: CLI provider nightly smoke
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  provider-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: deepseek
+            model: deepseek-v4-flash
+          - provider: deepseek
+            model: deepseek-v4-pro
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Streaming smoke
+        env:
+          AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
+          AGENTHUB_CLI_MODEL: ${{ matrix.model }}
+          AGENTHUB_RELEASE_ID: nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/streaming-${{ matrix.model }}.json
+          AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT: ${{ runner.temp }}/provider-health.json
+        run: python scripts/cli_provider_smoke.py
+      - name: Tool-call smoke
+        env:
+          AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
+          AGENTHUB_CLI_MODEL: ${{ matrix.model }}
+          AGENTHUB_CLI_PROVIDER_TOOL_SMOKE: "1"
+          AGENTHUB_CLI_PROVIDER_TOOL_LOOP: "1"
+          AGENTHUB_RELEASE_ID: nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_CLI_PROVIDER_SMOKE_OUTPUT: ${{ runner.temp }}/tool-${{ matrix.model }}.json
+          AGENTHUB_CLI_PROVIDER_HEALTH_OUTPUT: ${{ runner.temp }}/provider-health.json
+        run: python scripts/cli_provider_smoke.py
+      - name: Mission closed-loop smoke
+        env:
+          AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
+          AGENTHUB_CLI_MODEL: ${{ matrix.model }}
+          AGENTHUB_RELEASE_ID: nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_CLI_PROVIDER_MISSION_OUTPUT: ${{ runner.temp }}/mission-${{ matrix.model }}.json
+        run: python scripts/cli_provider_mission_smoke.py
+      - name: Upload redacted provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-provider-${{ matrix.model }}
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/*.json
+          if-no-files-found: ignore

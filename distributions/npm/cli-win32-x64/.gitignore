@@ -1,0 +1,4 @@
+# The frozen binary is injected at publish time by the npm-cli release
+# workflow (scripts/build-cli-windows.ps1 -> agenthub.exe). Never commit
+# build artifacts.
+agenthub.exe

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+import json
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -104,17 +105,78 @@ class ArtifactRef(DomainModel):
     digest: Digest
 
 
+class ArtifactKind(str, Enum):
+    DIFF = "diff"
+    COMMIT = "commit"
+    FILE = "file"
+    LOG = "log"
+    REPORT = "report"
+    TEST_RESULT = "test-result"
+    BUILD = "build"
+    PULL_REQUEST = "pull-request"
+
+
+class ArtifactRetention(str, Enum):
+    EPHEMERAL = "ephemeral"
+    MISSION = "mission"
+    STANDARD = "standard"
+    LEGAL_HOLD = "legal-hold"
+
+
+class ArtifactSensitivity(str, Enum):
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    CONFIDENTIAL = "confidential"
+    RESTRICTED = "restricted"
+
+
+class Artifact(DomainModel):
+    id: Identifier
+    mission_id: Identifier
+    work_unit_id: Identifier
+    attempt: Annotated[int, Field(ge=1)]
+    kind: ArtifactKind
+    digest: Digest
+    content_address: Annotated[str, Field(min_length=1, max_length=2048)]
+    media_type: Annotated[str, Field(min_length=1, max_length=255)]
+    size_bytes: Annotated[int, Field(ge=0)]
+    source_repository: Annotated[str, Field(min_length=1, max_length=2048)] | None = None
+    base_commit: Annotated[
+        str, Field(pattern=r"^[a-fA-F0-9]{7,64}$")
+    ] | None = None
+    retention: ArtifactRetention = ArtifactRetention.MISSION
+    sensitivity: ArtifactSensitivity = ArtifactSensitivity.INTERNAL
+    created_by: ActorRef
+    created_at: AwareDatetime
+
+
 class MissionSourceType(str, Enum):
     MANUAL = "manual"
     ISSUE = "issue"
     API = "api"
+    A2A = "a2a"
+    A2A_INBOUND = "a2a.inbound"
     IMPORT = "import"
+    MISSION_FORK = "mission.fork"
+    CHAT = "chat"          # Web chat Mission (v1 chat_mission adapter)
 
 
 class MissionSource(DomainModel):
     type: MissionSourceType
     reference: Annotated[str, Field(max_length=2048)] | None = None
     external_id: Annotated[str, Field(max_length=255)] | None = None
+    session_id: Annotated[str, Field(max_length=128)] | None = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_fork_ancestry(self) -> MissionSource:
+        if self.type != MissionSourceType.MISSION_FORK:
+            return self
+        if self.reference is None or not self.reference.strip():
+            raise ValueError("mission fork source requires a source Mission reference")
+        if self.external_id is None or not self.external_id.strip():
+            raise ValueError("mission fork source requires an ExecutionCheckpoint id")
+        return self
 
 
 class MissionStatus(str, Enum):
@@ -132,7 +194,9 @@ class AggregateType(str, Enum):
     MISSION = "mission"
     MISSION_CONTRACT = "mission_contract"
     WORK_UNIT = "work_unit"
+    ARTIFACT = "artifact"
     EVIDENCE = "evidence"
+    DECISION = "decision"
 
 
 class EventEnvelope(BaseModel):
@@ -165,6 +229,21 @@ class EventEnvelope(BaseModel):
     def to_public_dict(self) -> dict[str, Any]:
         return self.model_dump(exclude_none=True, mode="json")
 
+    def to_sse_dict(self) -> dict[str, Any]:
+        """Versioned wire envelope used by Mission Control SSE clients."""
+        return {
+            "schemaVersion": self.schema_version,
+            "eventId": self.event_id,
+            "missionId": self.correlation_id,
+            "aggregate": {
+                "type": self.aggregate_type,
+                "id": self.aggregate_id,
+                "sequence": self.sequence,
+            },
+            "type": self.event_type,
+            "payload": self.payload,
+        }
+
 
 class Mission(DomainModel):
     id: Identifier
@@ -173,6 +252,7 @@ class Mission(DomainModel):
     objective: Annotated[str, Field(min_length=1, max_length=10000)]
     source: MissionSource
     contract_id: Identifier
+    contract_version: Annotated[int, Field(ge=1)]
     status: MissionStatus
     plan_version: Annotated[int, Field(ge=0)] = 0
     created_by: ActorRef
@@ -240,6 +320,10 @@ class DecisionGate(DomainModel):
     blocking: bool = True
 
 
+class ContractGovernance(DomainModel):
+    decision_timeout_seconds: Annotated[int, Field(ge=1, le=31_536_000)] = 86_400
+
+
 class MissionContract(DomainModel):
     id: Identifier
     version: Annotated[int, Field(ge=1)]
@@ -249,6 +333,7 @@ class MissionContract(DomainModel):
     acceptance_criteria: Annotated[tuple[AcceptanceCriterion, ...], Field(min_length=1)]
     decision_gates: tuple[DecisionGate, ...]
     forbidden_actions: tuple[Annotated[str, Field(min_length=1, max_length=255)], ...]
+    governance: ContractGovernance = Field(default_factory=ContractGovernance)
     expires_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
@@ -287,9 +372,23 @@ class WorkUnitStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class ExecutionCheckpointPhase(str, Enum):
+    EXECUTION_STARTED = "harness.execution.started"
+    ITERATION_STARTED = "harness.iteration.started"
+    MODEL_STARTED = "harness.model.started"
+    MODEL_COMPLETED = "harness.model.completed"
+    TOOL_STARTED = "harness.tool.started"
+    TOOL_COMPLETED = "harness.tool.completed"
+    BUDGET_EXHAUSTED = "harness.budget.exhausted"
+    EXECUTION_COMPLETED = "harness.execution.completed"
+    EXECUTION_FAILED = "harness.execution.failed"
+
+
 class WorkUnit(DomainModel):
     id: Identifier
     mission_id: Identifier
+    parent_work_unit_id: Identifier | None = None
+    assigned_agent_id: Identifier | None = None
     kind: Annotated[str, Field(min_length=1, max_length=255)]
     dependencies: tuple[Identifier, ...]
     input_refs: tuple[ArtifactRef, ...]
@@ -304,6 +403,8 @@ class WorkUnit(DomainModel):
 
     @model_validator(mode="after")
     def validate_execution_state(self) -> WorkUnit:
+        if self.parent_work_unit_id == self.id:
+            raise ValueError("a work unit cannot delegate to itself")
         if self.id in self.dependencies:
             raise ValueError("a work unit cannot depend on itself")
         if len(self.dependencies) != len(set(self.dependencies)):
@@ -320,6 +421,57 @@ class WorkUnit(DomainModel):
             and self.lease is not None
         ):
             raise ValueError(f"{self.status.value} work unit cannot retain a lease")
+        return self
+
+
+class ExecutionCheckpoint(DomainModel):
+    id: Identifier
+    mission_id: Identifier
+    work_unit_id: Identifier
+    attempt: Annotated[int, Field(ge=1)]
+    sequence: Annotated[int, Field(ge=1)]
+    phase: ExecutionCheckpointPhase
+    iteration: Annotated[int, Field(ge=0)]
+    tool_calls: Annotated[int, Field(ge=0)]
+    prompt_tokens: Annotated[int, Field(ge=0)]
+    completion_tokens: Annotated[int, Field(ge=0)]
+    model_cost: Annotated[float, Field(ge=0)]
+    terminal: bool = False
+    failure_reason: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+    state_digest: Digest
+    # Versioned, content-minimized execution resume protocol.  Legacy rows
+    # may omit these fields; strict resume validation rejects such rows.
+    resume_protocol_version: Annotated[int, Field(ge=1, le=10)] | None = None
+    next_action: dict[str, Any] | None = None
+    idempotency_key: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    workspace_revision: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    context_manifest_digest: Annotated[str, Field(min_length=1, max_length=255)] | None = None
+    created_by: ActorRef
+    created_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def validate_terminal_state(self) -> ExecutionCheckpoint:
+        terminal_phases = {
+            ExecutionCheckpointPhase.EXECUTION_COMPLETED,
+            ExecutionCheckpointPhase.EXECUTION_FAILED,
+        }
+        if self.terminal != (self.phase in terminal_phases):
+            raise ValueError("checkpoint terminal flag must match its phase")
+        if self.phase == ExecutionCheckpointPhase.EXECUTION_FAILED:
+            if self.failure_reason is None:
+                raise ValueError("failed checkpoint requires a failure reason")
+        elif self.failure_reason is not None:
+            raise ValueError("only a failed checkpoint can carry a failure reason")
+        if self.next_action is not None:
+            if len(json.dumps(self.next_action, ensure_ascii=True, separators=(",", ":"))) > 8192:
+                raise ValueError("checkpoint next_action exceeds 8 KiB")
+            keys = {"toolName", "tool_name", "callId", "call_id"}
+            if not any(key in self.next_action for key in keys):
+                raise ValueError("checkpoint next_action must identify a tool call")
+            if self.resume_protocol_version is None:
+                raise ValueError("next_action requires resume_protocol_version")
+        if self.idempotency_key is not None and "/" not in self.idempotency_key:
+            raise ValueError("idempotency_key must be execution scoped")
         return self
 
 
@@ -353,3 +505,189 @@ class Evidence(DomainModel):
         if len(artifact_ids) != len(set(artifact_ids)):
             raise ValueError("evidence artifact refs must be unique")
         return self
+
+
+class DecisionStatus(str, Enum):
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+
+
+class DecisionResolution(str, Enum):
+    RETRY_WORK_UNIT = "RETRY_WORK_UNIT"
+    FAIL_MISSION = "FAIL_MISSION"
+
+
+class EvaluationPolicyReason(str, Enum):
+    NO_APPLICABLE_POLICY = "no_applicable_policy"
+    AMBIGUOUS_POLICY = "ambiguous_policy"
+    INVALID_CONFIGURATION = "invalid_configuration"
+    UNSUPPORTED_EVALUATOR = "unsupported_evaluator"
+    ARTIFACT_REQUIREMENTS_NOT_MET = "artifact_requirements_not_met"
+
+
+class Decision(DomainModel):
+    id: Identifier
+    mission_id: Identifier
+    work_unit_id: Identifier
+    attempt: Annotated[int, Field(ge=1)]
+    context_digest: Digest
+    reason_code: EvaluationPolicyReason
+    criterion_ids: tuple[Identifier, ...]
+    options: Annotated[tuple[DecisionResolution, ...], Field(min_length=1)]
+    recommended_option: DecisionResolution
+    risk_summary: Annotated[str, Field(min_length=1, max_length=2000)]
+    status: DecisionStatus
+    version: Annotated[int, Field(ge=1)] = 1
+    requested_by: ActorRef
+    requested_at: AwareDatetime
+    expires_at: AwareDatetime | None = None
+    resolution: DecisionResolution | None = None
+    rationale: Annotated[str, Field(min_length=1, max_length=10000)] | None = None
+    resolved_by: ActorRef | None = None
+    resolved_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def validate_lifecycle(self) -> Decision:
+        if self.criterion_ids != tuple(sorted(set(self.criterion_ids))):
+            raise ValueError("decision criterion IDs must be sorted and unique")
+        if len(self.options) != len(set(self.options)):
+            raise ValueError("decision options must be unique")
+        if self.recommended_option not in self.options:
+            raise ValueError("recommended option must be offered by the decision")
+        if self.expires_at is not None and self.expires_at <= self.requested_at:
+            raise ValueError("decision expiry must be later than requested_at")
+
+        resolution_fields = (
+            self.resolution,
+            self.rationale,
+            self.resolved_by,
+            self.resolved_at,
+        )
+        if self.status == DecisionStatus.PENDING:
+            if any(value is not None for value in resolution_fields):
+                raise ValueError("pending decision cannot carry resolution fields")
+            if self.version != 1:
+                raise ValueError("pending decision must start at version 1")
+            return self
+
+        completion_fields = (self.rationale, self.resolved_by, self.resolved_at)
+        if any(value is None for value in completion_fields):
+            raise ValueError("closed decision requires complete resolution metadata")
+        assert self.resolved_at is not None
+        if self.resolved_at < self.requested_at:
+            raise ValueError("decision resolution cannot predate its request")
+        if self.version < 2:
+            raise ValueError("closed decision version must be at least 2")
+        if self.status in {DecisionStatus.CANCELLED, DecisionStatus.EXPIRED}:
+            if self.resolution is not None:
+                raise ValueError("unresolved closed decision cannot carry a resolution")
+            if self.status == DecisionStatus.EXPIRED:
+                if self.expires_at is None:
+                    raise ValueError("expired decision requires expires_at")
+                if self.resolved_at < self.expires_at:
+                    raise ValueError("decision cannot expire before expires_at")
+            return self
+        assert self.resolution is not None
+        if self.resolution not in self.options:
+            raise ValueError("decision resolution was not an offered option")
+        return self
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# T1-3: Session event stream model (multi-agent collaboration)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class SessionStatus(str, Enum):
+    """Lifecycle status of a chat session."""
+
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class Session(DomainModel):
+    """A chat session that groups messages, mentions, and Missions."""
+
+    id: Identifier
+    workspace_id: Identifier
+    title: Annotated[str, Field(min_length=1, max_length=255)]
+    status: SessionStatus = SessionStatus.ACTIVE
+    metadata: dict[str, Any] | None = None
+    created_by: ActorRef
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class SessionEventType(str, Enum):
+    """Immutable event types in the session event log.
+
+    Matches the architecture spec (multi-agent-collaboration.md §5).
+    Values are wire-stable — new types may be appended; renames or
+    removals require an ADR + data migration.
+    """
+    MEMBER_JOINED = "member.joined"
+    MEMBER_LEFT = "member.left"
+    MESSAGE_CREATED = "message.created"
+    MENTION_DETECTED = "mention.detected"
+    RULE_TRIGGERED = "rule.triggered"
+    MISSION_CREATED = "mission.created"
+    MISSION_COMPLETED = "mission.completed"
+    DECISION_RECORDED = "decision.recorded"
+
+
+class SessionEvent(DomainModel):
+    """One immutable event in a session's event stream.
+
+    The session event log is the conversation-domain counterpart to the
+    Mission event ledger.  Every chat message, @mention resolution,
+    mission creation, and milestone completion appends one record —
+    never updates, never deletes (ADR-0108 event-log-as-memory).
+    """
+    id: Identifier
+    session_id: Identifier
+    event_type: SessionEventType
+    actor: ActorRef
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: AwareDatetime
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# T5: Rule confirmation gate — pending rule-trigger records
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class PendingConfirmationStatus(str, Enum):
+    """Lifecycle of a pending rule-trigger confirmation."""
+
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+
+
+class PendingConfirmation(DomainModel):
+    """A rule-trigger that requires user confirmation before creating a Mission.
+
+    Created by :func:`chat_mission.create_chat_mission` when a matched
+    rule has ``require_confirmation: true`` and ``action.kind: create_mission``.
+    The user confirms or cancels via the dedicated endpoints; the record
+    auto-expires after ``expires_at`` (default 15 min).
+    """
+
+    id: Identifier
+    session_id: str | None = None
+    workspace_id: Identifier
+    rule_id: str
+    rule_description: str
+    action_kind: str                       # "create_mission"
+    target_agent: str | None = None
+    objective_template: str | None = None
+    message: str                           # original user message (replay on confirm)
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    status: PendingConfirmationStatus = PendingConfirmationStatus.PENDING
+    created_by: ActorRef
+    expires_at: AwareDatetime
+    created_at: AwareDatetime
+    resolved_at: AwareDatetime | None = None

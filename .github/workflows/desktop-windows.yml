@@ -1,0 +1,272 @@
+name: Desktop Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['desktop-v*']
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package Windows desktop
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/runtime-sidecar/target
+            desktop/src-tauri/target
+          key: desktop-windows-${{ runner.os }}-${{ hashFiles('desktop/**/Cargo.lock', 'desktop/**/Cargo.toml') }}
+      - name: Install pinned Tauri CLI
+        run: cargo install tauri-cli --version 2.11.4 --locked
+      - name: Enforce public release signing policy
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: .\release-policy.ps1 -PublicRelease
+        env:
+          AGENTHUB_WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.AGENTHUB_WINDOWS_SIGNING_CERT_BASE64 }}
+          AGENTHUB_WINDOWS_SIGNING_PASSWORD: ${{ secrets.AGENTHUB_WINDOWS_SIGNING_PASSWORD }}
+          AGENTHUB_UPDATE_PRIVATE_KEY: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY }}
+          AGENTHUB_UPDATE_PUBLIC_KEY: ${{ secrets.AGENTHUB_UPDATE_PUBLIC_KEY }}
+          AGENTHUB_UPDATE_ENDPOINT: ${{ secrets.AGENTHUB_UPDATE_ENDPOINT }}
+      - name: Build and verify installer package
+        run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc
+        env:
+          AGENTHUB_INSTALLER_LIFECYCLE_SMOKE: '1'
+          AGENTHUB_UPDATE_ENABLED: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && '1' || '0' }}
+          AGENTHUB_UPDATE_PUBLIC_KEY: ${{ secrets.AGENTHUB_UPDATE_PUBLIC_KEY }}
+          AGENTHUB_UPDATE_ENDPOINT: ${{ secrets.AGENTHUB_UPDATE_ENDPOINT }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD }}
+      - name: Build and verify portable package
+        run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -Portable
+      - name: Run WebView2 GUI smoke
+        run: .\webview2-gui-smoke.ps1
+      - name: Verify updater signatures and rollback
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: .\updater-rollback-smoke.ps1 -TargetTriple x86_64-pc-windows-msvc
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-windows-${{ github.sha }}
+          path: |
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-desktop.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-runtime.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.msi
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
+          if-no-files-found: error
+      - name: Upload installer lifecycle logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-installer-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/agenthub-installer-smoke-*
+          if-no-files-found: ignore
+      - name: Upload WebView2 GUI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-webview2-${{ github.sha }}
+          path: output/playwright
+          if-no-files-found: ignore
+      - name: Upload signed updater artifacts
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenthub-desktop-updater-${{ github.sha }}
+          path: |
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.sig
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
+          if-no-files-found: error
+
+  external-integration:
+    name: External service opt-in integration
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install integration probe dependency
+        run: python -m pip install httpx pydantic pydantic-settings
+      - name: Probe configured external services
+        shell: pwsh
+        env:
+          MC_URL: ${{ secrets.AGENTHUB_INTEGRATION_MISSION_CONTROL_URL }}
+          MC_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_MISSION_CONTROL_TOKEN }}
+          GW_URL: ${{ secrets.AGENTHUB_INTEGRATION_AI_GATEWAY_URL }}
+          GW_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_AI_GATEWAY_TOKEN }}
+          MCP_URL: ${{ secrets.AGENTHUB_INTEGRATION_MCP_URL }}
+          MCP_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_MCP_TOKEN }}
+          ARTIFACT_URL: ${{ secrets.AGENTHUB_INTEGRATION_ARTIFACT_URL }}
+          ARTIFACT_TOKEN: ${{ secrets.AGENTHUB_INTEGRATION_ARTIFACT_TOKEN }}
+        run: |
+          $required = @($env:MC_URL, $env:MC_TOKEN, $env:GW_URL, $env:GW_TOKEN, $env:MCP_URL, $env:MCP_TOKEN, $env:ARTIFACT_URL, $env:ARTIFACT_TOKEN)
+          if ($required | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
+            Write-Output 'External integration skipped: required service secrets are not configured.'
+            exit 0
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'agenthub-runner-integration'
+          New-Item -ItemType Directory -Force -Path $root, (Join-Path $root 'artifacts') | Out-Null
+          Set-Content -LiteralPath (Join-Path $root 'mission-control.token') -Value $env:MC_TOKEN -NoNewline
+          Set-Content -LiteralPath (Join-Path $root 'gateway.token') -Value $env:GW_TOKEN -NoNewline
+          Set-Content -LiteralPath (Join-Path $root 'mcp.token') -Value $env:MCP_TOKEN -NoNewline
+          Set-Content -LiteralPath (Join-Path $root 'bindings.json') -Value '{"schemaVersion":"agenthub.runner.mcp-bindings.v1","bindings":[]}' -NoNewline
+          $env:AGENTHUB_RUNNER_RUNNER_ID = 'ci-external-integration'
+          $env:AGENTHUB_RUNNER_WORKSPACE_ID = 'ci-workspace'
+          $env:AGENTHUB_RUNNER_ASSIGNED_AGENT_ID = 'ci-agent'
+          $env:AGENTHUB_RUNNER_ASSIGNED_ADAPTER = 'mcp'
+          $env:AGENTHUB_RUNNER_MODEL = 'external-ci-model'
+          $env:AGENTHUB_RUNNER_MISSION_CONTROL_URL = $env:MC_URL
+          $env:AGENTHUB_RUNNER_MODEL_GATEWAY_URL = $env:GW_URL
+          $env:AGENTHUB_RUNNER_MCP_ENDPOINT = $env:MCP_URL
+          $env:AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE = Join-Path $root 'mission-control.token'
+          $env:AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE = Join-Path $root 'gateway.token'
+          $env:AGENTHUB_RUNNER_MCP_TOKEN_FILE = Join-Path $root 'mcp.token'
+          $env:AGENTHUB_RUNNER_MCP_BINDINGS_FILE = Join-Path $root 'bindings.json'
+          $env:AGENTHUB_RUNNER_ARTIFACT_HOST_PATH = Join-Path $root 'artifacts'
+          python scripts/runner_deployment_preflight.py --http-probe
+          $artifactHeaders = @{ Authorization = "Bearer $env:ARTIFACT_TOKEN" }
+          $artifactHealth = Invoke-WebRequest -Uri ($env:ARTIFACT_URL.TrimEnd('/') + '/healthz') -Headers $artifactHeaders -Method Get -UseBasicParsing
+          if ($artifactHealth.StatusCode -lt 200 -or $artifactHealth.StatusCode -ge 300) { throw "Artifact storage health probe returned HTTP $($artifactHealth.StatusCode)." }
+          $payload = [Text.Encoding]::UTF8.GetBytes('agenthub-ci-artifact-roundtrip-v1')
+          $sha = [Security.Cryptography.SHA256]::Create().ComputeHash($payload)
+          $digest = ([BitConverter]::ToString($sha) -replace '-', '').ToLowerInvariant()
+          $casUri = $env:ARTIFACT_URL.TrimEnd('/') + '/' + $digest
+          Invoke-WebRequest -Uri $casUri -Headers $artifactHeaders -Method Put -Body $payload -ContentType 'application/octet-stream' -UseBasicParsing | Out-Null
+          $downloadPath = Join-Path $root 'artifact-download.bin'
+          Invoke-WebRequest -Uri $casUri -Headers $artifactHeaders -Method Get -OutFile $downloadPath -UseBasicParsing
+          $downloadDigest = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($downloadDigest -ne $digest) { throw 'Artifact CAS read-back digest mismatch.' }
+          Invoke-WebRequest -Uri $casUri -Headers $artifactHeaders -Method Delete -UseBasicParsing | Out-Null
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Stack release publishing (north-star M3 / §4.0 baseline)
+  # On desktop-v* tags: build the FULL local-services runtime stack
+  # (mission-control, gateway, mcp-gateway, frontend, runner sidecar),
+  # generate a stack-manifest.json (sha256 per file), and attach both to
+  # the GitHub Release so the bootstrap downloader (desktop Rust module /
+  # first-run wizard / CLI 'agenthub upgrade') can pull the complete
+  # stack from a real release source.
+  # ─────────────────────────────────────────────────────────────────────
+  publish-stack:
+    name: Publish full runtime stack to release
+    runs-on: windows-latest
+    needs: [package]
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.0'
+          cache: true
+          cache-dependency-path: services/go/go.sum
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: agenthub-desktop-windows-${{ github.sha }}
+          path: dist
+      - name: Prepare Python environment for the Mission Control freeze
+        shell: pwsh
+        run: |
+          # build-mission-control.ps1 imports dependencies from
+          # .venv\Lib\site-packages; the ambient python must be this venv
+          # so the PyInstaller freeze and the site-packages agree.
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Build the full local-services stack
+        shell: pwsh
+        run: |
+          $stack = Join-Path $env:RUNNER_TEMP 'stack-release'
+          if (Test-Path $stack) { Remove-Item $stack -Recurse -Force }
+          $services = Join-Path $stack 'local-services'
+          New-Item -ItemType Directory -Force -Path $services | Out-Null
+          $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
+          desktop\local-services\build-windows.ps1 -OutputDirectory $services
+          # Runner runtime sidecar comes from the packaged artifact; the
+          # desktop shell itself updates through the Tauri updater, not
+          # the stack.
+          Copy-Item dist\agenthub-runtime.exe -Destination $services -Force
+          # The bundled-stack manifest (services list, written by the
+          # build script) is a bundle artifact; downloaded stacks get
+          # their manifest copy from the downloader itself.
+          Remove-Item (Join-Path $services 'stack-manifest.json') -Force -ErrorAction SilentlyContinue
+          $count = (Get-ChildItem $services -Recurse -File).Count
+          Write-Output "stack files staged: $count"
+          Write-Output "STACK_DIR=$stack" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Generate stack manifest
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('desktop-v')
+          $commit = "${{ github.sha }}".Substring(0, 7)
+          python scripts/make_stack_manifest.py `
+            --stack-dir "$env:STACK_DIR" `
+            --version $version `
+            --commit $commit `
+            --out "$env:STACK_DIR\stack-manifest.json"
+          Copy-Item "$env:STACK_DIR\stack-manifest.json" -Destination stack-manifest.json -Force
+      - name: Attach stack to GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $release = gh release view $tag --json id --jq '.id' 2>$null
+          if (-not $release) {
+            gh release create $tag --title "AgentHub Desktop $tag" --generate-notes --draft
+          }
+          # The manifest lists files as "local-services/<relative-path>";
+          # release asset names keep that path so the downloader's
+          # base_url resolves every entry directly.
+          gh release upload $tag stack-manifest.json --clobber
+          $servicesRoot = Join-Path $env:STACK_DIR 'local-services'
+          Get-ChildItem $servicesRoot -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($servicesRoot.Length + 1) -replace '\\', '/'
+            gh release upload $tag "$($_.FullName)#local-services/$relative" --clobber
+          }
+          # Honest verification: the release must actually expose a
+          # nested asset name, otherwise the downloader cannot resolve it.
+          $assets = gh release view $tag --json assets --jq '.assets[].name'
+          $manifest = Get-Content stack-manifest.json -Raw | ConvertFrom-Json
+          $first = $manifest.files[0].path
+          if ($assets -notcontains $first) {
+            throw "asset verification failed: '$first' is not listed on release $tag"
+          }
+          Write-Output "Stack published to release $tag ($($assets.Count) assets); bootstrap with:"
+          Write-Output "  agenthub upgrade https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/stack-manifest.json"

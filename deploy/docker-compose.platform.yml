@@ -31,6 +31,12 @@ services:
       POSTGRES_PASSWORD: agenthub
       POSTGRES_DB: agenthub
     ports: ["5435:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agenthub -d agenthub"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   minio:
     image: minio/minio:latest
@@ -50,7 +56,7 @@ services:
   #  启用方式：docker compose -f deploy/docker-compose.platform.yml --profile milvus up
   #  适用场景：向量规模 > 1000 万条、需要分布式部署、多索引类型
   #  当前推荐：保留 Qdrant（轻量、Rust 实现、单机友好、API 简洁）
-  #  迁移评估点：见 docs/vector-db-migration-checklist.md
+  #  迁移评估点：见 docs/operations/migrations/vector-db-migration-checklist.md
   # ═══════════════════════════════════════════════════════════════════
   # milvus-etcd:
   #   profiles: ["milvus"]
@@ -164,7 +170,21 @@ services:
       <<: *go-env
       GATEWAY_ADDR: ":8081"
       JWT_SECRET: "${JWT_SECRET:-}"
-    depends_on: [nats, tempo]
+      MISSION_CONTROL_PLANE_URL: "http://host.docker.internal:8000"
+      SESSION_SERVICE_URL: "http://session-service:8083"
+      A2A_ALLOW_UNSIGNED_CARDS: "${A2A_ALLOW_UNSIGNED_CARDS:-false}"
+      A2A_REQUIRE_PINNED_KEYS: "${A2A_REQUIRE_PINNED_KEYS:-false}"
+      A2A_TRUSTED_PUBLIC_KEYS_JSON: '${A2A_TRUSTED_PUBLIC_KEYS_JSON:-}'
+      A2A_PEER_BEARER_TOKEN_FILES_JSON: '${A2A_PEER_BEARER_TOKEN_FILES_JSON:-}'
+      A2A_REQUIRE_SIGNED_SELF_CARD: "${A2A_REQUIRE_SIGNED_SELF_CARD:-false}"
+      A2A_CARD_SIGNING_KEY_FILE: "${A2A_CARD_SIGNING_KEY_FILE:-}"
+      A2A_CARD_SIGNER_URL: "${A2A_CARD_SIGNER_URL:-}"
+      A2A_CARD_SIGNER_KEY_ID: "${A2A_CARD_SIGNER_KEY_ID:-}"
+      A2A_CARD_SIGNER_TOKEN_FILE: "${A2A_CARD_SIGNER_TOKEN_FILE:-}"
+      A2A_CARD_SIGNER_ALLOW_INSECURE_HTTP: "${A2A_CARD_SIGNER_ALLOW_INSECURE_HTTP:-false}"
+    depends_on: [nats, session-service, tempo]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports: ["8081:8081"]
 
   realtime-orchestrator:
@@ -345,6 +365,116 @@ services:
     depends_on: [nats, minio]
     ports: ["8095:8095"]
 
+  # Mission Control maintenance process. Disabled unless the operator selects
+  # --profile mission-supervision; this local profile is not a production
+  # secret-distribution mechanism.
+  decision-expiry-service:
+    profiles: ["mission-supervision"]
+    build:
+      context: ..
+      dockerfile: services/python/decision_expiry_service/Dockerfile
+    environment:
+      AGENTHUB_ENV: "development"
+      AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE: "/run/secrets/decision-expiry-database-url"
+      AGENTHUB_DECISION_EXPIRY_IDLE_DELAY_SECONDS: "${AGENTHUB_DECISION_EXPIRY_IDLE_DELAY_SECONDS:-0.5}"
+      AGENTHUB_DECISION_EXPIRY_MAX_DELAY_SECONDS: "${AGENTHUB_DECISION_EXPIRY_MAX_DELAY_SECONDS:-10.0}"
+      AGENTHUB_DECISION_EXPIRY_SHUTDOWN_TIMEOUT_SECONDS: "30.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose: ["8099"]
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      - /srv/agenthub/data:rw,noexec,nosuid,size=1m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    secrets:
+      - decision-expiry-database-url
+    restart: unless-stopped
+    stop_grace_period: 35s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/readyz', timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+  # Model-backed workspace Runner. This profile requires externally supplied
+  # Mission Control, AI Gateway, and Stateless MCP endpoints; it does not
+  # enable the separate outbound A2A transport runtime.
+  runner-service:
+    profiles: ["mission-runner"]
+    build:
+      context: ..
+      dockerfile: services/python/runner_service/Dockerfile
+    environment:
+      AGENTHUB_RUNNER_RUNNER_ID: "${AGENTHUB_RUNNER_RUNNER_ID:-}"
+      AGENTHUB_RUNNER_WORKSPACE_ID: "${AGENTHUB_RUNNER_WORKSPACE_ID:-}"
+      AGENTHUB_RUNNER_ASSIGNED_AGENT_ID: "${AGENTHUB_RUNNER_ASSIGNED_AGENT_ID:-}"
+      AGENTHUB_RUNNER_ASSIGNED_ADAPTER: "${AGENTHUB_RUNNER_ASSIGNED_ADAPTER:-}"
+      AGENTHUB_RUNNER_MISSION_CONTROL_URL: "${AGENTHUB_RUNNER_MISSION_CONTROL_URL:-}"
+      AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE: "/run/secrets/runner-mission-control-token"
+      AGENTHUB_RUNNER_MODEL_GATEWAY_URL: "${AGENTHUB_RUNNER_MODEL_GATEWAY_URL:-}"
+      AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE: "/run/secrets/runner-model-gateway-token"
+      AGENTHUB_RUNNER_MODEL: "${AGENTHUB_RUNNER_MODEL:-}"
+      AGENTHUB_RUNNER_MCP_ENDPOINT: "${AGENTHUB_RUNNER_MCP_ENDPOINT:-}"
+      AGENTHUB_RUNNER_MCP_TOKEN_FILE: "/run/secrets/runner-mcp-token"
+      AGENTHUB_RUNNER_MCP_BINDINGS_FILE: "/run/configs/runner-mcp-bindings.json"
+      AGENTHUB_RUNNER_ARTIFACT_LOCAL_ROOT: "/var/lib/agenthub/artifacts"
+      AGENTHUB_RUNNER_SHUTDOWN_TIMEOUT_SECONDS: "30.0"
+      # Outbound A2A (ADR-0053): only set when this process claims through the
+      # a2a.outbound adapter. The peer manifest is strict signed-and-pinned and
+      # is referenced from an immutable mounted config; token files stay secrets.
+      AGENTHUB_RUNNER_A2A_PEERS_FILE: "${AGENTHUB_RUNNER_A2A_PEERS_FILE:-}"
+      AGENTHUB_RUNNER_SOURCE_AGENT_URL: "${AGENTHUB_RUNNER_SOURCE_AGENT_URL:-}"
+    expose: ["8097"]
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+      # app.core.config initializes this directory at import time. It is
+      # transient runtime state, never Runner or Mission persistence.
+      - /srv/agenthub/data:rw,noexec,nosuid,size=1m
+    volumes:
+      - type: bind
+        source: "${AGENTHUB_RUNNER_ARTIFACT_HOST_PATH:-./secrets/runner-artifacts}"
+        target: /var/lib/agenthub/artifacts
+        read_only: false
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${AGENTHUB_RUNNER_MCP_BINDINGS_FILE:-./secrets/runner-mcp-bindings.json}"
+        target: /run/configs/runner-mcp-bindings.json
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    secrets:
+      - runner-mission-control-token
+      - runner-model-gateway-token
+      - runner-mcp-token
+    restart: unless-stopped
+    stop_grace_period: 35s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8097/readyz', timeout=2).read()"
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
   # ═══════════════════════════════════════════════════════════════════
   #  RUST HIGH-PERFORMANCE CORES
   # ═══════════════════════════════════════════════════════════════════
@@ -453,7 +583,7 @@ services:
   #  ─────────────────────────────────────────────────────────────────
   #  启用方式：docker compose -f deploy/docker-compose.platform.yml --profile vllm up
   #  GPU 要求：8GB+ VRAM（推荐 T4/A10/A100），CPU 模式仅用于功能验证
-  #  部署文档：见 docs/vllm-deployment.md
+  #  部署文档：见 docs/operations/deployment/vllm.md
   #  调用方式：model 字段传 vllm-<hf-model-id>，如 vllm-Qwen/Qwen2.5-7B-Instruct
   # ═══════════════════════════════════════════════════════════════════
   vllm:
@@ -502,3 +632,13 @@ services:
 # ── Named volumes ──────────────────────────────────────────────────────
 volumes:
   loki-data:
+
+secrets:
+  decision-expiry-database-url:
+    file: "${AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE:-./secrets/decision-expiry-database-url}"
+  runner-mission-control-token:
+    file: "${AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE:-./secrets/runner-mission-control-token}"
+  runner-model-gateway-token:
+    file: "${AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE:-./secrets/runner-model-gateway-token}"
+  runner-mcp-token:
+    file: "${AGENTHUB_RUNNER_MCP_TOKEN_FILE:-./secrets/runner-mcp-token}"

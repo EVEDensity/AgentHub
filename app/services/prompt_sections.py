@@ -35,6 +35,13 @@ def build_workspace_context(root: Path | None = None, *, max_items: int = 20) ->
     if not root.exists():
         return ""
 
+    # Every model path receives the same deterministic project identity. The
+    # compact file listing below remains a discovery aid; detailed facts are
+    # available through the read-only ``project_inspect`` tool.
+    from app.services.project_manifest import ProjectManifest
+
+    manifest = ProjectManifest.discover(root)
+
     lines = [f"工作区: {root}", "可用文件工具: file_read/file_write/file_write_batch/file_edit/file_patch/file_search/file_glob/mkdir/code_execute"]
     try:
         items = sorted(root.iterdir(), key=lambda p: (p.is_dir(), p.name.lower()))[:max_items]
@@ -53,4 +60,4 @@ def build_workspace_context(root: Path | None = None, *, max_items: int = 20) ->
     except OSError:
         pass
 
-    return "【工作区文件系统】\n" + "\n".join(lines) + "\n"
+    return manifest.to_prompt() + "\n【工作区文件系统】\n" + "\n".join(lines) + "\n"

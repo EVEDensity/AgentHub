@@ -25,9 +25,9 @@
 
 ## 这是什么？
 
-AgentHub 让你一键拉起一个真正协作的 AI 智能体团队 — Router 拆解任务，Executor 执行，Critic 审查，Summarizer 汇总。不是那种"给聊天机器人挂几个工具"的玩具，是实打实的分工协作。
+AgentHub 让你一键拉起一个真正协作的 AI 智能体团队 — Orchestrator 拆解任务并调度领域角色，代码审查与验证智能体把关，Implement/Deploy 落盘交付。不是那种"给聊天机器人挂几个工具"的玩具，是实打实的分工协作。
 
-每个智能体在 11 态的 ReAct 循环中运行，你可以实时看到它们在干什么。一切流式输出，一切留日志，一切跑在你自己的机器上。
+每个智能体在受控、可观测的执行循环中运行，你可以实时看到它们在干什么。一切流式输出，一切留日志，一切跑在你自己的机器上。
 
 ## 为什么选它？
 
@@ -36,6 +36,25 @@ AgentHub 让你一键拉起一个真正协作的 AI 智能体团队 — Router �
 AgentHub 把整个编排循环给你做好了 — 任务规划、执行、审查、汇总，外加权限管理、沙盒执行、深度搜索、可观测性。你只需要一把模型 Key，剩下都是现成的。
 
 ## 快速开始
+
+### 一键安装 CLI（Windows x64）
+
+在 PowerShell 中运行以下命令，即可为当前用户安装最新的、带校验和的
+GitHub Release。无需管理员权限、npm 或 Python：
+
+```powershell
+irm https://github.com/EVEDensity/AgentHub/releases/latest/download/install.ps1 | iex
+```
+
+打开一个新的终端，然后验证安装：
+
+```powershell
+agenthub --help
+```
+
+目前只正式发布 Windows x64 CLI 二进制文件，尚未声明支持其他平台。
+
+### 在本地运行完整平台
 
 ```bash
 git clone https://github.com/EVEDensity/AgentHub.git
@@ -55,6 +74,16 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 ```
 
+可选：把全部供应商统一收敛到 new-api 网关（多 key 故障切换、配额与用量统计）：
+
+```bash
+export AGENTHUB_LLM_GATEWAY=newapi
+export AGENTHUB_NEWAPI_BASE_URL=http://127.0.0.1:3000/v1
+export AGENTHUB_NEWAPI_API_KEY=sk-agenthub-xxxx
+```
+
+部署、迁移与验证见 [deploy/newapi/README.md](deploy/newapi/README.md)（ADR-0104）。
+
 然后：
 
 ```bash
@@ -69,7 +98,7 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 
 ## 有什么能力
 
-**智能体编排** — 6 种角色（Router、Planner、Executor、Critic、Summarizer、Search），预算感知的 ReAct 循环，Redis 持久化状态，重启不丢。默认流式输出，WebSocket + SSE 加回放。
+**智能体编排** — 7 个领域角色（Orchestrator、Architect、CodeGen、Review、Test、Implement、Deploy），受控工具调用循环，状态持久化于 PostgreSQL，重启不丢。默认流式输出，WebSocket + SSE 加回放。角色清单见 `app/services/agent_service.py`（`DEFAULT_AGENTS`）。
 
 **安全** — JWT 认证、RBAC + ABAC、敏感工具二次确认、租户数据隔离。正经生产环境用的，不是 demo。
 
@@ -78,6 +107,8 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 **沙盒** — 容器隔离执行，CPU/内存限制、网络策略、输出脱敏都可配。
 
 **可观测** — Prometheus + Grafana + OTLP 链路追踪。每个智能体在想什么、在做什么，一目了然。
+
+**公开基准分数** — 开发者 CLI 执行闭环在 Terminal-Bench 类"验收命令"评测集上有可引用、可复跑的通过率：**deepseek-v4-flash 8/8 (100%)（2026-09-01）**。方法与诚实范围见 [`benchmarks/public-scores.md`](benchmarks/public-scores.md)。
 
 ## 技术栈
 

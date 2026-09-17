@@ -1,0 +1,537 @@
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from pydantic import ValidationError
+
+from app.domain import MissionContract, WorkUnit
+from app.services.artifact_store_service import ArtifactPublisher
+from app.services.capability_tools import (
+    CapabilityResolutionError,
+    CapabilityToolBinding,
+    CapabilityToolResolver,
+)
+from app.services.harness_checkpoint import (
+    HarnessCheckpointPort,
+    HarnessExecutionContext,
+)
+from app.services.harness_service import (
+    FunctionCallingHarness,
+    FunctionTool,
+    HarnessPort,
+    ModelPort,
+)
+from app.services.harness_planner import (
+    compose_reflective_harness,
+)
+from app.services.runner_checkpoint import MissionControlHarnessCheckpointFactory
+from app.services.runner_service import (
+    A2AInboundClaimedWorkResolver,
+    ClaimedWorkResolutionError,
+    ClaimedWorkResolver,
+    KindAwareClaimedWorkResolver,
+    MissionControlRunnerPort,
+    MissionForkClaimedWorkResolver,
+    WorkUnitRunner,
+)
+
+A2A_RECEIVE_CAPABILITY = "a2a.receive"
+
+
+@dataclass(frozen=True, slots=True)
+class _HarnessProfile:
+    label: str
+    work_unit_kind: str
+    admission_capability: str | None = None
+    forbidden_adapter: str | None = None
+
+
+_A2A_INBOUND_HARNESS_PROFILE = _HarnessProfile(
+    label="inbound",
+    work_unit_kind="a2a.inbound",
+    admission_capability=A2A_RECEIVE_CAPABILITY,
+)
+_MISSION_FORK_HARNESS_PROFILE = _HarnessProfile(
+    label="Mission fork",
+    work_unit_kind="mission.fork",
+    forbidden_adapter="a2a.outbound",
+)
+
+
+class HarnessModelFactoryPort(Protocol):
+    """Build a request-scoped model adapter with the exact resolved tool set."""
+
+    def build(self, tools: Sequence[FunctionTool]) -> ModelPort: ...
+
+
+class CapabilityBindingFactoryPort(Protocol):
+    """Build capability bindings correlated to one execution attempt."""
+
+    def build(
+        self,
+        execution: HarnessExecutionContext,
+    ) -> Sequence[CapabilityToolBinding]: ...
+
+
+class HarnessCheckpointFactoryPort(Protocol):
+    """Build a request-scoped checkpoint port behind one active lease."""
+
+    def build(
+        self,
+        execution: HarnessExecutionContext,
+        *,
+        lease_id: str,
+    ) -> HarnessCheckpointPort: ...
+
+
+class _ClaimedHarnessFactory:
+    """Build one capability-scoped Harness from a claimed execution context."""
+
+    def __init__(
+        self,
+        model_factory: HarnessModelFactoryPort,
+        binding_factory: CapabilityBindingFactoryPort,
+        *,
+        profile: _HarnessProfile,
+        checkpoint_factory: HarnessCheckpointFactoryPort | None = None,
+        max_iterations: int = 8,
+        max_tool_calls: int = 32,
+        max_total_tokens: int | None = None,
+        max_model_cost: float | None = None,
+        max_reflections: int | None = None,
+        enable_planning: bool | None = None,
+    ) -> None:
+        if max_iterations < 1:
+            raise ValueError("max_iterations must be at least 1")
+        if max_tool_calls < 1:
+            raise ValueError("max_tool_calls must be at least 1")
+        if max_total_tokens is not None and max_total_tokens < 1:
+            raise ValueError("max_total_tokens must be at least 1")
+        if max_model_cost is not None and (
+            not math.isfinite(max_model_cost) or max_model_cost < 0
+        ):
+            raise ValueError("max_model_cost must be non-negative")
+        if max_reflections is not None and max_reflections < 0:
+            raise ValueError("max_reflections must be >= 0")
+        self._model_factory = model_factory
+        self._binding_factory = binding_factory
+        self._profile = profile
+        self._checkpoint_factory = checkpoint_factory
+        self._max_iterations = max_iterations
+        self._max_tool_calls = max_tool_calls
+        self._max_total_tokens = max_total_tokens
+        self._max_model_cost = max_model_cost
+        # Reflective + planner defaults: planner=on, reflections=2
+        self._max_reflections = (
+            max_reflections if max_reflections is not None else 2
+        )
+        self._enable_planning = (
+            enable_planning if enable_planning is not None else True
+        )
+
+    def build(self, context: Mapping[str, Any]) -> HarnessPort:
+        try:
+            contract = MissionContract.model_validate(context.get("contract"))
+            work_unit = WorkUnit.model_validate(context.get("workUnit"))
+        except (TypeError, ValidationError) as exc:
+            raise ClaimedWorkResolutionError(
+                "claimed execution context failed domain validation"
+            ) from exc
+
+        if work_unit.kind != self._profile.work_unit_kind:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit has another kind"
+            )
+        if work_unit.parent_work_unit_id is not None:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit must be a root"
+            )
+        if work_unit.assigned_agent_id is None or work_unit.assigned_adapter is None:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit has no execution binding"
+            )
+        if work_unit.assigned_adapter == self._profile.forbidden_adapter:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit cannot use "
+                f"{self._profile.forbidden_adapter}"
+            )
+        admission_capability = self._profile.admission_capability
+        if (
+            admission_capability is not None
+            and admission_capability not in work_unit.required_capabilities
+        ):
+            raise ClaimedWorkResolutionError(
+                "inbound WorkUnit lacks the A2A admission capability"
+            )
+        if work_unit.attempt < 1:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit has no active attempt"
+            )
+        if work_unit.status.value not in {"LEASED", "RUNNING"}:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} WorkUnit is not actively leased"
+            )
+        execution = HarnessExecutionContext(
+            mission_id=work_unit.mission_id,
+            work_unit_id=work_unit.id,
+            attempt=work_unit.attempt,
+        )
+        checkpoint_port = None
+        if self._checkpoint_factory is not None:
+            assert work_unit.lease is not None
+            checkpoint_port = self._checkpoint_factory.build(
+                execution,
+                lease_id=work_unit.lease.id,
+            )
+        try:
+            bindings = list(self._binding_factory.build(execution))
+        except Exception as exc:
+            raise ClaimedWorkResolutionError(
+                f"capability binding factory failed: {type(exc).__name__}"
+            ) from exc
+
+        tool_work_unit = work_unit.model_copy(
+            update={
+                "required_capabilities": tuple(
+                    capability
+                    for capability in work_unit.required_capabilities
+                    if capability != admission_capability
+                )
+            }
+        )
+        try:
+            tools = CapabilityToolResolver(bindings).resolve(contract, tool_work_unit)
+        except CapabilityResolutionError as exc:
+            raise ClaimedWorkResolutionError(
+                "claimed capability requirements could not be resolved"
+            ) from exc
+        except Exception as exc:
+            raise ClaimedWorkResolutionError(
+                f"capability binding resolution failed: {type(exc).__name__}"
+            ) from exc
+
+        try:
+            model = self._model_factory.build(tools)
+        except Exception as exc:
+            raise ClaimedWorkResolutionError(
+                f"model factory failed: {type(exc).__name__}"
+            ) from exc
+        if not callable(getattr(model, "complete", None)):
+            raise ClaimedWorkResolutionError("model factory returned an invalid model")
+
+        model_cost_limit = contract.budgets.model_cost
+        if self._max_model_cost is not None:
+            model_cost_limit = min(model_cost_limit, self._max_model_cost)
+        try:
+            base_harness = FunctionCallingHarness(
+                model,
+                tools,
+                max_iterations=self._max_iterations,
+                max_tool_calls=self._max_tool_calls,
+                max_total_tokens=self._max_total_tokens,
+                max_model_cost=model_cost_limit,
+                checkpoint_port=checkpoint_port,
+            )
+        except ValueError as exc:
+            raise ClaimedWorkResolutionError(
+                f"{self._profile.label} Harness policy configuration is invalid"
+            ) from exc
+
+        # Wrap with planner + reflective loop when enabled.
+        # max_reflections=0 disables the loop but planning still runs
+        # (planner embeds the plan text in the first request).
+        if self._max_reflections > 0 or self._enable_planning:
+            return compose_reflective_harness(
+                base_harness,
+                max_reflections=self._max_reflections,
+                enable_planning=self._enable_planning,
+            )
+        return base_harness
+
+
+class A2AInboundHarnessFactory(_ClaimedHarnessFactory):
+    """Build one capability-scoped inbound A2A Harness."""
+
+    def __init__(
+        self,
+        model_factory: HarnessModelFactoryPort,
+        binding_factory: CapabilityBindingFactoryPort,
+        *,
+        checkpoint_factory: HarnessCheckpointFactoryPort | None = None,
+        max_iterations: int = 8,
+        max_tool_calls: int = 32,
+        max_total_tokens: int | None = None,
+        max_model_cost: float | None = None,
+    ) -> None:
+        super().__init__(
+            model_factory,
+            binding_factory,
+            profile=_A2A_INBOUND_HARNESS_PROFILE,
+            checkpoint_factory=checkpoint_factory,
+            max_iterations=max_iterations,
+            max_tool_calls=max_tool_calls,
+            max_total_tokens=max_total_tokens,
+            max_model_cost=max_model_cost,
+        )
+
+
+class MissionForkHarnessFactory(_ClaimedHarnessFactory):
+    """Build one capability-scoped Harness for a controlled Mission fork."""
+
+    def __init__(
+        self,
+        model_factory: HarnessModelFactoryPort,
+        binding_factory: CapabilityBindingFactoryPort,
+        *,
+        checkpoint_factory: HarnessCheckpointFactoryPort | None = None,
+        max_iterations: int = 8,
+        max_tool_calls: int = 32,
+        max_total_tokens: int | None = None,
+        max_model_cost: float | None = None,
+    ) -> None:
+        super().__init__(
+            model_factory,
+            binding_factory,
+            profile=_MISSION_FORK_HARNESS_PROFILE,
+            checkpoint_factory=checkpoint_factory,
+            max_iterations=max_iterations,
+            max_tool_calls=max_tool_calls,
+            max_total_tokens=max_total_tokens,
+            max_model_cost=max_model_cost,
+        )
+
+
+def _validate_runner_binding(
+    *,
+    runner_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    label: str,
+) -> None:
+    for name, value in (
+        ("runner_id", runner_id),
+        ("assigned_agent_id", assigned_agent_id),
+        ("assigned_adapter", assigned_adapter),
+    ):
+        if not value.strip():
+            raise ValueError(f"{name} must be non-empty")
+    if assigned_adapter == "a2a.outbound":
+        raise ValueError(f"{label} Runner cannot use the outbound A2A adapter")
+
+
+def build_a2a_inbound_runner(
+    control: MissionControlRunnerPort,
+    *,
+    publisher: ArtifactPublisher,
+    model_factory: HarnessModelFactoryPort,
+    binding_factory: CapabilityBindingFactoryPort,
+    runner_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    max_context_chars: int = 32_768,
+    max_timeout_seconds: float = 300.0,
+    max_iterations: int = 8,
+    max_tool_calls: int = 32,
+    max_total_tokens: int | None = None,
+    max_model_cost: float | None = None,
+    heartbeat_interval_seconds: float | None = None,
+) -> WorkUnitRunner:
+    """Compose the inbound claim path without provider or tool fallbacks."""
+    _validate_runner_binding(
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        label="inbound",
+    )
+    harness_factory = A2AInboundHarnessFactory(
+        model_factory,
+        binding_factory,
+        checkpoint_factory=MissionControlHarnessCheckpointFactory(
+            control,
+            runner_id=runner_id,
+        ),
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+    )
+    resolver = A2AInboundClaimedWorkResolver(
+        control,
+        runner_id=runner_id,
+        harness_factory=harness_factory,
+        max_context_chars=max_context_chars,
+        max_timeout_seconds=max_timeout_seconds,
+    )
+    return WorkUnitRunner(
+        control,
+        publisher=publisher,
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        claimed_work_resolver=resolver,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+        supported_work_unit_kinds=("a2a.inbound",),
+    )
+
+
+def build_mission_fork_runner(
+    control: MissionControlRunnerPort,
+    *,
+    publisher: ArtifactPublisher,
+    model_factory: HarnessModelFactoryPort,
+    binding_factory: CapabilityBindingFactoryPort,
+    runner_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    max_context_chars: int = 32_768,
+    max_timeout_seconds: float = 300.0,
+    max_iterations: int = 8,
+    max_tool_calls: int = 32,
+    max_total_tokens: int | None = None,
+    max_model_cost: float | None = None,
+    heartbeat_interval_seconds: float | None = None,
+) -> WorkUnitRunner:
+    """Compose fork execution restricted to an explicitly selected Mission."""
+    _validate_runner_binding(
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        label="Mission fork",
+    )
+    harness_factory = MissionForkHarnessFactory(
+        model_factory,
+        binding_factory,
+        checkpoint_factory=MissionControlHarnessCheckpointFactory(
+            control,
+            runner_id=runner_id,
+        ),
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+    )
+    resolver = MissionForkClaimedWorkResolver(
+        control,
+        runner_id=runner_id,
+        harness_factory=harness_factory,
+        max_context_chars=max_context_chars,
+        max_timeout_seconds=max_timeout_seconds,
+    )
+    return WorkUnitRunner(
+        control,
+        publisher=publisher,
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        claimed_work_resolver=resolver,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+        workspace_claims_enabled=False,
+        supported_work_unit_kinds=("mission.fork",),
+    )
+
+
+def build_kind_aware_workspace_runner(
+    control: MissionControlRunnerPort,
+    *,
+    publisher: ArtifactPublisher,
+    model_factory: HarnessModelFactoryPort,
+    binding_factory: CapabilityBindingFactoryPort,
+    runner_id: str,
+    assigned_agent_id: str,
+    assigned_adapter: str,
+    max_context_chars: int = 32_768,
+    max_timeout_seconds: float = 300.0,
+    max_iterations: int = 8,
+    max_tool_calls: int = 32,
+    max_total_tokens: int | None = None,
+    max_model_cost: float | None = None,
+    heartbeat_interval_seconds: float | None = None,
+    extra_resolvers: Mapping[str, ClaimedWorkResolver] | None = None,
+) -> WorkUnitRunner:
+    """Compose workspace execution for every registered model-backed root kind.
+
+    ``extra_resolvers`` registers additional claimed-WorkUnit resolvers for
+    composition-specific root kinds (e.g. the desktop local runner). Kinds
+    must not collide with the built-in model-backed kinds.
+    """
+
+    _validate_runner_binding(
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        label="kind-aware workspace",
+    )
+    checkpoint_factory = MissionControlHarnessCheckpointFactory(
+        control,
+        runner_id=runner_id,
+    )
+    inbound_factory = A2AInboundHarnessFactory(
+        model_factory,
+        binding_factory,
+        checkpoint_factory=checkpoint_factory,
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+    )
+    fork_factory = MissionForkHarnessFactory(
+        model_factory,
+        binding_factory,
+        checkpoint_factory=checkpoint_factory,
+        max_iterations=max_iterations,
+        max_tool_calls=max_tool_calls,
+        max_total_tokens=max_total_tokens,
+        max_model_cost=max_model_cost,
+    )
+    resolvers: dict[str, ClaimedWorkResolver] = {
+        "a2a.inbound": A2AInboundClaimedWorkResolver(
+            control,
+            runner_id=runner_id,
+            harness_factory=inbound_factory,
+            max_context_chars=max_context_chars,
+            max_timeout_seconds=max_timeout_seconds,
+        ),
+        "mission.fork": MissionForkClaimedWorkResolver(
+            control,
+            runner_id=runner_id,
+            harness_factory=fork_factory,
+            max_context_chars=max_context_chars,
+            max_timeout_seconds=max_timeout_seconds,
+        ),
+    }
+    if extra_resolvers:
+        for kind, resolver in extra_resolvers.items():
+            if kind in resolvers:
+                raise ValueError(f"claimed WorkUnit resolver kind conflict: {kind}")
+            if not callable(getattr(resolver, "resolve", None)):
+                raise TypeError(
+                    f"claimed WorkUnit resolver is invalid for kind: {kind}"
+                )
+            resolvers[kind] = resolver
+    resolver = KindAwareClaimedWorkResolver(resolvers)
+    return WorkUnitRunner(
+        control,
+        publisher=publisher,
+        runner_id=runner_id,
+        assigned_agent_id=assigned_agent_id,
+        assigned_adapter=assigned_adapter,
+        claimed_work_resolver=resolver,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+        supported_work_unit_kinds=resolver.supported_work_unit_kinds,
+    )
+
+
+__all__ = [
+    "A2A_RECEIVE_CAPABILITY",
+    "A2AInboundHarnessFactory",
+    "CapabilityBindingFactoryPort",
+    "HarnessCheckpointFactoryPort",
+    "HarnessModelFactoryPort",
+    "MissionForkHarnessFactory",
+    "build_a2a_inbound_runner",
+    "build_kind_aware_workspace_runner",
+    "build_mission_fork_runner",
+]

@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.core.config import Settings
-    from app.services.websocket_manager import WebSocketManager
     from app.services.adapter_manager import AdapterManager
 
 
@@ -45,7 +44,6 @@ class AppContainer:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._settings = None
-        self._ws_manager = None
         self._adapter_manager = None
 
     # ── Settings ────────────────────────────────────────────────────
@@ -56,15 +54,6 @@ class AppContainer:
             from app.core.config import get_settings
             self._settings = get_settings()
         return self._settings
-
-    # ── WebSocket manager ───────────────────────────────────────────
-
-    def ws_manager(self):
-        """Return the WebSocket connection manager (singleton)."""
-        if self._ws_manager is None:
-            from app.services.websocket_manager import WebSocketManager
-            self._ws_manager = WebSocketManager()
-        return self._ws_manager
 
     # ── Adapter manager ─────────────────────────────────────────────
 

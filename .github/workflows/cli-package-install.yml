@@ -1,0 +1,42 @@
+name: CLI GitHub Release install and rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Target cli-v* GitHub Release version
+        required: true
+        type: string
+      previous_version:
+        description: Previous cli-v* version used for rollback
+        required: true
+        type: string
+
+jobs:
+  windows-install-upgrade-rollback:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify checksummed GitHub Release lifecycle
+        shell: pwsh
+        env:
+          AGENTHUB_RELEASE_ID: github-${{ github.run_id }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}\artifacts\production\github-${{ github.run_id }}
+        run: >-
+          python scripts/verify_github_release.py
+          --target "${{ inputs.version }}"
+          --previous "${{ inputs.previous_version }}"
+          --output "${{ runner.temp }}\github-release.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-github-release-${{ inputs.version }}
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/github-release.json
+          if-no-files-found: ignore

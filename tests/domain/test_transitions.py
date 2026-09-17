@@ -121,6 +121,16 @@ class WorkUnitTransitionTests(unittest.TestCase):
                 lease=self.lease,
             )
 
+    def test_pending_work_unit_can_fail_before_a_lease_is_acquired(self) -> None:
+        failed = transition_work_unit(
+            build_work_unit(),
+            WorkUnitStatus.FAILED,
+            occurred_at=NOW,
+        )
+
+        self.assertEqual(failed.status, WorkUnitStatus.FAILED)
+        self.assertIsNone(failed.lease)
+
     def test_expired_or_replaced_lease_is_rejected(self) -> None:
         expired = self.lease.model_copy(update={"expires_at": NOW})
         with self.assertRaisesRegex(ValueError, "unexpired lease"):

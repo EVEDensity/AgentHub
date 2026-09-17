@@ -92,8 +92,14 @@ type PublishResult struct {
 }
 
 func main() {
-	natsURL := getenv("NATS_URL", "nats://127.0.0.1:4222")
-	bus, err := eventbus.Connect(natsURL)
+	localMode := os.Getenv("GATEWAY_LOCAL_MODE") == "true"
+	var bus *eventbus.Client
+	var err error
+	if localMode {
+		bus = eventbus.ConnectLocal()
+	} else {
+		bus, err = eventbus.Connect(getenv("NATS_URL", "nats://127.0.0.1:4222"))
+	}
 	if err != nil {
 		log.Fatalf("connect event bus: %v", err)
 	}
@@ -214,7 +220,7 @@ func main() {
 				pgOK = false
 			}
 		}
-		natsOK := bus.Conn().IsConnected()
+		natsOK := bus.IsConnected()
 		status := http.StatusOK
 		health := map[string]any{"status": "ok", "pg": pgOK, "nats": natsOK}
 		if !pgOK || !natsOK {
@@ -228,7 +234,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		ready := map[string]any{"status": "ready", "pg": "connected", "nats": bus.Conn().IsConnected()}
+		ready := map[string]any{"status": "ready", "pg": "connected", "nats": bus.IsConnected(), "local": localMode}
 		code := http.StatusOK
 		if pool != nil {
 			if err := pool.Ping(ctx); err != nil {
@@ -239,7 +245,7 @@ func main() {
 		} else {
 			ready["pg"] = "disabled"
 		}
-		if !bus.Conn().IsConnected() {
+		if !bus.IsConnected() {
 			ready["nats"] = false
 			ready["status"] = "not_ready"
 			code = http.StatusServiceUnavailable
@@ -252,75 +258,75 @@ func main() {
 		_ = json.NewEncoder(w).Encode(profile)
 	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-			serveWS(hub, issuer, w, r)
-		})
+		serveWS(hub, issuer, w, r)
+	})
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"sessions":           hub.sessionCount(),
+			"connections":        hub.clientCount(),
+			"jwt_enforced":       len(jwtSecret) > 0,
+			"rate_limit_buckets": rl.ActiveBuckets(),
+			"rate_limit_stats":   rl.Stats(),
+			"redis_connected":    redisStore != nil,
+		})
+	})
+	mux.HandleFunc("/routes", func(w http.ResponseWriter, r *http.Request) {
+		if hub.routes != nil {
+			serveRoutes(hub.routes, w, r)
+		} else {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"sessions":          hub.sessionCount(),
-				"connections":       hub.clientCount(),
-				"jwt_enforced":      len(jwtSecret) > 0,
-				"rate_limit_buckets": rl.ActiveBuckets(),
-				"rate_limit_stats":   rl.Stats(),
-				"redis_connected":    redisStore != nil,
+				"instance":    instance,
+				"sessions":    hub.sessionCount(),
+				"connections": hub.clientCount(),
+				"redis":       false,
 			})
-		})
-		mux.HandleFunc("/routes", func(w http.ResponseWriter, r *http.Request) {
-			if hub.routes != nil {
-				serveRoutes(hub.routes, w, r)
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"instance":    instance,
-					"sessions":    hub.sessionCount(),
-					"connections": hub.clientCount(),
-					"redis":       false,
-				})
-			}
-		})
-		mux.HandleFunc("/routes/", func(w http.ResponseWriter, r *http.Request) {
-			if hub.routes != nil {
-				serveRoutes(hub.routes, w, r)
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"instance": instance,
-					"redis":    false,
-					"note":     "Route registry disabled (REDIS_ADDR not set). Only in-memory hub active.",
-				})
-			}
-		})
+		}
+	})
+	mux.HandleFunc("/routes/", func(w http.ResponseWriter, r *http.Request) {
+		if hub.routes != nil {
+			serveRoutes(hub.routes, w, r)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"instance": instance,
+				"redis":    false,
+				"note":     "Route registry disabled (REDIS_ADDR not set). Only in-memory hub active.",
+			})
+		}
+	})
 	mux.HandleFunc("/publish", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 
-			var req PublishMessageRequest
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+		var req PublishMessageRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+			return
+		}
+		if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.Content == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, content are required"})
+			return
+		}
+		// Multi-tenant isolation (P3-1): the authenticated principal may
+		// only publish on behalf of their own tenant. In dev mode the
+		// TenantContext is empty and the check passes through.
+		if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
+			if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
+				authDenied.WithLabelValues("cross_tenant_publish").Inc()
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
 				return
 			}
-			if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.Content == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, content are required"})
-				return
+			if req.ActorID == "" {
+				req.ActorID = tc.UserID
 			}
-			// Multi-tenant isolation (P3-1): the authenticated principal may
-			// only publish on behalf of their own tenant. In dev mode the
-			// TenantContext is empty and the check passes through.
-			if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
-				if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
-					authDenied.WithLabelValues("cross_tenant_publish").Inc()
-					w.WriteHeader(http.StatusForbidden)
-					_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
-					return
-				}
-				if req.ActorID == "" {
-					req.ActorID = tc.UserID
-				}
-			}
+		}
 
 		event := events.NewEnvelope(
 			events.EventSessionMessageReceived,
@@ -351,34 +357,34 @@ func main() {
 		_ = json.NewEncoder(w).Encode(PublishResult{Published: true, Subject: eventbus.SessionEventsSubject, Event: event})
 	})
 	mux.HandleFunc("/permissions/request", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 
-			var req PermissionRequestInput
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+		var req PermissionRequestInput
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid json body"})
+			return
+		}
+		if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.RequestID == "" || req.ToolName == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, request_id, tool_name are required"})
+			return
+		}
+		// Enforce tenant isolation on permission requests too.
+		if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
+			if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
+				authDenied.WithLabelValues("cross_tenant_permission").Inc()
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
 				return
 			}
-			if req.TenantID == "" || req.SessionID == "" || req.TraceID == "" || req.RequestID == "" || req.ToolName == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "tenant_id, session_id, trace_id, request_id, tool_name are required"})
-				return
+			if req.ActorID == "" {
+				req.ActorID = tc.UserID
 			}
-			// Enforce tenant isolation on permission requests too.
-			if tc, ok := iam.FromContext(r.Context()); ok && !tc.DevMode {
-				if !iam.EnforceTenantScope(r.Context(), req.TenantID) {
-					authDenied.WithLabelValues("cross_tenant_permission").Inc()
-					w.WriteHeader(http.StatusForbidden)
-					_ = json.NewEncoder(w).Encode(map[string]string{"error": "forbidden: tenant_id does not match authenticated principal"})
-					return
-				}
-				if req.ActorID == "" {
-					req.ActorID = tc.UserID
-				}
-			}
+		}
 
 		event := events.NewEnvelope(
 			events.EventToolPermissionRequested,
@@ -436,6 +442,12 @@ func main() {
 	mux.Handle("/platform/workspaces", workspaces)
 	mux.Handle("/platform/workspaces/", workspaces)
 
+	// Session Service owns durable chat sessions; Gateway owns public auth and routing.
+	sessions := newSessionProxy(parseSessionServiceURL())
+	mux.Handle("/platform/sessions", sessions)
+	agents := newAgentRegistryHandler(pool)
+	mux.Handle("/platform/agent-registry", iam.RequireScope(iam.ScopeAgentRead)(agents))
+
 	// ── Agent Versions (P1-6) ───────────────────────────────────────
 	agentVersions := newAgentVersionHandler()
 	mux.Handle("/platform/agent-versions/", agentVersions)
@@ -452,7 +464,42 @@ func main() {
 		log.Printf("a2a: TLS enabled (cert=%s, key=%s, ca=%s, strict=%v)",
 			a2aTLS.CertFile, a2aTLS.KeyFile, a2aTLS.CAFile, a2aTLS.StrictVerify)
 	}
-	a2a := newA2AHandler(a2aBaseURL, pool, a2aTLS)
+	a2aTrust, err := a2aTrustPolicyFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A trust policy: %v", err)
+	}
+	log.Printf("a2a: trust policy configured (allow_unsigned=%v, require_pinned_key=%v, pinned_origins=%d)",
+		a2aTrust.AllowUnsigned, a2aTrust.RequirePinnedKey, len(a2aTrust.TrustedKeys))
+	a2aSigner, err := a2aCardSignerFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A Agent Card signer: %v", err)
+	}
+	requireSignedSelfCard, err := a2aRequireSignedSelfCardFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A Agent Card signing requirement: %v", err)
+	}
+	if a2aSigner == nil {
+		if requireSignedSelfCard {
+			log.Fatal("A2A_REQUIRE_SIGNED_SELF_CARD requires A2A_CARD_SIGNING_KEY_FILE or A2A_CARD_SIGNER_URL")
+		}
+		log.Printf("a2a: WARNING AgentHub Agent Card is unsigned; configure a file-backed or remote signer for trusted interoperability")
+	} else {
+		log.Printf("a2a: AgentHub Agent Card signing enabled")
+	}
+	a2aPeerCredentials, err := a2aPeerCredentialsFromEnv()
+	if err != nil {
+		log.Fatalf("configure A2A peer credentials: %v", err)
+	}
+	log.Printf("a2a: peer credentials configured (origins=%d)", a2aPeerCredentials.Count())
+	a2aControl := newA2AControlPlaneClient(
+		getenv("MISSION_CONTROL_PLANE_URL", "http://127.0.0.1:8000"),
+		nil,
+	)
+	a2a, err := newA2AHandlerWithTrustPolicy(a2aBaseURL, pool, a2aTLS, a2aTrust, a2aSigner, a2aPeerCredentials, a2aControl)
+	if err != nil {
+		log.Fatalf("initialize A2A handler: %v", err)
+	}
+	mux.Handle("/.well-known/agent-card.json", a2a)
 	mux.Handle("/platform/a2a/", http.StripPrefix("/platform/a2a", a2a))
 
 	// ── API Keys + Public API ─────────────────────────────────────
@@ -464,23 +511,23 @@ func main() {
 	})
 
 	// ── Image Preprocessing (Sprint L1) ───────────────────────────
-		imagePreproc := newImagePreprocHandler()
-		mux.Handle("/platform/utils/image-preprocess", imagePreproc)
+	imagePreproc := newImagePreprocHandler()
+	mux.Handle("/platform/utils/image-preprocess", imagePreproc)
 
 	// ── Video Frame Extraction (Sprint L1) ───────────────────────────
-		videoH := newVideoHandler(bus)
-		mux.Handle("/platform/utils/video-frames", videoH)
-		mux.Handle("/platform/utils/video-frames/", videoH)
+	videoH := newVideoHandler(bus)
+	mux.Handle("/platform/utils/video-frames", videoH)
+	mux.Handle("/platform/utils/video-frames/", videoH)
 
-		// ── Public Bot Endpoint (Web App route) ──────────────────────
-		globalAgentVersionHandler = agentVersions
-		mux.HandleFunc("/api/public/bots/", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodOptions {
-				handlePublicBotOptions(w, r)
-				return
-			}
-			handlePublicBotConfig(w, r, pool)
-		})
+	// ── Public Bot Endpoint (Web App route) ──────────────────────
+	globalAgentVersionHandler = agentVersions
+	mux.HandleFunc("/api/public/bots/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			handlePublicBotOptions(w, r)
+			return
+		}
+		handlePublicBotConfig(w, r, pool)
+	})
 
 	// ── Channel Connector (Feishu/WeCom) ──────────────────────────
 	channels := newChannelConnector(bus)
@@ -505,10 +552,10 @@ func main() {
 	mux.Handle("/digital/", digitalID)
 	mux.Handle("/digital", digitalID)
 
-		// ── Audit log (Sprint J4) ─────────────────────────────────────
-		auditH := newAuditHandler(pool)
-		mux.Handle("/audit/", auditH)
-		mux.Handle("/audit", auditH)
+	// ── Audit log (Sprint J4) ─────────────────────────────────────
+	auditH := newAuditHandler(pool)
+	mux.Handle("/audit/", auditH)
+	mux.Handle("/audit", auditH)
 
 	// ── Logs proxy (Sprint J4) ────────────────────────────────────
 	logs := newLogsHandler()
@@ -528,7 +575,7 @@ func main() {
 	// against the caller's bucket) and outside the route mux. Public endpoints
 	// (/healthz, /metrics, /profile, /ws) bypass auth; /ws runs its own JWT
 	// check during the WebSocket upgrade.
-	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/api/public/bots/", "/v1/public/"}, func(r *http.Request, reason string) {
+	authMW := iam.AuthMiddleware(issuer, []string{"/healthz", "/metrics", "/profile", "/ws", "/.well-known/agent-card.json", "/api/public/bots/", "/v1/public/"}, func(r *http.Request, reason string) {
 		authDenied.WithLabelValues("unauthorized").Inc()
 	})
 	handler := obs.Middleware("gateway-service", rateLimitMiddleware(rl, authMW(mux)))

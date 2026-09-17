@@ -1,111 +1,62 @@
-# 架构总览
+# 当前架构总览
 
-AgentHub 采用 **Go + Rust + Python** 三层微服务架构，通过 NATS JetStream 事件总线实现异步解耦。
+> 文档状态：implemented baseline
+> 最后审查：2026-08-08
+> 详细目标方案：本地 `docs/internal/architecture/target-architecture.md`
 
-## 架构图
+AgentHub 当前是一个正在收敛的多运行时系统。不要把现有服务数量理解成
+已经完成的多 Agent 产品；新的业务开发必须围绕 Mission 和 WorkUnit 展开。
 
-```
-                         ┌──────────────────────────┐
-                         │    Frontend (Next.js 13)   │
-                         │  🎨 Warm Studio 2.0       │
-                         │  ├ Typed 组件库            │
-                         │  ├ WebGL 粒子拓扑          │
-                         │  ├ RAG 文档查看器           │
-                         │  └ 自适应响应式布局         │
-                         └────────────┬─────────────┘
-                                      │
-         ┌────────────────────────────┼────────────────────────────┐
-         │                            │                            │
-         ▼                            ▼                            ▼
-┌──────────────┐   ┌──────────────────────┐   ┌──────────────────┐
-│  接入层 (Go)  │   │   编排层 (Go)         │   │  生态层 (Go)     │
-│              │   │                      │   │                  │
-│ Gateway      │   │ Realtime-Orchestrator│   │ Channel-Connector│
-│ Session      │   │  ├ ReactMachine      │   │  ├ Feishu        │
-│ Stream-Delivery│  │  ├ DeepSearch       │   │  ├ WeCom         │
-│ MCP-Gateway  │   │  ├ RustCoreBridge    │   │  └ API-Public    │
-│ A2A-Handler  │   │  ├ AgentNet-Orch     │   │ Sandbox-Service │
-└──────┬───────┘   └─────────┬────────────┘   └────────┬─────────┘
-       │                     │                          │
-       └─────────────────────┼──────────────────────────┘
-                             │
-           ┌─────────────────┴─────────────────┐
-           │       NATS JetStream (12 条)        │
-           └─────────────────┬─────────────────┘
-                             │
-  ┌──────────────┬───────────┼───────────┬──────────────┐
-  │              │           │           │              │
-  ▼              ▼           ▼           ▼              ▼
-┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐
-│ Context │ │ stream- │ │retrieval│ │ fanout- │ │ agentnet-│
-│ Engine  │ │ core    │ │-core    │ │ core    │ │ core     │
-│  (Go)   │ │ (Rust)  │ │ (Rust)  │ │ (Rust)  │ │ (Rust)   │
-└─────────┘ └─────────┘ └─────────┘ └─────────┘ └──────────┘
+## 当前可验证边界
 
-              ┌────────────────────────────────┐
-              │       离线层 (Python ×5)         │
-              │  model-adapter | knowledge      │
-              │  document-pipeline | summarization│
-              │  evaluation | embedding_client  │
-              └────────────────────────────────┘
-
-              ┌────────────────────────────────┐
-              │       数据层                     │
-              │  PostgreSQL | Redis | Qdrant    │
-              │  OpenSearch | MinIO | NATS      │
-              └────────────────────────────────┘
+```text
+Frontend / API
+      |
+      v
+Mission Control (Python)
+  Mission / Contract / WorkUnit / Event Ledger
+      |
+      +--> Runner + Harness --> Model Adapter / Tools
+      |                         |
+      |                         +--> Artifact / Evidence
+      |
+      +--> Legacy adapters: LangGraph / AgentNet
+      +--> Protocol adapters: MCP / A2A
 ```
 
-## 分层说明
+### Mission Control
 
-### 接入层 (Go)
+负责 Mission、Contract、WorkUnit 的持久化、状态转换、lease、事件和权限。
+这是唯一允许新增业务状态的控制面。Mission 的完成状态需要 Artifact 和
+Evidence 支持，不能由模型文本或前端状态直接决定。
 
-| 服务 | 端口 | 职责 |
-|------|------|------|
-| **gateway-service** | 8081 | API 入口，WebSocket 网关，JWT 鉴权，限流 |
-| **session-service** | 8082 | 会话管理，Redis 热缓存 + PG 持久化 |
-| **stream-delivery-service** | 8083 | SSE 流式推送，Redis Streams 持久化回放 |
-| **mcp-gateway** | 8099 | MCP 协议网关，STDIO + SSE 双传输 |
+### Runner 与 Harness
 
-### 编排层 (Go)
+目标是将隔离执行、模型循环、function calling、工具调用、预算、取消、
+checkpoint 和证据采集统一起来。当前仍在从旧 Agent/DAG 链路迁移，部署
+环境必须明确执行能力和降级行为。
 
-| 服务 | 职责 |
-|------|------|
-| **realtime-orchestrator** | ReAct 状态机 (11 状态)，DeepSearch 7 步检索，AgentNet 任务调度 |
-| **tool-permission-service** | 敏感工具分级 + 二次确认 |
-| **agent-runtime-control-plane** | Worker pool 限流，调用 model-adapter |
+### Legacy 兼容层
 
-### 高性能层 (Rust)
+LangGraph 和 AgentNet 仍服务部分现有聊天、DAG 和监控功能。它们不是新的
+领域真相，也不应继续增加新的任务表、状态枚举或成功语义。
 
-| Crate | 职责 | P95 延迟 |
-|-------|------|---------|
-| **stream-core** | chunk 合并 + 背压窗口 + 慢消费者降级 | < 10ms |
-| **retrieval-core** | BM25+dense 混合检索 + RRF 融合 + rerank | < 80ms |
-| **fanout-core** | 高基数 fanout + 通道分区 + 广播调度 | < 5ms |
-| **patch-merge-core** | LCS diff + diff3 三路合并 + 冲突打分 | < 20ms |
-| **memory-segment-core** | 消息段压缩 + 窗口裁剪 + summary checkpoint | < 15ms |
-| **agentnet-core** | DAG 操作 + 任务调度 + 涌现通信 | < 1ms |
+### 协议适配层
 
-### 离线层 (Python)
+- A2A 用于外部 Agent 委托和发现，不负责内部调度。
+- MCP 用于工具和资源暴露，不保存 Mission 业务状态。
+- 协议请求必须映射到 Mission/WorkUnit，并经过认证、能力和审计检查。
 
-| 服务 | 职责 |
-|------|------|
-| **model-adapter-service** | 多模型适配 (OpenAI/Anthropic/BGE/Ollama) |
-| **offline-knowledge-service** | 文档分块 + embedding + Qdrant 入库 |
-| **document-pipeline-service** | PDF/DOCX/PPTX 抽取 |
-| **summarization-service** | 会话总结 + 周期性 consolidation |
-| **evaluation-batch-service** | 质量打分 + 回归评测 |
+## 部署原则
 
-## 事件驱动
+Community 应支持单控制面、一个 Runner、本地数据库和本地 Artifact Store。
+Cloud/Enterprise 才按负载引入队列、对象存储、Runner 池、AI Gateway、
+多租户和高可用组件。没有独立扩缩容、安全或运行时边界的数据，不拆为新
+微服务。
 
-所有服务通过 **NATS JetStream** 异步通信。12 条持久化 Stream 确保：
+## 相关文档
 
-- 消息不丢失（durable consumer + 72h 保留）
-- 服务间解耦（发布-订阅模式）
-- 可回放（JetStream replay）
-
-## 下一步
-
-- [ContextOS 4 层记忆](/zh/advanced/contextos)
-- [K8s 生产部署](/zh/advanced/k8s-deployment)
-- [性能调优](/zh/advanced/performance)
+- [文档与架构边界](../../architecture/README.md)
+- [中文 API 总览](../api/overview.md)
+- [AgentNet 兼容说明](../advanced/agentnet-dag.md)
+- [MCP 集成说明](../guide/mcp-integration.md)

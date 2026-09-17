@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/agenthub/platform/shared/db"
@@ -194,6 +195,11 @@ func main() {
 		})
 	})
 	mux.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
 		tenantID := r.URL.Query().Get("tenant_id")
 		if tenantID == "" {
 			w.WriteHeader(http.StatusBadRequest)
@@ -202,12 +208,13 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
+		limit := normalizeListLimit(r.URL.Query().Get("limit"))
 		rows, err := pool.Query(ctx, `
 			SELECT id, tenant_id, name, owner_id, type, visibility, status, created_at, updated_at
 			FROM platform_sessions
 			WHERE tenant_id=$1
 			ORDER BY created_at DESC
-			LIMIT 100`, tenantID)
+			LIMIT $2`, tenantID, limit)
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -225,7 +232,7 @@ func main() {
 			CreatedAt  string `json:"created_at"`
 			UpdatedAt  string `json:"updated_at"`
 		}
-		out := make([]sess, 0, 50)
+		out := make([]sess, 0, limit)
 		for rows.Next() {
 			var s sess
 			if err := rows.Scan(&s.ID, &s.TenantID, &s.Name, &s.OwnerID, &s.Type, &s.Visibility, &s.Status, &s.CreatedAt, &s.UpdatedAt); err == nil {
@@ -243,6 +250,17 @@ func main() {
 	})
 	handler := obs.Middleware("session-service", mux)
 	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+func normalizeListLimit(raw string) int {
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 {
+		return 10
+	}
+	if limit > 50 {
+		return 50
+	}
+	return limit
 }
 
 // upsertSessionPresence records the session row and the member row in PG so the

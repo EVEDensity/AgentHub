@@ -41,10 +41,43 @@ from app.services.tools.agent_tools import (
 from app.services.tools.network_tools import (
     http_request_handler,
 )
+from app.services.tools.utility_tools import (
+    current_date_handler,
+    current_time_handler,
+    weather_handler,
+)
+from app.services.tools.change_set import apply_change_set_handler
+from app.services.tools.git_tools import (
+    git_branch_handler,
+    git_branch_create_handler,
+    git_cherry_pick_handler,
+    git_commit_handler,
+    git_diff_handler,
+    git_log_handler,
+    git_push_handler,
+    git_revert_handler,
+    git_status_handler,
+)
+from app.services.tools.developer_tools import (
+    ast_symbols_handler,
+    audit_report_handler,
+    change_plan_handler,
+    formatter_handler,
+    log_tail_handler,
+    package_manager_handler,
+    port_check_handler,
+    process_list_handler,
+    service_health_handler,
+    test_discover_handler,
+    type_check_handler,
+)
+from app.services.tools.project_tools import project_inspect_handler
 from app.services.tools.session_tools import (
     artifact_list_handler,
     artifact_read_handler,
     conversation_search_handler,
+    memory_recall_handler,
+    memory_retain_handler,
 )
 
 # ── web_search ────────────────────────────────────────────────────────
@@ -85,6 +118,65 @@ WEB_SEARCH = ToolDefinition(
     is_concurrency_safe=True,  # Read-only, no side effects
 )
 
+# ── current_time / current_date / weather ────────────────────────────
+
+CURRENT_TIME = ToolDefinition(
+    name="current_time",
+    description="读取运行 CLI 的系统时钟，返回当前时间和时区；不得用模型记忆猜测时间。",
+    category="system",
+    parameters=[
+        ToolParameter(name="timezone", type="string", required=False,
+                      description="IANA 时区，例如 Asia/Shanghai；为空使用本机时区"),
+    ],
+    return_type='{"formatted": "YYYY-MM-DD HH:mm:ss", "iso": "ISO-8601", "timezone": "str"}',
+    examples=[
+        ToolExample(user_question="现在几点？", parameters={}),
+        ToolExample(user_question="现在东京几点？", parameters={"timezone": "Asia/Tokyo"}),
+    ],
+    risk_level="L1",
+    handler=current_time_handler,
+    is_concurrency_safe=True,
+)
+
+CURRENT_DATE = ToolDefinition(
+    name="current_date",
+    description="读取运行 CLI 的系统日期，返回当前日期和星期；不得用模型记忆猜测日期。",
+    category="system",
+    parameters=[
+        ToolParameter(name="timezone", type="string", required=False,
+                      description="IANA 时区，例如 Asia/Shanghai；为空使用本机时区"),
+    ],
+    return_type='{"formatted": "YYYY-MM-DD", "weekday": "str", "timezone": "str"}',
+    examples=[
+        ToolExample(user_question="今天是几号？", parameters={}),
+    ],
+    risk_level="L1",
+    handler=current_date_handler,
+    is_concurrency_safe=True,
+)
+
+WEATHER = ToolDefinition(
+    name="weather",
+    description="通过 Open-Meteo 查询指定地点的实时天气；没有地点时必须向用户询问城市，不得编造天气。",
+    category="search",
+    parameters=[
+        ToolParameter(name="location", type="string", required=False,
+                      description="城市或地点名称，例如 Beijing、上海"),
+        ToolParameter(name="latitude", type="number", required=False,
+                      description="纬度；与 longitude 一起提供时跳过地理编码"),
+        ToolParameter(name="longitude", type="number", required=False,
+                      description="经度；与 latitude 一起提供时跳过地理编码"),
+    ],
+    return_type='{"location": "str", "condition": "str", "temperature": "number", "time": "str"}',
+    examples=[
+        ToolExample(user_question="北京今天天气怎么样？", parameters={"location": "北京"}),
+        ToolExample(user_question="查询上海天气", parameters={"location": "上海"}),
+    ],
+    risk_level="L1",
+    handler=weather_handler,
+    is_concurrency_safe=True,
+)
+
 # ── file_read ─────────────────────────────────────────────────────────
 
 FILE_READ = ToolDefinition(
@@ -119,7 +211,7 @@ FILE_READ = ToolDefinition(
 
 FILE_WRITE = ToolDefinition(
     name="file_write",
-    description="将内容写入工作区的文件。可以创建新文件或追加到现有文件。用于保存代码、配置、文档等。所有写入自动纳入 Git 版本控制，多人协作时自动检测文件冲突。",
+    description="将内容写入工作区的文件。可以创建新文件或追加到现有文件。写入后返回校验哈希和变更信息；Git 提交必须由用户显式调用 git_commit。",
     category="file",
     parameters=[
         ToolParameter(name="path", type="string", required=True,
@@ -128,14 +220,14 @@ FILE_WRITE = ToolDefinition(
                       description="要写入的完整文本内容"),
         ToolParameter(name="mode", type="string", required=False,
                       description="写入模式: 'overwrite' 覆写(默认) 或 'append' 追加", default="overwrite"),
-        ToolParameter(name="expected_sha256", type="string", required=False,
-                      description="上次 file_read 返回的 sha256 值，用于检测文件是否被其他用户修改过。不提供则跳过冲突检测。"),
+        ToolParameter(name="expected_sha256", type="string", required=True,
+                      description="file_read 返回的完整 sha256；新文件传空字符串。缺失或不匹配时拒绝写入。"),
     ],
     return_type='"写入结果描述文本" 及 metadata（path, size_bytes, mode, sha256, conflict 等）',
     examples=[
         ToolExample(
             user_question="帮我在 data 目录下创建一个 config.json 文件，内容是 {...}",
-            parameters={"path": "data/config.json", "content": "{...}", "mode": "overwrite"},
+                parameters={"path": "data/config.json", "content": "{...}", "mode": "overwrite", "expected_sha256": ""},
         ),
     ],
     risk_level="L2",
@@ -147,11 +239,11 @@ FILE_WRITE = ToolDefinition(
 
 FILE_WRITE_BATCH = ToolDefinition(
     name="file_write_batch",
-    description="批量写入多个文件到工作区，自动创建所需的父目录。一次调用可写入多个文件（如整个模块的代码文件），大幅减少 tool_call 次数。适合 CodeGen 输出多文件代码时使用。",
+    description="兼容入口：以 apply_change_set 的原子事务契约批量写入多个文件。每项必须携带 expected_sha256；推荐新代码直接使用 apply_change_set。",
     category="file",
     parameters=[
         ToolParameter(name="paths_contents", type="array", required=True,
-                      description="文件列表。每项为 {\"path\": \"相对路径\", \"content\": \"文件内容\"} 的对象。例如 [{\"path\": \"src/main.py\", \"content\": \"print('hi')\"}, {\"path\": \"src/utils.py\", \"content\": \"def f(): pass\"}]。最多支持 20 个文件。"),
+                      description="文件列表。每项必须为 {\"path\": \"相对路径\", \"content\": \"文件内容\", \"expected_sha256\": \"...\"}；新文件 hash 传空字符串。最多 20 个文件。"),
     ],
     return_type='批量写入结果摘要及每个文件的写入状态（success/fail + metadata）',
     examples=[
@@ -159,9 +251,9 @@ FILE_WRITE_BATCH = ToolDefinition(
             user_question="帮我创建一个博客项目的基础结构，包括前端和后端代码",
             parameters={
                 "paths_contents": [
-                    {"path": "backend/app.py", "content": "from flask import Flask\napp = Flask(__name__)\n..."},
-                    {"path": "frontend/index.html", "content": "<!DOCTYPE html>\n<html>...</html>"},
-                    {"path": "README.md", "content": "# Blog Project\n..."},
+                    {"path": "backend/app.py", "content": "from flask import Flask\napp = Flask(__name__)\n...", "expected_sha256": ""},
+                    {"path": "frontend/index.html", "content": "<!DOCTYPE html>\n<html>...</html>", "expected_sha256": ""},
+                    {"path": "README.md", "content": "# Blog Project\n...", "expected_sha256": ""},
                 ],
             },
         ),
@@ -169,8 +261,8 @@ FILE_WRITE_BATCH = ToolDefinition(
             user_question="创建 src/utils 目录并在其中写入 helpers.py 和 config.py",
             parameters={
                 "paths_contents": [
-                    {"path": "src/utils/helpers.py", "content": "def add(a, b): return a + b"},
-                    {"path": "src/utils/config.py", "content": "DEBUG = True"},
+                    {"path": "src/utils/helpers.py", "content": "def add(a, b): return a + b", "expected_sha256": ""},
+                    {"path": "src/utils/config.py", "content": "DEBUG = True", "expected_sha256": ""},
                 ],
             },
         ),
@@ -179,6 +271,54 @@ FILE_WRITE_BATCH = ToolDefinition(
     handler=file_write_batch_handler,
     is_concurrency_safe=False,  # Has side effects
 )
+
+APPLY_CHANGE_SET = ToolDefinition(
+    name="apply_change_set",
+    description="以一次可回滚事务写入多个文本文件。每项必须提供完整 expected_sha256；任一文件冲突或写入失败都会拒绝或回滚整个变更集。",
+    category="file",
+    parameters=[
+        ToolParameter(
+            name="changes", type="array", required=True,
+            description="变更数组，每项包含 path、content、expected_sha256；新文件的 expected_sha256 传空字符串。",
+        ),
+    ],
+    return_type='事务结果及 metadata（transaction_id, files[path, sha256, size_bytes]）',
+    examples=[
+        ToolExample(
+            user_question="同时更新两个模块，任何一个冲突就整体回滚",
+            parameters={"changes": [{"path": "a.py", "content": "print(1)\\n", "expected_sha256": ""}]},
+        ),
+    ],
+    risk_level="L2",
+    handler=apply_change_set_handler,
+    is_concurrency_safe=False,
+)
+
+_GIT_CWD = ToolParameter(name="cwd", type="string", required=False, description="工作区内目录", default=".")
+
+GIT_STATUS = ToolDefinition("git_status", "查看工作区状态和当前分支。", "git", [_GIT_CWD], "git status", [], handler=git_status_handler)
+GIT_DIFF = ToolDefinition("git_diff", "查看未暂存或已暂存的代码差异。", "git", [_GIT_CWD, ToolParameter("staged", "boolean", False, "是否查看暂存区", False), ToolParameter("path", "string", False, "可选文件路径")], "unified diff", [], handler=git_diff_handler)
+GIT_LOG = ToolDefinition("git_log", "查看最近提交记录。", "git", [_GIT_CWD, ToolParameter("count", "number", False, "提交数量", 10)], "commit log", [], handler=git_log_handler)
+GIT_BRANCH = ToolDefinition("git_branch", "列出当前仓库分支。", "git", [_GIT_CWD], "branch list", [], handler=git_branch_handler)
+GIT_BRANCH_CREATE = ToolDefinition("git_branch_create", "创建并切换到新分支。", "git", [ToolParameter("name", "string", True, "新分支名"), _GIT_CWD], "branch result", [], risk_level="L2", handler=git_branch_create_handler, is_concurrency_safe=False)
+GIT_COMMIT = ToolDefinition("git_commit", "显式创建 Git 提交；文件工具不会自动提交。", "git", [ToolParameter("message", "string", True, "提交说明"), _GIT_CWD], "commit result", [], risk_level="L2", handler=git_commit_handler, is_concurrency_safe=False)
+GIT_REVERT = ToolDefinition("git_revert", "为指定提交创建可审计的 revert 提交。", "git", [ToolParameter("commit", "string", True, "单个 commit id"), _GIT_CWD], "revert result", [], risk_level="L2", handler=git_revert_handler, is_concurrency_safe=False)
+GIT_CHERRY_PICK = ToolDefinition("git_cherry_pick", "应用指定提交并保留 Git 冲突状态。", "git", [ToolParameter("commit", "string", True, "单个 commit id"), _GIT_CWD], "cherry-pick result", [], risk_level="L2", handler=git_cherry_pick_handler, is_concurrency_safe=False)
+GIT_PUSH = ToolDefinition("git_push", "声明当前 Desktop Runner 不支持远程 Git push；返回明确的人工操作提示。", "git", [_GIT_CWD], "unsupported capability result", [], risk_level="L2", handler=git_push_handler, is_concurrency_safe=False)
+
+DEV_CWD = ToolParameter(name="path", type="string", required=False, description="工作区内路径", default=".")
+PROJECT_INSPECT = ToolDefinition("project_inspect", "只读检查项目身份、技术栈、README 摘要、Git 分支和远程仓库。", "project", [DEV_CWD], "project manifest", [], handler=project_inspect_handler)
+AST_SYMBOLS = ToolDefinition("ast_symbols", "解析 Python AST，列出类和函数符号及行号。", "code", [ToolParameter("path", "string", True, "Python 文件路径"), ToolParameter("include_private", "boolean", False, "是否包含下划线私有符号", False)], "symbols", [], handler=ast_symbols_handler)
+TEST_DISCOVER = ToolDefinition("test_discover", "发现项目测试文件和 package.json scripts，不执行测试。", "code", [DEV_CWD], "test inventory", [], handler=test_discover_handler)
+FORMATTER = ToolDefinition("formatter", "运行已安装的 ruff/black/prettier；默认 check 模式不修改文件。", "code", [DEV_CWD, ToolParameter("formatter", "string", False, "auto/ruff/black/prettier", "auto"), ToolParameter("check", "boolean", False, "仅检查不写入", True)], "formatter result", [], risk_level="L2", handler=formatter_handler, is_concurrency_safe=False)
+TYPE_CHECK = ToolDefinition("type_check", "运行已安装的 mypy/pyright/tsc 类型检查器。", "code", [DEV_CWD, ToolParameter("checker", "string", False, "auto/mypy/pyright/tsc", "auto")], "type check result", [], handler=type_check_handler)
+PACKAGE_MANAGER = ToolDefinition("package_manager", "执行受限的 npm/pnpm/yarn/pip 依赖操作；install/update 默认 dry-run。", "integration", [ToolParameter("manager", "string", True, "npm/pnpm/yarn/pip"), ToolParameter("action", "string", False, "list/install/update", "list"), ToolParameter("package", "string", False, "可选包名"), ToolParameter("apply", "boolean", False, "是否真正修改依赖", False)], "package manager result", [], risk_level="L2", handler=package_manager_handler, is_concurrency_safe=False)
+LOG_TAIL = ToolDefinition("log_tail", "读取工作区内日志文件末尾内容。", "diagnostic", [ToolParameter("path", "string", True, "日志路径"), ToolParameter("lines", "number", False, "行数", 100)], "log text", [], handler=log_tail_handler)
+PROCESS_LIST = ToolDefinition("process_list", "列出当前操作系统进程。", "diagnostic", [], "process list", [], handler=process_list_handler)
+PORT_CHECK = ToolDefinition("port_check", "检查 TCP 端口是否可连接。", "diagnostic", [ToolParameter("host", "string", False, "主机", "127.0.0.1"), ToolParameter("port", "number", True, "端口"), ToolParameter("timeout", "number", False, "超时秒数", 1.0)], "port result", [], handler=port_check_handler)
+SERVICE_HEALTH = ToolDefinition("service_health", "对指定 HTTP 服务执行 GET 健康检查。", "diagnostic", [ToolParameter("url", "string", True, "HTTP URL"), ToolParameter("timeout", "number", False, "超时秒数", 5.0)], "health result", [], handler=service_health_handler)
+CHANGE_PLAN = ToolDefinition("change_plan", "将多文件修改整理为可审计的步骤和验证计划。", "workflow", [ToolParameter("changes", "array", True, "变更项列表")], "change plan", [], handler=change_plan_handler)
+AUDIT_REPORT = ToolDefinition("audit_report", "聚合 Attempt 文件来源和恢复审计记录。", "workflow", [ToolParameter("attempt_id", "string", False, "可选 Attempt ID")], "audit report", [], handler=audit_report_handler)
 
 # ── code_execute ──────────────────────────────────────────────────────
 
@@ -502,7 +642,7 @@ FILE_SEARCH = ToolDefinition(
     category="file",
     parameters=[
         ToolParameter(name="pattern", type="string", required=True,
-                      description="搜索的正则表达式，例如 'function\s+\w+' 或 'TODO'"),
+                      description=r"搜索的正则表达式，例如 'function\s+\w+' 或 'TODO'"),
         ToolParameter(name="path", type="string", required=False,
                       description="搜索的目录路径（相对于工作区），默认 '.'", default="."),
         ToolParameter(name="glob", type="string", required=False,
@@ -541,6 +681,8 @@ FILE_PATCH = ToolDefinition(
                       description="要打补丁的文件路径（相对于工作区），例如 'app/main.py'"),
         ToolParameter(name="diff", type="string", required=True,
                       description="Unified diff 格式的补丁内容，包含 @@ -a,n +b,m @@ 块头"),
+        ToolParameter(name="expected_sha256", type="string", required=True,
+                      description="file_read 返回的完整 sha256；文件被修改或缺失时拒绝应用补丁。"),
     ],
     return_type='补丁应用结果描述 + 文件预览 + metadata（lines_added, lines_removed, total_lines）',
     examples=[
@@ -549,6 +691,7 @@ FILE_PATCH = ToolDefinition(
             parameters={
                 "path": "app/main.py",
                 "diff": "@@ -42,4 +42,5 @@\n def main():\n-    pass\n+    print('hello')\n+    return 0",
+                "expected_sha256": "<full sha256 from file_read>",
             },
         ),
     ],
@@ -704,6 +847,60 @@ CONVERSATION_SEARCH = ToolDefinition(
     is_concurrency_safe=True,
 )
 
+# ── memory_recall ─────────────────────────────────────────────────────
+
+MEMORY_RECALL = ToolDefinition(
+    name="memory_recall",
+    description="只读暴露多层记忆（L0 工作记忆 / L1 情景摘要 / 语义持久化记忆 / 项目事实）。Agent 执行 Mission 时调用此工具获取用户偏好、历史上下文、项目 ADR 等信息，避免重复询问或违反既有约定。支持关键词过滤。",
+    category="memory",
+    parameters=[
+        ToolParameter(name="query", type="string", required=False,
+                      description="搜索关键词（可选），匹配语义记忆的 name/description/body 字段和项目事实", default=""),
+        ToolParameter(name="scope", type="string", required=False,
+                      description="记忆范围: 'session'(默认, 当前会话) 或 'global'(跨会话聚合)", default="session"),
+        ToolParameter(name="max_results", type="number", required=False,
+                      description="语义记忆/事实的最大返回数量，默认10，最大30", default=10),
+    ],
+    return_type='{"query": "str", "scope": "str", "layers": {"L0": {...}, "L1": {...}, "semantic": {...}, "facts": {...}}}',
+    examples=[
+        ToolExample(
+            user_question="回忆一下用户之前提过什么技术偏好？",
+            parameters={"query": "偏好 技术栈", "max_results": 5},
+        ),
+        ToolExample(
+            user_question="这个项目有哪些已知的 ADR 或架构决策？",
+            parameters={"query": "ADR 架构", "scope": "global", "max_results": 10},
+        ),
+    ],
+    risk_level="L1",
+    handler=memory_recall_handler,
+    is_concurrency_safe=True,  # Read-only — no side effects
+)
+
+# ── memory_retain ─────────────────────────────────────────────────────
+
+MEMORY_RETAIN = ToolDefinition(
+    name="memory_retain",
+    description="将一个请求级别的工作记忆事实追加到当前会话的 working memory 文件。Agent 在 Mission 执行中观察到用户偏好、项目约束等时调用此工具即时记录，信息会在下一次 memory_recall 中可见。区别于 memory_save（写持久化 MEMORY.md 跨会话保留），memory_retain 仅会话内有效。",
+    category="memory",
+    parameters=[
+        ToolParameter(name="fact", type="string", required=True,
+                      description="要保留的事实内容（20-500 字符），如 '用户偏好 TypeScript 严格模式'"),
+        ToolParameter(name="note", type="string", required=False,
+                      description="上下文备注（why / where 观察到的）", default=""),
+    ],
+    return_type='{"sessionId": "str", "fact": "str", "recordedAt": "str", "path": "str"}',
+    examples=[
+        ToolExample(
+            user_question="（Agent 在 Mission 执行中观察到）用户提到所有 API 必须用 FastAPI + Pydantic v2，需要记住这个偏好",
+            parameters={"fact": "项目 API 必须使用 FastAPI + Pydantic v2", "note": "用户在 Mission mission_xyz 对话中明确"},
+        ),
+    ],
+    risk_level="L1",
+    handler=memory_retain_handler,
+    is_concurrency_safe=False,  # Has side effects (appends to working memory file)
+)
+
 # ── invoke_agent ───────────────────────────────────────────────────────
 # THIS is the key tool that transforms the Orchestrator from a "fake
 # dispatcher" into a REAL orchestrator.  It allows the default agent
@@ -796,12 +993,14 @@ FILE_EDIT = ToolDefinition(
                       description="替换后的新文本。如果不想做任何修改，设置与 old_string 相同。"),
         ToolParameter(name="replace_all", type="boolean", required=False,
                       description="是否替换所有匹配项。默认 false（只替换第一处）。当 old_string 在文件中出现多次且 replace_all=false 时，工具会拒绝执行并返回所有匹配位置。", default=False),
+        ToolParameter(name="expected_sha256", type="string", required=True,
+                      description="file_read 返回的完整 sha256；新文件传空字符串。缺失或不匹配时拒绝编辑。"),
     ],
     return_type='"替换结果描述文本" 及 metadata（path, occurrences, replaced, size_bytes, sha256 等）',
     examples=[
         ToolExample(
             user_question="把 app/main.py 中所有的 'user_name' 改成 'username'",
-            parameters={"path": "app/main.py", "old_string": "user_name", "new_string": "username", "replace_all": True},
+            parameters={"path": "app/main.py", "old_string": "user_name", "new_string": "username", "replace_all": True, "expected_sha256": "<full sha256 from file_read>"},
         ),
         ToolExample(
             user_question="在 config.py 的 DEBUG = False 改为 DEBUG = True",
@@ -857,7 +1056,7 @@ FILE_GLOB = ToolDefinition(
 
 MKDIR = ToolDefinition(
     name="mkdir",
-    description="在用户的工作区中创建目录（类似 mkdir -p）。可以创建单个目录或嵌套的目录树。用于搭建项目代码的目录结构——例如创建 src/components/、app/api/、frontend/pages/ 等。成功创建后自动纳入 Git 版本控制。",
+    description="在用户的工作区中创建目录（类似 mkdir -p）。Git 提交必须由用户显式调用 git_commit。",
     category="file",
     parameters=[
         ToolParameter(name="path", type="string", required=True,
@@ -937,14 +1136,41 @@ TASK = ToolDefinition(
 
 BUILTIN_TOOLS: list[ToolDefinition] = [
     WEB_SEARCH,
+    CURRENT_TIME,
+    CURRENT_DATE,
+    WEATHER,
+    GIT_STATUS,
+    GIT_DIFF,
+    GIT_LOG,
+    GIT_BRANCH,
+    GIT_BRANCH_CREATE,
+    GIT_COMMIT,
+    GIT_REVERT,
+    GIT_CHERRY_PICK,
+    GIT_PUSH,
+    PROJECT_INSPECT,
+    AST_SYMBOLS,
+    TEST_DISCOVER,
+    FORMATTER,
+    TYPE_CHECK,
+    PACKAGE_MANAGER,
+    LOG_TAIL,
+    PROCESS_LIST,
+    PORT_CHECK,
+    SERVICE_HEALTH,
+    CHANGE_PLAN,
+    AUDIT_REPORT,
     FILE_READ,
     FILE_WRITE,
     FILE_WRITE_BATCH,
+    APPLY_CHANGE_SET,
     FILE_SEARCH,
     FILE_PATCH,
     CODE_EXECUTE,
     MEMORY_SEARCH,
     MEMORY_SAVE,
+    MEMORY_RECALL,
+    MEMORY_RETAIN,
     BROWSER_NAVIGATE,
     BROWSER_SCREENSHOT,
     BROWSER_EXTRACT,

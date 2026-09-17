@@ -1,5 +1,8 @@
 # ContextOS 4 层记忆
 
+> 迁移说明：本文描述历史记忆实现。目标架构将其收敛为 Context Compiler
+> 的 Memory Layers，并要求 ACL、来源、freshness 和可重放上下文。
+
 ContextOS 是 AgentHub 的四层记忆引擎，为 Agent 提供从即时工作上下文到长期知识图谱的完整记忆体系。
 
 ## 记忆分层

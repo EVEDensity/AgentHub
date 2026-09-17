@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,7 @@ class ContentBudgetConfig:
     max_result_chars: int = 10_000        # Max chars per individual tool result
     max_total_results_chars: int = 30_000  # Total char budget per conversation turn
     truncation_marker: str = "\n... [结果已截断，超出上下文预算]"
+    summary_chars: int = 320
 
 
 class ResultStorage:
@@ -54,6 +56,17 @@ class ResultStorage:
 
         # Shallow copy so we don't mutate the original
         processed = dict(result)
+        raw_text = self._extract_text(processed)
+        if raw_text:
+            processed.setdefault("context", {})
+            if isinstance(processed["context"], dict):
+                digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+                processed["context"].update({
+                    "rawChars": len(raw_text),
+                    "rawSha256": digest,
+                    "summary": raw_text[: self.config.summary_chars],
+                    "reference": f"tool-result:{digest}",
+                })
 
         # ── Truncate the result body ─────────────────────────────────
         result_data = processed.get("result")
@@ -103,6 +116,13 @@ class ResultStorage:
         # ── Track budget ──────────────────────────────────────────────
         final_text = self._extract_text(processed)
         self._used_budget += len(final_text)
+
+        context = processed.get("context")
+        if isinstance(context, dict):
+            context["class"] = (
+                "structured_summary" if processed.get("result_truncated") else "raw_result"
+            )
+            context["deferred"] = bool(processed.get("result_truncated"))
 
         return processed
 

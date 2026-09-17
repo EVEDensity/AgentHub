@@ -1,0 +1,253 @@
+# Deployment Assets
+
+`deploy/` contains local and production deployment support: Compose files,
+images, observability configuration, and operational defaults.
+
+Every deployment document must state prerequisites, exposed ports, secrets,
+health checks, persistence, rollback, and the verification command. Local
+Community deployment should not require the full enterprise service topology.
+
+Do not use deployment configuration to silently change domain semantics. A
+feature unavailable in a deployment must fail explicitly and be observable.
+
+## Local Decision expiry supervision
+
+The Decision expiry supervisor is available only through the explicit
+`mission-supervision` profile. Normal platform startup does not run it. Before
+enabling the profile, migrate the local PostgreSQL database to the current
+Alembic head; otherwise the process remains not ready and must not be treated as
+providing automatic expiry.
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+New-Item -ItemType Directory -Force deploy/secrets
+Set-Content -NoNewline deploy/secrets/decision-expiry-database-url "postgresql://agenthub:agenthub@postgres:5432/agenthub"
+docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision up -d --build postgres decision-expiry-service
+docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision ps decision-expiry-service
+```
+
+The profile waits for PostgreSQL health and probes the supervisor's `/readyz`
+endpoint inside the container. Port `8099` is exposed only to the Compose
+network, not published to the host. The container runs with no Linux
+capabilities, a read-only root filesystem, bounded temporary filesystems, and no
+durable volume. Mission Control PostgreSQL remains the only persistence layer.
+
+Compose mounts `deploy/secrets/decision-expiry-database-url` by default. Set
+`AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE` to select a different host-side
+file. The directory is excluded from Git and the Docker build context. The DSN
+must use PostgreSQL wire protocol; the supervisor deliberately does not use the
+stateless Neon HTTP adapter because expiry requires one real transaction.
+
+The example credentials above are for the bundled local PostgreSQL container
+only. Production must source the mounted file from its secret manager and pass
+only the file path in process configuration. The isolated direct-PostgreSQL
+smoke test passed on 2026-08-16. Production enablement still requires
+deployment-specific secret, network, scrape, and alert-routing review.
+
+The service exposes Prometheus text on `/metrics`. Because
+`deploy/prometheus.yml` is private local deployment material, each deployment
+must explicitly add the service to discovery. For the checked-in Compose
+network, the equivalent static scrape target is:
+
+```yaml
+- job_name: mission-supervision
+  static_configs:
+    - targets: ["decision-expiry-service:8099"]
+      labels:
+        tier: control
+```
+
+Versioned rules in `deploy/agenthub_rules.yml` alert on sustained poll failures
+and stalled successful polling. Target-down detection and notification routing
+belong to the deployment's Prometheus/Alertmanager configuration.
+
+Stop or roll back supervision without editing durable Mission state:
+
+```powershell
+docker compose -f deploy/docker-compose.platform.yml --profile mission-supervision stop decision-expiry-service
+```
+
+A committed expiry transaction remains authoritative. Any still-pending expired
+Decision remains eligible when a compatible supervisor starts again.
+
+### Isolated expiry smoke gate
+
+The smoke gate uses a dedicated Compose topology, random loopback ports, a
+generated password, and a DSN file under the operating-system temporary
+directory. It does not load the repository `.env` or use the platform Compose
+database. The script migrates the temporary PostgreSQL database, inserts one
+valid expired Decision, builds and starts the supervisor, and verifies:
+
+- Decision `PENDING -> EXPIRED` with service resolution metadata;
+- WorkUnit `VERIFYING -> FAILED` and Mission `WAITING_DECISION -> FAILED`;
+- exactly three causally linked aggregate events;
+- no Evidence and no duplicate events after subsequent idle polls;
+- sanitized readiness counters with exactly one expiry.
+
+Docker and the repository Python dependencies are prerequisites. Run from the
+repository root:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/decision_expiry_smoke.py
+```
+
+The script assigns a unique Compose project and executes `down --volumes` in a
+`finally` block. A cleanup failure fails an otherwise successful run. If the
+test itself fails and cleanup also fails, the original failure is preserved and
+the cleanup error type is reported so the operator can remove that exact smoke
+project without touching other containers.
+
+## Model Runner profile
+
+The model-backed workspace Runner is available only through the explicit
+`mission-runner` profile. It executes the registered `a2a.inbound` and
+`mission.fork` roots through the kind-aware model/Harness path. It does not
+enable outbound A2A transport execution.
+
+Before startup, provide a distinct Runner principal with `mission:claim` in
+the selected workspace, three single-line token files, a credential-free MCP
+binding manifest, writable Artifact storage shared with the verifier, and
+reachable Mission Control, AI Gateway, and Stateless MCP endpoints. Compose
+allows its normal platform profile to parse without these variables, but the
+Runner fails startup when any identity or endpoint is empty; set every value
+before enabling this profile.
+
+```powershell
+$env:AGENTHUB_RUNNER_RUNNER_ID = "runner-local-1"
+$env:AGENTHUB_RUNNER_WORKSPACE_ID = "workspace-1"
+$env:AGENTHUB_RUNNER_ASSIGNED_AGENT_ID = "reviewer"
+$env:AGENTHUB_RUNNER_ASSIGNED_ADAPTER = "local_codex"
+$env:AGENTHUB_RUNNER_MISSION_CONTROL_URL = "https://mission-control.example.test"
+$env:AGENTHUB_RUNNER_MODEL_GATEWAY_URL = "https://ai-gateway.example.test/v1"
+$env:AGENTHUB_RUNNER_MODEL = "production-model"
+$env:AGENTHUB_RUNNER_MCP_ENDPOINT = "https://mcp.example.test/mcp/rpc"
+$env:AGENTHUB_RUNNER_MISSION_CONTROL_TOKEN_FILE = "D:\secrets\mission-control-token"
+$env:AGENTHUB_RUNNER_MODEL_GATEWAY_TOKEN_FILE = "D:\secrets\model-gateway-token"
+$env:AGENTHUB_RUNNER_MCP_TOKEN_FILE = "D:\secrets\mcp-token"
+$env:AGENTHUB_RUNNER_MCP_BINDINGS_FILE = "D:\config\runner-mcp-bindings.json"
+$env:AGENTHUB_RUNNER_ARTIFACT_HOST_PATH = "D:\agenthub-artifacts"
+.\.venv\Scripts\python.exe scripts/runner_deployment_preflight.py
+docker compose -f deploy/docker-compose.platform.yml --profile mission-runner up -d --build runner-service
+docker compose -f deploy/docker-compose.platform.yml --profile mission-runner ps runner-service
+```
+
+Each token path and the MCP binding path must already be a regular file, not a
+directory or symbolic link. Docker Desktop can create a directory when a
+default bind source was absent on an earlier Compose attempt; remove an empty
+unexpected directory and recreate the required regular file before retrying.
+The preflight rejects this condition when run with the selected host paths.
+
+The preflight performs no writes. It validates the process identity and
+endpoint configuration, mounted-secret source files, credential-free MCP
+manifest, existing writable Artifact root, and TCP reachability of the three
+external endpoints. Use `--skip-network` only for an offline configuration
+review; it cannot prove endpoint availability or authorization.
+
+The container runs as UID `10001`. Ensure the mounted Artifact root is writable
+by that container identity; host-side writability from preflight does not prove
+the container mount's ownership or SELinux policy.
+
+The container has no published host port, runs with a read-only root filesystem,
+and mounts only transient `/tmp` and `/srv/agenthub/data` tmpfs directories, the
+read-write Artifact root, three Docker secrets, and the read-only MCP manifest.
+The data tmpfs satisfies framework import-time initialization; it is not
+durable Runner or Mission storage. Its health check calls `/readyz` inside the
+container. Roll back by stopping the profile service; do not alter Mission or
+WorkUnit state manually:
+
+```powershell
+docker compose -f deploy/docker-compose.platform.yml --profile mission-runner stop runner-service
+```
+
+Stopping prevents new polls. An active lease drains until the 30-second Runner
+shutdown deadline, then uses the existing cancellation/failure path; a process
+failure is recovered only through Mission Control lease expiry and retry policy.
+
+## A2A trust policy
+
+Gateway rejects unsigned A2A Agent Cards by default. Development environments
+that intentionally interoperate with unsigned agents must set
+`A2A_ALLOW_UNSIGNED_CARDS=true`; do not use that override in production.
+
+Production deployments can pin one or more Ed25519 public keys to each agent
+origin. Multiple keys allow an old and new key to overlap during rotation:
+
+```text
+A2A_REQUIRE_PINNED_KEYS=true
+A2A_TRUSTED_PUBLIC_KEYS_JSON={"https://agent.example.com":["<hex-ed25519-public-key>","<next-hex-ed25519-public-key>"]}
+```
+
+The JSON keys must be HTTP(S) origins without paths or queries. Invalid
+booleans, origins, JSON, empty key lists, or non-Ed25519 keys prevent Gateway
+startup. `A2A_ALLOW_UNSIGNED_CARDS=true` and
+`A2A_REQUIRE_PINNED_KEYS=true` are mutually exclusive. `GET
+/platform/a2a/trust-status` exposes only policy flags and the number of pinned
+origins; it never exposes key material.
+
+To publish a signed AgentHub Card, mount a persistent installation identity key
+as a read-only Secret and pass only its path to Gateway:
+
+```text
+A2A_REQUIRE_SIGNED_SELF_CARD=true
+A2A_CARD_SIGNING_KEY_FILE=/run/secrets/agenthub_a2a_ed25519
+```
+
+The file must contain a hex-encoded 32-byte Ed25519 seed or 64-byte Ed25519
+private key. A seed can be generated outside the repository with
+`openssl rand -hex 32`; store it in the deployment secret manager, not in an
+environment variable or tracked file. Rotate by pinning the new public key on
+peers before replacing the mounted key and restarting Gateway.
+
+For a non-exportable KMS/HSM key, configure a controlled remote signer instead
+of mounting private key material in Gateway:
+
+```text
+A2A_REQUIRE_SIGNED_SELF_CARD=true
+A2A_CARD_SIGNER_URL=https://signer.internal/v1/a2a-card
+A2A_CARD_SIGNER_KEY_ID=agenthub-production-card
+A2A_CARD_SIGNER_TOKEN_FILE=/run/secrets/agenthub_a2a_signer_token
+```
+
+`A2A_CARD_SIGNER_URL` and `A2A_CARD_SIGNING_KEY_FILE` are mutually exclusive.
+The token file is bounded, must contain one non-empty line, and must be mounted
+read-only. The signer URL must use HTTPS, must not contain credentials, query,
+or fragment, and never follows redirects. For local tests only, loopback HTTP
+can be enabled with `A2A_CARD_SIGNER_ALLOW_INSECURE_HTTP=true`.
+
+The endpoint accepts `POST application/json` with one of these request shapes:
+
+```json
+{"operation":"public_key","purpose":"a2a_agent_card_v1","key_id":"agenthub-production-card"}
+{"operation":"sign","purpose":"a2a_agent_card_v1","key_id":"agenthub-production-card","key_version":"42","payload":"<base64-card-json>"}
+```
+
+Responses use `algorithm`, `key_id`, `key_version`, and either a hex
+`public_key` or hex `signature`. The signer must authorize the fixed purpose,
+caller, and key ID; it must never return private key material. Gateway pins the
+reported version for the startup signing operation, verifies the returned
+signature locally, and publishes only non-secret identity metadata. Rotation
+still follows peer-pin overlap: publish the new public pin, switch signer key
+version and restart Gateway, then remove the old pin.
+
+AgentHub-to-AgentHub delegation also requires a receiver-issued bearer token
+for each peer origin. Mount each token as a separate read-only Secret and map
+the peer origin to the in-container file path; the environment variable carries
+paths only, never token values:
+
+```text
+A2A_PEER_BEARER_TOKEN_FILES_JSON={"https://peer.example.com":"/run/secrets/peer_example_a2a_token"}
+```
+
+Origins use the same exact HTTP(S) origin rules as public-key pins. Token files
+are bounded to 16 KiB and must contain one non-empty line. A peer whose Agent
+Card advertises Bearer authentication cannot receive a task unless its origin
+has a configured token. Gateway never substitutes the caller's Authorization
+header. Peer tokens are loaded at startup, are used only for the matching
+origin, and never enter Agent Cards, Registry data, trust status, Mission,
+WorkUnit, Artifact, Evidence, or logs. Rotation requires replacing the mounted
+Secret and restarting Gateway.
+
+The public Agent Card is served at `/.well-known/agent-card.json`. Local clients
+submit outbound work to the authenticated `/platform/a2a/tasks` endpoint;
+peers call the authenticated `/platform/a2a/inbox` endpoint declared by the
+Card. Do not expose the inbox without Gateway IAM verification.

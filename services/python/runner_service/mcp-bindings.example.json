@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "agenthub.runner.mcp-bindings.v1",
+  "bindings": [
+    {
+      "capability": "repository.read",
+      "functionName": "read_repository",
+      "description": "Read content within the Contract-granted repository scope.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

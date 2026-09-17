@@ -23,11 +23,27 @@
 
 ---
 
+## Local CLI installation
+
+For a personal, local-first setup, use an isolated virtual environment and an
+editable install while developing:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\agenthub.exe --help
+.\.venv\Scripts\agenthub.exe doctor
+```
+
+`pipx install .` creates a clean global command environment for regular use.
+Provider credentials remain environment-only; `agenthub doctor --json` reports
+only whether credentials are configured and never prints their values.
+
 ## What is this?
 
-AgentHub lets you spin up a team of AI agents that actually work together — Router figures out what needs doing, Executor does it, Critic checks the work, Summarizer ties it all up. Not a single-agent-with-tools trick. A real team.
+AgentHub lets you spin up a team of AI agents that actually work together — the Orchestrator decomposes your goal and dispatches roles, code-review and verification agents check the work, and deploy/implementation agents finish it. Not a single-agent-with-tools trick. A real team.
 
-Each agent runs through an 11-state ReAct loop that you can watch in real time. Everything streams. Everything logs. Everything's on your hardware.
+Each agent runs under a bounded, observable loop that you can watch in real time. Everything streams. Everything logs. Everything's on your hardware.
 
 ## Why?
 
@@ -36,6 +52,26 @@ Most AI platforms wrap an LLM in a chat box and call it an agent. Then you spend
 AgentHub gives you the full loop out of the box — orchestration, IAM, sandbox execution, search, observability. You bring a model key. It brings the rest.
 
 ## Quick start
+
+### Install the CLI (Windows x64)
+
+Run this in PowerShell to install the latest checksummed GitHub Release for
+the current user. It does not require administrator access, npm, or Python:
+
+```powershell
+irm https://github.com/EVEDensity/AgentHub/releases/latest/download/install.ps1 | iex
+```
+
+Open a new terminal, then verify the installation:
+
+```powershell
+agenthub --help
+```
+
+Only Windows x64 CLI binaries are published today. Other platforms are not yet
+claimed as supported.
+
+### Run the full platform locally
 
 ```bash
 git clone https://github.com/EVEDensity/AgentHub.git
@@ -55,6 +91,18 @@ export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_COMPATIBLE_BASE_URL=http://localhost:11434/v1
 ```
 
+Optionally route all providers through a unified gateway (new-api / one-api
+style) for multi-key failover, quotas and usage analytics:
+
+```bash
+export AGENTHUB_LLM_GATEWAY=newapi
+export AGENTHUB_NEWAPI_BASE_URL=http://127.0.0.1:3000/v1
+export AGENTHUB_NEWAPI_API_KEY=sk-agenthub-xxxx
+```
+
+See [deploy/newapi/README.md](deploy/newapi/README.md) for deployment,
+migration and verification (ADR-0104).
+
 Then:
 
 ```bash
@@ -69,7 +117,7 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 
 ## What's inside
 
-**Agent orchestration** — 6 roles (Router, Planner, Executor, Critic, Summarizer, Search) running a budget-aware ReAct loop with Redis-backed state that survives restarts. Streaming by default via WebSocket + SSE.
+**Agent orchestration** — 7 domain roles (Orchestrator, Architect, CodeGen, Review, Test, Implement, Deploy) running a bounded tool-call loop. State is persisted in PostgreSQL; streaming is delivered via WebSocket + SSE. Role roster is defined in `app/services/agent_service.py` (`DEFAULT_AGENTS`).
 
 **Security** — JWT auth, RBAC + ABAC, sensitive-tool gating, per-tenant data isolation. Built for production, not just demos.
 
@@ -78,6 +126,8 @@ docker compose -f deploy/docker-compose.platform.yml up --build
 **Sandbox** — Code execution in isolated containers. Configurable CPU/memory limits, network policies, output sanitization.
 
 **Observability** — Prometheus + Grafana + OTLP tracing. See what every agent is doing in real time.
+
+**Public benchmark score** — the developer CLI execution loop has a citable, replayable pass rate on a Terminal-Bench-style acceptance-command suite: **8/8 (100%) with deepseek-v4-flash (2026-09-01)**. See [`benchmarks/public-scores.md`](benchmarks/public-scores.md) for methodology and honest scope.
 
 ## Stack
 
@@ -101,16 +151,11 @@ cd frontend && npm install && npm run dev
 
 Bug reports, docs, new model providers — all count. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the details.
 
-## ⭐ Star History
+## ⭐ Stars History
+
+<img width="2608" height="2104" alt="star-history-202693" src="https://github.com/user-attachments/assets/09772f50-cee4-4211-afc7-3fa13557622c" />
 
 
-<a href="https://www.star-history.com/?type=date&repos=EVEDensity%2FAgentHub">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&theme=dark&legend=top-left&sealed_token=VgBpx74x_AENROSkwv9xsAKeMy89DIenqGq6nEM65HGnj2Ki2HV5MfNkJLxl5qafaHVcJueF-kUm3eGsTVUatiMUWtyuUaYtgk4dto6j0x1FKyRjt9JGDbiQMiOZnpGIpSDP7D7VIJu5W7dj2nUeDGDBDPqMrvFYWcKqRdk4cTzrAHc4-DT4f8qCizpb" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left&sealed_token=VgBpx74x_AENROSkwv9xsAKeMy89DIenqGq6nEM65HGnj2Ki2HV5MfNkJLxl5qafaHVcJueF-kUm3eGsTVUatiMUWtyuUaYtgk4dto6j0x1FKyRjt9JGDbiQMiOZnpGIpSDP7D7VIJu5W7dj2nUeDGDBDPqMrvFYWcKqRdk4cTzrAHc4-DT4f8qCizpb" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=EVEDensity/AgentHub&type=date&legend=top-left&sealed_token=VgBpx74x_AENROSkwv9xsAKeMy89DIenqGq6nEM65HGnj2Ki2HV5MfNkJLxl5qafaHVcJueF-kUm3eGsTVUatiMUWtyuUaYtgk4dto6j0x1FKyRjt9JGDbiQMiOZnpGIpSDP7D7VIJu5W7dj2nUeDGDBDPqMrvFYWcKqRdk4cTzrAHc4-DT4f8qCizpb" />
- </picture>
-</a>
 
 ## Contributors
 

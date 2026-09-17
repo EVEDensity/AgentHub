@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/work-unit-claim-response.schema.json",
+  "title": "Work unit claim response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claimStatus", "workUnit"],
+  "properties": {
+    "claimStatus": {
+      "type": "string",
+      "enum": ["claimed", "idle", "capacity_saturated"]
+    },
+    "workUnit": {
+      "oneOf": [
+        { "$ref": "work-unit.schema.json" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "claimStatus": { "const": "claimed" },
+        "workUnit": { "$ref": "work-unit.schema.json" }
+      }
+    },
+    {
+      "properties": {
+        "claimStatus": {
+          "enum": ["idle", "capacity_saturated"]
+        },
+        "workUnit": { "type": "null" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+- generic [active] [ref=e1]:
+  - link "跳转到内容" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e5]:
+    - heading "AgentHub Login" [level=1] [ref=e6]
+    - paragraph [ref=e7]: Use your bootstrap admin or registered account.
+    - generic [ref=e8]:
+      - text: Username
+      - textbox "Username" [ref=e9]
+    - generic [ref=e10]:
+      - text: Password
+      - textbox "Password" [ref=e11]
+    - button "Login" [ref=e12] [cursor=pointer]
+    - button "No account? Register" [ref=e13] [cursor=pointer]
+  - alert [ref=e14]

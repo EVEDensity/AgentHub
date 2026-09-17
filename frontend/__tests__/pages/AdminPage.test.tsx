@@ -244,6 +244,7 @@ vi.mock('../../stores/adminStore', () => ({
     '\u670d\u52a1\u5546',
     '\u5de5\u4f5c\u6d41',
     '\u6743\u9650',
+    '\u51b3\u7b56\u6536\u4ef6\u7bb1',
     '\u901a\u7528',
     '\u8bb0\u5fc6',
     '\u7528\u6237\u7ba1\u7406',
@@ -292,6 +293,17 @@ describe('AdminPage', () => {
 
   it('routes the permissions menu to a real module', async () => {
     mockAdminState.activeMenu = '\u6743\u9650';
+
+    await act(async () => {
+      render(<AdminPage />);
+    });
+
+    expect(screen.getByTestId('dynamic-module')).toBeInTheDocument();
+    expect(screen.queryByText(/\u7b49\u5f85\u914d\u7f6e\u9879\u63a5\u5165/)).toBeNull();
+  });
+
+  it('routes the decision inbox menu to a real module', async () => {
+    mockAdminState.activeMenu = '\u51b3\u7b56\u6536\u4ef6\u7bb1';
 
     await act(async () => {
       render(<AdminPage />);

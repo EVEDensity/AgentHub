@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/execution-checkpoint.schema.json",
+  "title": "ExecutionCheckpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "missionId", "workUnitId", "attempt", "sequence", "phase",
+    "iteration", "toolCalls", "promptTokens", "completionTokens",
+    "modelCost", "terminal", "stateDigest", "createdBy", "createdAt"
+  ],
+  "properties": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "missionId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "workUnitId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "phase": {
+      "enum": [
+        "harness.execution.started", "harness.iteration.started",
+        "harness.model.started", "harness.model.completed",
+        "harness.tool.started", "harness.tool.completed",
+        "harness.budget.exhausted", "harness.execution.completed",
+        "harness.execution.failed"
+      ]
+    },
+    "iteration": { "type": "integer", "minimum": 0 },
+    "toolCalls": { "type": "integer", "minimum": 0 },
+    "promptTokens": { "type": "integer", "minimum": 0 },
+    "completionTokens": { "type": "integer", "minimum": 0 },
+    "modelCost": { "type": "number", "minimum": 0 },
+    "terminal": { "type": "boolean" },
+    "failureReason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "stateDigest": { "type": "string", "pattern": "^sha256:[a-fA-F0-9]{64}$" },
+    "createdBy": { "$ref": "common.schema.json#/$defs/actorRef" },
+    "createdAt": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "terminal": { "const": true } } },
+      "then": {
+        "properties": {
+          "phase": {
+            "enum": ["harness.execution.completed", "harness.execution.failed"]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "phase": {
+            "not": {
+              "enum": ["harness.execution.completed", "harness.execution.failed"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "phase": { "const": "harness.execution.failed" } },
+        "required": ["phase"]
+      },
+      "then": { "required": ["failureReason"] },
+      "else": { "not": { "required": ["failureReason"] } }
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+name: GitHub CLI release
+
+on:
+  push:
+    tags: ['cli-v*']
+
+concurrency:
+  group: github-cli-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Prepare build environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+      - name: Freeze and validate CLI
+        shell: pwsh
+        run: |
+          scripts\build-cli-windows.ps1 -OutputDirectory dist
+          python scripts/verify_cli_release.py
+          $workspace = Join-Path $env:RUNNER_TEMP 'cli-smoke-workspace'
+          $resultFile = Join-Path $env:RUNNER_TEMP 'cli-smoke-result.json'
+          New-Item -ItemType Directory -Force -Path $workspace | Out-Null
+          & dist\agenthub.exe exec "complete the offline release smoke" --provider mock --workspace $workspace --json --quiet --mission-timeout 300 --runner-timeout-seconds 240 | Set-Content -LiteralPath $resultFile -Encoding utf8
+          $cliExit = $LASTEXITCODE
+          $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
+          if ($cliExit -ne 0 -or $result.status -ne 'SUCCEEDED' -or $result.exitCode -ne 0 -or $result.artifactCount -lt 1) {
+            throw 'Frozen CLI closed-loop smoke failed.'
+          }
+      - name: Package checksummed assets
+        shell: pwsh
+        run: |
+          Compress-Archive -LiteralPath dist\agenthub.exe -DestinationPath dist\agenthub-windows-x64.zip
+          $hash = (Get-FileHash -Algorithm SHA256 dist\agenthub-windows-x64.zip).Hash.ToLowerInvariant()
+          "$hash  agenthub-windows-x64.zip" | Set-Content dist\checksums.txt -Encoding ascii
+          Copy-Item release\install.ps1 dist\install.ps1
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/agenthub-windows-x64.zip
+            dist/checksums.txt
+            dist/install.ps1
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-release-${{ github.ref_name }}
+          path: dist/**/*
+          if-no-files-found: ignore

@@ -194,7 +194,7 @@ export interface A2AAgentManagerProps {
 export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentManagerProps): JSX.Element {
   const {
     agents, selfCard, discoveryResults, selectedAgentUrl, taskResult,
-    loading, discoveryLoading, taskLoading, demoMode,
+    loading, discoveryLoading, taskLoading,
     loadAgents, loadSelfCard, discoverAgents, registerAgent, unregisterAgent, sendTask, selectAgent,
   } = useA2AStore();
 
@@ -234,12 +234,6 @@ export default function A2AAgentManager({ authHeaders, setNotice }: A2AAgentMana
             Agent-to-Agent 开放协议 — Agent Card 发现、注册、跨 Agent 任务调度
           </p>
         </div>
-        {demoMode && (
-          <span className="tag tag-amber text-[11px] flex items-center gap-1">
-            <span className="material-symbols-outlined text-[14px]">info</span>
-            Demo
-          </span>
-        )}
       </div>
 
       {/* Info Banner */}

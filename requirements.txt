@@ -5,6 +5,9 @@ pydantic==2.10.6
 pydantic-settings==2.7.0
 python-multipart==0.0.20
 
+# ── Developer CLI TUI (north-star M2) ───────────────────────────────
+textual==8.2.8
+
 # ── Database ────────────────────────────────────────────────────────
 asyncpg==0.31.0
 alembic==1.18.4
@@ -12,6 +15,8 @@ psycopg2-binary==2.9.12
 
 # ── HTTP / API clients ──────────────────────────────────────────────
 httpx==0.28.1
+cryptography==46.0.3
+minio>=7.2.0,<8
 nats-py>=2.9.0,<3
 tiktoken>=0.8.0,<1
 tokenizers>=0.20.0,<1
@@ -31,3 +36,8 @@ markdown==3.7
 
 # ── Configuration ───────────────────────────────────────────────────
 python-dotenv==1.2.2
+
+# ── Windows sandbox (restricted token + Job Object) ─────────────────
+# Only used on Windows; app/services/runner/sandbox_windows.py degrades
+# gracefully with a warning when the platform is not Windows.
+pywin32>=306; sys_platform == "win32"

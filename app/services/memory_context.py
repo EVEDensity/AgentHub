@@ -1,96 +1,171 @@
+"""Memory context provider for Planner + ReflectiveHarness.
+
+Wraps AgentHub's existing session memory + receipts infrastructure into
+a single async interface that the planning and reflection layers can call
+before any tool runs.  Three tiers are retrieved in order of cost:
+
+1. **Session transcript** (L0) — raw chat history, truncated to a few
+   thousand characters.  Cheap and always available.
+
+2. **Project facts / summaries** (L1) — key-value facts the session has
+   already established.  Medium cost.
+
+3. **Evidence receipts** (L2) — receipts for prior Artifacts/Evidence the
+   mission has already produced.  More expensive (FTS-backed), cached per
+   planner invocation.
+
+Each tier is bounded to a character budget so we never blow past the
+planner's own context window.  When a tier is empty (fresh session, no
+receipts yet) it is simply omitted — no error.
+
+The :class:`MemoryContextProvider` is a *protocol* with two implementations:
+
+* :class:`NullMemoryContextProvider` — the safe default when Mission
+  Control is unreachable or no memory subsystem is wired up.  Returns
+  empty context but never raises.
+
+* :class:`BoundMemoryContextProvider` — takes concrete session memory
+  + receipts instances and produces real context strings.
+"""
+
 from __future__ import annotations
 
-import re
+import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
 
-from app.services.token_budget import count_tokens, truncate_to_tokens
+logger = logging.getLogger("agenthub.memory.context")
+
+
+# ── Protocol ──────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
-class MemoryContextSection:
-    name: str
-    text: str
-    priority: int
-    memory_type: str = "episodic"
+class MemoryContextBundle:
+    """Tiered memory context ready to be embedded in a prompt."""
 
+    session_transcript: str = ""
+    project_facts: str = ""
+    evidence_receipts: str = ""
 
-def _normalized(text: str) -> str:
-    return re.sub(r"[^\w\u3400-\u9fff]+", "", text).lower()
-
-
-def _features(text: str) -> set[str]:
-    normalized = _normalized(text)
-    if len(normalized) < 12:
-        return {normalized} if normalized else set()
-    return {normalized[index:index + 8] for index in range(0, len(normalized) - 7, 4)}
-
-
-def similarity(left: str, right: str) -> float:
-    left_norm, right_norm = _normalized(left), _normalized(right)
-    if not left_norm or not right_norm:
-        return 0.0
-    if left_norm in right_norm or right_norm in left_norm:
-        return min(len(left_norm), len(right_norm)) / max(len(left_norm), len(right_norm))
-    left_set, right_set = _features(left), _features(right)
-    if not left_set or not right_set:
-        return 0.0
-    return len(left_set & right_set) / max(1, min(len(left_set), len(right_set)))
-
-
-def deduplicate_text(text: str, references: list[str], threshold: float = 0.82) -> str:
-    blocks = [block.strip() for block in re.split(r"\n{2,}", text) if block.strip()]
-    kept: list[str] = []
-    for block in blocks:
-        if any(similarity(block, reference) >= threshold for reference in references if reference):
-            continue
-        if any(similarity(block, previous) >= threshold for previous in kept):
-            continue
-        kept.append(block)
-    return "\n\n".join(kept)
-
-
-def build_memory_context(
-    sections: list[MemoryContextSection],
-    *,
-    exclude_texts: list[str] | None = None,
-    max_tokens: int = 3_000,
-    provider: str = "",
-    model: str = "",
-    section_budgets: dict[str, int] | None = None,
-) -> tuple[str, dict[str, int | bool]]:
-    ordered = sorted(sections, key=lambda section: section.priority)
-    references = [text for text in (exclude_texts or []) if text]
-    before = sum(count_tokens(section.text, provider, model) for section in ordered)
-    output: list[str] = []
-    truncated = False
-    used_by_type: dict[str, int] = {}
-
-    for section in ordered:
-        unique = deduplicate_text(section.text, references)
-        if not unique:
-            continue
-        rendered = f"[{section.name}]\n{unique}"
-        remaining = max_tokens - count_tokens("\n\n".join(output), provider, model)
-        if section_budgets is not None:
-            type_remaining = section_budgets.get(section.memory_type, 0) - used_by_type.get(section.memory_type, 0)
-            remaining = min(remaining, type_remaining)
-        if remaining <= 8:
-            truncated = True
-            continue
-        rendered, was_truncated = truncate_to_tokens(
-            rendered, remaining, provider, model, preserve_tail=0.65,
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.session_transcript or self.project_facts or self.evidence_receipts
         )
-        truncated = truncated or was_truncated
-        output.append(rendered)
-        used_by_type[section.memory_type] = used_by_type.get(section.memory_type, 0) + count_tokens(
-            rendered, provider, model,
-        )
-        references.append(unique)
 
-    result = "\n\n".join(output)
-    after = count_tokens(result, provider, model)
-    return result, {
-        "tokens_before": before,
-        "tokens_after": after,
-        "truncated": truncated,
-    }
+    def format_for_prompt(self) -> str:
+        """Render the non-empty tiers into a prompt-ready block."""
+        sections: list[str] = []
+        if self.session_transcript:
+            sections.append(f"[Recent Session Transcript]\n{self.session_transcript}")
+        if self.project_facts:
+            sections.append(f"[Project Facts]\n{self.project_facts}")
+        if self.evidence_receipts:
+            sections.append(f"[Prior Evidence Receipts]\n{self.evidence_receipts}")
+        return "\n\n".join(sections)
+
+
+@runtime_checkable
+class MemoryContextProvider(Protocol):
+    """Any component that can assemble a :class:`MemoryContextBundle`.
+
+    The protocol is deliberately synchronous — planners and harnesses are
+    already in async territory; the provider itself does not need to be.
+    """
+
+    def get_context(self, *, mission_id: str | None = None) -> MemoryContextBundle: ...
+
+
+# ── Null safe default ─────────────────────────────────────────────────
+
+
+class NullMemoryContextProvider:
+    """No-op provider used when memory wiring is missing.
+
+    Always returns an empty bundle without raising.  This keeps the planner
+    usable in unit tests, offline dev shells, and any environment where the
+    memory subsystem has not been provisioned.
+    """
+
+    def get_context(self, *, mission_id: str | None = None) -> MemoryContextBundle:
+        return MemoryContextBundle()
+
+
+# ── Bound implementation ──────────────────────────────────────────────
+
+
+@dataclass
+class BoundMemoryContextProvider:
+    """Concrete provider backed by real session memory + receipts.
+
+    All dependencies are optional — the provider gracefully skips tiers
+    whose backing store is missing.  This means you can wire up just
+    session memory in dev and leave receipts to production without
+    touching callers.
+    """
+
+    session_memory: Any | None = None  # SessionMemoryManager
+    receipt_formatter: Any | None = None  # receipts.format_receipts_as_context
+    max_transcript_chars: int = 2_000
+    max_facts_chars: int = 1_500
+    max_receipts_chars: int = 1_500
+
+    def get_context(self, *, mission_id: str | None = None) -> MemoryContextBundle:
+        transcript = self._transcript()
+        facts = self._facts()
+        receipts = self._receipts(mission_id)
+        return MemoryContextBundle(
+            session_transcript=transcript,
+            project_facts=facts,
+            evidence_receipts=receipts,
+        )
+
+    def _transcript(self) -> str:
+        if self.session_memory is None:
+            return ""
+        try:
+            manager = self.session_memory
+            if hasattr(manager, "_build_transcript"):
+                result = manager._build_transcript([], self.max_transcript_chars)
+            else:
+                return ""
+        except Exception as exc:  # noqa: BLE001 - memory failure is silent
+            logger.debug("memory: transcript unavailable (%s)", exc)
+            return ""
+        text = str(result or "")
+        if len(text) > self.max_transcript_chars:
+            text = text[: self.max_transcript_chars] + "…"
+        return text
+
+    def _facts(self) -> str:
+        # Project facts live in SessionMemoryManager but there is no
+        # dedicated accessor yet.  This hook is left for L1 summary
+        # service to populate once it lands.
+        return ""
+
+    def _receipts(self, mission_id: str | None) -> str:
+        if self.receipt_formatter is None or mission_id is None:
+            return ""
+        try:
+            formatter = self.receipt_formatter
+            if callable(formatter):
+                result = formatter(mission_id=mission_id, limit=5)
+            else:
+                return ""
+        except Exception as exc:  # noqa: BLE001 - receipts failure is silent
+            logger.debug("memory: receipts unavailable (%s)", exc)
+            return ""
+        text = str(result or "")
+        if len(text) > self.max_receipts_chars:
+            text = text[: self.max_receipts_chars] + "…"
+        return text
+
+
+__all__ = [
+    "BoundMemoryContextProvider",
+    "MemoryContextBundle",
+    "MemoryContextProvider",
+    "NullMemoryContextProvider",
+]

@@ -17,7 +17,7 @@ use futures::StreamExt;
 use platform_events::EventEnvelope;
 use tracing;
 
-use crate::core::{AgentRegistry, DagEngine};
+use crate::core::AgentRegistry;
 use crate::types::{AgentCapability, AgentStatus};
 
 // ── NATS Subject Constants ─────────────────────────────────────────────
@@ -96,15 +96,14 @@ impl NatsAgentNetAdapter {
             while let Some(msg) = sub.next().await {
                 match serde_json::from_slice::<EventEnvelope>(&msg.payload) {
                     Ok(envelope) => {
-                        if let Some(payload) = envelope.payload {
-                            if let Ok(cap) = serde_json::from_value::<AgentCapability>(payload) {
-                                tracing::debug!(
-                                    agent_id = %cap.agent_id,
-                                    capabilities = ?cap.capabilities,
-                                    "capability received"
-                                );
-                                registry.upsert(cap).await;
-                            }
+                        let payload = serde_json::to_value(envelope.payload).unwrap_or_default();
+                        if let Ok(cap) = serde_json::from_value::<AgentCapability>(payload) {
+                            tracing::debug!(
+                                agent_id = %cap.agent_id,
+                                capabilities = ?cap.capabilities,
+                                "capability received"
+                            );
+                            registry.upsert(cap).await;
                         }
                     }
                     Err(e) => {
@@ -139,29 +138,28 @@ impl NatsAgentNetAdapter {
             while let Some(msg) = sub.next().await {
                 match serde_json::from_slice::<EventEnvelope>(&msg.payload) {
                     Ok(envelope) => {
-                        if let Some(payload) = envelope.payload {
-                            let agent_id = payload
-                                .get("agent_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            let status_str = payload
-                                .get("status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("idle");
-                            let load = payload
-                                .get("current_load")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0) as i32;
+                        let payload = envelope.payload;
+                        let agent_id = payload
+                            .get("agent_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let status_str = payload
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("idle");
+                        let load = payload
+                            .get("current_load")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0) as i32;
 
-                            let status = match status_str {
-                                "busy" => AgentStatus::Busy,
-                                "overloaded" => AgentStatus::Overloaded,
-                                "offline" => AgentStatus::Offline,
-                                _ => AgentStatus::Idle,
-                            };
+                        let status = match status_str {
+                            "busy" => AgentStatus::Busy,
+                            "overloaded" => AgentStatus::Overloaded,
+                            "offline" => AgentStatus::Offline,
+                            _ => AgentStatus::Idle,
+                        };
 
-                            registry.heartbeat(agent_id, load, status).await;
-                        }
+                        registry.heartbeat(agent_id, load, status).await;
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "failed to deserialize heartbeat envelope");
@@ -196,21 +194,20 @@ impl NatsAgentNetAdapter {
             while let Some(msg) = sub.next().await {
                 match serde_json::from_slice::<EventEnvelope>(&msg.payload) {
                     Ok(envelope) => {
-                        if let Some(payload) = &envelope.payload {
-                            let agent_id = payload
-                                .get("agent_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("?");
-                            let intent = payload
-                                .get("intent")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            tracing::debug!(
-                                agent_id = %agent_id,
-                                intent = %intent,
-                                "shared memory message"
-                            );
-                        }
+                        let payload = &envelope.payload;
+                        let agent_id = payload
+                            .get("agent_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?");
+                        let intent = payload
+                            .get("intent")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        tracing::debug!(
+                            agent_id = %agent_id,
+                            intent = %intent,
+                            "shared memory message"
+                        );
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "failed to deserialize memory envelope");

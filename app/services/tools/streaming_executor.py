@@ -4,9 +4,12 @@ import asyncio
 import logging
 import time
 import uuid
+import hashlib
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Awaitable
+from app.services.tools.receipts import ToolReceiptStore
 
 logger = logging.getLogger("agenthub.tools.streaming_executor")
 
@@ -66,11 +69,15 @@ class StreamingToolExecutor:
         permission_manager: Any = None,
         hook_manager: Any = None,
         progress_tracker: Any = None,
+        receipt_store: ToolReceiptStore | None = None,
+        approval_callback: Callable[[str, dict[str, Any]], Awaitable[bool] | bool] | None = None,
     ) -> None:
         self._queue: list[ToolExecutionItem] = []
         self._permission_manager = permission_manager
         self._hook_manager = hook_manager
         self._progress_tracker = progress_tracker
+        self._receipt_store = receipt_store
+        self._approval_callback = approval_callback
         self._on_state_change: Callable[[ToolExecutionItem], Awaitable[None]] | None = None
         self._context_overrides: dict[str, str] = {}
 
@@ -195,6 +202,7 @@ class StreamingToolExecutor:
         item.status = ToolState.EXECUTING
         start_time = time.time()
         await self._notify_state_change(item)
+        receipt_key = self._receipt_key(item)
 
         try:
             from app.services.tool_registry import tool_registry
@@ -303,12 +311,25 @@ class StreamingToolExecutor:
                         item.name, exc,
                     )
 
+            # The receipt key must describe the exact argument object sent to
+            # the handler, including any deterministic pre-hook normalization.
+            receipt_key = self._receipt_key(item, effective_args)
+
             # ── 3. Execute with timeout ────────────────────────────
             from app.services.tool_executor import tool_executor
 
             try:
                 result = await asyncio.wait_for(
-                    tool_executor.execute(item.name, effective_args),
+                    tool_executor.execute_gateway(
+                        item.name,
+                        effective_args,
+                        None,
+                        idempotency_key=receipt_key,
+                        receipt_store=self._receipt_store,
+                        risk_level=tool.risk_level,
+                        requires_user_confirmation=tool.requires_user_confirmation,
+                        approval_callback=self._approval_callback,
+                    ),
                     timeout=self.PER_TOOL_TIMEOUT,
                 )
                 item.result = result
@@ -334,7 +355,11 @@ class StreamingToolExecutor:
                             item.name, exc,
                         )
 
-                item.status = ToolState.COMPLETED
+                item.status = (
+                    ToolState.COMPLETED
+                    if not isinstance(result, dict) or result.get("success", True)
+                    else ToolState.ERROR
+                )
 
             except asyncio.TimeoutError:
                 item.status = ToolState.ERROR
@@ -347,6 +372,22 @@ class StreamingToolExecutor:
                 )
                 item.error = safe_msg
 
+        except asyncio.CancelledError:
+            # Cancellation means the side effect outcome is indeterminate;
+            # preserve UNKNOWN so a later resume cannot replay blindly.
+            if self._receipt_store is not None:
+                self._receipt_store.mark_unknown(
+                    receipt_key,
+                    item.name,
+                    time.time(),
+                    error_type="cancelled",
+                )
+            item.status = ToolState.ERROR
+            item.error_type = "cancelled"
+            item.error = "tool execution cancelled; outcome requires reconciliation"
+            item.duration_ms = (time.time() - start_time) * 1000
+            await self._notify_state_change(item)
+            raise
         except Exception as exc:
             item.status = ToolState.ERROR
             from app.services.tools.errors import classify_tool_error
@@ -368,6 +409,23 @@ class StreamingToolExecutor:
 
         await self._notify_state_change(item)
 
+    def _receipt_key(
+        self,
+        item: ToolExecutionItem,
+        arguments: dict[str, Any] | None = None,
+    ) -> str:
+        mission = self._context_overrides.get("mission_id", "local")
+        work_unit = self._context_overrides.get("work_unit_id", "default")
+        attempt = self._context_overrides.get("attempt", "1")
+        payload = json.dumps(
+            item.arguments if arguments is None else arguments,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(payload).hexdigest()
+        return f"{mission}/{work_unit}/{attempt}/{item.name}/{digest}"
+
     # ── Context injection ─────────────────────────────────────────────
 
     def set_context(self, **kwargs: Any) -> None:
@@ -384,6 +442,7 @@ class StreamingToolExecutor:
         if self._on_state_change:
             try:
                 await self._on_state_change(item)
+            # noqa: BLE001 - best-effort (注释已说明故意吞)
             except Exception:
                 pass  # Best-effort
 

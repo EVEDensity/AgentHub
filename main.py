@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.routes import api_router
 from app.core.config import get_settings
@@ -51,6 +52,15 @@ async def lifespan(app: FastAPI):
         "enabled" if _cfg.orchestrator.preprocess_enabled else "disabled",
     )
 
+    # ── Desktop secret provisioning (P3-3a) ─────────────────────────
+    # Earliest lifespan point: AGENTHUB_SECRET_KEY must exist before any
+    # secret-dependent service initializes (JWT signing, API-key decryption).
+    try:
+        from app.services.desktop_secret import ensure_secret_key
+        ensure_secret_key()
+    except Exception:
+        _log.warning("startup: desktop secret key provisioning failed", exc_info=True)
+
     # ── Secret validation ────────────────────────────────────────────
     from app.services.secret_service import validate_secret
     validate_secret()
@@ -84,6 +94,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         _log.warning("startup: register_builtin_tools failed — tools will be unavailable", exc_info=True)
 
+    # Register modality (multimodal) tools via the plugin system
+    try:
+        from app.services.tools import register_modality_tools
+        plugin_count = register_modality_tools()
+        if plugin_count:
+            _log.info("startup: registered %d modality/plugin tools", plugin_count)
+    except Exception:
+        _log.warning("startup: register_modality_tools failed — multimodal tools unavailable", exc_info=True)
+
     # Initialize enhanced function-calling system
     try:
         from app.services.tools import initialize_tool_system
@@ -97,24 +116,67 @@ async def lifespan(app: FastAPI):
         )
 
     try:
-        from app.services.memory_summary_consumer import memory_summary_consumer
-        await memory_summary_consumer.start()
-        app.state.memory_summary_consumer = memory_summary_consumer
-    except Exception:
-        _log.warning("startup: memory summary consumer unavailable", exc_info=True)
-
-    try:
-        from app.services.distributed_cache_versions import distributed_cache_version_bus
+        from app.services.distributed_cache_versions import (
+            distributed_cache_version_bus,
+        )
         await distributed_cache_version_bus.start()
         app.state.distributed_cache_version_bus = distributed_cache_version_bus
     except Exception:
         _log.warning("startup: distributed cache version bus unavailable", exc_info=True)
 
+    # Cross-process Mission SSE wakeups. Notifications are hints only; the
+    # durable mission_events ledger remains authoritative. SQLite/Neon HTTP
+    # profiles intentionally keep the in-process fallback.
+    try:
+        database_url = str(_cfg.DATABASE_URL or "")
+        if database_url.startswith(("postgres://", "postgresql://")):
+            from app.services.mission_event_bus import PostgresMissionEventNotifier, mission_event_bus
+            notifier = PostgresMissionEventNotifier(database_url, mission_event_bus)
+            await notifier.start()
+            app.state.mission_event_notifier = notifier
+    except Exception:
+        _log.warning("startup: PostgreSQL mission event listener unavailable", exc_info=True)
+
+    # Desktop local runner — env-gated (AGENTHUB_DESKTOP_LOCAL_RUNNER=1),
+    # never constructed in production or server deployments.
+    # Scheduled as a post-startup task: the runner authenticates against this
+    # very process over HTTP, which only works once uvicorn is listening
+    # (i.e., after this lifespan yields).
+    import asyncio
+
+    from app.services.desktop_local_runner import startup_desktop_local_runner
+
+    async def _start_desktop_runner() -> None:
+        try:
+            await startup_desktop_local_runner(app)
+        except Exception:
+            _log.warning("startup: desktop local runner unavailable", exc_info=True)
+
+    app.state.desktop_runner_startup = asyncio.create_task(_start_desktop_runner())
+
     yield
 
-    consumer = getattr(app.state, "memory_summary_consumer", None)
-    if consumer is not None:
-        await consumer.close()
+    startup_task = getattr(app.state, "desktop_runner_startup", None)
+    if startup_task is not None:
+        startup_task.cancel()
+        try:
+            await startup_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    try:
+        from app.services.desktop_local_runner import shutdown_desktop_local_runner
+        await shutdown_desktop_local_runner(app)
+    except Exception:
+        _log.warning("shutdown: desktop local runner stop failed", exc_info=True)
+
+    notifier = getattr(app.state, "mission_event_notifier", None)
+    if notifier is not None:
+        try:
+            await notifier.stop()
+        except Exception:
+            _log.warning("shutdown: PostgreSQL mission event listener stop failed", exc_info=True)
+        app.state.mission_event_notifier = None
 
     version_bus = getattr(app.state, "distributed_cache_version_bus", None)
     if version_bus is not None:
@@ -138,6 +200,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=_cfg.app_name, version=_cfg.app_version, lifespan=lifespan)
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error_envelope(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    from app.errors import error_envelope
+    envelope = error_envelope(exc, message=str(exc.detail))
+    body = envelope.to_dict()
+    body["detail"] = exc.detail  # compatibility for existing clients
+    return JSONResponse(status_code=exc.status_code, content=body)
 
 # ── Middleware (last added wraps outermost) ──────────────────────────
 app.add_middleware(_BodySizeLimitMiddleware)

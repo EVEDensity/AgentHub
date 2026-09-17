@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 
 export const SETTINGS_MENU = [
-  '服务商', '工作流', '权限', '通用', 'IM 接入', 'MCP', '技能', '记忆', '插件',
-  'Computer Use', '审计日志', '用户管理', '终端',
+  'Mission Control', '服务商', '工作流', '权限', '通用', 'IM 接入', 'MCP', '技能', '记忆', '插件',
+  'Computer Use', '决策收件箱', '审计日志', '用户管理', '终端',
   '知识库', '模板市场', '工具市场', '工作空间', '上下文引擎', 'AgentNet',
   'Agent 身份', 'Docker 沙箱', '多模态工作区', '集中日志', '模块连线', 'RAG 检索', '检索评估', 'A2A 互操作', 'A/B 测试',
   '成本分析', 'SLO 仪表板', '离线评估',
@@ -24,6 +24,7 @@ export const MENU_GROUPS = [
 ] as const;
 
 export const MENU_META: readonly MenuItemMeta[] = [
+  { key: 'Mission Control', icon: '🎯', group: '核心配置' },
   { key: '服务商',       icon: '🏭', group: '核心配置' },
   { key: '工作流',       icon: '🔀', group: '核心配置' },
   { key: '权限',         icon: '🔐', group: '核心配置' },
@@ -33,6 +34,7 @@ export const MENU_META: readonly MenuItemMeta[] = [
   { key: '技能',         icon: '🎯', group: '能力扩展' },
   { key: '插件',         icon: '🧩', group: '能力扩展' },
   { key: 'Computer Use', icon: '🖥️', group: '系统运维' },
+  { key: '决策收件箱',   icon: '⚖️', group: '系统运维' },
   { key: '审计日志',     icon: '📋', group: '系统运维' },
   { key: '用户管理',     icon: '👥', group: '系统运维' },
   { key: '记忆',         icon: '🧠', group: '系统运维' },

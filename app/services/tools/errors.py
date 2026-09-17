@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any
+from app.errors import ErrorEnvelope, error_envelope
 
 
 class ToolErrorType(str, Enum):
@@ -163,8 +164,11 @@ def wrap_tool_error(
     under ``error_detail`` for logging.
     """
     error_type, safe_message = classify_tool_error(error, tool_name)
+    envelope = error_envelope(error, message=safe_message)
+    # Preserve the stable top-level envelope while retaining legacy aliases.
     result["success"] = False
-    result["error_type"] = error_type.value
-    result["error"] = safe_message
+    result.update(envelope.to_dict())
+    result["error_type"] = envelope.error_type
+    result["error"] = envelope.message
     result["error_detail"] = str(error)[:500]
     return result

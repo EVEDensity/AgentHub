@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import inspect
 import json
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from app.services.tool_registry import ToolDefinition, tool_registry
 
 logger = logging.getLogger("agenthub.tool_executor")
+
+SIDE_EFFECTING_TOOLS = frozenset({
+    "file_write", "file_edit", "file_patch", "file_write_batch",
+    "apply_change_set", "command_execute", "code_execute",
+    "git_commit", "git_branch_create", "git_revert",
+    "git_cherry_pick", "network_request", "http_request",
+})
 
 
 class ToolExecutionError(Exception):
@@ -43,12 +53,16 @@ class ToolExecutor:
         self.permission_manager = None
         self.hook_manager = None
         self.result_storage = None
+        self.receipt_store = None
+        self.code_index = None
 
     def configure(
         self,
         permission_manager: Any = None,
         hook_manager: Any = None,
         result_storage: Any = None,
+        receipt_store: Any = None,
+        code_index: Any = None,
     ) -> None:
         """Inject optional enhancements. Called during app startup.
 
@@ -61,6 +75,34 @@ class ToolExecutor:
             self.hook_manager = hook_manager
         if result_storage is not None:
             self.result_storage = result_storage
+        if receipt_store is not None:
+            self.receipt_store = receipt_store
+        if code_index is not None:
+            self.code_index = code_index
+
+    def find_symbol(self, query: str, *, limit: int = 50) -> list[dict[str, Any]] | None:
+        """Query the optional local AST index without making it authoritative."""
+        index = self.code_index
+        finder = getattr(index, "find_symbol", None)
+        if not callable(finder):
+            return None
+        try:
+            result = finder(query, limit=limit)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return result if isinstance(result, list) else None
+
+    def get_definition(self, symbol: str, *, path: str | None = None) -> list[dict[str, Any]] | None:
+        """Return exact local definitions when the optional index is available."""
+        index = self.code_index
+        getter = getattr(index, "get_definition", None)
+        if not callable(getter):
+            return None
+        try:
+            result = getter(symbol, path=path)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        return result if isinstance(result, list) else None
 
     # ── JSON parsing ──────────────────────────────────────────────────
 
@@ -74,6 +116,7 @@ class ToolExecutor:
 
     @staticmethod
     def parse_tool_calls(text: str) -> list[dict[str, Any]]:
+        """Legacy compatibility parser; new code must use structured ToolCall."""
         """Extract tool_calls from an LLM response.
 
         Handles common LLM quirks:
@@ -224,53 +267,123 @@ class ToolExecutor:
 
     # ── Execution ─────────────────────────────────────────────────────
 
-    async def execute(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def execute(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        idempotency_key: str | None = None,
+        receipt_store: Any = None,
+    ) -> dict[str, Any]:
         """Execute a single tool call.
 
         Returns:
             {"success": bool, "result": Any, "error": str|null, "tool_name": str}
         """
-        start_time = time.time()
-
         tool = tool_registry.get(tool_name)
         if tool is None:
-            logger.warning("tool_executor: unknown tool '%s'", tool_name)
-            return {
-                "success": False,
-                "error": f"未知工具: {tool_name}。可用的工具有: {', '.join(tool_registry.list_names())}",
-                "tool_name": tool_name,
-                "duration_ms": (time.time() - start_time) * 1000,
-            }
-
-        # Validate parameters
+            return await self.execute_callable(
+                tool_name,
+                arguments,
+                None,
+                idempotency_key=idempotency_key,
+                receipt_store=receipt_store,
+                missing_error=f"未知工具: {tool_name}。可用的工具有: {', '.join(tool_registry.list_names())}",
+            )
         missing = self.validate_params(tool, arguments)
         if missing:
-            logger.info("tool_executor: tool '%s' missing params: %s", tool_name, missing)
-            return {
-                "success": False,
-                "error": f"工具 '{tool_name}' 缺少必填参数: {', '.join(missing)}。"
-                         f"请向用户询问这些参数的值。",
-                "tool_name": tool_name,
-                "missing_params": missing,
-                "duration_ms": (time.time() - start_time) * 1000,
-            }
-
-        # Execute handler
+            result = await self.execute_callable(
+                tool_name,
+                arguments,
+                None,
+                idempotency_key=idempotency_key,
+                receipt_store=receipt_store,
+                missing_error=(
+                    f"工具 '{tool_name}' 缺少必填参数: {', '.join(missing)}。"
+                    "请向用户询问这些参数的值。"
+                ),
+                error_type="invalid_arguments",
+            )
+            result.setdefault("missing_params", missing)
+            return result
         if tool.handler is None:
-            logger.error("tool_executor: tool '%s' has no handler", tool_name)
-            return {
+            return await self.execute_callable(
+                tool_name,
+                arguments,
+                None,
+                idempotency_key=idempotency_key,
+                receipt_store=receipt_store,
+                missing_error=f"工具 '{tool_name}' 尚未实现执行处理器。",
+                error_type="missing_handler",
+            )
+        return await self.execute_gateway(
+            tool_name,
+            arguments,
+            lambda payload: tool.handler(**dict(payload)),
+            idempotency_key=idempotency_key,
+            receipt_store=receipt_store,
+            risk_level=tool.risk_level,
+            requires_user_confirmation=tool.requires_user_confirmation,
+        )
+
+    async def execute_callable(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        handler: Callable[[Mapping[str, Any]], Awaitable[Any]] | None,
+        *,
+        idempotency_key: str | None = None,
+        receipt_store: Any = None,
+        missing_error: str | None = None,
+        error_type: str = "unknown_tool",
+    ) -> dict[str, Any]:
+        """Execute an injected callable through the canonical receipt boundary.
+
+        Harness-scoped function tools are deliberately accepted as callables
+        rather than importing Harness types into this infrastructure module.
+        This keeps the dependency direction one-way while guaranteeing the
+        same STARTED/SUCCEEDED/FAILED/UNKNOWN lifecycle as registry tools.
+        """
+        start_time = time.time()
+        receipt_store = receipt_store if receipt_store is not None else getattr(self, "receipt_store", None)
+        receipt_key = idempotency_key.strip() if isinstance(idempotency_key, str) else ""
+        if receipt_store is not None and receipt_key:
+            claim = getattr(receipt_store, "claim_started", None)
+            decision = (
+                str(claim(receipt_key, tool_name, start_time))
+                if callable(claim)
+                else receipt_store.replay_decision(receipt_key, strict=True)
+            )
+            if decision != "execute":
+                return {
+                    "success": decision == "already_succeeded",
+                    "error": None if decision == "already_succeeded" else f"工具调用未重放（{decision}）",
+                    "error_type": "idempotency" if decision != "already_succeeded" else None,
+                    "tool_name": tool_name,
+                    "recovered": decision == "already_succeeded",
+                }
+            if not callable(claim):
+                receipt_store.mark_started(receipt_key, tool_name, start_time)
+
+        if handler is None:
+            logger.warning("tool_executor: unavailable tool '%s'", tool_name)
+            result = {
                 "success": False,
-                "error": f"工具 '{tool_name}' 尚未实现执行处理器。",
+                "error": missing_error or f"工具 '{tool_name}' 尚未实现执行处理器。",
                 "tool_name": tool_name,
                 "duration_ms": (time.time() - start_time) * 1000,
             }
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                receipt_store.mark_failed(receipt_key, tool_name, time.time(), error_type=error_type)
+            return result
 
         try:
-            result = await tool.handler(**arguments)
+            result = await handler(arguments)
             duration_ms = (time.time() - start_time) * 1000
             logger.info(
                 "tool_executor: tool '%s' executed in %.0fms success=%s",
-                tool_name, duration_ms, result.get("success", False),
+                tool_name, duration_ms, result.get("success", False) if isinstance(result, dict) else True,
             )
 
             if isinstance(result, dict):
@@ -279,6 +392,17 @@ class ToolExecutor:
                 # Apply result storage budget if configured
                 if self.result_storage is not None:
                     result = self.result_storage.process(result)
+                if receipt_store is not None and receipt_key:
+                    from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                    digest = hashlib.sha256(repr(result).encode("utf-8")).hexdigest()
+                    receipt_store.put(ToolReceipt(
+                        receipt_key,
+                        tool_name,
+                        ToolReceiptStatus.SUCCEEDED if result.get("success", True) else ToolReceiptStatus.FAILED,
+                        time.time(),
+                        result_digest=digest if result.get("success", True) else None,
+                        error_type=str(result.get("error_type") or "tool_failure") if not result.get("success", True) else None,
+                    ))
                 return result
 
             final_result = {
@@ -289,7 +413,20 @@ class ToolExecutor:
             }
             if self.result_storage is not None:
                 final_result = self.result_storage.process(final_result)
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                digest = hashlib.sha256(repr(final_result).encode("utf-8")).hexdigest()
+                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.SUCCEEDED, time.time(), result_digest=digest))
             return final_result
+        except asyncio.CancelledError:
+            if receipt_store is not None and receipt_key:
+                receipt_store.mark_unknown(
+                    receipt_key,
+                    tool_name,
+                    time.time(),
+                    error_type="cancelled",
+                )
+            raise
         except Exception as exc:
             duration_ms = (time.time() - start_time) * 1000
             logger.exception("tool_executor: tool '%s' raised exception", tool_name)
@@ -298,13 +435,81 @@ class ToolExecutor:
             from app.services.tools.errors import classify_tool_error
 
             error_type, safe_message = classify_tool_error(exc, tool_name)
-            return {
+            result = {
                 "success": False,
                 "error": safe_message,
                 "error_type": error_type.value,
+                "exception_type": type(exc).__name__,
                 "tool_name": tool_name,
                 "duration_ms": duration_ms,
             }
+            if receipt_store is not None and receipt_key:
+                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type=error_type.value))
+            return result
+
+    async def execute_gateway(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        handler: Callable[[Mapping[str, Any]], Awaitable[Any]] | None,
+        *,
+        idempotency_key: str,
+        risk_level: str = "L1",
+        requires_user_confirmation: bool = False,
+        approval_callback: Callable[[str, Mapping[str, Any]], Awaitable[bool] | bool] | None = None,
+        permission_context: Any = None,
+        receipt_store: Any = None,
+    ) -> dict[str, Any]:
+        """Canonical risk, approval, receipt and execution gateway."""
+        if handler is None:
+            registry_tool = tool_registry.get(tool_name)
+            if registry_tool is not None and registry_tool.handler is not None:
+                handler = lambda payload: registry_tool.handler(**dict(payload))
+                risk_level = registry_tool.risk_level
+                requires_user_confirmation = registry_tool.requires_user_confirmation
+        effective_confirmation = requires_user_confirmation or tool_name in SIDE_EFFECTING_TOOLS
+        try:
+            from app.services.guardrails import classify_tool_risk
+            risk_result = classify_tool_risk(tool_name, dict(arguments))
+        except (ImportError, RuntimeError, ValueError):
+            risk_result = None
+        if risk_result is not None and risk_result.blocked:
+            return self._gateway_failure(tool_name, idempotency_key, receipt_store, "safety_block", "tool call blocked by safety policy")
+        if risk_result is not None and risk_result.requires_confirmation:
+            effective_confirmation = True
+        if self.permission_manager is not None and permission_context is not None:
+            try:
+                permission = await self.permission_manager.check(
+                    tool_name, dict(arguments), permission_context,
+                    risk_level=risk_level, requires_user_confirmation=effective_confirmation,
+                )
+                behavior = str(getattr(permission, "behavior", "")).lower()
+                if behavior.endswith("deny"):
+                    return self._gateway_failure(tool_name, idempotency_key, receipt_store, "permission", str(getattr(permission, "reason", "permission denied")))
+                if behavior.endswith("ask"):
+                    effective_confirmation = True
+            except (RuntimeError, ValueError, TypeError):
+                return self._gateway_failure(tool_name, idempotency_key, receipt_store, "permission", "permission evaluation failed")
+        if effective_confirmation:
+            allowed = False
+            if approval_callback is not None:
+                decision = approval_callback(tool_name, arguments)
+                allowed = bool(await decision) if inspect.isawaitable(decision) else bool(decision)
+            if not allowed:
+                return self._gateway_failure(tool_name, idempotency_key, receipt_store, "permission", "tool approval was not granted")
+        return await self.execute_callable(tool_name, arguments, handler, idempotency_key=idempotency_key, receipt_store=receipt_store)
+
+    @staticmethod
+    def _gateway_failure(tool_name: str, idempotency_key: str, receipt_store: Any, error_type: str, message: str) -> dict[str, Any]:
+        result = {"success": False, "error": message, "error_type": error_type, "tool_name": tool_name, "recovered": False}
+        if receipt_store is not None and idempotency_key:
+            try:
+                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                receipt_store.put(ToolReceipt(idempotency_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type=error_type))
+            except Exception:
+                logger.exception("tool_executor: failed to persist gateway denial receipt")
+        return result
 
     async def execute_all(
         self,
@@ -342,7 +547,15 @@ class ToolExecutor:
             args = tc.get("arguments", {})
             try:
                 return await asyncio.wait_for(
-                    self.execute(name, args),
+                    self.execute(
+                        name,
+                        args,
+                        idempotency_key=(
+                            str(tc.get("idempotency_key") or tc.get("idempotencyKey"))
+                            if tc.get("idempotency_key") or tc.get("idempotencyKey")
+                            else None
+                        ),
+                    ),
                     timeout=PER_TOOL_TIMEOUT,
                 )
             except asyncio.TimeoutError:

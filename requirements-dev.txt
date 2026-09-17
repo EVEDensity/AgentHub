@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Test and static-analysis dependencies. Keep these separate from the
+# production runtime image requirements.
+pytest>=8,<10
+pytest-asyncio>=0.24,<2
+ruff==0.16.1

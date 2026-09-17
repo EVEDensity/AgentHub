@@ -17,13 +17,61 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.version import __version__
 
 # ── Derive base paths ──────────────────────────────────────────────────
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent  # app/core → app → project root
-_PROJECT_ROOT = _BASE_DIR.parent
-_DATA_DIR = _BASE_DIR / "data"
+
+
+def _resolve_project_root() -> Path:
+    """Resolve the project root that owns ``.claude`` memory/skill state.
+
+    Priority: explicit ``AGENTHUB_PROJECT_ROOT`` (desktop bundles and other
+    packaged layouts point this at the install/user root) → the checkout
+    directory itself. The historical default escaped one level above the
+    checkout, which made the CLI and dev profiles touch paths outside the
+    workspace boundary.
+    """
+    explicit = os.environ.get("AGENTHUB_PROJECT_ROOT", "").strip()
+    if explicit:
+        return Path(explicit).resolve()
+    return _BASE_DIR
+
+
+_PROJECT_ROOT = _resolve_project_root()
+
+
+def _resolve_data_dir() -> Path:
+    """Resolve the local data directory.
+
+    Priority: ``AGENTHUB_LOCAL_DATA`` (desktop packaged profile points this at
+    the user-local data root, e.g. ``%LOCALAPPDATA%\\AgentHub``) → its ``data``
+    subdirectory; otherwise the in-project ``data`` directory. PostgreSQL
+    production deployments are unaffected (they only use ``DATABASE_URL``).
+    """
+    local_data = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
+    if local_data:
+        return Path(local_data) / "data"
+    return _BASE_DIR / "data"
+
+
+def _resolve_workspaces_dir() -> Path:
+    """Resolve the workspaces root.
+
+    Priority: explicit ``AGENTHUB_WORKSPACES_DIR`` → ``AGENTHUB_LOCAL_DATA``
+    data directory → the in-project default.
+    """
+    explicit = os.environ.get("AGENTHUB_WORKSPACES_DIR", "").strip()
+    if explicit:
+        return Path(explicit)
+    return _resolve_data_dir() / "workspaces"
+
+
+_DATA_DIR = _resolve_data_dir()
+_WORKSPACES_DIR = _resolve_workspaces_dir()
 
 # Ensure data directory exists (idempotent)
 _DATA_DIR.mkdir(exist_ok=True)
@@ -44,6 +92,21 @@ class LLMKeys(BaseSettings):
     ollama_base_url: str = Field(
         default="http://127.0.0.1:11434",
         description="Ollama server URL",
+    )
+    # Optional unified LLM gateway (new-api / one-api style). Empty (default)
+    # keeps the self-hosted per-provider adapters; "newapi" fans every remote
+    # provider model out through the single OpenAI-compatible gateway entry.
+    llm_gateway: str = Field(
+        default="", alias="AGENTHUB_LLM_GATEWAY",
+        description="LLM supplier layer: '' (self-hosted adapters) or 'newapi'",
+    )
+    newapi_base_url: str = Field(
+        default="http://127.0.0.1:3000/v1", alias="AGENTHUB_NEWAPI_BASE_URL",
+        description="new-api OpenAI-compatible entry (used when llm_gateway=newapi)",
+    )
+    newapi_api_key: str = Field(
+        default="", alias="AGENTHUB_NEWAPI_API_KEY",
+        description="new-api master/sub token (used when llm_gateway=newapi)",
     )
 
 
@@ -133,6 +196,46 @@ class CommandSettings(BaseSettings):
     max_output: int = Field(default=100000, alias="AGENTHUB_COMMAND_MAX_OUTPUT")
 
 
+class ArtifactStoreSettings(BaseSettings):
+    """Artifact byte-store locations and verification limits."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    backend: Literal["local", "minio"] = Field(
+        default="local",
+        alias="AGENTHUB_ARTIFACT_STORE_BACKEND",
+    )
+    local_root: Path = Field(
+        default=_DATA_DIR / "artifacts",
+        alias="AGENTHUB_ARTIFACT_LOCAL_ROOT",
+    )
+    minio_endpoint: str = Field(
+        default="127.0.0.1:9000",
+        alias="MINIO_ENDPOINT",
+    )
+    minio_access_key: str = Field(default="minio", alias="MINIO_ACCESS_KEY")
+    minio_secret_key: SecretStr = Field(
+        default=SecretStr("minio123"),
+        alias="MINIO_SECRET_KEY",
+    )
+    minio_bucket: str = Field(default="agenthub", alias="MINIO_BUCKET")
+    minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
+    verify_max_bytes: int = Field(
+        default=1024 * 1024 * 1024,
+        ge=1,
+        alias="AGENTHUB_ARTIFACT_VERIFY_MAX_BYTES",
+    )
+    publish_max_bytes: int = Field(
+        default=1024 * 1024 * 1024,
+        ge=1,
+        alias="AGENTHUB_ARTIFACT_PUBLISH_MAX_BYTES",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Main settings (aggregates sub-models + top-level keys)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -151,7 +254,7 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────
     app_name: str = "AgentHub 多智能体协作平台"
-    app_version: str = "3.0-modular"
+    app_version: str = __version__
 
     # ── Environment ────────────────────────────────────────────────────
     env: Literal["development", "production", "test"] = Field(
@@ -165,12 +268,23 @@ class Settings(BaseSettings):
         default="",
         description="PostgreSQL connection URL (postgresql://...)",
     )
+    db_backend: Literal["auto", "postgres", "sqlite"] = Field(
+        default="auto", alias="AGENTHUB_DB_BACKEND"
+    )
+    sqlite_path: Path = Field(
+        default=_DATA_DIR / "agenthub.db", alias="AGENTHUB_SQLITE_PATH"
+    )
     db_pool_min: int = Field(default=2, alias="AGENTHUB_DB_POOL_MIN")
     db_pool_max: int = Field(default=20, alias="AGENTHUB_DB_POOL_MAX")
 
     # ── Network ────────────────────────────────────────────────────────
     cors_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"],
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "tauri://localhost",
+            "http://tauri.localhost",
+        ],
         alias="AGENTHUB_CORS_ORIGINS",
         description="Comma-separated CORS allowed origins",
     )
@@ -185,7 +299,6 @@ class Settings(BaseSettings):
         alias="AGENTHUB_ENABLE_REAL_LLM",
         description="When False, all agent calls use MockAdapter",
     )
-
     # ── Identity ───────────────────────────────────────────────────────
     default_session_id: str = "session-1"
     default_user_id: str = "local-admin"
@@ -199,6 +312,7 @@ class Settings(BaseSettings):
     streaming: StreamingSettings = Field(default_factory=StreamingSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     command: CommandSettings = Field(default_factory=CommandSettings)
+    artifact_store: ArtifactStoreSettings = Field(default_factory=ArtifactStoreSettings)
 
     # ── Derived paths (not from env) ──────────────────────────────────
     @property
@@ -215,7 +329,7 @@ class Settings(BaseSettings):
 
     @property
     def workspaces_dir(self) -> Path:
-        return _DATA_DIR / "workspaces"
+        return _WORKSPACES_DIR
 
     @property
     def memory_dir(self) -> Path:
@@ -238,7 +352,7 @@ class Settings(BaseSettings):
             return [o.strip() for o in v.split(",") if o.strip()]
         if isinstance(v, list):
             return v
-        return ["http://localhost:3000", "http://127.0.0.1:3000"]
+        return ["http://localhost:3000", "http://127.0.0.1:3000", "tauri://localhost", "http://tauri.localhost"]
 
     @field_validator("DATABASE_URL")
     @classmethod

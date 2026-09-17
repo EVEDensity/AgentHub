@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,9 +38,9 @@ const (
 	MemoryCompactRequestedSubject = "agenthub.memory.compact.requested"
 
 	// Sprint D: Rust core audit subjects (Rust → Go via core NATS).
-	FanoutAuditSubject   = "agenthub.fanout.audit"
-	PatchAuditSubject    = "agenthub.patch.audit"
-	MemoryAuditSubject   = "agenthub.memory.audit"
+	FanoutAuditSubject = "agenthub.fanout.audit"
+	PatchAuditSubject  = "agenthub.patch.audit"
+	MemoryAuditSubject = "agenthub.memory.audit"
 
 	// Sprint H: ContextOS — unified context engine subjects.
 	ContextSearchSubject   = "agenthub.context.search"
@@ -54,7 +56,7 @@ const (
 	AgentNetMemorySubject       = "agenthub.agentnet.memory"
 
 	// Sprint J: Digital Identity + Sandbox subjects.
-	AgentIdentitySubject = "agenthub.agent.identity"
+	AgentIdentitySubject  = "agenthub.agent.identity"
 	SandboxControlSubject = "agenthub.sandbox.control"
 	SandboxExecSubject    = "agenthub.sandbox.exec"
 	WorkspaceFileSubject  = "agenthub.workspace.file"
@@ -84,8 +86,38 @@ var streamDefs = []nats.StreamConfig{
 // through JetStream so messages are durable; subscribers use durable consumers
 // so they resume from the last acked message after a restart.
 type Client struct {
-	conn *nats.Conn
-	js   nats.JetStreamContext
+	conn  *nats.Conn
+	js    nats.JetStreamContext
+	local *localBus
+}
+
+type localBus struct {
+	mu   sync.RWMutex
+	subs map[string][]func(events.Envelope)
+}
+
+// Bus is the transport contract shared by server (NATS) and desktop (memory)
+// profiles. Client remains the compatibility implementation for existing
+// handlers while new local code can depend on this narrow contract.
+type Bus interface {
+	IsConnected() bool
+	PublishEnvelope(context.Context, string, events.Envelope) error
+	Subscribe(string, string, func(events.Envelope)) (*nats.Subscription, error)
+	QueueSubscribe(string, string, string, func(events.Envelope)) (*nats.Subscription, error)
+	SubscribeCore(string, func(events.Envelope)) (*nats.Subscription, error)
+	Close()
+}
+
+var _ Bus = (*Client)(nil)
+
+// ConnectLocal creates the single-process backend used by the desktop profile.
+// It deliberately provides ephemeral delivery; server deployments must use NATS.
+func ConnectLocal() *Client {
+	return &Client{local: &localBus{subs: make(map[string][]func(events.Envelope))}}
+}
+
+func (c *Client) IsConnected() bool {
+	return c != nil && (c.local != nil || (c.conn != nil && c.conn.IsConnected()))
 }
 
 // Connect dials NATS, opens a JetStream context, and ensures all platform
@@ -136,6 +168,9 @@ func (c *Client) ensureStreams() error {
 func (c *Client) Conn() *nats.Conn { return c.conn }
 
 func (c *Client) Close() {
+	if c.local != nil {
+		return
+	}
 	if c != nil && c.conn != nil {
 		c.conn.Close()
 	}
@@ -146,6 +181,20 @@ func (c *Client) Close() {
 // caller's context bounds how long we wait for the ack; the JetStream context
 // itself is configured with a 5s default timeout.
 func (c *Client) PublishEnvelope(ctx context.Context, subject string, event events.Envelope) error {
+	if c.local != nil {
+		c.local.mu.RLock()
+		handlers := append([]func(events.Envelope){}, c.local.subs[subject]...)
+		for pattern, subscribers := range c.local.subs {
+			if strings.HasSuffix(pattern, ">") && strings.HasPrefix(subject, strings.TrimSuffix(pattern, ">")) {
+				handlers = append(handlers, subscribers...)
+			}
+		}
+		c.local.mu.RUnlock()
+		for _, handler := range handlers {
+			handler(event)
+		}
+		return nil
+	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event envelope: %w", err)
@@ -175,6 +224,12 @@ func (c *Client) PublishEnvelope(ctx context.Context, subject string, event even
 // fanout consumers (e.g. stream-delivery, audit-log). The consumer auto-acks
 // after the handler returns; a panic is treated as a nak and redelivered.
 func (c *Client) Subscribe(durable, subject string, handler func(events.Envelope)) (*nats.Subscription, error) {
+	if c.local != nil {
+		c.local.mu.Lock()
+		c.local.subs[subject] = append(c.local.subs[subject], handler)
+		c.local.mu.Unlock()
+		return nil, nil
+	}
 	return c.js.Subscribe(subject, dispatch(handler),
 		nats.Durable(durable),
 		nats.DeliverAll(),
@@ -188,6 +243,9 @@ func (c *Client) Subscribe(durable, subject string, handler func(events.Envelope
 // subjects (orchestrator, tool-permission, agent-runtime dispatch) so multiple
 // replicas share load.
 func (c *Client) QueueSubscribe(durable, queue, subject string, handler func(events.Envelope)) (*nats.Subscription, error) {
+	if c.local != nil {
+		return c.Subscribe(durable, subject, handler)
+	}
 	return c.js.QueueSubscribe(subject, queue, dispatch(handler),
 		nats.Durable(durable),
 		nats.DeliverAll(),
@@ -201,6 +259,9 @@ func (c *Client) QueueSubscribe(durable, queue, subject string, handler func(eve
 // are ephemeral — no persistence, no replay, no ack. For durable delivery,
 // ensure a JetStream stream covers the subject and use Subscribe instead.
 func (c *Client) SubscribeCore(subject string, handler func(events.Envelope)) (*nats.Subscription, error) {
+	if c.local != nil {
+		return c.Subscribe("core", subject, handler)
+	}
 	return c.conn.Subscribe(subject, func(msg *nats.Msg) {
 		var env events.Envelope
 		if err := json.Unmarshal(msg.Data, &env); err != nil {

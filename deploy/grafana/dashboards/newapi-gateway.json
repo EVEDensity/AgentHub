@@ -1,0 +1,210 @@
+{
+  "_comment": "R4-5 new-api 网关四宫格面板。导入方式：Grafana UI → Dashboards → Import → 上传本文件并选择 Prometheus 数据源；或将本目录作为 provisioning 源挂载到 grafana 容器 /etc/grafana/provisioning/dashboards 并配置 provider 后自动加载。所有 PromQL 均逐字取自 deploy/newapi/prometheus-rules.yml 与 deploy/agenthub_rules.yml 中真实存在的告警表达式，未发明任何指标。",
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "_comment": "宫格①：网关可用性。up{job=\"new-api\"} 来自 agenthub_rules.yml 的 NewAPIProbeDown；probe_success{job=\"new-api\"} 来自 deploy/newapi/prometheus-rules.yml 的探活口径（blackbox 探测 /api/status）。",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": { "color": "red", "index": 1, "text": "DOWN" },
+                "1": { "color": "green", "index": 0, "text": "UP" }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "up{job=\"new-api\"}",
+          "legendFormat": "up (prometheus 抓取)",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "probe_success{job=\"new-api\"}",
+          "legendFormat": "probe_success (/api/status)",
+          "refId": "B"
+        }
+      ],
+      "title": "网关可用性 up",
+      "type": "stat"
+    },
+    {
+      "_comment": "宫格②：渠道成功率与 5xx 率。表达式逐字对齐 agenthub_rules.yml / prometheus-rules.yml 中 NewAPI5xxRateHigh 与 NewAPIErrorRateHigh（仅去掉阈值比较），成功率为错误率的补数。",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "max": 1,
+          "min": 0,
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(relay_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(relay_requests_total[5m])), 1e-6)",
+          "legendFormat": "5xx 率 (NewAPI5xxRateHigh 口径)",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(rate(relay_requests_total{status=~\"4..|5..\"}[10m])) / clamp_min(sum(rate(relay_requests_total[10m])), 1e-6)",
+          "legendFormat": "4xx+5xx 错误率 (NewAPIErrorRateHigh 口径)",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "1 - (sum(rate(relay_requests_total{status=~\"4..|5..\"}[10m])) / clamp_min(sum(rate(relay_requests_total[10m])), 1e-6))",
+          "legendFormat": "成功率",
+          "refId": "C"
+        }
+      ],
+      "title": "渠道成功率与 5xx 率",
+      "type": "timeseries"
+    },
+    {
+      "_comment": "宫格③：p95 转发延迟。表达式逐字对齐 prometheus-rules.yml 的 NewAPILatencySLO；红色阈值线 2s 即该告警的 SLO 边界。",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "id": 3,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "histogram_quantile(0.95, sum(rate(relay_request_duration_seconds_bucket[10m])) by (le))",
+          "legendFormat": "转发 p95 延迟 (NewAPILatencySLO 口径)",
+          "refId": "A"
+        }
+      ],
+      "title": "p95 转发延迟（SLO 2s）",
+      "type": "timeseries"
+    },
+    {
+      "_comment": "宫格④：日 token 用量（Prometheus 口径二选一）。指标来自 agenthub_rules.yml P3 TokenUsageApproachingLimit 引用的真实计数器；与导出 sidecar 的 ./data/newapi-export/<YYYY-MM-DD>.json 可交叉对账。",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "id": 4,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "expr": "sum(increase(quota_usage_events_total{event_type=\"token_consumed\"}[24h]))",
+          "legendFormat": "近 24h token 消耗事件",
+          "refId": "A"
+        }
+      ],
+      "title": "日 token 用量（Prometheus 口径）",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["new-api", "gateway", "agenthub"],
+  "templating": { "list": [] },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "new-api 网关总览（R4-5 四宫格）",
+  "uid": "newapi-gateway-r45",
+  "version": 1,
+  "weekStart": ""
+}

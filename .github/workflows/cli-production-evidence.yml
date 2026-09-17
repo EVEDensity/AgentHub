@@ -1,0 +1,57 @@
+name: CLI production evidence gates
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 3 * * 1"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Benchmark evidence
+        env:
+          AGENTHUB_RELEASE_ID: evidence-${{ github.run_id }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/evidence-${{ github.run_id }}
+          AGENTHUB_BENCHMARK_EVIDENCE_OUTPUT: ${{ runner.temp }}/benchmark.json
+        run: python scripts/cli_benchmark.py --task-file benchmarks/cli_tasks.json --task-id conversation-basic --check-thresholds
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-benchmark-evidence
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/benchmark.json
+          if-no-files-found: ignore
+
+  sse-recovery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: SSE disconnect and cursor recovery evidence
+        env:
+          AGENTHUB_CLI_BASE_URL: ${{ vars.AGENTHUB_SSE_BASE_URL }}
+          AGENTHUB_CLI_AUTH_TOKEN: ${{ secrets.AGENTHUB_CLI_AUTH_TOKEN }}
+          AGENTHUB_CLI_SSE_MISSION_ID: ${{ vars.AGENTHUB_SSE_MISSION_ID }}
+          AGENTHUB_CLI_SSE_FAULT_INJECTED: "1"
+          AGENTHUB_RELEASE_ID: evidence-${{ github.run_id }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/evidence-${{ github.run_id }}
+          AGENTHUB_SSE_EVIDENCE_OUTPUT: ${{ runner.temp }}/sse-recovery.json
+        run: python scripts/cli_sse_recovery_evidence.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-sse-recovery-evidence
+          path: |
+            artifacts/production/**/*.json
+            ${{ runner.temp }}/sse-recovery.json
+          if-no-files-found: ignore

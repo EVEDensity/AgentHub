@@ -7,7 +7,22 @@ from datetime import datetime
 
 from app.config import DEFAULT_SESSION_ID, DEFAULT_USER_ID
 
+# SQLite DDL translation for the Mission control plane lives in its own
+# module; the names are re-imported here so historical imports
+# (``from app.db.init_db import _create_mission_control_plane_sqlite``)
+# keep working.
+from app.db.sqlite_translator import (  # noqa: F401
+    _MISSION_CONTROL_PLANE_SQLITE_UPGRADES,
+    _create_mission_control_plane_sqlite,
+    _strip_check_constraints,
+)
+
 logger = logging.getLogger("agenthub.db.init")
+
+# SQLite is initialized by every local Mission Control subprocess boot.  Keep
+# a schema marker so already-initialized profiles avoid replaying the complete
+# compatibility DDL and seed pass on every CLI invocation.
+SQLITE_SCHEMA_VERSION = 2
 
 
 def now() -> str:
@@ -321,12 +336,59 @@ _PG_DDL = [
 
 
 async def ainit_db() -> None:
-    """Create all tables and seed data on PostgreSQL (idempotent).
+    """Create all tables and seed data on the configured backend.
 
     Order: (1) Alembic migrations, (2) legacy DDL (idempotent fallback),
     (3) seed data.
     """
-    await _ainit_postgresql()
+    from app.config import DB_BACKEND, DATABASE_URL
+
+    if DB_BACKEND == "sqlite" or (DB_BACKEND == "auto" and not DATABASE_URL):
+        await _ainit_sqlite()
+    else:
+        await _ainit_postgresql()
+
+
+async def _ainit_sqlite() -> None:
+    """Initialize the local profile without PostgreSQL-only migrations."""
+    from app.db.session import aget_pool
+
+    pool = await aget_pool()
+    async with pool.acquire() as conn:
+        current_version = await conn.fetchval(
+            "SELECT MAX(version) FROM schema_migrations"
+        )
+        if current_version is not None and int(current_version) >= SQLITE_SCHEMA_VERSION:
+            logger.debug("init_db: SQLite schema already initialized (version=%s)", current_version)
+            return
+        for ddl in _PG_DDL:
+            normalized = ddl.strip().upper()
+            if normalized.startswith(("ALTER TABLE", "DO $$", "CREATE EXTENSION")):
+                continue
+            sqlite_ddl = (
+                ddl.replace("SERIAL", "INTEGER")
+                .replace("BIGSERIAL", "INTEGER")
+                .replace("BOOLEAN", "INTEGER")
+                .replace("BYTEA", "BLOB")
+            )
+            try:
+                await conn.execute(sqlite_ddl)
+            except Exception as exc:
+                logger.warning("init_db SQLite DDL skipped: %s — %s", exc, ddl[:80])
+
+        await _seed_users_pg(conn)
+        await _seed_session_pg(conn)
+        await _seed_agents_pg(conn)
+        await _seed_templates_pg(conn)
+        await _seed_agent_routes_pg(conn)
+        await _seed_model_configs_pg(conn)
+        await _create_mission_control_plane_sqlite(conn)
+        await conn.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES($1, $2)",
+            SQLITE_SCHEMA_VERSION,
+            now(),
+        )
+    logger.info("init_db: SQLite local database initialized")
 
 
 # ═══════════════════════════════════════════════════════════════════════

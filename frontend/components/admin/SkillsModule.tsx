@@ -34,7 +34,7 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
     setSkillLoading(true);
     setSkillError('');
     try {
-      const res = await fetch('/api/skills');
+      const res = await fetch('/api/v1/skills', { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { skills: SkillMeta[] };
       setSkillList(data.skills || []);
@@ -56,14 +56,14 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
     } finally {
       setSkillLoading(false);
     }
-  }, [activeSkillName, activeSkillSource]);
+  }, [activeSkillName, activeSkillSource, authHeaders]);
 
   const loadSkillDetail = useCallback(async (name: string, source: string): Promise<void> => {
     setSkillDetailLoading(true);
     setSkillMetaExpanded(false);
     try {
-      const url = `/api/skills/${encodeURIComponent(name)}?source=${encodeURIComponent(source)}`;
-      const res = await fetch(url);
+      const url = `/api/v1/skills/${encodeURIComponent(name)}?source=${encodeURIComponent(source)}`;
+      const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const detail = (await res.json()) as SkillDetail;
       setSkillDetail(detail);
@@ -74,17 +74,26 @@ export default function SkillsModule({ authHeaders, setNotice }: SkillsModulePro
     } finally {
       setSkillDetailLoading(false);
     }
-  }, []);
+  }, [authHeaders]);
 
-  const handleExportSkill = useCallback((): void => {
+  const handleExportSkill = useCallback(async (): Promise<void> => {
     if (!activeSkillName || !activeSkillSource) return;
-    const a = document.createElement('a');
-    a.href = `/api/skills/${encodeURIComponent(activeSkillName)}/raw?source=${encodeURIComponent(activeSkillSource)}`;
-    a.download = `${activeSkillName}_SKILL.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }, [activeSkillName, activeSkillSource]);
+    try {
+      const url = `/api/v1/skills/${encodeURIComponent(activeSkillName)}/raw?source=${encodeURIComponent(activeSkillSource)}`;
+      const res = await fetch(url, { headers: authHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${activeSkillName}_SKILL.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch {
+      setNotice('导出技能失败');
+    }
+  }, [activeSkillName, activeSkillSource, authHeaders, setNotice]);
 
   // ── Load skills on mount ────────────────────────────────────────
   useEffect(() => {

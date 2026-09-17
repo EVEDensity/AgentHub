@@ -1,0 +1,116 @@
+name: PR review (agenthub)
+
+# North-star M3 / I-4: every PR is reviewed by `agenthub review-pr` —
+# the same verifier-gated mission loop and exit-code contract as
+# `agenthub run` (0 pass / 1 blocking findings or FAILED / 2 CANCELLED /
+# 3 timeout / 4 infra). Blocking findings fail the check and are
+# surfaced as an actionable list in the job summary.
+#
+# Required secret: AGENTHUB_REVIEW_MODEL_API_KEY (model channel key).
+# The review runs honestly — without the secret the job fails with a
+# clear message instead of silently passing.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review PR diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The reviewer needs the PR head, not the merge ref.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check review channel secret
+        id: channel
+        env:
+          KEY: ${{ secrets.AGENTHUB_REVIEW_MODEL_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::AGENTHUB_REVIEW_MODEL_API_KEY secret is not configured — the agent review cannot run honestly. Add the secret or skip this check."
+            exit 4
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Export PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr diff ${{ github.event.pull_request.number }} > "$RUNNER_TEMP/pr.diff"
+          wc -l "$RUNNER_TEMP/pr.diff"
+
+      - name: Run agenthub review-pr
+        env:
+          AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.AGENTHUB_REVIEW_MODEL_API_KEY }}
+          AGENTHUB_CLI_PROVIDER: ${{ vars.AGENTHUB_REVIEW_PROVIDER || 'deepseek' }}
+          AGENTHUB_CLI_MODEL: ${{ vars.AGENTHUB_REVIEW_MODEL || 'deepseek-v4-flash' }}
+        run: |
+          set +e
+          python -m app.cli review-pr \
+            --diff-file "$RUNNER_TEMP/pr.diff" \
+            --workspace "$RUNNER_TEMP/review-workspace" \
+            --no-web-search \
+            --mission-timeout 900 \
+            --runner-timeout-seconds 720 \
+            --json > "$RUNNER_TEMP/review-result.json"
+          code=$?
+          set -e
+          echo "review-pr exit code: $code"
+          # Any non-zero code fails the check; the exit-code contract
+          # (1 = blocking findings, 3 = timeout, 4 = infra) shows in the
+          # summary below and the job log.
+          exit $code
+
+      - name: Surface findings in job summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          result_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "review-result.json"
+          summary = os.environ["GITHUB_STEP_SUMMARY"]
+          lines = ["## agenthub review-pr", ""]
+          if result_path.is_file():
+              try:
+                  doc = json.loads(result_path.read_text(encoding="utf-8"))
+              except json.JSONDecodeError:
+                  lines += ["_review output was not valid JSON (see job log)_"]
+              else:
+                  lines.append(f"mission status: **{doc.get('review', '?')}** (exit {doc.get('exitCode', '?')})")
+                  findings = doc.get("findings") or {}
+                  for sev in ("blocking", "warnings", "nits"):
+                      items = findings.get(sev) or []
+                      lines += [f"", f"### {sev.upper()} ({len(items)})", ""]
+                      if not items:
+                          lines.append("none")
+                      for item in items:
+                          lines += [
+                              f"- **`{item.get('file', '?')}`** [{item.get('category', '?')}]",
+                              f"  - issue: {item.get('issue', '')}",
+                              f"  - fix: {item.get('suggestion', '')}",
+                          ]
+          else:
+              lines += ["_no review result produced (see job log)_"]
+          pathlib.Path(summary).write_text("\n".join(lines), encoding="utf-8")
+          print("\n".join(lines))
+          PY

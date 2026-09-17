@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Three agents connected by lines -->
+  <line x1="32" y1="20" x2="16" y2="44" stroke="#58a6ff" stroke-width="3" stroke-linecap="round"/>
+  <line x1="32" y1="20" x2="48" y2="44" stroke="#58a6ff" stroke-width="3" stroke-linecap="round"/>
+  <line x1="16" y1="44" x2="48" y2="44" stroke="#3fb950" stroke-width="3" stroke-linecap="round"/>
+  <!-- Top agent -->
+  <circle cx="32" cy="16" r="8" fill="#58a6ff"/>
+  <circle cx="32" cy="16" r="3" fill="#fff"/>
+  <!-- Bottom-left agent -->
+  <circle cx="12" cy="48" r="8" fill="#a371f7"/>
+  <circle cx="12" cy="48" r="3" fill="#fff"/>
+  <!-- Bottom-right agent -->
+  <circle cx="52" cy="48" r="8" fill="#3fb950"/>
+  <circle cx="52" cy="48" r="3" fill="#fff"/>
+</svg>

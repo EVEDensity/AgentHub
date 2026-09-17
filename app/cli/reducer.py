@@ -1,0 +1,120 @@
+"""Pure reducer for CLI streaming view state.
+
+Renderers consume this state; they never mutate Mission/WorkUnit truth.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from typing import Any
+
+from app.cli.events import CliEvent
+
+
+@dataclass(frozen=True)
+class ToolView:
+    call_id: str
+    name: str
+    status: str
+    output: str = ""
+
+
+@dataclass(frozen=True)
+class SessionViewState:
+    status: str = ""
+    assistant_text: str = ""
+    tools: tuple[ToolView, ...] = ()
+    pending_decision: dict[str, Any] | None = None
+    verification_status: str = ""
+    event_count: int = 0
+    diagnostics: tuple[str, ...] = ()
+    connection_status: str = "connected"
+
+
+def state_to_dict(state: SessionViewState) -> dict[str, Any]:
+    return {"status": state.status, "assistantText": state.assistant_text, "tools": [{"callId": t.call_id, "name": t.name, "status": t.status, "output": t.output} for t in state.tools], "pendingDecision": state.pending_decision, "verificationStatus": state.verification_status, "eventCount": state.event_count, "diagnostics": list(state.diagnostics), "connectionStatus": state.connection_status}
+
+
+RenderSnapshot = dict[str, Any]
+
+def render_snapshot(state: SessionViewState) -> RenderSnapshot:
+    """唯一 renderer 输入；渲染层不得直接消费原始事件。"""
+    return state_to_dict(state)
+
+
+def state_summary(state: SessionViewState) -> str:
+    parts = [state.status] if state.status else []
+    if state.tools:
+        parts.append(f"tool:{state.tools[-1].name} {state.tools[-1].status}")
+    if state.pending_decision is not None:
+        parts.append("decision pending")
+    if state.verification_status:
+        parts.append(f"verification:{state.verification_status}")
+    if state.diagnostics:
+        parts.append(f"diagnostics:{len(state.diagnostics)}")
+    if state.connection_status != "connected":
+        parts.append(f"stream:{state.connection_status}")
+    return " · ".join(parts)
+
+
+def reduce_event(state: SessionViewState, event: CliEvent) -> SessionViewState:
+    """Apply one normalized event idempotently at the renderer boundary."""
+    kind = event.event_type
+    payload = event.payload
+    status = event.status or state.status
+    if not event.status:
+        status = {"mission.created": "CREATED", "work_unit.claimed": "CLAIMED", "work_unit.running": "RUNNING", "mission.completed": "SUCCEEDED", "mission.failed": "FAILED", "mission.cancelled": "CANCELLED", "mission.timeout": "TIMEOUT"}.get(kind, status)
+    text = state.assistant_text
+    if kind == "assistant.delta":
+        text += event.text_delta or ""
+    decision = state.pending_decision
+    if kind == "decision.pending":
+        decision = dict(payload.get("decision", payload))
+    elif kind in {"decision.resolved", "decision.expired"}:
+        decision = None
+    tools = list(state.tools)
+    diagnostics = state.diagnostics
+    if kind.startswith("tool."):
+        name = str(payload.get("toolName") or payload.get("tool_name") or "unknown")
+        call_id = str(payload.get("callId") or payload.get("call_id") or payload.get("toolCallId") or "")
+        if not call_id:
+            # New events must carry call_id. Preserve the old no-ID fixture
+            # behavior when no event ID exists, but never merge two distinct
+            # event IDs under the same tool name.
+            if event.event_id:
+                diagnostics = diagnostics + (f"tool event missing call_id: {name}",)
+            call_id = f"legacy:{event.event_id}" if event.event_id else f"legacy:{name}"
+        index = next((i for i, item in enumerate(tools) if item.call_id == call_id), None)
+        if index is None:
+            tools.append(ToolView(call_id=call_id, name=name, status=kind.removeprefix("tool."), output=str(payload.get("text") or "")))
+        else:
+            current = tools[index]
+            tools[index] = replace(current, status=kind.removeprefix("tool."), output=(str(payload.get("text") or "") or current.output))
+    verification = state.verification_status
+    if kind in {"verification.started", "verification.completed"}:
+        verification = kind.removeprefix("verification.")
+    known = {"assistant.delta", "assistant.completed", "decision.pending", "decision.resolved", "decision.expired", "verification.started", "verification.completed", "mission.created", "mission.started", "mission.completed", "mission.failed", "mission.cancelled", "mission.timeout", "work_unit.created", "work_unit.claimed", "work_unit.running", "checkpoint.created", "artifact.registered", "sse.reconnecting", "sse.connected", "sse.polling"}
+    if kind in known or kind.startswith("tool."):
+        diagnostics = diagnostics
+    else:
+        diagnostics = state.diagnostics + (f"unknown event: {kind}",)
+    connection = state.connection_status
+    if kind == "sse.reconnecting":
+        connection = "reconnecting"
+    elif kind == "sse.polling":
+        connection = "polling"
+    elif kind == "sse.connected":
+        connection = "connected"
+    return replace(
+        state,
+        status=status,
+        assistant_text=text,
+        tools=tuple(tools),
+        pending_decision=decision,
+        verification_status=verification,
+        event_count=state.event_count + 1,
+        diagnostics=diagnostics,
+        connection_status=connection,
+    )
+
+
+__all__ = ["SessionViewState", "ToolView", "RenderSnapshot", "reduce_event", "state_to_dict", "render_snapshot", "state_summary"]

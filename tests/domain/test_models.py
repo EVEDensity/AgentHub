@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -14,13 +14,17 @@ from app.domain import (
     ArtifactRef,
     Evidence,
     Mission,
+    MissionSource,
     VerifierRef,
 )
 from tests.domain.factories import (
     DIGEST,
     NOW,
+    build_artifact,
     build_contract,
+    build_decision,
     build_event,
+    build_execution_checkpoint,
     build_mission,
     build_work_unit,
 )
@@ -50,6 +54,7 @@ class DomainModelTests(unittest.TestCase):
         mission = build_mission()
         contract = build_contract()
         work_unit = build_work_unit()
+        artifact = build_artifact()
         evidence = Evidence(
             id="evd-1",
             mission_id="mis-1",
@@ -65,7 +70,78 @@ class DomainModelTests(unittest.TestCase):
         self.assert_matches_schema("mission.schema.json", mission)
         self.assert_matches_schema("mission-contract.schema.json", contract)
         self.assert_matches_schema("work-unit.schema.json", work_unit)
+        self.assert_matches_schema("artifact.schema.json", artifact)
         self.assert_matches_schema("evidence.schema.json", evidence)
+        self.assert_matches_schema("decision.schema.json", build_decision())
+        self.assert_matches_schema(
+            "execution-checkpoint.schema.json",
+            build_execution_checkpoint(),
+        )
+
+    def test_execution_checkpoint_terminal_shape_is_strict(self) -> None:
+        build_execution_checkpoint(
+            phase="harness.execution.completed",
+            terminal=True,
+        )
+        build_execution_checkpoint(
+            phase="harness.execution.failed",
+            terminal=True,
+            failure_reason="Provider failed.",
+        )
+        with self.assertRaises(ValidationError):
+            build_execution_checkpoint(terminal=True)
+        with self.assertRaises(ValidationError):
+            build_execution_checkpoint(failure_reason="Unexpected content.")
+
+    def test_decision_enforces_pending_and_resolved_lifecycle(self) -> None:
+        pending = build_decision()
+        resolved = build_decision(
+            status="RESOLVED",
+            version=2,
+            resolution="RETRY_WORK_UNIT",
+            rationale="Run a new attempt with corrected Artifact output.",
+            resolved_by={"type": "human", "id": "user-1"},
+            resolved_at=NOW,
+        )
+
+        self.assertEqual(resolved.resolution.value, "RETRY_WORK_UNIT")
+        with self.assertRaisesRegex(ValidationError, "cannot carry resolution"):
+            build_decision(resolution="FAIL_MISSION")
+        with self.assertRaisesRegex(ValidationError, "sorted and unique"):
+            build_decision(criterion_ids=["tests", "tests"])
+        with self.assertRaisesRegex(ValidationError, "offered by"):
+            build_decision(recommended_option="RETRY_WORK_UNIT", options=["FAIL_MISSION"])
+        with self.assertRaisesRegex(ValidationError, "resolution metadata"):
+            build_decision(status="RESOLVED", version=2)
+        cancelled = build_decision(
+            status="CANCELLED",
+            version=2,
+            rationale="Mission was cancelled.",
+            resolved_by={"type": "human", "id": "user-1"},
+            resolved_at=NOW,
+        )
+        self.assert_matches_schema("decision.schema.json", cancelled)
+        self.assertIsNone(cancelled.resolution)
+        expired = build_decision(
+            status="EXPIRED",
+            version=2,
+            requested_at=NOW - timedelta(hours=2),
+            expires_at=NOW - timedelta(hours=1),
+            rationale="Decision expired before human resolution.",
+            resolved_by={"type": "service", "id": "mission-control"},
+            resolved_at=NOW,
+        )
+        self.assert_matches_schema("decision.schema.json", expired)
+        self.assertIsNone(expired.resolution)
+        with self.assertRaisesRegex(ValidationError, "requires expires_at"):
+            build_decision(
+                status="EXPIRED",
+                version=2,
+                rationale="Decision expired before human resolution.",
+                resolved_by={"type": "service", "id": "mission-control"},
+                resolved_at=NOW,
+            )
+        self.assertEqual(pending.version, 1)
 
     def test_event_envelope_uses_public_snake_case_contract(self) -> None:
         event = build_event()
@@ -91,6 +167,35 @@ class DomainModelTests(unittest.TestCase):
         restored = Mission.model_validate(document)
         self.assertEqual(restored.workspace_id, "workspace-1")
         self.assertEqual(restored.contract_id, "contract-1")
+        self.assertEqual(restored.contract_version, 1)
+
+    def test_mission_fork_source_requires_explicit_checkpoint_ancestry(self) -> None:
+        source = MissionSource(
+            type="mission.fork",
+            reference="mis-source",
+            external_id="chk-source-terminal",
+        )
+        mission = build_mission(source=source)
+
+        self.assert_matches_schema("mission.schema.json", mission)
+        self.assertEqual(
+            mission.to_public_dict()["source"],
+            {
+                "type": "mission.fork",
+                "reference": "mis-source",
+                "externalId": "chk-source-terminal",
+            },
+        )
+        invalid_document = mission.to_public_dict()
+        del invalid_document["source"]["externalId"]
+        validator = Draft202012Validator(
+            self.schemas["mission.schema.json"], registry=self.registry
+        )
+        self.assertFalse(validator.is_valid(invalid_document))
+        with self.assertRaisesRegex(ValidationError, "source Mission reference"):
+            MissionSource(type="mission.fork", external_id="chk-source-terminal")
+        with self.assertRaisesRegex(ValidationError, "ExecutionCheckpoint id"):
+            MissionSource(type="mission.fork", reference="mis-source")
 
     def test_models_are_frozen_and_reject_unknown_fields(self) -> None:
         mission = build_mission()
@@ -98,6 +203,10 @@ class DomainModelTests(unittest.TestCase):
             mission.status = "RUNNING"
         with self.assertRaises(ValidationError):
             build_mission(unknown_field=True)
+
+    def test_decision_rejects_unknown_evaluation_policy_reason(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "reason_code"):
+            build_decision(reason_code="model_requested_human_review")
 
     def test_contract_collections_and_nested_configuration_are_immutable(self) -> None:
         contract = build_contract(
@@ -115,6 +224,20 @@ class DomainModelTests(unittest.TestCase):
             contract.to_public_dict()["allowedCapabilities"][0]["scope"],
             {"paths": ["app/**"]},
         )
+
+    def test_contract_governance_has_stable_bounded_decision_timeout(self) -> None:
+        default_contract = build_contract()
+        custom_contract = build_contract(governance={"decisionTimeoutSeconds": 900})
+
+        self.assertEqual(default_contract.governance.decision_timeout_seconds, 86_400)
+        self.assertEqual(
+            custom_contract.to_public_dict()["governance"],
+            {"decisionTimeoutSeconds": 900},
+        )
+        with self.assertRaisesRegex(ValidationError, "greater than or equal to 1"):
+            build_contract(governance={"decisionTimeoutSeconds": 0})
+        with self.assertRaisesRegex(ValidationError, "less than or equal to 31536000"):
+            build_contract(governance={"decisionTimeoutSeconds": 31_536_001})
 
     def test_contract_configuration_rejects_non_json_values(self) -> None:
         with self.assertRaisesRegex(ValidationError, "valid JSON value"):
@@ -144,6 +267,8 @@ class DomainModelTests(unittest.TestCase):
             build_work_unit(status="RUNNING")
         with self.assertRaisesRegex(ValidationError, "cannot depend on itself"):
             build_work_unit(dependencies=["wu-1"])
+        with self.assertRaisesRegex(ValidationError, "cannot delegate to itself"):
+            build_work_unit(parent_work_unit_id="wu-1")
         with self.assertRaisesRegex(
             ValidationError, "PENDING work unit cannot retain a lease"
         ):

@@ -1,0 +1,1520 @@
+"""Interactive chat REPL for the developer CLI (north-star M2).
+
+``python -m app.cli chat`` opens a session-bound loop over the same
+engine the one-shot commands use (isolated SQLite mission-control +
+desktop runner + verifier gate). Each turn runs one Mission; the
+previous turn's Mission id is chained as resume context so the
+conversation accumulates honestly — prior objectives, statuses, and
+deposited summaries, never invented history.
+
+Slash commands (typed instead of an objective):
+
+    /help          list commands
+    /missions      list recorded missions
+    /resume <id>   chain a specific prior mission into the next turn
+    /unresume      clear the chained context
+    /compact       fold the session chain into one compact context document
+    /replay        replay every mission of this session (objective/status/summary)
+    /new           start a fresh conversation (clears the chain)
+    /status        show current session settings
+    /quit          exit
+
+Full-screen TUI (ratatui/ink) remains a later M2 deliverable; this REPL
+is the terminal-interactive baseline.
+"""
+
+from __future__ import annotations
+
+import sys
+import threading
+import fnmatch
+import difflib
+import json
+import asyncio
+import re
+from datetime import datetime
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+from app.cli.main import _load_config
+
+try:  # rich ships with textual; guard anyway so chat never hard-fails.
+    from app.cli import ui
+except Exception:  # noqa: BLE001 - degrade to plain text without rich
+    ui = None  # type: ignore[assignment]
+
+from app.cli.runtime import (
+    DEFAULT_MAX_TOTAL_TOKENS,
+    DEFAULT_MISSION_TIMEOUT,
+    DEFAULT_RUNNER_TIMEOUT_SECONDS,
+    CliModelSettings,
+    MissionControlClient,
+    MissionControlProcess,
+    build_compact_context,
+    collect_agents_md_layers,
+    execute_objective,
+    list_recent_missions,
+    merge_project_instructions,
+    resolve_model_settings,
+    state_dir,
+    load_config,
+)
+from app.cli.lifecycle import cancellation_scope
+from app.errors import ConfigError
+from app.cli.errors import EXIT_INFRASTRUCTURE
+
+_PROMPT = "AgentHub ❯ "
+
+_LOCAL_WRITE_TOOLS = frozenset({
+    "file_write", "file_write_batch", "file_edit", "file_patch", "file_delete",
+    "apply_change_set", "code_execute", "command_execute", "shell", "git",
+})
+
+
+def _is_local_write_tool(tool_name: str, arguments: dict[str, Any]) -> bool:
+    """Classify side effects from structured tool metadata, never user prose."""
+    normalized = tool_name.strip().lower()
+    if normalized in _LOCAL_WRITE_TOOLS:
+        return True
+    if normalized in {"http_request", "network_request"}:
+        return str(arguments.get("method") or "GET").upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    return False
+
+
+def _tool_risk_summary(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Return a redacted local risk summary for approval metadata."""
+    try:
+        from app.services.guardrails import classify_tool_risk
+
+        result = classify_tool_risk(tool_name, arguments)
+        return "; ".join(flag.message for flag in result.flags[:3])
+    except Exception:  # noqa: BLE001 - approval UI must never block execution
+        return ""
+
+
+def _likely_side_effect_objective(objective: str) -> bool:
+    """Return True only for explicit write/execute intent.
+
+    Normal conversation must not be interrupted. Tool-level Decision remains
+    the authoritative guard when the model actually requests a side effect.
+    """
+    text = objective.lower()
+    markers = (
+        "写入", "写文件", "修改", "创建文件", "删除文件", "重命名",
+        "运行命令", "执行命令", "执行脚本", "安装依赖", "提交代码", "提交当前项目", "提交当前的项目", "提交项目",
+        "推送", "推送到 github", "上传仓库", "github push", "git push", "push", "格式化",
+        "write ", "edit ", "modify ", "create ", "delete ", "remove ",
+        "rename ", "run ", "execute ", "install ", "format ", "commit ",
+        "shell", "command",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _is_simple_greeting(objective: str) -> bool:
+    return objective.strip().lower() in {"hello", "hi", "你好", "您好", "嗨"}
+
+
+def _is_conversational_objective(objective: str) -> bool:
+    if _likely_side_effect_objective(objective) or _is_project_identity_query(objective):
+        return False
+    operational = ("查看", "查询", "检查", "分析代码", "读取", "搜索", "列出文件", "文件分类", "文件列表", "项目结构", "目录", "测试代码", "调试", "实现", "修复", "天气", "气温", "weather")
+    return not any(word in objective for word in operational)
+
+
+def _is_workspace_query(objective: str) -> bool:
+    """Recognize read-only requests that can be answered from the real tree."""
+    text = objective.lower()
+    if any(token in text for token in (
+        "文件分类", "文件列表", "项目结构", "目录结构", "列出文件",
+        "分类项目文件", "workspace files", "project files", "file tree",
+    )):
+        return True
+    # Cover natural variants such as “查询项目下有哪些文件” without
+    # routing arbitrary file-writing requests into the read-only walker.
+    return any(action in text for action in ("查询", "查看", "列出", "统计")) and any(
+        subject in text for subject in ("项目文件", "工作区文件", "目录", "文件")
+    )
+
+
+def _is_project_identity_query(objective: str) -> bool:
+    """Recognize requests for facts about the current repository itself."""
+    text = objective.lower()
+    return any(phrase in text for phrase in (
+        "分析当前的项目是什么", "分析当前项目是什么", "当前项目是什么",
+        "这个项目是什么", "介绍当前项目", "查看项目说明", "查看 readme",
+        "当前仓库是什么", "项目身份", "project identity", "what is this project",
+    ))
+
+
+def _is_date_question(objective: str) -> bool:
+    text = objective.lower()
+    return any(token in text for token in ("今天是几号", "今天几号", "日期", "what date", "today's date"))
+
+
+def _is_time_question(objective: str) -> bool:
+    text = objective.lower()
+    return any(token in text for token in (
+        "现在几点", "现在时间", "当前时间", "几点了", "what time", "current time",
+    ))
+
+
+def _is_weather_question(objective: str) -> bool:
+    text = objective.lower()
+    return any(token in text for token in ("天气", "气温", "温度", "下雨", "降雨", "雨吗", "rain", "raining", "weather", "temperature"))
+
+
+def _weather_location(objective: str) -> str:
+    """Extract an explicit place without guessing a user's location."""
+    text = objective.strip()
+    # Generic questions such as “今天是什么天气” do not identify a place.
+    # Return an empty location so the tool can ask for one instead of sending
+    # words like “是什么” to the geocoder.
+    if re.search(r"^(?:请问|查询|查一下)?\s*(?:今天|当前|现在)?\s*(?:是)?\s*(?:什么|怎样|如何|怎么样|哪儿|哪里)?\s*(?:天气|气温|温度|下雨|降雨|雨吗)\s*[吗嘛呢?？。！!]*$", text, re.IGNORECASE):
+        return ""
+    english = re.search(r"(?:weather|temperature)\s+(?:in|at)\s+(.+)$", text, re.IGNORECASE)
+    if english:
+        return re.sub(r"[,.!?]+$", "", english.group(1)).strip()
+    match = re.search(r"(.+?)(?:今天|当前|现在)?(?:的)?(?:天气|气温|温度)", text, re.IGNORECASE)
+    if match:
+        candidate = match.group(1)
+    else:
+        match = re.search(r"(?:天气|气温|温度)\s*(?:在|是)?\s*(.+)$", text, re.IGNORECASE)
+        candidate = match.group(1) if match else ""
+    candidate = re.sub(r"[，。！？?：:、\s]+", " ", candidate)
+    candidate = re.sub(r"^(今天|当前|现在|请问|查询|查一下)\s*", "", candidate)
+    candidate = re.sub(r"\s*(今天|当前|现在|怎么样|如何|呢)$", "", candidate)
+    return candidate.strip()
+
+
+def _format_utility_result(tool_name: str, outcome: dict[str, Any]) -> str:
+    if not outcome.get("success"):
+        return str(outcome.get("error") or f"{tool_name} 工具执行失败")
+    result = outcome.get("result") if isinstance(outcome.get("result"), dict) else {}
+    if tool_name == "current_time":
+        return f"现在是 {result.get('formatted', '')}（{result.get('timezone', '')}）"
+    if tool_name == "current_date":
+        return f"今天是 {result.get('formatted', '')}（{result.get('weekday', '')}，{result.get('timezone', '')}）"
+    if tool_name == "weather":
+        location = str(result.get("location", "当前地点"))
+        if isinstance(outcome.get("metadata"), dict) and outcome["metadata"].get("locationApproximate"):
+            location += "（位置为近似值，可设置 AGENTHUB_WEATHER_LOCATION）"
+        return (
+            f"{location}：{result.get('condition', '未知')}，"
+            f"{result.get('temperature', '未知')}{result.get('temperature_unit', '°C')}，"
+            f"体感 {result.get('apparent_temperature', '未知')}{result.get('temperature_unit', '°C')}，"
+            f"湿度 {result.get('humidity', '未知')}%，风速 {result.get('wind_speed', '未知')} "
+            f"{result.get('wind_speed_unit', 'km/h')}（数据时间 {result.get('time', '未知')}）"
+        )
+    return str(result)
+
+
+def _decision_diff_preview(decision: dict[str, Any], workspace_root: Path) -> str:
+    """Build a bounded preflight diff without mutating the workspace."""
+    arguments = decision.get("arguments") if isinstance(decision.get("arguments"), dict) else {}
+    tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or "").lower()
+    if tool_name not in {"file_write", "file_edit", "file_patch", "write", "edit"}:
+        return ""
+    path_value = decision.get("path") or decision.get("filePath") or decision.get("file_path") or arguments.get("path") or arguments.get("file_path")
+    content_value = decision.get("content") or decision.get("new_content") or decision.get("newContent") or arguments.get("content") or arguments.get("new_content") or arguments.get("newContent")
+    if not isinstance(path_value, str) or not isinstance(content_value, str) or len(content_value) > 100_000:
+        return ""
+    candidate = (workspace_root / path_value).resolve()
+    try:
+        candidate.relative_to(workspace_root.resolve())
+        old = candidate.read_text(encoding="utf-8", errors="replace") if candidate.is_file() else ""
+    except (OSError, ValueError):
+        return ""
+    diff = difflib.unified_diff(
+        old.splitlines(), content_value.splitlines(),
+        fromfile=str(path_value), tofile=str(path_value), lineterm="",
+    )
+    return "\n".join(list(diff)[:80])
+
+
+def _run_local_utility(tool_name: str, **arguments: Any) -> str:
+    from app.services.tools.utility_tools import (
+        current_date_handler,
+        current_time_handler,
+        weather_handler,
+    )
+
+    handlers = {
+        "current_time": current_time_handler,
+        "current_date": current_date_handler,
+        "weather": weather_handler,
+    }
+    handler = handlers[tool_name]
+    try:
+        outcome = asyncio.run(handler(**arguments))
+    except Exception as exc:  # noqa: BLE001 - surface a stable tool failure
+        return f"{tool_name} 工具执行失败: {type(exc).__name__}: {exc}"
+    return _format_utility_result(tool_name, outcome)
+
+
+def _direct_greeting(
+    settings: CliModelSettings,
+    objective: str,
+    emit: Callable[..., None],
+    console: Any = None,
+    history: list[dict[str, str]] | None = None,
+    workspace_root: Path | None = None,
+    instruction_files: list[Path] | tuple[Path, ...] = (),
+) -> tuple[bool, str]:
+    """Use the provider's text stream for a plain greeting.
+
+    Greetings must not enter the desktop task planner: that path may emit
+    internal DSML tool markup and has unnecessary verification latency.
+    """
+    from app.services.adapter_manager import adapter_manager
+
+    async def run() -> str:
+        adapter = adapter_manager.get_adapter(settings.provider)
+        chunks: list[str] = []
+        prompt = objective
+        if history:
+            prompt = "\n".join(f"{item['role']}: {item['content']}" for item in history[-8:]) + f"\nuser: {objective}"
+        from app.services.project_manifest import ProjectManifest
+
+        manifest_prompt = ""
+        if workspace_root is not None:
+            manifest_prompt = ProjectManifest.discover(
+                workspace_root, instruction_files=instruction_files
+            ).to_prompt(provider=settings.provider, model=settings.model)
+        system_prompt = (
+            "Reply to the user directly in plain text. Do not think aloud. "
+            "Do not call tools or emit XML.\n\n"
+            + manifest_prompt
+        )
+        stream = adapter.stream_prompt(
+            prompt,
+            settings.model,
+            settings.api_key,
+            settings.base_url,
+            system_prompt=system_prompt,
+        )
+        async for chunk in stream:
+            if chunk:
+                chunks.append(str(chunk))
+        return "".join(chunks)
+
+    try:
+        response = asyncio.run(run())
+    except Exception as exc:  # noqa: BLE001 - fall back to the durable mission path
+        emit(f"  direct chat unavailable ({type(exc).__name__}); using mission runner")
+        return False, ""
+    # Remove reasoning and provider-specific tool markup before displaying.
+    if ui is not None:
+        filter_ = ui.ThinkingFilter()
+        visible = filter_.feed(response) + filter_.flush()
+    else:
+        visible = response
+    if "DSML" in visible:
+        visible = ""
+    visible = visible.strip()
+    if not visible:
+        # A greeting must always produce a user-visible answer. This branch
+        # is reached only when the provider returned reasoning/tool markup
+        # without a final text message.
+        visible = "你好！" if any("你" in ch for ch in objective) else "Hello!"
+    if console is not None:
+        console.print(visible, style=ui.STYLE_PRIMARY)
+    else:
+        emit(visible)
+    return True, visible
+_BANNER_LINES = (
+    "AgentHub interactive session — engine: desktop runner + verifier gate",
+    "Type an objective to run one mission; /help for commands; /quit to exit.",
+)
+
+_HELP_LINES = (
+    "/help          显示本帮助",
+    "/missions      列出本地历史任务",
+    "/resume <id>   将指定任务链入下一轮上下文",
+    "/unresume      清除链式上下文",
+    "/compact       将会话任务链压缩为一份上下文文档（下一轮注入摘要而非全链）",
+    "/replay        回放本会话每个任务（目标/状态/耗时/产物）",
+    "/new           开始全新会话（清除链式上下文）",
+    "/clear         同 /new（清空上下文开始新会话）",
+    "/cost          显示本会话成本摘要（任务数/产物/耗时）",
+    "/diff          查看当前工作区 Git diff",
+    "/changes       列出当前变更文件",
+    "/patch         输出当前变更补丁",
+    "/undo          撤销当前 attempt 变更（需确认）",
+    "/undo preview  仅预览恢复路径和冲突，不修改文件",
+    "/status        显示当前会话设置",
+    "/tools [category] 列出当前可用工具（可按分类过滤）",
+    "/context       查看当前上下文与 token 使用",
+    "/thinking      展开最近一轮已折叠的模型思考",
+    "/permissions   查看当前会话工具/路径权限",
+    "/permissions export <file>  导出权限策略",
+    "/permissions import <file> [merge|replace]  导入权限策略",
+    "/permissions remove <allow|deny> <tool> <path>  删除权限规则",
+    "/permissions check <tool> <path>  预览完整裁决链",
+    "/permissions replay [file]  回放权限审计",
+    "/allow <tool> <path>  允许工具访问路径（本会话）",
+    "/deny <tool> <path>   拒绝工具访问路径（本会话）",
+    "/clear-permissions    清除本会话权限",
+    "/quit          退出",
+)
+
+
+@dataclass
+class ChatSessionState:
+    """Mutable per-session state (chain + history + HITL flag)."""
+
+    chained_mission_id: str | None = None
+    session_missions: list[str] = field(default_factory=list)
+    session_records: list[dict[str, Any]] = field(default_factory=list)
+    compact_context: str | None = None
+    compact_manifest: dict[str, Any] | None = None
+    always_allow: bool = False
+    session_allow_writes: bool = False
+    allowed_tools: set[str] = field(default_factory=set)
+    allowed_paths: set[tuple[str, str]] = field(default_factory=set)
+    denied_paths: set[tuple[str, str]] = field(default_factory=set)
+    last_thinking: str = ""
+    conversation: list[dict[str, str]] = field(default_factory=list)
+
+
+def _load_permission_policy(directory: Path, session: ChatSessionState) -> None:
+    path = directory / "permissions.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(payload, dict):
+        return
+    session.allowed_tools.update(str(item) for item in payload.get("allowedTools", []) if str(item).strip())
+    for key, target in (("allowedPaths", session.allowed_paths), ("deniedPaths", session.denied_paths)):
+        for item in payload.get(key, []):
+            if isinstance(item, list) and len(item) == 2:
+                target.add((str(item[0]), str(item[1])))
+
+
+def _save_permission_policy(directory: Path, session: ChatSessionState) -> None:
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "allowedTools": sorted(session.allowed_tools),
+            "allowedPaths": [list(item) for item in sorted(session.allowed_paths)],
+            "deniedPaths": [list(item) for item in sorted(session.denied_paths)],
+        }
+        tmp = directory / "permissions.json.tmp"
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(directory / "permissions.json")
+    except OSError:
+        # Read-only or synthetic test workspaces keep the in-memory policy.
+        return
+
+
+CONVERSATION_FILE_NAME = "conversation.jsonl"
+CONVERSATION_SCHEMA_VERSION = 1
+_NO_RESUME_MARKER = object()
+
+
+def _conversation_path(directory: Path) -> Path:
+    return directory / CONVERSATION_FILE_NAME
+
+
+def _load_conversation(directory: Path, session: ChatSessionState) -> None:
+    """Load durable conversation messages, tolerating truncated JSONL tails."""
+    from app.services.context_store import ContextStore
+    store = ContextStore(directory)
+    path = store.path
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    loaded: list[dict[str, str]] = []
+    latest_resume: str | None | object = _NO_RESUME_MARKER
+    latest_mission_id = ""
+    for line in lines[-200:]:
+        try:
+            item = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(item, dict):
+            continue
+        if item.get("recordType") == "session":
+            event = str(item.get("event") or "")
+            if event == "resume.set" and str(item.get("missionId") or "").strip():
+                latest_resume = str(item["missionId"]).strip()
+            elif event == "resume.clear":
+                latest_resume = None
+            continue
+        if item.get("role") not in {"user", "assistant"}:
+            continue
+        content = str(item.get("content") or "").strip()
+        if content:
+            loaded.append({"role": str(item["role"]), "content": content})
+            mission_id = str(item.get("missionId") or "").strip()
+            if mission_id:
+                latest_mission_id = mission_id
+    session.conversation = store.messages(limit=40) or loaded[-40:]
+    # A session event is authoritative when present. For files written by
+    # older versions, continue the most recent Mission chain inferred from
+    # message metadata; direct-only conversations remain unchained.
+    if latest_resume is not _NO_RESUME_MARKER:
+        session.chained_mission_id = latest_resume if isinstance(latest_resume, str) else None
+    elif latest_mission_id:
+        session.chained_mission_id = latest_mission_id
+
+
+def _append_conversation(
+    directory: Path,
+    session: ChatSessionState,
+    *,
+    role: str,
+    content: str,
+    source: str,
+    mission_id: str = "",
+) -> None:
+    content = str(content or "").strip()
+    if role not in {"user", "assistant"} or not content:
+        return
+    item = {
+        "schemaVersion": CONVERSATION_SCHEMA_VERSION,
+        "role": role,
+        "content": content,
+        "source": source,
+        "timestamp": datetime.now().astimezone().isoformat(),
+    }
+    if mission_id:
+        item["missionId"] = mission_id
+    try:
+        from app.services.context_store import ContextStore
+        ContextStore(directory).append(role, content, source=source, mission_id=mission_id)
+    except OSError:
+        return
+    session.conversation.append({"role": role, "content": content})
+    del session.conversation[:-40]
+
+
+def _append_session_event(
+    directory: Path,
+    *,
+    event: str,
+    mission_id: str = "",
+) -> None:
+    """Persist non-message session state in the shared conversation log."""
+    item: dict[str, Any] = {
+        "schemaVersion": CONVERSATION_SCHEMA_VERSION,
+        "recordType": "session",
+        "event": event,
+        "timestamp": datetime.now().astimezone().isoformat(),
+    }
+    if mission_id:
+        item["missionId"] = mission_id
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with _conversation_path(directory).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+    except OSError:
+        # Session state remains usable in memory when the workspace is read-only.
+        return
+
+
+def _clear_conversation(directory: Path, session: ChatSessionState) -> None:
+    session.conversation.clear()
+    try:
+        _conversation_path(directory).unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def _conversation_context(session: ChatSessionState) -> str:
+    if not session.conversation:
+        return ""
+    from app.services.context_compiler import ContextCompiler
+    return ContextCompiler(Path(".agenthub")).compile(conversation="\n".join(
+        f"{item['role']}: {item['content']}" for item in session.conversation[-8:]
+    )).render()
+
+
+def _permission_payload(session: ChatSessionState) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "version": 1,
+        "allowedTools": sorted(session.allowed_tools),
+        "allowedPaths": [list(item) for item in sorted(session.allowed_paths)],
+        "deniedPaths": [list(item) for item in sorted(session.denied_paths)],
+    }
+
+
+def _load_permission_payload(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return None
+    if payload.get("schemaVersion", 1) != 1:
+        return None
+    if not all(isinstance(payload.get(key, []), list) for key in ("allowedTools", "allowedPaths", "deniedPaths")):
+        return None
+    rules = payload.get("allowedPaths", []) + payload.get("deniedPaths", [])
+    if any(not isinstance(item, list) or len(item) != 2 or not all(isinstance(value, str) for value in item) for item in rules):
+        return None
+    if any(not isinstance(item, str) for item in payload.get("allowedTools", [])):
+        return None
+    return payload
+
+
+def _apply_permission_payload(session: ChatSessionState, payload: dict[str, Any], *, replace: bool) -> None:
+    if replace:
+        session.allowed_tools.clear()
+        session.allowed_paths.clear()
+        session.denied_paths.clear()
+    session.allowed_tools.update(item for item in payload.get("allowedTools", []) if item.strip())
+    session.allowed_paths.update((item[0], item[1]) for item in payload.get("allowedPaths", []) if item[0].strip() and item[1].strip())
+    session.denied_paths.update((item[0], item[1]) for item in payload.get("deniedPaths", []) if item[0].strip() and item[1].strip())
+
+
+def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
+    if not missions:
+        emit("  （暂无历史任务）")
+        return
+    emit(f"  {'MISSION ID':36} {'STATUS':12} OBJECTIVE")
+    for mission in missions:
+        mission_id = str(mission.get("id") or "")[:34]
+        status = str(mission.get("status") or "")[:12]
+        lines = str(mission.get("objective") or "").splitlines()
+        summary = (lines[0] if lines else "")[:52]
+        emit(f"  {mission_id:36} {status:12} {summary}")
+
+
+def _print_result_compact(result: Any, emit: Callable[..., None]) -> None:
+    extra = ""
+    if getattr(result, "cancelled", False):
+        extra = " (cancelled)"
+    emit(
+        f"  → {result.mission_id}  {result.status}{extra}  (exit {result.exit_code}, "
+        f"{result.wall_seconds:.1f}s, artifacts {len(result.artifacts)})"
+    )
+    tokens = int(getattr(result, "total_tokens", 0) or 0)
+    if tokens:
+        emit(f"  tokens: {tokens} (prompt {int(getattr(result, 'prompt_tokens', 0) or 0)} / completion {int(getattr(result, 'completion_tokens', 0) or 0)})")
+    if result.workspace_files:
+        preview = ", ".join(result.workspace_files[:6])
+        more = (
+            f" +{len(result.workspace_files) - 6} more"
+            if len(result.workspace_files) > 6
+            else ""
+        )
+        emit(f"  files: {preview}{more}")
+
+
+def _record_session_mission(session: ChatSessionState, result: Any) -> None:
+    """Keep a replayable digest of this turn's mission (I-6c /replay)."""
+    session.session_records.append(
+        {
+            "mission_id": result.mission_id,
+            "objective_first_line": (
+                (result.objective or "").strip().splitlines() or [""]  # type: ignore[attr-defined]
+            )[0][:120],
+            "status": result.status,
+            "wall_seconds": result.wall_seconds,
+            "artifacts": len(result.artifacts),
+            "workspace_files": list(result.workspace_files),
+            "mission_changed_files": list(getattr(result, "mission_changed_files", []) or []),
+            "baseline_commit": getattr(result, "baseline_commit", None),
+            "baseline_changed_files": list(getattr(result, "baseline_changed_files", []) or []),
+            "attempt_snapshot_id": getattr(result, "attempt_snapshot_id", None),
+            "prompt_tokens": int(getattr(result, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(result, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(result, "total_tokens", 0) or 0),
+            "cancelled": bool(getattr(result, "cancelled", False)),
+        }
+    )
+
+
+def _compact_session_context(
+    *,
+    settings: CliModelSettings,
+    workspace_root: Path,
+    directory: Path,
+    session: ChatSessionState,
+    emit: Callable[..., None],
+) -> None:
+    """Fold the session chain into one compact context document."""
+    if not session.session_missions:
+        emit("本会话尚无任务，无需压缩（先运行一个任务）")
+        return
+    try:
+        with MissionControlProcess(
+            state_dir=directory,
+            workspace_root=workspace_root,
+            model=settings,
+        ) as process:
+            with MissionControlClient(process.base_url) as client:
+                client.login()
+                document = build_compact_context(
+                    client, list(session.session_missions)
+                )
+                from app.cli.runtime import build_compact_manifest
+                manifest = build_compact_manifest(client, list(session.session_missions))
+    except (RuntimeError, OSError) as exc:
+        emit(f"error: {exc}")
+        return
+    if not document.strip():
+        emit("压缩结果为空（本地任务记录不可读），链式上下文保持不变")
+        return
+    session.compact_context = document
+    session.compact_manifest = manifest
+    emit(
+        f"已压缩 {len(session.session_missions)} 个任务为一份上下文文档"
+        f"（{len(document)} 字符）；下一轮将注入该摘要而非全链。"
+        "继续运行新任务后链会自动恢复逐轮链入。"
+    )
+
+
+def _replay_session(session: ChatSessionState, emit: Callable[..., None]) -> None:
+    """Replay every mission of this session from recorded digests."""
+    if not session.session_records:
+        emit("本会话尚无任务（回放只覆盖本会话内运行过的任务）")
+        return
+    emit(f"本会话共 {len(session.session_records)} 个任务：")
+    for index, record in enumerate(session.session_records, start=1):
+        emit(
+            f"  {index}. {record['mission_id']}  {record['status']}  "
+            f"{record['wall_seconds']:.1f}s  artifacts {record['artifacts']}"
+        )
+        emit(f"     目标: {record['objective_first_line'] or '（空）'}")
+        if record["workspace_files"]:
+            preview = ", ".join(record["workspace_files"][:6])
+            more = (
+                f" +{len(record['workspace_files']) - 6} more"
+                if len(record["workspace_files"]) > 6
+                else ""
+            )
+            emit(f"     文件: {preview}{more}")
+    if session.compact_context:
+        emit("（当前处于 /compact 压缩上下文模式）")
+
+
+def _run_slash_command(
+    command: str,
+    *,
+    settings: CliModelSettings,
+    workspace_root: Path,
+    directory: Path,
+    session: ChatSessionState,
+    emit: Callable[..., None],
+    read_line: Callable[[str], str] | None = None,
+) -> bool | str:
+    """Handle one slash command. True=continue, 'quit'=exit, False=unknown."""
+    parts = command.split()
+    name = parts[0].lower()
+    args = parts[1:]
+
+    if name in ("/quit", "/exit", "/q"):
+        return "quit"
+    if name == "/help":
+        for line in _HELP_LINES:
+            emit(line)
+        return True
+    if name == "/status":
+        emit(
+            f"model: {settings.provider} / {settings.model}\n"
+            f"workspace: {workspace_root}\n"
+            f"state: {directory}\n"
+            f"chained mission: {session.chained_mission_id or '（无）'}\n"
+            f"session missions: {len(session.session_missions)}"
+            f"\nallowed tools: {', '.join(sorted(session.allowed_tools)) or '（无）'}"
+        )
+        return True
+    if name in ("/new", "/clear", "/unresume"):
+        session.chained_mission_id = None
+        if name == "/unresume":
+            from app.services.context_store import ContextStore
+            ContextStore(directory).clear_resume()
+        if name in ("/new", "/clear"):
+            session.compact_context = None
+            session.compact_manifest = None
+            _clear_conversation(directory, session)
+        emit(
+            "已清除链式上下文，下一轮从零开始"
+            if name in ("/new", "/clear")
+            else "已清除链式上下文"
+        )
+        return True
+    if name == "/cost":
+        if not session.session_records:
+            emit("本会话尚未运行任务（/cost 汇总本会话任务数/产物/耗时）")
+            return True
+        if ui is not None:
+            emit("")  # spacing before the rich render
+            # Reuse the shared cost renderer even in plain mode: it
+            # degrades to a single muted text line.
+            console = ui.make_console()
+            console.print(ui.format_cost_line(session.session_records))
+        else:
+            missions = len(session.session_records)
+            artifacts = sum(
+                int(r.get("artifacts") or 0) for r in session.session_records
+            )
+            seconds = sum(
+                float(r.get("wall_seconds") or 0.0)
+                for r in session.session_records
+            )
+            emit(f"  ⌁ {missions} missions · {artifacts} artifacts · {seconds:.1f}s")
+        return True
+    if name in {"/thinking", "/think"}:
+        if not session.last_thinking:
+            emit("最近一轮没有可展开的 thinking 内容")
+        elif ui is not None:
+            from rich.rule import Rule
+            from rich.console import Group
+            from rich.text import Text
+            ui.make_console().print(Group(Rule("thinking", style=ui.STYLE_ACCENT), Text("│ " + session.last_thinking, style=ui.STYLE_MUTED)))
+        else:
+            emit(session.last_thinking)
+        return True
+    if name == "/context":
+        from app.services.context_compiler import ContextCompiler
+        manifest = ContextCompiler(directory).compile(conversation=_conversation_context(session), compact=session.compact_context or "", mission=session.chained_mission_id or "")
+        if args and args[0].lower() == "explain":
+            emit(json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2))
+            return True
+        tokens = sum(int(r.get("total_tokens") or 0) for r in session.session_records)
+        emit(
+            f"session missions: {len(session.session_missions)}\n"
+            f"conversation messages: {len(session.conversation)}\n"
+            f"tokens observed: {tokens:,}\n"
+            f"compact context: {'active' if session.compact_context else 'inactive'}\n"
+            f"resume mission: {session.chained_mission_id or '（无）'}\n"
+            f"persistent store: {_conversation_path(directory)}\n"
+            f"context sources: {', '.join(source.kind for source in manifest.sources) or 'none'}\n"
+            f"context chars: {manifest.estimated_chars}/{manifest.token_budget * 4}"
+        )
+        return True
+    if name == "/tools":
+        # Read from the runtime registry so this view stays aligned with the
+        # actual handlers exposed to the application.  Registration is
+        # idempotent and also makes this command useful before a mission runs.
+        try:
+            from app.services.tools import register_builtin_tools
+            from app.services.tool_registry import tool_registry
+            from app.services.tool_availability import resolve_tool_availability
+
+            register_builtin_tools()
+            subcommand = args[0].lower() if args else "available"
+            if subcommand in {"registered", "available", "denied", "explain"}:
+                if subcommand == "explain":
+                    if len(args) < 2:
+                        emit("用法: /tools explain <tool>")
+                        return True
+                    rows = resolve_tool_availability(workspace_root, names=[args[1]])
+                    if not rows:
+                        emit(f"未找到工具: {args[1]}")
+                        return True
+                    row = rows[0]
+                    emit(json.dumps(row.to_dict(), ensure_ascii=False, indent=2))
+                    return True
+                rows = resolve_tool_availability(workspace_root)
+                if subcommand == "registered":
+                    rows = [row for row in rows if row.registered]
+                elif subcommand == "available":
+                    rows = [row for row in rows if row.executable]
+                else:
+                    rows = [row for row in rows if not row.executable]
+                emit(f"工具 {subcommand}（{len(rows)} 个）")
+                for row in rows:
+                    emit(f"  {row.name:<24} executable={row.executable} runner={row.runner_exposed} permission={row.permission} contract={row.contract_capability} server={row.server_deny}")
+                return True
+            category = subcommand
+            tools = tool_registry.list_all()
+            if category:
+                tools = [item for item in tools if item.category.lower() == category]
+            if not tools:
+                emit(
+                    f"未找到工具{f'（分类: {category}）' if category else ''}。"
+                    "使用 /tools 查看全部工具。"
+                )
+                return True
+            title = "当前可用工具" + (f"（分类: {category}）" if category else "")
+            emit(title + f"（{len(tools)} 个）")
+            for item in sorted(tools, key=lambda value: (value.category, value.name)):
+                emit(f"  {item.name:<24} [{item.category}/{item.risk_level}] {item.description}")
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not break REPL
+            emit(f"读取工具清单失败: {type(exc).__name__}: {exc}")
+        return True
+    if name == "/permissions":
+        if args and args[0].lower() in {"export", "import"}:
+            if len(args) < 2:
+                emit("用法: /permissions export <file> 或 /permissions import <file> [merge|replace]")
+                return True
+            target = Path(args[1]).expanduser()
+            if args[0].lower() == "export":
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = target.with_name(target.name + ".tmp")
+                    tmp.write_text(json.dumps(_permission_payload(session), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    tmp.replace(target)
+                    emit(f"已导出权限策略: {target}")
+                except OSError as exc:
+                    emit(f"导出失败: {exc}")
+                return True
+            payload = _load_permission_payload(target)
+            if payload is None:
+                emit("导入失败: 权限策略格式无效或文件不可读")
+                return True
+            mode = args[2].lower() if len(args) > 2 else "merge"
+            if mode not in {"merge", "replace"}:
+                emit("用法: /permissions import <file> [merge|replace]")
+                return True
+            previous = (
+                set(session.allowed_tools),
+                set(session.allowed_paths),
+                set(session.denied_paths),
+            )
+            _apply_permission_payload(session, payload, replace=mode == "replace")
+            try:
+                _save_permission_policy(directory, session)
+            except Exception as exc:  # noqa: BLE001 - restore in-memory state
+                session.allowed_tools, session.allowed_paths, session.denied_paths = (
+                    set(previous[0]), set(previous[1]), set(previous[2])
+                )
+                emit(f"导入失败，策略已回滚: {exc}")
+                return True
+            emit(f"已导入权限策略 ({mode})")
+            return True
+        if args and args[0].lower() == "remove":
+            if len(args) < 4 or args[1].lower() not in {"allow", "deny"}:
+                emit("用法: /permissions remove <allow|deny> <tool> <path>")
+                return True
+            rule = (args[2], " ".join(args[3:]))
+            target = session.allowed_paths if args[1].lower() == "allow" else session.denied_paths
+            if rule in target:
+                target.remove(rule)
+                _save_permission_policy(directory, session)
+                emit(f"已删除规则: {args[1]} {rule[0]}:{rule[1]}")
+            else:
+                emit("未找到该权限规则")
+            return True
+        if args and args[0].lower() in {"check", "explain"}:
+            if len(args) < 3:
+                emit("用法: /permissions check <tool> <path>")
+                return True
+            tool, path = args[1], " ".join(args[2:])
+            denied = next((pattern for item_tool, pattern in session.denied_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
+            allowed = next((pattern for item_tool, pattern in session.allowed_paths if item_tool == tool and fnmatch.fnmatch(path, pattern)), None)
+            local = "deny" if denied else "allow" if allowed or tool in session.allowed_tools else "not_applicable"
+            legacy = (f"来源: cli-session deny\n匹配: deny {tool}:{denied}（服务端仍需再次校验）" if denied else
+                      f"来源: cli-session allow\n匹配: allow {tool}:{allowed}（服务端仍需再次校验）" if allowed else
+                      f"来源: cli-session allow-tool\n匹配: allow-tool {tool}" if tool in session.allowed_tools else
+                      "来源: none\n匹配: none（需要 Decision 确认）")
+            emit("裁决链（高优先级到低优先级）:\n"
+                 "  server_deny: unknown（需 Mission Control 校验）\n"
+                 "  contract_capability: unknown（需 Contract 能力查询）\n"
+                 "  server_policy: unknown（需服务端策略查询）\n"
+                 f"  cli_session: {local}"
+                 + (f"（匹配 {denied or allowed}）" if denied or allowed else "")
+                 + "\n  user_confirmation: pending（服务端未知时默认拒绝）\n" + legacy)
+            return True
+        if args and args[0].lower() == "replay":
+            target = Path(args[1]).expanduser() if len(args) > 1 else directory / "permission-audit.jsonl"
+            if not target.is_file():
+                emit(f"权限审计文件不存在: {target}")
+                return True
+            try:
+                lines = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines() if line.strip()]
+                emit("权限审计回放:")
+                for item in lines:
+                    emit(f"  {item.get('timestamp', '?')} · {item.get('tool', '?')}:{item.get('path', '?')} · {item.get('decision', '?')} · {item.get('source', '?')}")
+            except (OSError, ValueError, TypeError):
+                emit("权限审计回放失败：文件格式无效")
+            return True
+        emit(
+            f"allowed tools (cli-session): {', '.join(sorted(session.allowed_tools)) or '（无）'}\n"
+            f"allowed paths (cli-session): {', '.join(f'{t}:{p}' for t,p in sorted(session.allowed_paths)) or '（无）'}\n"
+            f"denied paths (cli-session): {', '.join(f'{t}:{p}' for t,p in sorted(session.denied_paths)) or '（无）'}\n"
+            "note: server policy and Contract capabilities have higher priority"
+        )
+        return True
+    if name in ("/allow", "/deny"):
+        if len(args) < 2:
+            emit(f"用法: {name} <tool> <path>")
+            return True
+        rule = (args[0], " ".join(args[1:]))
+        (session.allowed_paths if name == "/allow" else session.denied_paths).add(rule)
+        _save_permission_policy(directory, session)
+        emit(f"已记录 {rule[0]}:{rule[1]}")
+        return True
+    if name == "/clear-permissions":
+        session.allowed_tools.clear(); session.allowed_paths.clear(); session.denied_paths.clear()
+        _save_permission_policy(directory, session)
+        emit("已清除本会话权限")
+        return True
+    if name in ("/diff", "/changes", "/patch"):
+        if ui is None:
+            emit("当前终端不支持 Git 变更渲染")
+            return True
+        if name == "/changes":
+            files = ui.git_changed_files(workspace_root)
+            emit("  （暂无变更）" if not files else "\n".join(f"  {path}" for path in files))
+            return True
+        diff = ui.git_diff_text(workspace_root)
+        if not diff:
+            emit("  （工作区干净）")
+            return True
+        if name == "/patch":
+            emit(diff)
+        elif ui is not None:
+            ui.make_console().print(ui.render_diff_panel(workspace_root))
+        return True
+    if name == "/undo":
+        preview_only = bool(args and args[0].lower() in {"preview", "--preview"})
+        latest_snapshot_id = str((session.session_records[-1] if session.session_records else {}).get("attempt_snapshot_id") or "")
+        if latest_snapshot_id:
+            from app.cli.snapshots import load_snapshot
+            snapshot = load_snapshot(workspace_root, directory / "attempt-snapshots", latest_snapshot_id)
+            if snapshot is not None:
+                preview_ok, preview_conflicts = snapshot.preview_restore()
+                if not preview_ok:
+                    emit("撤销预检失败，未修改任何文件。冲突: " + ", ".join(preview_conflicts))
+                    return True
+                changed = sorted(set(snapshot.baseline) | set(snapshot.post or {}))
+                emit(f"撤销预览: attempt {latest_snapshot_id} 将恢复 {len(changed)} 个路径")
+                manifest = snapshot.manifest_path
+                if manifest.is_file():
+                    try:
+                        details = json.loads(manifest.read_text(encoding="utf-8"))
+                        hashes = details.get("hashes", {})
+                        sources = details.get("fileSources", {})
+                        for path in changed:
+                            digest = hashes.get(path, {})
+                            source = sources.get(path, {})
+                            before = str(digest.get("before") or "missing")[:12]
+                            after = str(digest.get("after") or "missing")[:12]
+                            units = ",".join(source.get("workUnitIds") or []) or "unknown"
+                            artifacts = ",".join(source.get("artifactIds") or []) or "none"
+                            emit(f"  {path}: {after} -> {before} · workUnits={units} · artifacts={artifacts}")
+                    except (OSError, ValueError, TypeError):
+                        emit("  来源 manifest 不可读，仍保持 fail-closed 预检")
+                if preview_only:
+                    emit("撤销预览完成；未修改任何文件")
+                    return True
+                answer = read_line("将恢复最近一次 attempt 的文件，继续？ [y/N] ").strip().lower() if read_line else ""
+                if answer not in {"y", "yes"}:
+                    emit("已取消撤销")
+                    return True
+                ok, conflicts = snapshot.restore()
+                emit("已恢复最近一次 attempt" if ok else f"撤销被阻止，存在冲突: {', '.join(conflicts)}")
+                return True
+        latest = session.session_records[-1] if session.session_records else {}
+        tracked = list(latest.get("mission_changed_files") or []) if latest else []
+        if not tracked and ui is not None:
+            tracked = ui.git_tracked_changed_files(workspace_root)
+        if not tracked:
+            emit("  （没有可撤销的已跟踪变更；未跟踪文件会保留）")
+            return True
+        if read_line is None:
+            emit("  /undo 需要交互确认；未执行")
+            return True
+        try:
+            answer = read_line(
+                f"将撤销 {len(tracked)} 个已跟踪文件变更，继续？ [y/N] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in {"y", "yes"}:
+            emit("已取消撤销")
+            return True
+        if ui.git_restore_paths(workspace_root, tracked):
+            emit("已撤销已跟踪文件变更（未跟踪文件未删除）")
+        else:
+            emit("error: Git restore 执行失败")
+        return True
+    if name == "/compact":
+        _compact_session_context(
+            settings=settings,
+            workspace_root=workspace_root,
+            directory=directory,
+            session=session,
+            emit=emit,
+        )
+        return True
+    if name == "/replay":
+        _replay_session(session, emit)
+        return True
+    if name == "/resume":
+        if not args:
+            emit("用法: /resume <mission_id>")
+            return True
+        session.chained_mission_id = args[0].strip()
+        from app.services.context_store import ContextStore
+        ContextStore(directory).set_resume(session.chained_mission_id)
+        emit(f"下一轮将链入任务 {session.chained_mission_id} 的上下文")
+        return True
+    if name == "/missions":
+        if not (directory / "db" / "agenthub.db").is_file():
+            emit("暂无本地任务历史（先运行一个任务）")
+            return True
+        try:
+            missions = list_recent_missions(
+                state_dir=directory,
+                workspace_root=workspace_root,
+                model=settings,
+                limit=20,
+            )
+        except (RuntimeError, OSError) as exc:
+            emit(f"error: {exc}")
+            return True
+        _print_missions(missions, emit)
+        return True
+        return False, ""
+
+
+def chat_session(
+    *,
+    cwd: Path,
+    provider: str | None,
+    model: str | None,
+    base_url: str | None,
+    workspace: Path | None,
+    mission_timeout: float = DEFAULT_MISSION_TIMEOUT,
+    max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
+    runner_timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS,
+    no_web_search: bool = False,
+    input_fn: Callable[[str], str] | None = None,
+    output_fn: Callable[..., None] | None = None,
+) -> int:
+    """Run the interactive session. Returns a CLI exit code.
+
+    ``input_fn``/``output_fn`` exist for tests; production uses the
+    built-in input()/print().
+    """
+    read_line = input_fn or input
+    emit = output_fn or print
+
+    # Rich upgrade only when interactive on a TTY (tests inject
+    # output_fn and keep the plain-string contract).
+    use_rich = (
+        ui is not None
+        and output_fn is None
+        and sys.stdout.isatty()
+    )
+    console = None
+    if use_rich:
+        console = ui.make_console()
+
+    try:
+        config = load_config(cwd, strict=True)
+    except ConfigError as exc:
+        emit(f"error [config]: {exc}")
+        return EXIT_INFRASTRUCTURE
+    settings = resolve_model_settings(
+        provider=provider, model=model, base_url=base_url, config=config
+    )
+    workspace_root = workspace or cwd
+    directory = state_dir(cwd)
+    directory.mkdir(parents=True, exist_ok=True)
+    instruction_paths = collect_agents_md_layers(workspace_root, cwd)
+    project_instructions = merge_project_instructions(instruction_paths)
+    session = ChatSessionState()
+    _load_permission_policy(directory, session)
+    _load_conversation(directory, session)
+
+    if use_rich and console is not None:
+        # Claude-Code-style header: cwd + git branch + model channel.
+        console.print(
+            ui.render_header(cwd, settings.provider, settings.model, workspace_root)
+        )
+        _print_provider_health(directory, settings.provider, settings.model, emit=console.print)
+        if instruction_paths:
+            console.print(
+                "agents.md: "
+                + ", ".join(
+                    str(p.parent.name) or "/" for p in instruction_paths
+                ),
+                style=ui.STYLE_MUTED,
+            )
+        console.print(
+            "输入任务目标运行；/help 查看命令；/quit 退出。",
+            style=ui.STYLE_MUTED,
+        )
+        console.print()
+    else:
+        for line in _BANNER_LINES:
+            emit(line)
+        emit(
+            f"model: {settings.provider} / {settings.model}   "
+            f"workspace: {workspace_root}"
+        )
+        _print_provider_health(directory, settings.provider, settings.model, emit=emit)
+        if instruction_paths:
+            emit(
+                "agents.md: "
+                + ", ".join(str(p.parent.name) or "/" for p in instruction_paths)
+            )
+        emit()
+
+    while True:
+        try:
+            raw = read_line(_PROMPT)
+        except (EOFError, KeyboardInterrupt):
+            emit()
+            emit("bye")
+            return 0
+        # Windows redirected stdin may include a UTF-8 BOM on the first line.
+        objective = (raw or "").strip().lstrip("\ufeff")
+        if not objective:
+            continue
+
+        if objective.startswith("/"):
+            handled = _run_slash_command(
+                objective,
+                settings=settings,
+                workspace_root=workspace_root,
+                directory=directory,
+                session=session,
+                emit=emit,
+                read_line=read_line,
+            )
+            if handled is True:
+                continue
+            if handled == "quit":
+                emit("bye")
+                return 0
+            emit(f"未知命令: {objective}（/help 查看可用命令）")
+            continue
+
+        compact_context = session.compact_context
+        # Objective text only controls diagnostic snapshot/policy defaults; it
+        # is never used as authorization. Mission Control Decisions remain the
+        # sole side-effect gate in `_on_decision`.
+        is_side_effect_task = _likely_side_effect_objective(objective)
+        if output_fn is None and not is_side_effect_task and _is_date_question(objective):
+            answer = _run_local_utility("current_date")
+            if console is not None:
+                console.print(answer, style=ui.STYLE_PRIMARY)
+            else:
+                emit(answer)
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=answer, source="direct")
+            emit()
+            continue
+        if output_fn is None and not is_side_effect_task and _is_time_question(objective):
+            answer = _run_local_utility("current_time")
+            if console is not None:
+                console.print(answer, style=ui.STYLE_PRIMARY)
+            else:
+                emit(answer)
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=answer, source="direct")
+            emit()
+            continue
+        if output_fn is None and not is_side_effect_task and _is_weather_question(objective):
+            location = _weather_location(objective)
+            if console is not None and ui is not None:
+                console.print(ui.render_tool_started("weather", location or "location required"))
+            answer = _run_local_utility("weather", location=location)
+            if console is not None:
+                if ui is not None:
+                    console.print(ui.render_tool_completed("Weather lookup complete"))
+                console.print(answer, style=ui.STYLE_PRIMARY)
+            else:
+                emit(answer)
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=answer, source="direct")
+            emit()
+            continue
+        if output_fn is None and not is_side_effect_task and _is_workspace_query(objective):
+            if console is not None and ui is not None:
+                console.print(ui.render_tool_started("file_walker", "workspace"))
+                console.print(ui.render_workspace_classification(workspace_root))
+                console.print(ui.render_tool_completed("Workspace classification complete"))
+            else:
+                emit(f"workspace: {workspace_root}")
+                if ui is not None:
+                    report = ui.classify_workspace(workspace_root)
+                    for category, count in report["categories"].items():
+                        emit(f"  {category}: {count}")
+            report_text = f"已读取工作区并完成文件分类：{workspace_root}"
+            _append_conversation(directory, session, role="user", content=objective, source="direct")
+            _append_conversation(directory, session, role="assistant", content=report_text, source="direct")
+            emit()
+            continue
+        if not is_side_effect_task and _is_project_identity_query(objective):
+            from app.services.project_manifest import ProjectManifest
+
+            manifest = ProjectManifest.discover(
+                workspace_root, instruction_files=instruction_paths
+            )
+            data = manifest.to_dict()
+            if console is not None and ui is not None:
+                console.print(f"项目: {data['name']}", style=ui.STYLE_PRIMARY)
+                console.print(f"工作区: {data['workspaceRoot']}", style=ui.STYLE_MUTED)
+                console.print(f"Git: {data['gitBranch'] or '无分支'} · {data['gitRemote'] or '无 origin'}", style=ui.STYLE_MUTED)
+                console.print(f"技术栈: {', '.join(data['techStack']) or '未识别'}", style=ui.STYLE_PRIMARY)
+                if data["readmeSummary"]:
+                    console.print(f"说明: {data['readmeSummary']}", style=ui.STYLE_PRIMARY)
+            else:
+                emit(f"项目: {data['name']}")
+                emit(f"工作区: {data['workspaceRoot']}")
+                emit(f"Git: {data['gitBranch'] or '无分支'} · {data['gitRemote'] or '无 origin'}")
+                emit(f"技术栈: {', '.join(data['techStack']) or '未识别'}")
+                if data["readmeSummary"]:
+                    emit(f"说明: {data['readmeSummary']}")
+            report_text = f"项目身份：{data['name']}（{data['workspaceRoot']}）"
+            _append_conversation(directory, session, role="user", content=objective, source="project_inspect")
+            _append_conversation(directory, session, role="assistant", content=report_text, source="project_inspect")
+            emit()
+            continue
+        if output_fn is None and _is_conversational_objective(objective):
+            ok, answer = _direct_greeting(
+                settings,
+                objective,
+                emit,
+                console,
+                session.conversation,
+                workspace_root,
+                instruction_paths,
+            )
+            if ok:
+                _append_conversation(directory, session, role="user", content=objective, source="direct")
+                _append_conversation(directory, session, role="assistant", content=answer, source="direct")
+                emit()
+                continue
+        # P0-4: cancel signal — either set externally or via Esc/KbdInt
+        cancel_event = threading.Event()
+        attempt_allow_writes = False
+
+        def _on_decision(decision: dict[str, Any]) -> bool:
+            """P0-3: ask the user whether to allow this tool call."""
+            nonlocal attempt_allow_writes
+            if not (use_rich and console is not None and sys.stdin.isatty()):
+                # CI, redirected stdin, and JSON/headless paths fail closed.
+                return False
+            if session.always_allow:
+                return True
+            arguments = decision.get("arguments") if isinstance(decision.get("arguments"), dict) else {}
+            tool_name = str(decision.get("tool_name") or decision.get("toolName") or decision.get("tool") or arguments.get("tool_name") or "?")
+            write_tool = _is_local_write_tool(tool_name, arguments)
+            if write_tool and (attempt_allow_writes or session.session_allow_writes):
+                return True
+            if tool_name in session.allowed_tools:
+                return True
+            path = str(decision.get("path") or decision.get("filePath") or decision.get("file_path") or arguments.get("path") or arguments.get("file_path") or "")
+            if any(t == tool_name and fnmatch.fnmatch(path, pattern) for t, pattern in session.denied_paths):
+                return False
+            if any(t == tool_name and fnmatch.fnmatch(path, pattern) for t, pattern in session.allowed_paths):
+                return True
+            reason = str(decision.get("reason") or decision.get("riskSummary") or "")
+            if not reason:
+                reason = _tool_risk_summary(tool_name, arguments)
+            request = ui.ToolApprovalRequest(
+                tool_name=tool_name,
+                path=path,
+                expected_sha256=str(decision.get("expected_sha256") or decision.get("expectedSha256") or arguments.get("expected_sha256") or arguments.get("expectedSha256") or ""),
+                action=str(decision.get("action") or arguments.get("action") or ""),
+                command=str(decision.get("command") or arguments.get("command") or ""),
+                url=str(decision.get("url") or arguments.get("url") or ""),
+                diff_preview=str(decision.get("diff_preview") or decision.get("diffPreview") or arguments.get("diff_preview") or arguments.get("diffPreview") or _decision_diff_preview(decision, workspace_root)),
+                risk=reason,
+            )
+            choice = ui.confirm_tool_approval(console, read_line, request, is_tty=True)
+            if choice == "session":
+                session.session_allow_writes = True
+                return True
+            if choice == "attempt":
+                attempt_allow_writes = True
+                return True
+            if choice == "once":
+                return True
+            if choice == "edit":
+                # Editing is intentionally fail-closed until a typed command
+                # editor is available; no original command is executed.
+                return False
+            if choice == "always":
+                session.allowed_tools.add(tool_name)
+                return True
+            return False
+
+        status_cb: Callable[[str], None]
+        runner_ctx: Any = None
+        if use_rich and console is not None:
+            runner_ctx = ui.MissionRunner(
+                console, f"running · {settings.provider}/{settings.model}"
+            )
+            runner_ctx.__enter__()
+            status_cb = runner_ctx.on_status
+            text_cb = runner_ctx.on_text
+        else:
+            emit(f"… 运行任务（{settings.provider}/{settings.model}）")
+            status_cb = lambda status: emit(f"  [status] {status}")  # noqa: E731
+        thinking_filter = ui.ThinkingFilter() if ui is not None else None
+        snapshot_text_seen = ""
+        def text_cb(text: str) -> None:
+                if thinking_filter is not None:
+                    text = thinking_filter.feed(text)
+                    if not text:
+                        return
+                if runner_ctx is not None:
+                    # Keep all streamed text on Rich Live's console. Writing
+                    # through print() while Live is refreshing causes token
+                    # wrapping and apparent event reordering.
+                    runner_ctx.on_text(text)
+                    return
+                # Preserve injected output seams used by tests/callers that
+                # accept only one positional argument.
+                if output_fn is None:
+                    print(text, end="", flush=True)
+                else:
+                    emit(text)
+
+        def snapshot_cb(snapshot: Any) -> None:
+            nonlocal snapshot_text_seen
+            if runner_ctx is not None:
+                runner_ctx.on_snapshot(snapshot)
+                return
+            if not isinstance(snapshot, dict):
+                return
+            full_text = str(snapshot.get("assistantText") or "")
+            delta = full_text[len(snapshot_text_seen):] if full_text.startswith(snapshot_text_seen) else full_text
+            snapshot_text_seen = full_text
+            if delta:
+                text_cb(delta)
+
+        def event_cb(event: dict[str, Any]) -> None:
+            # Deprecated compatibility sink; canonical rendering uses snapshot.
+            return None
+        try:
+            with cancellation_scope(cancel_event):
+                result = execute_objective(
+                    objective=objective,
+                    workspace_root=workspace_root,
+                    state_dir=directory,
+                    model=settings,
+                    max_total_tokens=max_total_tokens,
+                    runner_timeout_seconds=runner_timeout_seconds,
+                    mission_timeout=mission_timeout,
+                    project_instructions=project_instructions,
+                    resume_mission_id=session.chained_mission_id or "",
+                    web_search=not no_web_search,
+                    context_text=compact_context or _conversation_context(session),
+                    on_status=status_cb,
+                    on_text=None,
+                    on_event=event_cb,
+                    # Keep the legacy callback populated for injected test
+                    # seams and third-party callers; Rich itself consumes
+                    # only the canonical snapshot sink above.
+                    on_view_state=(lambda _state: None),
+                    on_snapshot=snapshot_cb,
+                    on_decision_request=_on_decision,
+                    cancel_event=cancel_event,
+                    capture_attempt_snapshot=is_side_effect_task,
+                    # Policy controls capability availability; each side effect
+                    # is still gated by its concrete Decision callback above.
+                    tool_permission_mode=(
+                        None if is_side_effect_task else "suggest"
+                    ),
+                    disable_tools=False,
+                )
+            if thinking_filter is not None:
+                trailing = thinking_filter.flush()
+                if trailing:
+                    text_cb(trailing)
+                session.last_thinking = thinking_filter.thinking_text
+        except KeyboardInterrupt:
+            # P0-4 last-ditch: execute_objective should have caught and
+            # turned this into a CANCELLED result; if we're here, the
+            # process aborted further up — surface and continue.
+            if runner_ctx is not None:
+                runner_ctx.__exit__(None, None, None)
+            emit("  已取消（mission 可能还在后台运行）")
+            continue
+        except (RuntimeError, OSError) as exc:
+            if runner_ctx is not None:
+                runner_ctx.__exit__(None, None, None)
+            emit(f"  error: {exc}")
+            continue
+        if runner_ctx is not None:
+            # Include provider usage in the collapsed thinking summary when
+            # the result exposes it; finish() remains idempotent for errors.
+            runner_ctx.finish(int(getattr(result, "total_tokens", 0) or 0))
+
+        if use_rich and console is not None:
+            console.print(ui.render_result_panel(result))
+            console.print(ui.render_artifact_summary(result))
+            if is_side_effect_task:
+                diff_panel = ui.render_diff_panel(workspace_root)
+                if diff_panel is not None:
+                    console.print(diff_panel)
+            console.print(ui.format_cost_line(session.session_records))
+        else:
+            _print_result_compact(result, emit)
+        # P0-4: cancelled missions still record but don't chain
+        if getattr(result, "cancelled", False) or str(result.status).upper() == "CANCELLED":
+            session.chained_mission_id = None
+            _append_session_event(directory, event="resume.clear")
+            emit("  mission 已取消 — 不链入下一轮")
+        else:
+            session.session_missions.append(result.mission_id)
+            # Chain the finished mission so the next turn continues the
+            # story. A compacted context is one-shot: after this turn the
+            # chain (which now includes this mission) takes over again.
+            session.chained_mission_id = result.mission_id
+            session.compact_context = None
+            session.compact_manifest = None
+            _append_session_event(
+                directory,
+                event="resume.set",
+                mission_id=result.mission_id,
+            )
+        _record_session_mission(session, result)
+        _append_conversation(
+            directory,
+            session,
+            role="user",
+            content=objective,
+            source="mission",
+            mission_id=result.mission_id,
+        )
+        mission_answer = getattr(result, "assistant_text", "") or ""
+        if not mission_answer:
+            mission_answer = "任务已完成，但模型未返回可显示的正文。"
+        _append_conversation(
+            directory,
+            session,
+            role="assistant",
+            content=mission_answer,
+            source="mission",
+            mission_id=result.mission_id,
+        )
+        emit()
+
+
+def _print_provider_health(directory: Path, provider: str, model: str, *, emit: Callable[..., None]) -> None:
+    try:
+        from app.cli.provider_health import ProviderHealthRegistry
+        record = next((item for item in ProviderHealthRegistry.load(directory / "provider-health.json").snapshot() if item["provider"] == provider and item["model"] == model), None)
+        if record and record["status"] == "degraded":
+            suffix = " ALERT" if record.get("alert") else ""
+            emit(f"provider: degraded{suffix} · failures={record['failures']} · lastError={record.get('lastError') or 'unknown'}")
+    except (OSError, ValueError, TypeError):
+        return
+
+
+def run_chat_cli(args: Any) -> int:
+    """Entry from the CLI parser (see app.cli.main cmd_chat)."""
+    return chat_session(
+        cwd=Path.cwd(),
+        provider=args.provider,
+        model=args.model,
+        base_url=args.model_base_url,
+        workspace=(
+            Path(args.workspace).resolve() if args.workspace else None
+        ),
+        mission_timeout=args.mission_timeout,
+        max_total_tokens=args.max_total_tokens,
+        runner_timeout_seconds=args.runner_timeout_seconds,
+        no_web_search=args.no_web_search,
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(run_chat_cli({}))

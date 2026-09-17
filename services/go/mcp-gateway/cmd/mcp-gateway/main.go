@@ -18,28 +18,48 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	mcpauth "github.com/agenthub/mcp-gateway/internal/auth"
 	"github.com/agenthub/mcp-gateway/internal/protocol"
 	"github.com/agenthub/mcp-gateway/internal/registry"
 	"github.com/agenthub/mcp-gateway/internal/transport"
+	"github.com/agenthub/platform/shared/iam"
 )
 
 func main() {
 	// ── Configuration ────────────────────────────────────────────────
 	transportMode := getenv("MCP_TRANSPORT", "sse")
+	localMode := os.Getenv("MCP_LOCAL_MODE") == "true"
 	addr := getenv("MCP_ADDR", ":8099")
+	if localMode {
+		addr = getenv("MCP_ADDR", "127.0.0.1:8099")
+	}
 	knowledgeURL := getenv("KNOWLEDGE_URL", "http://127.0.0.1:8092")
 	gatewayURL := getenv("GATEWAY_URL", "http://127.0.0.1:8081")
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if localMode && jwtSecret == "" {
+		var err error
+		jwtSecret, err = localJWTSecret()
+		if err != nil {
+			log.Fatalf("local JWT secret: %v", err)
+		}
+	}
 
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[mcp-gateway] ")
+	if transportMode != "stdio" && jwtSecret == "" && os.Getenv("MCP_ALLOW_INSECURE_DEV_AUTH") != "true" {
+		log.Fatal("JWT_SECRET is required for HTTP transport; set MCP_ALLOW_INSECURE_DEV_AUTH=true only for local development")
+	}
 
 	// ── Initialize registry with AgentHub tools ──────────────────────
 	reg := registry.New(knowledgeURL, gatewayURL)
@@ -78,6 +98,19 @@ func main() {
 		return responses, nil
 	}
 
+	// MCP RPC authentication reuses the platform IAM verifier. The transport
+	// remains protocol-only; this callback intersects the authenticated
+	// principal's permissions with the Contract capability declaration.
+	issuer := iam.NewTokenIssuer(
+		[]byte(jwtSecret),
+		getenv("IAM_ISSUER", "iam-service"),
+		time.Hour,
+	)
+	statelessRPC := transport.NewStatelessHTTPHandlerWithAuthorizer(dispatcher, mcpauth.AuthorizeMCP)
+	rpcHandler := mcpauth.Middleware(issuer, statelessRPC, func(_ *http.Request, reason string) {
+		log.Printf("MCP authorization denied: %s", reason)
+	})
+
 	// ── Start transport ──────────────────────────────────────────────
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -86,7 +119,7 @@ func main() {
 	case "stdio":
 		runSTDIO(ctx, dispatcher)
 	default:
-		runSSE(ctx, addr, dispatcher)
+		runSSE(ctx, addr, dispatcher, rpcHandler)
 	}
 }
 
@@ -102,13 +135,15 @@ func runSTDIO(ctx context.Context, dispatcher transport.MessageHandler) {
 
 // ── SSE (HTTP) Mode ──────────────────────────────────────────────────
 
-func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandler) {
+func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandler, rpcHandler http.Handler) {
 	sseHandler := transport.NewSSEHandler(dispatcher, "/mcp")
 
 	mux := http.NewServeMux()
 	// MCP SSE endpoints
 	mux.Handle("/mcp/sse", sseHandler)
 	mux.Handle("/mcp/message", sseHandler)
+	// Stateless JSON-RPC endpoint; every request carries its own execution context.
+	mux.Handle("/mcp/rpc", rpcHandler)
 
 	// Health + info endpoints
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -122,9 +157,10 @@ func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandle
 			"version":  "1.0.0",
 			"protocol": "2024-11-05",
 			"endpoints": map[string]string{
-				"sse":         "GET /mcp/sse",
-				"message":     "POST /mcp/message",
-				"healthz":     "GET /healthz",
+				"sse":     "GET /mcp/sse",
+				"message": "POST /mcp/message",
+				"rpc":     "POST /mcp/rpc",
+				"healthz": "GET /healthz",
 			},
 			"sessions": sseHandler.SessionCount(),
 		})
@@ -158,12 +194,39 @@ func runSSE(ctx context.Context, addr string, dispatcher transport.MessageHandle
 	log.Printf("MCP Gateway (SSE mode) listening on %s", addr)
 	log.Printf("  SSE endpoint:   GET  http://localhost%s/mcp/sse", addr)
 	log.Printf("  Message endpoint: POST http://localhost%s/mcp/message", addr)
+	log.Printf("  Stateless RPC:  POST http://localhost%s/mcp/rpc", addr)
 	log.Printf("  Health:         GET  http://localhost%s/healthz", addr)
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("SSE server error: %v", err)
 	}
 	log.Println("MCP Gateway stopped")
+}
+
+func localJWTSecret() (string, error) {
+	root := os.Getenv("AGENTHUB_LOCAL_DATA")
+	if root == "" {
+		if base, err := os.UserConfigDir(); err == nil {
+			root = filepath.Join(base, "AgentHub", "data")
+		} else {
+			root = ".agenthub-data"
+		}
+	}
+	path := filepath.Join(root, "mcp-jwt.secret")
+	if data, err := os.ReadFile(path); err == nil && len(data) >= 32 {
+		return string(data), nil
+	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(hex.EncodeToString(secret)), 0600); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(secret), nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

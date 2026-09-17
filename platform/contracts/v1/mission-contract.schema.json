@@ -88,6 +88,19 @@
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "maxLength": 255 }
     },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionTimeoutSeconds"],
+      "properties": {
+        "decisionTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 31536000,
+          "default": 86400
+        }
+      }
+    },
     "expiresAt": { "$ref": "common.schema.json#/$defs/timestamp" }
   }
 }
