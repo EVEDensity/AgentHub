@@ -27,6 +27,8 @@ from app.services.harness_service import (
     HarnessPort,
     ModelPort,
 )
+from app.services.runner.tool_approval import desktop_tool_approval
+from app.services.tools.policy import ToolExecutionPolicy
 from app.services.model_port import (
     ContextBoundModelPort,
     DEFAULT_CONTEXT_CHAR_BUDGET,
@@ -233,6 +235,7 @@ class DesktopTaskHarnessFactory:
         max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS,
         max_total_tokens: int | None = _DEFAULT_MAX_TOTAL_TOKENS,
         max_model_cost: float | None = None,
+        tool_policy: ToolExecutionPolicy | None = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -246,6 +249,7 @@ class DesktopTaskHarnessFactory:
         self._max_tool_calls = max_tool_calls
         self._max_total_tokens = max_total_tokens
         self._max_model_cost = max_model_cost
+        self._tool_policy = tool_policy
 
     def build(self, context: Mapping[str, Any]) -> HarnessPort:
         work_unit = context.get("workUnit")
@@ -294,4 +298,6 @@ class DesktopTaskHarnessFactory:
             max_total_tokens=self._max_total_tokens,
             max_model_cost=model_cost_limit,
             checkpoint_port=checkpoint_port,
+            approval_callback=(desktop_tool_approval(self._tool_policy)
+                               if self._tool_policy is not None else None),
         )

@@ -630,6 +630,9 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("check-docs", help="enforce capability-table convention")
     sub.add_parser("check-links", help="verify docs links resolve")
+    quality = sub.add_parser("quality", help="prevent new quality debt against Git merge base")
+    quality.add_argument("--base-ref", required=True)
+    quality.add_argument("--output", default=None)
 
     run = sub.add_parser("run", help="execute a named gate")
     run.add_argument("--name", required=True, choices=sorted({
@@ -643,6 +646,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--addr", default=None, help="endpoint for api_latency_p95")
 
     args = parser.parse_args(argv)
+    if args.command == "quality":
+        from benchmarks.quality_delta import run_quality
+
+        return run_quality(ROOT, args.base_ref, args.output)
     if args.command == "run":
         threshold = (
             args.threshold_ms

@@ -96,15 +96,14 @@ async def embed_images(images: list[ImageInput]) -> list[list[float]]:
     embed_image in a gather with concurrency limits.
     """
     vectors: list[list[float]] = []
-    for img in images:
+    for index, img in enumerate(images):
         try:
             vec = await embed_image(img)
             vectors.append(vec)
-        except Exception as e:
-            logger.error("Failed to embed image: %s", e)
-            # Append a zero vector as placeholder so indices stay aligned
-            dim = _cached_image_dim()
-            vectors.append([0.0] * (dim if dim > 0 else 512))
+        except Exception as exc:
+            raise MultimodalEmbeddingError(
+                f"image embedding failed at batch index {index}"
+            ) from exc
     return vectors
 
 
