@@ -55,3 +55,9 @@ Harness DTOs and bounded repair transactions live in `harness_types.py` and
 `harness_repair.py`. `harness_loop.py` owns each resumable turn's counters and
 pending queue; `harness_service.py` preserves public imports and model/tool
 adapters. A final no-tools summary is also checkpointed and charged to budgets.
+
+Durable desktop tool feedback uses `tool_feedback.py` with a frozen policy and
+the saved visible result prefix. The normal loop and a successful-receipt gap
+apply the same limiter, so restarting preserves both feedback and its remaining
+character budget. Its scoped executor retains gateway permission/hook services
+and leaves the process-global result counter to compatibility callers.

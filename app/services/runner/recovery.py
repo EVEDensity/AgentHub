@@ -1,6 +1,7 @@
 """Desktop private recovery binding; durable lifecycle remains Mission Control's."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -16,10 +17,11 @@ from app.services.workspace_fingerprint import workspace_revision
 class DesktopRecoveryBinding:
     def __init__(self, workspace: Path, model_manifest: Mapping[str, Any], *, tools: list[Any],
                  policy: Any, budgets: Mapping[str, Any], state_root: Path | None = None,
-                 execution: Any = None) -> None:
+                 execution: Any = None, feedback_policy: Any = None) -> None:
         self.workspace = workspace.resolve()
         directory = runner_state_directory(self.workspace, state_root)
         self.execution = execution
+        self.feedback_policy = feedback_policy
         self.lock = None
         if execution is not None:
             scope = f"{execution.mission_id}/{execution.work_unit_id}/{execution.attempt}"
@@ -31,6 +33,8 @@ class DesktopRecoveryBinding:
         self.material = {"model": dict(model_manifest), "tools": list(build_function_tool_schemas(tools)),
                          "permissionMode": str(policy.mode) if policy else "denied",
                          "budgets": dict(budgets)}
+        if feedback_policy is not None:
+            self.material["toolFeedbackPolicy"] = asdict(feedback_policy)
 
     def journal(self, port: Any, checkpoint: Any) -> RecoveryCheckpointJournal:
         sequence = int(checkpoint.get("sequence", 0)) if isinstance(checkpoint, Mapping) else 0
@@ -45,7 +49,7 @@ class DesktopRecoveryBinding:
             raise ResumeImageError("checkpoint belongs to another claimed execution")
         return restore_resume(self.store, checkpoint, code=code, workspace=self.workspace,
                               context_material=self.material, receipt_store=self.receipts, tools=self.tools,
-                              timeout=timeout, language=language)
+                              timeout=timeout, language=language, feedback_policy=self.feedback_policy)
 
     def close(self) -> None:
         if self.lock is not None:

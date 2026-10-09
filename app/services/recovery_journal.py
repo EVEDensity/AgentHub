@@ -96,6 +96,18 @@ def _receipt_duration(result: Mapping[str, Any]) -> float:
     return duration / 1000
 
 
+def _recovered_feedback(result: Mapping[str, Any], call: Any, image: ResumeImage, policy: Any) -> ToolResult:
+    content = result.get("result", result.get("content", ""))
+    if not isinstance(content, str):
+        content = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    feedback = ToolResult(call.id, call.name, True, content)
+    if policy is not None:
+        from app.services.tool_feedback import apply_tool_feedback
+        prior_results = [ToolResult(**value.model_dump()) for value in image.tool_results]
+        feedback = apply_tool_feedback(feedback, prior_results, policy)
+    return feedback
+
+
 def _check_anchor(image: ResumeImage, anchor: Mapping[str, Any], *,
                   code: str, workspace: Path, material: Mapping[str, Any]) -> None:
     pairs = {"id": image.checkpoint_id, "sequence": image.sequence,
@@ -119,10 +131,12 @@ def _check_anchor(image: ResumeImage, anchor: Mapping[str, Any], *,
 
 
 def _reconcile_started(image: ResumeImage, anchor: Mapping[str, Any], receipt_store: Any,
-                       tools: Mapping[str, Any], current_revision: str) -> ResumeImage:
+                       tools: Mapping[str, Any], current_revision: str, feedback_policy: Any = None) -> ResumeImage:
     if not image.pending_tool_calls or image.reserved_call_id != image.pending_tool_calls[0].id:
         raise ResumeImageError("started tool checkpoint lacks its complete pending call")
     call = image.pending_tool_calls[0]
+    if not call.arguments_complete:
+        raise ResumeImageError("incomplete pending call cannot inherit a successful receipt")
     tool = tools.get(call.name)
     if tool is None:
         raise ResumeImageError("pending tool is no longer granted")
@@ -146,10 +160,7 @@ def _reconcile_started(image: ResumeImage, anchor: Mapping[str, Any], receipt_st
     if recovered.post_workspace_revision != current_revision:
         raise ResumeImageError("workspace changed after completed tool receipt")
     result = recovered.result
-    content = result.get("result", result.get("content", ""))
-    if not isinstance(content, str):
-        content = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
-    tool_result = ToolResult(call.id, call.name, True, content)
+    tool_result = _recovered_feedback(result, call, image, feedback_policy)
     from app.services.recovery_image import SavedResult
     image = image.model_copy(update={"tool_results": [*image.tool_results, SavedResult(**tool_result.__dict__)],
                                      "pending_tool_calls": image.pending_tool_calls[1:],
@@ -161,7 +172,8 @@ def _reconcile_started(image: ResumeImage, anchor: Mapping[str, Any], receipt_st
 def restore_resume(store: ResumeImageStore, anchor: Mapping[str, Any], *, code: str,
                    workspace: Path, context_material: Mapping[str, Any],
                    receipt_store: Any, tools: Mapping[str, Any],
-                   timeout: float | None = None, language: str | None = None) -> HarnessResumeInput:
+                   timeout: float | None = None, language: str | None = None,
+                   feedback_policy: Any = None) -> HarnessResumeInput:
     action = anchor.get("nextAction")
     if anchor.get("resumeProtocolVersion") != 2 or not isinstance(action, Mapping):
         raise ResumeImageError("legacy checkpoint has no complete strict resume image")
@@ -174,7 +186,7 @@ def restore_resume(store: ResumeImageStore, anchor: Mapping[str, Any], *, code: 
     _check_anchor(image, anchor, code=code, workspace=workspace, material=context_material)
     revision = workspace_revision(workspace)
     if image.phase == HarnessEventType.TOOL_STARTED.value:
-        image = _reconcile_started(image, anchor, receipt_store, tools, revision)
+        image = _reconcile_started(image, anchor, receipt_store, tools, revision, feedback_policy)
     elif image.workspace_revision != revision:
         raise ResumeImageError("workspace revision changed since checkpoint")
     # A completed tool round needs the next model turn, not an empty terminal answer.

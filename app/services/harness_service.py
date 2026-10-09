@@ -8,9 +8,9 @@ import math
 import re
 import time
 import uuid
-from pathlib import Path
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -123,6 +123,7 @@ class FunctionCallingHarness:
         receipt_store: Any = None,
         approval_callback: Callable[[str, Mapping[str, Any]], Awaitable[bool] | bool] | None = None,
         recovery: Any = None,
+        feedback_policy: Any = None,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -148,6 +149,7 @@ class FunctionCallingHarness:
         self._receipt_store = receipt_store
         self._approval_callback = approval_callback
         self._recovery = recovery
+        self._feedback_policy = feedback_policy
 
     @property
     def workspace_root(self) -> Path | None:

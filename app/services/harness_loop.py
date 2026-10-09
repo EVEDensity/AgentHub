@@ -118,6 +118,9 @@ class HarnessLoop:
             await self.record(Phase.TOOL_STARTED, tool_call=call)
             await self.publish_tool("started", call.name)
             result = await self.harness._execute_function_call(call, self.request.execution)
+            if self.harness._feedback_policy is not None:
+                from app.services.tool_feedback import apply_tool_feedback
+                result = apply_tool_feedback(result, self.results, self.harness._feedback_policy)
             self.results.append(result)
             self.pending.pop(0)
             self.reserved = None

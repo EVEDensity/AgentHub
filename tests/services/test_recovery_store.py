@@ -1,5 +1,6 @@
 import sqlite3
 import time
+from unittest.mock import Mock
 from pathlib import Path
 
 import pytest
@@ -74,3 +75,15 @@ def test_private_state_cannot_live_inside_tool_workspace(tmp_path):
     with pytest.raises(ResumeImageError, match="outside"):
         runner_state_directory(workspace, workspace / "state")
     assert runner_state_directory(workspace, tmp_path / "private").is_dir()
+
+
+def test_incomplete_pending_call_cannot_be_promoted_by_an_earlier_successful_receipt(tmp_path):
+    from app.services.recovery_journal import _reconcile_started
+    value = image(tmp_path)
+    call = value.pending_tool_calls[0].model_copy(update={"arguments_complete": False})
+    value = value.model_copy(update={"pending_tool_calls": [call], "reserved_call_id": call.id})
+    receipts = Mock()
+    receipts.replay_decision.return_value = "already_succeeded"
+    with pytest.raises(ResumeImageError, match="incomplete"):
+        _reconcile_started(value, {}, receipts, {}, "unchanged")
+    receipts.replay_decision.assert_not_called()

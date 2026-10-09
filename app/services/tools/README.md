@@ -23,5 +23,11 @@ The JSON store remains a compatibility adapter for a single process; it does
 not provide SQLite's cross-process claim guarantee. Receipt storage is private
 local execution state and must not be included in public execution projections.
 
+Durable desktop Harnesses clone the gateway's service bindings while disabling
+its process-global ResultStorage counter. Their feedback policy is applied by
+the Harness and saved with the context; raw receipt bodies retain their exact
+results. Normal and recovered feedback are limited identically from the saved
+prefix, including error feedback, without sharing another Mission's consumption.
+
 Verified by `tests/services/test_recovery_receipts.py`, including real process
 competition, a process crash after a side effect, and recovery after process exit.

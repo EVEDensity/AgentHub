@@ -38,6 +38,13 @@ missing successful bodies and corrupt results refuse automatic recovery.
 In-flight model requests refuse recovery because their usage/outcome is unknown.
 Legacy v1/NULL checkpoints remain diagnostic records and cannot rebuild a turn.
 
+Model-visible tool feedback has a request-scoped character policy included in
+the context fingerprint. Normal execution and receipt reconciliation use the
+same pure limiter, deriving consumption from already saved visible results.
+The durable desktop Harness retains the gateway's permission/hook services but
+does not consume the process-global ResultStorage counter. Raw receipts stay
+complete and bounded; restart neither replenishes nor changes feedback limits.
+
 The desktop factory binds this journal to its actual tool workspace and model
 manifest. Resume runs only behind the same still-valid owned lease and attempt;
 expired or changed leases require explicit reconciliation. A local OS-owned

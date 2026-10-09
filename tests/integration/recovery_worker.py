@@ -80,7 +80,7 @@ class RealControl:
         ):
             (self.root / "paused").write_text(self.mode)
             await asyncio.Event().wait()
-        if self.mode in {"checkpoint", "short_deadline"} and result.phase == ExecutionCheckpointPhase.TOOL_COMPLETED and result.tool_calls == 1:
+        if self.mode in {"checkpoint", "short_deadline", "feedback_checkpoint"} and result.phase == ExecutionCheckpointPhase.TOOL_COMPLETED and result.tool_calls == 1:
             (self.root / "paused").write_text("checkpoint")
             await asyncio.Event().wait()
         return result.model_dump(mode="json", by_alias=True, exclude_none=True)
@@ -117,8 +117,9 @@ class RealControl:
 
 
 class ProcessModel:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, feedback: bool = False):
         self.root = root
+        self.feedback = feedback
 
     async def complete(self, request, tool_results):
         with (self.root / "model-calls").open("a") as handle:
@@ -126,7 +127,9 @@ class ProcessModel:
         if not tool_results:
             return ModelResponse(tool_calls=(ToolCall("first", "append", {"text": "one"}),
                 ToolCall("second", "append", {"text": "two"})), usage=ModelUsage(100, 20, .1))
-        assert [result.content for result in tool_results] == ["written one", "written two"]
+        expected = ["writt*CU*CUT*", "*CUT*"] if self.feedback else ["written one", "written two"]
+        assert [result.content for result in tool_results] == expected
+        (self.root / "visible-feedback.json").write_text(json.dumps(expected))
         return ModelResponse(content="real tools completed", usage=ModelUsage(50, 10, .05))
 
 
@@ -134,15 +137,23 @@ class ProcessModelFactory:
     recovery_manifest = {"provider": "deterministic-process-test", "model": "bounded-v1",
                          "messages": [{"role": "system", "content": "process acceptance"}]}
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, feedback: bool = False):
         self.root = root
+        self.feedback = feedback
 
     def build(self, tools):
-        return ProcessModel(self.root)
+        return ProcessModel(self.root, self.feedback)
 
 
 async def execute(root: Path, mode: str):
     workspace = root / "workspace"
+    feedback = mode.startswith("feedback_")
+    if feedback:
+        from app.services.tool_executor import tool_executor
+        from app.services.tools.result_storage import ContentBudgetConfig, ResultStorage
+        tool_executor.result_storage = ResultStorage(ContentBudgetConfig(
+            max_result_chars=5, max_total_results_chars=8, truncation_marker="*CUT*"))
+        tool_executor.result_storage._used_budget = 999999  # another execution cannot consume this turn
     async with control_repository(root / "control.sqlite3") as repository:
         control = RealControl(repository, root, mode)
         unit = await repository.get_work_unit("wu-1")
@@ -156,7 +167,7 @@ async def execute(root: Path, mode: str):
                 await asyncio.Event().wait()
             return "written " + arguments["text"]
 
-        model_factory = ProcessModelFactory(root)
+        model_factory = ProcessModelFactory(root, feedback)
         if mode == "context_changed":
             model_factory.recovery_manifest = {**model_factory.recovery_manifest, "model": "different"}
         factory = DesktopTaskHarnessFactory(model_factory,
@@ -171,7 +182,7 @@ async def execute(root: Path, mode: str):
             assigned_adapter="function-calling", claimed_work_resolver=resolver,
             supported_work_unit_kinds=("desktop.task",), publisher=ContentAddressedArtifactPublisher(
                 ArtifactStoreSettings(backend="local", local_root=root / "artifacts")))
-        if mode in {"resume", "resume_short"}:
+        if mode in {"resume", "resume_short", "feedback_resume"}:
             poll = await runner.claim_ready_and_run("workspace-1")
             result = poll.run_result
             (root / "result.json").write_text(json.dumps({"claimStatus": poll.claim_status.value,
@@ -179,7 +190,7 @@ async def execute(root: Path, mode: str):
             return
         execution = await resolver.resolve(unit.model_dump(mode="json", by_alias=True))
         harness = execution.harness
-        if mode == "receipt":
+        if mode in {"receipt", "feedback_receipt"}:
             complete = harness._receipt_store.complete
 
             def complete_then_pause(*args, **kwargs):

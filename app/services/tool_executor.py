@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from copy import copy
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -79,6 +80,12 @@ class ToolExecutor:
             self.receipt_store = receipt_store
         if code_index is not None:
             self.code_index = code_index
+
+    def for_harness(self) -> ToolExecutor:
+        """Keep gateway services while Harness owns resumable feedback budgets."""
+        scoped = copy(self)
+        scoped.result_storage = None
+        return scoped
 
     def find_symbol(self, query: str, *, limit: int = 50) -> list[dict[str, Any]] | None:
         """Query the optional local AST index without making it authoritative."""

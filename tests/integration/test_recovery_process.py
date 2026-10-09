@@ -211,3 +211,20 @@ async def test_original_timeout_deadline_cannot_be_replenished_by_process_restar
     assert result["success"] is False and result["status"] == "FAILED"
     assert (tmp_path / "workspace" / "output").read_text() == "one\n"
     assert (tmp_path / "model-calls").read_text().splitlines() == ["0"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["feedback_checkpoint", "feedback_receipt"])
+async def test_real_restart_restores_identical_bounded_feedback_and_remaining_budget(tmp_path, boundary):
+    baseline, recovered = tmp_path / "baseline", tmp_path / "recovered"
+    baseline.mkdir()
+    recovered.mkdir()
+    await seed(baseline)
+    await seed(recovered)
+    code, stdout, stderr = await restart(baseline, "feedback_baseline")
+    assert code == 0, (stdout, stderr)
+    await kill_at_boundary(recovered, boundary)
+    code, stdout, stderr = await restart(recovered, "feedback_resume")
+    assert code == 0, (stdout, stderr)
+    assert (baseline / "visible-feedback.json").read_text() == (recovered / "visible-feedback.json").read_text()
+    assert (recovered / "workspace" / "output").read_text() == "one\ntwo\n"

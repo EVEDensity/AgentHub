@@ -49,6 +49,7 @@ from app.services.runner_composition import (
     CapabilityBindingFactoryPort,
     HarnessModelFactoryPort,
 )
+from app.services.tool_executor import tool_executor as default_tool_executor
 from app.services.tools.policy import ToolExecutionPolicy
 
 logger = logging.getLogger("agenthub.desktop_local_runner")
@@ -314,6 +315,8 @@ class DesktopTaskHarnessFactory:
             checkpoint_port=checkpoint_port,
             receipt_store=recovery.receipts if recovery is not None else None,
             recovery=recovery,
+            feedback_policy=recovery.feedback_policy if recovery is not None else None,
+            tool_executor=default_tool_executor.for_harness() if recovery is not None else None,
             approval_callback=(desktop_tool_approval(self._tool_policy)
                                if self._tool_policy is not None else None),
         )
@@ -323,8 +326,11 @@ class DesktopTaskHarnessFactory:
         if self._workspace_root is None or not isinstance(manifest, Mapping):
             return None
         from app.services.runner.recovery import DesktopRecoveryBinding
+        from app.services.tool_feedback import ToolFeedbackPolicy
+        feedback_policy = ToolFeedbackPolicy.from_config(getattr(default_tool_executor.result_storage, "config", None))
         return DesktopRecoveryBinding(self._workspace_root, manifest, tools=self._tools,
             execution=execution,
+            feedback_policy=feedback_policy,
             policy=self._tool_policy, state_root=self._recovery_state_root,
             budgets={"iterations": self._max_iterations, "toolCalls": self._max_tool_calls,
                      "totalTokens": self._max_total_tokens, "modelCost": model_cost_limit})
