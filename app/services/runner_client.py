@@ -53,6 +53,7 @@ class MissionControlRunnerClient:
         supported_work_unit_kinds: tuple[str, ...],
         lease_seconds: int,
         supported_capabilities: tuple[str, ...] = (),
+        resume_mission_id: str | None = None,
     ) -> dict[str, Any]:
         del runner_id
         payload: dict[str, Any] = {
@@ -64,6 +65,8 @@ class MissionControlRunnerClient:
         }
         if supported_capabilities:
             payload["supportedCapabilities"] = list(supported_capabilities)
+        if resume_mission_id is not None:
+            payload["resumeMissionId"] = resume_mission_id
         return await self._request(
             "POST", "/api/v1/missions/work-unit-claims", json=payload,
         )

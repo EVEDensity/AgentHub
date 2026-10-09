@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.harness_checkpoint import HarnessCheckpoint
+from app.services.guidance_recovery import GuidanceResumeState
 from app.services.harness_types import HarnessRequest, HarnessResumeInput
 from app.services.model_contract import ModelUsage, ToolCall, ToolResult
 
@@ -58,6 +59,7 @@ class ResumeImage(_StrictImage):
     workspace_revision: str = Field(min_length=1)
     context_manifest_digest: str = Field(min_length=1)
     context_material: dict[str, Any] = Field(default_factory=dict, repr=False)
+    guidance_state: GuidanceResumeState | None = Field(default=None, repr=False)
     iteration: int = Field(ge=0)
     next_iteration: int = Field(ge=1)
     tool_calls: int = Field(ge=0)
@@ -96,7 +98,8 @@ class ResumeImage(_StrictImage):
 
 def capture_image(request: HarnessRequest, checkpoint: HarnessCheckpoint, *,
                   checkpoint_id: str, sequence: int, workspace_revision: str,
-                  context_manifest_digest: str, context_material: dict[str, Any] | None = None) -> ResumeImage:
+                  context_manifest_digest: str, context_material: dict[str, Any] | None = None,
+                  guidance_state: GuidanceResumeState | None = None) -> ResumeImage:
     execution = checkpoint.execution
     if execution is None or request.cwd is None:
         raise ResumeImageError("durable recovery requires execution identity and workspace")
@@ -108,6 +111,7 @@ def capture_image(request: HarnessRequest, checkpoint: HarnessCheckpoint, *,
         timeout=request.timeout, workspace_revision=workspace_revision,
         context_manifest_digest=context_manifest_digest,
         context_material=context_material or {},
+        guidance_state=guidance_state,
         iteration=checkpoint.iteration, tool_calls=checkpoint.tool_calls,
         next_iteration=checkpoint.next_iteration,
         usage=SavedUsage(**asdict(checkpoint.usage)),

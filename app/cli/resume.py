@@ -17,6 +17,10 @@ import httpx
 from app.services.workspace_fingerprint import workspace_revision
 
 
+def execution_resume_target(mission_id: str, context_text: str) -> str | None:
+    return mission_id if mission_id and not context_text.strip() else None
+
+
 @dataclass(frozen=True)
 class ResumeExecutionPlan:
     """Metadata preflight; ``resume_input`` remains empty by design."""

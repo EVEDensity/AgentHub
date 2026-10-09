@@ -210,6 +210,7 @@ async def claim_workspace_work_unit(
             actor=build_runner_actor(user),
             lease_seconds=request.lease_seconds,
             admission_policy=admission_policy,
+            resume_mission_id=request.resume_mission_id,
         )
     except WorkspaceClaimAdmissionUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

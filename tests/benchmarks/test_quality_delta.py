@@ -24,6 +24,12 @@ def function_source(decisions: int, *, name: str = "work") -> str:
     ) + "    return -1\n"
 
 
+def lambda_source(decisions: int, *, name: str = "handler") -> str:
+    return f"{name} = lambda value: " + "".join(
+        f"{index} if value == {index} else " for index in range(decisions)
+    ) + "-1\n"
+
+
 class QualityDeltaTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="agenthub-quality-test-")
@@ -204,6 +210,57 @@ class QualityDeltaTests(unittest.TestCase):
         self.assertIn(path, report["checked"])
         self.write(path, assignments(851))
         self.assertFalse(self.report()["passed"])
+
+    def test_new_lambda_cc_15_passes_and_cc_16_fails(self) -> None:
+        self.write("app/new.py", lambda_source(14))
+        self.assertTrue(self.report()["passed"])
+        self.write("app/new.py", lambda_source(15))
+        report = self.report()
+        self.assertFalse(report["passed"])
+        self.assertTrue(any("handler.<lambda#1>: CC=16 > 15" in issue for issue in report["issues"]))
+
+    def test_existing_lambda_cannot_grow_but_comments_do_not_reset_its_identity(self) -> None:
+        self.write("app/legacy.py", lambda_source(23))
+        self.commit()
+        self.write("app/legacy.py", "# moved down one line\n" + lambda_source(23))
+        self.assertTrue(self.report()["passed"])
+        self.write("app/legacy.py", lambda_source(22))
+        self.assertTrue(self.report()["passed"])
+        self.write("app/legacy.py", lambda_source(24))
+        self.assertFalse(self.report()["passed"])
+
+    def test_new_lambda_in_existing_module_cannot_inherit_another_binding_limit(self) -> None:
+        self.write("app/legacy.py", lambda_source(23))
+        self.commit()
+        self.write("app/legacy.py", lambda_source(23) + lambda_source(15, name="new_handler"))
+        self.assertFalse(self.report()["passed"])
+
+    def test_annotated_and_walrus_bound_lambdas_are_checked(self) -> None:
+        expression = lambda_source(15).split(" = ", 1)[1].strip()
+        for source in (f"handler: object = {expression}\n", f"(handler := {expression})\n"):
+            with self.subTest(source=source):
+                self.write("app/new.py", source)
+                self.assertFalse(self.report()["passed"])
+
+    def test_nested_lambda_is_separate_from_its_enclosing_function(self) -> None:
+        import ast
+
+        expression = lambda_source(15).split(" = ", 1)[1].strip()
+        source = f"def outer():\n    return ({expression})(1)\n"
+        values = _functions(ast.parse(source))
+        self.assertEqual(values["outer"], 1)
+        self.assertEqual(values["outer.<lambda#1>"], 16)
+        self.write("app/new.py", source)
+        self.assertFalse(self.report()["passed"])
+
+    def test_full_historical_audit_also_lists_lambda_functions(self) -> None:
+        import ast
+
+        from benchmarks.gates import _iter_functions, cyclomatic_complexity
+
+        nodes = dict(_iter_functions(ast.parse(lambda_source(20))))
+        self.assertIn("handler.<lambda#1>", nodes)
+        self.assertEqual(cyclomatic_complexity(nodes["handler.<lambda#1>"]), 21)
 
 
 if __name__ == "__main__":

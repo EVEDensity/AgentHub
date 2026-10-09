@@ -25,6 +25,14 @@ for its exact attempt before execution. Missing manifests or anchors cannot
 fall back to a fresh model loop. A concurrently held recovery lock returns
 `capacity_saturated` without failing the active WorkUnit.
 
+All desktop workers use the authenticated principal as lease owner; local
+worker indices are not server identities. Ordinary workspace claims prefer
+ready work over owned busy attempts. Explicit recovery uses the optional
+`resumeMissionId` fence to select only that Mission's original live lease.
+Reclaiming it adds no tenant concurrency, and expired leases do not consume
+capacity on either database backend. Admission locks retain tenant-before-row
+ordering. See [ADR-0117](../../../docs/architecture/decisions/0117-fair-claims-and-targeted-resume.md).
+
 Login retries connection refusal within a bounded readiness window because the
 post-startup Runner task can start before Uvicorn binds its socket. HTTP credential
 rejection remains immediate, and local authentication bypasses environment proxies.
@@ -48,6 +56,15 @@ only a digest through Mission Control. Private state is outside the tool
 workspace. The exact admitted anchor is restored behind the same live lease;
 uncertain receipts/model calls, context changes and legacy incomplete records
 are refused. Local OS locks prevent simultaneous execution of an owned attempt.
+Guidance-enabled journals also retain the mission event cursor, consumed event
+IDs and the guidance blocks actually injected by that execution. Restoration
+merges those IDs into the shared worker ledger and reads only later events;
+previous blocks remain private audit context and are not injected again.
+The durable guidance reader fails closed on malformed or unavailable events.
+Its private history is limited to 4,096 visited mission events and 512 KiB;
+overflow is refused before another model invocation. Retries within one model
+round retain the same injected request. Attempt locks remain held through
+Artifact reporting and release on setup, reporting and cancellation failures.
 See [ADR-0115](../../../docs/architecture/decisions/0115-private-runner-resume-images.md)
 and `tests/integration/test_recovery_process.py` for actual kill/restart evidence.
 

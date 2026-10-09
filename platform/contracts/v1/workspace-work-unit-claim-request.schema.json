@@ -11,6 +11,12 @@
     "supportedWorkUnitKinds"
   ],
   "properties": {
+    "resumeMissionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
     "workspaceId": {
       "type": "string",
       "minLength": 1,

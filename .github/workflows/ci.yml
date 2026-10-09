@@ -283,7 +283,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           push: false
           cache-from: type=gha,scope=${{ matrix.name }}

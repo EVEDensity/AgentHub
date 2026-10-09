@@ -277,12 +277,9 @@ class DesktopLocalRunnerController:
 
         worker_count = max(1, min(settings.workers, _MAX_DESKTOP_WORKERS))
         for index in range(worker_count):
-            worker_runner_id = (
-                runner_id if worker_count == 1 else f"{runner_id}-w{index}"
-            )
             runner = self._build_runner(
                 control,
-                runner_id=worker_runner_id,
+                runner_id=runner_id,
                 model_factory=model_factory,
                 tools=tools,
                 tool_policy=policy,
@@ -420,6 +417,7 @@ class DesktopLocalRunnerController:
             runner_id=runner_id,
             assigned_agent_id=DESKTOP_AGENT_ID,
             assigned_adapter=DESKTOP_ADAPTER_TYPE,
+            resume_mission_id=settings.resume_mission_id,
             max_timeout_seconds=settings.timeout_seconds,
             max_iterations=settings.max_iterations,
             max_tool_calls=settings.max_tool_calls,

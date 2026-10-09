@@ -2,7 +2,7 @@
 
 > Status: accepted
 > Owner: repository maintainers
-> Last reviewed: 2026-09-02
+> Last reviewed: 2026-10-10
 > Scope: `app/`, `frontend/`, `services/`, `desktop/`, `tests/`
 > Applies to: every pull request, including AI-generated patches
 
@@ -13,52 +13,74 @@ security. Code quality rules exist to keep the core loop small, replayable,
 observable, and cheap, and to make the repository safe to modify for humans and
 AI agents alike.
 
-## 2. Structural gates (CI-enforced)
+## 2. Structural gates and review rules
 
-| Gate                        | Threshold                                                                                                                                                                                                                      | Enforcement                                    |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| Maximum module size         | **500 LOC hard limit for all new modules**; legacy modules carry an 800 LOC soft ceiling — anything over that must be registered in §2a below with a shrink target. Every refactor slice must move the number *down*, never up | CI size check + review against §2a             |
-| Maximum function complexity | cyclomatic complexity < 15 per function                                                                                                                                                                                        | CI lint (ruff for Python, biome/eslint for TS) |
-| Maximum function length     | < 100 lines                                                                                                                                                                                                                    | CI lint                                        |
-| Broad exception use         | No new bare `except Exception` in hot paths; require `except SpecificError`                                                                                                                                                    | Review + CI lint rule                          |
-| File layout                 | New business logic goes under `app/services/<domain>/`; new WS lanes under `app/api/websocket/`; new benchmarks under `benchmarks/`                                                                                            | Review                                         |
-| Test placement              | Unit/near-module tests may live beside modules; structural/contract tests live under `tests/`                                                                                                                                  | Review                                         |
+The [CI guide](../development/ci.md) describes the actual required checks.
+`benchmarks/gates.py quality --base-ref <SHA>` compares Python changes with the
+Git merge base. The workflow supplies the base SHA from GitHub's event metadata;
+the checker does not consult a developer's `BASE_REF` environment override.
+An invalid base or invalid Python syntax fails the check.
 
-### §2a — Legacy exception registry (baseline 2026-09-02)
+The incremental gate covers `.py` files under `app/`, `services/`, `benchmarks/`,
+`tests/` and `scripts/`. Effective lines are nonblank source lines excluding lines
+whose first nonspace character is `#`. Do not compress statements onto fewer
+lines to bypass the measure; review still checks readability.
 
-Modules over the 800 LOC soft ceiling are registered here with a shrink target
-and a owning roadmap phase. A refactor that does not move the number *down*
-does not count toward the phase stop condition; if it moves the number *up*,
-it is rejected unless there is no alternative and the architect signs off.
+- New modules: at most **500 effective lines**. Copies and renames count as new
+  paths and cannot inherit another module's allowance.
+- Existing modules: at most **800 effective lines**, or their measured merge-base
+  value when already above 800. An oversized legacy module may stay the same or
+  shrink; it cannot grow. Refactoring acceptance requires an actual reduction.
+- New functions, methods and lambdas: branch complexity at most **15**. Existing
+  functions retain the normal **20** limit, or their measured merge-base value
+  when already above 20. Nested and conditional definitions are checked in their
+  own scopes; their bodies do not inflate the enclosing function's score.
+- Lambda identities use their enclosing scope, direct assignment binding when
+  available, and occurrence number. Moving comments or reformatting does not
+  erase an existing lambda's baseline. A new binding cannot inherit a different
+  binding's legacy complexity allowance.
+- Deletions remove debt. NUL-delimited Git paths preserve Unicode and spaces.
 
-The registry is ratcheted on each phase review. A module that falls below 800
-LOC is removed from the registry; a module that climbs *above* 800 LOC
-between two reviews is treated as a *new* debt item with a target date
-of the next phase boundary.
+Python runtime syntax/name errors (`E9,F63,F7,F82`), compilation and the complete
+root test suite are required. TypeScript checks, unit/browser tests and production
+builds run for selected frontend/API changes; Go vet/race and locked Rust tests
+run for selected consumers. These checks do **not** enforce a universal style,
+function-length or coverage-percentage threshold. Frontend lint, broad Python
+style/typing and Rust fmt/clippy need separate baselines before becoming gates.
 
-| Baseline LOC | File                                         | Target LOC    | Roadmap phase | Notes                                                                                |
-| ------------ | -------------------------------------------- | ------------- | ------------- | ------------------------------------------------------------------------------------ |
-| 1791         | `app/services/tools/builtin_tools.py`        | \~800         | R3            | Move each tool group into its own file under `services/tools/builtins/`              |
-| 1542         | `app/services/runner_service.py`             | \~600         | R3            | Claim/lease/mission-dispatch mix — split into `claim/`, `lease/`, `lifecycle/` lanes |
-| 1401         | `app/repositories/mission_repository.py`     | \~700         | R3            | CRUD / search / lineage mix — split into methods by use case                         |
-| 1244         | `app/api/files.py`                           | \~600         | R3            | Upload / download / metadata / indexing lanes                                        |
-| 1049         | `app/db/migrations/mission_control_plane.py` | — (immutable) | —             | Migration file — exempt; only grows forward, never refactored                        |
-| 1018         | `app/services/adapter_manager.py`            | \~500         | R3            | Discovery / lifecycle / protocol-dispatch lanes                                      |
-| 991          | `app/services/desktop_runner_tools.py`       | \~500         | R3            | Split by tool family (sandbox, git, process)                                         |
-| 960          | `app/services/tools/definitions.py`          | \~500         | R3            | Inline definitions → per-tool-class files                                            |
-| 892          | `app/services/agent/tooling.py`              | \~500         | R3            | Tool discovery + runtime binding + formatter lanes                                   |
+Review rules supplement executable checks:
 
-**Recently resolved (removed from registry):**
+- Prefer functions below 100 lines and cohesive modules; this is a review target,
+  not a currently enforced CI length check.
+- Use specific exceptions in hot paths. Broad catches require a documented
+  boundary purpose, such as final CLI error projection or supervised cleanup.
+- Place new business logic under `app/services/<domain>/`, transport lanes under
+  their adapter, and benchmarks under `benchmarks/`.
+- Preserve compatibility imports during mechanical splits; update the nearest
+  README whenever a module's responsibility changes.
+- Historical migration revision IDs and SQL behavior are immutable. SQL constants
+  may move mechanically into small modules with original aliases and value/order
+  equivalence tests; do not rewrite already applied migrations.
 
-| File                         | Peak LOC | Resolution                                                                                                        | Date       |
-| ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- | ---------- |
-| `app/api/v1/chat_mission.py` | 915      | Split into `chat_mission/_helpers.py` (323) + `chat_mission/_handlers.py` (619) + `chat_mission/__init__.py` (36) | 2026-09-02 |
-| `app/api/chat.py`            | 816      | Split into `chat/_helpers.py` (236) + `chat/_routes.py` (476) + `chat/__init__.py` (21)                           | 2026-09-02 |
+### 2a. Historical audit and exemptions
 
-Modules in the 600–800 LOC band (`app/db/init_db.py` 778, `app/cli/main.py` 743,
-`app/cli/runtime.py` 732, `app/services/a2a_adapter_service.py` 709, ...) are
-*not* on the registry — they are encouraged to shrink opportunistically but
-do not block any phase. If any one of them crosses 800 LOC it is added.
+The full `code_file_size` and `code_complexity` audit remains available through
+`benchmarks/gates.py run --name <gate>`. Its historical metric is distinct from
+incremental enforcement: file size counts all nonblank lines, and complexity
+retains the older raw AST walk. The full complexity audit also lists lambdas.
+Compare before/after snapshots with the **same scanner**; a changed scanner must
+not be presented as a source-code debt reduction.
+
+[`benchmarks/quality_exemptions.json`](../../benchmarks/quality_exemptions.json)
+contains the remaining full-audit legacy allowances. They do not control the
+incremental PR gate. Remove retired entries when appropriate; never expand or add
+static allowances merely to make an audit pass. The live PR baseline is the
+actual merge-base source, rather than an old documentation table.
+
+This execution slice split the Harness, Runner and database implementation while
+preserving contracts; see [execution follow-up slices](../roadmaps/execution-next-slices.md).
+That acceptance requires a smaller comparable audit and preserved state/lease
+checks. It does not require unrelated historical modules to reach zero debt.
 
 ## 3. Coverage expectations
 
@@ -73,6 +95,10 @@ do not block any phase. If any one of them crosses 800 LOC it is added.
 
 - Performance-sensitive changes: contributor must run the affected benchmark in
   `benchmarks/` and report before/after numbers in the PR description.
+
+These are evidence requirements, not a claim that CI enforces a numerical
+coverage percentage. Add tests for meaningful behavior and failure boundaries;
+implementation-mirroring tests do not replace state-transition evidence.
 
 ## 4. Documentation-to-code rule (no unverified claims)
 
@@ -93,8 +119,8 @@ do not block any phase. If any one of them crosses 800 LOC it is added.
 3. Is every `except Exception` justified and specific?
 4. Are secrets and credentials in the code? (Never.) Is the credential store
    used the OS/native one, not env/config files?
-5. Does the module exceed the size/complexity gates? If it does, is it already
-   registered in the reconstruction roadmap as debt, and is it shrinking?
+5. Does the change satisfy the actual merge-base size/complexity limits, and
+   does a refactor reduce its measured debt without expanding static allowances?
 6. Do docs referenced by the change still match the implementation?
 7. Is there evidence (test run, benchmark report) backing any new claim?
 
@@ -108,10 +134,12 @@ gates as human patches, including the checklist in §5.
 
 ## 7. Flow when a gate fails
 
-1. CI blocks merge.
+1. A required or selected check failure makes `CI Gate` fail. Branch protection
+   must require that status to block merging; workflow success alone does not
+   establish repository protection settings.
 2. The PR author fixes or explicitly demotes the claim.
 3. Oversize refactors are broken into reviewable slices; each slice keeps the
    module shrinking relative to the previous slice.
-4. Only architecture maintainers may register new debt items in the
-   reconstruction roadmap; unregistered debt is fixed before merge.
+4. New or growing debt that violates the incremental limits is fixed before
+   merge. A roadmap entry or static exemption does not bypass the gate.
 

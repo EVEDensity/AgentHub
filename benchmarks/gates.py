@@ -332,7 +332,7 @@ def _python_targets():
 
 
 def _iter_functions(tree: "ast.AST"):
-    """Yield ``(qualified_name, FunctionDef)`` including methods.
+    """Yield ``(qualified_name, AST)`` including methods and lambdas.
 
     Qualified names are ``Class.method`` (nested classes dotted); standalone
     functions keep their bare name. Same-name methods of different classes
@@ -346,6 +346,13 @@ def _iter_functions(tree: "ast.AST"):
                 yield (f"{prefix}{node.name}", node)
             elif isinstance(node, ast.ClassDef):
                 stack.append((node, f"{prefix}{node.name}."))
+    # Retain the historical def audit metric, and also expose lambda functions
+    # which the incremental gate checks separately from their enclosing scope.
+    from benchmarks.quality_delta import _function_nodes
+
+    for name, node in _function_nodes(tree):
+        if isinstance(node, ast.Lambda):
+            yield name, node
 
 
 def cyclomatic_complexity(node: "ast.AST") -> int:

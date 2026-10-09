@@ -2396,13 +2396,9 @@ class DesktopMultiWorkerTests(DesktopWorkspaceTestCase):
             sorted(control.completed), ["wu-multi-1", "wu-multi-2"]
         )
         self.assertEqual(control.failures, [])
-        # Two distinct workers claimed the two units: runner ids carry the
-        # worker sequence suffix.
+        # Parallel workers use the identity recognized by the HTTP lease fence.
         runner_ids = set(control.claimed_by.values())
-        self.assertEqual(len(runner_ids), 2)
-        self.assertTrue(
-            all(runner_id.endswith(("-w0", "-w1")) for runner_id in runner_ids)
-        )
+        self.assertEqual(runner_ids, {RUNNER_USER_ID})
         self.assertTrue((self.workspace_root / "hello.txt").exists())
         self.assertEqual(
             (self.workspace_root / "hello.txt").read_text(encoding="utf-8"),

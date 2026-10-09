@@ -4,6 +4,8 @@
 `resume.py` owns authenticated checkpoint metadata preflight. Its public
 `ResumeExecutionPlan` and gate functions remain available through `runtime.py`,
 including the existing monkeypatch seams.
+`server_environment.py` constructs the subprocess environment, including the
+explicit resume target; `runtime.build_server_env` remains a compatibility import.
 
 Execution resume requires a nonterminal protocol-v2 checkpoint, an unchanged
 checkpoint anchor in the lease-fenced projection, and the original live lease
@@ -18,6 +20,13 @@ If the worker has already completed, the CLI observes the same durable Mission
 instead: terminal outcomes are reported directly, and a completed `VERIFYING`
 attempt waits for independent verification. One metadata reread handles a
 completion that races preflight; this observation starts no execution.
+
+An execution `--resume` passes its exact Mission to the server before polling
+starts. The optional `resumeMissionId` claim fence accepts only that Mission's
+existing, live, same-owner lease. It cannot start a PENDING sibling or another
+Mission, acquire a new attempt, or recover an expired lease. Compact chat
+context retains ordinary polling. Ambient resume-target environment variables
+are cleared unless the CLI explicitly supplies the target.
 
 `control_state.py` places database, Artifact data, logs and generated project
 instructions under `runner_state_directory(workspace)/control-state`, outside

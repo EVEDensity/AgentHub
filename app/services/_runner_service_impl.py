@@ -62,6 +62,8 @@ from app.services.runner_sync import run_mission_sync
 from app.services.recovery_lock import RecoveryExecutionBusy
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
 from app.services.workspace_admission_service import WorkspaceClaimStatus
+from app.services.mission._workspace_claim import validate_resume_mission_id
+from app.services.runner_recovery_scope import runner_recovery_scope
 from app.services.workspace_fingerprint import (
     context_manifest_digest,
 )
@@ -100,6 +102,7 @@ class WorkUnitRunner:
         workspace_claims_enabled: bool = True,
         supported_work_unit_kinds: tuple[str, ...] | None = None,
         supported_capabilities: tuple[str, ...] = (),
+        resume_mission_id: str | None = None,
         on_text_delta: Any | None = None,
     ) -> None:
         self._control = control
@@ -137,6 +140,8 @@ class WorkUnitRunner:
                 raise ValueError("supported_work_unit_kinds is invalid")
         self._supported_work_unit_kinds = supported_work_unit_kinds
         self._supported_capabilities = _validate_supported_capabilities(supported_capabilities)
+        validate_resume_mission_id(resume_mission_id)
+        self._resume_mission_id = resume_mission_id
         self._on_text_delta = on_text_delta
 
     async def run(
@@ -260,12 +265,13 @@ class WorkUnitRunner:
             supported_work_unit_kinds=self._supported_work_unit_kinds,
             lease_seconds=lease_seconds,
             **({"supported_capabilities": self._supported_capabilities} if self._supported_capabilities else {}),
+            **({"resume_mission_id": self._resume_mission_id} if self._resume_mission_id is not None else {}),
         )
         claim_status = parse_workspace_claim_status(claimed_payload)
         try:
             run_result = await self._run_claimed_payload(
                 claimed_payload,
-                expected_mission_id=None,
+                expected_mission_id=self._resume_mission_id,
                 lease_seconds=lease_seconds,
                 artifact_kind=artifact_kind,
                 media_type=media_type,
@@ -407,112 +413,113 @@ class WorkUnitRunner:
         harness: HarnessPort,
         resume: HarnessResumeInput | None = None,
     ) -> RunnerRunResult:
-        lease = _lease_context(leased)
-        # A resumed claim may already be RUNNING. Starting it again would be
-        # an invalid transition and could lose the checkpoint lineage.
-        current_status = str(leased.get("status") or "").upper()
-        if current_status == "RUNNING":
-            started = leased
-        else:
-            started = await self._control.start_work_unit(
-                mission_id,
-                work_unit_id,
-                runner_id=self._runner_id,
-                lease_id=lease.lease_id,
-            )
-            _assert_lease_context(started, lease)
+        async with runner_recovery_scope(harness):
+            lease = _lease_context(leased)
+            # A resumed claim may already be RUNNING. Starting it again would be
+            # an invalid transition and could lose the checkpoint lineage.
+            current_status = str(leased.get("status") or "").upper()
+            if current_status == "RUNNING":
+                started = leased
+            else:
+                started = await self._control.start_work_unit(
+                    mission_id,
+                    work_unit_id,
+                    runner_id=self._runner_id,
+                    lease_id=lease.lease_id,
+                )
+                _assert_lease_context(started, lease)
 
-        try:
-            result = await self._execute_with_supervision(
-                mission_id,
-                work_unit_id,
-                lease,
-                code=code,
-                language=language,
-                timeout=timeout,
-                cwd=cwd,
-                lease_seconds=lease_seconds,
-                harness=harness,
-                resume=resume,
-            )
-        except asyncio.CancelledError:
-            with suppress(RunnerControlError):
+            try:
+                result = await self._execute_with_supervision(
+                    mission_id,
+                    work_unit_id,
+                    lease,
+                    code=code,
+                    language=language,
+                    timeout=timeout,
+                    cwd=cwd,
+                    lease_seconds=lease_seconds,
+                    harness=harness,
+                    resume=resume,
+                )
+            except asyncio.CancelledError:
+                with suppress(RunnerControlError):
+                    await self._fail(
+                        mission_id,
+                        work_unit_id,
+                        lease,
+                        "runner execution cancelled",
+                    )
+                raise
+            except RunnerHeartbeatError as exc:
                 await self._fail(
                     mission_id,
                     work_unit_id,
                     lease,
-                    "runner execution cancelled",
+                    f"heartbeat supervision failed: {exc}",
                 )
-            raise
-        except RunnerHeartbeatError as exc:
-            await self._fail(
-                mission_id,
-                work_unit_id,
-                lease,
-                f"heartbeat supervision failed: {exc}",
-            )
-            raise RunnerExecutionError(
-                f"heartbeat supervision failed for WorkUnit {work_unit_id}"
-            ) from exc
-        except Exception as exc:
-            await self._fail(
-                mission_id,
-                work_unit_id,
-                lease,
-                f"Harness execution raised: {exc}",
-            )
-            raise RunnerExecutionError(
-                f"Harness execution failed for WorkUnit {work_unit_id}"
-            ) from exc
+                raise RunnerExecutionError(
+                    f"heartbeat supervision failed for WorkUnit {work_unit_id}"
+                ) from exc
+            except Exception as exc:
+                await self._fail(
+                    mission_id,
+                    work_unit_id,
+                    lease,
+                    f"Harness execution raised: {exc}",
+                )
+                raise RunnerExecutionError(
+                    f"Harness execution failed for WorkUnit {work_unit_id}"
+                ) from exc
 
-        if not result.success:
-            reason = _execution_failure_reason(result)
-            failed = await self._fail(mission_id, work_unit_id, lease, reason)
+            if not result.success:
+                reason = _execution_failure_reason(result)
+                failed = await self._fail(mission_id, work_unit_id, lease, reason)
+                return RunnerRunResult(
+                    success=False,
+                    work_unit=failed,
+                    artifact=None,
+                    failure_reason=reason,
+                )
+
+            try:
+                published = await self._publisher.publish_bytes(result.stdout.encode())
+                artifact_id = _artifact_id(work_unit_id, lease.attempt, published.digest)
+                await self._control.register_artifact(
+                    mission_id,
+                    work_unit_id,
+                    runner_id=self._runner_id,
+                    lease_id=lease.lease_id,
+                    artifact=published,
+                    artifact_id=artifact_id,
+                    kind=artifact_kind,
+                    media_type=media_type,
+                )
+                completed = await self._control.complete_work_unit(
+                    mission_id,
+                    work_unit_id,
+                    runner_id=self._runner_id,
+                    lease_id=lease.lease_id,
+                    artifact_refs=[
+                        {"id": artifact_id, "digest": published.digest},
+                    ],
+                )
+            except Exception as exc:
+                await self._fail(
+                    mission_id,
+                    work_unit_id,
+                    lease,
+                    f"artifact reporting failed: {exc}",
+                )
+                raise RunnerExecutionError(
+                    f"artifact reporting failed for WorkUnit {work_unit_id}"
+                ) from exc
+
             return RunnerRunResult(
-                success=False,
-                work_unit=failed,
-                artifact=None,
-                failure_reason=reason,
-            )
-
-        try:
-            published = await self._publisher.publish_bytes(result.stdout.encode())
-            artifact_id = _artifact_id(work_unit_id, lease.attempt, published.digest)
-            await self._control.register_artifact(
-                mission_id,
-                work_unit_id,
-                runner_id=self._runner_id,
-                lease_id=lease.lease_id,
+                success=True,
+                work_unit=completed,
                 artifact=published,
-                artifact_id=artifact_id,
-                kind=artifact_kind,
-                media_type=media_type,
             )
-            completed = await self._control.complete_work_unit(
-                mission_id,
-                work_unit_id,
-                runner_id=self._runner_id,
-                lease_id=lease.lease_id,
-                artifact_refs=[
-                    {"id": artifact_id, "digest": published.digest},
-                ],
-            )
-        except Exception as exc:
-            await self._fail(
-                mission_id,
-                work_unit_id,
-                lease,
-                f"artifact reporting failed: {exc}",
-            )
-            raise RunnerExecutionError(
-                f"artifact reporting failed for WorkUnit {work_unit_id}"
-            ) from exc
-
-        return RunnerRunResult(
-            success=True,
-            work_unit=completed,
-            artifact=published,
-        )
 
     async def _execute_with_supervision(
         self,

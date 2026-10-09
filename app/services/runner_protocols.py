@@ -42,6 +42,7 @@ class MissionControlRunnerPort(Protocol):
         supported_work_unit_kinds: tuple[str, ...],
         lease_seconds: int,
         supported_capabilities: tuple[str, ...] = (),
+        resume_mission_id: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def claim_work_unit(

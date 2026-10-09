@@ -40,31 +40,76 @@ def _complexity(node: ast.AST) -> int:
     return score
 
 
-def _functions(tree: ast.AST, prefix: str = "") -> dict[str, int]:
-    class FunctionMetrics(ast.NodeVisitor):
-        def __init__(self) -> None:
-            self.prefix = prefix
-            self.values = {}
+class _FunctionMetrics(ast.NodeVisitor):
+    def __init__(self, prefix: str) -> None:
+        self.prefix = prefix
+        self.nodes: list[tuple[str, ast.AST]] = []
+        self.binding: str | None = None
+        self.lambda_counts: dict[str, int] = {}
 
-        def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-            name = self.prefix + node.name
-            self.values[name] = max(self.values.get(name, 0), _complexity(node))
-            previous = self.prefix
-            self.prefix = name + "."
+    def visit_FunctionDef(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        name = self.prefix + node.name
+        self.nodes.append((name, node))
+        previous = self.prefix
+        self.prefix = name + "."
+        self.generic_visit(node)
+        self.prefix = previous
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        scope = self.prefix + (self.binding + "." if self.binding else "")
+        index = self.lambda_counts.get(scope, 0) + 1
+        self.lambda_counts[scope] = index
+        name = f"{scope}<lambda#{index}>"
+        self.nodes.append((name, node))
+        previous_prefix, previous_binding = self.prefix, self.binding
+        self.prefix, self.binding = name + ".", None
+        self.generic_visit(node)
+        self.prefix, self.binding = previous_prefix, previous_binding
+
+    def _visit_bound(self, node: ast.AST, targets: list[ast.AST]) -> None:
+        previous = self.binding
+        self.binding = ",".join(ast.unparse(target) for target in targets)
+        self.generic_visit(node)
+        self.binding = previous
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if isinstance(node.value, ast.Lambda):
+            self._visit_bound(node, node.targets)
+        else:
             self.generic_visit(node)
-            self.prefix = previous
 
-        visit_AsyncFunctionDef = visit_FunctionDef
-
-        def visit_ClassDef(self, node: ast.ClassDef) -> None:
-            previous = self.prefix
-            self.prefix += node.name + "."
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if isinstance(node.value, ast.Lambda):
+            self._visit_bound(node, [node.target])
+        else:
             self.generic_visit(node)
-            self.prefix = previous
 
-    visitor = FunctionMetrics()
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        if isinstance(node.value, ast.Lambda):
+            self._visit_bound(node, [node.target])
+        else:
+            self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        previous = self.prefix
+        self.prefix += node.name + "."
+        self.generic_visit(node)
+        self.prefix = previous
+
+
+def _function_nodes(tree: ast.AST, prefix: str = "") -> list[tuple[str, ast.AST]]:
+    visitor = _FunctionMetrics(prefix)
     visitor.visit(tree)
-    return visitor.values
+    return visitor.nodes
+
+
+def _functions(tree: ast.AST, prefix: str = "") -> dict[str, int]:
+    values = {}
+    for name, node in _function_nodes(tree, prefix):
+        values[name] = max(values.get(name, 0), _complexity(node))
+    return values
 
 
 def _compare(path: str, source: str, baseline: str | None) -> list[str]:

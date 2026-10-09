@@ -25,6 +25,13 @@ declaration. Mission Control applies it before candidate locking and leasing;
 it is transient process capability and is never persisted as WorkUnit truth.
 Mission-scoped claim requests are unchanged.
 
+Optional `resumeMissionId` restricts workspace discovery to the requested
+RUNNING Mission's existing LEASED/RUNNING unit, under the authenticated
+principal's unexpired lease. It never creates a lease or increments an attempt;
+missing, foreign, expired and ready-only candidates return `idle`. Workspace,
+binding and supported-kind checks still apply. Omission keeps normal ready-work
+polling. See [ADR-0117](../../../docs/architecture/decisions/0117-fair-claims-and-targeted-resume.md).
+
 `workspace-work-unit-claim-request.schema.json` additionally defines optional
 `supportedCapabilities` (legacy default empty). It describes a Runner's declared
 operational support, never grants tools or replaces Contract authorization.

@@ -302,7 +302,7 @@ class DesktopTaskHarnessFactory:
                         if model_cost_limit is not None
                         else float(contract_cost)
                     )
-        recovery = self._build_recovery(model_cost_limit, execution)
+        recovery = self._build_recovery(model_cost_limit, execution, model)
         if recovery is not None and checkpoint_port is not None:
             checkpoint_port = recovery.journal(checkpoint_port, context.get("checkpoint"))
         return FunctionCallingHarness(
@@ -321,16 +321,21 @@ class DesktopTaskHarnessFactory:
                                if self._tool_policy is not None else None),
         )
 
-    def _build_recovery(self, model_cost_limit: float | None, execution: HarnessExecutionContext):
+    def _build_recovery(self, model_cost_limit: float | None, execution: HarnessExecutionContext,
+                        model: ModelPort):
         manifest = getattr(self._model_factory, "recovery_manifest", None)
         if self._workspace_root is None or not isinstance(manifest, Mapping):
             return None
         from app.services.runner.recovery import DesktopRecoveryBinding
         from app.services.tool_feedback import ToolFeedbackPolicy
         feedback_policy = ToolFeedbackPolicy.from_config(getattr(default_tool_executor.result_storage, "config", None))
+        guidance = model if isinstance(model, GuidanceInjectingModel) else None
+        if guidance is not None:
+            guidance.enable_recovery(execution)
         return DesktopRecoveryBinding(self._workspace_root, manifest, tools=self._tools,
             execution=execution,
             feedback_policy=feedback_policy,
+            guidance_model=guidance,
             policy=self._tool_policy, state_root=self._recovery_state_root,
             budgets={"iterations": self._max_iterations, "toolCalls": self._max_tool_calls,
                      "totalTokens": self._max_total_tokens, "modelCost": model_cost_limit})

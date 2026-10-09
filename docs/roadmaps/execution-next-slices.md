@@ -37,6 +37,10 @@ and corrected receipt, fingerprint, lease, cancellation and UI race boundaries.
    lives outside the tool workspace with verified legacy copies. Recovery
    requires the same owned live lease/attempt; expired leases and in-flight
    model calls need reconciliation. See [ADR-0115](../architecture/decisions/0115-private-runner-resume-images.md).
+   Follow-up acceptance also covers the production guidance ledger: private
+   consumption cursors prevent repeated old guidance after restart. Attempt
+   exclusion continues through durable Artifact reporting, including blocked
+   publication and failure exits.
 3. **Runner availability and chat UX.** Project durable PENDING/RUNNING state and
    matching Runner availability in the frontend. Acceptance: an explicitly
    selected Agent with no Runner visibly waits without reporting execution.
@@ -52,6 +56,11 @@ and corrected receipt, fingerprint, lease, cancellation and UI race boundaries.
    explicit WorkUnit dependencies and Contract acceptance. No synthetic DAG or
    second business authority was introduced. See
    [ADR-0116](../architecture/decisions/0116-runner-contact-and-chat-execution-status.md).
+   Real SQLite/HTTP parallel workers now share the authenticated lease owner;
+   ready siblings progress while an older attempt is busy. Explicit CLI recovery
+   targets its original Mission, full quotas permit existing-lease recovery,
+   and both database backends exclude expired capacity. See
+   [ADR-0117](../architecture/decisions/0117-fair-claims-and-targeted-resume.md).
 4. **Historical code debt.** Split the oversized Harness, Runner and database
    modules while retaining contracts. Acceptance: the full audit shrinks and
    each refactor preserves state/lease tests. The PR quality gate prevents growth
@@ -62,6 +71,8 @@ and corrected receipt, fingerprint, lease, cancellation and UI race boundaries.
    `1584bb7`, the raw audit initially drops oversized modules from 19 to 16 and
    functions above complexity 20 from 94 to 88. One retired exemption was
    removed; none was added. Remaining unrelated historical debt is still visible.
+   Lambda functions now participate in the same incremental complexity gate;
+   the public quality standard distinguishes enforcement from review targets.
 
 CI configuration and remaining external evidence gaps are governed by
 [the CI guide](../development/ci.md). Operational schema checks are in

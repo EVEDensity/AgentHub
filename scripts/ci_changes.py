@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 GO_IMAGES = (
@@ -22,7 +23,49 @@ GO_IMAGES = (
     ("mcp-gateway", "mcp-gateway"),
     ("iam", "iam-service"),
     ("audit-log", "audit-log-service"),
+    ("tool-permission", "tool-permission-service"),
+    ("agent-runtime-control-plane", "agent-runtime-control-plane"),
 )
+PYTHON_APP_IMAGES = (
+    ("runner", "runner_service"),
+    ("verifier", "verifier_service"),
+    ("decision-expiry", "decision_expiry_service"),
+)
+PYTHON_SHARED_IMAGES = (
+    ("model-adapter", "model_adapter_service"),
+    ("summarization", "summarization_service"),
+    ("offline-knowledge", "offline_knowledge_service"),
+    ("document-pipeline", "document_pipeline_service"),
+    ("evaluation-batch", "evaluation_batch_service"),
+)
+RUST_IMAGES = (
+    "stream-core", "retrieval-core", "fanout-core", "patch-merge-core",
+    "memory-segment-core",
+)
+
+
+def _container_images(changed: Callable[..., bool], go: bool, rust: bool, frontend: bool) -> list[dict]:
+    images = []
+
+    def image(name: str, file: str, context: str = ".") -> None:
+        images.append({"name": name, "file": file, "context": context})
+
+    if go:
+        for name, module in GO_IMAGES:
+            image(name, f"services/go/{module}/Dockerfile")
+    for name, module in PYTHON_APP_IMAGES:
+        if changed("app/", f"services/python/{module}/"):
+            image(name, f"services/python/{module}/Dockerfile")
+    for name, module in PYTHON_SHARED_IMAGES:
+        if changed("services/python/shared/", "services/python/pyproject.toml",
+                   f"services/python/{module}/"):
+            image(name, f"services/python/{module}/Dockerfile")
+    if rust:
+        for module in RUST_IMAGES:
+            image(module, f"services/rust/crates/{module}/Dockerfile")
+    if frontend:
+        image("frontend", "frontend/Dockerfile")
+    return images
 
 
 def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
@@ -38,25 +81,13 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
 
     contracts = changed("platform/contracts/", "tests/contracts/")
     go = contracts or changed("services/go/")
-    frontend = contracts or changed("frontend/", "app/api/", "tests/api/")
+    frontend = contracts or changed("frontend/", "app/api/", "app/schemas/", "tests/api/")
     rust = contracts or changed("services/rust/")
     windows_cli = contracts or changed(
         "app/", "desktop/", "tests/cli/", "tests/desktop/", "tests/npm/",
         "requirements", "pyproject.toml", "release/", "scripts/build-cli-",
     )
-    images = []
-    if go:
-        images.extend(
-            {"name": name, "file": f"services/go/{module}/Dockerfile"}
-            for name, module in GO_IMAGES
-        )
-    if changed("services/python/"):
-        images.append({
-            "name": "model-adapter",
-            "file": "services/python/model_adapter_service/Dockerfile",
-        })
-    if frontend:
-        images.append({"name": "frontend", "file": "frontend/Dockerfile"})
+    images = _container_images(changed, go, rust, frontend)
     return {
         "go": go, "frontend": frontend, "rust": rust,
         "windows_cli": windows_cli, "docker": bool(images),

@@ -20,6 +20,8 @@ from app.domain import (
     WorkUnit,
 )
 
+from app.repositories.mission_workspace_claim_selection import WorkspaceClaimSelectionMixin
+
 Execute = Callable[..., Awaitable[None]]
 FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
 FetchAll = Callable[..., Awaitable[list[dict[str, Any]]]]
@@ -46,7 +48,7 @@ def _decode_json_array(value: object, field_name: str) -> list[Any]:
     return value
 
 
-class MissionRepository:
+class MissionRepository(WorkspaceClaimSelectionMixin):
     """PostgreSQL persistence for immutable contracts and Mission snapshots."""
 
     def __init__(
@@ -939,7 +941,7 @@ class MissionRepository:
         except ValueError:
             return None
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            return None
         return parsed
 
     def _first_claimable_row(
@@ -950,7 +952,7 @@ class MissionRepository:
         now = datetime.now(timezone.utc)
         for row in rows:
             expires_at = self._sqlite_lease_expires_at(row)
-            if str(row.get("status") or "") == "LEASED" and expires_at is None:
+            if str(row.get("status") or "") in {"LEASED", "RUNNING"} and expires_at is None:
                 # A leased row without a parseable expiry is ambiguous; never
                 # hand it to a Runner for replay.
                 continue
@@ -1063,228 +1065,6 @@ class MissionRepository:
         )
         return self._work_unit_from_row(row) if row is not None else None
 
-    async def get_workspace_bound_work_unit_for_claim(
-        self,
-        workspace_id: str,
-        *,
-        agent_id: str,
-        adapter_type: str,
-        supported_work_unit_kinds: tuple[str, ...],
-        runner_id: str | None = None,
-    ) -> tuple[Mission, WorkUnit] | None:
-        """Lock one ready unit, optionally reopening this runner's lease.
-
-        A normal claim only considers ``PENDING``/``RETRYING`` rows.  Resume
-        callers may pass ``runner_id`` to include a still-valid ``LEASED``
-        row, but only when its durable lease belongs to that same runner.
-        This prevents another process from stealing an in-flight execution.
-        """
-        include_leased = bool(runner_id and runner_id.strip())
-
-        if self._is_sqlite_connection():
-            kinds = list(supported_work_unit_kinds)
-            kind_offset = 5 if include_leased else 4
-            kind_placeholders = ", ".join(
-                f"${kind_offset + index}" for index in range(len(kinds))
-            )
-            status_clause = (
-                "AND (candidate.status IN ('PENDING', 'RETRYING') OR ("
-                "candidate.status IN ('LEASED', 'RUNNING') AND candidate.lease IS NOT NULL "
-                "AND json_extract(candidate.lease, '$.runnerId')=$4))"
-                if include_leased
-                else "AND candidate.status IN ('PENDING', 'RETRYING')"
-            )
-            query_args = (
-                [workspace_id, agent_id, adapter_type, runner_id, *kinds]
-                if include_leased
-                else [workspace_id, agent_id, adapter_type, *kinds]
-            )
-            try:
-                candidate_rows = await self._fetch_all(
-                    f"""SELECT
-                              mission.id AS selected_mission_id,
-                              mission.workspace_id AS selected_workspace_id,
-                              mission.title AS selected_title,
-                              mission.objective AS selected_objective,
-                              mission.source AS selected_source,
-                              mission.contract_id AS selected_contract_id,
-                              mission.contract_version AS selected_contract_version,
-                              mission.status AS selected_status,
-                              mission.plan_version AS selected_plan_version,
-                              mission.created_by AS selected_created_by,
-                              mission.created_at AS selected_created_at,
-                              mission.updated_at AS selected_updated_at,
-                              candidate.id, candidate.mission_id,
-                              candidate.parent_work_unit_id, candidate.assigned_agent_id,
-                              candidate.kind, candidate.dependencies, candidate.input_refs,
-                              candidate.expected_outputs, candidate.required_capabilities,
-                              candidate.assigned_adapter, candidate.status,
-                              candidate.attempt, candidate.lease
-                       FROM missions AS mission
-                       JOIN work_units AS candidate
-                         ON candidate.mission_id=mission.id
-                       WHERE mission.workspace_id=$1
-                         AND mission.status='RUNNING'
-                         AND (
-                             candidate.parent_work_unit_id IS NOT NULL
-                             OR (
-                                 mission.source->>'type' = 'a2a.inbound'
-                                 AND candidate.parent_work_unit_id IS NULL
-                                 AND candidate.kind = 'a2a.inbound'
-                                 AND candidate.assigned_adapter <> 'a2a.outbound'
-                             )
-                             OR (
-                                 mission.source->>'type' = 'a2a'
-                                 AND candidate.parent_work_unit_id IS NULL
-                                 AND candidate.kind = 'a2a.delegate'
-                                 AND candidate.assigned_adapter = 'a2a.outbound'
-                             )
-                             OR (
-                                 mission.source->>'type' = 'mission.fork'
-                                 AND candidate.parent_work_unit_id IS NULL
-                                 AND candidate.kind = 'mission.fork'
-                                 AND candidate.assigned_adapter <> 'a2a.outbound'
-                             )
-                             OR (
-                                 (mission.source->>'type' = 'manual' OR (mission.source->>'type' = 'chat' AND candidate.assigned_adapter = 'function-calling'))
-                                 AND candidate.parent_work_unit_id IS NULL
-                                 AND candidate.kind = 'desktop.task'
-                                 AND candidate.assigned_adapter <> 'a2a.outbound'
-                             )
-                         )
-                         AND candidate.assigned_agent_id=$2
-                         AND candidate.assigned_adapter=$3
-                         AND candidate.kind IN ({kind_placeholders})
-                         {status_clause}
-                         AND NOT EXISTS (
-                             SELECT 1
-                             FROM json_each(candidate.dependencies) AS dep
-                             LEFT JOIN work_units AS dependency_unit
-                               ON dependency_unit.id = dep.value
-                             WHERE dependency_unit.id IS NULL
-                                OR dependency_unit.mission_id <> candidate.mission_id
-                                OR dependency_unit.status <> 'SUCCEEDED'
-                         )
-                       ORDER BY (
-                           SELECT COUNT(*)
-                           FROM work_units AS active_unit
-                           WHERE active_unit.mission_id=mission.id
-                             AND active_unit.status IN ('LEASED', 'RUNNING')
-                       ) ASC,
-                       mission.created_at ASC,
-                       mission.id ASC,
-                       candidate.id ASC
-                       LIMIT 32""",
-                    *query_args,
-                )
-            except sqlite3.OperationalError as exc:
-                # SQLite's json_extract raises on corrupt lease JSON. Such a
-                # row is ambiguous and must be treated as unavailable rather
-                # than allowing a claim path to crash or replay work.
-                if "malformed JSON" in str(exc):
-                    return None
-                raise
-            row = self._first_claimable_row(candidate_rows)
-            if row is None:
-                return None
-            return self._mission_from_claim_row(row), self._work_unit_from_row(row)
-        status_clause = (
-            "AND (candidate.status IN ('PENDING', 'RETRYING') OR ("
-            "candidate.status IN ('LEASED', 'RUNNING') AND candidate.lease IS NOT NULL "
-            "AND candidate.lease->>'runnerId'=$4 "
-            "AND (candidate.lease->>'expiresAt')::timestamptz > CURRENT_TIMESTAMP))"
-            if include_leased
-            else "AND candidate.status IN ('PENDING', 'RETRYING')"
-        )
-        kind_array_placeholder = "$5" if include_leased else "$4"
-        query_args = (
-            [workspace_id, agent_id, adapter_type, runner_id, list(supported_work_unit_kinds)]
-            if include_leased
-            else [workspace_id, agent_id, adapter_type, list(supported_work_unit_kinds)]
-        )
-        row = await self._fetch_one(
-            f"""SELECT
-                      mission.id AS selected_mission_id,
-                      mission.workspace_id AS selected_workspace_id,
-                      mission.title AS selected_title,
-                      mission.objective AS selected_objective,
-                      mission.source AS selected_source,
-                      mission.contract_id AS selected_contract_id,
-                      mission.contract_version AS selected_contract_version,
-                      mission.status AS selected_status,
-                      mission.plan_version AS selected_plan_version,
-                      mission.created_by AS selected_created_by,
-                      mission.created_at AS selected_created_at,
-                      mission.updated_at AS selected_updated_at,
-                      candidate.id, candidate.mission_id,
-                      candidate.parent_work_unit_id, candidate.assigned_agent_id,
-                      candidate.kind, candidate.dependencies, candidate.input_refs,
-                      candidate.expected_outputs, candidate.required_capabilities,
-                      candidate.assigned_adapter, candidate.status,
-                      candidate.attempt, candidate.lease
-               FROM missions AS mission
-               JOIN work_units AS candidate
-                 ON candidate.mission_id=mission.id
-               WHERE mission.workspace_id=$1
-                 AND mission.status='RUNNING'
-                 AND (
-                     candidate.parent_work_unit_id IS NOT NULL
-                     OR (
-                         mission.source->>'type' = 'a2a.inbound'
-                         AND candidate.parent_work_unit_id IS NULL
-                         AND candidate.kind = 'a2a.inbound'
-                         AND candidate.assigned_adapter <> 'a2a.outbound'
-                     )
-                     OR (
-                         mission.source->>'type' = 'a2a'
-                         AND candidate.parent_work_unit_id IS NULL
-                         AND candidate.kind = 'a2a.delegate'
-                         AND candidate.assigned_adapter = 'a2a.outbound'
-                     )
-                     OR (
-                         mission.source->>'type' = 'mission.fork'
-                         AND candidate.parent_work_unit_id IS NULL
-                         AND candidate.kind = 'mission.fork'
-                         AND candidate.assigned_adapter <> 'a2a.outbound'
-                     )
-                     OR (
-                         (mission.source->>'type' = 'manual' OR (mission.source->>'type' = 'chat' AND candidate.assigned_adapter = 'function-calling'))
-                         AND candidate.parent_work_unit_id IS NULL
-                         AND candidate.kind = 'desktop.task'
-                         AND candidate.assigned_adapter <> 'a2a.outbound'
-                     )
-                 )
-                 AND candidate.assigned_agent_id=$2
-                 AND candidate.assigned_adapter=$3
-                 AND candidate.kind = ANY({kind_array_placeholder}::text[])
-               {status_clause}
-                 AND NOT EXISTS (
-                     SELECT 1
-                     FROM jsonb_array_elements_text(candidate.dependencies) AS dep(id)
-                     LEFT JOIN work_units AS dependency_unit
-                       ON dependency_unit.id=dep.id
-                     WHERE dependency_unit.id IS NULL
-                        OR dependency_unit.mission_id <> candidate.mission_id
-                        OR dependency_unit.status <> 'SUCCEEDED'
-                 )
-               ORDER BY (
-                   SELECT COUNT(*)
-                   FROM work_units AS active_unit
-                   WHERE active_unit.mission_id=mission.id
-                     AND active_unit.status IN ('LEASED', 'RUNNING', 'VERIFYING')
-               ) ASC,
-               mission.created_at ASC,
-               mission.id ASC,
-               candidate.id ASC
-               LIMIT 1
-               FOR UPDATE OF mission, candidate SKIP LOCKED""",
-            *query_args,
-        )
-        if row is None:
-            return None
-        mission = self._mission_from_claim_row(row)
-        return mission, self._work_unit_from_row(row)
-
     async def get_workspace_verification_candidate(
         self,
         workspace_id: str,
@@ -1350,17 +1130,20 @@ class MissionRepository:
         """Count non-expired Runner attempts against the tenant quota."""
 
         if self._is_sqlite_connection():
-            # The local profile maps the tenant onto the workspace (see the
-            # SQLite admission resolver); expired leases are excluded by the
-            # application-level expiry checks, not by SQL time functions.
-            row = await self._fetch_one(
-                """SELECT COUNT(*) AS active_count
+            rows = await self._fetch_all(
+                """SELECT active_unit.lease
                    FROM work_units AS active_unit
                    JOIN missions AS mission ON mission.id = active_unit.mission_id
                    WHERE mission.workspace_id = $1
                      AND active_unit.status IN ('LEASED', 'RUNNING')
                      AND active_unit.lease IS NOT NULL""",
                 tenant_id,
+            )
+            now = datetime.now(timezone.utc)
+            return sum(
+                expiry > now
+                for row in rows
+                if (expiry := self._sqlite_lease_expires_at(row)) is not None
             )
         else:
             row = await self._fetch_one(

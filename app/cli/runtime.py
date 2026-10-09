@@ -30,6 +30,7 @@ import httpx
 
 from app.cli import resume as _resume
 from app.cli.resume import ResumeExecutionPlan
+from app.cli.server_environment import build_server_env
 from app.cli.control_state import control_state_directory
 from app.services.recovery_store import runner_state_directory
 from app.cli.transport import HttpTransport
@@ -285,73 +286,6 @@ def build_contract(contract_id: str, time_seconds: int) -> dict[str, Any]:
     }
 
 
-def build_server_env(
-    *,
-    db_path: Path,
-    data_dir: Path,
-    workspace_root: Path,
-    port: int,
-    model: CliModelSettings,
-    max_total_tokens: int,
-    runner_timeout_seconds: float,
-    project_instructions_file: Path | None = None,
-    web_search: bool = False,
-    tool_permission_mode: str | None = None,
-    tool_policy: ToolExecutionPolicy | None = None,
-    disable_tools: bool = False,
-) -> dict[str, str]:
-    """Env for the isolated SQLite mission-control subprocess.
-
-    The model API key travels only through the subprocess environment;
-    it is never written to any file under the state directory. Project
-    instructions (merged layered AGENTS.md), when present, are exposed
-    to the desktop model factory through
-    ``AGENTHUB_DESKTOP_PROJECT_INSTRUCTIONS_FILE``.
-    """
-    env = os.environ.copy()
-    env.update(
-        {
-            "AGENTHUB_DB_BACKEND": "sqlite",
-            "AGENTHUB_SQLITE_PATH": str(db_path),
-            "AGENTHUB_LOCAL_DATA": str(data_dir),
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER": "1",
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_BASE_URL": f"http://127.0.0.1:{port}",
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY": "1",
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_INTERVAL_SECONDS": "1",
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_DERIVATION_INTERVAL_SECONDS": "1",
-            "AGENTHUB_DESKTOP_WORKSPACE_ROOT": str(workspace_root),
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL": model.model,
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_MODEL_BASE_URL": model.base_url,
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_PROVIDER": model.provider,
-            "AGENTHUB_DESKTOP_MODEL_API_KEY": model.api_key,
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_MAX_ITERATIONS": "8",
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_MAX_TOOL_CALLS": "32",
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_MAX_TOTAL_TOKENS": str(max_total_tokens),
-            "AGENTHUB_DESKTOP_LOCAL_RUNNER_TIMEOUT_SECONDS": str(
-                runner_timeout_seconds
-            ),
-            # Keep the self-hosted adapter path even if a gateway is
-            # configured in the ambient environment.
-            "AGENTHUB_LLM_GATEWAY": "",
-            "AGENTHUB_DESKTOP_DISABLE_TOOLS": "1" if disable_tools else "0",
-        }
-    )
-    if project_instructions_file is not None:
-        env[_PROJECT_INSTRUCTIONS_FILE_ENV] = str(project_instructions_file)
-    # North-star M1: the developer CLI exposes the public-web search tool
-    # by default; packaged desktop deployments keep it off.
-    env[_WEB_SEARCH_ENV] = "1" if web_search else "0"
-    # North-star I-6b: Codex-style tool permission tiering. Only a
-    # resolved tier travels — an invalid tier fails fast at the CLI.
-    if tool_policy is None:
-        tool_policy = resolve_tool_execution_policy(
-            workspace_root,
-            mode=tool_permission_mode,
-            environment_value=env.get(_TOOL_PERMISSION_ENV),
-        )
-    env[_TOOL_PERMISSION_ENV] = tool_policy.mode.value
-    return env
-
 
 def free_port(start: int = 28_100) -> int:
     port = start
@@ -388,6 +322,7 @@ class MissionControlProcess:
         web_search: bool = False,
         tool_permission_mode: str | None = None,
         disable_tools: bool = False,
+        resume_mission_id: str | None = None,
     ) -> None:
         self._state_dir = state_dir
         self._user_state_dir = state_dir
@@ -404,6 +339,7 @@ class MissionControlProcess:
             environment_value=os.environ.get(_TOOL_PERMISSION_ENV),
         )
         self._disable_tools = disable_tools
+        self._resume_mission_id = resume_mission_id
         self.port = port or free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self._process: subprocess.Popen[bytes] | None = None
@@ -438,6 +374,7 @@ class MissionControlProcess:
             tool_permission_mode=self._tool_permission_mode,
             tool_policy=self._tool_policy,
             disable_tools=self._disable_tools,
+            resume_mission_id=self._resume_mission_id,
         )
         log_path = (
             logs_dir / f"mission-control-{time.strftime('%Y%m%d-%H%M%S')}.log"
@@ -1167,8 +1104,9 @@ def execute_objective(
         max_total_tokens = DEFAULT_MAX_TOTAL_TOKENS
     """Run one objective end to end and return the structured result.
 
-    ``resume_mission_id`` prepends the prior Mission's objective, status
-    and deposited summary as read-only context. Raises ``RuntimeError``
+    Without compact context, ``resume_mission_id`` recovers only the original
+    Mission's owned live attempt. Compact context starts a new chat turn.
+    Raises ``RuntimeError``
     on infrastructure failures (server did not start, HTTP errors);
     mission-level failure is reported through the result status, never
     by faking success.
@@ -1225,8 +1163,9 @@ def execute_objective(
         runner_timeout_seconds=runner_timeout_seconds,
         project_instructions=compiled_project_context.render(),
         web_search=web_search,
-                tool_permission_mode=tool_permission_mode,
-                disable_tools=disable_tools,
+        tool_permission_mode=tool_permission_mode,
+        disable_tools=disable_tools,
+        resume_mission_id=_resume.execution_resume_target(resume_mission_id, context_text),
     ) as process:
         with MissionControlClient(process.base_url) as client:
             client.login()

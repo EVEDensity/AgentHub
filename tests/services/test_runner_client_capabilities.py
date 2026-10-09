@@ -42,3 +42,22 @@ async def test_optional_capabilities_are_transmitted_only_when_explicit(capabili
     if capabilities:
         expected["supportedCapabilities"] = list(capabilities)
     assert json.loads(request.content) == expected
+
+
+@pytest.mark.asyncio
+async def test_explicit_resume_transmits_only_target_not_client_selected_owner():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"claimStatus": "idle", "workUnit": None})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        control = MissionControlRunnerClient("http://test", access_token="principal", http_client=client)
+        await control.claim_ready_work_unit("workspace", runner_id="untrusted-owner",
+            agent_id="executor", adapter_type="function-calling",
+            supported_work_unit_kinds=("desktop.task",), lease_seconds=60,
+            resume_mission_id="requested-mission")
+    body = json.loads(requests[0].content)
+    assert body["resumeMissionId"] == "requested-mission"
+    assert "runnerId" not in body

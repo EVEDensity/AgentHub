@@ -21,10 +21,11 @@ from app.domain import (
 )
 from app.repositories import MissionRepository
 from app.services.artifact_store_service import ContentAddressedArtifactPublisher
+from app.services.desktop_guidance import InProcessGuidanceSource
 from app.services.harness_checkpoint import HarnessEventType
 from app.services.harness_service import FunctionTool
 from app.services.mission_service import MissionService
-from app.services.model_contract import ModelResponse, ModelUsage, ToolCall
+from app.services.model_contract import ModelResponse, ModelUsage, ToolCall, ToolResult
 from app.services.runner.model import DesktopTaskHarnessFactory
 from app.services.runner_checkpoint import MissionControlHarnessCheckpointFactory
 from app.services.runner_service import DesktopTaskClaimedWorkResolver, WorkUnitRunner
@@ -99,6 +100,10 @@ class RealControl:
         unit = await self.service.heartbeat_work_unit(mission_id, work_unit_id, actor=self.actor, **kwargs)
         return unit.model_dump(mode="json", by_alias=True)
 
+    async def start_work_unit(self, mission_id, work_unit_id, **kwargs):
+        unit = await self.service.start_work_unit(mission_id, work_unit_id, actor=self.actor, **kwargs)
+        return unit.model_dump(mode="json", by_alias=True)
+
     async def register_artifact(self, mission_id, work_unit_id, *, artifact, kind, **kwargs):
         value = await self.service.register_artifact(mission_id, work_unit_id, kind=ArtifactKind(kind),
             digest=artifact.digest, content_address=artifact.content_address, size_bytes=artifact.size_bytes,
@@ -133,21 +138,38 @@ class ProcessModel:
         return ModelResponse(content="real tools completed", usage=ModelUsage(50, 10, .05))
 
 
+class GuidanceProcessModel:
+    def __init__(self, root: Path):
+        self.root = root
+        self.inner = ProcessModel(root)
+
+    async def complete(self, request):
+        blocks = [message.content for message in request.messages if message.source_id == "guidance"]
+        with (self.root / "guidance-messages.jsonl").open("a") as handle:
+            handle.write(json.dumps(blocks) + "\n")
+        results = [json.loads(message.content) for message in request.messages if message.role == "tool"]
+        feedback = tuple(ToolResult(value["callId"], value["name"], value["success"], value["content"])
+                         for value in results)
+        return await self.inner.complete(request, feedback)
+
+
 class ProcessModelFactory:
     recovery_manifest = {"provider": "deterministic-process-test", "model": "bounded-v1",
                          "messages": [{"role": "system", "content": "process acceptance"}]}
 
-    def __init__(self, root: Path, feedback: bool = False):
+    def __init__(self, root: Path, feedback: bool = False, guidance: bool = False):
         self.root = root
         self.feedback = feedback
+        self.guidance = guidance
 
     def build(self, tools):
-        return ProcessModel(self.root, self.feedback)
+        return GuidanceProcessModel(self.root) if self.guidance else ProcessModel(self.root, self.feedback)
 
 
 async def execute(root: Path, mode: str):
     workspace = root / "workspace"
     feedback = mode.startswith("feedback_")
+    guidance = mode.startswith("guidance_")
     if feedback:
         from app.services.tool_executor import tool_executor
         from app.services.tools.result_storage import ContentBudgetConfig, ResultStorage
@@ -155,7 +177,7 @@ async def execute(root: Path, mode: str):
             max_result_chars=5, max_total_results_chars=8, truncation_marker="*CUT*"))
         tool_executor.result_storage._used_budget = 999999  # another execution cannot consume this turn
     async with control_repository(root / "control.sqlite3") as repository:
-        control = RealControl(repository, root, mode)
+        control = RealControl(repository, root, mode.removeprefix("guidance_"))
         unit = await repository.get_work_unit("wu-1")
 
         async def append(arguments):
@@ -165,14 +187,18 @@ async def execute(root: Path, mode: str):
             if mode == "ambiguous":
                 (root / "paused").write_text("started")
                 await asyncio.Event().wait()
+            if guidance and arguments["text"] == "one":
+                await control.service.add_mission_guidance("mis-1", content="new guidance after saved cursor",
+                    actor=ActorRef(type="human", id="user-1"))
             return "written " + arguments["text"]
 
-        model_factory = ProcessModelFactory(root, feedback)
+        model_factory = ProcessModelFactory(root, feedback, guidance)
         if mode == "context_changed":
             model_factory.recovery_manifest = {**model_factory.recovery_manifest, "model": "different"}
         factory = DesktopTaskHarnessFactory(model_factory,
             tools=[FunctionTool("append", append, lambda arguments: arguments)],
             workspace_root=workspace, recovery_state_root=root / "private",
+            guidance_source=_guidance_source(repository, guidance),
             checkpoint_factory=MissionControlHarnessCheckpointFactory(control, runner_id="runner-1"),
             tool_policy=ToolExecutionPolicy.for_mode("edit", workspace), max_iterations=3,
             max_tool_calls=2, max_total_tokens=180)
@@ -182,7 +208,7 @@ async def execute(root: Path, mode: str):
             assigned_adapter="function-calling", claimed_work_resolver=resolver,
             supported_work_unit_kinds=("desktop.task",), publisher=ContentAddressedArtifactPublisher(
                 ArtifactStoreSettings(backend="local", local_root=root / "artifacts")))
-        if mode in {"resume", "resume_short", "feedback_resume"}:
+        if mode in {"resume", "resume_short", "feedback_resume", "guidance_resume"}:
             poll = await runner.claim_ready_and_run("workspace-1")
             result = poll.run_result
             (root / "result.json").write_text(json.dumps({"claimStatus": poll.claim_status.value,
@@ -190,7 +216,7 @@ async def execute(root: Path, mode: str):
             return
         execution = await resolver.resolve(unit.model_dump(mode="json", by_alias=True))
         harness = execution.harness
-        if mode in {"receipt", "feedback_receipt"}:
+        if mode in {"receipt", "feedback_receipt", "guidance_receipt"}:
             complete = harness._receipt_store.complete
 
             def complete_then_pause(*args, **kwargs):
@@ -205,6 +231,10 @@ async def execute(root: Path, mode: str):
             harness=harness, resume=execution.execution_input.resume)
         (root / "result.json").write_text(json.dumps({"success": result.success,
             "status": result.work_unit["status"]}))
+
+
+def _guidance_source(repository, enabled):
+    return InProcessGuidanceSource(lambda: repository) if enabled else None
 
 
 if __name__ == "__main__":

@@ -149,6 +149,7 @@ class FunctionCallingHarness:
         self._receipt_store = receipt_store
         self._approval_callback = approval_callback
         self._recovery = recovery
+        self._recovery_close_deferred = False
         self._feedback_policy = feedback_policy
 
     @property
@@ -164,21 +165,27 @@ class FunctionCallingHarness:
     async def execute(self, request: HarnessRequest) -> HarnessResult:
         from app.services.harness_loop import HarnessLoop
 
-        if request.on_text_delta is None and self._checkpoint_port is not None:
-            publish = getattr(self._checkpoint_port, "publish_text_delta", None)
-            if callable(publish):
-                async def publish_delta(text: str) -> None:
-                    await publish("evt-stream-" + uuid.uuid4().hex, text)
-                request = replace(request, on_text_delta=publish_delta)
-        bind = getattr(self._checkpoint_port, "bind_request", None)
-        if callable(bind):
-            bind(request)
         try:
+            if request.on_text_delta is None and self._checkpoint_port is not None:
+                publish = getattr(self._checkpoint_port, "publish_text_delta", None)
+                if callable(publish):
+                    async def publish_delta(text: str) -> None:
+                        await publish("evt-stream-" + uuid.uuid4().hex, text)
+                    request = replace(request, on_text_delta=publish_delta)
+            bind = getattr(self._checkpoint_port, "bind_request", None)
+            if callable(bind):
+                bind(request)
             return await HarnessLoop(self, request).run()
         finally:
-            self.close_recovery()
+            if not self._recovery_close_deferred:
+                self.close_recovery()
+
+    def defer_recovery_close(self) -> None:
+        """Transfer closure to the Runner through durable reporting."""
+        self._recovery_close_deferred = True
 
     def close_recovery(self) -> None:
+        self._recovery_close_deferred = False
         if self._recovery is not None:
             self._recovery.close()
 

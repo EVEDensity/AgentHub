@@ -24,6 +24,16 @@ fingerprint overhead and downtime cannot replenish the execution time budget.
 Provider API keys are excluded; the configured endpoint is represented by a
 digest. Changing model, context, grants, budgets or workspace refuses recovery.
 
+For the production guidance wrapper, the private image also binds the exact
+Mission/WorkUnit/attempt, visited mission-ledger sequence and event identities,
+and actual injected guidance blocks. A saved cursor is restored into the shared
+worker consumption ledger; subsequent model rounds read only later events and
+do not reinject old blocks. The normal shared-worker once-only behavior remains.
+Strict guidance reads fail before model invocation on malformed/unavailable
+pages or configured state limits; compatibility callers retain best-effort
+guidance. The guidance protocol and limits participate in the context digest.
+Images from a guided execution that lack this complete state are refused.
+
 The image is saved before public admission. Recovery loads the exact admitted
 checkpoint ID and digest, never a newer unadmitted candidate. Old images are
 pruned only after the full returned metadata is independently checked against
@@ -51,6 +61,9 @@ expired or changed leases require explicit reconciliation. A local OS-owned
 attempt lock stops simultaneous workers from taking over a live execution and
 is released automatically on process death. This supplements server fencing;
 it is not a distributed ownership protocol.
+Runner retains that lock through Artifact publication, registration and durable
+completion, closing it on every exit. Standalone Harness callers still release
+their own lock when execution finishes.
 
 Private state lives outside the writable workspace, under
 `AGENTHUB_RUNNER_STATE_ROOT` or the user's `.agenthub-runner-state`, partitioned

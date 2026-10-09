@@ -32,13 +32,37 @@ do not establish production readiness.
 
 [`scripts/ci_changes.py`](../../scripts/ci_changes.py) selects additional jobs
 from the changed dependency paths. Frontend/API changes run TypeScript,
-Vitest, a production build and Playwright browser checks in one job. Go changes
+Vitest, a production build and Playwright browser checks in one job. API schema
+DTO changes also select those frontend consumers. Go changes
 run vet and race tests for every workspace module. Rust changes run locked
 workspace tests. CLI/runtime/dependency changes run CLI, desktop and release
 contract tests, including real CLI subprocesses, on Windows/Python 3.12.
 Public contract changes select all runtime consumers. Container builds follow
-the Go, Python service and frontend inputs; deployment/runtime service changes
-also start and health-check the Docker Compose smoke stack. CI configuration
+the actual supported service recipes and their COPY inputs:
+
+- Go workspace changes build all ten supported Go service images, including the
+  permission and runtime-control services.
+- Each Python service's source or Dockerfile selects its own image. Changes to
+  `services/python/shared/` or Python project metadata select the five images
+  that copy those inputs. Changes under `app/` select the Runner, Verifier and
+  Decision expiry images, which copy the root application.
+- Rust workspace changes build the five performance-core images referenced by
+  `deploy/docker-compose.platform.yml`: stream, retrieval, fanout, patch-merge and
+  memory-segment. Their Dockerfiles copy `services/rust` from the repository-root
+  context; the matrix carries each recipe's explicit build context.
+- Frontend inputs select the frontend image.
+
+Current configured builds cover 24 images on an all-checks run. The legacy
+AgentNet Dockerfile is not a maintained platform deployment target and uses a
+different old Rust build context; it is excluded from image validation. Its crate
+still participates in the locked Rust workspace tests. Inventory tests prevent
+new supported recipes from silently escaping selection.
+
+Deployment/runtime service changes
+also start and health-check the existing Docker Compose smoke stack. That stack
+starts Gateway and summarization with local infrastructure; image builds alone
+do not prove every service's boot, credential configuration or business flow.
+CI configuration
 changes and manual runs select every optional job.
 
 `CI Gate` requires all core checks and every selected optional check to pass.
@@ -77,7 +101,10 @@ branch complexity score of 15. Existing modules/functions retain the normal
 that limit. Deletion removes debt. Copies and renames count as new files and
 must meet new-module limits; changing a path cannot grant a legacy exemption.
 Git filenames are read with NUL delimiters, including names containing spaces
-or Unicode, and conditionally defined/nested functions are checked by scope.
+or Unicode, and conditionally defined/nested functions and lambdas are checked
+by scope. Lambda binding/scope identities preserve the measured baseline across
+comment and line-layout changes. The [quality standard](../governance/code-quality-standard.md)
+distinguishes these enforced rules from review targets and the historical audit.
 
 The three third-party AI comment-agent workflows were removed: Cursor was a
 Claude alias, the issue-comment checkout referenced a nonexistent event field,

@@ -451,6 +451,7 @@ def build_kind_aware_workspace_runner(
     heartbeat_interval_seconds: float | None = None,
     extra_resolvers: Mapping[str, ClaimedWorkResolver] | None = None,
     supported_capabilities: tuple[str, ...] = (),
+    resume_mission_id: str | None = None,
 ) -> WorkUnitRunner:
     """Compose workspace execution for every registered model-backed root kind.
 
@@ -525,6 +526,7 @@ def build_kind_aware_workspace_runner(
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         supported_work_unit_kinds=resolver.supported_work_unit_kinds,
         supported_capabilities=supported_capabilities,
+        resume_mission_id=resume_mission_id,
     )
 
 

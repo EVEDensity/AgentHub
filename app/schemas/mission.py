@@ -166,6 +166,7 @@ class WorkUnitClaimRequest(BaseModel):
 
 class WorkspaceWorkUnitClaimRequest(WorkUnitClaimRequest):
     workspace_id: Annotated[str, Field(min_length=1, max_length=255)]
+    resume_mission_id: Annotated[str, Field(min_length=1, max_length=255, pattern=r"^\S(?:.*\S)?$")] | None = None
     supported_capabilities: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=255)], ...],
         Field(max_length=256),
@@ -174,6 +175,13 @@ class WorkspaceWorkUnitClaimRequest(WorkUnitClaimRequest):
         tuple[Annotated[str, Field(min_length=1, max_length=255)], ...],
         Field(min_length=1, max_length=32),
     ]
+
+    @field_validator("resume_mission_id")
+    @classmethod
+    def validate_resume_mission_id(cls, value: str | None) -> str:
+        if value is None or value != value.strip():
+            raise ValueError("an explicit resume target must be a nonblank Mission ID")
+        return value
 
     @field_validator("supported_work_unit_kinds")
     @classmethod

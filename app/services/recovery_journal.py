@@ -34,12 +34,13 @@ class RecoveryCheckpointJournal:
 
     def __init__(self, delegate: Any, store: ResumeImageStore, *, workspace: Path,
                  context_material: dict[str, Any], base_sequence: int = 0,
-                 tools: Mapping[str, Any] | None = None) -> None:
+                 tools: Mapping[str, Any] | None = None, guidance_model: Any = None) -> None:
         self.delegate = delegate
         self.store = store
         self.workspace = workspace.resolve()
         self.material = context_material
         self.tools = tools or {}
+        self.guidance_model = guidance_model
         self.sequence = base_sequence
         self.request: HarnessRequest | None = None
         # Every phase is meaningful for recovery, including an in-flight model.
@@ -62,7 +63,8 @@ class RecoveryCheckpointJournal:
             checkpoint_id=_checkpoint_id(checkpoint.execution, sequence), sequence=sequence,
             workspace_revision=await asyncio.to_thread(workspace_revision, self.workspace),
             context_manifest_digest=recovery_context_digest(self.request.code, self.material),
-            context_material=self.material)
+            context_material=self.material,
+            guidance_state=self.guidance_model.snapshot_guidance() if self.guidance_model is not None else None)
         digest = self.store.save(image)
         action = dict(checkpoint.next_action or {})
         action["resumeImageDigest"] = digest
@@ -175,7 +177,7 @@ def restore_resume(store: ResumeImageStore, anchor: Mapping[str, Any], *, code: 
                    workspace: Path, context_material: Mapping[str, Any],
                    receipt_store: Any, tools: Mapping[str, Any],
                    timeout: float | None = None, language: str | None = None,
-                   feedback_policy: Any = None) -> HarnessResumeInput:
+                   feedback_policy: Any = None, guidance_model: Any = None) -> HarnessResumeInput:
     action = anchor.get("nextAction")
     if anchor.get("resumeProtocolVersion") != 2 or not isinstance(action, Mapping):
         raise ResumeImageError("legacy checkpoint has no complete strict resume image")
@@ -194,4 +196,8 @@ def restore_resume(store: ResumeImageStore, anchor: Mapping[str, Any], *, code: 
     # A completed tool round needs the next model turn, not an empty terminal answer.
     if image.phase in {HarnessEventType.TOOL_STARTED.value, HarnessEventType.TOOL_COMPLETED.value} and not image.pending_tool_calls:
         image = image.model_copy(update={"response_content": None})
+    if guidance_model is not None:
+        guidance_model.restore_guidance(image.guidance_state)
+    elif image.guidance_state is not None:
+        raise ResumeImageError("saved guidance has no bound recovery model")
     return image.resume_input()
