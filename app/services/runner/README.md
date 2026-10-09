@@ -4,6 +4,10 @@ This package composes desktop authentication, model context, scoped built-in
 tools, Harness budgets/checkpoints, claim supervision and independent artifact
 verification. Durable state changes go through Mission Control.
 
+Login retries connection refusal within a bounded readiness window because the
+post-startup Runner task can start before Uvicorn binds its socket. HTTP credential
+rejection remains immediate, and local authentication bypasses environment proxies.
+
 `tool_approval.py` translates the resolved workspace permission policy into
 explicit grants for the canonical Harness tool gateway. Suggest mode denies
 workspace mutation; edit mode permits bounded workspace edits; auto mode also

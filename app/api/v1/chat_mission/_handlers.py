@@ -335,9 +335,11 @@ async def create_chat_mission(
     title = message.splitlines()[0][:80] or "Chat mission"
     contract_id = f"contract-chat-{uuid.uuid4().hex[:12]}"
 
-    service = MissionService(repository, session_event_repository=session_events)
-    try:
-        mission = await service.create_mission(
+    from app.api.v1.chat_mission._admission import admit_chat_mission
+
+    mission, work_unit = await admit_chat_mission(
+        pending_repo, resolver=resolver, rules_hit=[hit.rule.id for hit in rules_hit],
+        command=dict(
             mission_id=mission_id,
             workspace_id=request.workspace_id,
             title=title,
@@ -372,28 +374,6 @@ async def create_chat_mission(
             contract=_build_chat_contract(contract_id),
             actor=build_human_actor(user),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    await _emit(SessionEventType.MISSION_CREATED, payload={
-        "mission_id": mission.id,
-        "status": mission.status.value,
-        "participants": resolved,
-        "has_unresolved": bool(unresolved),
-        "rules_hit": [h.rule.id for h in rules_hit],
-    }, actor_override=ActorRef(type="adapter", id="chat_mission"))
-
-    # Start immediately — the web chat surface expects a running mission.
-    try:
-        mission = await service.start_mission(
-            mission_id=mission_id,
-            actor=build_human_actor(user),
-        )
-    except Exception as exc:  # noqa: BLE001 - start failures surface cleanly
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    work_unit = await _inline_derive_work_units(
-        mission_id, workspace_id=request.workspace_id, repository=repository, resolver=resolver,
     )
 
     stream_url = (

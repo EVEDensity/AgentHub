@@ -91,9 +91,10 @@ def _event_url(session_id, *, stream=False):
 
 
 def _parameters(workspace, *, stream=False, **extra):
-    parameters = {"workspaceId": workspace, **extra}
+    parameters = {"workspaceId": workspace}
     if stream:
         parameters.update(maxSeconds=0.15, pollSeconds=0.11)
+    parameters.update(extra)
     return parameters
 
 
@@ -224,13 +225,13 @@ def test_sse_drains_more_than_one_page_and_reconnects_after_event_550(session_cl
     _append_history()
     response = session_client.get(
         _event_url("session-alice", stream=True),
-        params=_parameters("alice", stream=True), headers={"X-Test-User": "alice"},
+        params=_parameters("alice", stream=True, maxSeconds=2), headers={"X-Test-User": "alice"},
     )
     assert response.status_code == 200
     assert [event["id"] for event in _frames(response)] == [f"alice-event-{index:04d}" for index in range(601)]
     resumed = session_client.get(
         _event_url("session-alice", stream=True),
-        params=_parameters("alice", stream=True, afterId="alice-event-0550"),
+        params=_parameters("alice", stream=True, afterId="alice-event-0550", maxSeconds=2),
         headers={"X-Test-User": "alice"},
     )
     assert resumed.status_code == 200

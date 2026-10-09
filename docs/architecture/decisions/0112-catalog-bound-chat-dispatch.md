@@ -1,8 +1,12 @@
 # ADR-0112: Catalog-bound single-executor chat dispatch
 
-> Status: implemented  
-> Owner: Mission Control maintainers  
-> Last reviewed: 2026-10-09  
+> Status: implemented
+> Owner: Mission Control maintainers
+> Last reviewed: 2026-10-09
+
+Direct chat admission commits Mission/Contract creation, start, catalog-bound
+WorkUnit creation and its Mission-created session receipt together. A failed
+dispatch rolls back this admission while retaining the original chat input.
 > Scope: chat admission, WorkUnit binding, controlled desktop claims
 
 ## Context

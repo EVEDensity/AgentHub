@@ -19,6 +19,32 @@ from tests.api.test_chat_mission import _FakeAgentBindingResolver, build_chat_ap
 class TestChatDispatchSQLite(unittest.IsolatedAsyncioTestCase):
     """Exercise real catalog, durable WorkUnit, claim SQL and lease fencing."""
 
+    async def test_direct_chat_dispatch_failure_leaves_no_partial_mission(self):
+        from app.domain import SessionEventType
+        from app.services.mission_service import MissionService
+
+        app = self.real_confirmation_app()
+        with (
+            patch("app.db.session.afetch_all", self.connection.fetch),
+            patch.object(MissionService, "create_chat_work_unit", side_effect=RuntimeError("dispatch unavailable")),
+        ):
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.post("/api/v1/chat/mission", json={
+                    "message": "@selected-agent inspect this", "workspaceId": "ws-chat",
+                })
+        self.assertEqual(response.status_code, 503, response.text)
+        for table in ("missions", "mission_contracts", "work_units", "mission_events"):
+            self.assertEqual(await self.connection.fetchval(f"SELECT COUNT(*) FROM {table}"), 0)
+        self.assertEqual(await self.connection.fetchval(
+            "SELECT COUNT(*) FROM session_events WHERE event_type=$1", SessionEventType.MISSION_CREATED.value,
+        ), 0)
+
+    async def test_missing_chat_participant_metadata_is_rejected_cleanly(self):
+        mission = await self.seed_mission(metadata=None)
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            await self.service.create_chat_work_unit(mission.id, workspace_id="ws-chat")
+        self.assertFalse(await self.repository.list_work_units(mission.id))
+
     async def asyncSetUp(self) -> None:
         from app.db.init_db import _create_mission_control_plane_sqlite
         from app.db.sqlite_pool import SQLitePool
@@ -406,5 +432,3 @@ rules:
         response = TestClient(app).post("/api/v1/chat/mission", json={"message": "@dev inspect"})
         self.assertEqual(response.status_code, 422, response.text)
         self.assertFalse(fakes["repo"].missions)
-
-

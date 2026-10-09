@@ -21,6 +21,10 @@ desktop derivation loop does not supply a fallback executor for chat Missions.
 Rule target Agents use the same catalog admission and cannot create a separate
 execution path. See ADR-0112 for the current dispatch boundary.
 
+Direct admission also groups Mission/Contract creation, start, WorkUnit dispatch
+and the Mission-created receipt in one transaction. Catalog changes or storage
+failures cannot leave an orphan RUNNING Mission behind a failed HTTP request.
+
 Rule confirmation/cancellation uses the pending repository's transactional
 companions. A compare-and-set consumes PENDING once; Mission/Contract creation,
 start, dispatch and confirmation receipts commit together or roll back together.
