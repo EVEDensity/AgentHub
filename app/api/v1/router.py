@@ -8,6 +8,7 @@ from app.api.v1 import (
     access,
     agent_catalog,
     chat_mission,
+    execution_status,
     missions,
     permissions,
     sessions,
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/api/v1")
 router.include_router(a2a_adapter.router)
 router.include_router(agent_catalog.router)
 router.include_router(missions.router)
+router.include_router(execution_status.router)
 router.include_router(access.router)
 router.include_router(workspace_members.router)
 router.include_router(chat_mission.router)

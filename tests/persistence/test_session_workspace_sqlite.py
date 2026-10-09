@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
-from app.db.init_db import _ainit_sqlite
+from app.db.init_db import _ainit_sqlite, SQLITE_SCHEMA_VERSION
 from app.db.sqlite_pool import SQLitePool
 from app.domain import ActorRef, Session
 from app.repositories import SessionRepository
@@ -54,7 +54,7 @@ class SessionWorkspaceSQLiteTests(unittest.IsolatedAsyncioTestCase):
         await repository.add_session(session)
         self.assertEqual(await repository.get_session(session.id), session)
         async with self.pool.acquire() as connection:
-            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), 4)
+            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), SQLITE_SCHEMA_VERSION)
             row = await connection.fetchrow("SELECT name,owner_id,workspace_id FROM sessions WHERE id=$1", session.id)
             self.assertEqual(row, {"name": session.title, "owner_id": "alice", "workspace_id": "alice"})
 
@@ -68,7 +68,7 @@ class SessionWorkspaceSQLiteTests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as connection:
             legacy = await connection.fetchrow("SELECT name,participants,owner_id,workspace_id FROM sessions WHERE id='legacy'")
             self.assertEqual(legacy, {"name": "Keep my conversation", "participants": '["alice"]', "owner_id": "alice", "workspace_id": None})
-            self.assertEqual(await connection.fetchval("SELECT COUNT(*) FROM schema_migrations WHERE version=4"), 1)
+            self.assertEqual(await connection.fetchval("SELECT COUNT(*) FROM schema_migrations WHERE version=$1", SQLITE_SCHEMA_VERSION), 1)
         await repository.add_session(self._session())
         self.assertIsNotNone(await repository.get_session("new-session"))
 

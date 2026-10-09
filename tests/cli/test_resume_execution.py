@@ -16,7 +16,7 @@ class _ResumeClient:
     def heartbeat_work_unit(self, mission_id: str, work_unit_id: str, *, lease_id: str, lease_seconds: int) -> dict[str, object]:
         del mission_id, work_unit_id, lease_seconds
         self.heartbeats.append(lease_id)
-        return {"lease": {"id": lease_id, "attempt": 1}}
+        return {"lease": {"id": lease_id, "attempt": 1, "runnerId": "local-admin", "expiresAt": "2999-01-01T00:00:00+00:00"}}
 
     def decisions(self, mission_id: str) -> list[dict[str, object]]:
         del mission_id
@@ -34,14 +34,20 @@ class ResumeExecutionPlanTests(unittest.TestCase):
                 "id": "wu-1",
                 "status": "RUNNING",
                 "attempt": 1,
-                "lease": {"id": "lease-1", "expiresAt": "2999-01-01T00:00:00+00:00"},
+                "lease": {"id": "lease-1", "runnerId": "local-admin", "attempt": 1, "expiresAt": "2999-01-01T00:00:00+00:00"},
             }],
             "checkpoint": {
                 "id": "checkpoint-1",
+                "missionId": "mis-1",
+                "resumeProtocolVersion": 2,
+                "sequence": 1,
+                "terminal": False,
+                "workspaceRevision": "sha256:" + "a" * 64,
+                "contextManifestDigest": "sha256:" + "b" * 64,
                 "workUnitId": "wu-1",
                 "attempt": 1,
                 "iteration": 2,
-                "nextAction": {"toolName": "file_write", "callId": "call-1"},
+                "nextAction": {"toolName": "file_write", "callId": "call-1", "resumeImageDigest": "sha256:" + "c" * 64},
                 "idempotencyKey": "mis-1/wu-1/1/call-1",
             },
             "receiptDecision": "not_checked",
@@ -79,7 +85,7 @@ class ResumeExecutionPlanTests(unittest.TestCase):
                 Path("."),
             )
         self.assertFalse(plan.can_resume)
-        self.assertEqual(plan.refusal_reason, "multiple pending decisions for work unit")
+        self.assertIn("multiple pending decisions for work unit", str(plan.refusal_reason))
 
     def test_checkpoint_change_between_gate_and_execution_projection_is_refused(self) -> None:
         changed = dict(self._gate()["checkpoint"])

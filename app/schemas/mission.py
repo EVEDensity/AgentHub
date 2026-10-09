@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -165,6 +166,10 @@ class WorkUnitClaimRequest(BaseModel):
 
 class WorkspaceWorkUnitClaimRequest(WorkUnitClaimRequest):
     workspace_id: Annotated[str, Field(min_length=1, max_length=255)]
+    supported_capabilities: Annotated[
+        tuple[Annotated[str, Field(min_length=1, max_length=255)], ...],
+        Field(max_length=256),
+    ] = ()
     supported_work_unit_kinds: Annotated[
         tuple[Annotated[str, Field(min_length=1, max_length=255)], ...],
         Field(min_length=1, max_length=32),
@@ -180,6 +185,14 @@ class WorkspaceWorkUnitClaimRequest(WorkUnitClaimRequest):
             raise ValueError("supported WorkUnit kinds must not contain whitespace")
         if len(value) != len(set(value)):
             raise ValueError("supported WorkUnit kinds must be unique")
+        return value
+
+
+    @field_validator("supported_capabilities")
+    @classmethod
+    def validate_supported_capabilities(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(cap != cap.strip() for cap in value) or len(value) != len(set(value)):
+            raise ValueError("supported capabilities must be unique and contain no surrounding whitespace")
         return value
 
 
@@ -270,13 +283,16 @@ class ExecutionCheckpointCreateRequest(BaseModel):
             return None
         if len(str(value).encode("utf-8")) > 8192:
             raise ValueError("next_action exceeds 8 KiB")
-        allowed = {"toolName", "tool_name", "callId", "call_id", "argumentsDigest"}
+        allowed = {"toolName", "tool_name", "callId", "call_id", "argumentsDigest", "resumeImageDigest"}
         if any(key not in allowed for key in value):
             raise ValueError("next_action contains unsupported fields")
-        if not any(key in value for key in ("toolName", "tool_name")) or not any(key in value for key in ("callId", "call_id")):
+        if "resumeImageDigest" in value:
+            digest = value["resumeImageDigest"]
+            if not isinstance(digest, str) or not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
+                raise ValueError("invalid resume image digest")
+        elif not any(key in value for key in ("toolName", "tool_name")) or not any(key in value for key in ("callId", "call_id")):
             raise ValueError("next_action requires toolName and callId")
         return value
-
 
 class WorkUnitExecutionRequest(BaseModel):
     model_config = ConfigDict(

@@ -21,7 +21,7 @@ from psycopg2 import sql
 from sqlalchemy.engine import make_url
 
 from app.api.v1.chat_mission._confirmation import confirm_chat_pending
-from app.db.migrations.session_workspace import SESSION_WORKSPACE_REVISION
+from app.db.migrations.runner_presence import RUNNER_PRESENCE_REVISION
 from app.domain import (
     ActorRef,
     PendingConfirmation,
@@ -151,7 +151,7 @@ class SessionWorkspacePostgresTests(unittest.TestCase):
         self._execute("""INSERT INTO sessions(id,name,owner_id,created_at)
             VALUES('legacy','preserve this conversation','alice','2026-09-01')""")
         self._alembic(command.upgrade, "head")
-        self.assertEqual(self._execute("SELECT version_num FROM alembic_version"), [(SESSION_WORKSPACE_REVISION,)])
+        self.assertEqual(self._execute("SELECT version_num FROM alembic_version"), [(RUNNER_PRESENCE_REVISION,)])
         self.assertEqual(self._execute("SELECT name,owner_id,workspace_id FROM sessions WHERE id='legacy'"),
                          [("preserve this conversation", "alice", None)])
 

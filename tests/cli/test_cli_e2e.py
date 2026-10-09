@@ -33,6 +33,8 @@ class CliEndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
+        self._runtime_tmp = tempfile.TemporaryDirectory(prefix="cli-state-")
+        self.addCleanup(self._runtime_tmp.cleanup)
         self.workspace = Path(self._tmp.name)
         self._cwd = Path.cwd()
         os.chdir(self.workspace)
@@ -41,7 +43,8 @@ class CliEndToEndTests(unittest.TestCase):
         # rather than inheriting an operator's configured provider.
         patcher = mock.patch.dict(
             os.environ,
-            {"AGENTHUB_CLI_MODEL_API_KEY": "", "AGENTHUB_DESKTOP_MODEL_API_KEY": ""},
+            {"AGENTHUB_CLI_MODEL_API_KEY": "", "AGENTHUB_DESKTOP_MODEL_API_KEY": "",
+             "AGENTHUB_RUNNER_STATE_ROOT": self._runtime_tmp.name},
             clear=False,
         )
         patcher.start()
@@ -55,7 +58,9 @@ class CliEndToEndTests(unittest.TestCase):
         with redirect_stdout(buffer):
             code = cli_main(list(argv))
         if code in {3, 4}:
-            for log in (self.workspace / ".agenthub" / "logs").glob("mission-control-*.log"):
+            from app.cli.control_state import control_state_directory
+            control = control_state_directory(self.workspace, self.workspace / ".agenthub")
+            for log in (control / "logs").glob("mission-control-*.log"):
                 print("Mock CLI runtime diagnostics:\n" + "\n".join(
                     log.read_text(encoding="utf-8", errors="replace").splitlines()[-100:],
                 ), file=sys.stderr)

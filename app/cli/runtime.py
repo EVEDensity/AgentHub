@@ -22,14 +22,16 @@ import sys
 import time
 import uuid
 import hashlib
-from collections.abc import Mapping
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
 import httpx
 
+from app.cli import resume as _resume
+from app.cli.resume import ResumeExecutionPlan
+from app.cli.control_state import control_state_directory
+from app.services.recovery_store import runner_state_directory
 from app.cli.transport import HttpTransport
 from app.cli.config import ConfigResolver
 from app.cli.sse_client import SseClient
@@ -367,9 +369,10 @@ def free_port(start: int = 28_100) -> int:
 class MissionControlProcess:
     """Own the SQLite mission-control subprocess lifecycle.
 
-    The database and local data live under the persistent ``.agenthub``
-    state directory so missions survive across CLI invocations; per-boot
-    logs go to ``.agenthub/logs/``.
+    Mutable database, Artifact data, instructions and logs live in the private
+    Runner control-state directory outside the model workspace. Existing
+    workspace-local control data is copied once and verified, retaining its
+    original source. User configuration remains in ``.agenthub``.
     """
 
     def __init__(
@@ -387,6 +390,7 @@ class MissionControlProcess:
         disable_tools: bool = False,
     ) -> None:
         self._state_dir = state_dir
+        self._user_state_dir = state_dir
         self._workspace_root = workspace_root
         self._model = model
         self._max_total_tokens = max_total_tokens
@@ -406,12 +410,15 @@ class MissionControlProcess:
         self._log_handle: Any = None
 
     def start(self, *, timeout: float = DEFAULT_SERVER_STARTUP_TIMEOUT) -> None:
+        self._workspace_root.mkdir(parents=True, exist_ok=True)
+        self._state_dir = control_state_directory(
+            self._workspace_root, self._user_state_dir, initialize=True,
+        )
         db_dir = self._state_dir / "db"
         data_dir = self._state_dir / "data"
         logs_dir = self._state_dir / "logs"
         for directory in (db_dir, data_dir, logs_dir):
             directory.mkdir(parents=True, exist_ok=True)
-        self._workspace_root.mkdir(parents=True, exist_ok=True)
         instructions_file: Path | None = None
         if self._project_instructions:
             instructions_file = self._state_dir / "project-instructions.md"
@@ -497,7 +504,8 @@ class MissionControlProcess:
         if self._log_handle is not None:
             self._log_handle.close()
             self._log_handle = None
-        _cleanup_local_runtime_artifacts(self._workspace_root)
+        # Stopping a process does not prove its attempt is terminal. Preserve
+        # workspace scratch/journals covered by the admitted recovery fingerprint.
 
     def __enter__(self) -> MissionControlProcess:
         self.start()
@@ -872,23 +880,6 @@ class MissionRunResult:
         }
 
 
-@dataclass(frozen=True)
-class ResumeExecutionPlan:
-    """Fail-closed execution handoff produced before Harness re-entry."""
-
-    mission_id: str
-    work_unit_id: str
-    attempt: int
-    lease_id: str | None
-    checkpoint: dict[str, Any] | None
-    pending_decision: dict[str, Any] | None
-    receipt_decision: str
-    can_resume: bool
-    refusal_reason: str | None = None
-    resume_input: Any | None = None
-    execution_context: dict[str, Any] | None = None
-
-
 def prepare_resume_execution(
     client: MissionControlClient,
     mission_id: str,
@@ -899,202 +890,12 @@ def prepare_resume_execution(
     expected_context_manifest_digest: str | None = None,
     receipt_store: Any | None = None,
 ) -> ResumeExecutionPlan:
-    """Acquire a fresh lease and validate all execution resume fences.
-
-    This function performs no tool or model work.  It is the only safe handoff
-    into a Harness resume: a stale lease is recovered, a new lease is claimed,
-    pending decisions are surfaced, and ambiguous receipts fail closed.
-    """
-    gate = resume_work_unit(
-        client,
-        mission_id,
-        workspace_root,
-        strict=True,
+    """Preserve the public CLI gate patch point while Runner owns recovery."""
+    return _resume.prepare_resume_execution(
+        client, mission_id, workspace_root, runner_id=runner_id,
+        lease_seconds=lease_seconds,
         expected_context_manifest_digest=expected_context_manifest_digest,
-        receipt_store=receipt_store,
-    )
-    units = [u for u in gate["workUnits"] if isinstance(u, dict)]
-    checkpoint = gate.get("checkpoint")
-    if not isinstance(checkpoint, dict):
-        return ResumeExecutionPlan(mission_id, "", 0, None, None, None, "not_checked", False, "no durable checkpoint")
-    work_unit_id = str(checkpoint.get("workUnitId") or checkpoint.get("work_unit_id") or "")
-    unit = next((u for u in units if str(u.get("id")) == work_unit_id), None)
-    if unit is None:
-        return ResumeExecutionPlan(mission_id, work_unit_id, 0, None, checkpoint, None, "not_checked", False, "checkpoint work unit is not part of mission")
-    checkpoint_attempt = int(checkpoint.get("attempt") or 0)
-    attempt = int(unit.get("attempt") or checkpoint_attempt or 0)
-    if attempt < 1:
-        return ResumeExecutionPlan(mission_id, work_unit_id, attempt, None, checkpoint, None, "not_checked", False, "invalid execution attempt")
-    status = str(unit.get("status") or "")
-    def _lease_expired(payload: Mapping[str, Any]) -> bool:
-        value = payload.get("expiresAt") or payload.get("expires_at")
-        if not isinstance(value, str) or not value:
-            return True
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed <= datetime.now(timezone.utc)
-
-    def _lease_from_unit(value: Mapping[str, Any]) -> Mapping[str, Any]:
-        lease_value = value.get("lease")
-        return lease_value if isinstance(lease_value, Mapping) else {}
-
-    try:
-        if status == "RUNNING":
-            lease = _lease_from_unit(unit)
-            lease_id = str(lease.get("id") or lease.get("leaseId") or "")
-            if not lease_id:
-                return ResumeExecutionPlan(mission_id, work_unit_id, attempt, None, checkpoint, None, gate["receiptDecision"], False, "running work unit has no lease")
-            if _lease_expired(lease):
-                client.recover_work_unit(mission_id, work_unit_id)
-                renewed = client.lease_work_unit(mission_id, work_unit_id, lease_seconds=lease_seconds)
-            else:
-                renewed = client.heartbeat_work_unit(mission_id, work_unit_id, lease_id=lease_id, lease_seconds=lease_seconds)
-        else:
-            if status == "LEASED":
-                lease = _lease_from_unit(unit)
-                lease_id = str(lease.get("id") or lease.get("leaseId") or "")
-                if lease_id and not _lease_expired(lease):
-                    renewed = client.heartbeat_work_unit(mission_id, work_unit_id, lease_id=lease_id, lease_seconds=lease_seconds)
-                else:
-                    if lease_id:
-                        client.recover_work_unit(mission_id, work_unit_id)
-                    renewed = client.lease_work_unit(mission_id, work_unit_id, lease_seconds=lease_seconds)
-            else:
-                if status in {"FAILED", "RETRYING"}:
-                    client.recover_work_unit(mission_id, work_unit_id)
-                renewed = client.lease_work_unit(mission_id, work_unit_id, lease_seconds=lease_seconds)
-        lease_payload = renewed.get("lease") if isinstance(renewed, dict) else None
-        lease_id = str((lease_payload or {}).get("id") or (lease_payload or {}).get("leaseId") or renewed.get("leaseId") or "")
-        if not lease_id:
-            raise RuntimeError("lease response did not contain a lease id")
-        leased_attempt = int((lease_payload or {}).get("attempt") or renewed.get("attempt") or attempt)
-        if leased_attempt < 1:
-            raise RuntimeError("lease response contained an invalid attempt")
-        if checkpoint_attempt and leased_attempt != checkpoint_attempt:
-            return ResumeExecutionPlan(mission_id, work_unit_id, leased_attempt, lease_id, checkpoint, None, gate["receiptDecision"], False, "checkpoint belongs to a different execution attempt")
-        attempt = leased_attempt
-    except (httpx.HTTPError, RuntimeError, KeyError, TypeError, ValueError) as exc:
-        return ResumeExecutionPlan(mission_id, work_unit_id, attempt, None, checkpoint, None, gate["receiptDecision"], False, f"lease acquisition failed: {exc}")
-
-    decisions = client.decisions(mission_id)
-    pending = [d for d in decisions if isinstance(d, dict) and str(d.get("status") or d.get("decisionStatus") or "PENDING") == "PENDING"]
-    next_action = checkpoint.get("nextAction") or checkpoint.get("next_action") or {}
-    next_call_id = str(next_action.get("callId") or next_action.get("call_id") or "") if isinstance(next_action, dict) else ""
-    checkpoint_key = str(checkpoint.get("idempotencyKey") or checkpoint.get("idempotency_key") or "")
-    def _decision_related(item: dict[str, Any]) -> bool:
-        if str(item.get("workUnitId") or item.get("work_unit_id") or work_unit_id) != work_unit_id:
-            return False
-        decision_attempt = item.get("attempt") or item.get("executionAttempt")
-        if decision_attempt is not None and int(decision_attempt) != attempt:
-            return False
-        decision_call = str(item.get("callId") or item.get("toolCallId") or item.get("tool_call_id") or "")
-        decision_key = str(item.get("idempotencyKey") or item.get("idempotency_key") or "")
-        if next_call_id and decision_call and decision_call != next_call_id:
-            return False
-        if checkpoint_key and decision_key and decision_key != checkpoint_key:
-            return False
-        return True
-    related = [d for d in pending if _decision_related(d)]
-    if len(related) > 1:
-        return ResumeExecutionPlan(mission_id, work_unit_id, attempt, lease_id, checkpoint, None, gate["receiptDecision"], False, "multiple pending decisions for work unit")
-    if gate["receiptDecision"] in {"unknown_outcome", "already_succeeded"}:
-        can_resume = gate["receiptDecision"] == "already_succeeded"
-        reason = None if can_resume else "tool receipt outcome is unknown"
-    else:
-        can_resume, reason = True, None
-    execution_context: dict[str, Any] | None = None
-    context_reader = getattr(client, "execution_context", None)
-    if callable(context_reader):
-        try:
-            context_payload = context_reader(
-                mission_id,
-                work_unit_id,
-                lease_id=lease_id,
-            )
-            if isinstance(context_payload, dict):
-                execution_context = context_payload
-                projected = context_payload.get("executionContext")
-                projected_checkpoint = (
-                    projected.get("checkpoint")
-                    if isinstance(projected, dict)
-                    else None
-                )
-                if isinstance(projected_checkpoint, dict) and isinstance(checkpoint, dict):
-                    projected_id = str(
-                        projected_checkpoint.get("id")
-                        or projected_checkpoint.get("checkpointId")
-                        or ""
-                    )
-                    checkpoint_id = str(
-                        checkpoint.get("id")
-                        or checkpoint.get("checkpointId")
-                        or ""
-                    )
-                    projected_attempt = int(projected_checkpoint.get("attempt") or 0)
-                    if checkpoint_id and projected_id and checkpoint_id != projected_id:
-                        return ResumeExecutionPlan(
-                            mission_id, work_unit_id, attempt, lease_id, checkpoint,
-                            None, gate["receiptDecision"], False,
-                            "execution checkpoint changed during lease acquisition",
-                            None, execution_context,
-                        )
-                    if projected_attempt and projected_attempt != attempt:
-                        return ResumeExecutionPlan(
-                            mission_id, work_unit_id, attempt, lease_id, checkpoint,
-                            None, gate["receiptDecision"], False,
-                            "execution checkpoint attempt changed during lease acquisition",
-                            None, execution_context,
-                        )
-        except (httpx.HTTPError, RuntimeError, KeyError, TypeError, ValueError) as exc:
-            return ResumeExecutionPlan(
-                mission_id,
-                work_unit_id,
-                attempt,
-                lease_id,
-                checkpoint,
-                None,
-                gate["receiptDecision"],
-                False,
-                f"execution context acquisition failed: {exc}",
-            )
-    resume_input = None
-    if can_resume:
-        from app.services.harness_service import HarnessResumeInput
-        checkpoint_iteration = int(checkpoint.get("iteration") or 0)
-        if checkpoint_iteration < 1:
-            return ResumeExecutionPlan(
-                mission_id, work_unit_id, attempt, lease_id, checkpoint,
-                related[0] if related else None, gate["receiptDecision"],
-                False, "checkpoint iteration must be greater than zero",
-                None, execution_context,
-            )
-        recovered: tuple[Any, ...] = ()
-        if isinstance(next_action, dict) and next_call_id and gate["receiptDecision"] == "already_succeeded":
-            from app.services.model_contract import ToolResult
-            recovered = (ToolResult(call_id=next_call_id, name=str(next_action.get("toolName") or next_action.get("tool_name") or "recovered-tool"), success=True, content="[tool result recovered from durable receipt; side effect not replayed]"),)
-        resume_input = HarnessResumeInput(
-            checkpoint_id=str(checkpoint.get("id") or checkpoint.get("checkpointId") or ""),
-            attempt=attempt,
-            next_action=next_action if isinstance(next_action, dict) else None,
-            recovered_tool_results=recovered,
-            start_iteration=checkpoint_iteration,
-        )
-    return ResumeExecutionPlan(
-        mission_id,
-        work_unit_id,
-        attempt,
-        lease_id,
-        checkpoint,
-        related[0] if related else None,
-        gate["receiptDecision"],
-        can_resume,
-        reason,
-        resume_input,
-        execution_context,
+        receipt_store=receipt_store, gate_reader=resume_work_unit,
     )
 
 
@@ -1222,90 +1023,12 @@ def resume_work_unit(
     expected_context_manifest_digest: str | None = None,
     receipt_store: Any | None = None,
 ) -> dict[str, Any]:
-    """Validate an execution checkpoint before a resume can replay work.
-
-    This is deliberately a read-only gate.  It never starts a WorkUnit or
-    executes a tool.  Callers must acquire a fresh lease and pass the returned
-    identity to the Runner.  Legacy checkpoints without a workspace fence are
-    reported as ``legacy`` and are rejected when ``strict`` is true.
-    """
-    mission = client.get_mission(mission_id)
-    if not isinstance(mission, dict):
-        raise RuntimeError(f"cannot safely resume mission {mission_id}: invalid mission payload")
-    units = client.work_units(mission_id) if callable(getattr(client, "work_units", None)) else []
-    checkpoints = client.checkpoints(mission_id) if callable(getattr(client, "checkpoints", None)) else []
-    current_revision = workspace_revision(workspace_root)
-    latest = max(
-        (row for row in checkpoints if isinstance(row, dict)),
-        key=lambda row: int(row.get("sequence", 0) or 0),
-        default=None,
+    """Read-only metadata preflight; complete recovery belongs to Runner."""
+    return _resume.resume_work_unit(
+        client, mission_id, workspace_root, strict=strict,
+        expected_context_manifest_digest=expected_context_manifest_digest,
+        receipt_store=receipt_store, revision_reader=workspace_revision,
     )
-    recorded_revision = "" if latest is None else str(latest.get("workspaceRevision") or latest.get("workspace_revision") or "")
-    recorded_context_digest = "" if latest is None else str(
-        latest.get("contextManifestDigest")
-        or latest.get("context_manifest_digest")
-        or ""
-    )
-    # A checkpoint is legacy when either execution fence is absent. Strict
-    # resume rejects these rows until the durable schema carries both
-    # fingerprints; lenient callers retain historical summary behavior.
-    legacy = not bool(recorded_revision and recorded_context_digest)
-    revision_matches = bool(recorded_revision) and recorded_revision == current_revision
-    context_matches = (
-        expected_context_manifest_digest is None
-        or recorded_context_digest == expected_context_manifest_digest
-    )
-    if strict and (legacy or not revision_matches or not context_matches):
-        if legacy:
-            reason = "checkpoint has no workspace revision"
-        elif not revision_matches:
-            reason = "workspace revision changed since checkpoint"
-        else:
-            reason = "context manifest changed since checkpoint"
-        raise RuntimeError(f"cannot safely resume mission {mission_id}: {reason}")
-
-    next_action = (latest or {}).get("nextAction") or (latest or {}).get("next_action")
-    idempotency_key = (latest or {}).get("idempotencyKey") or (latest or {}).get("idempotency_key")
-    receipt_decision = "not_checked"
-    if receipt_store is not None and idempotency_key:
-        replay = getattr(receipt_store, "replay_decision", None)
-        if callable(replay):
-            receipt_decision = str(replay(str(idempotency_key), strict=True))
-    if strict and next_action is not None:
-        from app.services.runner_checkpoint import (
-            ResumeProtocol,
-            ResumeValidationError,
-            validate_resume_protocol,
-        )
-
-        if not isinstance(next_action, dict):
-            raise ResumeValidationError("checkpoint next action must be an object")
-
-        validate_resume_protocol(
-            ResumeProtocol(
-                next_action=next_action,
-                idempotency_key=str(idempotency_key) if idempotency_key else None,
-                workspace_revision=recorded_revision or None,
-                context_manifest_digest=recorded_context_digest or None,
-            ),
-            workspace_revision=current_revision,
-            expected_idempotency_prefix=f"{mission_id}/",
-        )
-    return {
-        "missionId": mission_id,
-        "missionStatus": mission.get("status"),
-        "workUnits": units,
-        "checkpoint": latest,
-        "workspaceRevision": current_revision,
-        "recordedWorkspaceRevision": recorded_revision or None,
-        "revisionMatches": revision_matches,
-        "recordedContextManifestDigest": recorded_context_digest or None,
-        "contextManifestMatches": context_matches,
-        "legacy": legacy,
-        "nextAction": next_action,
-        "idempotencyKey": idempotency_key,
-        "receiptDecision": receipt_decision,
-    }
 
 
 def _mission_digest(client: MissionControlClient, mission_id: str) -> str:
@@ -1491,7 +1214,7 @@ def execute_objective(
         baseline_files = git_status_snapshot(workspace_root)
         if capture_attempt_snapshot:
             from app.cli.snapshots import capture_attempt
-            attempt_snapshot = capture_attempt(workspace_root, state_dir / "attempt-snapshots")
+            attempt_snapshot = capture_attempt(workspace_root, runner_state_directory(workspace_root) / "attempt-snapshots")
     except Exception:  # noqa: BLE001
         pass
     with MissionControlProcess(
@@ -1512,16 +1235,14 @@ def execute_objective(
             resume_plan: ResumeExecutionPlan | None = None
             if resume_mission_id and not conversation_context:
                 # Resume is an execution handoff, never a new Mission.  The
-                # strict gate validates workspace/context fences, reacquires
-                # the WorkUnit lease and reconciles receipts before polling.
-                from app.services.tools.receipts import SQLiteToolReceiptStore
+                # metadata gate preserves the live same-owner attempt. The
+                # production Runner restores its complete private image before
+                # model/tool execution; CLI never fabricates recovered output.
                 try:
-                    resume_plan = prepare_resume_execution(
-                        client,
-                        resume_mission_id,
-                        workspace_root,
-                        expected_context_manifest_digest=None,
-                        receipt_store=SQLiteToolReceiptStore(state_dir / "tool-receipts.sqlite3"),
+                    resume_plan = _resume.prepare_resume_handoff(
+                        client, resume_mission_id, workspace_root,
+                        execution_preparer=prepare_resume_execution,
+                        gate_reader=resume_work_unit,
                     )
                 except Exception as exc:
                     raise RuntimeError(f"cannot safely resume mission {resume_mission_id}: {type(exc).__name__}") from exc

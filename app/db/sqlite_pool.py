@@ -94,7 +94,11 @@ class SQLiteConnection:
                     await asyncio.shield(task)
                 except asyncio.CancelledError:
                     continue
-            task.result()
+                except Exception:
+                    # A worker failure must not replace the caller's cancellation.
+                    break
+            if not task.cancelled():
+                task.exception()  # consume the thread exception without re-raising it
             raise
 
     async def execute(self, statement: str, *args: Any) -> str:

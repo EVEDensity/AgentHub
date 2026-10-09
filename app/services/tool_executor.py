@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
 import json
 import logging
@@ -10,6 +9,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
+from app.services.recovery_receipts import RecoveryReceiptError, encode_receipt_result
 from app.services.tool_registry import ToolDefinition, tool_registry
 
 logger = logging.getLogger("agenthub.tool_executor")
@@ -345,79 +345,15 @@ class ToolExecutor:
         same STARTED/SUCCEEDED/FAILED/UNKNOWN lifecycle as registry tools.
         """
         start_time = time.time()
-        receipt_store = receipt_store if receipt_store is not None else getattr(self, "receipt_store", None)
+        receipt_store = self._effective_receipt_store(receipt_store)
         receipt_key = idempotency_key.strip() if isinstance(idempotency_key, str) else ""
-        if receipt_store is not None and receipt_key:
-            claim = getattr(receipt_store, "claim_started", None)
-            decision = (
-                str(claim(receipt_key, tool_name, start_time))
-                if callable(claim)
-                else receipt_store.replay_decision(receipt_key, strict=True)
-            )
-            if decision != "execute":
-                return {
-                    "success": decision == "already_succeeded",
-                    "error": None if decision == "already_succeeded" else f"工具调用未重放（{decision}）",
-                    "error_type": "idempotency" if decision != "already_succeeded" else None,
-                    "tool_name": tool_name,
-                    "recovered": decision == "already_succeeded",
-                }
-            if not callable(claim):
-                receipt_store.mark_started(receipt_key, tool_name, start_time)
-
-        if handler is None:
-            logger.warning("tool_executor: unavailable tool '%s'", tool_name)
-            result = {
-                "success": False,
-                "error": missing_error or f"工具 '{tool_name}' 尚未实现执行处理器。",
-                "tool_name": tool_name,
-                "duration_ms": (time.time() - start_time) * 1000,
-            }
-            if receipt_store is not None and receipt_key:
-                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
-                receipt_store.mark_failed(receipt_key, tool_name, time.time(), error_type=error_type)
-            return result
-
+        previous = self._claim_receipt(receipt_store, receipt_key, tool_name, start_time)
+        if previous is not None:
+            return previous
         try:
-            result = await handler(arguments)
-            duration_ms = (time.time() - start_time) * 1000
-            logger.info(
-                "tool_executor: tool '%s' executed in %.0fms success=%s",
-                tool_name, duration_ms, result.get("success", False) if isinstance(result, dict) else True,
+            final_result = await self._invoke_handler(
+                tool_name, arguments, handler, start_time, missing_error, error_type,
             )
-
-            if isinstance(result, dict):
-                result.setdefault("tool_name", tool_name)
-                result.setdefault("duration_ms", duration_ms)
-                # Apply result storage budget if configured
-                if self.result_storage is not None:
-                    result = self.result_storage.process(result)
-                if receipt_store is not None and receipt_key:
-                    from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
-                    digest = hashlib.sha256(repr(result).encode("utf-8")).hexdigest()
-                    receipt_store.put(ToolReceipt(
-                        receipt_key,
-                        tool_name,
-                        ToolReceiptStatus.SUCCEEDED if result.get("success", True) else ToolReceiptStatus.FAILED,
-                        time.time(),
-                        result_digest=digest if result.get("success", True) else None,
-                        error_type=str(result.get("error_type") or "tool_failure") if not result.get("success", True) else None,
-                    ))
-                return result
-
-            final_result = {
-                "success": True,
-                "result": result,
-                "tool_name": tool_name,
-                "duration_ms": duration_ms,
-            }
-            if self.result_storage is not None:
-                final_result = self.result_storage.process(final_result)
-            if receipt_store is not None and receipt_key:
-                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
-                digest = hashlib.sha256(repr(final_result).encode("utf-8")).hexdigest()
-                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.SUCCEEDED, time.time(), result_digest=digest))
-            return final_result
         except asyncio.CancelledError:
             if receipt_store is not None and receipt_key:
                 receipt_store.mark_unknown(
@@ -427,26 +363,122 @@ class ToolExecutor:
                     error_type="cancelled",
                 )
             raise
-        except Exception as exc:
-            duration_ms = (time.time() - start_time) * 1000
-            logger.exception("tool_executor: tool '%s' raised exception", tool_name)
+        except Exception:
+            # A handler may already have performed its side effect. A failure
+            # to normalize/store its result must not turn STARTED into FAILED.
+            return self._receipt_failure(tool_name, "receipt_persistence")
+        recorded = await self._finish_receipt(receipt_store, receipt_key, tool_name, final_result)
+        return self._apply_result_budget(recorded)
 
-            # Classify the error
-            from app.services.tools.errors import classify_tool_error
+    @staticmethod
+    def _receipt_failure(tool_name: str, error_type: str) -> dict[str, Any]:
+        return {
+            "success": False, "error": "tool result could not be safely recorded or recovered",
+            "error_type": error_type, "tool_name": tool_name, "recovered": False,
+        }
 
-            error_type, safe_message = classify_tool_error(exc, tool_name)
-            result = {
-                "success": False,
-                "error": safe_message,
-                "error_type": error_type.value,
-                "exception_type": type(exc).__name__,
-                "tool_name": tool_name,
-                "duration_ms": duration_ms,
-            }
-            if receipt_store is not None and receipt_key:
-                from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
-                receipt_store.put(ToolReceipt(receipt_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type=error_type.value))
+    def _effective_receipt_store(self, store: Any) -> Any:
+        return store if store is not None else self.receipt_store
+
+    def _apply_result_budget(self, result: dict[str, Any]) -> dict[str, Any]:
+        if self.result_storage is None:
             return result
+        try:
+            return self.result_storage.process(result)
+        except Exception:
+            return self._receipt_failure(str(result.get("tool_name", "")), "result_storage")
+
+    def _claim_receipt(
+        self, store: Any, key: str, tool_name: str, now: float,
+    ) -> dict[str, Any] | None:
+        if store is None or not key:
+            return None
+        try:
+            claim = getattr(store, "claim_started", None)
+            decision = str(claim(key, tool_name, now)) if callable(claim) else store.replay_decision(key, strict=True)
+            if decision == "already_succeeded":
+                recover = getattr(store, "recover_result", None)
+                if not callable(recover):
+                    raise RecoveryReceiptError("tool receipt has no recoverable result")
+                result = dict(recover(key, tool_name=tool_name).result)
+                result["recovered"] = True
+                return result
+            if decision != "execute":
+                return {
+                    "success": False, "error": f"工具调用未重放（{decision}）",
+                    "error_type": "idempotency", "tool_name": tool_name, "recovered": False,
+                }
+            if not callable(claim):
+                store.mark_started(key, tool_name, now)
+        except Exception:
+            return self._receipt_failure(tool_name, "receipt_recovery")
+        return None
+
+    @staticmethod
+    async def _invoke_handler(
+        tool_name: str, arguments: Mapping[str, Any],
+        handler: Callable[[Mapping[str, Any]], Awaitable[Any]] | None,
+        start_time: float, missing_error: str | None, missing_error_type: str,
+    ) -> dict[str, Any]:
+        if handler is None:
+            return {
+                "success": False, "error": missing_error or f"工具 '{tool_name}' 尚未实现执行处理器。",
+                "error_type": missing_error_type, "tool_name": tool_name,
+                "duration_ms": (time.time() - start_time) * 1000,
+            }
+        try:
+            result = await handler(arguments)
+        except Exception as exc:
+            from app.services.tools.errors import classify_tool_error
+            error_type, safe_message = classify_tool_error(exc, tool_name)
+            return {
+                "success": False, "error": safe_message, "error_type": error_type.value,
+                "exception_type": type(exc).__name__, "tool_name": tool_name,
+                "duration_ms": (time.time() - start_time) * 1000,
+            }
+        final_result = result if isinstance(result, dict) else {"success": True, "result": result}
+        final_result.setdefault("success", True)
+        final_result.setdefault("tool_name", tool_name)
+        final_result.setdefault("duration_ms", (time.time() - start_time) * 1000)
+        return final_result
+
+    async def _finish_receipt(
+        self, store: Any, key: str, tool_name: str, result: dict[str, Any],
+    ) -> dict[str, Any]:
+        if store is None or not key:
+            return result
+        worker = asyncio.create_task(asyncio.to_thread(self._persist_receipt, store, key, tool_name, result))
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            # The handler already returned. Finish this atomic acknowledgement
+            # before propagating cancellation; never downgrade its outcome.
+            await self._settle_completion(worker)
+            raise
+        except Exception:
+            # Leave the active/committed receipt untouched. In particular, a
+            # failed completion acknowledgement cannot overwrite SUCCEEDED.
+            return self._receipt_failure(tool_name, "receipt_persistence")
+        return result
+
+    @staticmethod
+    async def _settle_completion(worker: asyncio.Task[None]) -> None:
+        try:
+            await asyncio.shield(worker)
+        except Exception:
+            # The database still contains STARTED when completion fails.
+            return
+
+    @staticmethod
+    def _persist_receipt(store: Any, key: str, tool_name: str, result: dict[str, Any]) -> None:
+        complete = getattr(store, "complete", None)
+        if callable(complete):
+            complete(key, tool_name, time.time(), result=result)
+            return
+        from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+        _, digest = encode_receipt_result(result)
+        status = ToolReceiptStatus.SUCCEEDED if result.get("success", True) else ToolReceiptStatus.FAILED
+        store.put(ToolReceipt(key, tool_name, status, time.time(), result_digest=digest))
 
     async def execute_gateway(
         self,
@@ -462,6 +494,7 @@ class ToolExecutor:
         receipt_store: Any = None,
     ) -> dict[str, Any]:
         """Canonical risk, approval, receipt and execution gateway."""
+        receipt_store = self._effective_receipt_store(receipt_store)
         if handler is None:
             registry_tool = tool_registry.get(tool_name)
             if registry_tool is not None and registry_tool.handler is not None:
@@ -506,6 +539,8 @@ class ToolExecutor:
         if receipt_store is not None and idempotency_key:
             try:
                 from app.services.tools.receipts import ToolReceipt, ToolReceiptStatus
+                if receipt_store.replay_decision(idempotency_key, strict=True) != "execute":
+                    return result
                 receipt_store.put(ToolReceipt(idempotency_key, tool_name, ToolReceiptStatus.FAILED, time.time(), error_type=error_type))
             except Exception:
                 logger.exception("tool_executor: failed to persist gateway denial receipt")

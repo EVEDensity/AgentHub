@@ -451,27 +451,8 @@ class ExecutionCheckpoint(DomainModel):
 
     @model_validator(mode="after")
     def validate_terminal_state(self) -> ExecutionCheckpoint:
-        terminal_phases = {
-            ExecutionCheckpointPhase.EXECUTION_COMPLETED,
-            ExecutionCheckpointPhase.EXECUTION_FAILED,
-        }
-        if self.terminal != (self.phase in terminal_phases):
-            raise ValueError("checkpoint terminal flag must match its phase")
-        if self.phase == ExecutionCheckpointPhase.EXECUTION_FAILED:
-            if self.failure_reason is None:
-                raise ValueError("failed checkpoint requires a failure reason")
-        elif self.failure_reason is not None:
-            raise ValueError("only a failed checkpoint can carry a failure reason")
-        if self.next_action is not None:
-            if len(json.dumps(self.next_action, ensure_ascii=True, separators=(",", ":"))) > 8192:
-                raise ValueError("checkpoint next_action exceeds 8 KiB")
-            keys = {"toolName", "tool_name", "callId", "call_id"}
-            if not any(key in self.next_action for key in keys):
-                raise ValueError("checkpoint next_action must identify a tool call")
-            if self.resume_protocol_version is None:
-                raise ValueError("next_action requires resume_protocol_version")
-        if self.idempotency_key is not None and "/" not in self.idempotency_key:
-            raise ValueError("idempotency_key must be execution scoped")
+        from app.domain.checkpoint_validation import validate_terminal_state
+        validate_terminal_state(self)
         return self
 
 

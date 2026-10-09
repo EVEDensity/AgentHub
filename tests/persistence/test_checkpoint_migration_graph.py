@@ -16,7 +16,7 @@ class CheckpointMigrationGraphTests(unittest.TestCase):
         config.set_main_option("script_location", str(root / "migrations"))
         scripts = ScriptDirectory.from_config(config)
 
-        self.assertEqual(scripts.get_heads(), ["c8f2a314d5e6"])
+        self.assertEqual(scripts.get_heads(), ["d9a3b425e6f7"])
         original = scripts.get_revision("a6d0e1f2b3c4")
         resumed = scripts.get_revision("b7e1f203c4d5")
         self.assertEqual(original.down_revision, "f5c9d0e1a2b3")
@@ -26,5 +26,5 @@ class CheckpointMigrationGraphTests(unittest.TestCase):
                 revision.revision
                 for revision in scripts.iterate_revisions("head", original.revision)
             ],
-            ["c8f2a314d5e6", resumed.revision],
+            ["d9a3b425e6f7", "c8f2a314d5e6", resumed.revision],
         )

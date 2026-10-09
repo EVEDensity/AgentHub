@@ -13,6 +13,50 @@ FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
 FetchAll = Callable[..., Awaitable[list[dict[str, Any]]]]
 
 
+def _sqlite_created_order() -> str:
+    # SQLite's datetime/julianday parser rounds fractional seconds to millis.
+    # Parse only integral seconds there; keep the original six decimal places
+    # as a second INTEGER key. Postgres native-to-TEXT values can use +HH.
+    tail = "substr(created_at,21)"
+    zone = f"CASE WHEN substr(created_at,20,1)='.' THEN ltrim({tail},'0123456789') ELSE substr(created_at,20) END"
+    normalized_zone = f"CASE WHEN length({zone})=3 THEN ({zone}) || ':00' WHEN length({zone})=5 THEN substr(({zone}),1,3) || ':' || substr(({zone}),4,2) ELSE ({zone}) END"
+    seconds = f"CAST(strftime('%s', substr(created_at,1,19) || ({normalized_zone})) AS INTEGER)"
+    fraction = f"substr({tail},1,length({tail})-length(ltrim({tail},'0123456789')))"
+    micros = f"CASE WHEN substr(created_at,20,1)='.' THEN CAST(substr(({fraction}) || '000000',1,6) AS INTEGER) ELSE 0 END"
+    return f"{seconds} DESC, {micros} DESC, id DESC"
+
+
+def _created_order(fetch_all: FetchAll, *, backend: str | None, configured: bool) -> str:
+    if backend is None:
+        if configured:
+            from app.db.session import is_sqlite_backend
+            backend = "sqlite" if is_sqlite_backend() else "postgresql"
+        else:
+            from app.db.sqlite_pool import SQLiteConnection
+            backend = "sqlite" if isinstance(getattr(fetch_all, "__self__", None), SQLiteConnection) else "postgresql"
+    if backend == "sqlite":
+        return _sqlite_created_order()
+    if backend == "postgresql":
+        # Naive legacy strings use the same UTC interpretation as the decoder,
+        # regardless of the PostgreSQL connection's configured TimeZone.
+        zoned = "created_at ~ '[T ][0-9]{2}:' AND created_at ~ '(Z|[+-][0-9]{2}(:?[0-9]{2})?)$'"
+        instant = f"CASE WHEN {zoned} THEN created_at::timestamptz ELSE created_at::timestamp AT TIME ZONE 'UTC' END"
+        return f"({instant}) DESC, id DESC"
+    raise ValueError("session repository backend must be sqlite or postgresql")
+
+
+def _decode_datetime(value: Any) -> datetime:
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.removesuffix("Z") + ("+00:00" if value.endswith("Z") else ""))
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _encode_datetime(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat(timespec="microseconds")
+
+
 def _encode_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
@@ -36,15 +80,6 @@ def _decode_actor(row: Mapping[str, Any]) -> ActorRef:
 
 
 def _session_from_row(row: Mapping[str, Any]) -> Session:
-    def decode_datetime(dt: Any) -> datetime:
-        if isinstance(dt, str):
-            if dt.endswith("Z"):
-                dt = dt[:-1] + "+00:00"
-            dt = datetime.fromisoformat(dt)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        return dt
-
     return Session(
         id=str(row["id"]),
         workspace_id=str(row["workspace_id"]),
@@ -52,8 +87,8 @@ def _session_from_row(row: Mapping[str, Any]) -> Session:
         status=SessionStatus(row["status"]),
         metadata=_decode_json(row.get("metadata")),
         created_by=_decode_actor(row),
-        created_at=decode_datetime(row["created_at"]),
-        updated_at=decode_datetime(row["updated_at"]),
+        created_at=_decode_datetime(row["created_at"]),
+        updated_at=_decode_datetime(row["updated_at"]),
     )
 
 
@@ -66,7 +101,9 @@ class SessionRepository:
         execute: Execute | None = None,
         fetch_one: FetchOne | None = None,
         fetch_all: FetchAll | None = None,
+        backend: str | None = None,
     ) -> None:
+        configured = fetch_all is None
         if execute is None or fetch_one is None or fetch_all is None:
             from app.db.session import aexecute, afetch_all, afetch_one
 
@@ -76,6 +113,7 @@ class SessionRepository:
         self._execute = execute
         self._fetch_one = fetch_one
         self._fetch_all = fetch_all
+        self._created_order = _created_order(fetch_all, backend=backend, configured=configured)
 
     # ── mutations ──────────────────────────────────────────────────
 
@@ -95,8 +133,8 @@ class SessionRepository:
             session.created_by.type,
             session.created_by.id,
             session.created_by.display_name or "",
-            session.created_at.isoformat(),
-            session.updated_at.isoformat(),
+            _encode_datetime(session.created_at),
+            _encode_datetime(session.updated_at),
             session.title,
             session.created_by.id if session.created_by.type == "human" else "",
         )
@@ -114,7 +152,7 @@ class SessionRepository:
             """UPDATE sessions
                SET status='ARCHIVED', active=0, updated_at=$1
                WHERE id=$2""",
-            now.isoformat(),
+            _encode_datetime(now),
             session_id,
         )
         row = dict(row)
@@ -148,9 +186,9 @@ class SessionRepository:
         if offset < 0:
             raise ValueError("offset cannot be negative")
         rows = await self._fetch_all(
-            """SELECT * FROM sessions
+            f"""SELECT * FROM sessions
                WHERE workspace_id=$1
-               ORDER BY created_at DESC, id DESC
+               ORDER BY {self._created_order}
                LIMIT $2 OFFSET $3""",
             workspace_id,
             limit,

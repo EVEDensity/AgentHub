@@ -83,7 +83,9 @@ export function useSessionEvents(options: SessionEventStreamOptions): SessionEve
     sessionIdRef.current = sessionId;
     afterIdRef.current = undefined; // new session = reset cursor
     backoffRef.current = INITIAL_BACKOFF_SECONDS;
-  }, [sessionId]);
+    setEvents([]);
+    setLastConnectedAt(null);
+  }, [sessionId, workspaceId, token]);
 
   useEffect(() => {
     mountedRef.current = true;

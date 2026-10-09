@@ -47,7 +47,10 @@ SESSION_WORKSPACE_UPGRADE = (
         for name, kind in _SESSION_COLUMNS
     ),
     # Legacy transports store ISO text. Retain that compatible representation
-    # even when the experimental v1-only schema used native timestamps.
+    # even when the experimental v1-only schema used native timestamps. Native
+    # ::TEXT uses a space separator; newer repository writes use ISO T/UTC.
+    # SessionRepository orders parsed instants, including profiles already at
+    # this revision. The TEXT index is not a chronological ordering contract.
     "ALTER TABLE sessions ALTER COLUMN created_at TYPE TEXT USING created_at::TEXT",
     "ALTER TABLE sessions ALTER COLUMN updated_at TYPE TEXT USING updated_at::TEXT",
     _SESSION_INDEX,

@@ -4,10 +4,11 @@ import asyncio
 import hashlib
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
+from app.services.verification_report_models import REPORT_MAX_BYTES
 
 _CHUNK_BYTES = 1024 * 1024
 _LOCAL_PREFIX = "local:sha256/"
@@ -30,6 +31,7 @@ class ArtifactByteVerification:
     artifact_id: str
     digest: str
     size_bytes: int
+    report_content: bytes | None = field(default=None, repr=False)
 
 
 class ArtifactByteDescriptor(Protocol):
@@ -103,8 +105,9 @@ class ContentAddressedArtifactByteVerifier:
         self,
         artifact: ArtifactByteDescriptor,
     ) -> ArtifactByteVerification:
-        result, _content = await self._consume(artifact, collect_bytes=False)
-        return result
+        collect_report = getattr(artifact, "kind", None) in {"report", "test-result"} and artifact.size_bytes <= REPORT_MAX_BYTES
+        result, content = await self._consume(artifact, collect_bytes=collect_report)
+        return replace(result, report_content=content)
 
     async def read_verified(
         self,

@@ -22,3 +22,14 @@ optimistically versioned lifecycle. Protocol adapters and verifiers may expose
 or trigger a server-owned Decision but cannot resolve it or translate it into
 PASS Evidence. EXPIRED is a distinct fail-closed terminal status with service
 closure metadata; it is not a human resolution or cancellation.
+
+`test-run-report.schema.json` and `security-scan-report.schema.json` define
+versioned report bodies registered as `test-result` and `report` Artifacts.
+Runner or external test/scanner producers must provide exact Mission, WorkUnit,
+and attempt identity plus individual case/finding records and consistent
+summaries. No built-in producer is implied by the schema. The independent
+verifier and Mission Control read the same integrity-verified bytes; raw report
+content is not added to discovery, Evidence, or HTTP projections. Existing
+free-text reports fail semantic acceptance until producers migrate. See ADR-0114
+for failure behavior and the boundary between report verification and trusted
+test/scanner execution.

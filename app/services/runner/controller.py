@@ -395,6 +395,7 @@ class DesktopLocalRunnerController:
         settings = self._settings
         harness_factory = DesktopTaskHarnessFactory(
             model_factory,
+            workspace_root=self._workspace_root,
             tools=tools,
             tool_policy=tool_policy,
             checkpoint_factory=MissionControlHarnessCheckpointFactory(

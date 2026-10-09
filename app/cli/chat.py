@@ -44,6 +44,8 @@ try:  # rich ships with textual; guard anyway so chat never hard-fails.
 except Exception:  # noqa: BLE001 - degrade to plain text without rich
     ui = None  # type: ignore[assignment]
 
+from app.cli.control_state import has_control_database
+from app.cli.mission_history import _print_missions
 from app.cli.runtime import (
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MISSION_TIMEOUT,
@@ -572,18 +574,6 @@ def _apply_permission_payload(session: ChatSessionState, payload: dict[str, Any]
     session.denied_paths.update((item[0], item[1]) for item in payload.get("deniedPaths", []) if item[0].strip() and item[1].strip())
 
 
-def _print_missions(missions: list[dict[str, Any]], emit: Callable[..., None]) -> None:
-    if not missions:
-        emit("  （暂无历史任务）")
-        return
-    emit(f"  {'MISSION ID':36} {'STATUS':12} OBJECTIVE")
-    for mission in missions:
-        mission_id = str(mission.get("id") or "")[:34]
-        status = str(mission.get("status") or "")[:12]
-        lines = str(mission.get("objective") or "").splitlines()
-        summary = (lines[0] if lines else "")[:52]
-        emit(f"  {mission_id:36} {status:12} {summary}")
-
 
 def _print_result_compact(result: Any, emit: Callable[..., None]) -> None:
     extra = ""
@@ -1050,7 +1040,7 @@ def _run_slash_command(
         emit(f"下一轮将链入任务 {session.chained_mission_id} 的上下文")
         return True
     if name == "/missions":
-        if not (directory / "db" / "agenthub.db").is_file():
+        if not has_control_database(workspace_root, directory):
             emit("暂无本地任务历史（先运行一个任务）")
             return True
         try:

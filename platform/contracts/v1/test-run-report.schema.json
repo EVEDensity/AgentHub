@@ -1,0 +1,140 @@
+{
+  "$defs": {
+    "TestCaseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "errored",
+            "skipped"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status"
+      ],
+      "title": "TestCaseResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "missionId": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Missionid",
+      "type": "string"
+    },
+    "workUnitId": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Workunitid",
+      "type": "string"
+    },
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "conclusion": {
+      "enum": [
+        "passed",
+        "failed",
+        "inconclusive"
+      ],
+      "title": "Conclusion",
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "maximum": 65535,
+          "minimum": -65535,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Exitcode"
+    },
+    "reportType": {
+      "const": "test-run",
+      "title": "Reporttype",
+      "type": "string"
+    },
+    "total": {
+      "maximum": 1000000000,
+      "minimum": 0,
+      "title": "Total",
+      "type": "integer"
+    },
+    "passed": {
+      "maximum": 1000000000,
+      "minimum": 0,
+      "title": "Passed",
+      "type": "integer"
+    },
+    "failed": {
+      "maximum": 1000000000,
+      "minimum": 0,
+      "title": "Failed",
+      "type": "integer"
+    },
+    "errored": {
+      "maximum": 1000000000,
+      "minimum": 0,
+      "title": "Errored",
+      "type": "integer"
+    },
+    "skipped": {
+      "maximum": 1000000000,
+      "minimum": 0,
+      "title": "Skipped",
+      "type": "integer"
+    },
+    "cases": {
+      "items": {
+        "$ref": "#/$defs/TestCaseResult"
+      },
+      "maxItems": 50000,
+      "title": "Cases",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "missionId",
+    "workUnitId",
+    "attempt",
+    "conclusion",
+    "exitCode",
+    "reportType",
+    "total",
+    "passed",
+    "failed",
+    "errored",
+    "skipped",
+    "cases"
+  ],
+  "title": "TestRunReport",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/test-run-report.schema.json"
+}
