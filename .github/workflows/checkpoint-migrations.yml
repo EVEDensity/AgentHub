@@ -14,6 +14,7 @@ on:
       - 'tests/integration/test_checkpoint_resume_postgres.py'
       - 'tests/integration/test_mission_fork_postgres.py'
       - 'requirements*.txt'
+      - 'pytest.ini'
       - '.github/workflows/checkpoint-migrations.yml'
   pull_request:
     branches: [main, 'main*']
@@ -28,6 +29,7 @@ on:
       - 'tests/integration/test_checkpoint_resume_postgres.py'
       - 'tests/integration/test_mission_fork_postgres.py'
       - 'requirements*.txt'
+      - 'pytest.ini'
       - '.github/workflows/checkpoint-migrations.yml'
   workflow_dispatch:
 
