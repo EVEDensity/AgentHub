@@ -97,6 +97,8 @@ def _receipt_duration(result: Mapping[str, Any]) -> float:
 
 
 def _recovered_feedback(result: Mapping[str, Any], call: Any, image: ResumeImage, policy: Any) -> ToolResult:
+    if result.get("success") is not True:
+        raise ResumeImageError("completed receipt has no explicit successful gateway outcome")
     content = result.get("result", result.get("content", ""))
     if not isinstance(content, str):
         content = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)

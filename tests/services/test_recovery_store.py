@@ -87,3 +87,11 @@ def test_incomplete_pending_call_cannot_be_promoted_by_an_earlier_successful_rec
     with pytest.raises(ResumeImageError, match="incomplete"):
         _reconcile_started(value, {}, receipts, {}, "unchanged")
     receipts.replay_decision.assert_not_called()
+
+
+@pytest.mark.parametrize("result", [{"result": "body"}, {"success": False}, {"success": 1}])
+def test_receipt_label_cannot_promote_ambiguous_or_negative_result_body(tmp_path, result):
+    from app.services.recovery_journal import _recovered_feedback
+    value = image(tmp_path)
+    with pytest.raises(ResumeImageError, match="explicit successful"):
+        _recovered_feedback(result, value.pending_tool_calls[0], value, None)
