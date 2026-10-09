@@ -1,0 +1,68 @@
+name: Checkpoint migration compatibility
+
+on:
+  push:
+    branches: [main, 'main*', 'codex/checkpoint-*']
+    paths:
+      - 'app/db/**'
+      - 'app/domain/**'
+      - 'app/repositories/**'
+      - 'migrations/**'
+      - 'platform/contracts/v1/**'
+      - 'tests/contracts/test_execution_checkpoint_contract.py'
+      - 'tests/persistence/**'
+      - 'tests/integration/test_checkpoint_resume_postgres.py'
+      - 'tests/integration/test_mission_fork_postgres.py'
+      - 'requirements*.txt'
+      - '.github/workflows/checkpoint-migrations.yml'
+  pull_request:
+    branches: [main, 'main*']
+    paths:
+      - 'app/db/**'
+      - 'app/domain/**'
+      - 'app/repositories/**'
+      - 'migrations/**'
+      - 'platform/contracts/v1/**'
+      - 'tests/contracts/test_execution_checkpoint_contract.py'
+      - 'tests/persistence/**'
+      - 'tests/integration/test_checkpoint_resume_postgres.py'
+      - 'tests/integration/test_mission_fork_postgres.py'
+      - 'requirements*.txt'
+      - '.github/workflows/checkpoint-migrations.yml'
+  workflow_dispatch:
+
+jobs:
+  checkpoint-migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: checkpoint-test
+          POSTGRES_DB: checkpoint_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U postgres -d checkpoint_test'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      AGENTHUB_DB_BACKEND: sqlite
+      AGENTHUB_TEST_POSTGRES_DSN: postgresql://postgres:checkpoint-test@127.0.0.1:5432/checkpoint_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m alembic heads
+      - name: Validate legacy, fresh and resumed checkpoint storage
+        run: >-
+          python -m pytest -q
+          tests/contracts/test_execution_checkpoint_contract.py
+          tests/persistence/test_checkpoint_migration_graph.py
+          tests/persistence/test_checkpoint_resume_sqlite.py
+          tests/persistence/test_migrations.py
+          tests/integration/test_checkpoint_resume_postgres.py
+          tests/integration/test_mission_fork_postgres.py

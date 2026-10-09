@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0110](0110-checkpoint-resume-storage-compatibility.md) | Preserve checkpoint migration lineage and resume storage compatibility |
 | [0108](0108-event-log-as-memory-multi-agent-collaboration.md) | Event log as memory for multi-agent collaboration |
 | [0107](0107-memory-slimming-web-chat-decommission.md) | Slim the memory subsystem to L0/L1 |
 | [0106](0106-l3-knowledge-graph-stays-r5.md) | L3 knowledge graph stays on the R5 timeline |

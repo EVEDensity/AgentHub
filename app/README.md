@@ -48,6 +48,11 @@ workspace tree.
   Legacy session file versions remain in `artifacts`; Mission Control owns
   immutable execution metadata in the separate `mission_artifacts` table.
 
+* `db/`: connection and schema initialization. Checkpoint resume metadata uses
+  a distinct PostgreSQL Alembic revision and a transactional SQLite version-2
+  to version-3 upgrade; historical rows retain NULL fingerprints. See
+  `db/README.md` for migration and rollback boundaries (ADR-0110).
+
 * `services/`: application use cases, compatibility adapters, and storage ports.
   The optional `services/code_index/` package maintains a fail-open,
   workspace-local SQLite symbol index for faster repository discovery; file

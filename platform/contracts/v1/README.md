@@ -39,3 +39,12 @@ versions, and the human-supplied reason. The event creates no Mission rebind.
 `execution-checkpoint.schema.json` defines the content-minimized durable
 checkpoint projection. Tool/model content is intentionally excluded; terminal
 shape and the server-generated state digest are part of the v1 contract.
+
+The optional `resumeProtocolVersion`, `nextAction`, `idempotencyKey`,
+`workspaceRevision`, and `contextManifestDigest` fields now match the domain
+and repository projection. Older documents without them remain valid. An
+included `nextAction` requires a protocol version and tool-call identity;
+execution-scoped keys and fingerprints remain metadata, never a grant to
+replay work. The Harness journal retains actual arguments/results, and strict
+resume still validates lease/attempt, workspace/context, and ToolReceipts.
+See ADR-0110 and `tests/contracts/test_execution_checkpoint_contract.py`.
