@@ -15,6 +15,7 @@ on:
       - 'tests/integration/test_mission_fork_postgres.py'
       - 'requirements*.txt'
       - 'pytest.ini'
+      - 'tests/contracts/requirements.txt'
       - '.github/workflows/checkpoint-migrations.yml'
   pull_request:
     branches: [main, 'main*']
@@ -30,6 +31,7 @@ on:
       - 'tests/integration/test_mission_fork_postgres.py'
       - 'requirements*.txt'
       - 'pytest.ini'
+      - 'tests/contracts/requirements.txt'
       - '.github/workflows/checkpoint-migrations.yml'
   workflow_dispatch:
 
@@ -57,7 +59,7 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-dev.txt
-      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt -r tests/contracts/requirements.txt
       - run: python -m alembic heads
       - name: Validate legacy, fresh and resumed checkpoint storage
         run: >-
