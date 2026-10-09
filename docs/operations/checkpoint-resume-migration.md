@@ -15,10 +15,11 @@ Mission, Artifact and Evidence records. It adds no ports or services.
 
 ## PostgreSQL upgrade and checks
 
-`python -m alembic heads` must report only `b7e1f203c4d5`. Configure the existing
+`python -m alembic heads` must report only `c8f2a314d5e6`. Configure the existing
 `DATABASE_URL` securely, then run `python -m alembic upgrade head`. The startup
 migrator can also advance a supported older head with the shared SQL. An
-already recorded `b7e1f203c4d5` remains unchanged.
+already recorded `b7e1f203c4d5` advances through the additive session compatibility
+revision while preserving checkpoint metadata.
 
 Verify the schema before admitting work:
 
@@ -35,8 +36,9 @@ metadata. Do not fill them using the current checkout or claim they are resumabl
 
 ## SQLite upgrade and checks
 
-Normal local Mission Control startup upgrades schema version 2 to 3 without
-replaying seeds. The five column additions and marker update share a transaction.
+Normal local Mission Control startup upgrades schema version 2 to 4 without
+replaying seeds. The five checkpoint columns, session compatibility additions,
+and marker update share a transaction. Version 3 upgrades session storage only.
 On failure, startup fails and version 2 remains; resolve the reported schema
 problem before retrying. An absent checkpoint table is a failure, not readiness.
 
@@ -45,7 +47,7 @@ SELECT MAX(version) FROM schema_migrations;
 PRAGMA table_info(execution_checkpoints);
 ```
 
-Expect version 3 and the same five column names. Existing metadata values and
+Expect version 4 and the same five column names. Existing metadata values and
 user data are retained. No change in readiness/health semantics is introduced.
 
 ## Rollback
@@ -67,7 +69,7 @@ Run the contract and persistence tests listed in `app/db/README.md`. Set
 python -m pytest tests/integration/test_checkpoint_resume_postgres.py -q
 ```
 
-The tests create and drop only their uniquely named schemas. The checked-in
-`Checkpoint migration compatibility` workflow supplies its own PostgreSQL
-service. Successful schema tests do not certify real-provider, physical TTY,
+The tests create and drop only their uniquely named schemas. The consolidated
+`CI` workflow supplies its own PostgreSQL service and runs all integration tests.
+Successful schema tests do not certify real-provider, physical TTY,
 distributed SSE or full crash-resume behavior.

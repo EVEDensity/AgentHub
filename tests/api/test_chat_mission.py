@@ -24,8 +24,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.v1.chat_mission import (
-    ConfirmPendingRequest,
-    CancelPendingRequest,
     router as chat_router,
     get_mission_repository,
     get_session_event_repository,
@@ -34,10 +32,12 @@ from app.api.v1.chat_mission import (
     get_pending_confirmation_repository,
 )
 from app.services.auth_service import get_current_user
+from app.services.agent_binding_service import AgentBinding
+from tests.api.chat_transaction_fixture import configure_pending_transaction
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _now() -> datetime:
@@ -65,6 +65,7 @@ class _FakeMissionRepository:
         self.created: list[Any] = []
         self.events: list[Any] = []
         self.last_sequences: dict[tuple[str, str], int] = {}  # (aggregate_type, aggregate_id) -> last seq
+        self.work_units: dict[str, Any] = {}
 
     # ── Contract lineage (create_mission transaction) ───────────
     async def lock_contract_lineage(self, contract_id: str) -> None:
@@ -105,6 +106,12 @@ class _FakeMissionRepository:
 
     async def list_missions(self, workspace_id, *, limit=100, offset=0):
         return [m for m in self.missions.values() if m.workspace_id == workspace_id][offset : offset + limit]
+
+    async def list_work_units(self, mission_id: str):
+        return [unit for unit in self.work_units.values() if unit.mission_id == mission_id]
+
+    async def add_work_unit(self, work_unit) -> None:
+        self.work_units[work_unit.id] = work_unit
 
     # ── Event store ─────────────────────────────────────────────
     async def append_event(self, event) -> None:
@@ -198,33 +205,21 @@ class _FakePendingConfirmationRepository:
 class _FakeAgentBindingResolver:
     """Returns a static catalog + default agent for testing."""
 
-    def __init__(self, catalog: list[dict[str, Any]] | None = None, default_id: str | None = None) -> None:
-        self.catalog = catalog or [
-            {
-                "agent_id": "dev",
-                "domain": "dev.local",
-                "display_name": "Dev Agent",
-                "agent_type": "generic",
-                "enabled": True,
-            },
-            {
-                "agent_id": "researcher",
-                "domain": "research.local",
-                "display_name": "Research Agent",
-                "agent_type": "generic",
-                "enabled": True,
-            },
+    def __init__(self, catalog: list[AgentBinding] | None = None, default_id: str | None = None) -> None:
+        self.catalog = catalog if catalog is not None else [
+            AgentBinding("dev", "function-calling", ()),
+            AgentBinding("researcher", "function-calling", ()),
         ]
         self.default_id = default_id or "dev"
 
-    async def list_enabled(self, scope_id: str) -> list[dict[str, Any]]:
+    async def list_enabled(self, scope_id: str) -> list[AgentBinding]:
         return self.catalog
 
-    async def get_default(self, scope_id: str) -> dict[str, Any] | None:
+    async def resolve(self, *, scope_id: str, agent_id: str) -> AgentBinding | None:
         for b in self.catalog:
-            if b["agent_id"] == self.default_id:
+            if b.agent_id == agent_id:
                 return b
-        return self.catalog[0] if self.catalog else None
+        return None
 
 
 def _user(role: str = "admin") -> dict[str, Any]:
@@ -263,6 +258,7 @@ def build_chat_app(
         "pending": pending_repo or _FakePendingConfirmationRepository(),
         "resolver": resolver or _FakeAgentBindingResolver(),
     }
+    configure_pending_transaction(fakes)
 
     app = FastAPI()
     app.include_router(chat_router, prefix="/api/v1")
@@ -359,7 +355,13 @@ class TestSessionAutoCreate(
         self.assertEqual(sess.workspace_id, "local-admin")
 
     def test_preserves_existing_session_id(self) -> None:
+        from app.domain import Session, ActorRef
+
         app, fakes = build_chat_app()
+        fakes["sessions"].sessions["sess-preset-123"] = Session(
+            id="sess-preset-123", workspace_id="local-admin", title="Existing chat", status="ACTIVE",
+            created_by=ActorRef(type="human", id="user-1"), created_at=_now(), updated_at=_now(),
+        )
         client = TestClient(app)
         resp = client.post(
             "/api/v1/chat/mission",
@@ -425,13 +427,9 @@ class TestMentionRouting(
             "/api/v1/chat/mission",
             json={"message": "@ghost 这个 agent 不存在"},
         )
-        self.assertEqual(resp.status_code, 202)
-        body = resp.json()
-        mentions = body["mentions"]
-        self.assertEqual(mentions["resolved"], [])
-        self.assertEqual(len(mentions["unresolved"]), 1)
-        self.assertEqual(mentions["unresolved"][0]["name"], "ghost")
-
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("resolve", resp.json()["detail"])
+        self.assertFalse(fakes["repo"].missions)
 
 class TestArchivistMention(
     unittest.TestCase,
@@ -785,9 +783,9 @@ class TestRunnerClaimFencing(
                 errors.append(exc)
 
         runners = [f"runner-{i}" for i in range(10)]
-        asyncio.get_event_loop().run_until_complete(
-            asyncio.gather(*[_claim(r) for r in runners])
-        )
+        async def _all_claims():
+            await asyncio.gather(*[_claim(r) for r in runners])
+        _run(_all_claims())
 
         winners = [r for r in results if r["claim"].get("ok")]
         losers = [r for r in results if not r["claim"].get("ok")]
@@ -890,7 +888,7 @@ class TestLeaseExpiryAndHeartbeatGap(
         c2 = _FakeControlClient(repo)
 
         # Runner 1 claims at t=0
-        win1 = asyncio.get_event_loop().run_until_complete(
+        win1 = _run(
             c1.claim_ready_work_unit(
                 "ws", runner_id="runner-1", agent_id="a1",
                 adapter_type="local", supported_work_unit_kinds=("desktop.task",),
@@ -901,7 +899,7 @@ class TestLeaseExpiryAndHeartbeatGap(
 
         # Ticking forward 20s — lease still active, runner 2 must fail
         fake_clock[0] += timedelta(seconds=20)
-        fail = asyncio.get_event_loop().run_until_complete(
+        fail = _run(
             c2.claim_ready_work_unit(
                 "ws", runner_id="runner-2", agent_id="a2",
                 adapter_type="local", supported_work_unit_kinds=("desktop.task",),
@@ -912,7 +910,7 @@ class TestLeaseExpiryAndHeartbeatGap(
 
         # Ticking past expiry → runner 1 "died", runner 2 reclaims
         fake_clock[0] += timedelta(seconds=15)  # now 35s after claim → 5s past expiry
-        win2 = asyncio.get_event_loop().run_until_complete(
+        win2 = _run(
             c2.claim_ready_work_unit(
                 "ws", runner_id="runner-2", agent_id="a2",
                 adapter_type="local", supported_work_unit_kinds=("desktop.task",),
@@ -931,7 +929,7 @@ class TestLeaseExpiryAndHeartbeatGap(
         c2 = _FakeControlClient(repo)
 
         # Runner 1 claims at t=0, lease = 30s
-        win1 = asyncio.get_event_loop().run_until_complete(
+        win1 = _run(
             c1.claim_ready_work_unit(
                 "ws", runner_id="runner-1", agent_id="a1",
                 adapter_type="local", supported_work_unit_kinds=("desktop.task",),
@@ -942,7 +940,7 @@ class TestLeaseExpiryAndHeartbeatGap(
 
         # At t=20s heartbeat extends to t=50s
         fake_clock[0] += timedelta(seconds=20)
-        hb = asyncio.get_event_loop().run_until_complete(
+        hb = _run(
             c1.heartbeat_work_unit(
                 "mis-wu-hb", "wu-hb", runner_id="runner-1",
                 lease_id=lease_id, lease_seconds=30,
@@ -953,7 +951,7 @@ class TestLeaseExpiryAndHeartbeatGap(
         # At t=45s (25s after heartbeat, 15s before new expiry)
         # runner 2 still cannot claim
         fake_clock[0] += timedelta(seconds=25)
-        fail = asyncio.get_event_loop().run_until_complete(
+        fail = _run(
             c2.claim_ready_work_unit(
                 "ws", runner_id="runner-2", agent_id="a2",
                 adapter_type="local", supported_work_unit_kinds=("desktop.task",),
@@ -964,7 +962,7 @@ class TestLeaseExpiryAndHeartbeatGap(
 
         # After lease finally expires → takeover succeeds
         fake_clock[0] += timedelta(seconds=10)
-        win2 = asyncio.get_event_loop().run_until_complete(
+        win2 = _run(
             c2.claim_ready_work_unit(
                 "ws", runner_id="runner-2", agent_id="a2",
                 adapter_type="local", supported_work_unit_kinds=("desktop.task",),
@@ -1005,7 +1003,7 @@ class TestA2AInboundClaimFencing(unittest.TestCase):
             )
             self.assertFalse(fail["ok"])
 
-        asyncio.get_event_loop().run_until_complete(_do())
+        _run(_do())
 
     def test_desktop_runner_cannot_claim_a2a_inbound(self) -> None:
         """desktop.task runners must not claim a2a.inbound work_units."""
@@ -1022,7 +1020,7 @@ class TestA2AInboundClaimFencing(unittest.TestCase):
             )
             self.assertFalse(fail["ok"], "desktop runner must not claim a2a.inbound")
 
-        asyncio.get_event_loop().run_until_complete(_do())
+        _run(_do())
 
 
 # ═══════════════════════════════════════════════════════════════════════

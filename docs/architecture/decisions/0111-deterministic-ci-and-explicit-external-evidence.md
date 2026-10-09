@@ -1,8 +1,8 @@
 # ADR-0111: Consolidate deterministic CI and explicitly enable external evidence
 
-> Status: accepted  
-> Owner: repository maintainers  
-> Date: 2026-10-09  
+> Status: accepted
+> Owner: repository maintainers
+> Date: 2026-10-09
 > Scope: validation ownership, external evidence and release automation
 
 ## Context

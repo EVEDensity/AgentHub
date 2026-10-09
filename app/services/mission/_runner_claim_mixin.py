@@ -79,6 +79,7 @@ from app.services.mission._types import (
     _VERIFICATION_ARTIFACT_FIELDS,
     _checkpoint_event_payload,
 )
+from app.services.mission._root_execution_policy import is_desktop_task_root
 
 
 class MissionRunnerClaimMixin:
@@ -380,12 +381,7 @@ class MissionRunnerClaimMixin:
             and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
         ):
             claim_mode = "mission.fork"
-        elif (
-            mission.source.type == MissionSourceType.MANUAL
-            and work_unit.parent_work_unit_id is None
-            and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
-            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
-        ):
+        elif is_desktop_task_root(mission, work_unit):
             claim_mode = "desktop.task"
         else:
             raise WorkUnitNotReadyError(
@@ -493,19 +489,12 @@ class MissionRunnerClaimMixin:
                 and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
                 and bool(work_unit.input_refs)
             )
-            is_desktop_task_root = (
-                mission.source.type == MissionSourceType.MANUAL
-                and work_unit.parent_work_unit_id is None
-                and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
-                and work_unit.assigned_agent_id is not None
-                and work_unit.assigned_adapter is not None
-                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
-            )
+            is_desktop_root = is_desktop_task_root(mission, work_unit)
             if not (
                 is_inbound_root
                 or is_outbound_root
                 or is_mission_fork_root
-                or is_desktop_task_root
+                or is_desktop_root
             ):
                 raise WorkUnitNotReadyError(
                     "execution context is only available for controlled roots"

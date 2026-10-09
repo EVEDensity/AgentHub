@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-
 _PARAMETER = re.compile(r"\$(\d+)")
 _CAST = re.compile(r"::[a-zA-Z_][a-zA-Z0-9_]*")
 # PostgreSQL row-lock clauses have no SQLite equivalent; the local profile's
@@ -35,15 +34,18 @@ class _SharedTransactionState:
 
     ``SQLitePool.acquire()`` hands a fresh adapter to every caller while all
     of them share a single serialized ``sqlite3.Connection`` and its one
-    transaction, so the open/closed state must be tracked at connection
-    level instead of per adapter instance.
+    transaction. Ownership belongs to one asyncio task; only that task can
+    nest scopes. Other tasks wait at the shared gate, including plain reads
+    and writes outside transaction contexts.
     """
 
-    __slots__ = ("depth", "rollback_pending")
+    __slots__ = ("depth", "gate", "owner", "rollback_pending")
 
     def __init__(self) -> None:
         self.depth = 0
         self.rollback_pending = False
+        self.owner: asyncio.Task | None = None
+        self.gate = asyncio.Lock()
 
     @property
     def active(self) -> bool:
@@ -61,26 +63,62 @@ class SQLiteConnection:
         self._lock = lock
         self._tx_state = state if state is not None else _SharedTransactionState()
 
+    @asynccontextmanager
+    async def _operation(self):
+        # Ownership is the actual task, not inherited ContextVar state. A
+        # child task must wait for its parent's transaction to finish.
+        if self._tx_state.owner is asyncio.current_task():
+            async with self._lock:
+                yield
+        else:
+            async with self._tx_state.gate, self._lock:
+                try:
+                    yield
+                except BaseException:
+                    # A cancelled worker may have finished a write in its
+                    # thread. Clear that implicit transaction before releasing
+                    # the connection to another task.
+                    await self._run(self._connection.rollback)
+                    raise
+
+    @staticmethod
+    async def _run(operation, *args):
+        # Cancellation cannot release the connection while a thread still
+        # operates on it. Finish the SQLite call, then propagate cancellation.
+        task = asyncio.create_task(asyncio.to_thread(operation, *args))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+            task.result()
+            raise
+
     async def execute(self, statement: str, *args: Any) -> str:
         query, values = _sql(statement, args)
-        async with self._lock:
-            cursor = await asyncio.to_thread(self._connection.execute, query, values)
+        async with self._operation():
+            cursor = await self._run(self._connection.execute, query, values)
             if not self._tx_state.active:
-                await asyncio.to_thread(self._connection.commit)
+                await self._run(self._connection.commit)
             return f"OK {cursor.rowcount}"
 
     async def executemany(self, statement: str, args_list: list[tuple[Any, ...]]) -> None:
         query, _ = _sql(statement)
-        async with self._lock:
-            await asyncio.to_thread(self._connection.executemany, query, args_list)
+        async with self._operation():
+            await self._run(self._connection.executemany, query, args_list)
             if not self._tx_state.active:
-                await asyncio.to_thread(self._connection.commit)
+                await self._run(self._connection.commit)
 
     async def fetch(self, statement: str, *args: Any) -> list[dict[str, Any]]:
         query, values = _sql(statement, args)
-        async with self._lock:
-            cursor = await asyncio.to_thread(self._connection.execute, query, values)
-            rows = await asyncio.to_thread(cursor.fetchall)
+        async with self._operation():
+            cursor = await self._run(self._connection.execute, query, values)
+            rows = await self._run(cursor.fetchall)
+            if not self._tx_state.active:
+                await self._run(self._connection.commit)
             return [dict(row) for row in rows]
 
     async def fetchrow(self, statement: str, *args: Any) -> dict[str, Any] | None:
@@ -91,23 +129,33 @@ class SQLiteConnection:
         row = await self.fetchrow(statement, *args)
         return next(iter(row.values())) if row else None
 
-    def transaction(self) -> "SQLiteTransaction":
+    def transaction(self) -> SQLiteTransaction:
         return SQLiteTransaction(self)
 
     async def _begin(self) -> None:
-        async with self._lock:
-            if self._tx_state.active:
-                # Nested or concurrent BEGIN reuses the already-open
-                # transaction; only the reference count grows.
-                self._tx_state.depth += 1
-                return
-            await asyncio.to_thread(self._connection.execute, "BEGIN")
-            self._tx_state.depth = 1
+        if self._tx_state.owner is asyncio.current_task():
+            self._tx_state.depth += 1
+            return
+        await self._tx_state.gate.acquire()
+        try:
+            async with self._lock:
+                try:
+                    await self._run(self._connection.execute, "BEGIN")
+                except BaseException:
+                    await self._run(self._connection.rollback)
+                    raise
+                self._tx_state.owner = asyncio.current_task()
+                self._tx_state.depth = 1
+        except BaseException:
+            self._tx_state.gate.release()
+            raise
 
     async def _finish(self, rollback: bool) -> None:
         async with self._lock:
             if not self._tx_state.active:
                 return
+            if self._tx_state.owner is not asyncio.current_task():
+                raise RuntimeError("SQLite transaction must finish in its owning task")
             self._tx_state.depth -= 1
             if self._tx_state.depth > 0:
                 # A failed inner scope must not be committed by the outer
@@ -115,13 +163,19 @@ class SQLiteConnection:
                 self._tx_state.rollback_pending = self._tx_state.rollback_pending or rollback
                 return
             perform_rollback = rollback or self._tx_state.rollback_pending
-            self._tx_state.rollback_pending = False
             operation = self._connection.rollback if perform_rollback else self._connection.commit
-            await asyncio.to_thread(operation)
+            try:
+                await self._run(operation)
+            finally:
+                self._tx_state.rollback_pending = False
+                self._tx_state.owner = None
+                self._tx_state.gate.release()
 
     async def close(self) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._connection.close)
+        if self._tx_state.owner is asyncio.current_task():
+            raise RuntimeError("Cannot close SQLite during the current task's transaction")
+        async with self._tx_state.gate, self._lock:
+            await self._run(self._connection.close)
 
 
 class SQLiteTransaction:
@@ -177,5 +231,5 @@ class SQLitePool:
 
     async def close(self) -> None:
         if self._connection is not None:
-            await asyncio.to_thread(self._connection.close)
+            await SQLiteConnection(self._connection, self._lock, self._tx_state).close()
             self._connection = None

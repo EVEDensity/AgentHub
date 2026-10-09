@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest import mock
 
-from app.db.init_db import _ainit_sqlite
+from app.db.init_db import _ainit_sqlite, SQLITE_SCHEMA_VERSION
 from app.db.sqlite_pool import SQLitePool
 
 RESUME_COLUMNS = {
@@ -28,6 +28,8 @@ class CheckpointResumeSQLiteTests(unittest.IsolatedAsyncioTestCase):
 
     async def _legacy_database(self) -> None:
         async with self.pool.acquire() as connection:
+            await connection.execute("CREATE TABLE sessions(id TEXT PRIMARY KEY, created_at TEXT NOT NULL, name TEXT NOT NULL)")
+            await connection.execute("INSERT INTO sessions VALUES('old-session', '2026-09-01', 'Legacy session')")
             await connection.execute(
                 "INSERT INTO schema_migrations VALUES(2, '2026-09-01')"
             )
@@ -87,7 +89,7 @@ class CheckpointResumeSQLiteTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 await connection.fetchval("SELECT MAX(version) FROM schema_migrations"),
-                3,
+                SQLITE_SCHEMA_VERSION,
             )
 
     async def test_partial_previous_upgrade_and_repeated_boot_are_idempotent(
@@ -113,7 +115,7 @@ class CheckpointResumeSQLiteTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 await connection.fetchval(
-                    "SELECT COUNT(*) FROM schema_migrations WHERE version=3"
+                    "SELECT COUNT(*) FROM schema_migrations WHERE version=$1", SQLITE_SCHEMA_VERSION
                 ),
                 1,
             )
@@ -167,5 +169,5 @@ class CheckpointResumeSQLiteTests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as connection:
             self.assertEqual(
                 await connection.fetchval("SELECT MAX(version) FROM schema_migrations"),
-                3,
+                SQLITE_SCHEMA_VERSION,
             )

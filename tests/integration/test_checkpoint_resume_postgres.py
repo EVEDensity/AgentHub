@@ -113,7 +113,7 @@ class CheckpointResumePostgresTests(unittest.TestCase):
         self.assertTrue(_COLUMNS <= self._columns())
         self.assertEqual(
             self._execute("SELECT version_num FROM alembic_version"),
-            [("b7e1f203c4d5",)],
+            [("c8f2a314d5e6",)],
         )
 
     def test_existing_rows_survive_upgrade_downgrade_and_reupgrade(self) -> None:
@@ -212,7 +212,7 @@ class CheckpointResumePostgresTests(unittest.TestCase):
                     await connection.fetchval(
                         "SELECT version_num FROM alembic_version"
                     ),
-                    "b7e1f203c4d5",
+                    "c8f2a314d5e6",
                 )
                 self.assertEqual(
                     await connection.fetchval(

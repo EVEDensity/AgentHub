@@ -1,8 +1,8 @@
 # CI ownership and verification
 
-> Status: implemented  
-> Owner: repository maintainers  
-> Last reviewed: 2026-10-09  
+> Status: implemented
+> Owner: repository maintainers
+> Last reviewed: 2026-10-09
 > Scope: GitHub Actions validation, release checks and external evidence
 
 ## Deterministic merge gate

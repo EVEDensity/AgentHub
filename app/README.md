@@ -50,10 +50,18 @@ workspace tree.
 
 * `db/`: connection and schema initialization. Checkpoint resume metadata uses
   a distinct PostgreSQL Alembic revision and a transactional SQLite version-2
-  to version-3 upgrade; historical rows retain NULL fingerprints. See
+  to version-4 upgrade; historical rows retain NULL fingerprints. Session scope
+  compatibility follows the checkpoint revision and retains unknown legacy
+  ownership as NULL; v1 access checks durable scope before reading or writing.
+  See
   `db/README.md` for migration and rollback boundaries (ADR-0110).
 
 * `services/`: application use cases, compatibility adapters, and storage ports.
+  Chat dispatch now persists one catalog-bound `desktop.task` WorkUnit through
+  Mission Control. The local Runner claims its registered Agent only; other
+  executors remain PENDING until their matching Runner is available. Unknown,
+  ambiguous, multiple, and unsupported executor mentions fail admission. The
+  `/chat/orchestrate` placeholder returns an explicit unsupported response.
   The optional `services/code_index/` package maintains a fail-open,
   workspace-local SQLite symbol index for faster repository discovery; file
   search and glob remain the fallback and source of truth for reads.

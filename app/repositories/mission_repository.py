@@ -1146,7 +1146,7 @@ class MissionRepository:
                                  AND candidate.assigned_adapter <> 'a2a.outbound'
                              )
                              OR (
-                                 mission.source->>'type' = 'manual'
+                                 (mission.source->>'type' = 'manual' OR (mission.source->>'type' = 'chat' AND candidate.assigned_adapter = 'function-calling'))
                                  AND candidate.parent_work_unit_id IS NULL
                                  AND candidate.kind = 'desktop.task'
                                  AND candidate.assigned_adapter <> 'a2a.outbound'
@@ -1248,7 +1248,7 @@ class MissionRepository:
                          AND candidate.assigned_adapter <> 'a2a.outbound'
                      )
                      OR (
-                         mission.source->>'type' = 'manual'
+                         (mission.source->>'type' = 'manual' OR (mission.source->>'type' = 'chat' AND candidate.assigned_adapter = 'function-calling'))
                          AND candidate.parent_work_unit_id IS NULL
                          AND candidate.kind = 'desktop.task'
                          AND candidate.assigned_adapter <> 'a2a.outbound'

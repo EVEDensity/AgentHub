@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.services.runner_context_policy import supports_model_source
 
 import asyncio
 import inspect
@@ -334,7 +335,6 @@ class _ClaimedModelWorkResolver:
             # stop recovery rather than replaying a command or file write.
             if idempotency_key and not receipt_decision:
                 import os
-                from pathlib import Path
                 from app.services.tools.receipts import SQLiteToolReceiptStore
 
                 data_root = os.environ.get("AGENTHUB_LOCAL_DATA", "").strip()
@@ -358,7 +358,7 @@ class _ClaimedModelWorkResolver:
                 )
             resume_input = HarnessResumeInput(
                 checkpoint_id=str(checkpoint.get("id") or checkpoint.get("checkpointId") or ""),
-                attempt=int(checkpoint.get("attempt") or claimed_work_unit.get("attempt") or 0),
+                attempt=int(checkpoint.get("attempt") or work_unit.get("attempt") or 0),
                 next_action=dict(action) if isinstance(action, Mapping) else None,
                 recovered_tool_results=recovered,
                 start_iteration=int(checkpoint.get("iteration") or 0),
@@ -1413,7 +1413,7 @@ def _sequence_string(value: Any, field: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _ModelContextProfile:
-    source_type: str
+    source_types: tuple[str, ...]
     work_unit_kind: str
     label: str
     schema: str
@@ -1423,14 +1423,14 @@ class _ModelContextProfile:
 
 
 _A2A_INBOUND_CONTEXT_PROFILE = _ModelContextProfile(
-    source_type="a2a.inbound",
+    source_types=("a2a.inbound",),
     work_unit_kind="a2a.inbound",
     label="inbound A2A",
     schema="agenthub.a2a-inbound-context.v1",
     required_capability="a2a.receive",
 )
 _MISSION_FORK_CONTEXT_PROFILE = _ModelContextProfile(
-    source_type="mission.fork",
+    source_types=("mission.fork",),
     work_unit_kind="mission.fork",
     label="Mission fork",
     schema="agenthub.mission-fork-context.v1",
@@ -1438,7 +1438,7 @@ _MISSION_FORK_CONTEXT_PROFILE = _ModelContextProfile(
     require_input_refs=True,
 )
 _DESKTOP_TASK_CONTEXT_PROFILE = _ModelContextProfile(
-    source_type="manual",
+    source_types=("manual", "chat"),
     work_unit_kind="desktop.task",
     label="desktop task",
     schema="agenthub.desktop-task-context.v1",
@@ -1515,7 +1515,7 @@ def _compile_model_context(
         )
     claimed_agent_id = _required_string(claimed_work_unit, "assignedAgentId")
     claimed_adapter = _required_string(claimed_work_unit, "assignedAdapter")
-    if profile.source_type == "mission.fork" and claimed_adapter == "a2a.outbound":
+    if profile.require_ancestry and claimed_adapter == "a2a.outbound":
         raise ClaimedWorkResolutionError(
             "Mission fork cannot use the outbound A2A adapter"
         )
@@ -1545,7 +1545,7 @@ def _compile_model_context(
     if mission_contract_version < 1:
         raise ClaimedWorkResolutionError("execution context Mission has no Contract version")
     source = _required_mapping(mission, "source")
-    if _required_string(source, "type") != profile.source_type:
+    if not supports_model_source(_required_string(source, "type"), profile.source_types, claimed_adapter):
         raise ClaimedWorkResolutionError(
             f"execution context source is not {profile.label}"
         )
@@ -1568,7 +1568,7 @@ def _compile_model_context(
     context_adapter = _required_string(work_unit, "assignedAdapter")
     if context_adapter != claimed_adapter:
         raise ClaimedWorkResolutionError("execution context WorkUnit adapter changed")
-    if profile.source_type == "mission.fork" and context_adapter == "a2a.outbound":
+    if profile.require_ancestry and context_adapter == "a2a.outbound":
         raise ClaimedWorkResolutionError(
             "Mission fork cannot use the outbound A2A adapter"
         )
@@ -1724,7 +1724,7 @@ def _compile_model_context(
             {"kind": _required_string(output_value, "kind"), "required": required}
         )
 
-    source_projection: dict[str, str] = {"type": profile.source_type}
+    source_projection: dict[str, str] = {"type": _required_string(source, "type")}
     if profile.require_ancestry:
         for key in ("reference", "externalId"):
             source_value = _optional_string(source, key)

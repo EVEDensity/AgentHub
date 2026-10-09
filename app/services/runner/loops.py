@@ -61,15 +61,13 @@ class MissionControlDesktopMissionSource:
     async def running_manual_missions(self, workspace_id: str) -> Sequence[Any]:
         repository = self._repository_factory()
         missions = await repository.list_missions(workspace_id, limit=200)
-        # Accept both MANUAL (CLI/desktop runner) and CHAT (web chat)
-        # sources — both produce RUNNING Missions that need work unit
-        # derivation.  A2A and API sources have their own derivation path.
-        accepted_sources = {MissionSourceType.MANUAL, MissionSourceType.CHAT}
+        # Chat dispatch persists its actual catalog binding through Mission
+        # Control. Never replace it with this fixed desktop executor.
         return [
             mission
             for mission in missions
             if mission.status == MissionStatus.RUNNING
-            and mission.source.type in accepted_sources
+            and mission.source.type == MissionSourceType.MANUAL
         ]
 
     async def has_work_unit_kind(self, mission_id: str, kind: str) -> bool:

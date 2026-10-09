@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.domain import ActorRef, Session, SessionStatus
@@ -36,15 +36,14 @@ def _decode_actor(row: Mapping[str, Any]) -> ActorRef:
 
 
 def _session_from_row(row: Mapping[str, Any]) -> Session:
-    created_at = row["created_at"]
-    updated_at = row["updated_at"]
-    for dt in (created_at, updated_at):
+    def decode_datetime(dt: Any) -> datetime:
         if isinstance(dt, str):
             if dt.endswith("Z"):
                 dt = dt[:-1] + "+00:00"
             dt = datetime.fromisoformat(dt)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
+        return dt
 
     return Session(
         id=str(row["id"]),
@@ -53,8 +52,8 @@ def _session_from_row(row: Mapping[str, Any]) -> Session:
         status=SessionStatus(row["status"]),
         metadata=_decode_json(row.get("metadata")),
         created_by=_decode_actor(row),
-        created_at=created_at,
-        updated_at=updated_at,
+        created_at=decode_datetime(row["created_at"]),
+        updated_at=decode_datetime(row["updated_at"]),
     )
 
 
@@ -86,8 +85,8 @@ class SessionRepository:
             """INSERT INTO sessions(
                    id, workspace_id, title, status, metadata,
                    created_by_type, created_by_id, created_by_display_name,
-                   created_at, updated_at
-               ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                   created_at, updated_at, name, owner_id
+               ) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
             session.id,
             session.workspace_id,
             session.title,
@@ -96,8 +95,10 @@ class SessionRepository:
             session.created_by.type,
             session.created_by.id,
             session.created_by.display_name or "",
-            session.created_at,
-            session.updated_at,
+            session.created_at.isoformat(),
+            session.updated_at.isoformat(),
+            session.title,
+            session.created_by.id if session.created_by.type == "human" else "",
         )
 
     async def archive_session(self, session_id: str) -> Session | None:
@@ -106,14 +107,14 @@ class SessionRepository:
             "SELECT * FROM sessions WHERE id=$1",
             session_id,
         )
-        if row is None:
+        if row is None or not row.get("workspace_id"):
             return None
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         await self._execute(
             """UPDATE sessions
-               SET status='ARCHIVED', updated_at=$1
+               SET status='ARCHIVED', active=0, updated_at=$1
                WHERE id=$2""",
-            now,
+            now.isoformat(),
             session_id,
         )
         row = dict(row)
@@ -128,7 +129,11 @@ class SessionRepository:
             "SELECT * FROM sessions WHERE id=$1",
             session_id,
         )
-        return _session_from_row(row) if row is not None else None
+        # Legacy conversation rows have no durable workspace assignment.
+        # Do not infer a v1 scope from owner_id, participants, or the caller.
+        if row is None or not row.get("workspace_id"):
+            return None
+        return _session_from_row(row)
 
     async def list_sessions(
         self,
