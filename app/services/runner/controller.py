@@ -45,7 +45,7 @@ from app.services.desktop_runner_tools import (
     DelegateSubtaskConfig,
     build_desktop_runner_tools,
 )
-from app.services.tools.policy import resolve_tool_execution_policy
+from app.services.tools.policy import ToolExecutionPolicy, resolve_tool_execution_policy
 from app.services.harness_service import FunctionTool
 from app.services.mission_service import DESKTOP_TASK_WORK_UNIT_KIND
 from app.services.runner.auth import DesktopAuthenticator
@@ -67,6 +67,7 @@ from app.services.runner.settings import (
     _MAX_DESKTOP_WORKERS,
     DESKTOP_ADAPTER_TYPE,
     DESKTOP_AGENT_ID,
+    DESKTOP_RUNNER_LABEL,
     DESKTOP_VERIFIER_ID,
     DESKTOP_VERIFIER_VERSION,
     INPROCESS_GUIDANCE_ENV,
@@ -276,14 +277,12 @@ class DesktopLocalRunnerController:
 
         worker_count = max(1, min(settings.workers, _MAX_DESKTOP_WORKERS))
         for index in range(worker_count):
-            worker_runner_id = (
-                runner_id if worker_count == 1 else f"{runner_id}-w{index}"
-            )
             runner = self._build_runner(
                 control,
-                runner_id=worker_runner_id,
+                runner_id=runner_id,
                 model_factory=model_factory,
                 tools=tools,
+                tool_policy=policy,
             )
             if index == 0:
                 self._runner = runner
@@ -388,11 +387,14 @@ class DesktopLocalRunnerController:
         runner_id: str,
         model_factory: HarnessModelFactoryPort,
         tools: Sequence[FunctionTool],
+        tool_policy: ToolExecutionPolicy,
     ) -> WorkUnitRunner:
         settings = self._settings
         harness_factory = DesktopTaskHarnessFactory(
             model_factory,
+            workspace_root=self._workspace_root,
             tools=tools,
+            tool_policy=tool_policy,
             checkpoint_factory=MissionControlHarnessCheckpointFactory(
                 control,
                 runner_id=runner_id,
@@ -415,6 +417,7 @@ class DesktopLocalRunnerController:
             runner_id=runner_id,
             assigned_agent_id=DESKTOP_AGENT_ID,
             assigned_adapter=DESKTOP_ADAPTER_TYPE,
+            resume_mission_id=settings.resume_mission_id,
             max_timeout_seconds=settings.timeout_seconds,
             max_iterations=settings.max_iterations,
             max_tool_calls=settings.max_tool_calls,

@@ -10,6 +10,7 @@ from typing import Any
 
 import asyncpg
 
+from app.db.migrations.checkpoint_resume import EXECUTION_CHECKPOINT_RESUME_UPGRADE
 from app.db.migrations.mission_control_plane import (
     AGENT_BINDING_PERSISTENCE_UPGRADE,
     ARTIFACT_PERSISTENCE_UPGRADE,
@@ -52,6 +53,7 @@ _MIGRATIONS = (
     + CONTRACT_REVISION_BINDING_UPGRADE
     + CONTRACT_LINEAGE_OWNERSHIP_UPGRADE
     + EXECUTION_CHECKPOINT_UPGRADE
+    + EXECUTION_CHECKPOINT_RESUME_UPGRADE
 )
 
 

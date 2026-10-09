@@ -7,7 +7,7 @@
 This service hosts one workspace-scoped `VerifierWorker` behind a minimal
 operational HTTP surface. It is independently authenticated from Runner and
 reproduces registered Artifact byte integrity plus the Contract-bound
-`artifact-set.v1` evaluation before requesting PASS Evidence. Mission Control
+registered evaluation before requesting PASS or FAIL Evidence. Mission Control
 remains the only durable verification, Evidence, and lifecycle authority.
 
 ## Runtime contract
@@ -39,6 +39,19 @@ returns only sanitized process-local counters. A failed poll makes readiness
 false until Mission Control discovery and evaluation succeed again. Neither
 endpoint exposes workspace, Mission, WorkUnit, Artifact, policy, error text, or
 credential values.
+
+`test-run.v1` and `security-scan.v1` read registered v1 report bytes, verify
+Mission/WorkUnit/attempt identity, and reproduce case/finding results against
+Contract thresholds. Test counters and security summaries must match individual
+records; failed, malformed, inconclusive, or oversized reports produce FAIL.
+The internal report byte bound is 1 MiB and raw bodies are never included in
+Evidence or HTTP projections. Producers must emit the versioned
+`test-run-report.schema.json` or `security-scan-report.schema.json` contracts.
+
+This verifies a producer's report conclusion and integrity. It does not rerun
+tests or scans and does not attest that an untrusted producer actually executed
+the claimed command. Artifact-set and build-presence policies retain their
+narrower structural meaning. See ADR-0114.
 
 ## Required configuration
 

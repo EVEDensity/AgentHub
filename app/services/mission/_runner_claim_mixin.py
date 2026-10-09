@@ -79,6 +79,10 @@ from app.services.mission._types import (
     _VERIFICATION_ARTIFACT_FIELDS,
     _checkpoint_event_payload,
 )
+from app.services.mission._root_execution_policy import is_desktop_task_root
+from app.services.mission._workspace_claim import (
+    is_owned_live_claim, select_workspace_claim, validate_workspace_claim,
+)
 
 
 class MissionRunnerClaimMixin:
@@ -230,58 +234,21 @@ class MissionRunnerClaimMixin:
         actor: ActorRef,
         lease_seconds: int,
         admission_policy: WorkspaceClaimAdmissionPolicy,
+        resume_mission_id: str | None = None,
     ) -> WorkUnitClaimOutcome:
         """Atomically discover and claim one bound unit in a workspace."""
 
-        if not workspace_id.strip():
-            raise ValueError("workspace_id must be non-empty")
-        if not supported_work_unit_kinds:
-            raise ValueError("supported_work_unit_kinds must be non-empty")
-        if len(supported_work_unit_kinds) > 32:
-            raise ValueError("supported_work_unit_kinds exceeds limit")
-        if len(supported_work_unit_kinds) != len(set(supported_work_unit_kinds)):
-            raise ValueError("supported_work_unit_kinds must be unique")
-        if any(
-            not isinstance(kind, str)
-            or not kind.strip()
-            or kind != kind.strip()
-            or len(kind) > 255
-            for kind in supported_work_unit_kinds
-        ):
-            raise ValueError("supported_work_unit_kinds is invalid")
-        if not 1 <= lease_seconds <= 3600:
-            raise ValueError("lease_seconds must be between 1 and 3600")
+        validate_workspace_claim(workspace_id, supported_work_unit_kinds, lease_seconds, resume_mission_id)
         async with self._repository.transaction() as repository:
-            if not await self._runner_claim_is_admitted(
-                repository,
-                admission_policy,
-            ):
-                return WorkUnitClaimOutcome(
-                    status=WorkspaceClaimStatus.CAPACITY_SATURATED,
-                    work_unit=None,
-                )
-            try:
-                selection = await repository.get_workspace_bound_work_unit_for_claim(
-                    workspace_id,
-                    agent_id=agent_id,
-                    adapter_type=adapter_type,
-                    supported_work_unit_kinds=supported_work_unit_kinds,
-                    runner_id=runner_id,
-                )
-            except TypeError as exc:
-                # Older repository adapters/test doubles do not expose the
-                # optional resume fence; retain their normal claim behavior.
-                if "runner_id" not in str(exc):
-                    raise
-                selection = await repository.get_workspace_bound_work_unit_for_claim(
-                    workspace_id,
-                    agent_id=agent_id,
-                    adapter_type=adapter_type,
-                    supported_work_unit_kinds=supported_work_unit_kinds,
-                )
+            # All claim paths lock tenant admission before a candidate. A
+            # full quota denies new leases, while the existing lease can resume.
+            admitted = await self._runner_claim_is_admitted(repository, admission_policy)
+            selection = await select_workspace_claim(repository, workspace_id,
+                agent_id=agent_id, adapter_type=adapter_type, kinds=supported_work_unit_kinds,
+                runner_id=runner_id, target=resume_mission_id, existing_lease_only=not admitted)
             if selection is None:
                 return WorkUnitClaimOutcome(
-                    status=WorkspaceClaimStatus.IDLE,
+                    status=WorkspaceClaimStatus.IDLE if admitted or resume_mission_id is not None else WorkspaceClaimStatus.CAPACITY_SATURATED,
                     work_unit=None,
                 )
             mission, work_unit = selection
@@ -292,16 +259,15 @@ class MissionRunnerClaimMixin:
             # A resume claim may return an existing unexpired lease owned by
             # this runner. Preserve its attempt/lease instead of incrementing
             # the attempt through the normal leasing transition.
-            if (
-                work_unit.status in {WorkUnitStatus.LEASED, WorkUnitStatus.RUNNING}
-                and work_unit.lease is not None
-                and work_unit.lease.runner_id == runner_id
-                and work_unit.lease.expires_at > datetime.now(timezone.utc)
-            ):
+            if is_owned_live_claim(mission, work_unit, runner_id, resume_mission_id):
                 return WorkUnitClaimOutcome(
                     status=WorkspaceClaimStatus.CLAIMED,
                     work_unit=work_unit,
                 )
+            if resume_mission_id is not None:
+                raise WorkUnitNotReadyError("resume requires the requested Mission's existing owned live lease")
+            if not admitted:
+                return WorkUnitClaimOutcome(status=WorkspaceClaimStatus.CAPACITY_SATURATED, work_unit=None)
             return WorkUnitClaimOutcome(
                 status=WorkspaceClaimStatus.CLAIMED,
                 work_unit=await self._lease_bound_claim_candidate(
@@ -380,12 +346,7 @@ class MissionRunnerClaimMixin:
             and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
         ):
             claim_mode = "mission.fork"
-        elif (
-            mission.source.type == MissionSourceType.MANUAL
-            and work_unit.parent_work_unit_id is None
-            and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
-            and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
-        ):
+        elif is_desktop_task_root(mission, work_unit):
             claim_mode = "desktop.task"
         else:
             raise WorkUnitNotReadyError(
@@ -493,19 +454,12 @@ class MissionRunnerClaimMixin:
                 and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
                 and bool(work_unit.input_refs)
             )
-            is_desktop_task_root = (
-                mission.source.type == MissionSourceType.MANUAL
-                and work_unit.parent_work_unit_id is None
-                and work_unit.kind == _DESKTOP_TASK_WORK_UNIT_KIND
-                and work_unit.assigned_agent_id is not None
-                and work_unit.assigned_adapter is not None
-                and work_unit.assigned_adapter != _A2A_OUTBOUND_ADAPTER
-            )
+            is_desktop_root = is_desktop_task_root(mission, work_unit)
             if not (
                 is_inbound_root
                 or is_outbound_root
                 or is_mission_fork_root
-                or is_desktop_task_root
+                or is_desktop_root
             ):
                 raise WorkUnitNotReadyError(
                     "execution context is only available for controlled roots"

@@ -32,7 +32,7 @@ from app.db.migrations import (
     EVIDENCE_PROJECTION_UPGRADE,
     EXECUTION_CHECKPOINT_DOWN_REVISION,
     EXECUTION_CHECKPOINT_DOWNGRADE,
-    EXECUTION_CHECKPOINT_REVISION,
+    EXECUTION_CHECKPOINT_RESUME_REVISION,
     EXECUTION_CHECKPOINT_UPGRADE,
     MISSION_CONTROL_PLANE_DOWN_REVISION,
     MISSION_CONTROL_PLANE_REVISION,
@@ -42,6 +42,7 @@ from app.db.migrations import (
     WORK_UNIT_PERSISTENCE_REVISION,
     WORK_UNIT_PERSISTENCE_UPGRADE,
 )
+from app.db.migrations.runner_presence import RUNNER_PRESENCE_REVISION
 from app.db.migrations.runner import (
     UnsupportedMigrationPath,
     apply_startup_migrations,
@@ -117,7 +118,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("idx_decisions_pending_expiry", expiry_sql)
         self.assertIn("WHERE status = 'PENDING' AND expires_at IS NOT NULL", expiry_sql)
         self.assertEqual(
-            connection.current_revision, EXECUTION_CHECKPOINT_REVISION
+            connection.current_revision, RUNNER_PRESENCE_REVISION
         )
         self.assertTrue(statements[-1].startswith("INSERT INTO alembic_version"))
 
@@ -154,12 +155,12 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         for statement in ARTIFACT_TABLE_OWNERSHIP_UPGRADE:
             self.assertIn(statement, statements)
         self.assertEqual(
-            connection.current_revision, EXECUTION_CHECKPOINT_REVISION
+            connection.current_revision, RUNNER_PRESENCE_REVISION
         )
         self.assertTrue(connection.executed[-1][0].startswith("UPDATE alembic_version"))
 
     async def test_current_head_is_idempotent(self) -> None:
-        connection = FakeConnection(EXECUTION_CHECKPOINT_REVISION)
+        connection = FakeConnection(RUNNER_PRESENCE_REVISION)
 
         await apply_startup_migrations(connection)
 
@@ -179,7 +180,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         self.assertEqual(
             connection.current_revision,
-            EXECUTION_CHECKPOINT_REVISION,
+            RUNNER_PRESENCE_REVISION,
         )
 
     async def test_contract_revision_head_advances_only_lineage_ownership(
@@ -198,7 +199,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         self.assertEqual(
             connection.current_revision,
-            EXECUTION_CHECKPOINT_REVISION,
+            RUNNER_PRESENCE_REVISION,
         )
 
     async def test_lineage_head_advances_only_execution_checkpoints(self) -> None:
@@ -217,7 +218,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(statement, statements)
         for statement in EXECUTION_CHECKPOINT_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_decision_persistence_head_advances_only_expiry(self) -> None:
         connection = FakeConnection(DECISION_PERSISTENCE_REVISION)
@@ -230,7 +231,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         for statement in DECISION_EXPIRY_UPGRADE:
             self.assertIn(statement, statements)
         self.assertEqual(
-            connection.current_revision, EXECUTION_CHECKPOINT_REVISION
+            connection.current_revision, RUNNER_PRESENCE_REVISION
         )
 
     async def test_decision_expiry_head_advances_only_artifact_ownership(
@@ -246,7 +247,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         for statement in ARTIFACT_TABLE_OWNERSHIP_UPGRADE:
             self.assertIn(statement, statements)
         self.assertEqual(
-            connection.current_revision, EXECUTION_CHECKPOINT_REVISION
+            connection.current_revision, RUNNER_PRESENCE_REVISION
         )
 
     def test_legacy_and_mission_artifacts_have_distinct_tables(self) -> None:
@@ -340,7 +341,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
         self.assertEqual(
-            connection.current_revision, EXECUTION_CHECKPOINT_REVISION
+            connection.current_revision, RUNNER_PRESENCE_REVISION
         )
 
     async def test_event_ledger_head_advances_to_work_unit_persistence(self) -> None:
@@ -363,7 +364,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_work_unit_head_advances_through_all_later_revisions(self) -> None:
         connection = FakeConnection(WORK_UNIT_PERSISTENCE_REVISION)
@@ -383,7 +384,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_a2a_head_advances_artifact_and_evidence(self) -> None:
         connection = FakeConnection(ARTIFACT_PERSISTENCE_DOWN_REVISION)
@@ -401,7 +402,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_artifact_head_advances_evidence_and_repairs_table(self) -> None:
         connection = FakeConnection(EVIDENCE_PROJECTION_DOWN_REVISION)
@@ -431,7 +432,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_evidence_head_advances_only_delegation_persistence(self) -> None:
         connection = FakeConnection(EVIDENCE_PROJECTION_REVISION)
@@ -445,7 +446,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_delegation_head_advances_only_agent_binding_persistence(self) -> None:
         connection = FakeConnection(AGENT_BINDING_PERSISTENCE_DOWN_REVISION)
@@ -457,7 +458,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(statement, statements)
         for statement in AGENT_BINDING_PERSISTENCE_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_agent_binding_head_advances_only_catalog_projection(self) -> None:
         connection = FakeConnection(AGENT_CATALOG_PROJECTION_DOWN_REVISION)
@@ -469,7 +470,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(statement, statements)
         for statement in AGENT_CATALOG_PROJECTION_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_catalog_head_advances_only_inbound_source_mapping(self) -> None:
         connection = FakeConnection(A2A_INBOUND_SOURCE_MAPPING_DOWN_REVISION)
@@ -484,7 +485,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         inbound_index = A2A_INBOUND_SOURCE_MAPPING_UPGRADE[0]
         self.assertIn("source->>'reference'", inbound_index)
         self.assertIn("source->>'externalId'", inbound_index)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_inbound_head_advances_only_decision_persistence(self) -> None:
         connection = FakeConnection(DECISION_PERSISTENCE_DOWN_REVISION)
@@ -504,7 +505,7 @@ class StartupMigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("UNIQUE (work_unit_id, attempt, context_digest)", decision_table)
         for statement in DECISION_EXPIRY_UPGRADE:
             self.assertIn(statement, statements)
-        self.assertEqual(connection.current_revision, EXECUTION_CHECKPOINT_REVISION)
+        self.assertEqual(connection.current_revision, RUNNER_PRESENCE_REVISION)
 
     async def test_unknown_upgrade_path_is_not_falsely_stamped(self) -> None:
         connection = FakeConnection("unknown-revision")

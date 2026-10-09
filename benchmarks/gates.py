@@ -332,7 +332,7 @@ def _python_targets():
 
 
 def _iter_functions(tree: "ast.AST"):
-    """Yield ``(qualified_name, FunctionDef)`` including methods.
+    """Yield ``(qualified_name, AST)`` including methods and lambdas.
 
     Qualified names are ``Class.method`` (nested classes dotted); standalone
     functions keep their bare name. Same-name methods of different classes
@@ -346,6 +346,13 @@ def _iter_functions(tree: "ast.AST"):
                 yield (f"{prefix}{node.name}", node)
             elif isinstance(node, ast.ClassDef):
                 stack.append((node, f"{prefix}{node.name}."))
+    # Retain the historical def audit metric, and also expose lambda functions
+    # which the incremental gate checks separately from their enclosing scope.
+    from benchmarks.quality_delta import _function_nodes
+
+    for name, node in _function_nodes(tree):
+        if isinstance(node, ast.Lambda):
+            yield name, node
 
 
 def cyclomatic_complexity(node: "ast.AST") -> int:
@@ -630,6 +637,9 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("check-docs", help="enforce capability-table convention")
     sub.add_parser("check-links", help="verify docs links resolve")
+    quality = sub.add_parser("quality", help="prevent new quality debt against Git merge base")
+    quality.add_argument("--base-ref", required=True)
+    quality.add_argument("--output", default=None)
 
     run = sub.add_parser("run", help="execute a named gate")
     run.add_argument("--name", required=True, choices=sorted({
@@ -643,6 +653,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--addr", default=None, help="endpoint for api_latency_p95")
 
     args = parser.parse_args(argv)
+    if args.command == "quality":
+        from benchmarks.quality_delta import run_quality
+
+        return run_quality(ROOT, args.base_ref, args.output)
     if args.command == "run":
         threshold = (
             args.threshold_ms

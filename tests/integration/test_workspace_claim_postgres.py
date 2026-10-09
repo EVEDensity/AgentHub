@@ -25,6 +25,8 @@ from app.db.migrations.mission_control_plane import (
     MISSION_EVENT_LEDGER_UPGRADE,
     WORK_UNIT_PERSISTENCE_UPGRADE,
 )
+from app.db.migrations.runner_presence import RUNNER_PRESENCE_UPGRADE
+from app.repositories.runner_presence_repository import RunnerPresenceRepository
 from app.repositories import MissionRepository
 from app.services.auth_service import get_current_user
 from app.services.runner_service import MissionControlRunnerClient
@@ -48,6 +50,7 @@ _MIGRATIONS = (
     # add_mission inserts missions.contract_version; the column is added by
     # this later upgrade, so the schema must include it before seeding.
     + CONTRACT_REVISION_BINDING_UPGRADE
+    + RUNNER_PRESENCE_UPGRADE
 )
 
 
@@ -111,6 +114,12 @@ def _build_app(
     application = FastAPI()
     application.include_router(router, prefix="/api/v1")
     application.dependency_overrides[get_mission_repository] = lambda: repository
+    from app.api.v1.execution_status import get_runner_presence_repository
+    presence = RunnerPresenceRepository(
+        execute=repository._execute, fetch_one=repository._fetch_one,
+        fetch_all=repository._fetch_all,
+    )
+    application.dependency_overrides[get_runner_presence_repository] = lambda: presence
     application.dependency_overrides[get_runner_workspace_grant_authorizer] = (
         lambda: grant_authorizer
     )

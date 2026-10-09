@@ -72,7 +72,6 @@
     "app/api/files.py": 1244,
     "app/api/v1/missions.py": 1301,
     "app/api/websocket_processor.py": 1479,
-    "app/db/migrations/mission_control_plane.py": 945,
     "app/repositories/mission_repository.py": 1401,
     "app/services/adapter_manager.py": 1018,
     "app/services/agent/tooling.py": 892,

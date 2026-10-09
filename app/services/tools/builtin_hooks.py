@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.tools.hooks import PostToolUseResult, PreToolUseResult
 
 logger = logging.getLogger("agenthub.tools.builtin_hooks")
 

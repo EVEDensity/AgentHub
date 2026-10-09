@@ -37,6 +37,7 @@ def main() -> int:
     console = Console(
         file=output_buffer,
         width=width,
+        height=25,
         force_terminal=True,
         color_system="standard",
         record=True,

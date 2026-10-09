@@ -7,8 +7,8 @@ call the request-scoped :class:`GuidanceInjectingModel` asks its
 :class:`GuidanceSourcePort` for unconsumed guidance and appends it to the
 prompt. Each guidance entry is injected exactly once — consumption is
 tracked per mission by event id (the runner-side view of the append-only
-event ledger), so a retry of the same entry never happens within one
-runner process.
+event ledger). Recoverable desktop executions also retain their private
+ledger cursor and actual injected blocks in the admitted resume image.
 """
 
 from __future__ import annotations
@@ -22,6 +22,11 @@ from typing import Any, Protocol
 import httpx
 
 from app.repositories import MissionRepository
+from app.services.guidance_recovery import (
+    GuidanceRecoveryCursor,
+    GuidanceResumeState,
+    format_guidance_block,
+)
 from app.services.harness_service import (
     FunctionResult,
     HarnessRequest,
@@ -34,15 +39,6 @@ logger = logging.getLogger("agenthub.desktop_guidance")
 
 GUIDANCE_EVENT_TYPE = "mission.guidance.added"
 GUIDANCE_CONTENT_KEY = "content"
-
-_GUIDANCE_BLOCK_HEADER = "[用户补充指导 · 运行中注入]"
-
-
-def format_guidance_block(guidance: Sequence[str]) -> str:
-    """Render unconsumed guidance entries as one prompt block."""
-    lines = "\n".join(f"- {item}" for item in guidance)
-    return f"{_GUIDANCE_BLOCK_HEADER}\n{lines}"
-
 
 class GuidanceSourcePort(Protocol):
     """Unconsumed mission guidance, bounded to one runner identity."""
@@ -91,7 +87,25 @@ def _collect_pending_guidance(
     return tuple(pending)
 
 
-class MissionControlGuidanceSource:
+class _GuidanceLedgerSource:
+    _consumed_event_ids: set[str]
+    _event_limit: int
+
+    @property
+    def event_limit(self) -> int:
+        return self._event_limit
+
+    def consume_event(self, event_id: str) -> bool:
+        if event_id in self._consumed_event_ids:
+            return False
+        self._consumed_event_ids.add(event_id)
+        return True
+
+    def restore_consumed_event_ids(self, event_ids: Sequence[str]) -> None:
+        self._consumed_event_ids.update(event_ids)
+
+
+class MissionControlGuidanceSource(_GuidanceLedgerSource):
     """HTTP adapter over the Mission events feed for guidance events.
 
     Consumption is tracked in memory by ``event_id``: every guidance event
@@ -128,6 +142,10 @@ class MissionControlGuidanceSource:
         return _collect_pending_guidance(events, self._consumed_event_ids)
 
     async def _list_events(self, mission_id: str) -> list[Mapping[str, Any]]:
+        events = await self.read_events(mission_id, after_sequence=0)
+        return [event for event in events if isinstance(event, Mapping)]
+
+    async def read_events(self, mission_id: str, *, after_sequence: int) -> list[Mapping[str, Any]]:
         headers = (
             {"Authorization": f"Bearer {self._access_token}"}
             if self._access_token
@@ -135,23 +153,22 @@ class MissionControlGuidanceSource:
         )
         url = (
             f"{self._base_url}/api/v1/missions/{mission_id}/events"
-            f"?afterSequence=0&limit={self._event_limit}"
+            f"?afterSequence={after_sequence}&limit={self._event_limit}"
         )
         if self._http_client is not None:
             response = await self._http_client.get(url, headers=headers)
         else:
             async with httpx.AsyncClient() as client:
                 response = await client.get(url, headers=headers)
-        if response.is_error:
-            return []
+        response.raise_for_status()
         payload = response.json()
         events = payload.get("events") if isinstance(payload, Mapping) else None
         if not isinstance(events, list):
-            return []
-        return [event for event in events if isinstance(event, Mapping)]
+            raise ValueError("guidance events response is malformed")
+        return events
 
 
-class InProcessGuidanceSource:
+class InProcessGuidanceSource(_GuidanceLedgerSource):
     """Read the guidance ledger directly from the in-process Mission repository.
 
     The desktop runner shares the Mission Control process and database, so
@@ -177,22 +194,22 @@ class InProcessGuidanceSource:
 
     async def pending_guidance(self, mission_id: str) -> tuple[str, ...]:
         try:
-            repository = self._repository_factory()
-            events = await repository.list_events(
-                mission_id,
-                after_sequence=0,
-                limit=self._event_limit,
-            )
+            normalized = await self.read_events(mission_id, after_sequence=0)
         except Exception as exc:  # noqa: BLE001 - guidance is best-effort
             logger.warning(
                 "guidance fetch failed for mission %s: %s", mission_id, exc
             )
             return ()
-        normalized = [
+        return _collect_pending_guidance(normalized, self._consumed_event_ids)
+
+    async def read_events(self, mission_id: str, *, after_sequence: int) -> list[Mapping[str, Any]]:
+        repository = self._repository_factory()
+        events = await repository.list_events(mission_id, after_sequence=after_sequence,
+                                             limit=self._event_limit)
+        return [
             event.to_public_dict() if not isinstance(event, Mapping) else event
             for event in events
         ]
-        return _collect_pending_guidance(normalized, self._consumed_event_ids)
 
 
 class GuidanceInjectingModel:
@@ -214,6 +231,29 @@ class GuidanceInjectingModel:
         self._source = source
         self._mission_id = mission_id
         self.injected_blocks: list[str] = []
+        self._recovery_cursor: GuidanceRecoveryCursor | None = None
+        self._retry_request: ModelRequest | HarnessRequest | None = None
+        self._retry_effective_request: ModelRequest | HarnessRequest | None = None
+
+    def enable_recovery(self, execution: Any) -> None:
+        self._recovery_cursor = GuidanceRecoveryCursor(self._source, execution)
+
+    def snapshot_guidance(self) -> GuidanceResumeState:
+        if self._recovery_cursor is None:
+            raise ValueError("guidance model has no private recovery cursor")
+        return self._recovery_cursor.state.model_copy(deep=True)
+
+    def restore_guidance(self, state: GuidanceResumeState | None) -> None:
+        if self._recovery_cursor is None:
+            raise ValueError("guidance model has no private recovery cursor")
+        self._recovery_cursor.restore(state)
+        self.injected_blocks = [batch.block for batch in self._recovery_cursor.state.injections]
+        self._clear_retry_request()
+
+    async def _pending_guidance(self) -> tuple[str, ...]:
+        if self._recovery_cursor is not None:
+            return await self._recovery_cursor.pending_guidance()
+        return await self._source.pending_guidance(self._mission_id)
 
     async def complete(
         self,
@@ -221,7 +261,16 @@ class GuidanceInjectingModel:
         *legacy_args: object,
         **legacy_kwargs: object,
     ) -> ModelResponse:
-        guidance = await self._source.pending_guidance(self._mission_id)
+        request = await self._prepare_request(request)
+        response = await self._call_inner(request, legacy_args, legacy_kwargs)
+        self._clear_retry_request()
+        return response
+
+    async def _prepare_request(self, request: ModelRequest | HarnessRequest):
+        if request is self._retry_request:
+            return self._retry_effective_request
+        original = request
+        guidance = await self._pending_guidance()
         if guidance:
             block = format_guidance_block(guidance)
             self.injected_blocks.append(block)
@@ -233,6 +282,14 @@ class GuidanceInjectingModel:
                 )
             else:
                 request = replace(request, code=f"{request.code}\n\n{block}")
+        self._retry_request, self._retry_effective_request = original, request
+        return request
+
+    def _clear_retry_request(self) -> None:
+        self._retry_request = self._retry_effective_request = None
+
+    async def _call_inner(self, request: ModelRequest | HarnessRequest,
+                          legacy_args: tuple[object, ...], legacy_kwargs: Mapping[str, object]) -> ModelResponse:
         if not isinstance(request, ModelRequest):
             return await self._inner.complete(  # type: ignore[call-arg]
                 request, *legacy_args, **legacy_kwargs
@@ -253,21 +310,15 @@ class GuidanceInjectingModel:
         return self._stream_canonical(request)
 
     async def _stream_canonical(self, request: ModelRequest) -> Any:
-        guidance = await self._source.pending_guidance(self._mission_id)
-        if guidance:
-            block = format_guidance_block(guidance)
-            self.injected_blocks.append(block)
-            request = replace(
-                request,
-                messages=request.messages
-                + (Message(role="system", content=block, source_id="guidance"),),
-            )
+        request = await self._prepare_request(request)
         stream_method = getattr(self._inner, "stream", None)
         if callable(stream_method) and not _uses_legacy_signature(stream_method):
             async for event in stream_method(request):
                 yield event
+            self._clear_retry_request()
             return
-        response = await self.complete(request)
+        response = await self._call_inner(request, (), {})
+        self._clear_retry_request()
         if response.content:
             yield ModelStreamEvent(kind="text_delta", text=response.content)
         for call in response.tool_calls:

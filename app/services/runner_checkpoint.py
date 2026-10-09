@@ -257,6 +257,7 @@ class MissionControlHarnessCheckpointPort(HarnessCheckpointPort):
             "model_cost": checkpoint.usage.cost,
             "terminal": checkpoint.terminal,
             "failure_reason": checkpoint.failure_reason,
+            **self._resume_fields(checkpoint),
         }
         if any(getattr(durable, field) != value for field, value in expected.items()):
             raise HarnessError("Mission Control checkpoint identity drifted")

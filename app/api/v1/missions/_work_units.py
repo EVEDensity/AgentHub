@@ -9,6 +9,8 @@ from app.services.mission._types import (
     WorkUnitNotFoundError,
     WorkUnitNotReadyError,
 )
+from app.api.v1.execution_status import get_runner_presence_repository
+from app.repositories.runner_presence_repository import RunnerPresenceRepository
 
 router = APIRouter()
 
@@ -184,6 +186,7 @@ async def claim_workspace_work_unit(
     repository: MissionRepositoryDep,
     grant_authorizer: RunnerWorkspaceGrantAuthorizerDep,
     admission_policy_resolver: WorkspaceClaimAdmissionPolicyResolverDep,
+    presence: Annotated[RunnerPresenceRepository, Depends(get_runner_presence_repository)],
 ) -> dict:
     """Discover and claim one ready WorkUnit in an authorized workspace."""
 
@@ -207,6 +210,7 @@ async def claim_workspace_work_unit(
             actor=build_runner_actor(user),
             lease_seconds=request.lease_seconds,
             admission_policy=admission_policy,
+            resume_mission_id=request.resume_mission_id,
         )
     except WorkspaceClaimAdmissionUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -214,7 +218,22 @@ async def claim_workspace_work_unit(
         raise HTTPException(status_code=404, detail="WorkUnit not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await _observe_successful_claim(presence, request, str(user["id"]))
     return claimed.to_public_dict()
+
+
+async def _observe_successful_claim(presence, request, runner_id):
+    try:
+        await presence.observe_poll(
+            request.workspace_id, runner_id=runner_id, agent_id=request.agent_id,
+            adapter_type=request.adapter_type, supported_work_unit_kinds=request.supported_work_unit_kinds,
+            supported_capabilities=request.supported_capabilities,
+        )
+    except Exception as exc:
+        # Presence is operational telemetry. Losing its write must not discard
+        # a committed lease response or manufacture a fresh observation.
+        import logging
+        logging.getLogger("agenthub.runner-presence").warning("Runner contact observation unavailable (%s)", type(exc).__name__)
 
 @router.post("/verification-work-items/discover")
 async def discover_verification_work(

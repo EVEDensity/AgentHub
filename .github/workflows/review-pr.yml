@@ -1,14 +1,8 @@
 name: PR review (agenthub)
 
-# North-star M3 / I-4: every PR is reviewed by `agenthub review-pr` —
-# the same verifier-gated mission loop and exit-code contract as
-# `agenthub run` (0 pass / 1 blocking findings or FAILED / 2 CANCELLED /
-# 3 timeout / 4 infra). Blocking findings fail the check and are
-# surfaced as an actionable list in the job summary.
-#
-# Required secret: AGENTHUB_REVIEW_MODEL_API_KEY (model channel key).
-# The review runs honestly — without the secret the job fails with a
-# clear message instead of silently passing.
+# Optional paid-model review; deterministic CI remains the merge gate.
+# Enabling AGENTHUB_PR_REVIEW_ENABLED requires a real model secret.
+# Forks do not receive credentials or execute this job.
 
 on:
   pull_request:
@@ -21,11 +15,15 @@ concurrency:
 jobs:
   review:
     name: Review PR diff
+    if: >-
+      vars.AGENTHUB_PR_REVIEW_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +34,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install runtime dependencies
         run: |
@@ -48,7 +48,7 @@ jobs:
           KEY: ${{ secrets.AGENTHUB_REVIEW_MODEL_API_KEY }}
         run: |
           if [ -z "$KEY" ]; then
-            echo "::error::AGENTHUB_REVIEW_MODEL_API_KEY secret is not configured — the agent review cannot run honestly. Add the secret or skip this check."
+            echo "::error::PR model review is enabled, but AGENTHUB_REVIEW_MODEL_API_KEY is not configured."
             exit 4
           fi
           echo "configured=true" >> "$GITHUB_OUTPUT"

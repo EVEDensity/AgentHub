@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from app.cli.control_state import control_database_path, has_control_database
 from app.cli.runtime import (
     CliModelSettings,
     EXIT_INFRA_ERROR,
@@ -451,7 +452,7 @@ def cmd_search(args: argparse.Namespace, cwd: Path) -> int:
     )
     workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
     directory = state_dir(cwd)
-    db_path = directory / "db" / "agenthub.db"
+    db_path = control_database_path(workspace_root, directory)
 
     scope = getattr(args, "scope", "mission") or "mission"
     scope = scope.lower()
@@ -569,7 +570,7 @@ def cmd_replay(args: argparse.Namespace, cwd: Path) -> int:
     )
     workspace_root = Path(args.workspace).resolve() if args.workspace else cwd
     directory = state_dir(cwd)
-    if not (directory / "db" / "agenthub.db").is_file():
+    if not has_control_database(workspace_root, directory):
         print("no local missions yet — run `agenthub run` first")
         return EXIT_OK
     try:

@@ -473,7 +473,8 @@ class SlashCommandUnitTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             (root / "a.txt").write_text("base", encoding="utf-8")
             subprocess.run(["git", "-C", str(root), "add", "a.txt"], check=True)
-            subprocess.run(["git", "-C", str(root), "commit", "-qm", "init"], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=AgentHub Test",
+                            "-c", "user.email=test@agenthub.invalid", "commit", "-qm", "init"], check=True)
             snap = capture_attempt(root, directory / "attempt-snapshots")
             (root / "a.txt").write_text("agent", encoding="utf-8")
             snap.finalize()

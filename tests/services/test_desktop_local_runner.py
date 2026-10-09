@@ -87,6 +87,7 @@ from app.services.workspace_admission_service import (
     WorkspaceClaimStatus,
 )
 from tests.domain.factories import build_mission, build_work_unit
+from tests.services.runner_checkpoint_fixture import checkpoint_acknowledgement
 
 RUNNER_USER_ID = "user-1"
 WORKSPACE_ID = "local-admin"
@@ -880,24 +881,7 @@ class FakeDesktopControl:
         **kwargs: Any,
     ) -> dict[str, Any]:
         self.calls.append(f"checkpoint:{kwargs['sequence']}")
-        return {
-            "id": kwargs["checkpoint_id"],
-            "missionId": mission_id,
-            "workUnitId": work_unit_id,
-            "attempt": 1,
-            "sequence": kwargs["sequence"],
-            "phase": kwargs["phase"],
-            "iteration": kwargs["iteration"],
-            "toolCalls": kwargs["tool_calls"],
-            "promptTokens": kwargs["prompt_tokens"],
-            "completionTokens": kwargs["completion_tokens"],
-            "modelCost": kwargs["model_cost"],
-            "terminal": kwargs["terminal"],
-            "failureReason": kwargs.get("failure_reason"),
-            "stateDigest": "sha256:" + "a" * 64,
-            "createdBy": {"id": RUNNER_USER_ID, "type": "service"},
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
+        return checkpoint_acknowledgement(mission_id, work_unit_id, kwargs, attempt=1)
 
     async def register_artifact(
         self,
@@ -2251,24 +2235,7 @@ class TwoUnitControl:
         work_unit_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        return {
-            "id": kwargs["checkpoint_id"],
-            "missionId": mission_id,
-            "workUnitId": work_unit_id,
-            "attempt": 1,
-            "sequence": kwargs["sequence"],
-            "phase": kwargs["phase"],
-            "iteration": kwargs["iteration"],
-            "toolCalls": kwargs["tool_calls"],
-            "promptTokens": kwargs["prompt_tokens"],
-            "completionTokens": kwargs["completion_tokens"],
-            "modelCost": kwargs["model_cost"],
-            "terminal": kwargs["terminal"],
-            "failureReason": kwargs.get("failure_reason"),
-            "stateDigest": "sha256:" + "a" * 64,
-            "createdBy": {"id": RUNNER_USER_ID, "type": "service"},
-            "createdAt": datetime.now(timezone.utc).isoformat(),
-        }
+        return checkpoint_acknowledgement(mission_id, work_unit_id, kwargs, attempt=1)
 
     async def register_artifact(
         self,
@@ -2429,13 +2396,9 @@ class DesktopMultiWorkerTests(DesktopWorkspaceTestCase):
             sorted(control.completed), ["wu-multi-1", "wu-multi-2"]
         )
         self.assertEqual(control.failures, [])
-        # Two distinct workers claimed the two units: runner ids carry the
-        # worker sequence suffix.
+        # Parallel workers use the identity recognized by the HTTP lease fence.
         runner_ids = set(control.claimed_by.values())
-        self.assertEqual(len(runner_ids), 2)
-        self.assertTrue(
-            all(runner_id.endswith(("-w0", "-w1")) for runner_id in runner_ids)
-        )
+        self.assertEqual(runner_ids, {RUNNER_USER_ID})
         self.assertTrue((self.workspace_root / "hello.txt").exists())
         self.assertEqual(
             (self.workspace_root / "hello.txt").read_text(encoding="utf-8"),

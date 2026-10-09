@@ -553,3 +553,24 @@ missing external prerequisites produce `SKIP`, never `PASS`. Single-file
 mutation now fails closed when another actor holds the advisory lock, and CLI
 model environment precedence is resolved through
 `app.cli.config.ConfigResolver`.
+
+### Checkpoint storage compatibility (2026-10-09)
+
+ADR-0110 restores the original `a6d0e1f2b3c4` checkpoint revision and places
+the five nullable resume fields in a separate `b7e1f203c4d5` migration. The
+runtime migrator shares that SQL. SQLite version-2 profiles now add only missing
+columns and advance to version 3 in a transaction without replaying seeds.
+Legacy rows keep NULL fingerprints; strict resume remains fail closed.
+
+The public v1 checkpoint schema now accepts the domain's optional resume
+projection while preserving legacy documents. Real disposable PostgreSQL
+tests cover full installation, original-head upgrade, rollback/reupgrade,
+injected DDL failure, runtime startup, and repository roundtrip. Real SQLite
+tests cover data preservation, partial upgrades, idempotency and failure rollback.
+
+Local validation: 252 targeted tests and 118 subtests passed across domain,
+persistence, checkpoint contracts, Mission API, Runner checkpoint, resume gates,
+and PostgreSQL migration/fork tests. This verifies the storage slice, not full
+crash-resume, a production database deployment, or real-provider readiness.
+The previous root-suite collection failure and unrelated quality/TTY/release
+regressions remain separate follow-up work.

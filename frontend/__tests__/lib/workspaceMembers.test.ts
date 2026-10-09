@@ -43,7 +43,7 @@ describe('agentsFromMembers', () => {
       agentId: 'CodeGen',
       adapterType: 'desktop.local',
       capabilityTags: ['code-generation'],
-      status: 'online',
+      status: 'registered',
     });
   });
 

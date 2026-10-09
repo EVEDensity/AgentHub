@@ -19,8 +19,6 @@ if TYPE_CHECKING:
     from app.services.verification_policy_service import (
         ArtifactSetEvaluationPlan,
         BuildArtifactEvaluationPlan,
-        SecurityScanEvaluationPlan,
-        TestRunEvaluationPlan,
     )
 
 
@@ -35,6 +33,7 @@ class VerificationEvaluationResult:
     configuration_digest: str
     verdict: EvidenceVerdict
     artifact_verifications: tuple[ArtifactByteVerification, ...]
+    summary: str | None = None
 
 
 class VerificationArtifactMetadata(Protocol):
@@ -128,40 +127,6 @@ def _evaluate_artifact_set_v2(
     )
 
 
-def _evaluate_test_run_v1(
-    plan: "TestRunEvaluationPlan",
-    artifacts: tuple[VerificationArtifactMetadata, ...],
-    byte_verifications: tuple[ArtifactByteVerification, ...],
-) -> VerificationEvaluationResult:
-    """Test-run.v1 evaluator.
-
-    Counts TEST_RESULT artifacts and checks that their aggregate pass rate
-    meets the configured threshold.  TEST_RESULT artifacts are expected to
-    carry their pass/total counters in the artifact metadata (via size_bytes
-    convention is not used — the downstream verifier worker is responsible
-    for extracting structured pass/total data before invoking this evaluator).
-
-    The evaluator is intentionally minimal: it only *counts* TEST_RESULT
-    artifacts and validates the plan's structural precondition
-    (``minimum_test_results``).  Actual pass-rate arithmetic belongs to the
-    verifier worker, which has access to the TEST_RESULT artifact body.
-    """
-    test_results = [a for a in artifacts if a.kind == ArtifactKind.TEST_RESULT]
-    if len(test_results) < plan.minimum_test_results:
-        raise VerificationEvaluationError(
-            f"test-run.v1 evaluator needs at least {plan.minimum_test_results} "
-            f"TEST_RESULT artifacts, found {len(test_results)}"
-        )
-    canonical = canonicalize_artifact_byte_verifications(artifacts, byte_verifications)
-    return VerificationEvaluationResult(
-        criterion_id=plan.criterion_id,
-        evaluator=plan.evaluator,
-        configuration_digest=plan.configuration_digest,
-        verdict=EvidenceVerdict.PASS,
-        artifact_verifications=canonical,
-    )
-
-
 def _evaluate_build_artifact_v1(
     plan: "BuildArtifactEvaluationPlan",
     artifacts: tuple[VerificationArtifactMetadata, ...],
@@ -196,36 +161,6 @@ def _evaluate_build_artifact_v1(
     )
 
 
-def _evaluate_security_scan_v1(
-    plan: "SecurityScanEvaluationPlan",
-    artifacts: tuple[VerificationArtifactMetadata, ...],
-    byte_verifications: tuple[ArtifactByteVerification, ...],
-) -> VerificationEvaluationResult:
-    """Security-scan.v1 evaluator.
-
-    Requires at least ``minimum_scan_reports`` REPORT artifacts.  The
-    ``max_severity`` parameter (CVSS-style 0-5) is recorded in the plan
-    configuration digest — actual severity arithmetic is done by the
-    verifier worker, which parses the report body for vulnerability counts.
-    The evaluator itself is a structural gate: are the expected scan reports
-    present?
-    """
-    reports = [a for a in artifacts if a.kind == ArtifactKind.REPORT]
-    if len(reports) < plan.minimum_scan_reports:
-        raise VerificationEvaluationError(
-            f"security-scan.v1 evaluator needs at least {plan.minimum_scan_reports} "
-            f"REPORT artifacts, found {len(reports)}"
-        )
-    canonical = canonicalize_artifact_byte_verifications(artifacts, byte_verifications)
-    return VerificationEvaluationResult(
-        criterion_id=plan.criterion_id,
-        evaluator=plan.evaluator,
-        configuration_digest=plan.configuration_digest,
-        verdict=EvidenceVerdict.PASS,
-        artifact_verifications=canonical,
-    )
-
-
 _EVALUATORS: dict[str, EvaluatorCallable] = {}
 
 
@@ -240,12 +175,13 @@ def _ensure_registry() -> dict[str, EvaluatorCallable]:
         _BUILD_ARTIFACT_V1,
         _SECURITY_SCAN_V1,
     )
+    from app.services.verification_report_evaluator import evaluate_test_run, evaluate_security_scan
 
     _EVALUATORS[_ARTIFACT_SET_V1] = _evaluate_artifact_set_v1
     _EVALUATORS[_ARTIFACT_SET_V2] = _evaluate_artifact_set_v2
-    _EVALUATORS[_TEST_RUN_V1] = _evaluate_test_run_v1
+    _EVALUATORS[_TEST_RUN_V1] = evaluate_test_run
     _EVALUATORS[_BUILD_ARTIFACT_V1] = _evaluate_build_artifact_v1
-    _EVALUATORS[_SECURITY_SCAN_V1] = _evaluate_security_scan_v1
+    _EVALUATORS[_SECURITY_SCAN_V1] = evaluate_security_scan
     return _EVALUATORS
 
 
@@ -305,6 +241,7 @@ def canonicalize_artifact_byte_verifications(
                 artifact_id=artifact.id,
                 digest=verification.digest.lower(),
                 size_bytes=verification.size_bytes,
+                report_content=getattr(verification, "report_content", None),
             )
         )
     return tuple(canonical_verifications)

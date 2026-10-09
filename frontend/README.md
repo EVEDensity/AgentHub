@@ -15,6 +15,29 @@ It must not manufacture domain state when a backend is unavailable.
 Demo fixtures are permitted only in explicitly named development stories or
 tests. Production failure must render an honest unavailable/error state.
 
+## Mission chat execution
+
+Chat admission returns after `POST /api/v1/chat/mission` persists the Mission
+and its PENDING WorkUnit. The execution banner reads the workspace-authorized
+`GET /api/v1/missions/{missionId}/execution-status` projection. It distinguishes
+waiting for a matching Runner, waiting for claim/start, running behind a live
+lease, independent verification, governance, and terminal outcomes. An enabled
+catalog binding or connected SSE stream never becomes an execution signal.
+
+Submission and read errors remain visible. Status retries reread the same
+Mission; stream reconnects deduplicate durable event IDs. Cancellation issues
+the server command and shows success only after acknowledgement. Pending rule
+confirmations expose explicit confirmation and cancellation buttons. Expired
+leases cannot display active execution.
+
+The conversation view caches IDs of native v1 sessions returned by admission;
+legacy session IDs do not acquire inferred workspace ownership. Workspace
+selection uses the authenticated user's scope, and cache entries never replace
+API authorization. Session changes clear transport events and cursors. Catalog
+reads render registered Agents or a visible unavailable state without fixtures.
+
+See [ADR-0116](../docs/architecture/decisions/0116-runner-contact-and-chat-execution-status.md).
+
 When adding a user workflow, document its command, loading, retry, cancellation,
 and permission states and cover the primary path with an end-to-end test.
 

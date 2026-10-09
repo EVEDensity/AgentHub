@@ -38,6 +38,7 @@ from app.services.runner_service import MissionControlRunnerClient
 from app.services.workspace_admission_service import WorkspaceClaimStatus
 from tests.api.test_missions_api import (
     FakeMissionRepository,
+    FakeRunnerPresenceRepository,
     FakeRunnerWorkspaceGrantAuthorizer,
     FakeWorkspaceClaimAdmissionPolicyResolver,
 )
@@ -89,6 +90,9 @@ def _build_app(repository: _AtomicMissionRepository) -> FastAPI:
     application.include_router(missions_router, prefix="/api/v1")
     application.dependency_overrides[get_a2a_repository] = lambda: repository
     application.dependency_overrides[get_mission_repository] = lambda: repository
+    from app.api.v1.execution_status import get_runner_presence_repository
+    presence = FakeRunnerPresenceRepository()
+    application.dependency_overrides[get_runner_presence_repository] = lambda: presence
     application.dependency_overrides[get_a2a_binding_selector] = lambda: (
         StaticAgentBindingSelector(
             {

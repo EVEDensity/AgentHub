@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,8 +26,11 @@ class DesktopRunnerIdentity:
 class DesktopAuthenticator:
     """Resolve the Runner identity through the existing token mechanisms."""
 
-    def __init__(self, client_factory: Any = httpx.AsyncClient) -> None:
-        self._client_factory = client_factory
+    def __init__(self, client_factory: Any = None, *, login_timeout_seconds: float = 10.0) -> None:
+        if login_timeout_seconds <= 0:
+            raise ValueError("login_timeout_seconds must be positive")
+        self._client_factory = client_factory or (lambda: httpx.AsyncClient(trust_env=False))
+        self._login_timeout_seconds = login_timeout_seconds
 
     async def resolve(
         self,
@@ -53,10 +58,7 @@ class DesktopAuthenticator:
         settings: DesktopLocalRunnerSettings,
     ) -> DesktopRunnerIdentity:
         async with self._client_factory() as client:
-            response = await client.post(
-                f"{settings.base_url}/api/auth/login",
-                json={"name": settings.admin_name, "password": settings.admin_password},
-            )
+            response = await self._wait_for_login(client, settings)
         if response.is_error:
             raise DesktopRunnerError(
                 f"desktop runner login failed with HTTP {response.status_code}"
@@ -68,3 +70,20 @@ class DesktopAuthenticator:
         if not isinstance(token, str) or not token or not user_id:
             raise DesktopRunnerError("desktop runner login returned no identity")
         return DesktopRunnerIdentity(access_token=token, user_id=user_id)
+
+    async def _wait_for_login(self, client: Any, settings: DesktopLocalRunnerSettings):
+        # A scheduled lifespan task may run before Uvicorn binds its socket.
+        # Retry only transport readiness; rejected credentials fail immediately.
+        deadline = time.monotonic() + self._login_timeout_seconds
+        while True:
+            try:
+                return await client.post(
+                    f"{settings.base_url}/api/auth/login",
+                    json={"name": settings.admin_name, "password": settings.admin_password},
+                    timeout=max(0.001, deadline - time.monotonic()),
+                )
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise DesktopRunnerError("desktop runner login server readiness timed out") from exc
+                await asyncio.sleep(min(0.1, remaining))
