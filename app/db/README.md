@@ -5,6 +5,8 @@ upgrades. Mission lifecycle and verification remain in the domain/services;
 database initialization never invents successful work or resume fingerprints.
 
 PostgreSQL's Alembic graph and runtime startup share the same SQL definitions.
+Online Alembic commands explicitly select the installed `psycopg2` driver for
+plain PostgreSQL DSNs; SQLAlchemy's changing default driver is not relied on.
 The original checkpoint revision is `a6d0e1f2b3c4`, following Contract lineage
 revision `f5c9d0e1a2b3`. Additive resume fields live in the separate
 `b7e1f203c4d5` revision. Previously recorded `b7e1f203c4d5` databases stay at

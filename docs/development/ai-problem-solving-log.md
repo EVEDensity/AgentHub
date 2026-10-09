@@ -129,3 +129,6 @@
 - 远端干净环境还发现 pytest 过滤配置引用了锁定 Pydantic 2.10.6 中不存在
   的 `UnsupportedFieldAttributeWarning`，导致测试启动退出。改用稳定的
   `UserWarning` 基类并保留原来的窄消息匹配，兼容新旧 Pydantic。
+- 干净环境的 SQLAlchemy 默认 PostgreSQL 驱动选择了未声明的 psycopg v3。
+  Alembic 在线迁移现在为普通 PostgreSQL DSN 显式选择项目已安装的 psycopg2，
+  避免依赖隐式驱动默认值。
