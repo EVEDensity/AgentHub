@@ -76,6 +76,16 @@ def _make_fake_repo():
                 store[pending_id]["resolved_at"] = args[1]
 
     async def _fetch_one(sql, *args):
+        if "UPDATE pending_confirmations" in sql:
+            status, resolved_at, identifier = args
+            row = store.get(identifier)
+            if row is None or row["status"] != "PENDING":
+                return None
+            expired = row["expires_at"] <= resolved_at
+            if expired != (status == "EXPIRED"):
+                return None
+            row.update(status=status, resolved_at=resolved_at)
+            return dict(row)
         if "WHERE id=$1" in sql:
             row = store.get(args[0])
             return dict(row) if row else None

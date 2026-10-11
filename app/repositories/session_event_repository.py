@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.domain import ActorRef, SessionEvent, SessionEventType
@@ -41,7 +41,7 @@ def _event_from_row(row: Mapping[str, Any]) -> SessionEvent:
             created_at = created_at[:-1] + "+00:00"
         created_at = datetime.fromisoformat(created_at)
     if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
+        created_at = created_at.replace(tzinfo=UTC)
 
     return SessionEvent(
         id=str(row["id"]),
@@ -118,40 +118,26 @@ class SessionEventRepository:
         event_type: SessionEventType | None = None,
         limit: int = 200,
         offset: int = 0,
+        after: SessionEvent | None = None,
     ) -> list[SessionEvent]:
-        """Return the event stream for ``session_id`` in chronological order."""
+        """Read chronological events, optionally after a validated keyset cursor."""
         if not 1 <= limit <= 500:
             raise ValueError("limit must be between 1 and 500")
         if offset < 0:
             raise ValueError("offset cannot be negative")
-
-        if event_type is not None:
-            rows = await self._fetch_all(
-                """SELECT id, session_id, event_type,
-                          actor_type, actor_id, actor_display_name,
-                          payload, created_at
-                   FROM session_events
-                   WHERE session_id=$1 AND event_type=$2
-                   ORDER BY created_at ASC, id ASC
-                   LIMIT $3 OFFSET $4""",
-                session_id,
-                event_type.value,
-                limit,
-                offset,
-            )
-        else:
-            rows = await self._fetch_all(
-                """SELECT id, session_id, event_type,
-                          actor_type, actor_id, actor_display_name,
-                          payload, created_at
-                   FROM session_events
-                   WHERE session_id=$1
-                   ORDER BY created_at ASC, id ASC
-                   LIMIT $2 OFFSET $3""",
-                session_id,
-                limit,
-                offset,
-            )
+        if after is not None and offset:
+            raise ValueError("after and offset cannot be combined")
+        where, params = self._query_scope(session_id, event_type, after)
+        limit_parameter = len(params) + 1
+        rows = await self._fetch_all(
+            "SELECT id, session_id, event_type, actor_type, actor_id, "
+            "actor_display_name, payload, created_at FROM session_events "
+            f"WHERE {where} ORDER BY created_at ASC, id ASC "
+            f"LIMIT ${limit_parameter} OFFSET ${limit_parameter + 1}",
+            *params,
+            limit,
+            offset,
+        )
         return [_event_from_row(row) for row in rows]
 
     async def count_session_events(
@@ -159,19 +145,36 @@ class SessionEventRepository:
         session_id: str,
         *,
         event_type: SessionEventType | None = None,
+        after: SessionEvent | None = None,
     ) -> int:
-        if event_type is not None:
-            row = await self._fetch_one(
-                "SELECT COUNT(*) AS n FROM session_events WHERE session_id=$1 AND event_type=$2",
-                session_id,
-                event_type.value,
-            )
-        else:
-            row = await self._fetch_one(
-                "SELECT COUNT(*) AS n FROM session_events WHERE session_id=$1",
-                session_id,
-            )
+        where, params = self._query_scope(session_id, event_type, after)
+        row = await self._fetch_one(
+            f"SELECT COUNT(*) AS n FROM session_events WHERE {where}", *params,
+        )
         return int(row["n"]) if row else 0
+
+    @staticmethod
+    def _query_scope(
+        session_id: str,
+        event_type: SessionEventType | None,
+        after: SessionEvent | None,
+    ) -> tuple[str, list[Any]]:
+        conditions = ["session_id=$1"]
+        params: list[Any] = [session_id]
+        if event_type is not None:
+            params.append(event_type.value)
+            conditions.append(f"event_type=${len(params)}")
+        if after is not None:
+            if after.session_id != session_id:
+                raise ValueError("cursor must belong to the requested session")
+            timestamp_parameter = len(params) + 1
+            id_parameter = timestamp_parameter + 1
+            conditions.append(
+                f"(created_at > ${timestamp_parameter} OR "
+                f"(created_at = ${timestamp_parameter} AND id > ${id_parameter}))"
+            )
+            params.extend((after.created_at, after.id))
+        return " AND ".join(conditions), params
 
     # ── cross-session text search (T6) ─────────────────────────────
 

@@ -1,211 +1,171 @@
 /**
- * Mission/v1 chat hook — "POST create + GET SSE stream" two-phase model.
- *
- * Replaces the legacy WebSocket surface for messages that should go
- * through Mission control plane (e.g. @mention of an Agent).
- *
- * Usage:
- *   const { sendMission, cancel, streamState, events, mentions } = useMissionChat({
- *     token, workspaceId, sessionId, authHeaders, onEvent,
- *   });
- *   await sendMission('@Architect 设计一个博客 API');
- *
- * This follows the pattern recommended in the experience recall
- * "SSE 接口对接": POST to create → GET(SSE) to subscribe, use
- * fetch + ReadableStream for the SSE side because EventSource
- * cannot send custom auth headers.
+ * Admission returns after the durable server acknowledgement.
+ * SSE connection state never establishes whether a WorkUnit is executing.
  */
-
-import { useCallback, useRef, useState } from 'react';
-import { mapMissionEvent, type ChatRenderEvent } from '../lib/missionEventMapper';
-import type { MissionEvent, ArchivistInfo } from '../types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ArchivistInfo } from '../types';
+import type { ChatRenderEvent } from '../lib/missionEventMapper';
+import { missionCommand, readMissionStream } from '../lib/missionStream';
+import { readMissionSession, rememberMissionSession } from '../lib/missionSessionCache';
 
 export type MissionStreamState = 'idle' | 'connecting' | 'streaming' | 'closed' | 'error';
-
 export interface MissionMentionResult {
   resolved: Array<{ agentId: string; adapterType: string; capabilities: string[] }>;
   unresolved: Array<{ name: string; reason: string }>;
 }
-
 export interface MissionChatOptions {
   token?: string;
   workspaceId?: string;
   sessionId?: string;
   authHeaders: () => Record<string, string>;
-  /** Optional callback for each mapped event (bubble, toast, etc.) */
   onEvent?: (event: ChatRenderEvent) => void;
-  /** Optional callback when stream completes (success or error) */
   onComplete?: (missionId: string, state: MissionStreamState, error?: string) => void;
 }
+export interface PendingMissionConfirmation { id: string; description: string; }
+const EMPTY_MENTIONS: MissionMentionResult = { resolved: [], unresolved: [] };
 
-export interface MissionChatHandle {
-  sendMission: (message: string) => Promise<{
-    missionId: string;
-    mentions: MissionMentionResult;
-    archivist?: ArchivistInfo | null;
-  } | null>;
-  cancel: () => void;
-  streamState: MissionStreamState;
-  missionId: string | null;
-  events: ChatRenderEvent[];
-  mentions: MissionMentionResult | null;
-  /** Archivist receipts from the most recent @archivist message. */
-  archivistInfo: ArchivistInfo | null;
-}
-
-/** Minimal SSE frame parser — "data: {...}\n\n" chunks. */
-function parseSSEChunk(buffer: string): { events: MissionEvent[]; rest: string } {
-  const events: MissionEvent[] = [];
-  const parts = buffer.split('\n\n');
-  const rest = parts.pop() ?? '';  // last chunk may be incomplete
-  for (const part of parts) {
-    const lines = part.split('\n');
-    const dataLines = lines.filter(l => l.startsWith('data:'));
-    const data = dataLines.map(l => l.slice(5).trim()).join('\n');
-    if (!data) continue;
-    try {
-      events.push(JSON.parse(data) as MissionEvent);
-    } catch {
-      // Skip malformed frames — stream stays healthy.
-    }
-  }
-  return { events, rest };
-}
-
-export function useMissionChat(options: MissionChatOptions): MissionChatHandle {
+export function useMissionChat(options: MissionChatOptions) {
   const { authHeaders, onEvent, onComplete } = options;
+  const key = (options.workspaceId ?? 'local-admin') + '/' + (options.sessionId ?? 'new');
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  const identity = key + '/' + (options.token ?? '');
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
   const [streamState, setStreamState] = useState<MissionStreamState>('idle');
   const [missionId, setMissionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | undefined>();
   const [events, setEvents] = useState<ChatRenderEvent[]>([]);
   const [mentions, setMentions] = useState<MissionMentionResult | null>(null);
   const [archivistInfo, setArchivistInfo] = useState<ArchivistInfo | null>(null);
-
+  const [pending, setPending] = useState<PendingMissionConfirmation | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const targetRef = useRef<string | null>(null);
+  targetRef.current = pending ? 'pending/' + pending.id : missionId ? 'mission/' + missionId : null;
   const abortRef = useRef<AbortController | null>(null);
+  const streamRef = useRef<{ missionId: string; url: string } | null>(null);
+  const seenRef = useRef(new Set<string>());
+  const busyRef = useRef<string | null>(null);
 
-  const cancel = useCallback(() => {
+  useEffect(() => {
     abortRef.current?.abort();
-    abortRef.current = null;
-    setStreamState(prev => (prev === 'streaming' || prev === 'connecting' ? 'closed' : prev));
-  }, []);
-
-  const sendMission = useCallback(async (message: string) => {
-    const token = options.token;
-    if (!token) {
-      setStreamState('error');
-      return null;
-    }
-
-    setStreamState('connecting');
+    setMissionId(null);
+    setSessionId(readMissionSession(key));
+    setPending(null);
+    setError(null);
     setEvents([]);
-    setMentions(null);
-    setArchivistInfo(null);
+    setStreamState('idle');
+    setSending(false);
+    return () => { abortRef.current?.abort(); };
+  }, [key, options.token]);
 
-    // ── Phase 1: POST create ──────────────────────────────────────
-    let createRes: Response;
-    try {
-      createRes = await fetch('/api/v1/chat/mission', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({
-          message,
-          workspaceId: options.workspaceId ?? 'local-admin',
-          sessionId: options.sessionId ?? null,
-          stream: true,
-        }),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setStreamState('error');
-      onComplete?.(missionId ?? '', 'error', msg);
-      return null;
-    }
-
-    if (!createRes.ok) {
-      const detail = await createRes.json().catch(() => ({}));
-      setStreamState('error');
-      onComplete?.(missionId ?? '', 'error', detail.detail ?? `HTTP ${createRes.status}`);
-      return null;
-    }
-
-    const createData = await createRes.json();
-    const mid = createData.missionId as string;
-    const streamUrl = createData.streamUrl as string;
-    const mentionRes = createData.mentions as MissionMentionResult | undefined;
-    // T1-2b: archivist receipts — inline in create response when @archivist present
-    const archivistData = createData.archivist as ArchivistInfo | undefined;
-
-    setMissionId(mid);
-    setMentions(mentionRes ?? { resolved: [], unresolved: [] });
-    setArchivistInfo(archivistData ?? null);
-
-    // ── Phase 2: GET(SSE) subscribe via fetch + ReadableStream ──
-    const controller = new AbortController();
+  const subscribe = useCallback((mid: string, url: string) => {
     abortRef.current?.abort();
+    const controller = new AbortController();
     abortRef.current = controller;
-
-    try {
-      const sseRes = await fetch(streamUrl, {
-        headers: authHeaders(),
-        signal: controller.signal,
-      });
-      if (!sseRes.ok || !sseRes.body) {
-        throw new Error(`SSE HTTP ${sseRes.status}`);
-      }
-
-      setStreamState('streaming');
-
-      const reader = sseRes.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const { events: parsed, rest } = parseSSEChunk(buffer);
-        buffer = rest;
-
-        for (const evt of parsed) {
-          const rendered = mapMissionEvent(evt);
-          if (rendered) {
-            setEvents(prev => [...prev, rendered]);
-            onEvent?.(rendered);
-          }
-        }
-      }
-
-      // Flush remaining buffer
-      if (buffer.trim()) {
-        const { events: parsed } = parseSSEChunk(buffer + '\n\n');
-        for (const evt of parsed) {
-          const rendered = mapMissionEvent(evt);
-          if (rendered) {
-            setEvents(prev => [...prev, rendered]);
-            onEvent?.(rendered);
-          }
-        }
-      }
-
+    streamRef.current = { missionId: mid, url };
+    setStreamState('connecting');
+    void readMissionStream(url, authHeaders(), controller.signal, event => {
+      if (event.eventId && seenRef.current.has(event.eventId)) return;
+      if (event.eventId) seenRef.current.add(event.eventId);
+      setEvents(previous => [...previous, event]);
+      onEvent?.(event);
+    }, () => setStreamState('streaming')).then(() => {
+      if (controller.signal.aborted) return;
       setStreamState('closed');
       onComplete?.(mid, 'closed');
-    } catch (err) {
-      if (controller.signal.aborted) {
-        setStreamState('closed');
-      } else {
-        const msg = err instanceof Error ? err.message : String(err);
-        setStreamState('error');
-        onComplete?.(mid, 'error', msg);
-      }
-    } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = null;
-      }
+    }).catch(err => {
+      if (controller.signal.aborted) return;
+      const detail = err instanceof Error ? err.message : '事件连接失败';
+      setStreamState('error');
+      setError(detail);
+      onComplete?.(mid, 'error', detail);
+    });
+  }, [authHeaders, onEvent, onComplete]);
+
+  const admit = useCallback((data: Record<string, any>, requestKey: string) => {
+    if (typeof data.sessionId === 'string') rememberMissionSession(requestKey, data.sessionId);
+    if (requestKey !== keyRef.current) return null;
+    setSessionId(data.sessionId);
+    if (data.status === 'pending' && typeof data.pendingId === 'string') {
+      targetRef.current = 'pending/' + data.pendingId;
+      setPending({ id: data.pendingId, description: data.ruleDescription ?? '该操作需要确认' });
+      setStreamState('idle');
+      return { missionId: null, mentions: EMPTY_MENTIONS };
     }
+    if (typeof data.missionId !== 'string' || typeof data.streamUrl !== 'string') throw new Error('任务提交响应无效');
+    targetRef.current = 'mission/' + data.missionId;
+    setMissionId(data.missionId);
+    setPending(null);
+    setMentions(data.mentions ?? EMPTY_MENTIONS);
+    setArchivistInfo(data.archivist ?? null);
+    seenRef.current.clear();
+    subscribe(data.missionId, data.streamUrl);
+    return { missionId: data.missionId as string, mentions: (data.mentions ?? EMPTY_MENTIONS) as MissionMentionResult, archivist: data.archivist as ArchivistInfo | undefined };
+  }, [subscribe]);
 
-    return { missionId: mid, mentions: mentionRes ?? { resolved: [], unresolved: [] }, archivist: archivistData ?? null };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [options.token, options.workspaceId, options.sessionId, authHeaders, onEvent, onComplete]);
+  const command = useCallback(async (path: string, body: unknown) => {
+    if (!options.token || busyRef.current === identity) return null;
+    const requestKey = key;
+    const requestIdentity = identity;
+    busyRef.current = requestIdentity;
+    setSending(true);
+    setError(null);
+    setEvents([]);
+    try {
+      const response = await missionCommand(path, body, authHeaders());
+      if (requestIdentity !== identityRef.current) return null;
+      return admit(response, requestKey);
+    } catch (err) {
+      if (requestIdentity === identityRef.current) {
+        setError(err instanceof Error ? err.message : '任务提交失败');
+        setStreamState('error');
+      }
+      return null;
+    } finally {
+      if (busyRef.current === requestIdentity) busyRef.current = null;
+      if (requestIdentity === identityRef.current) setSending(false);
+    }
+  }, [options.token, key, identity, authHeaders, admit]);
 
-  return { sendMission, cancel, streamState, missionId, events, mentions, archivistInfo };
+  const sendMission = useCallback((message: string) => command('/api/v1/chat/mission', {
+    message, workspaceId: options.workspaceId ?? 'local-admin',
+    sessionId: sessionId ?? readMissionSession(key) ?? null, stream: true,
+  }), [command, options.workspaceId, sessionId, key]);
+
+  const confirmPending = useCallback(() => pending ? command('/api/v1/chat/confirm', { pendingId: pending.id }) : Promise.resolve(null), [pending, command]);
+  const cancel = useCallback(async () => {
+    const path = pending ? '/api/v1/chat/cancel' : missionId ? '/api/v1/missions/' + encodeURIComponent(missionId) + '/cancel' : null;
+    if (!path) return false;
+    const requestIdentity = identity;
+    const requestTarget = pending ? 'pending/' + pending.id : 'mission/' + missionId;
+    const stillCurrent = () => requestIdentity === identityRef.current && requestTarget === targetRef.current;
+    try {
+      await missionCommand(path, pending ? { pendingId: pending.id } : {}, authHeaders());
+      if (!stillCurrent()) return false;
+      abortRef.current?.abort();
+      targetRef.current = missionId ? 'mission/' + missionId : null;
+      setPending(null);
+      setStreamState('closed');
+      setError(null);
+      return true;
+    } catch (err) {
+      if (!stillCurrent()) return false;
+      setError(err instanceof Error ? err.message : '取消失败');
+      return false;
+    }
+  }, [pending, missionId, identity, authHeaders]);
+
+  const reconnect = useCallback(() => {
+    const stream = streamRef.current;
+    if (stream && stream.missionId === missionId) {
+      setError(null);
+      subscribe(stream.missionId, stream.url);
+    }
+  }, [missionId, subscribe]);
+
+  return { sendMission, cancel, confirmPending, reconnect, streamState, missionId, sessionId, events, mentions, archivistInfo, pending, error, sending };
 }
+
+export type MissionChatHandle = ReturnType<typeof useMissionChat>;

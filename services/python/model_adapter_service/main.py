@@ -114,6 +114,16 @@ def _httpx_client() -> httpx.Client:
     return httpx.Client(timeout=120.0)
 
 
+def _content_text(content: str | list[dict[str, Any]]) -> str:
+    """Project text parts without exposing image URLs in mock responses."""
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        part["text"] for part in content
+        if part.get("type") == "text" and isinstance(part.get("text"), str)
+    )
+
+
 # ---------------------------------------------------------------------------
 # MockProvider
 # ---------------------------------------------------------------------------

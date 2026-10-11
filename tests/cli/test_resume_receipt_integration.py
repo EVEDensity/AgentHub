@@ -15,7 +15,7 @@ class _Client:
 
     def heartbeat_work_unit(self, *args, **kwargs):
         del args, kwargs
-        return {"lease": {"id": "lease-2", "attempt": 1}}
+        return {"lease": {"id": "lease-1", "attempt": 1, "runnerId": "local-admin", "expiresAt": "2999-01-01T00:00:00+00:00"}}
 
     def decisions(self, mission_id: str):
         del mission_id
@@ -51,7 +51,7 @@ class ResumeReceiptIntegrationTests(unittest.TestCase):
             "receiptDecision": decision,
         }
 
-    def test_unknown_receipt_refuses_resume_and_succeeded_injects_result(self) -> None:
+    def test_legacy_receipt_cannot_invent_a_complete_resume_image(self) -> None:
         with TemporaryDirectory() as temp_dir:
             store = SQLiteToolReceiptStore(Path(temp_dir) / "receipts.sqlite3")
             key = "mis-1/wu-1/1/file_write/abc"
@@ -61,14 +61,14 @@ class ResumeReceiptIntegrationTests(unittest.TestCase):
             with mock.patch.object(runtime, "resume_work_unit", return_value=self._gate("unknown_outcome")):
                 refused = runtime.prepare_resume_execution(client, "mis-1", Path(temp_dir), receipt_store=store)
             self.assertFalse(refused.can_resume)
-            self.assertIn("unknown", str(refused.refusal_reason))
+            self.assertIn("legacy", str(refused.refusal_reason))
+            self.assertIsNone(refused.resume_input)
 
             store.put(ToolReceipt(key, "file_write", ToolReceiptStatus.SUCCEEDED, 2.0, result_digest="digest"))
             client.checkpoint = self._gate("already_succeeded")["checkpoint"]
             with mock.patch.object(runtime, "resume_work_unit", return_value=self._gate("already_succeeded")):
                 resumed = runtime.prepare_resume_execution(client, "mis-1", Path(temp_dir), receipt_store=store)
-            self.assertTrue(resumed.can_resume)
-            self.assertIsNotNone(resumed.resume_input)
-            self.assertGreater(resumed.resume_input.start_iteration, 0)
-            self.assertEqual(len(resumed.resume_input.recovered_tool_results), 1)
+            self.assertFalse(resumed.can_resume)
+            self.assertIn("legacy", str(resumed.refusal_reason))
+            self.assertIsNone(resumed.resume_input)
             self.assertEqual(client.missions_created, 0)

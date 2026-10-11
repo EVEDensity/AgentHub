@@ -12,6 +12,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import create_engine, pool
+from sqlalchemy.engine import make_url
 
 # Alembic Config object
 config = context.config
@@ -50,8 +51,14 @@ def run_migrations_online() -> None:
     if not url:
         raise RuntimeError("DATABASE_URL is not set")
 
+    database_url = make_url(url)
+    if database_url.drivername in {"postgres", "postgresql"}:
+        # The project installs psycopg2-binary. Do not depend on SQLAlchemy's
+        # evolving implicit PostgreSQL driver (which can require psycopg v3).
+        database_url = database_url.set(drivername="postgresql+psycopg2")
+
     connectable = create_engine(
-        url,
+        database_url,
         poolclass=pool.NullPool,
     )
 

@@ -30,6 +30,7 @@ from tests.services.test_runner_service import (
     FakePublisher,
     mission_fork_execution_context,
 )
+from tests.services.runner_checkpoint_fixture import checkpoint_acknowledgement
 
 
 def _settings() -> RunnerServiceSettings:
@@ -127,24 +128,7 @@ class _ForkWorkspaceControl:
         **kwargs: Any,
     ) -> dict[str, Any]:
         self.calls.append(("checkpoint", kwargs))
-        return {
-            "id": kwargs["checkpoint_id"],
-            "missionId": mission_id,
-            "workUnitId": work_unit_id,
-            "attempt": 1,
-            "sequence": kwargs["sequence"],
-            "phase": kwargs["phase"],
-            "iteration": kwargs["iteration"],
-            "toolCalls": kwargs["tool_calls"],
-            "promptTokens": kwargs["prompt_tokens"],
-            "completionTokens": kwargs["completion_tokens"],
-            "modelCost": kwargs["model_cost"],
-            "terminal": kwargs["terminal"],
-            "failureReason": kwargs.get("failure_reason"),
-            "stateDigest": "sha256:" + "a" * 64,
-            "createdBy": {"id": "runner-1", "type": "service"},
-            "createdAt": "2026-08-21T00:00:00+00:00",
-        }
+        return checkpoint_acknowledgement(mission_id, work_unit_id, kwargs, attempt=1)
 
     async def heartbeat_work_unit(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         del args, kwargs

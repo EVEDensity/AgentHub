@@ -27,6 +27,7 @@ from textual.binding import Binding
 from textual.widgets import Footer, Header, Input, RichLog
 
 from app.cli.main import _load_config
+from app.cli.control_state import has_control_database
 from app.cli.runtime import (
     DEFAULT_MAX_TOTAL_TOKENS,
     DEFAULT_MISSION_TIMEOUT,
@@ -232,7 +233,7 @@ class AgentHubTUI(App[None]):
 
     async def _list_missions(self) -> None:
         assert self._directory is not None and self._settings is not None
-        if not (self._directory / "db" / "agenthub.db").is_file():
+        if not has_control_database(self._workspace or self._cwd, self._directory):
             self._log("暂无本地任务历史（先运行一个任务）")
             return
         try:

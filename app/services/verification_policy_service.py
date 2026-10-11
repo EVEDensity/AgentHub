@@ -172,8 +172,8 @@ class SecurityScanEvaluationPlan:
     artifacts (security-scan result reports).  ``max_severity`` is the
     highest accepted severity grade on the standard CVSS-style scale
     (0=None, 1=info, 2=low, 3=medium, 4=high, 5=critical).  The evaluator
-    only counts the presence of report artifacts — severity arithmetic is
-    delegated to the verifier worker, which parses the report body.
+    reproduces the registered report's finding records and completion status.
+    Its severity threshold applies to verified bytes, not Artifact counts.
     """
 
     criterion_id: str

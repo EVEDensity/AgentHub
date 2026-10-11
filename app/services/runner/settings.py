@@ -116,6 +116,7 @@ class DesktopLocalRunnerSettings:
     workers: int = 1
     mcp_config: Path | None = None
     sandbox_enabled: bool = True
+    resume_mission_id: str | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DesktopLocalRunnerSettings:
@@ -207,6 +208,7 @@ class DesktopLocalRunnerSettings:
             mcp_config=_mcp_config_path(environment),
             # OS sandbox defaults to on; ``0`` degrades to plain subprocess.
             sandbox_enabled=environment.get(SANDBOX_ENV, "1").strip() == "1",
+            resume_mission_id=environment.get("AGENTHUB_DESKTOP_LOCAL_RUNNER_RESUME_MISSION_ID", "").strip() or None,
         )
 
     def default_workspace_root(self) -> Path:

@@ -199,9 +199,7 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
                 HarnessEventType.TOOL_STARTED,
                 HarnessEventType.TOOL_COMPLETED,
                 HarnessEventType.ITERATION_STARTED,
-                HarnessEventType.MODEL_STARTED,
-                HarnessEventType.MODEL_COMPLETED,
-                HarnessEventType.EXECUTION_COMPLETED,
+                HarnessEventType.MODEL_STARTED, HarnessEventType.MODEL_COMPLETED, HarnessEventType.EXECUTION_COMPLETED,
             ],
         )
         self.assertEqual(
@@ -372,7 +370,7 @@ class HarnessServiceTests(unittest.IsolatedAsyncioTestCase):
                 # The summary round reuses the iteration marker one past the
                 # budget so durable phase constraints stay valid.
                 HarnessEventType.ITERATION_STARTED,
-                HarnessEventType.EXECUTION_COMPLETED,
+                HarnessEventType.MODEL_STARTED, HarnessEventType.MODEL_COMPLETED, HarnessEventType.EXECUTION_COMPLETED,
             ],
         )
         self.assertEqual(checkpoint_port.events[-2].iteration, 3)

@@ -85,7 +85,7 @@ def main() -> None:
                 )
             if diff_files and item["file"] not in diff_files:
                 fail(
-                    f"{severity}[{index}].file '{item[\"file\"]}' does not appear "
+                    f"{severity}[{index}].file '{item['file']}' does not appear "
                     "in the reviewed diff"
                 )
 

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import time
 import hashlib
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -106,6 +106,13 @@ class HarnessCheckpoint:
     idempotency_key: str | None = None
     workspace_revision: str | None = None
     context_manifest_digest: str | None = None
+    # Private journal fields: never sent directly to Mission Control.
+    pending_tool_calls: tuple[FunctionCall, ...] = ()
+    response_content: str | None = None
+    reserved_call_id: str | None = None
+    elapsed_seconds: float = 0.0
+    next_iteration: int = 1
+    deadline_epoch: float | None = None
 
     def resume_fingerprint(self) -> str:
         """Return a stable digest for safe resume comparisons."""
@@ -173,11 +180,12 @@ class _HarnessRecorder:
         started_at: float,
         workspace_revision: str | None = None,
         context_manifest_digest: str | None = None,
+        base_sequence: int = 0,
     ) -> None:
         self._port = port
         self._execution = execution
         self._started_at = started_at
-        self._sequence = 0
+        self._sequence = base_sequence
         self._workspace_revision = workspace_revision
         self._context_manifest_digest = context_manifest_digest
 
@@ -194,6 +202,11 @@ class _HarnessRecorder:
         budget: str | None = None,
         reason: str | None = None,
         terminal: bool = False,
+        pending_tool_calls: tuple[FunctionCall, ...] = (),
+        response_content: str | None = None,
+        reserved_call_id: str | None = None,
+        next_iteration: int = 1,
+        deadline_epoch: float | None = None,
     ) -> None:
         if self._port is None:
             return
@@ -246,6 +259,12 @@ class _HarnessRecorder:
             ),
             workspace_revision=self._workspace_revision,
             context_manifest_digest=self._context_manifest_digest,
+            pending_tool_calls=pending_tool_calls,
+            response_content=response_content,
+            reserved_call_id=reserved_call_id,
+            elapsed_seconds=max(0.0, time.monotonic() - self._started_at),
+            next_iteration=next_iteration,
+            deadline_epoch=deadline_epoch,
         )
         try:
             await self._port.record(checkpoint, event)

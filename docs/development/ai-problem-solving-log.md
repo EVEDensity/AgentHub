@@ -112,3 +112,23 @@
 - 验证：`python -m pytest tests/cli tests/services/test_model_contract_spec.py -q`。
 - 残余风险：旧 Harness 内部 DTO 尚未完全替换为 canonical ModelPort，
   需要后续按适配器边界逐步迁移。
+
+### 2026-10-09：检查点迁移链与已有 SQLite 升级
+
+- 症状：`alembic heads` 无法解析旧 `a6d0e1f2b3c4`；已初始化的 SQLite
+  version 2 跳过新增字段；公开 schema 拒绝域模型已输出的恢复元数据。
+- 根因：原迁移 ID 被改成了以旧 ID 为父节点的新 ID，却没有独立的新 revision；
+  SQLite 启动版本未推进；跨进程 JSON Schema 未同步。
+- 修复：恢复原 revision/table shape，新增独立 `b7e1f203c4d5`；SQLite 升级
+  只补缺失字段并在同一事务记录 version 3；同步五个可选 v1 字段。
+- 验证：252 个定向测试、118 个 subtests 通过；临时 PostgreSQL 16 实际执行
+  空库全链安装、旧库升级、回滚再升级、故障回滚、运行时升级和仓库读写；
+  SQLite 验证数据保留、部分升级、幂等启动和失败不推进版本号。
+- 残余风险：旧行不回填恢复指纹，不宣称完整崩溃恢复或生产部署已验证；
+  全量 suite 的旧兼容接口收集问题，以及聊天派发/授权/验收语义按后续批次处理。
+- 远端干净环境还发现 pytest 过滤配置引用了锁定 Pydantic 2.10.6 中不存在
+  的 `UnsupportedFieldAttributeWarning`，导致测试启动退出。改用稳定的
+  `UserWarning` 基类并保留原来的窄消息匹配，兼容新旧 Pydantic。
+- 干净环境的 SQLAlchemy 默认 PostgreSQL 驱动选择了未声明的 psycopg v3。
+  Alembic 在线迁移现在为普通 PostgreSQL DSN 显式选择项目已安装的 psycopg2，
+  避免依赖隐式驱动默认值。

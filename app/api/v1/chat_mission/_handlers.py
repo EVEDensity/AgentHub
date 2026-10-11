@@ -8,45 +8,26 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any
+from datetime import timedelta
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import HTTPException
+from pydantic import BaseModel, Field
 
 from app.api.v1.access import authorize_workspace
 from app.db.init_db import now
 from app.domain import (
     ActorRef,
-    ActorType,
-    MissionContract,
     MissionSource,
     MissionSourceType,
     PendingConfirmation,
     PendingConfirmationStatus,
-    Session,
     SessionEvent,
     SessionEventType,
-    SessionStatus,
 )
-from app.repositories import (
-    MissionRepository,
-    PendingConfirmationRepository,
-    SessionEventRepository,
-    SessionRepository,
-)
-from app.services.agent_binding_service import (
-    AgentBindingResolver,
-    DatabaseAgentBindingResolver,
-)
-from app.services.auth_service import get_current_user
 from app.services.mission_service import (
     MissionService,
     build_human_actor,
-)
-from app.services.receipts import (
-    format_receipts_as_context,
-    search_receipts_inprocess,
 )
 from app.services.rule_engine import (
     RuleHit,
@@ -63,20 +44,16 @@ from app.api.v1.chat_mission._helpers import (
     ConfirmPendingRequest,
     CancelPendingRequest,
     router,
-    _MENTION_RE,
     _SPECIAL_MENTIONS,
     _now_dt,
     _parse_mentions,
     _resolve_mentions,
     _pick_default_participant,
     _build_chat_contract,
+    _apply_chat_rule_targets,
+    _ensure_chat_session,
     _inline_derive_work_units,
     _preprocess_archivist,
-    get_mission_repository,
-    get_session_event_repository,
-    get_session_repository,
-    get_agent_binding_resolver,
-    get_pending_confirmation_repository,
     CurrentUser,
     MissionRepositoryDep,
     SessionEventRepoDep,
@@ -114,30 +91,8 @@ async def create_chat_mission(
     if not message:
         raise HTTPException(status_code=422, detail="message is required")
 
-    # ── T3: Auto-create session when client doesn't provide one ────
-    # Before T3 every chat_mission request needed a pre-existing
-    # session_id.  Now we create one on-the-fly so single-shot chat
-    # requests still emit a full session event stream.  Best-effort
-    # like every other persistence step: session creation failure does
-    # not block the Mission.
-    session_id = request.session_id
-    if not session_id:
-        try:
-            _ts = _now_dt()
-            chat_title = message.splitlines()[0][:80] or "Chat session"
-            new_session = Session(
-                id=f"sess-{uuid.uuid4().hex[:12]}",
-                workspace_id=request.workspace_id,
-                title=chat_title,
-                status=SessionStatus.ACTIVE,
-                created_by=build_human_actor(user),
-                created_at=_ts,
-                updated_at=_ts,
-            )
-            await sessions.add_session(new_session)
-            session_id = new_session.id
-        except Exception:  # noqa: BLE001 - observe, never block
-            session_id = None
+    # Session identity must come from durable workspace ownership.
+    session_id = await _ensure_chat_session(request.session_id, request.workspace_id, message, user, sessions)
 
     async def _emit(
         event_type: SessionEventType,
@@ -249,6 +204,13 @@ async def create_chat_mission(
                 "requires_confirmation": hit.rule.action.require_confirmation,
             })
 
+    resolved, unresolved = await _apply_chat_rule_targets(
+        resolved, unresolved, mention_names,
+        [hit.rule.action.target_agent for hit in rules_hit
+         if hit.rule.action.kind == "create_mission" and hit.rule.action.target_agent],
+        request.workspace_id, resolver,
+    )
+
     # ── Subscribe trigger (reply_only) ─────────────────────────────
     # A rule with action.kind == "reply_only" means an Agent is
     # passively listening to the conversation and auto-replies when
@@ -324,13 +286,8 @@ async def create_chat_mission(
                 created_at=_ts,
             )
             await pending_repo.add_pending(pending)
-        except Exception as exc:  # noqa: BLE001 - degrade gracefully
-            # Pending storage failed → fall through to regular Mission
-            # creation (same behavior as pre-T5).  Log-only on production.
-            import logging
-            logging.getLogger("agenthub.chat_mission").warning(
-                "pending storage failed, proceeding with Mission: %s", exc,
-            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="chat confirmation persistence unavailable") from exc
         else:
             return {
                 "status": "pending",
@@ -378,16 +335,18 @@ async def create_chat_mission(
     title = message.splitlines()[0][:80] or "Chat mission"
     contract_id = f"contract-chat-{uuid.uuid4().hex[:12]}"
 
-    service = MissionService(repository, session_event_repository=session_events)
-    try:
-        mission = await service.create_mission(
+    from app.api.v1.chat_mission._admission import admit_chat_mission
+
+    mission, work_unit = await admit_chat_mission(
+        pending_repo, resolver=resolver, rules_hit=[hit.rule.id for hit in rules_hit],
+        command=dict(
             mission_id=mission_id,
             workspace_id=request.workspace_id,
             title=title,
             objective=enriched_objective,
             source=MissionSource(
                 type=MissionSourceType.CHAT,
-                session_id=request.session_id,
+                session_id=session_id,
                 metadata={
                     "created_at": now(),
                     "participants": resolved,
@@ -415,32 +374,7 @@ async def create_chat_mission(
             contract=_build_chat_contract(contract_id),
             actor=build_human_actor(user),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    await _emit(SessionEventType.MISSION_CREATED, payload={
-        "mission_id": mission.id,
-        "status": mission.status.value,
-        "participants": resolved,
-        "has_unresolved": bool(unresolved),
-        "rules_hit": [h.rule.id for h in rules_hit],
-    }, actor_override=ActorRef(type="adapter", id="chat_mission"))
-
-    # Start immediately — the web chat surface expects a running mission.
-    try:
-        mission = await service.start_mission(
-            mission_id=mission_id,
-            actor=build_human_actor(user),
-        )
-    except Exception as exc:  # noqa: BLE001 - start failures surface cleanly
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    # ── P0: Inline work unit derivation ─────────────────────────────
-    # Creates a desktop.task WorkUnit immediately so the SSE stream
-    # has meaningful events (work_unit.started, evidence.recorded...)
-    # instead of just mission.lifecycle.started.  Best-effort; the
-    # desktop runner's loop will retry on its interval if this fails.
-    await _inline_derive_work_units(mission_id)
+    )
 
     stream_url = (
         f"/api/v1/missions/{mission_id}/events/stream?maxSeconds=0"
@@ -448,6 +382,9 @@ async def create_chat_mission(
 
     return {
         "missionId": mission.id,
+        "sessionId": session_id,
+        "dispatch": {"workUnitId": work_unit.id, "status": work_unit.status.value,
+                     "assignedAgentId": work_unit.assigned_agent_id, "assignedAdapter": work_unit.assigned_adapter},
         "status": mission.status.value,
         "streamUrl": stream_url,
         "updatedAt": mission.updated_at.isoformat(),
@@ -483,400 +420,40 @@ async def create_chat_mission(
 
 @router.post("/confirm", status_code=202)
 async def confirm_pending(
-    request: ConfirmPendingRequest,
-    user: CurrentUser,
-    repository: MissionRepositoryDep,
-    session_events: SessionEventRepoDep,
-    sessions: SessionRepoDep,
-    resolver: BindingResolverDep,
+    request: ConfirmPendingRequest, user: CurrentUser, repository: MissionRepositoryDep,
+    session_events: SessionEventRepoDep, sessions: SessionRepoDep, resolver: BindingResolverDep,
     pending_repo: PendingRepoDep,
 ) -> dict:
-    """Confirm a rule-triggered pending record → create the Mission.
-
-    Fetches the pending record, transitions it to ``CONFIRMED``, then
-    replays the message through the normal Mission-creation pipeline
-    (mention resolution, archivist preprocessing, Mission lifecycle).
-    Rule evaluation is **skipped** — the rule has already passed the
-    user's confirmation gate, so we proceed straight to execution.
-    """
-    pending = await pending_repo.get_pending(request.pending_id)
-    if pending is None:
-        raise HTTPException(status_code=404, detail="pending not found")
-
-    # Authorize
-    authorize_workspace(user, pending.workspace_id)
-
-    # Reject non-pending states
-    if pending.status != PendingConfirmationStatus.PENDING:
-        raise HTTPException(
-            status_code=409,
-            detail=f"pending is already {pending.status.value}",
-        )
-
-    from datetime import datetime, timezone
-    if pending.expires_at < datetime.now(timezone.utc):
-        # Auto-expire on confirm attempt
-        await pending_repo.resolve_pending(
-            pending.id, PendingConfirmationStatus.EXPIRED,
-        )
-        raise HTTPException(status_code=410, detail="pending expired")
-
-    # ── Transition to CONFIRMED ───────────────────────────────────
-    resolved = await pending_repo.resolve_pending(
-        pending.id, PendingConfirmationStatus.CONFIRMED,
-    )
-
-    message = pending.message.strip()
-    if not message:
-        raise HTTPException(status_code=422, detail="message is empty")
-
-    session_id = pending.session_id
-
-    async def _emit(
-        event_type: SessionEventType,
-        payload: dict | None = None,
-        *,
-        actor_override: ActorRef | None = None,
-    ) -> None:
-        if not session_id:
-            return
-        try:
-            evt = SessionEvent(
-                id=f"evt-{uuid.uuid4().hex[:16]}",
-                session_id=session_id,
-                event_type=event_type,
-                actor=actor_override or build_human_actor(user),
-                payload=payload or {},
-                created_at=_now_dt(),
-            )
-            await session_events.add_session_event(evt)
-        except Exception:  # noqa: BLE001 - observe, never block
-            pass
-
-    # Emit message.created if we have a session (it may have been created
-    # by the original chat_mission call — the session_id is preserved).
-    await _emit(SessionEventType.MESSAGE_CREATED, payload={
-        "content": message[:500],
-        "has_archivist": "@archivist" in message.lower(),
-        "source": "rule_confirm",
-    })
-
-    # Emit a confirm-specific event so the SSE stream knows a rule was
-    # approved (distinct from rule.triggered which was already emitted
-    # by the original chat_mission call).
-    await _emit(SessionEventType.DECISION_RECORDED, payload={
-        "pending_id": pending.id,
-        "rule_id": pending.rule_id,
-        "resolution": "CONFIRMED",
-    })
-
-    # ── Mention parsing & resolution ───────────────────────────────
-    mention_names = _parse_mentions(message)
-    special_hit = [m for m in mention_names if m.lower() in _SPECIAL_MENTIONS]
-    mention_names = [m for m in mention_names if m.lower() not in _SPECIAL_MENTIONS]
-
-    if mention_names or special_hit:
-        await _emit(SessionEventType.MENTION_DETECTED, payload={
-            "names": mention_names + special_hit,
-            "source": "rule_confirm",
-        })
-
-    enriched_objective = message
-    archivist_receipts: list[dict] = []
-    if "archivist" in [m.lower() for m in special_hit]:
-        enriched_objective, archivist_receipts = await _preprocess_archivist(
-            message, repository, pending.workspace_id,
-        )
-
-    # Rule-driven objective enrichment (already evaluated → apply directly)
-    if pending.objective_template:
-        try:
-            enriched_objective = pending.objective_template.format(
-                rule=type("_R", (), {"id": pending.rule_id, "description": pending.rule_description})(),
-            )
-        except (KeyError, AttributeError):
-            enriched_objective = pending.objective_template
-
-    resolved, unresolved = await _resolve_mentions(
-        mention_names, pending.workspace_id, resolver,
-    )
-    if not resolved and not unresolved:
-        default = await _pick_default_participant(pending.workspace_id, resolver)
-        if default is not None:
-            resolved = [default]
-
-    # ── Create & start Mission ─────────────────────────────────────
-    mission_id = f"mis-confirm-{uuid.uuid4().hex[:12]}"
-    title = message.splitlines()[0][:80] or "Chat mission (confirmed)"
-    contract_id = f"contract-confirm-{uuid.uuid4().hex[:12]}"
-
-    service = MissionService(repository, session_event_repository=session_events)
+    """Confirm and dispatch one Mission atomically behind the pending row lock."""
+    from app.api.v1.chat_mission._confirmation import confirm_chat_pending
     try:
-        mission = await service.create_mission(
-            mission_id=mission_id,
-            workspace_id=pending.workspace_id,
-            title=title,
-            objective=enriched_objective,
-            source=MissionSource(
-                type=MissionSourceType.CHAT,
-                session_id=session_id,
-                metadata={
-                    "created_at": now(),
-                    "participants": resolved,
-                    "unresolved_mentions": unresolved,
-                    "special_mentions": special_hit,
-                    "rule_confirm": {
-                        "pending_id": pending.id,
-                        "rule_id": pending.rule_id,
-                        "target_agent": pending.target_agent,
-                    },
-                },
-            ),
-            contract=_build_chat_contract(contract_id),
-            actor=build_human_actor(user),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return await confirm_chat_pending(request.pending_id, user=user, pending_repo=pending_repo, resolver=resolver)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="chat confirmation persistence unavailable") from exc
 
-    await _emit(SessionEventType.MISSION_CREATED, payload={
-        "mission_id": mission.id,
-        "status": mission.status.value,
-        "participants": resolved,
-        "has_unresolved": bool(unresolved),
-        "rule_id": pending.rule_id,
-    }, actor_override=ActorRef(type="adapter", id="chat_mission.confirm"))
-
-    # Start + inline work units
-    try:
-        mission = await service.start_mission(
-            mission_id=mission_id,
-            actor=build_human_actor(user),
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    await _inline_derive_work_units(mission_id)
-
-    stream_url = f"/api/v1/missions/{mission_id}/events/stream?maxSeconds=0"
-
-    return {
-        "status": "confirmed",
-        "pendingId": pending.id,
-        "missionId": mission.id,
-        "streamUrl": stream_url,
-        "updatedAt": mission.updated_at.isoformat(),
-        "mentions": {
-            "resolved": resolved,
-            "unresolved": unresolved,
-            "special": special_hit,
-        },
-        "rule": {
-            "id": pending.rule_id,
-            "description": pending.rule_description,
-            "targetAgent": pending.target_agent,
-        },
-    }
 
 @router.post("/cancel", status_code=200)
-async def cancel_pending(
-    request: CancelPendingRequest,
-    user: CurrentUser,
-    pending_repo: PendingRepoDep,
-) -> dict:
-    """Cancel a pending rule-trigger record — no Mission is created."""
-    pending = await pending_repo.get_pending(request.pending_id)
-    if pending is None:
-        raise HTTPException(status_code=404, detail="pending not found")
-
-    authorize_workspace(user, pending.workspace_id)
-
-    if pending.status != PendingConfirmationStatus.PENDING:
-        raise HTTPException(
-            status_code=409,
-            detail=f"pending is already {pending.status.value}",
-        )
-
-    await pending_repo.resolve_pending(
-        pending.id, PendingConfirmationStatus.CANCELLED,
-    )
-
-    return {
-        "status": "cancelled",
-        "pendingId": pending.id,
-        "ruleId": pending.rule_id,
-    }
+async def cancel_pending(request: CancelPendingRequest, user: CurrentUser, pending_repo: PendingRepoDep) -> dict:
+    """Cancel or expire a pending rule without creating work."""
+    from app.api.v1.chat_mission._confirmation import cancel_chat_pending
+    return await cancel_chat_pending(request.pending_id, user=user, pending_repo=pending_repo)
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Orchestration — DAG-based multi-Agent execution (enterprise feature)
-# ═══════════════════════════════════════════════════════════════════════
-
-# Late imports to avoid circular deps with _helpers.py
-from app.services.orchestrator import (
-    OrchestrationNode,
-    OrchestrationPlan,
-    OrchestratorService,
-)
-from app.services.orchestrator_gateway import _SyncRunnerGateway
-
-
+# Multi-Agent execution stays unavailable until it creates durable Missions.
 class OrchestrateRequest(BaseModel):
-    """Request body for :router.post:`/orchestrate`.
+    """Compatibility request shape for the unsupported orchestration command."""
 
-    Two modes supported:
-
-    **Mode A — plan as data** (explicit DAG)::
-
-        {
-          "mode": "plan",
-          "nodes": [
-            {"id": "analyst", "agent_id": "planner",
-             "objective": "列出需要修改的文件", "file_claims": ["docs/**"]},
-            {"id": "frontend", "agent_id": "dev",
-             "objective": "前端组件", "depends_on": ["analyst"],
-             "file_claims": ["frontend/src/**"]},
-            {"id": "backend", "agent_id": "dev",
-             "objective": "后端 handler", "depends_on": ["analyst"],
-             "file_claims": ["src/api/**"]},
-            {"id": "integrate", "agent_id": "tester",
-             "objective": "集成测试", "depends_on": ["frontend", "backend"]},
-          ]
-        }
-
-    **Mode B — natural-language intent** (we derive a simple DAG)::
-
-        {
-          "mode": "intent",
-          "objective": "先让分析师分析需求，然后前端和后端并行开发，最后集成测试"
-        }
-    """
-
-    mode: str = "plan"  # "plan" | "intent"
+    mode: str = "plan"
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     objective: str | None = None
 
 
-@router.post("/orchestrate", status_code=202)
-async def orchestrate_mission(
-    request: OrchestrateRequest,
-    user: CurrentUser,
-    repository: MissionRepositoryDep,
-    session_events: SessionEventRepoDep,
-) -> dict[str, Any]:
-    """Launch a multi-Agent DAG.
-
-    This is the entry point the VSCode extension calls when the user says
-    "use DAG / run pipeline / parallelise frontend and backend", or when
-    ``@orchestrator`` is mentioned.  The response includes the DAG summary
-    (root nodes, join points, parallel groups) so the extension can render
-    the topology before waiting for actual execution.
-    """
-    # 1. Parse or derive the plan
-    if request.mode == "plan" and request.nodes:
-        try:
-            plan = OrchestrationPlan.from_dict({"nodes": request.nodes})
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-    elif request.mode == "intent" and request.objective:
-        plan = _derive_plan_from_intent(request.objective)
-    else:
-        raise HTTPException(
-            status_code=422,
-            detail="provide either nodes (mode=plan) or objective (mode=intent)",
-        )
-
-    # 2. Summary for the VSCode extension
-    summary = {
-        "root_nodes": list(plan.root_ids),
-        "parallel_groups": [list(g) for g in plan.parallel_groups],
-        "join_points": list(plan.join_ids),
-        "node_count": len(plan.nodes),
-    }
-
-    # 3. Build gateway + orchestrator — but DON'T actually run in the
-    #    request handler.  Real execution is fire-and-forget; the DAG
-    #    engine needs event-loop access which we yield to the worker.
-    #    We record the plan + emit an event so the extension sees it.
-    mission_id = f"mis-dag-{len(plan.nodes)}n-{getattr(user, 'id', user.get('id', 'anon') if isinstance(user, dict) else 'anon')}"
-    from app.domain import (
-        ActorRef, ActorType, SessionEvent, SessionEventType,
+@router.post("/orchestrate", status_code=501)
+async def orchestrate_mission(request: OrchestrateRequest, user: CurrentUser) -> dict[str, Any]:
+    """Reject execution without inventing a Mission ID or result event."""
+    raise HTTPException(
+        status_code=501,
+        detail="multi-Agent orchestration is not implemented; use /chat/mission with one catalog executor",
     )
-    from datetime import datetime, timezone
-
-    dag_event = SessionEvent(
-        id=f"evt-dag-plan-{mission_id}",
-        session_id=f"sess-dag-{mission_id[-8:]}",  # synthetic; real session is a separate concern
-        event_type=SessionEventType("rule.triggered"),  # closest existing type
-        actor=ActorRef(type=ActorType.AGENT, id=f"orchestrator:{mission_id}"),
-        payload={
-            "_source": "orchestrator",
-            "_dag_mission_id": mission_id,
-            "_dag_mode": request.mode,
-            "plan": [n.id for n in plan.nodes],
-            "summary": summary,
-        },
-        created_at=datetime.now(timezone.utc),
-    )
-    try:
-        await session_events.append(dag_event)
-    except Exception:  # noqa: BLE001 - event write is best-effort
-        pass
-
-    return {
-        "missionId": mission_id,
-        "status": "DAG_PLANNED",
-        "summary": summary,
-        "mode": request.mode,
-    }
-
-
-def _derive_plan_from_intent(objective: str) -> OrchestrationPlan:
-    """Derive a simple sequential-or-branching plan from natural language.
-
-    This is a heuristic placeholder — enterprise users who need real
-    DAG topology should send ``mode=plan`` with explicit nodes.  The
-    intent-mode derivation is: detect keywords → build a two-wave DAG.
-    """
-    import re
-
-    text = objective.lower()
-    # Detect a "parallel" hint
-    parallel_hint = bool(re.search(r"并行|同时|parallel|\|\|", text))
-
-    analyst = OrchestrationNode(
-        id="analyst",
-        agent_id="planner",
-        objective=f"分析需求: {objective[:80]}",
-        file_claims=("docs/**",),
-    )
-    dev_front = OrchestrationNode(
-        id="frontend",
-        agent_id="dev",
-        objective="前端实现",
-        depends_on=("analyst",),
-        file_claims=("frontend/**",),
-    )
-    dev_back = OrchestrationNode(
-        id="backend",
-        agent_id="dev",
-        objective="后端实现",
-        depends_on=("analyst",),
-        file_claims=("src/api/**",),
-    )
-    integrate = OrchestrationNode(
-        id="integrate",
-        agent_id="tester",
-        objective="集成测试 + 端到端验证",
-        depends_on=("frontend", "backend"),
-        file_claims=("tests/**",),
-    )
-
-    if parallel_hint:
-        return OrchestrationPlan(nodes=(analyst, dev_front, dev_back, integrate))
-
-    # No parallel hint → simple sequential
-    dev_front_seq = OrchestrationNode(
-        id="dev", agent_id="dev", objective="实现",
-        depends_on=("analyst",), file_claims=("src/**", "frontend/**"),
-    )
-    return OrchestrationPlan(nodes=(analyst, dev_front_seq, integrate))

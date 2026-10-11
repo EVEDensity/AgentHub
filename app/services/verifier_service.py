@@ -18,6 +18,7 @@ from app.domain import (
     Evidence,
     EvidenceVerdict,
     Mission,
+    MissionStatus,
     OutputSpec,
     WorkUnit,
     WorkUnitStatus,
@@ -507,8 +508,8 @@ class ControlledVerifier:
             artifacts,
             tuple(byte_verifications),
         )
-        if evaluation.verdict != EvidenceVerdict.PASS:
-            raise VerifierProtocolError("controlled evaluator did not return PASS")
+        if evaluation.verdict not in {EvidenceVerdict.PASS, EvidenceVerdict.FAIL}:
+            raise VerifierProtocolError("controlled evaluator did not return a terminal verdict")
 
         artifact_refs = tuple(
             ArtifactRef(id=artifact.id, digest=artifact.digest)
@@ -521,7 +522,7 @@ class ControlledVerifier:
             configuration_digest=evaluation.configuration_digest,
             verdict=evaluation.verdict,
             artifact_refs=artifact_refs,
-            summary=(
+            summary=evaluation.summary or (
                 f"{evaluation.evaluator} verified {len(artifacts)} Artifact(s) "
                 f"for WorkUnit attempt {context.work_unit.attempt}."
             ),
@@ -568,12 +569,21 @@ class ControlledVerifier:
             or evidence.verifier.configuration_digest != submission.configuration_digest
             or actual_refs != expected_refs
             or admission.work_unit.id != work_unit_id
-            or admission.work_unit.status != WorkUnitStatus.SUCCEEDED
+            or not _admission_outcome_matches(submission.verdict, admission.work_unit.status, admission.mission.status)
             or admission.mission.id != mission_id
         ):
             raise VerifierProtocolError(
                 "Mission Control verification response does not match submission"
             )
+
+
+def _admission_outcome_matches(verdict: EvidenceVerdict, work_status: WorkUnitStatus, mission_status: MissionStatus) -> bool:
+    expected = {EvidenceVerdict.PASS: WorkUnitStatus.SUCCEEDED, EvidenceVerdict.FAIL: WorkUnitStatus.FAILED}
+    if work_status != expected.get(verdict):
+        return False
+    if verdict == EvidenceVerdict.FAIL:
+        return mission_status == MissionStatus.FAILED
+    return mission_status in {MissionStatus.RUNNING, MissionStatus.VERIFYING, MissionStatus.SUCCEEDED}
 
 
 def _build_plan_from_policy(policy: _ReadyEvaluationPolicy) -> object:

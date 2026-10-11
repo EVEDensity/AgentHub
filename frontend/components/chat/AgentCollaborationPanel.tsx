@@ -29,7 +29,7 @@ const AgentCollaborationPanel = memo(function AgentCollaborationPanel({
 }: AgentCollaborationPanelProps) {
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
-  const activeAgents = agents.filter((a) => a.status === 'active' || a.status === 'idle');
+  const activeAgents = agents.filter((a) => ['registered', 'active', 'idle'].includes(a.status));
   const sleepingAgents = agents.filter((a) => a.status === 'sleeping' || a.status === 'offline');
 
   if (collapsed) {
@@ -60,7 +60,7 @@ const AgentCollaborationPanel = memo(function AgentCollaborationPanel({
       <div className="agent-panel-header">
         <div className="agent-panel-title-row">
           <h3 className="agent-panel-title">智能体团队</h3>
-          <span className="agent-panel-count">{activeAgents.length} 在线</span>
+          <span className="agent-panel-count">{agents.length} 已注册</span>
         </div>
         <div className="agent-panel-header-actions">
           <button className="agent-panel-header-btn" title="添加智能体">
@@ -103,7 +103,7 @@ const AgentCollaborationPanel = memo(function AgentCollaborationPanel({
                   <span className="agent-card-name">{agent.displayName || agent.agentId}</span>
                   <span className="agent-card-role">{agent.domain || 'Agent'}</span>
                 </div>
-                <span className="agent-card-status online" title="在线" />
+                <span className="agent-card-status" title="目录已注册；Runner 状态见任务状态" />
               </div>
 
               {isExpanded && (

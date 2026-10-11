@@ -1,13 +1,37 @@
-name: CLI provider nightly smoke
+name: External provider and recovery evidence
 
 on:
   schedule:
     - cron: "23 2 * * *"
   workflow_dispatch:
+    inputs:
+      provider_checks:
+        description: Run paid provider streaming, tools, Mission and benchmark checks
+        type: boolean
+        default: true
+      sse_recovery:
+        description: Run recovery against a configured fault-injection service
+        type: boolean
+        default: false
+      vision_probe:
+        description: Run the configured paid multimodal channel probe
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-evidence-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   provider-smoke:
+    if: >-
+      (github.event_name == 'schedule' && vars.AGENTHUB_PROVIDER_CHECKS_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.provider_checks)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +46,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -r requirements.txt
+      - name: Require the selected real provider credential
+        env:
+          MODEL_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -z "$MODEL_KEY" ]; then
+            echo '::error::Provider evidence was enabled, but DEEPSEEK_API_KEY is missing.'
+            exit 1
+          fi
       - name: Streaming smoke
         env:
           AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -53,6 +85,19 @@ jobs:
           AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
           AGENTHUB_CLI_PROVIDER_MISSION_OUTPUT: ${{ runner.temp }}/mission-${{ matrix.model }}.json
         run: python scripts/cli_provider_mission_smoke.py
+      - name: Real provider benchmark evidence
+        working-directory: ${{ runner.temp }}
+        env:
+          AGENTHUB_CLI_MODEL_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          AGENTHUB_CLI_PROVIDER: ${{ matrix.provider }}
+          AGENTHUB_CLI_MODEL: ${{ matrix.model }}
+          AGENTHUB_RELEASE_ID: nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/nightly-${{ github.run_id }}-${{ matrix.model }}
+          AGENTHUB_BENCHMARK_EVIDENCE_OUTPUT: ${{ runner.temp }}/benchmark.json
+        run: >-
+          python "$GITHUB_WORKSPACE/scripts/cli_benchmark.py"
+          --task-file "$GITHUB_WORKSPACE/benchmarks/cli_tasks.json"
+          --task-id conversation-basic --check-thresholds
       - name: Upload redacted provider evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -60,5 +105,69 @@ jobs:
           name: cli-provider-${{ matrix.model }}
           path: |
             artifacts/production/**/*.json
-            ${{ runner.temp }}/*.json
+            ${{ runner.temp }}/streaming-${{ matrix.model }}.json
+            ${{ runner.temp }}/tool-${{ matrix.model }}.json
+            ${{ runner.temp }}/mission-${{ matrix.model }}.json
+            ${{ runner.temp }}/provider-health.json
+            ${{ runner.temp }}/benchmark.json
           if-no-files-found: ignore
+
+  sse-recovery:
+    if: >-
+      (github.event_name == 'schedule' && vars.AGENTHUB_SSE_EVIDENCE_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.sse_recovery)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AGENTHUB_CLI_BASE_URL: ${{ vars.AGENTHUB_SSE_BASE_URL }}
+      AGENTHUB_CLI_AUTH_TOKEN: ${{ secrets.AGENTHUB_CLI_AUTH_TOKEN }}
+      AGENTHUB_CLI_SSE_MISSION_ID: ${{ vars.AGENTHUB_SSE_MISSION_ID }}
+      AGENTHUB_CLI_SSE_FAULT_INJECTED: ${{ vars.AGENTHUB_SSE_FAULT_INJECTED }}
+      AGENTHUB_RELEASE_ID: evidence-${{ github.run_id }}
+      AGENTHUB_PRODUCTION_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/production/evidence-${{ github.run_id }}
+      AGENTHUB_SSE_EVIDENCE_OUTPUT: ${{ github.workspace }}/.tmp/sse-recovery.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Require service configuration and an explicit injected-fault declaration
+        run: |
+          python - <<'PY'
+          import os
+          for key in ("AGENTHUB_CLI_BASE_URL", "AGENTHUB_CLI_AUTH_TOKEN", "AGENTHUB_CLI_SSE_MISSION_ID"):
+              if not os.environ.get(key, "").strip():
+                  raise SystemExit(f"SSE evidence was enabled, but {key} is missing.")
+          if os.environ.get("AGENTHUB_CLI_SSE_FAULT_INJECTED", "").lower() not in {"1", "true", "yes"}:
+              raise SystemExit("Set AGENTHUB_SSE_FAULT_INJECTED only after configuring the test proxy.")
+          PY
+      - run: python scripts/cli_sse_recovery_evidence.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cli-sse-recovery-evidence
+          path: |
+            artifacts/production/**/*.json
+            .tmp/sse-recovery.json
+          if-no-files-found: ignore
+
+  vision-probe:
+    if: >-
+      (github.event_name == 'schedule' && vars.AGENTHUB_VISION_CHECKS_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.vision_probe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NEWAPI_BASE_URL: ${{ secrets.NEWAPI_BASE_URL }}
+      AGENTHUB_TEST_CHANNEL_KEY: ${{ secrets.AGENTHUB_TEST_CHANNEL_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements.txt
+      - name: Require the selected real multimodal channel
+        run: |
+          test -n "$NEWAPI_BASE_URL" && test -n "$AGENTHUB_TEST_CHANNEL_KEY"
+      - run: python benchmarks/gates.py run --name multimodal_e2e_probe

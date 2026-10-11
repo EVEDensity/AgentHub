@@ -450,12 +450,16 @@ def build_kind_aware_workspace_runner(
     max_model_cost: float | None = None,
     heartbeat_interval_seconds: float | None = None,
     extra_resolvers: Mapping[str, ClaimedWorkResolver] | None = None,
+    supported_capabilities: tuple[str, ...] = (),
+    resume_mission_id: str | None = None,
 ) -> WorkUnitRunner:
     """Compose workspace execution for every registered model-backed root kind.
 
     ``extra_resolvers`` registers additional claimed-WorkUnit resolvers for
     composition-specific root kinds (e.g. the desktop local runner). Kinds
     must not collide with the built-in model-backed kinds.
+    ``supported_capabilities`` is an explicit operational declaration, defaults
+    to empty, and does not grant tools or infer support from catalog metadata.
     """
 
     _validate_runner_binding(
@@ -521,6 +525,8 @@ def build_kind_aware_workspace_runner(
         claimed_work_resolver=resolver,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         supported_work_unit_kinds=resolver.supported_work_unit_kinds,
+        supported_capabilities=supported_capabilities,
+        resume_mission_id=resume_mission_id,
     )
 
 

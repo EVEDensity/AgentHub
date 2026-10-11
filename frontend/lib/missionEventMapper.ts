@@ -14,6 +14,8 @@
 import type { MissionEvent } from '../types';
 
 export interface ChatRenderEvent {
+  /** Stable ledger identity for reconnect deduplication. */
+  eventId?: string;
   /** Mission/chat turn id — useful for grouping bubbles. */
   missionId: string;
   /** Chat bubble type. */
@@ -43,6 +45,12 @@ export function mapMissionEvent(
   const timestamp = String(event.generatedAt ?? event.timestamp ?? '');
 
   switch (event.eventType ?? event.type ?? '') {
+    case 'harness.assistant.delta':
+    case 'harness.assistant.completed': {
+      const payload = event.payload as Record<string, unknown> | undefined;
+      const text = typeof payload?.text === 'string' ? payload.text : '';
+      return text ? { missionId, type: 'text', content: text, timestamp, payload } : null;
+    }
     case 'work_unit.started':
       return {
         missionId,

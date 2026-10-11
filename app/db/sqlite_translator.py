@@ -99,7 +99,7 @@ async def _create_mission_control_plane_sqlite(conn) -> None:
         for statement in statements:
             text = statement.strip()
             upper_text = text.upper()
-            if upper_text.startswith("DO $$"):
+            if upper_text.startswith("DO "):
                 continue
             if upper_text.startswith("ALTER TABLE"):
                 # SQLite supports additive ALTERs only: ADD COLUMN becomes a
@@ -144,6 +144,10 @@ async def _create_mission_control_plane_sqlite(conn) -> None:
         )
     except Exception as exc:
         logger.warning("mission schema SQLite unique index skipped: %s", exc)
+
+    from app.db.migrations.checkpoint_resume import upgrade_checkpoint_resume_sqlite
+
+    await upgrade_checkpoint_resume_sqlite(conn)
 
 
 create_mission_control_plane_sqlite = _create_mission_control_plane_sqlite

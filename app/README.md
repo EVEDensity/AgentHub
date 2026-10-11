@@ -48,7 +48,20 @@ workspace tree.
   Legacy session file versions remain in `artifacts`; Mission Control owns
   immutable execution metadata in the separate `mission_artifacts` table.
 
+* `db/`: connection and schema initialization. Checkpoint resume metadata uses
+  a distinct PostgreSQL Alembic revision and a transactional SQLite version-2
+  to version-5 upgrade; historical rows retain NULL fingerprints. Session scope
+  compatibility follows the checkpoint revision and retains unknown legacy
+  ownership as NULL; v1 access checks durable scope before reading or writing.
+  See
+  `db/README.md` for migration and rollback boundaries (ADR-0110).
+
 * `services/`: application use cases, compatibility adapters, and storage ports.
+  Chat dispatch now persists one catalog-bound `desktop.task` WorkUnit through
+  Mission Control. The local Runner claims its registered Agent only; other
+  executors remain PENDING until their matching Runner is available. Unknown,
+  ambiguous, multiple, and unsupported executor mentions fail admission. The
+  `/chat/orchestrate` placeholder returns an explicit unsupported response.
   The optional `services/code_index/` package maintains a fail-open,
   workspace-local SQLite symbol index for faster repository discovery; file
   search and glob remain the fallback and source of truth for reads.
@@ -116,10 +129,11 @@ workspace tree.
   attempt one. The lease owner can read the same versioned, lease-fenced
   execution projection used by controlled A2A roots; it contains immutable
   ArtifactRefs but does not read Artifact bytes or source checkpoint content.
-  The CLI `resume_work_unit()` gate compares workspace and context fingerprints
-  and consults ToolReceipt state before any replay; strict mode rejects legacy
-  checkpoints until the versioned durable resume fields are persisted end to
-  end. Side-effecting calls through both the streaming and legacy ToolExecutor
+  The CLI resume preflight checks the admitted anchor and same owned live lease.
+  The desktop Runner independently restores a complete private v2 image and
+  reconciles real ToolReceipt results before replaying any pending work.
+  Legacy incomplete records, uncertain tool/model outcomes and changed
+  workspace/model/context/budgets remain refused. Side-effecting calls through both the streaming and legacy ToolExecutor
   entry points accept the same execution-scoped idempotency key and consult
   the local ToolReceipt journal before starting work; ambiguous or corrupt
   receipts fail closed.
@@ -240,14 +254,17 @@ workspace tree.
   PENDING Decision and atomically moves the Mission to `WAITING_DECISION`.
   The WorkUnit remains VERIFYING, subsequent discovery excludes the Mission,
   and direct INCONCLUSIVE Evidence is rejected.
-  Mission Control currently recognizes only the deterministic
-  `artifact-set.v1` evaluator, whose canonical configuration digest binds one
+  Mission Control recognizes the registered deterministic artifact-set, build,
+  test-run and security-scan evaluators. The canonical configuration digest binds one
   acceptance criterion to WorkUnit kind and Artifact requirements. PASS
   Evidence must reproduce that criterion and digest before Artifact I/O and
   again inside the state-transition transaction; unsupported, ambiguous, or
   unsatisfied policies cannot be bypassed through the direct verification API.
-  This evaluator proves Artifact-set availability and byte integrity only, not
-  semantic correctness or test execution. The desktop local runner
+  Artifact-set/build policies prove structural availability and byte integrity.
+  Test/security policies reproduce bounded v1 report conclusions from verified
+  bytes, checking case/finding records, counters, attempt identity, pass rate and
+  severity; failed or malformed reports cannot pass (ADR-0114). Reports do not
+  prove actual external test/scanner execution. The desktop local runner
   (the `services/runner/` package behind the `services/desktop_local_runner.py`
   facade) additionally treats any Mission
   objective line starting with `VERIFY:` as a workspace acceptance command:
@@ -269,9 +286,9 @@ workspace tree.
   tamper-evident hashing, not verifier authentication or a signature.
   `verifier_service.py` adds the independent application-layer coordinator and
   its narrow Mission Control HTTP port. It strictly validates discovery,
-  verifies the projected Artifact bytes, replays only the registered
-  `artifact-set.v1` evaluator, and submits PASS only from that controlled
-  result. It validates inconclusive criterion attribution but does not submit
+  verifies the projected Artifact bytes, replays the registered deterministic
+  evaluator, and submits PASS or FAIL from that controlled result.
+  It validates inconclusive criterion attribution but does not submit
   inconclusive Evidence or create Decision state. Mission Control creates and
   owns that Decision during discovery; only a workspace-authorized human can
   resolve it to a budget-checked WorkUnit retry or explicit Mission failure.
@@ -336,3 +353,10 @@ new business state to the legacy LangGraph task state machine.
 2. Append an event for every durable state transition.
 3. Add domain, persistence, and API tests as applicable.
 4. Update the nearest contract or ADR when ownership changes.
+
+The private desktop recovery journal persists bounded model context and actual
+tool results outside the writable workspace, exposing only digest/counters
+through Mission Control. It retains remaining calls, usage and elapsed budgets
+and supports terminal Artifact publication without rerunning model or tools.
+See [ADR-0115](../docs/architecture/decisions/0115-private-runner-resume-images.md)
+and the real process kill/restart tests in `tests/integration/`.

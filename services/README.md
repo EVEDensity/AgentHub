@@ -13,6 +13,11 @@ not create a competing Mission or WorkUnit state machine.
 - `rust/`: isolated performance cores. Rust services communicate through stable
   contracts or events and do not own orchestration policy.
 
+The Python model adapter projects multimodal text parts explicitly for its
+test-only mock provider. The offline knowledge image batch aborts on an embedding
+failure with the failing index; it cannot report fabricated zero vectors as a
+successful indexable result. Covered by `tests/services/test_runtime_service_failures.py`.
+
 ## Ownership rules
 
 - Gateway authenticates and routes; it does not invent task completion. Its A2A

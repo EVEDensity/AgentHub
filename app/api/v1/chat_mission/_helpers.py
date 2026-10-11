@@ -9,24 +9,16 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any
+from datetime import datetime, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.v1.access import authorize_workspace
-from app.db.init_db import now
+from app.api.v1.session_access import require_session_workspace
 from app.domain import (
-    ActorRef,
     MissionContract,
-    MissionSource,
-    MissionSourceType,
-    PendingConfirmation,
-    PendingConfirmationStatus,
     Session,
-    SessionEvent,
-    SessionEventType,
     SessionStatus,
 )
 from app.repositories import (
@@ -36,6 +28,7 @@ from app.repositories import (
     SessionRepository,
 )
 from app.services.agent_binding_service import (
+    AgentBinding,
     AgentBindingResolver,
     DatabaseAgentBindingResolver,
 )
@@ -44,18 +37,10 @@ from app.services.mission_service import (
     MissionService,
     build_human_actor,
 )
+from app.services.mission._chat_dispatch_mixin import validate_chat_dispatch
 from app.services.receipts import (
     format_receipts_as_context,
     search_receipts_inprocess,
-)
-from app.services.rule_engine import (
-    RuleHit,
-    RuleSyntaxError,
-    AgentRule,
-    discover_rules_file,
-    evaluate_rules,
-    get_or_create_rules_cache,
-    load_rules,
 )
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -184,15 +169,12 @@ async def _resolve_mentions(
     except Exception:  # noqa: BLE001 - treat resolver failure as "none found"
         return [], [{"name": n, "reason": "resolver unavailable"} for n in names]
 
-    # Build lookup by agent_id (case-insensitive for fuzzy matching)
-    by_id = {b["agent_id"].lower(): b for b in all_enabled}
-    # Also match by any display/domain field present
-    by_alias: dict[str, dict] = {}
-    for b in all_enabled:
-        for key in ("domain", "display_name", "name"):
-            val = b.get(key)
-            if val:
-                by_alias[str(val).lower()] = b
+    # The catalog port returns credential-free AgentBinding values, not legacy
+    # registry dictionaries.  Case-folded collisions must not select an
+    # arbitrary executor.
+    by_id: dict[str, list[AgentBinding]] = {}
+    for binding in all_enabled:
+        by_id.setdefault(binding.agent_id.lower(), []).append(binding)
 
     resolved: list[dict] = []
     unresolved: list[dict] = []
@@ -200,18 +182,22 @@ async def _resolve_mentions(
 
     for name in names:
         key = name.lower()
-        binding = by_id.get(key) or by_alias.get(key)
-        if binding is None:
+        matches = by_id.get(key, [])
+        if not matches:
             unresolved.append({"name": name, "reason": "not found in workspace catalog"})
             continue
-        agent_id = binding["agent_id"]
+        if len(matches) != 1:
+            unresolved.append({"name": name, "reason": "ambiguous workspace catalog identifier"})
+            continue
+        binding = matches[0]
+        agent_id = binding.agent_id
         if agent_id in seen_ids:
             continue
         seen_ids.add(agent_id)
         resolved.append({
             "agentId": agent_id,
-            "adapterType": binding.get("adapter_type", "unknown"),
-            "capabilities": binding.get("capabilities", []),
+            "adapterType": binding.adapter_type,
+            "capabilities": list(binding.capabilities),
         })
 
     return resolved, unresolved
@@ -221,24 +207,19 @@ async def _pick_default_participant(
     workspace_id: str,
     resolver: AgentBindingResolver,
 ) -> dict | None:
-    """Return the first enabled Agent binding as default participant.
-
-    Used when the chat message has no ``@mention`` — every Mission needs
-    at least one executor.  Returns ``None`` if the workspace has no
-    enabled agents at all (the Mission still starts but work unit
-    derivation will surface an empty executor error).
-    """
+    """Prefer the built-in local Agent, then an enabled supported executor."""
     try:
         all_enabled = await resolver.list_enabled(scope_id=workspace_id)
     except Exception:  # noqa: BLE001
         return None
-    if not all_enabled:
+    eligible = [binding for binding in all_enabled if binding.adapter_type == "function-calling"]
+    if not eligible:
         return None
-    first = all_enabled[0]
+    first = min(eligible, key=lambda binding: (binding.agent_id != "local-desktop-agent", binding.agent_id))
     return {
-        "agentId": first["agent_id"],
-        "adapterType": first.get("adapter_type", "unknown"),
-        "capabilities": first.get("capabilities", []),
+        "agentId": first.agent_id,
+        "adapterType": first.adapter_type,
+        "capabilities": list(first.capabilities),
     }
 
 
@@ -270,30 +251,70 @@ def _build_chat_contract(contract_id: str) -> MissionContract:
     })
 
 
-async def _inline_derive_work_units(mission_id: str) -> None:
-    """Best-effort inline work unit derivation for chat Missions.
-
-    Chat Missions need work units immediately so the SSE stream carries
-    meaningful events.  The desktop runner's derivation loop (which also
-    handles chat-source Missions now that the filter has been widened)
-    will pick this up on its next tick, but running it inline eliminates
-    the idle gap between Mission start and the first ``work_unit.started``
-    event.
-    """
+def _validate_chat_dispatch(resolved: list[dict], unresolved: list[dict]) -> None:
+    """Fail before creating work when the requested route is unsupported."""
     try:
-        from app.services.runner.loops import (
-            DesktopLocalMissionSource,
-            derive_desktop_task_work_units,
-        )
+        validate_chat_dispatch(resolved, unresolved)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        source = DesktopLocalMissionSource()
-        await derive_desktop_task_work_units(
-            source,
-            workspace_id="__any__",  # derive_desktop_task_work_units filters by source.type in running_manual_missions
-        )
-    except Exception:  # noqa: BLE001 - derivation failure is non-fatal
-        # The desktop runner loop will retry on its next interval.
-        pass
+
+async def _apply_chat_rule_targets(
+    resolved: list[dict], unresolved: list[dict], explicit_mentions: list[str],
+    targets: list[str | None], workspace_id: str, resolver: AgentBindingResolver,
+) -> tuple[list[dict], list[dict]]:
+    """Resolve rule routing through the same single-executor admission gate."""
+    unique_targets = sorted({target.lower() for target in targets if target})
+    if len(unique_targets) > 1:
+        raise HTTPException(status_code=422, detail="chat rules select conflicting executors")
+    if unique_targets:
+        target_resolved, target_unresolved = await _resolve_mentions(unique_targets, workspace_id, resolver)
+        _validate_chat_dispatch(target_resolved, target_unresolved)
+        if explicit_mentions:
+            _validate_chat_dispatch(resolved, unresolved)
+            if resolved[0]["agentId"] != target_resolved[0]["agentId"]:
+                raise HTTPException(status_code=422, detail="chat rule target conflicts with executor mention")
+        resolved, unresolved = target_resolved, target_unresolved
+    _validate_chat_dispatch(resolved, unresolved)
+    return resolved, unresolved
+
+
+async def _ensure_chat_session(
+    session_id: str | None, workspace_id: str, message: str, user: dict, sessions: SessionRepository,
+) -> str:
+    if session_id:
+        await require_session_workspace(session_id, workspace_id, sessions)
+        return session_id
+    timestamp = _now_dt()
+    session = Session(
+        id=f"sess-{uuid.uuid4().hex[:12]}", workspace_id=workspace_id,
+        title=message.splitlines()[0][:80] or "Chat session", status=SessionStatus.ACTIVE,
+        created_by=build_human_actor(user), created_at=timestamp, updated_at=timestamp,
+    )
+    try:
+        await sessions.add_session(session)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="chat session persistence unavailable") from exc
+    return session.id
+
+
+async def _inline_derive_work_units(
+    mission_id: str,
+    *,
+    workspace_id: str,
+    repository: MissionRepository,
+    resolver: AgentBindingResolver,
+):
+    """Create only this Mission's catalog-bound PENDING WorkUnit.
+
+    This command does not claim, execute, or verify the WorkUnit. Catalog or
+    persistence failures are reported instead of inventing successful dispatch.
+    """
+    service = MissionService(repository, agent_binding_resolver=resolver)
+    try:
+        return await service.create_chat_work_unit(mission_id, workspace_id=workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 async def _preprocess_archivist(

@@ -1,0 +1,115 @@
+{
+  "$defs": {
+    "SecurityFinding": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "severity": {
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Severity",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "severity"
+      ],
+      "title": "SecurityFinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "missionId": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Missionid",
+      "type": "string"
+    },
+    "workUnitId": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Workunitid",
+      "type": "string"
+    },
+    "attempt": {
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "conclusion": {
+      "enum": [
+        "passed",
+        "failed",
+        "inconclusive"
+      ],
+      "title": "Conclusion",
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "maximum": 65535,
+          "minimum": -65535,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Exitcode"
+    },
+    "reportType": {
+      "const": "security-scan",
+      "title": "Reporttype",
+      "type": "string"
+    },
+    "findingCount": {
+      "maximum": 1000000000,
+      "minimum": 0,
+      "title": "Findingcount",
+      "type": "integer"
+    },
+    "maximumSeverity": {
+      "maximum": 5,
+      "minimum": 0,
+      "title": "Maximumseverity",
+      "type": "integer"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/SecurityFinding"
+      },
+      "maxItems": 10000,
+      "title": "Findings",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "missionId",
+    "workUnitId",
+    "attempt",
+    "conclusion",
+    "exitCode",
+    "reportType",
+    "findingCount",
+    "maximumSeverity",
+    "findings"
+  ],
+  "title": "SecurityScanReport",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/security-scan-report.schema.json"
+}

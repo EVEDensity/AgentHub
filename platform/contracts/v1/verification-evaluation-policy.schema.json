@@ -4,37 +4,36 @@
   "title": "Verification evaluation policy decision",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status"],
+  "required": [
+    "status"
+  ],
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["ready", "inconclusive"]
+      "enum": [
+        "ready",
+        "inconclusive"
+      ]
     },
-    "criterionId": { "$ref": "common.schema.json#/$defs/identifier" },
+    "criterionId": {
+      "$ref": "common.schema.json#/$defs/identifier"
+    },
     "evaluator": {
       "type": "string",
-      "enum": ["artifact-set.v1"]
+      "enum": [
+        "artifact-set.v1",
+        "artifact-set.v2",
+        "test-run.v1",
+        "build-artifact.v1",
+        "security-scan.v1"
+      ]
     },
     "configurationDigest": {
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$"
     },
     "parameters": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["minimumArtifacts", "requiredArtifactKinds"],
-      "properties": {
-        "minimumArtifacts": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 200
-        },
-        "requiredArtifactKinds": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": { "$ref": "artifact.schema.json#/properties/kind" }
-        }
-      }
+      "type": "object"
     },
     "reasonCode": {
       "type": "string",
@@ -49,36 +48,277 @@
     "criterionIds": {
       "type": "array",
       "uniqueItems": true,
-      "items": { "$ref": "common.schema.json#/$defs/identifier" }
+      "items": {
+        "$ref": "common.schema.json#/$defs/identifier"
+      }
     }
   },
   "oneOf": [
     {
       "required": [
-        "criterionId", "evaluator", "configurationDigest", "parameters"
+        "criterionId",
+        "evaluator",
+        "configurationDigest",
+        "parameters"
       ],
       "properties": {
-        "status": { "const": "ready" }
+        "status": {
+          "const": "ready"
+        }
       },
       "not": {
         "anyOf": [
-          { "required": ["reasonCode"] },
-          { "required": ["criterionIds"] }
+          {
+            "required": [
+              "reasonCode"
+            ]
+          },
+          {
+            "required": [
+              "criterionIds"
+            ]
+          }
         ]
       }
     },
     {
-      "required": ["reasonCode", "criterionIds"],
+      "required": [
+        "reasonCode",
+        "criterionIds"
+      ],
       "properties": {
-        "status": { "const": "inconclusive" }
+        "status": {
+          "const": "inconclusive"
+        }
       },
       "not": {
         "anyOf": [
-          { "required": ["criterionId"] },
-          { "required": ["evaluator"] },
-          { "required": ["configurationDigest"] },
-          { "required": ["parameters"] }
+          {
+            "required": [
+              "criterionId"
+            ]
+          },
+          {
+            "required": [
+              "evaluator"
+            ]
+          },
+          {
+            "required": [
+              "configurationDigest"
+            ]
+          },
+          {
+            "required": [
+              "parameters"
+            ]
+          }
         ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "evaluator"
+        ],
+        "properties": {
+          "evaluator": {
+            "const": "artifact-set.v1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "minimumArtifacts",
+              "requiredArtifactKinds"
+            ],
+            "properties": {
+              "minimumArtifacts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "requiredArtifactKinds": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "artifact.schema.json#/properties/kind"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "evaluator"
+        ],
+        "properties": {
+          "evaluator": {
+            "const": "artifact-set.v2"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "minimumArtifacts",
+              "requiredArtifactKinds"
+            ],
+            "properties": {
+              "minimumArtifacts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "requiredArtifactKinds": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "artifact.schema.json#/properties/kind"
+                }
+              },
+              "optionalArtifactKinds": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "$ref": "artifact.schema.json#/properties/kind"
+                }
+              },
+              "maxArtifactSizeBytes": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100000000000
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "evaluator"
+        ],
+        "properties": {
+          "evaluator": {
+            "const": "test-run.v1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "minimumTestResults",
+              "minimumPassRate"
+            ],
+            "properties": {
+              "minimumTestResults": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "minimumPassRate": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "evaluator"
+        ],
+        "properties": {
+          "evaluator": {
+            "const": "build-artifact.v1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "minimumBuildArtifacts",
+              "maxArtifactSizeBytes"
+            ],
+            "properties": {
+              "minimumBuildArtifacts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "maxArtifactSizeBytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100000000000
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "evaluator"
+        ],
+        "properties": {
+          "evaluator": {
+            "const": "security-scan.v1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "minimumScanReports",
+              "maxSeverity"
+            ],
+            "properties": {
+              "minimumScanReports": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "maxSeverity": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5
+              }
+            }
+          }
+        }
       }
     }
   ]

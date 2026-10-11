@@ -39,6 +39,7 @@ from app.services.harness_service import (
     ModelPort,
 )
 from app.services.runner_composition import HarnessModelFactoryPort
+from app.services.runner.tool_approval import desktop_tool_approval
 from app.services.tool_registry import ToolDefinition, ToolParameter
 from app.services.tools.definitions import (
     APPLY_CHANGE_SET,
@@ -253,8 +254,7 @@ def _truncate(content: str, max_chars: int) -> str:
     if len(content) <= max_chars:
         return content
     return (
-        f"{content[:max_chars]}\n{_TRUNCATION_MARKER}"
-        f"（已显示前 {max_chars} 字符，共 {len(content)} 字符）"
+        f"{content[:max_chars]}\n{_TRUNCATION_MARKER}（已显示前 {max_chars} 字符，共 {len(content)} 字符）"
     )
 
 
@@ -551,7 +551,7 @@ def _validate_delegate_arguments_factory() -> Callable[
 def _build_delegate_subtask_executor(
     model_factory: HarnessModelFactoryPort,
     subtask_tools: Sequence[FunctionTool],
-    config: DelegateSubtaskConfig,
+    config: DelegateSubtaskConfig, policy: ToolExecutionPolicy,
 ) -> Callable[[Mapping[str, Any]], Awaitable[str]]:
     """Run one bounded child Harness over the whitelist sans delegate_subtask.
 
@@ -564,15 +564,14 @@ def _build_delegate_subtask_executor(
 
     async def execute(arguments: Mapping[str, Any]) -> str:
         objective = str(arguments.get("objective", "")).strip()
-        max_iterations = int(
-            arguments.get("max_iterations", DELEGATE_SUBTASK_DEFAULT_ITERATIONS)
-        )
+        max_iterations = int(arguments.get("max_iterations", DELEGATE_SUBTASK_DEFAULT_ITERATIONS))
         harness = FunctionCallingHarness(
             model_factory.build(tools),
             tools,
             max_iterations=max_iterations,
             max_tool_calls=config.max_tool_calls,
             max_total_tokens=config.max_total_tokens,
+            approval_callback=desktop_tool_approval(policy),
         )
         try:
             result = await harness.execute(
@@ -1178,7 +1177,7 @@ def build_desktop_runner_tools(
                 },
                 validate_arguments=_validate_delegate_arguments_factory(),
                 handler=_build_delegate_subtask_executor(
-                    model_factory, tools, config
+                    model_factory, tools, config, policy
                 ),
             )
         )

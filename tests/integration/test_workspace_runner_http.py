@@ -209,6 +209,10 @@ def _build_app(repository: _AtomicMissionRepository) -> FastAPI:
     application = FastAPI()
     application.include_router(router, prefix="/api/v1")
     application.dependency_overrides[get_mission_repository] = lambda: repository
+    from app.api.v1.execution_status import get_runner_presence_repository
+    from tests.api.test_missions_api import FakeRunnerPresenceRepository
+    presence = FakeRunnerPresenceRepository()
+    application.dependency_overrides[get_runner_presence_repository] = lambda: presence
     grant_authorizer = FakeRunnerWorkspaceGrantAuthorizer(
         {
             ("workspace-1", "runner-a"),

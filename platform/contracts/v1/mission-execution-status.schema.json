@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenthub.dev/contracts/v1/mission-execution-status.schema.json",
+  "title": "MissionExecutionStatus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "missionId",
+    "workspaceId",
+    "missionStatus",
+    "observedAt",
+    "workUnits"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "missionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspaceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "missionStatus": {
+      "enum": [
+        "DRAFT",
+        "READY",
+        "RUNNING",
+        "VERIFYING",
+        "WAITING_DECISION",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED"
+      ]
+    },
+    "observedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workUnits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workUnitId",
+          "status",
+          "assignedAgentId",
+          "assignedAdapter",
+          "reason",
+          "matchingRunnerAvailable",
+          "availabilitySource",
+          "lastSeenAt",
+          "availabilityExpiresAt"
+        ],
+        "properties": {
+          "workUnitId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "LEASED",
+              "RUNNING",
+              "VERIFYING",
+              "WAITING",
+              "RETRYING",
+              "SUCCEEDED",
+              "FAILED",
+              "CANCELLED"
+            ]
+          },
+          "assignedAgentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assignedAdapter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "waiting_runner",
+              "waiting_claim",
+              "waiting_dependencies",
+              "waiting_decision",
+              "leased",
+              "executing",
+              "lease_expired",
+              "verifying",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "matchingRunnerAvailable": {
+            "type": "boolean"
+          },
+          "availabilitySource": {
+            "enum": [
+              "poll",
+              "lease",
+              "none"
+            ]
+          },
+          "lastSeenAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "availabilityExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

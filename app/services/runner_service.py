@@ -1,9 +1,10 @@
-"""Compatibility shim — all real code lives in app/services/_runner_service_impl.py.
+"""Compatibility exports for Runner orchestration, values and transport.
 
 This module exists so that ``from app.services.runner_service import X``
-continues to work.  New code should import from
-``app.services._runner_service_impl`` or ``app.services.runner._service``
-directly once the circular-import chain is resolved.
+continues to work. Immutable ports/results live in ``runner_protocols``, the
+Mission Control HTTP adapter lives in ``runner_client``, pure context compilation
+and scoped resolution live in ``runner_model_context``/``runner_model_resolver``,
+and lease-supervised attempt execution remains in ``_runner_service_impl``.
 """
 
 from __future__ import annotations

@@ -88,6 +88,12 @@ from tests.domain.factories import (
 )
 
 
+from tests.api.mission_app_fixture import (  # noqa: F401 - compatibility exports
+    FakeRunnerPresenceRepository,
+    build_app,
+)
+
+
 class FakeMissionRepository:
     def __init__(self) -> None:
         self.contract: MissionContract | None = None
@@ -730,6 +736,8 @@ class FakeMissionRepository:
         self.events.append(event)
 
 
+
+
 class FakeRunnerWorkspaceGrantAuthorizer:
     def __init__(
         self,
@@ -993,49 +1001,6 @@ def recompute_evidence_integrity_hash(
     )
 
 
-def build_app(
-    repository: FakeMissionRepository,
-    user: dict[str, Any],
-    *,
-    artifact_byte_verifier: FakeArtifactByteVerifier | None = None,
-    agent_binding_resolver: AgentBindingResolver | None = None,
-    runner_workspace_grant_authorizer: RunnerWorkspaceGrantAuthorizer | None = None,
-    verifier_workspace_grant_authorizer: (
-        VerifierWorkspaceGrantAuthorizer | None
-    ) = None,
-    workspace_claim_admission_policy_resolver: (
-        WorkspaceClaimAdmissionPolicyResolver | None
-    ) = None,
-) -> FastAPI:
-    app = FastAPI()
-    app.include_router(router, prefix="/api/v1")
-    verifier = artifact_byte_verifier or FakeArtifactByteVerifier()
-    verifier.repository = repository
-    app.dependency_overrides[get_mission_repository] = lambda: repository
-    app.dependency_overrides[get_artifact_byte_verifier] = lambda: verifier
-    binding_resolver = agent_binding_resolver or UnavailableAgentBindingResolver()
-    app.dependency_overrides[get_agent_binding_resolver] = lambda: binding_resolver
-    grant_authorizer = (
-        runner_workspace_grant_authorizer or FakeRunnerWorkspaceGrantAuthorizer()
-    )
-    app.dependency_overrides[get_runner_workspace_grant_authorizer] = lambda: (
-        grant_authorizer
-    )
-    verifier_grant_authorizer = (
-        verifier_workspace_grant_authorizer or FakeVerifierWorkspaceGrantAuthorizer()
-    )
-    app.dependency_overrides[get_verifier_workspace_grant_authorizer] = lambda: (
-        verifier_grant_authorizer
-    )
-    admission_policy_resolver = (
-        workspace_claim_admission_policy_resolver
-        or FakeWorkspaceClaimAdmissionPolicyResolver()
-    )
-    app.dependency_overrides[get_workspace_claim_admission_policy_resolver] = lambda: (
-        admission_policy_resolver
-    )
-    app.dependency_overrides[get_current_user] = lambda: user
-    return app
 
 
 class MissionApiTests(unittest.TestCase):

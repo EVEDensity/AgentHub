@@ -1,8 +1,8 @@
 """Durable, local tool-execution receipts used for idempotent recovery.
 
-Receipts contain identifiers and outcome metadata only; arguments and tool
-output are never persisted.  The store is intentionally file-backed so the
-local CLI can recover after a process crash without requiring PostgreSQL.
+Receipt DTOs contain identifiers and outcome metadata only. Complete executor
+results are stored separately as bounded canonical JSON for verified recovery;
+arguments are never persisted. SQLite provides cross-process arbitration.
 """
 from __future__ import annotations
 
@@ -10,12 +10,70 @@ import json
 import os
 import sqlite3
 import tempfile
-from contextlib import closing
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 from threading import RLock
 from typing import Any
+
+from app.services.recovery_receipts import (
+    RecoveredToolResult,
+    RecoveryReceiptError,
+    decode_receipt_result,
+    encode_receipt_result,
+    receipt_result_status,
+)
+
+
+def _completion_payload(
+    result: Mapping[str, Any],
+    tool_name: str,
+    revision_provider: Callable[[], str] | None,
+) -> tuple[str, str, str, str | None]:
+    if result.get("tool_name", tool_name) != tool_name:
+        raise RecoveryReceiptError("tool receipt result belongs to another tool")
+    status = receipt_result_status(result)
+    body, digest = encode_receipt_result(result)
+    revision = revision_provider() if revision_provider is not None else None
+    if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+        raise RecoveryReceiptError("tool receipt workspace revision is invalid")
+    return body, digest, status, revision
+
+
+def _recover_payload(
+    value: Mapping[str, Any],
+    *,
+    tool_name: str | None,
+    allow_failed: bool,
+) -> RecoveredToolResult:
+    status = value.get("status")
+    if status != "SUCCEEDED" and not (allow_failed and status == "FAILED"):
+        raise RecoveryReceiptError("tool receipt has no completed recoverable result")
+    if tool_name is not None and value.get("tool_name") != tool_name:
+        raise RecoveryReceiptError("tool receipt belongs to another tool")
+    recovered = decode_receipt_result(
+        value.get("result_json"), value.get("result_digest"),
+        value.get("post_workspace_revision"),
+    )
+    if receipt_result_status(recovered.result) != status:
+        raise RecoveryReceiptError("tool receipt result status does not match")
+    if recovered.result.get("tool_name", value.get("tool_name")) != value.get("tool_name"):
+        raise RecoveryReceiptError("tool receipt result belongs to another tool")
+    return recovered
+
+
+def _same_completion(
+    existing: Mapping[str, Any], body: str, digest: str, status: str,
+    revision: str | None,
+) -> bool:
+    return (
+        existing.get("status") == status
+        and existing.get("result_json") == body
+        and existing.get("result_digest") == digest
+        and existing.get("post_workspace_revision") == revision
+    )
 
 
 class ToolReceiptStatus(StrEnum):
@@ -39,11 +97,15 @@ class ToolReceipt:
 class ToolReceiptStore:
     """Atomic JSON receipt store with fail-closed recovery semantics."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *,
+        workspace_revision_provider: Callable[[], str] | None = None,
+    ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         self._read_corrupt = False
+        self._workspace_revision_provider = workspace_revision_provider
 
     def get(self, idempotency_key: str) -> ToolReceipt | None:
         with self._lock:
@@ -74,8 +136,47 @@ class ToolReceiptStore:
                 # Never overwrite an unreadable journal; doing so could erase
                 # evidence of an indeterminate side effect.
                 raise RuntimeError("tool receipt store is corrupt; manual reconciliation required")
+            existing = data.get(receipt.idempotency_key)
+            if isinstance(existing, dict) and existing.get("status") in {"SUCCEEDED", "FAILED"}:
+                raise RecoveryReceiptError("completed tool receipt cannot be overwritten")
             data[receipt.idempotency_key] = asdict(receipt) | {"status": receipt.status.value}
             self._write(data)
+
+    def complete(
+        self, key: str, tool_name: str, now: float, *, result: Mapping[str, Any],
+    ) -> ToolReceipt:
+        body, digest, status, revision = _completion_payload(
+            result, tool_name, self._workspace_revision_provider
+        )
+        with self._lock:
+            data = self._read()
+            existing = data.get(key)
+            if self._read_corrupt or not isinstance(existing, dict):
+                raise RecoveryReceiptError("tool receipt completion requires STARTED")
+            if existing.get("tool_name") != tool_name:
+                raise RecoveryReceiptError("tool receipt belongs to another tool")
+            if existing.get("status") != "STARTED":
+                if _same_completion(existing, body, digest, status, revision):
+                    return self.get(key)  # type: ignore[return-value]
+                raise RecoveryReceiptError("completed or unknown tool receipt cannot be overwritten")
+            error_type = None if status == "SUCCEEDED" else str(result.get("error_type") or "tool_failure")
+            receipt = ToolReceipt(key, tool_name, ToolReceiptStatus(status), now, error_type, digest)
+            data[key] = asdict(receipt) | {
+                "status": status, "result_json": body,
+                "post_workspace_revision": revision,
+            }
+            self._write(data)
+            return receipt
+
+    def recover_result(
+        self, key: str, *, tool_name: str | None = None, allow_failed: bool = False,
+    ) -> RecoveredToolResult:
+        with self._lock:
+            data = self._read()
+            value = data.get(key)
+            if self._read_corrupt or not isinstance(value, dict):
+                raise RecoveryReceiptError("tool receipt has no recoverable result")
+            return _recover_payload(value, tool_name=tool_name, allow_failed=allow_failed)
 
     def mark_started(self, key: str, tool_name: str, now: float) -> ToolReceipt:
         receipt = ToolReceipt(key, tool_name, ToolReceiptStatus.STARTED, now)
@@ -151,9 +252,13 @@ class SQLiteToolReceiptStore:
     UNKNOWN rows are returned as ``unknown_outcome`` and are never replayed.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *,
+        workspace_revision_provider: Callable[[], str] | None = None,
+    ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._workspace_revision_provider = workspace_revision_provider
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
@@ -166,7 +271,7 @@ class SQLiteToolReceiptStore:
         return connection
 
     def _initialize(self) -> None:
-        with closing(self._connect()) as connection:
+        with self._transaction() as connection:
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS tool_receipts (
                     idempotency_key TEXT PRIMARY KEY,
@@ -174,9 +279,27 @@ class SQLiteToolReceiptStore:
                     status TEXT NOT NULL,
                     updated_at REAL NOT NULL,
                     error_type TEXT,
-                    result_digest TEXT
+                    result_digest TEXT,
+                    result_json TEXT,
+                    post_workspace_revision TEXT
                 )"""
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(tool_receipts)")}
+            for column in ("result_json", "post_workspace_revision"):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE tool_receipts ADD COLUMN {column} TEXT")
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield connection
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
 
     @staticmethod
     def _from_row(row: sqlite3.Row | None, key: str) -> ToolReceipt | None:
@@ -204,16 +327,15 @@ class SQLiteToolReceiptStore:
 
     def claim_started(self, key: str, tool_name: str, now: float) -> str:
         """Atomically claim a receipt row, returning a replay decision."""
-        connection = self._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._transaction() as connection:
             row = connection.execute(
-                "SELECT status FROM tool_receipts WHERE idempotency_key = ?",
+                "SELECT status, tool_name FROM tool_receipts WHERE idempotency_key = ?",
                 (key,),
             ).fetchone()
             if row is not None:
+                if row["tool_name"] != tool_name:
+                    return "unknown_outcome"
                 status = ToolReceiptStatus(str(row["status"]))
-                connection.execute("COMMIT")
                 if status is ToolReceiptStatus.SUCCEEDED:
                     return "already_succeeded"
                 if status is ToolReceiptStatus.FAILED:
@@ -224,17 +346,16 @@ class SQLiteToolReceiptStore:
                 "(idempotency_key, tool_name, status, updated_at) VALUES (?, ?, ?, ?)",
                 (key, tool_name, ToolReceiptStatus.STARTED.value, now),
             )
-            connection.execute("COMMIT")
             return "execute"
-        except Exception:
-            connection.execute("ROLLBACK")
-            raise
-        finally:
-            connection.close()
 
     def put(self, receipt: ToolReceipt) -> None:
-        with closing(self._connect()) as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self._transaction() as connection:
+            existing = connection.execute(
+                "SELECT status FROM tool_receipts WHERE idempotency_key = ?",
+                (receipt.idempotency_key,),
+            ).fetchone()
+            if existing is not None and existing["status"] in {"SUCCEEDED", "FAILED"}:
+                raise RecoveryReceiptError("completed tool receipt cannot be overwritten")
             connection.execute(
                 "INSERT INTO tool_receipts"
                 "(idempotency_key, tool_name, status, updated_at, error_type, result_digest)"
@@ -242,11 +363,50 @@ class SQLiteToolReceiptStore:
                 " ON CONFLICT(idempotency_key) DO UPDATE SET"
                 " tool_name=excluded.tool_name, status=excluded.status,"
                 " updated_at=excluded.updated_at, error_type=excluded.error_type,"
-                " result_digest=excluded.result_digest",
+                " result_digest=excluded.result_digest,"
+                " result_json=NULL, post_workspace_revision=NULL",
                 (receipt.idempotency_key, receipt.tool_name, receipt.status.value,
                  receipt.updated_at, receipt.error_type, receipt.result_digest),
             )
-            connection.execute("COMMIT")
+
+    def complete(
+        self, key: str, tool_name: str, now: float, *, result: Mapping[str, Any],
+    ) -> ToolReceipt:
+        """Atomically finalize one claimed result, never replacing terminal truth."""
+        body, digest, status, revision = _completion_payload(
+            result, tool_name, self._workspace_revision_provider
+        )
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM tool_receipts WHERE idempotency_key = ?", (key,),
+            ).fetchone()
+            if row is None:
+                raise RecoveryReceiptError("tool receipt completion requires STARTED")
+            if row["tool_name"] != tool_name:
+                raise RecoveryReceiptError("tool receipt belongs to another tool")
+            if row["status"] != "STARTED":
+                if _same_completion(dict(row), body, digest, status, revision):
+                    return self._from_row(row, key)  # type: ignore[return-value]
+                raise RecoveryReceiptError("completed or unknown tool receipt cannot be overwritten")
+            error_type = None if status == "SUCCEEDED" else str(result.get("error_type") or "tool_failure")
+            connection.execute(
+                "UPDATE tool_receipts SET status=?, updated_at=?, error_type=?,"
+                " result_digest=?, result_json=?, post_workspace_revision=?"
+                " WHERE idempotency_key=?",
+                (status, now, error_type, digest, body, revision, key),
+            )
+            return ToolReceipt(key, tool_name, ToolReceiptStatus(status), now, error_type, digest)
+
+    def recover_result(
+        self, key: str, *, tool_name: str | None = None, allow_failed: bool = False,
+    ) -> RecoveredToolResult:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM tool_receipts WHERE idempotency_key=?", (key,),
+            ).fetchone()
+        if row is None:
+            raise RecoveryReceiptError("tool receipt has no recoverable result")
+        return _recover_payload(dict(row), tool_name=tool_name, allow_failed=allow_failed)
 
     def mark_started(self, key: str, tool_name: str, now: float) -> ToolReceipt:
         decision = self.claim_started(key, tool_name, now)

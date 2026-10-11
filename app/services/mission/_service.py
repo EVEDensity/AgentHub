@@ -17,6 +17,7 @@ from app.services.evidence_integrity_service import (
 )
 from app.services.mission._artifacts_mixin import MissionArtifactsMixin
 from app.services.mission._checkpoint_mixin import MissionCheckpointMixin
+from app.services.mission._chat_dispatch_mixin import MissionChatDispatchMixin
 from app.services.mission._decisions_mixin import MissionDecisionsMixin
 from app.services.mission._fork_mixin import MissionForkMixin
 from app.services.mission._lifecycle_mixin import MissionLifecycleMixin
@@ -35,6 +36,7 @@ from app.services.verification_policy_service import (
 
 
 class MissionService(
+    MissionChatDispatchMixin,
     MissionLifecycleMixin,
     MissionForkMixin,
     MissionWorkUnitLifecycleMixin,

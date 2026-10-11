@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from app.domain import (
@@ -15,6 +17,17 @@ from app.domain import (
 Execute = Callable[..., Awaitable[None]]
 FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
 FetchAll = Callable[..., Awaitable[list[dict[str, Any]]]]
+TransactionFactory = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class ConfirmationTransaction:
+    """Companion repositories using exactly one already-open transaction."""
+
+    pendings: PendingConfirmationRepository
+    missions: Any
+    session_events: Any
+    sessions: Any
 
 
 def _encode_json(value: object) -> str:
@@ -48,7 +61,7 @@ def _to_dt(value: Any) -> datetime:
             value = value[:-1] + "+00:00"
         value = datetime.fromisoformat(value)
     if isinstance(value, datetime) and value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value
 
 
@@ -86,6 +99,7 @@ class PendingConfirmationRepository:
         execute: Execute | None = None,
         fetch_one: FetchOne | None = None,
         fetch_all: FetchAll | None = None,
+        transaction_factory: TransactionFactory | None = None,
     ) -> None:
         if execute is None or fetch_one is None or fetch_all is None:
             from app.db.session import aexecute, afetch_all, afetch_one
@@ -96,6 +110,37 @@ class PendingConfirmationRepository:
         self._execute = execute
         self._fetch_one = fetch_one
         self._fetch_all = fetch_all
+        self._transaction_factory = transaction_factory
+
+    @classmethod
+    def from_connection(cls, connection: Any) -> PendingConfirmationRepository:
+        return cls(execute=connection.execute, fetch_one=connection.fetchrow, fetch_all=connection.fetch)
+
+    @asynccontextmanager
+    async def transaction(self):
+        """Hold consumption, Mission admission, and receipts in one transaction."""
+        from app.repositories.mission_repository import MissionRepository
+        from app.repositories.session_event_repository import SessionEventRepository
+        from app.repositories.session_repository import SessionRepository
+
+        factory = self._transaction_factory
+        if factory is None:
+            from app.db.session import atransaction
+            factory = atransaction
+        async with factory() as connection:
+            @asynccontextmanager
+            async def same_connection():
+                # Mission services open their own scoped repository contexts.
+                # Reuse this outer transaction without independent commits.
+                yield connection
+
+            arguments = {"execute": connection.execute, "fetch_one": connection.fetchrow, "fetch_all": connection.fetch}
+            yield ConfirmationTransaction(
+                pendings=self.from_connection(connection),
+                missions=MissionRepository(**arguments, transaction_factory=same_connection),
+                session_events=SessionEventRepository(**arguments),
+                sessions=SessionRepository(**arguments),
+            )
 
     # ── mutations ──────────────────────────────────────────────────
 
@@ -133,27 +178,24 @@ class PendingConfirmationRepository:
         pending_id: str,
         status: PendingConfirmationStatus,
     ) -> PendingConfirmation | None:
-        """Transition a pending record to CONFIRMED, CANCELLED, or EXPIRED."""
-        row = await self._fetch_one(
-            "SELECT * FROM pending_confirmations WHERE id=$1",
-            pending_id,
-        )
-        if row is None:
-            return None
+        """Consume PENDING once; expired records cannot confirm or cancel.
 
-        now = datetime.now(timezone.utc)
-        await self._execute(
-            """UPDATE pending_confirmations
-               SET status=$1, resolved_at=$2
-               WHERE id=$3""",
+        The returned row proves this command won the database compare-and-set.
+        None means missing, already consumed, or outside the expiry window.
+        Mission dispatch must run in :meth:`transaction` after a winning CAS.
+        """
+        if status == PendingConfirmationStatus.PENDING:
+            raise ValueError("resolution must be a terminal confirmation status")
+        now = datetime.now(UTC)
+        expiry = "expires_at <= $2" if status == PendingConfirmationStatus.EXPIRED else "expires_at > $2"
+        row = await self._fetch_one(
+            "UPDATE pending_confirmations SET status=$1, resolved_at=$2 "
+            f"WHERE id=$3 AND status='PENDING' AND {expiry} RETURNING *",
             status.value,
             now,
             pending_id,
         )
-        row = dict(row)
-        row["status"] = status.value
-        row["resolved_at"] = now
-        return _pending_from_row(row)
+        return _pending_from_row(row) if row is not None else None
 
     # ── queries ────────────────────────────────────────────────────
 
@@ -162,6 +204,11 @@ class PendingConfirmationRepository:
             "SELECT * FROM pending_confirmations WHERE id=$1",
             pending_id,
         )
+        return _pending_from_row(row) if row is not None else None
+
+    async def get_pending_for_update(self, pending_id: str) -> PendingConfirmation | None:
+        """Lock the durable record before authorizing and consuming it."""
+        row = await self._fetch_one("SELECT * FROM pending_confirmations WHERE id=$1 FOR UPDATE", pending_id)
         return _pending_from_row(row) if row is not None else None
 
     async def list_pending(

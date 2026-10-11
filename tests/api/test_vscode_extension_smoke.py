@@ -55,7 +55,6 @@ def test_create_mission_endpoint(client_and_fakes):
 
     # Verify fakes captured the write
     assert body["missionId"] in fakes["repo"].missions, "mission not persisted"
-    return body
 
 
 # ── 2. Session events written (extension SSE consumes these) ─────────

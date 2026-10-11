@@ -45,7 +45,7 @@ export function agentsFromMembers(members: WorkspaceMember[]): Agent[] {
     .map((m) => ({
       agentId: m.memberId,
       domain: m.memberId.toLowerCase(),
-      status: 'online',
+      status: 'registered',
       adapterType: m.adapterType || 'unknown',
       capabilityTags: m.capabilities,
     }));

@@ -64,3 +64,7 @@ areas also contain a local `README.md` describing ownership and placement:
 - `platform/README.md`
 - `deploy/README.md`
 - `tests/README.md`
+
+CI ownership, coverage and external-evidence configuration are documented in
+[`development/ci.md`](development/ci.md). `.github/README.md` is the automation
+entry point; release workflows are separate from the deterministic PR merge gate.

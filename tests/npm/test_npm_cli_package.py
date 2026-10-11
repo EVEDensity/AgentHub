@@ -114,35 +114,36 @@ class FreezeScriptTests(unittest.TestCase):
             Path(__file__).resolve().parents[2]
             / ".github"
             / "workflows"
-            / "npm-cli.yml"
+            / "github-cli-release.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("cli-v*", workflow)
-        self.assertIn("npm publish --access public", workflow)
+        self.assertIn("softprops/action-gh-release@v2", workflow)
         # The frozen binary must pass a closed-loop smoke before publish.
         self.assertIn("--provider mock", workflow)
 
-    def test_workflow_validates_final_tarball_contents_before_publish(self) -> None:
+    def test_release_validates_binary_and_checksums_before_publish(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[2]
             / ".github"
             / "workflows"
-            / "npm-cli.yml"
+            / "github-cli-release.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("Validate staged npm tarballs before publish", workflow)
-        self.assertGreaterEqual(workflow.count("npm pack --dry-run --json"), 2)
-        self.assertIn("Upload release diagnostics", workflow)
+        self.assertIn("Frozen CLI closed-loop smoke failed", workflow)
+        self.assertIn("artifactCount -lt 1", workflow)
+        self.assertIn("Get-FileHash -Algorithm SHA256", workflow)
+        self.assertLess(workflow.index("Frozen CLI closed-loop smoke failed"),
+                        workflow.index("softprops/action-gh-release@v2"))
+        self.assertIn("Upload build diagnostics", workflow)
 
-    def test_cross_platform_install_workflow_covers_upgrade_and_rollback(self) -> None:
+    def test_windows_install_workflow_covers_upgrade_and_rollback(self) -> None:
         workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "cli-package-install.yml").read_text(encoding="utf-8")
         self.assertIn("windows-latest", workflow)
-        self.assertIn("macos-latest", workflow)
-        self.assertIn("ubuntu-latest", workflow)
         self.assertIn("previous_version", workflow)
-        self.assertIn("Upgrade and rollback package", workflow)
-        self.assertIn('test "$code" -eq 127', workflow)
-        self.assertIn("Run doctor and record release diagnostics", workflow)
-        self.assertIn("rollback-help.txt", workflow)
-        self.assertIn("Upload install diagnostics", workflow)
+        self.assertIn("scripts/verify_github_release.py", workflow)
+        self.assertIn('--target "${{ inputs.version }}"', workflow)
+        self.assertIn('--previous "${{ inputs.previous_version }}"', workflow)
+        self.assertIn("github-release.json", workflow)
+        self.assertIn("actions/upload-artifact@v4", workflow)
 
 
 if __name__ == "__main__":

@@ -131,7 +131,10 @@ class WorkspaceAdmissionServiceTests(unittest.IsolatedAsyncioTestCase):
                 "max_concurrent": "4",
             }
         )
-        with patch("app.db.session.afetch_one", fetch_one):
+        with (
+            patch("app.db.session.afetch_one", fetch_one),
+            patch("app.db.session.is_sqlite_backend", return_value=False),
+        ):
             row = await _lookup_workspace_claim_admission("workspace-1")
 
         self.assertEqual(row["max_concurrent"], "4")
@@ -141,6 +144,17 @@ class WorkspaceAdmissionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("LEFT JOIN platform_quota_definitions AS quota", query)
         self.assertIn("tenant.quotas_json::jsonb ? 'max_concurrent'", query)
         self.assertEqual(args, ["workspace-1"])
+
+    async def test_sqlite_profile_does_not_query_postgres_iam_tables(self) -> None:
+        fetch_one = AsyncMock()
+        with (
+            patch("app.db.session.afetch_one", fetch_one),
+            patch("app.db.session.is_sqlite_backend", return_value=True),
+        ):
+            row = await _lookup_workspace_claim_admission("local-workspace")
+        self.assertEqual(row["tenant_id"], "local-workspace")
+        self.assertEqual(row["max_concurrent"], "0")
+        fetch_one.assert_not_awaited()
 
 
 if __name__ == "__main__":

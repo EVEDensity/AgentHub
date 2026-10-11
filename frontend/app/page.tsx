@@ -5,6 +5,8 @@ import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
 import ChatHeader from '../components/chat/ChatHeader';
 import ChatInput from '../components/chat/ChatInput';
+import MissionExecutionBanner from '../components/chat/MissionExecutionBanner';
+import MissionAdmissionControls from '../components/chat/MissionAdmissionControls';
 
 import UserRoster from '../components/collaboration/UserRoster';
 import TypingIndicator from '../components/collaboration/TypingIndicator';
@@ -30,7 +32,7 @@ import { useSessionEvents } from '../hooks/useSessionEvents';
 import { useMessageAutoScroll } from '../hooks/useMessageAutoScroll';
 import EventTimeline from '../components/chat/EventTimeline';
 import ArchivistReceiptCard from '../components/chat/ArchivistReceiptCard';
-import { AGENTS, FALLBACK_AGENTS, sortSessions } from '../lib/agents';
+import { AGENTS, sortSessions } from '../lib/agents';
 import {
   detectMentionTrigger,
   filterAgentsForMention,
@@ -87,14 +89,14 @@ export default function AgentHubIM(): JSX.Element {
   const dag = useDagState(sessionId);
   const { addToast } = useAddToast();
   const [sessionQuery, setSessionQuery] = useState<string>('');
-  const [input, setInput] = useState<string>('@CodeGen Generate a FastAPI health route file, save as health_router.py');
+  const [input, setInput] = useState<string>('');
   const [taskOpen, setTaskOpen] = useState<boolean>(false);
   const [previewOpen, setPreviewOpen] = useState<boolean>(false);
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [connected, setConnected] = useState<boolean>(false);
   const [notice, setNotice] = useState<string>('');
   const [generated, setGenerated] = useState<GeneratedData | null>(null);
-  const [agents, setAgents] = useState<Agent[]>(FALLBACK_AGENTS);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [mentionSearch, setMentionSearch] = useState<string>('');
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState<boolean>(false);
@@ -239,12 +241,15 @@ export default function AgentHubIM(): JSX.Element {
     cancel: cancelMission,
     streamState: missionStreamState,
     missionId: activeMissionId,
+    sessionId: missionSessionId,
+    pending: pendingMission, error: missionError, sending: missionSending,
+    confirmPending: confirmMission, reconnect: reconnectMission,
     events: missionEvents,
     mentions: missionMentions,
     archivistInfo,  // T1-2b
   } = useMissionChat({
     token,
-    workspaceId: 'local-admin',
+    workspaceId: user?.id ?? 'local-admin',
     sessionId,
     authHeaders,
   });
@@ -256,8 +261,8 @@ export default function AgentHubIM(): JSX.Element {
     lastConnectedAt: sessionEventsConnectedAt,
   } = useSessionEvents({
     token,
-    sessionId,
-    workspaceId: 'local-admin',
+    sessionId: missionSessionId,
+    workspaceId: user?.id ?? 'local-admin',
     authHeaders,
   });
 
@@ -266,6 +271,7 @@ export default function AgentHubIM(): JSX.Element {
   // a non-bubble system message so MessageList can optionally render
   // it.  This keeps MessageList decoupled from the EventTimeline panel.
   const prevSessionEventCountRef = useRef(0);
+  useEffect(() => { prevSessionEventCountRef.current = 0; }, [missionSessionId, token]);
   useEffect(() => {
     const activeSessionId = activeSessionIdRef.current;
     if (!activeSessionId) return;
@@ -294,6 +300,7 @@ export default function AgentHubIM(): JSX.Element {
   // messages.  The `missionEvents` array is append-only, so `prev`
   // always contains all prior events for the active mission.
   const prevMissionCountRef = useRef(0);
+  useEffect(() => { prevMissionCountRef.current = 0; }, [activeMissionId]);
   useEffect(() => {
     const activeSessionId = activeSessionIdRef.current;
     if (!activeSessionId) return;
@@ -339,12 +346,12 @@ export default function AgentHubIM(): JSX.Element {
         }
       });
     // ── Fetch agents (v1 unified member roster — P1 ADR-0108 §3.3) ──
-    fetchWorkspaceMembers('local-admin')
+    fetchWorkspaceMembers(user?.id ?? 'local-admin')
       .then((roster) => {
         const mapped = agentsFromMembers(roster.members);
-        setAgents(mapped.length ? mapped : FALLBACK_AGENTS);
+        setAgents(mapped);
       })
-      .catch(() => setAgents(FALLBACK_AGENTS));
+      .catch(() => { setAgents([]); setNotice('智能体目录暂不可用，请刷新后重试'); });
     // ── Fetch workflows ─────────────────────────────────────────────
     fetch('/api/chat/workflows', { headers: authHeaders() })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -355,7 +362,7 @@ export default function AgentHubIM(): JSX.Element {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: { skills: SkillMeta[] }) => setSkills(data.skills || []))
       .catch(() => {});
-  }, [token]);
+  }, [token, user?.id]);
 
   // fetchAuth: 统一 401 处理见 lib/api.ts — 组件内包装以接入 handleTokenExpired。
   async function fetchAuth(url: string, init: RequestInit = {}): Promise<Response> {
@@ -878,33 +885,6 @@ export default function AgentHubIM(): JSX.Element {
 
     updateSessionMessages(activeSessionId, (prev) => [...prev, localMsg]);
 
-    // ★ 方案1: 乐观 Thinking 占位 — 发送后立即显示 "AI思考中" 消除黑洞期
-    const optimisticMsgId = `optimistic-${Date.now()}`;
-    // Detect which agent is being mentioned
-    let detectedAgentName = 'AI';
-    const mentionMatch = text.match(/@(\w+)/);
-    if (mentionMatch) {
-      const agent = agents.find(a => a.agentId === mentionMatch[1]);
-      if (agent) {
-        detectedAgentName = agent.displayName || agent.agentId;
-        setCurrentAgentName(detectedAgentName);
-      }
-    }
-    updateSessionMessages(activeSessionId, (prev) => [
-      ...prev,
-      {
-        event: 'message',
-        sessionId: activeSessionId,
-        sender: detectedAgentName,
-        content: '正在理解你的需求...',
-        type: 'text' as const,
-        timestamp: new Date().toISOString(),
-        messageId: optimisticMsgId,
-        isStreaming: true,
-        _optimistic: true as any,
-      },
-    ]);
-
     setSessions((prev) => sortSessions(prev.map((s) => (s.id === activeSessionId ? { ...s, lastMessageAt: localMsg.timestamp } : s))));
 
     // ── Mission/SSE is the only route — legacy WebSocket removed
@@ -1399,11 +1379,13 @@ export default function AgentHubIM(): JSX.Element {
             streamPhase={streamPhase}
             activeTools={activeTools}
             currentAgentName={currentAgentName}
-            onInterruptStream={() => {
-              cancelMission();
-              addToast({ type: 'info', title: '已发送中断请求', duration: 3000 });
-            }}
+            onInterruptStream={() => void cancelMission().then(ok => {
+              if (ok) addToast({ type: 'info', title: '任务已取消', duration: 3000 });
+            })}
           />
+          <MissionAdmissionControls pending={pendingMission} error={missionError} sending={missionSending} missionId={activeMissionId}
+            onConfirm={confirmMission} onCancel={cancelMission} onReconnect={reconnectMission} />
+          <MissionExecutionBanner missionId={activeMissionId} token={token} authHeaders={authHeaders} onCancel={cancelMission} />
         </header>
 
         {/* Content area: Messages */}
