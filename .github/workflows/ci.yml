@@ -277,10 +277,25 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin/cargo-tauri.exe
             desktop/runtime-sidecar/target
             desktop/src-tauri/target
           key: desktop-resources-${{ runner.os }}-${{ hashFiles('desktop/**/Cargo.lock') }}-tauri-2.11.4
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc --noEmit
+        working-directory: frontend
+      - name: Verify resource rejection boundaries
+        run: node --test desktop/tests/*.test.mjs
+      - name: Require unchanged committed build inputs
+        shell: pwsh
+        run: |
+          $changes = @(git status --porcelain --untracked-files=normal)
+          if ($LASTEXITCODE -ne 0 -or $changes.Count) { throw "Build preparation changed source inputs: $($changes -join '; ')" }
+      - uses: actions/cache/restore@v4
+        id: tauri_cli_cache
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-${{ runner.os }}-2.11.4-rust-1.88.0
       - name: Prepare pinned build tools
         shell: pwsh
         run: |
@@ -288,12 +303,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Python freeze dependencies failed to install.' }
           if ((cargo tauri --version 2>$null) -ne 'tauri-cli 2.11.4') { cargo install tauri-cli --version 2.11.4 --locked --force }
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Tauri CLI installation failed.' }
-      - run: npm ci
-        working-directory: frontend
-      - run: npx tsc --noEmit
-        working-directory: frontend
-      - name: Verify resource rejection boundaries
-        run: node --test desktop/tests/*.test.mjs
+      - uses: actions/cache/save@v4
+        if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: ${{ steps.tauri_cli_cache.outputs.cache-primary-key }}
       - name: Build one current full stack and verify actual Portable and MSI
         shell: pwsh
         run: desktop/package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -LocalServices

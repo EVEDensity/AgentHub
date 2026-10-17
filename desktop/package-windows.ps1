@@ -71,7 +71,7 @@ if ($LocalServices) {
     $sourceCommit = (& git -C $desktopDirectory rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[a-f0-9]{40}$') { throw 'A source commit is required.' }
     $sourceChanges = @(& git -C $desktopDirectory status --porcelain --untracked-files=normal)
-    if ($LASTEXITCODE -ne 0 -or $sourceChanges.Count -ne 0) { throw 'Full-service packaging requires a clean committed checkout.' }
+    if ($LASTEXITCODE -ne 0 -or $sourceChanges.Count -ne 0) { throw "Full-service packaging requires a clean committed checkout: $($sourceChanges -join '; ')" }
     $resourceEvidence = Join-Path $desktopDirectory '.runtime\package-resources'
     Assert-UnlinkedTree $resourceEvidence
     if (Test-Path -LiteralPath $resourceEvidence) {
@@ -189,7 +189,7 @@ try {
         $commitAfterBuild = (& git -C $desktopDirectory rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0 -or $commitAfterBuild -cne $sourceCommit) { throw 'Source commit changed during packaging.' }
         $changesAfterBuild = @(& git -C $desktopDirectory status --porcelain --untracked-files=normal)
-        if ($LASTEXITCODE -ne 0 -or $changesAfterBuild.Count -ne 0) { throw 'Source checkout changed during packaging.' }
+        if ($LASTEXITCODE -ne 0 -or $changesAfterBuild.Count -ne 0) { throw "Source checkout changed during packaging: $($changesAfterBuild -join '; ')" }
     }
 } finally {
     Pop-Location
