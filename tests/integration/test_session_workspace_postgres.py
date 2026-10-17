@@ -22,6 +22,7 @@ from sqlalchemy.engine import make_url
 
 from app.api.v1.chat_mission._confirmation import confirm_chat_pending
 from app.db.migrations.mission_budget import MISSION_BUDGET_REVISION
+from app.db.migrations.session_workspace import SESSION_WORKSPACE_REVISION
 from app.domain import (
     ActorRef,
     PendingConfirmation,
@@ -195,7 +196,11 @@ class SessionWorkspacePostgresTests(unittest.TestCase):
         self._execute("""INSERT INTO sessions(id,workspace_id,title,status,created_by_type,
             created_by_id,created_at,updated_at) VALUES('v1','alice','Existing scope','ACTIVE',
             'human','alice','2026-09-01T00:00:00Z','2026-09-01T00:00:00Z')""")
-        self._alembic(command.upgrade, "head")
+        # This deliberately partial experimental schema contains only sessions.
+        # Exercise its compatibility revision; full historical schemas upgrade
+        # to head in the legacy roundtrip and budget migration tests above.
+        self._alembic(command.upgrade, SESSION_WORKSPACE_REVISION)
+        self.assertEqual(self._execute("SELECT version_num FROM alembic_version"), [(SESSION_WORKSPACE_REVISION,)])
         self.assertEqual(self._execute("SELECT workspace_id,title FROM sessions WHERE id='v1'"), [("alice", "Existing scope")])
         types = self._execute("""SELECT data_type FROM information_schema.columns
             WHERE table_schema=current_schema() AND table_name='sessions'
