@@ -1,8 +1,10 @@
 import type { PendingMissionConfirmation } from '../../hooks/useMissionChat';
 
-export default function MissionAdmissionControls({ pending, error, sending, missionId, onConfirm, onCancel, onReconnect }: {
+export default function MissionAdmissionControls({ pending, error, sending, cancelling = false, admissionBlocked = false, missionId, onConfirm, onCancel, onReconnect }: {
   pending: PendingMissionConfirmation | null; error: string | null; sending: boolean;
   missionId: string | null; onConfirm: () => Promise<unknown>; onCancel: () => Promise<boolean>; onReconnect: () => void;
+  cancelling?: boolean;
+  admissionBlocked?: boolean;
 }) {
   if (!pending && !error && !sending) return null;
   return (
@@ -11,8 +13,8 @@ export default function MissionAdmissionControls({ pending, error, sending, miss
       {pending && (
         <div>
           <span>等待确认：{pending.description}</span>
-          <button type="button" disabled={sending} onClick={() => void onConfirm()} className="ml-3 underline">确认执行</button>
-          <button type="button" disabled={sending} onClick={() => void onCancel()} className="ml-3 underline">取消请求</button>
+          <button type="button" disabled={sending || cancelling || admissionBlocked} onClick={() => void onConfirm()} className="ml-3 underline">确认执行</button>
+          <button type="button" disabled={sending || cancelling} onClick={() => void onCancel()} className="ml-3 underline">{cancelling ? '正在取消请求…' : '取消请求'}</button>
         </div>
       )}
       {error && (

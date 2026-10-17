@@ -39,6 +39,21 @@ describe('useMissionChat admission', () => {
     unmount();
   });
 
+  it.each([
+    { attachments: [{ name: 'image.png' }] },
+    { references: [{ path: 'source.ts' }] },
+    { execPermission: 2 },
+    { execPermission: 3 },
+  ])('rejects unsupported selected input without creating a Mission: %j', async input => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const { result } = renderHook(() => useMissionChat(options));
+    await act(async () => { expect(await result.current.sendMission('inspect', input)).toBeNull(); });
+    expect(result.current.error).toContain('暂不支持');
+    expect(result.current.missionId).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('keeps submission failures visible without inventing a Mission', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ detail: 'catalog unavailable' }, 503)));
     const { result } = renderHook(() => useMissionChat(options));

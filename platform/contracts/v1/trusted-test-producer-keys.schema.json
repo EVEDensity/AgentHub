@@ -1,0 +1,69 @@
+{
+  "$defs": {
+    "TrustedProducerKey": {
+      "additionalProperties": false,
+      "properties": {
+        "producerId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Producerid",
+          "type": "string"
+        },
+        "keyId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Keyid",
+          "type": "string"
+        },
+        "publicKeyBase64": {
+          "maxLength": 44,
+          "minLength": 44,
+          "title": "Publickeybase64",
+          "type": "string"
+        },
+        "testProfileDigests": {
+          "items": {
+            "pattern": "^sha256:[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "title": "Testprofiledigests",
+          "type": "array"
+        }
+      },
+      "required": [
+        "producerId",
+        "keyId",
+        "publicKeyBase64",
+        "testProfileDigests"
+      ],
+      "title": "TrustedProducerKey",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "keys": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TrustedProducerKey"
+      },
+      "maxItems": 256,
+      "title": "Keys",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion"
+  ],
+  "title": "TrustedProducerRegistry",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/trusted-test-producer-keys.schema.json"
+}

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import MissionExecutionBanner, { executionUnitLabel } from '../../../components/chat/MissionExecutionBanner';
@@ -13,7 +13,7 @@ const response = (status = 200) => new Response(JSON.stringify(body), { status }
 const headers = () => ({ Authorization: 'Bearer test-token' });
 
 describe('MissionExecutionBanner', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
   it('shows waiting when the selected Agent has no matching Runner', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response()));
@@ -45,5 +45,20 @@ describe('MissionExecutionBanner', () => {
     await screen.findByText('PENDING');
     rerender(<MissionExecutionBanner missionId="other-mission" token="test-token" authHeaders={headers} />);
     await waitFor(() => expect(screen.queryByText('PENDING')).not.toBeInTheDocument());
+  });
+
+  it('displays Mission governance even when the WorkUnit is still verifying', () => {
+    render(<MissionExecutionBanner missionId="mission-1" token="token" authHeaders={headers} status={{ data: { ...body, missionStatus: 'WAITING_DECISION', workUnits: [{ ...unit, status: 'VERIFYING', reason: 'verifying' }] }, error: null, retry: vi.fn() }} />);
+    expect(screen.getByText('等待人工决策')).toBeVisible();
+    expect(screen.queryByText('验收通过')).not.toBeInTheDocument();
+  });
+
+  it('expires the visible lease while the next status read is stalled', async () => {
+    vi.useFakeTimers();
+    const expiresAt = new Date(Date.now() + 1200).toISOString();
+    render(<MissionExecutionBanner missionId="mission-1" token="token" authHeaders={headers} status={{ data: { ...body, workUnits: [{ ...unit, status: 'RUNNING', reason: 'executing', matchingRunnerAvailable: true, availabilitySource: 'lease', availabilityExpiresAt: expiresAt }] }, error: null, retry: vi.fn() }} />);
+    expect(screen.getByText('executor · 正在执行')).toBeVisible();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(screen.getByText('executor · Runner 租约已过期，执行状态待恢复')).toBeVisible();
   });
 });

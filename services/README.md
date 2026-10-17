@@ -12,6 +12,10 @@ not create a competing Mission or WorkUnit state machine.
   and batch evaluation.
 - `rust/`: isolated performance cores. Rust services communicate through stable
   contracts or events and do not own orchestration policy.
+- `node/browser-read/`: optional pinned Playwright worker for one anonymous
+  document per process, behind an explicit Linux Runner profile. It owns browser
+  transport only, with no model loop or Mission state. See
+  [ADR-0127](../docs/architecture/decisions/0127-experimental-anonymous-browser-read.md).
 
 The Python model adapter projects multimodal text parts explicitly for its
 test-only mock provider. The offline knowledge image batch aborts on an embedding

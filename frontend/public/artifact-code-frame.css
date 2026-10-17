@@ -1,0 +1,2 @@
+html, body, #editor { height: 100%; width: 100%; margin: 0; overflow: hidden; background: #191c22; }
+#error { color: #fca0a0; font: 14px system-ui, sans-serif; margin: 16px; }

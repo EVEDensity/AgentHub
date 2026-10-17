@@ -525,7 +525,7 @@ async function startTask() {
   if (!servicesReady) { elements.feedback.textContent = '本地服务尚未就绪，请稍候…'; return; }
   elements.startTask.disabled = true; elements.feedback.textContent = '正在创建 Mission…';
   try {
-    const contract = { id: `desktop-${Date.now()}`, version: 1, repositoryScopes: [], allowedCapabilities: [], budgets: { timeSeconds: 300, modelCost: 1, retries: 0 }, acceptanceCriteria: [{ id: 'desktop-review', kind: 'manual', description: '桌面端用户审核 Mission 输出。', required: true, configuration: {} }], decisionGates: [], forbiddenActions: [] };
+    const contract = buildDefaultTaskContract(`desktop-${Date.now()}`);
     const created = await localApi('/api/v1/missions', { method: 'POST', body: JSON.stringify({ workspaceId: localMissionControl.workspaceId, title: prompt.slice(0, 80), objective: prompt, source: { type: 'manual' }, contract }) });
     const mission = created.mission || created;
     activeMissionId = mission.id; elements.cancelMission.hidden = false;

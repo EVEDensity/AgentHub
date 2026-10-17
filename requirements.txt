@@ -36,6 +36,7 @@ markdown==3.7
 
 # ── Configuration ───────────────────────────────────────────────────
 python-dotenv==1.2.2
+PyYAML==6.0.3
 
 # ── Windows sandbox (restricted token + Job Object) ─────────────────
 # Only used on Windows; app/services/runner/sandbox_windows.py degrades

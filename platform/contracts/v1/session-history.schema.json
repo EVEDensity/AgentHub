@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/session-history.schema.json",
+  "title": "Native Session history read projections",
+  "description": "Read-only workspace-scoped native Session directory, detail, or chat Mission directory. Mission objective previews may include rules or archivist preprocessing and are not original message receipts or a complete transcript. Reads do not resume execution or establish a verdict.",
+  "$defs": {
+    "MissionStatus": {
+      "enum": [
+        "DRAFT",
+        "READY",
+        "RUNNING",
+        "VERIFYING",
+        "WAITING_DECISION",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "MissionStatus",
+      "type": "string"
+    },
+    "SessionDetail": {
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "workspaceId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Workspaceid",
+          "type": "string"
+        },
+        "session": {
+          "$ref": "#/$defs/SessionDirectoryItem"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "workspaceId",
+        "session"
+      ],
+      "title": "SessionDetail",
+      "type": "object"
+    },
+    "SessionDirectory": {
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "workspaceId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Workspaceid",
+          "type": "string"
+        },
+        "sessions": {
+          "items": {
+            "$ref": "#/$defs/SessionDirectoryItem"
+          },
+          "maxItems": 50,
+          "title": "Sessions",
+          "type": "array"
+        },
+        "hasMore": {
+          "title": "Hasmore",
+          "type": "boolean"
+        },
+        "nextOffset": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextoffset"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "workspaceId",
+        "sessions",
+        "hasMore",
+        "nextOffset"
+      ],
+      "title": "SessionDirectory",
+      "type": "object"
+    },
+    "SessionDirectoryItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "workspaceId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Workspaceid",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 255,
+          "title": "Title",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SessionStatus"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "title": "Createdat",
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "title": "Updatedat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "title",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "title": "SessionDirectoryItem",
+      "type": "object"
+    },
+    "SessionMissionDirectory": {
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "workspaceId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Workspaceid",
+          "type": "string"
+        },
+        "sessionId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Sessionid",
+          "type": "string"
+        },
+        "missions": {
+          "items": {
+            "$ref": "#/$defs/SessionMissionItem"
+          },
+          "maxItems": 20,
+          "title": "Missions",
+          "type": "array"
+        },
+        "hasMore": {
+          "title": "Hasmore",
+          "type": "boolean"
+        },
+        "nextBeforeId": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextbeforeid"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "workspaceId",
+        "sessionId",
+        "missions",
+        "hasMore",
+        "nextBeforeId"
+      ],
+      "title": "SessionMissionDirectory",
+      "type": "object"
+    },
+    "SessionMissionItem": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "workspaceId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Workspaceid",
+          "type": "string"
+        },
+        "sessionId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Sessionid",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 255,
+          "title": "Title",
+          "type": "string"
+        },
+        "objectivePreview": {
+          "description": "At most 1,000 Unicode code points of the persisted Mission objective. Rules or archivist preprocessing may have changed this objective; this is a goal excerpt, not an original message receipt or complete transcript.",
+          "maxLength": 1000,
+          "title": "Objectivepreview",
+          "type": "string"
+        },
+        "objectiveTruncated": {
+          "title": "Objectivetruncated",
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "#/$defs/MissionStatus"
+        },
+        "createdAt": {
+          "format": "date-time",
+          "title": "Createdat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "workspaceId",
+        "sessionId",
+        "title",
+        "objectivePreview",
+        "objectiveTruncated",
+        "status",
+        "createdAt"
+      ],
+      "title": "SessionMissionItem",
+      "type": "object"
+    },
+    "SessionStatus": {
+      "description": "Lifecycle status of a chat session.",
+      "enum": [
+        "ACTIVE",
+        "ARCHIVED"
+      ],
+      "title": "SessionStatus",
+      "type": "string"
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/SessionDirectory"
+    },
+    {
+      "$ref": "#/$defs/SessionDetail"
+    },
+    {
+      "$ref": "#/$defs/SessionMissionDirectory"
+    }
+  ]
+}

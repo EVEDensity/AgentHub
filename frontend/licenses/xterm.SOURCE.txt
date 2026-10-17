@@ -1,0 +1,13 @@
+@xterm/xterm 6.0.0, https://github.com/xtermjs/xterm.js
+Reviewed upstream commit and npm gitHead: f447274f430fd22513f6adbf9862d19524471c04
+Source package manifest:
+https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/package.json
+Upstream license: MIT (the actual distributed LICENSE is copied beside these assets).
+Registry archive: https://registry.npmjs.org/@xterm/xterm/-/xterm-6.0.0.tgz
+Archive integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==
+
+Only the core UMD JavaScript and CSS are used by an owned same-origin static
+Artifact log frame. No addon, shell, transport, stdin, URL/clipboard handler or
+model runtime is configured. Source controls are made visible BEFORE writing to
+the terminal. This narrow profile displays a bounded modified text projection,
+not the raw bytes, a live terminal, command authenticity or Mission acceptance.

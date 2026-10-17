@@ -35,6 +35,8 @@ jobs:
       docker: ${{ steps.select.outputs.docker }}
       images: ${{ steps.select.outputs.images }}
       smoke: ${{ steps.select.outputs.smoke }}
+      opensandbox: ${{ steps.select.outputs.opensandbox }}
+      browser_read: ${{ steps.select.outputs.browser_read }}
       base: ${{ steps.base.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
@@ -111,6 +113,8 @@ jobs:
       AGENTHUB_CLI_E2E: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -185,18 +189,53 @@ jobs:
       AGENTHUB_CLI_E2E: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements*.txt
-      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m pip install -r requirements-dev.txt -r tests/contracts/requirements.txt
       - run: python scripts/ci_prepare_tokenizers.py
       - name: Verify CLI, terminal and Windows release contracts
         run: python -m pytest tests/cli tests/desktop tests/npm -q --tb=short
+      - name: Verify trusted-local snapshots, subprocess cleanup and test production
+        run: >-
+          python -m pytest tests/services/test_trusted_test_snapshot.py
+          tests/services/test_trusted_test_producer.py tests/services/test_trusted_test_harness.py
+          tests/services/test_trusted_test_process.py -q --tb=short
+      - name: Verify strict provider HTTP accounting and Native Harness composition
+        run: >-
+          python -m pytest tests/services/test_strict_provider_http.py
+          tests/services/test_strict_provider_wire.py tests/services/test_strict_provider_fences.py
+          tests/services/test_strict_budget_harness.py
+          tests/services/test_harness_model_operations.py
+          tests/integration/test_strict_budget_runner_sqlite.py -q --tb=short
+      - name: Verify experimental Native sandbox composition contracts
+        run: >-
+          python -m pytest tests/services/test_opensandbox_harness.py
+          tests/services/test_opensandbox_harness_supervision.py
+          tests/services/test_opensandbox_native_factory.py
+          tests/integration/test_opensandbox_native_sqlite.py -q --tb=short
+      - name: Verify frozen reviewed Skills and progressive Native reads
+        run: >-
+          python -m pytest tests/services/test_reviewed_skill_catalog.py
+          tests/services/test_reviewed_skill_tools.py
+          tests/services/test_reviewed_desktop_skills.py
+          tests/services/test_desktop_skill_tools.py
+          tests/contracts/test_reviewed_skill_packages.py
+          tests/integration/test_reviewed_skills_runner_sqlite.py -q --tb=short
+      - name: Verify browser profile, wire and Native composition contracts
+        run: >-
+          python -m pytest tests/services/test_browser_read_profile.py
+          tests/services/test_browser_read_backend.py tests/services/test_browser_read_cleanup.py
+          tests/services/test_browser_read_workdir.py
+          tests/services/test_browser_read_harness.py tests/services/test_browser_native_factory.py
+          tests/contracts/test_browser_execution_report.py -q --tb=short
 
   frontend:
-    name: Frontend types, unit tests and browser flow
+    name: Frontend, editor contracts and browser flow
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
@@ -208,19 +247,67 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       API_BACKEND: go
       GO_GATEWAY_URL: http://localhost:8081
+      MISSION_CONTROL_URL: http://127.0.0.1:38100
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install real Artifact browser fixture dependencies
+        run: python -m pip install -r ../requirements-dev.txt -r ../tests/contracts/requirements.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            extensions/vscode-agenthub/package-lock.json
+      - name: Install editor extension dependencies
+        run: npm ci
+        working-directory: extensions/vscode-agenthub
+      - name: Compile and verify editor API contracts
+        run: npm test
+        working-directory: extensions/vscode-agenthub
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npx vitest run
       - run: npm run build
       - run: npx playwright install chromium --with-deps
-      - run: npx playwright test --reporter=list
+      - run: npx playwright test --reporter=list,junit
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: .tmp/frontend-playwright.xml
+      - name: Require real Artifact preview browser coverage without skips
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'artifact-preview.spec.ts' in c.get('classname','')];
+          assert len(cases) >= 5;
+          assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - name: Require real Mission assistant browser coverage without skips
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'mission-chat.spec.ts' in c.get('classname','')];
+          assert len(cases) >= 11;
+          assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - name: Require real native Session restoration browser coverage without skips
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'native-mission-sessions.spec.ts' in c.get('classname','')];
+          assert len(cases) >= 11;
+          assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - name: Require real registered log browser coverage without skips
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'artifact-log.spec.ts' in c.get('classname','')];
+          assert len(cases) >= 7;
+          assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-browser-results
+          path: frontend/.tmp/frontend-playwright.xml
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -251,6 +338,15 @@ jobs:
             (cd "$(dirname "$mod")" && go vet ./... && go test -short -race -count=1 ./...)
             echo "::endgroup::"
           done < <(find . -name go.mod -not -path '*/testdata/*' | sort)
+      - name: Build the real sandbox execution image
+        working-directory: ${{ github.workspace }}
+        run: docker build -t agenthub/sandbox:ci -f deploy/sandbox-image/Dockerfile deploy/sandbox-image
+      - name: Verify real Docker execution and cancellation
+        working-directory: services/go/sandbox-service
+        env:
+          AGENTHUB_TEST_DOCKER: '1'
+          AGENTHUB_TEST_DOCKER_IMAGE: agenthub/sandbox:ci
+        run: go test -v -race -count=1 -timeout=120s -run '^TestLiveDocker' ./...
 
   rust:
     name: Rust workspace tests
@@ -306,10 +402,86 @@ jobs:
         if: always()
         run: docker compose -f deploy/docker-compose.ci.yml down -v
 
+  opensandbox:
+    name: OpenSandbox pinned Linux conformance
+    needs: changes
+    if: needs.changes.outputs.opensandbox == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: python -m pip install -r requirements.txt
+      - name: Require real pinned sandbox execution, cancellation and cleanup
+        run: python scripts/opensandbox_poc_ci.py --enable --native-composition --report .tmp/opensandbox-ci/report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: opensandbox-conformance
+          path: |
+            .tmp/opensandbox-ci/report.json
+            .tmp/opensandbox-ci/report.infrastructure.json
+            .tmp/opensandbox-ci/report.native.json
+          if-no-files-found: error
+
+  browser-read:
+    name: Playwright anonymous read Linux conformance
+    needs: changes
+    if: needs.changes.outputs.browser_read == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AGENTHUB_REAL_BROWSER: '1'
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.tmp/playwright-browsers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: services/node/browser-read/package-lock.json
+      - run: python -m pip install -r requirements-dev.txt
+      - run: npm ci --ignore-scripts
+        working-directory: services/node/browser-read
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: browser-read-${{ runner.os }}-${{ hashFiles('services/node/browser-read/package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+        working-directory: services/node/browser-read
+      - run: npm test
+        working-directory: services/node/browser-read
+      - name: Require real Chromium, cancellation, deadlines and Runner integrity flow
+        run: >-
+          python -m pytest tests/integration/test_browser_read_live.py
+          tests/integration/test_browser_native_runner_sqlite.py
+          -q --tb=short --junitxml=.tmp/browser-read-results.xml
+      - name: Reject skipped or empty enabled browser conformance
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          suites=list(E.parse('.tmp/browser-read-results.xml').getroot().iter('testsuite'));
+          assert suites and sum(int(s.get('tests','0')) for s in suites) >= 8;
+          assert all(int(s.get('skipped','0')) == 0 for s in suites)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-read-conformance
+          path: .tmp/browser-read-results.xml
+          if-no-files-found: error
+
   gate:
     name: CI Gate
     if: always()
-    needs: [changes, quality, python, postgres, windows-cli, frontend, go, rust, docker, smoke]
+    needs: [changes, quality, python, postgres, windows-cli, frontend, go, rust, docker, smoke, opensandbox, browser-read]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

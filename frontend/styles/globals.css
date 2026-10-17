@@ -2,6 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  /* Local icon font; utility text sizes override this component default. */
+  .material-symbols-outlined {
+    font-family: 'Material Symbols Outlined';
+    font-weight: 400;
+    font-style: normal;
+    font-size: 24px;
+    line-height: 1;
+    letter-spacing: normal;
+    text-transform: none;
+    display: inline-block;
+    white-space: nowrap;
+    word-wrap: normal;
+    direction: ltr;
+    font-feature-settings: 'liga';
+    -webkit-font-feature-settings: 'liga';
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    AgentHub Dark Theme — Understand-Anything Fixed Palette
    Base: #121418 | Surface: #191C22 | Elevated: #20242B | Accent: #22A3C9

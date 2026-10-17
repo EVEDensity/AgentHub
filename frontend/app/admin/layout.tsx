@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback, useRef, type JSX, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '../../stores/authStore';
-import { useAdminStore, MENU_META, MENU_GROUPS, type MenuItem } from '../../stores/adminStore';
+import { useAdminStore, type MenuItem } from '../../stores/adminStore';
 import { useAgentStore } from '../../stores/agentStore';
 import { WorkspaceSelector } from '../../components/admin/WorkspaceSelector';
 import AdminSidebar from '../../components/admin/AdminSidebar';
+import AdminActivityPanel, { type FrontendActivity } from '../../components/admin/AdminActivityPanel';
 import CommandPalette from '../../components/admin/CommandPalette';
 import AIChatDialog from '../../components/chat/AIChatDialog';
 import ResizableDivider from '../../components/common/ResizableDivider';
@@ -16,7 +17,7 @@ import ResizableDivider from '../../components/common/ResizableDivider';
  *
  * Structure: [Sidebar | ResizeHandle | Main+Header+Content | ResizeHandle | Console]
  * - Three-column CSS grid with resizable side panels
- * - Right console for logs, events, and command input
+ * - Right panel for explicitly local browser navigation activity
  * - Cyan accent (#22A3C9) on dark (#121418 / #191C22)
  */
 export default function AdminLayout({ children }: { children: ReactNode }): JSX.Element {
@@ -41,10 +42,8 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
       }
     } catch { /* localStorage unavailable */ }
   }, []);
-  const [consoleTab, setConsoleTab] = useState<'logs' | 'state' | 'tools'>('logs');
-  const [consoleLogs, setConsoleLogs] = useState<Array<{ time: string; tag: string; msg: string; tagClass?: string }>>([
-    { time: '--:--:--', tag: 'SYS', msg: 'AgentHub 控制台已就绪 · 等待管理操作', tagClass: 'info' },
-  ]);
+  const [activities, setActivities] = useState<FrontendActivity[]>([]);
+  const activitySequence = useRef(0);
 
   const [sidebarWidth, setSidebarWidth] = useState(240);
 
@@ -101,15 +100,16 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // ── Console log helpers ────────────────────────────────────────────
+  // ── Local navigation activity; no terminal or server transport ───────
   const pad2 = (n: number) => (n < 10 ? '0' : '') + n;
   const getTime = () => {
     const d = new Date();
     return `${d.getHours()}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   };
 
-  const addConsoleLog = useCallback((tag: string, msg: string, tagClass?: string) => {
-    setConsoleLogs((prev) => [...prev.slice(-200), { time: getTime(), tag, msg, tagClass }]);
+  const addNavigationActivity = useCallback((message: string) => {
+    const activity = { id: ++activitySequence.current, time: getTime(), message };
+    setActivities(previous => [...previous.slice(-199), activity]);
   }, []);
 
   // ── Stable callbacks ───────────────────────────────────────────────
@@ -117,12 +117,12 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
     (item: MenuItem) => {
       setActiveMenu(item);
       router.push(`/admin?menu=${encodeURIComponent(item)}`);
-      addConsoleLog('NAV', `导航至: ${item}`, 'gold');
+      addNavigationActivity(`导航至: ${item}`);
       if (window.innerWidth < 1024) {
         setMobileDrawerOpen(false);
       }
     },
-    [setActiveMenu, router, addConsoleLog],
+    [setActiveMenu, router, addNavigationActivity],
   );
 
   const handleToggleSidebar = useCallback(() => {
@@ -172,28 +172,6 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
       document.removeEventListener('mouseup', onMouseUp);
     };
   }, []);
-
-  // ── Console input handler ──────────────────────────────────────────
-  const handleConsoleCommand = useCallback(
-    (cmd: string) => {
-      addConsoleLog('CMD', `> ${cmd}`, 'gold');
-      const lower = cmd.toLowerCase().trim();
-      if (lower === 'help') {
-        addConsoleLog('HELP', '可用命令: help, clear, status, menu, routes, version', 'info');
-      } else if (lower === 'clear') {
-        setConsoleLogs([]);
-      } else if (lower === 'status') {
-        addConsoleLog('SYS', `菜单: ${activeMenu} · 侧栏: ${sidebarCollapsed ? '折叠' : '展开'} · 控制台: ${consoleCollapsed ? '隐藏' : '显示'}`, 'info');
-      } else if (lower === 'version') {
-        addConsoleLog('SYS', 'AgentHub v5.1.0 · Warm Dark Theme · Gold Accent', 'info');
-      } else if (lower === 'menu') {
-        addConsoleLog('SYS', `当前模块: ${activeMenu} · 共 ${MENU_META.length} 个菜单项`, 'info');
-      } else {
-        addConsoleLog('SYS', `未知指令: ${cmd} · 输入 help 查看可用命令`, 'warn');
-      }
-    },
-    [addConsoleLog, activeMenu, sidebarCollapsed, consoleCollapsed],
-  );
 
   return (
     <div
@@ -276,20 +254,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
         {/* ── Status bar (thin top bar) ── */}
         <div className="admin-status-bar">
           <div className="admin-status-item">
-            <span className="admin-status-dot-sm pulse" />
-            系统正常
-          </div>
-          <div className="admin-status-item">
-            RPM <span className="admin-status-value">1,247</span>
-          </div>
-          <div className="admin-status-item">
-            P95 <span className="admin-status-value">1.8s</span>
-          </div>
-          <div className="admin-status-item">
-            成功率 <span className="admin-status-value">98.7%</span>
-          </div>
-          <div className="admin-status-item">
-            智能体 <span className="admin-status-value">6 在线</span>
+            运行指标尚未接入
           </div>
         </div>
 
@@ -440,77 +405,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
           Column 3: Console Panel (Right)
           ════════════════════════════════════════════════════ */}
       {!consoleCollapsed && (
-        <aside className="admin-console">
-          <div className="admin-console-header">
-            <div className="admin-console-tabs">
-              <button
-                className={`admin-console-tab ${consoleTab === 'logs' ? 'active' : ''}`}
-                onClick={() => setConsoleTab('logs')}
-              >
-                执行日志
-              </button>
-              <button
-                className={`admin-console-tab ${consoleTab === 'state' ? 'active' : ''}`}
-                onClick={() => setConsoleTab('state')}
-              >
-                状态机
-              </button>
-              <button
-                className={`admin-console-tab ${consoleTab === 'tools' ? 'active' : ''}`}
-                onClick={() => setConsoleTab('tools')}
-              >
-                工具调用
-              </button>
-            </div>
-            <div className="admin-console-actions">
-              <button
-                className="admin-console-act"
-                title="清空日志"
-                onClick={() => setConsoleLogs([])}
-              >
-                ◻
-              </button>
-              <button
-                className="admin-console-act"
-                title="折叠面板"
-                onClick={() => setConsoleCollapsed(true)}
-              >
-                ⟩
-              </button>
-            </div>
-          </div>
-
-          <div className="admin-console-body">
-            {consoleLogs.length === 0 ? (
-              <div style={{ color: 'rgb(var(--warm-500))', padding: '20px 0', textAlign: 'center' }}>
-                控制台已清空 · 等待事件…
-              </div>
-            ) : (
-              consoleLogs.map((log, i) => (
-                <div key={i} className="admin-console-log">
-                  <span className="admin-console-log-time">{log.time}</span>
-                  <span className={`admin-console-log-tag ${log.tagClass || 'info'}`}>{log.tag}</span>
-                  <span className="admin-console-log-msg">{log.msg}</span>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="admin-console-input-row">
-            <span className="admin-console-prompt">$</span>
-            <input
-              className="admin-console-input"
-              placeholder="输入指令… help / clear / status / version"
-              autoComplete="off"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.target as HTMLInputElement).value.trim()) {
-                  handleConsoleCommand((e.target as HTMLInputElement).value);
-                  (e.target as HTMLInputElement).value = '';
-                }
-              }}
-            />
-          </div>
-        </aside>
+        <AdminActivityPanel activities={activities} onClear={() => setActivities([])} onCollapse={() => setConsoleCollapsed(true)} />
       )}
 
       {/* ── Console Expand Trigger — visible only when collapsed ── */}
@@ -523,7 +418,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6" />
           </svg>
-          <span>控制台</span>
+          <span>前端活动</span>
         </div>
       )}
 
@@ -545,7 +440,6 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
           setChatOpen(false);
           try { localStorage.setItem('agenthub_chat_closed_at', String(Date.now())); } catch { /* ignore */ }
         }}
-        addConsoleLog={addConsoleLog}
       />
 
       {/* ── Global Command Palette (Ctrl+K) ── */}

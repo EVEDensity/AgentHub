@@ -1,8 +1,8 @@
 """Derivation and unattended-verification loop helpers (split module).
 
 - derivation: exactly one ``desktop.task`` WorkUnit per RUNNING manual Mission;
-- verification: ``VERIFY:`` / ``RUN:`` acceptance-command extraction and
-  workspace execution used by the controller's unattended verifier loop.
+- command helpers: compatibility marker parsers and explicitly invoked workspace
+  execution. The default verifier does not call them or interpret objective text.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ async def derive_desktop_task_work_units(
 
 
 def extract_verify_commands(objective: str) -> tuple[str, ...]:
-    """Return the acceptance commands declared as ``VERIFY: <command>`` lines.
+    """Parse legacy ``VERIFY: <command>`` lines without granting execution authority.
 
     Any objective line starting with the marker (leading whitespace allowed)
     declares one workspace command; empty commands are ignored.
@@ -141,8 +141,8 @@ def extract_verify_commands(objective: str) -> tuple[str, ...]:
 def extract_run_commands(objective: str) -> tuple[str, ...]:
     """Return the shell commands declared as ``RUN: <command>`` lines (P1-3).
 
-    Declared commands are executed by the unattended verifier during
-    acceptance only; the ``command_execute`` tool never runs shell directly.
+    This compatibility parser never executes commands. The default verifier
+    ignores these markers; a future trusted producer must own command authority.
     """
     return _extract_marker_commands(objective, RUN_COMMAND_MARKER)
 
@@ -178,6 +178,8 @@ async def run_verify_command(
 ) -> VerifyCommandOutcome:
     """Run one acceptance command in the workspace, capturing merged output.
 
+    This low-level helper is not invoked by default artifact verification and
+    does not establish authorization or trusted test evidence on its own.
     The command inherits the runner process environment; on timeout the whole
     process tree is killed and the outcome is reported as a non-zero result
     with whatever output was produced so far.

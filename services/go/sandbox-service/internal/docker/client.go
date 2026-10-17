@@ -1,93 +1,87 @@
-// Package docker — lightweight Docker HTTP API client for sandbox-service.
-// Talks to /var/run/docker.sock (UNIX socket) without requiring the
-// heavy docker/docker SDK dependency. Covers the subset of the Docker
-// Engine API needed for AgentHub sandbox containers.
+// Package docker implements the subset of the Docker Engine HTTP API needed
+// by sandbox-service. Missing Docker is an execution error, never a simulator.
 package docker
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
-// ── Client ────────────────────────────────────────────────────────────
+var ErrUnavailable = errors.New("Docker is not configured")
+var ErrNetworkPolicyUnsupported = errors.New("only network=none is supported; network allowlists are unavailable")
 
 type Client struct {
 	http           *http.Client
 	baseURL        string
-	seccompProfile string // path to custom seccomp JSON, "" = use Docker default
+	seccompProfile string
 }
 
-// NewClient creates a Docker API client. Use an empty socketPath to
-// operate in "noop" mode (always returns success without real containers).
-// seccompProfile is the path to a custom seccomp JSON profile file;
-// pass "" to use Docker's built-in default seccomp profile.
-func NewClient(socketPath string, seccompProfile string) *Client {
+// NewClient uses a Unix socket. An empty path creates an unavailable client;
+// every operation on that client returns an error without fabricating output.
+func NewClient(socketPath, seccompProfile string) *Client {
 	if socketPath == "" {
-		log.Println("sandbox/docker: socket path empty — running in noop mode")
 		return &Client{seccompProfile: seccompProfile}
 	}
-
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socketPath)
 		},
-		MaxIdleConns:    5,
-		IdleConnTimeout: 30 * time.Second,
+		MaxIdleConns: 5, IdleConnTimeout: 30 * time.Second,
 	}
-
-	return &Client{
-		http:           &http.Client{Transport: transport, Timeout: 30 * time.Second},
-		baseURL:        "http://localhost",
-		seccompProfile: seccompProfile,
-	}
+	// The operation context supplies the deadline, including executions lasting
+	// longer than 30 seconds. A separate dial timeout is supplied by the caller.
+	return &Client{http: &http.Client{Transport: transport}, baseURL: "http://localhost", seccompProfile: seccompProfile}
 }
 
-// IsNoop returns true when no Docker socket is configured.
-func (c *Client) IsNoop() bool { return c.http == nil }
+func (c *Client) IsConfigured() bool { return c != nil && c.http != nil }
 
-// buildSecurityOpts constructs the SecurityOpt array for container creation.
-// Uses the custom seccomp profile if configured, otherwise falls back to
-// Docker's built-in default profile. Always adds no-new-privileges.
-func (c *Client) buildSecurityOpts() []string {
+func (c *Client) buildSecurityOpts() ([]string, error) {
 	opts := []string{"no-new-privileges=true"}
+	// Omitting seccomp uses Docker's built-in default. The Engine API expects
+	// profile JSON, not the CLI's local-file path or a literal "default" string.
 	if c.seccompProfile != "" {
-		opts = append(opts, "seccomp="+c.seccompProfile)
-	} else {
-		opts = append(opts, "seccomp=default")
+		profile, err := os.ReadFile(c.seccompProfile)
+		if err != nil {
+			return nil, fmt.Errorf("read seccomp profile: %w", err)
+		}
+		if !json.Valid(profile) {
+			return nil, errors.New("invalid seccomp profile JSON")
+		}
+		opts = append(opts, "seccomp="+string(profile))
 	}
-	return opts
+	return opts, nil
 }
-
-// ── Types ────────────────────────────────────────────────────────────
 
 type ContainerConfig struct {
-	Name        string
-	Image       string
-	AgentID     string
-	TenantID    string
-	CPU         float64 // CPU shares (1.0 = 1 vCPU)
-	MemoryMB    int     // memory limit in MB
-	DiskMB      int     // disk quota (not enforced via Docker, informational)
-	Network     string  // "none" | "bridge" | "host"
-	Env         []string
-	Command     []string
-	NetworkAllow []string // whitelisted outbound domains (informational)
+	Name         string
+	Image        string
+	AgentID      string
+	TenantID     string
+	CPU          float64
+	MemoryMB     int
+	DiskMB       int // Metadata only; disk quota is not enforced.
+	Network      string
+	Env          []string
+	Command      []string
+	NetworkAllow []string
 }
 
 type ContainerInfo struct {
 	ID           string     `json:"id"`
 	Name         string     `json:"name"`
 	Image        string     `json:"image"`
-	Status       string     `json:"status"` // created | running | stopped | failed | destroyed
+	Status       string     `json:"status"`
 	AgentID      string     `json:"agent_id"`
 	TenantID     string     `json:"tenant_id"`
 	CPULimit     float64    `json:"cpu_limit"`
@@ -107,440 +101,173 @@ type ExecResult struct {
 }
 
 type Stats struct {
-	TotalContainers int            `json:"total_containers"`
-	ActiveContainers int           `json:"active_containers"`
-	TotalExecs      int            `json:"total_execs"`
-	AvgDurationMs   float64        `json:"avg_duration_ms"`
-	ByStatus        map[string]int `json:"by_status"`
+	TotalContainers  int            `json:"total_containers"`
+	ActiveContainers int            `json:"active_containers"`
+	TotalExecs       int            `json:"total_execs"`
+	AvgDurationMs    float64        `json:"avg_duration_ms"`
+	ByStatus         map[string]int `json:"by_status"`
 }
 
-// ── Network Policy Enforcement ───────────────────────────────────────
-//
-// When NetworkAllow is set, the container is created with network "bridge"
-// and ApplyNetworkPolicy applies iptables rules to restrict egress to
-// only the whitelisted hosts. Without this, the container would have
-// unrestricted bridge access (the "informational only" gap).
-
-// ApplyNetworkPolicy runs iptables inside the container to restrict
-// outbound network access to only the whitelisted hosts. The default
-// OUTPUT policy is DROP; only DNS (UDP 53), loopback, and explicitly
-// allowed CIDRs are permitted.
-func (c *Client) ApplyNetworkPolicy(containerID string, allowedHosts []string) error {
-	if c.IsNoop() {
-		return nil
+// Create enforces the supported isolation boundary before contacting Docker.
+// In-container iptables cannot safely restrict egress with CapDrop=ALL, leaves
+// a startup exposure window and does not cover IPv6. Do not enable bridge
+// networking until a separately enforced egress boundary has been implemented.
+func (c *Client) Create(ctx context.Context, cfg ContainerConfig) (*ContainerInfo, error) {
+	if !c.IsConfigured() {
+		return nil, ErrUnavailable
 	}
-
-	if len(allowedHosts) == 0 {
-		// No whitelist — ensure network isolation by stopping the
-		// container's network interface. Docker network=none already
-		// handles this; this is a defense-in-depth measure.
-		return nil
+	if len(cfg.NetworkAllow) > 0 || (cfg.Network != "" && cfg.Network != "none") {
+		return nil, ErrNetworkPolicyUnsupported
 	}
-
-	// Resolve domain names to IPs for the allowlist.
-	allowedCIDRs := resolveHostsToCIDRs(allowedHosts)
-
-	// Build iptables-restore input to atomically apply the ruleset.
-	// We create a custom chain AGENTHUB_OUT to keep rules organized.
-	rules := buildIPTablesRules(allowedCIDRs)
-	cmd := fmt.Sprintf(
-		"iptables-restore --noflush << 'IPTEOF'\n%s\nIPTEOF",
-		rules,
-	)
-
-	result, err := c.Exec(containerID, cmd)
+	securityOpts, err := c.buildSecurityOpts()
 	if err != nil {
-		return fmt.Errorf("apply network policy: %w", err)
+		return nil, err
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("apply network policy: exit %d: %s", result.ExitCode, result.Stderr)
-	}
-
-	log.Printf("sandbox/docker: applied network policy to %s — egress restricted to %d host(s) (%v)",
-		containerID[:12], len(allowedHosts), allowedHosts)
-	return nil
-}
-
-// resolveHostsToCIDRs resolves domain names and IPs to /32 CIDR notation.
-// Non-resolvable hosts are logged and skipped. Private/local ranges are
-// always allowed for DNS and container networking.
-func resolveHostsToCIDRs(hosts []string) []string {
-	cidrs := make([]string, 0, len(hosts)+2)
-	for _, h := range hosts {
-		h = strings.TrimSpace(h)
-		if h == "" {
-			continue
-		}
-		// If it's already a CIDR or raw IP, use it directly.
-		if strings.Contains(h, "/") {
-			cidrs = append(cidrs, h)
-			continue
-		}
-		if net.ParseIP(h) != nil {
-			cidrs = append(cidrs, h+"/32")
-			continue
-		}
-		// Resolve domain name.
-		ips, err := net.LookupHost(h)
-		if err != nil {
-			log.Printf("sandbox/docker: network allow — cannot resolve %s, skipping: %v", h, err)
-			continue
-		}
-		for _, ip := range ips {
-			if strings.Contains(ip, ":") {
-				cidrs = append(cidrs, ip+"/128") // IPv6
-			} else {
-				cidrs = append(cidrs, ip+"/32") // IPv4
-			}
-		}
-	}
-	return cidrs
-}
-
-// buildIPTablesRules generates an iptables-restore compatible ruleset.
-// Policy: default DROP on OUTPUT; allow loopback, DNS, established conns,
-// and the explicitly whitelisted CIDRs.
-func buildIPTablesRules(allowedCIDRs []string) string {
-	var sb strings.Builder
-	sb.WriteString("*filter\n")
-	sb.WriteString(":INPUT ACCEPT [0:0]\n")    // we don't restrict inbound
-	sb.WriteString(":FORWARD ACCEPT [0:0]\n")   // no routing
-	sb.WriteString(":OUTPUT DROP [0:0]\n")      // default deny egress
-	sb.WriteString(":AGENTHUB_OUT - [0:0]\n")   // custom chain
-	sb.WriteString("-A OUTPUT -j AGENTHUB_OUT\n")
-	sb.WriteString("-A AGENTHUB_OUT -o lo -j ACCEPT\n") // loopback always
-	sb.WriteString("-A AGENTHUB_OUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
-	// DNS resolution (UDP 53) — always allowed so domain allowlists work.
-	sb.WriteString("-A AGENTHUB_OUT -p udp --dport 53 -j ACCEPT\n")
-	sb.WriteString("-A AGENTHUB_OUT -p tcp --dport 53 -j ACCEPT\n")
-	// Whitelisted CIDRs.
-	for _, cidr := range allowedCIDRs {
-		sb.WriteString(fmt.Sprintf("-A AGENTHUB_OUT -d %s -j ACCEPT\n", cidr))
-	}
-	sb.WriteString("COMMIT\n")
-	return sb.String()
-}
-
-// ── Container Lifecycle ──────────────────────────────────────────────
-
-// Create starts a new container and leaves it in "created" state.
-func (c *Client) Create(cfg ContainerConfig) (*ContainerInfo, error) {
-	if c.IsNoop() {
-		return &ContainerInfo{
-			ID:           fmt.Sprintf("sandbox-%s", shortID()),
-			Name:         cfg.Name,
-			Image:        cfg.Image,
-			Status:       "created",
-			AgentID:      cfg.AgentID,
-			TenantID:     cfg.TenantID,
-			CPULimit:     cfg.CPU,
-			MemoryMB:     cfg.MemoryMB,
-			DiskMB:       cfg.DiskMB,
-			Network:      cfg.Network,
-			NetworkAllow: cfg.NetworkAllow,
-		}, nil
-	}
-
-	// Docker API: POST /containers/create
 	body := map[string]any{
-		"Image": cfg.Image,
-		"Cmd":   cfg.Command,
-		"Env":   cfg.Env,
+		"Image": cfg.Image, "Cmd": cfg.Command, "Env": cfg.Env,
 		"HostConfig": map[string]any{
-			"Memory":     int64(cfg.MemoryMB) * 1024 * 1024,
-			"NanoCPUs":   int64(cfg.CPU * 1e9),
-			"NetworkMode": cfg.Network,
-			"SecurityOpt": c.buildSecurityOpts(),
-			"ReadonlyRootfs": true,
-			"Tmpfs":          map[string]string{"/tmp": "rw,noexec,nosuid,size=100m"},
-			"CapDrop":        []string{"ALL"},
+			"Memory": int64(cfg.MemoryMB) * 1024 * 1024, "NanoCPUs": int64(cfg.CPU * 1e9),
+			"NetworkMode": "none", "SecurityOpt": securityOpts, "ReadonlyRootfs": true,
+			"Tmpfs": map[string]string{"/tmp": "rw,noexec,nosuid,size=100m"}, "CapDrop": []string{"ALL"},
 		},
-		"Labels": map[string]string{
-			"agenthub.agent_id":  cfg.AgentID,
-			"agenthub.tenant_id": cfg.TenantID,
-		},
+		"Labels": map[string]string{"agenthub.agent_id": cfg.AgentID, "agenthub.tenant_id": cfg.TenantID},
 	}
-
-	resp, err := c.do("POST", "/containers/create?name="+cfg.Name, body)
+	resp, err := c.do(ctx, "POST", "/containers/create?name="+url.QueryEscape(cfg.Name), body)
 	if err != nil {
 		return nil, fmt.Errorf("docker create: %w", err)
 	}
-
-	var createResp struct {
-		ID       string   `json:"Id"`
-		Warnings []string `json:"Warnings"`
+	var created struct {
+		ID string `json:"Id"`
 	}
-	if err := json.Unmarshal(resp, &createResp); err != nil {
+	if err := json.Unmarshal(resp, &created); err != nil {
 		return nil, fmt.Errorf("parse docker create response: %w", err)
 	}
-
-	for _, w := range createResp.Warnings {
-		log.Printf("sandbox/docker create warning: %s", w)
+	if created.ID == "" {
+		return nil, errors.New("docker create response omitted container ID")
 	}
-
 	return &ContainerInfo{
-		ID:           createResp.ID,
-		Name:         cfg.Name,
-		Image:        cfg.Image,
-		Status:       "created",
-		AgentID:      cfg.AgentID,
-		TenantID:     cfg.TenantID,
-		CPULimit:     cfg.CPU,
-		MemoryMB:     cfg.MemoryMB,
-		DiskMB:       cfg.DiskMB,
-		Network:      cfg.Network,
-		NetworkAllow: cfg.NetworkAllow,
-		CreatedAt:    time.Now(),
+		ID: created.ID, Name: cfg.Name, Image: cfg.Image, Status: "created",
+		AgentID: cfg.AgentID, TenantID: cfg.TenantID, CPULimit: cfg.CPU,
+		MemoryMB: cfg.MemoryMB, DiskMB: cfg.DiskMB, Network: "none", CreatedAt: time.Now(),
 	}, nil
 }
 
-// Start starts a created container.
-func (c *Client) Start(containerID string) error {
-	if c.IsNoop() {
-		return nil
-	}
-	_, err := c.do("POST", "/containers/"+containerID+"/start", nil)
+func (c *Client) Start(ctx context.Context, containerID string) error {
+	_, err := c.do(ctx, "POST", "/containers/"+url.PathEscape(containerID)+"/start", nil)
 	return err
 }
 
-// Stop stops a running container.
-func (c *Client) Stop(containerID string) error {
-	if c.IsNoop() {
-		return nil
-	}
-	_, err := c.do("POST", "/containers/"+containerID+"/stop?t=10", nil)
+func (c *Client) Stop(ctx context.Context, containerID string) error {
+	_, err := c.do(ctx, "POST", "/containers/"+url.PathEscape(containerID)+"/stop?t=10", nil)
 	return err
 }
 
-// Remove deletes a container (force if running).
-func (c *Client) Remove(containerID string) error {
-	if c.IsNoop() {
-		return nil
-	}
-	_, err := c.do("DELETE", "/containers/"+containerID+"?force=true&v=true", nil)
+func (c *Client) Remove(ctx context.Context, containerID string) error {
+	_, err := c.do(ctx, "DELETE", "/containers/"+url.PathEscape(containerID)+"?force=true&v=true", nil)
 	return err
 }
 
-// Exec runs a command inside a container and returns the result.
-func (c *Client) Exec(containerID string, command string) (*ExecResult, error) {
-	if c.IsNoop() {
-		// Noop: return simulated result
-		return &ExecResult{
-			ExitCode:   0,
-			Stdout:     fmt.Sprintf("[sandbox noop] %s\nHello from sandbox!", command),
-			Stderr:     "",
-			DurationMs: 5,
-		}, nil
-	}
-
+// Exec reports a result only after Docker has confirmed a finished execution
+// with an exit code. Failure to inspect execution is never interpreted as zero.
+func (c *Client) Exec(ctx context.Context, containerID, command string) (*ExecResult, error) {
 	start := time.Now()
-
-	// Step 1: Create exec instance
-	createBody := map[string]any{
-		"Cmd":          []string{"/bin/sh", "-c", command},
-		"AttachStdout": true,
-		"AttachStderr": true,
-	}
-	// Use application/vnd.docker.raw-stream for proper TTY=false multiplexing
-	createResp, err := c.do("POST", "/containers/"+containerID+"/exec", createBody)
+	created, err := c.do(ctx, "POST", "/containers/"+url.PathEscape(containerID)+"/exec", map[string]any{
+		"Cmd": []string{"/bin/sh", "-c", command}, "AttachStdout": true, "AttachStderr": true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("docker exec create: %w", err)
 	}
-
-	var execCreate struct {
+	var instance struct {
 		ID string `json:"Id"`
 	}
-	if err := json.Unmarshal(createResp, &execCreate); err != nil {
+	if err := json.Unmarshal(created, &instance); err != nil {
 		return nil, fmt.Errorf("parse exec create: %w", err)
 	}
-
-	// Step 2: Start exec — use raw streaming endpoint with upgraded connection
-	startBody := map[string]any{
-		"Detach": false,
-		"Tty":    false,
+	if instance.ID == "" {
+		return nil, errors.New("docker exec create response omitted exec ID")
 	}
-
-	// Use the raw exec start endpoint that returns the multiplexed stream.
-	// Docker API returns: [STREAM_TYPE:1][0x00×3][SIZE:4BE][PAYLOAD:SIZE]...
-	//   STREAM_TYPE 1 = stdout, 2 = stderr
-	rawResp, err := c.doRaw("POST", "/exec/"+execCreate.ID+"/start", startBody)
+	path := "/exec/" + url.PathEscape(instance.ID)
+	raw, err := c.do(ctx, "POST", path+"/start", map[string]any{"Detach": false, "Tty": false})
 	if err != nil {
 		return nil, fmt.Errorf("docker exec start: %w", err)
 	}
-
-	// Step 3: Demux the multiplexed Docker stream
-	stdout, stderr := demuxDockerStream(rawResp)
-
-	// Step 4: Inspect the exec instance for the exit code
-	exitCode := 0
-	inspectResp, err := c.do("GET", "/exec/"+execCreate.ID+"/json", nil)
-	if err == nil {
-		var inspect struct {
-			ExitCode int `json:"ExitCode"`
-		}
-		if json.Unmarshal(inspectResp, &inspect) == nil {
-			exitCode = inspect.ExitCode
-		}
-	}
-
-	result := &ExecResult{
-		ExitCode:   exitCode,
-		Stdout:     stdout,
-		Stderr:     stderr,
-		DurationMs: time.Since(start).Milliseconds(),
-	}
-	return result, nil
-}
-
-// Inspect returns container info by ID.
-func (c *Client) Inspect(containerID string) (string, error) {
-	if c.IsNoop() {
-		return "running", nil
-	}
-	resp, err := c.do("GET", "/containers/"+containerID+"/json", nil)
+	inspected, err := c.do(ctx, "GET", path+"/json", nil)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("docker exec inspect: %w", err)
 	}
-	var inspect struct {
-		State struct {
-			Status string `json:"Status"`
-		} `json:"State"`
+	var state struct {
+		ExitCode *int  `json:"ExitCode"`
+		Running  *bool `json:"Running"`
 	}
-	if err := json.Unmarshal(resp, &inspect); err != nil {
-		return "unknown", nil
+	if err := json.Unmarshal(inspected, &state); err != nil {
+		return nil, fmt.Errorf("parse exec inspect: %w", err)
 	}
-	return inspect.State.Status, nil
+	if state.ExitCode == nil || *state.ExitCode < 0 || state.Running == nil || *state.Running {
+		return nil, errors.New("Docker did not confirm a finished execution and exit code")
+	}
+	stdout, stderr := demuxDockerStream(raw)
+	return &ExecResult{ExitCode: *state.ExitCode, Stdout: stdout, Stderr: stderr, DurationMs: time.Since(start).Milliseconds()}, nil
 }
 
-// List returns all containers with the agenthub label.
-func (c *Client) List() ([]map[string]any, error) {
-	if c.IsNoop() {
-		return nil, nil
-	}
-	resp, err := c.do("GET", "/containers/json?all=true&filters="+`{"label":["agenthub.agent_id"]}`, nil)
-	if err != nil {
-		return nil, err
-	}
-	var containers []map[string]any
-	if err := json.Unmarshal(resp, &containers); err != nil {
-		return nil, fmt.Errorf("parse container list: %w", err)
-	}
-	return containers, nil
-}
-
-// Ping checks if the Docker daemon is reachable.
 func (c *Client) Ping(ctx context.Context) error {
-	if c.IsNoop() {
-		return fmt.Errorf("docker not configured (noop mode)")
+	if !c.IsConfigured() {
+		return ErrUnavailable
 	}
-	_, err := c.do("GET", "/_ping", nil)
-	return err
+	if _, err := c.buildSecurityOpts(); err != nil {
+		return err
+	}
+	resp, err := c.do(ctx, "GET", "/_ping", nil)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(resp)) != "OK" {
+		return errors.New("Docker ping returned an unexpected response")
+	}
+	return nil
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
-
-// doRaw performs a request and returns the raw response body bytes without
-// attempting JSON parsing. Used for Docker's multiplexed stream endpoints.
-func (c *Client) doRaw(method, path string, body any) ([]byte, error) {
-	var r io.Reader
+func (c *Client) do(ctx context.Context, method, path string, body any) ([]byte, error) {
+	if !c.IsConfigured() {
+		return nil, ErrUnavailable
+	}
+	var reader io.Reader
 	if body != nil {
-		b, err := json.Marshal(body)
+		encoded, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		r = bytes.NewReader(b)
+		reader = bytes.NewReader(encoded)
 	}
-
-	req, err := http.NewRequest(method, c.baseURL+path, r)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("docker API error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
-
 	return data, nil
 }
 
-func (c *Client) do(method, path string, body any) ([]byte, error) {
-	var r io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		r = bytes.NewReader(b)
-	}
-
-	req, err := http.NewRequest(method, c.baseURL+path, r)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("docker API error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-
-	return data, nil
-}
-
-func shortID() string {
-	// Minimal unique ID without crypto/rand (used only in noop mode).
-	return fmt.Sprintf("%x", time.Now().UnixNano())[:8]
-}
-
-// ── Docker Multiplexed Stream Decoder ──────────────────────────────────
-//
-// When AttachStdout+AttachStderr are set and Tty=false, Docker returns a
-// multiplexed stream with the following frame format (8-byte header):
-//
-//	[STREAM_TYPE:1 byte][0x00:3 bytes][SIZE:4 bytes big-endian][PAYLOAD:SIZE bytes]
-//
-// STREAM_TYPE values:
-//
-//	0 = stdin  (not used in exec output)
-//	1 = stdout
-//	2 = stderr
-//
-// Reference: https://docs.docker.com/reference/api/engine/version/v1.47/#tag/Exec
-
+// Docker non-TTY output contains frames with an 8-byte header. The HTTP client
+// propagates body read errors, so an interrupted stream cannot complete Exec.
 func demuxDockerStream(raw []byte) (stdout, stderr string) {
 	var outBuf, errBuf []byte
 	offset := 0
-
 	for offset+8 <= len(raw) {
 		streamType := raw[offset]
-		// Skip 3 reserved bytes (offset+1, +2, +3)
 		size := int(raw[offset+4])<<24 | int(raw[offset+5])<<16 | int(raw[offset+6])<<8 | int(raw[offset+7])
 		offset += 8
-
 		if offset+size > len(raw) {
-			// Truncated frame — append remaining as raw
 			if streamType == 2 {
 				errBuf = append(errBuf, raw[offset:]...)
 			} else {
@@ -548,18 +275,14 @@ func demuxDockerStream(raw []byte) (stdout, stderr string) {
 			}
 			break
 		}
-
 		payload := raw[offset : offset+size]
 		offset += size
-
 		switch streamType {
-		case 1: // stdout
+		case 1:
 			outBuf = append(outBuf, payload...)
-		case 2: // stderr
+		case 2:
 			errBuf = append(errBuf, payload...)
 		}
-		// streamType 0 (stdin) is ignored in exec output
 	}
-
 	return string(outBuf), string(errBuf)
 }

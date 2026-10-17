@@ -27,10 +27,49 @@ Rust, Python, or Docker. Docker Compose remains the server/private-deployment
 path. The bundled admin frontend bakes the local stack endpoints
 (`127.0.0.1:28000` control plane, `:28001` gateway) into its Next.js rewrites
 at `local-services/build-windows.ps1` build time; standalone Next.js bundles
-cannot re-read those endpoints from runtime environment variables. The first
+cannot re-read those endpoints from runtime environment variables. The build
+pins `MISSION_CONTROL_URL` to the local control plane even when a remote override
+is inherited, then restores that environment value afterward. The first
 desktop instance receives the 28000 port group by allocation order;
 concurrent second instances get their own groups while the bundled frontend
 still targets the first instance (single-instance limitation).
+
+The admin Terminal now displays an unavailable notice without command input;
+it has no real terminal service and shows no simulated system or execution
+results. This applies to the shared admin view opened by Desktop as well.
+
+The shared Next.js Mission panel now contains the UI-1 shadcn/Radix Dialog and
+local Monaco code preview, documented in
+[ADR-0128](../docs/architecture/decisions/0128-registered-artifact-text-preview.md).
+The existing public-asset copy carries its generated editor, worker and license
+files into the standalone bundle. This source integration does not establish a
+new packaged WebView2 verification record. The same shared source now includes
+the UI-2a assistant-ui Mission dialog, replacing the admin public-gateway chat
+and simulated typing with admission, bounded observations and real cancellation.
+Closing pauses observation and leaves accepted server work running; no native
+session/permission/model authority is added. See
+[ADR-0129](../docs/architecture/decisions/0129-mission-assistant-ui-projection.md).
+This is also source/browser integration, not a new packaged release record.
+The same Next bundle's main route now uses UI-2b native Session/Mission
+observations and Mission Control's personal-scope probe, documented in
+[ADR-0130](../docs/architecture/decisions/0130-native-session-mission-observation.md).
+It restores selectable task goals and bounded observations, not original full
+transcripts or execution checkpoints. This remains source/browser evidence;
+the Desktop default admin entry and native shell are unchanged. Packaged
+validation follows the
+[UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
+The shared Mission Artifact surface also includes UI-3a's local xterm 6.0.0
+registered-log snapshot renderer and shipped MIT notices. It verifies original
+bytes, displays bounded control-neutralized text and adds no native command or
+terminal transport. The sidebar shows only actual frontend navigation activity.
+See [ADR-0131](../docs/architecture/decisions/0131-registered-log-artifact-snapshots.md).
+This does not establish a new packaged Desktop/WebView2/offline release result.
+The
+dependency-free `ui/` shell keeps bootstrap, service lifecycle, diagnostics and
+native credential responsibilities; it does not gain another Mission store or
+an independent Agent runtime. Component adoption must pass packaged WebView2
+and offline asset checks as well as browser tests before Desktop support is
+claimed. This change does not modify the Tauri shell or its command surface.
 
 ## Layout
 
@@ -227,6 +266,15 @@ package contains the shell, Runtime sidecar, and the local service stack,
 so the admin UI is a self-contained local deployment target.
 
 ## Configuration and credentials
+
+The task form uses `ui/default-contract.js`, a projection of the shared Python
+default in `app/services/default_mission_contract.py`. The cross-language
+contract test executes this projection and checks its exact protocol fields.
+Default completion means independent verification of registered output
+availability, size and SHA-256. It does not certify code correctness or actual
+test execution, and the default contract grants no tools. The existing Runner
+output kind `test-result` can contain model text; no minimum byte size is
+imposed by `artifact-set.v1`.
 
 Desktop configuration is split by sensitivity. The app configuration file
 contains only validated Mission Control and MCP endpoints, the local Artifact

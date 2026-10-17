@@ -3,6 +3,7 @@
 from app.db.migrations.checkpoint_resume import upgrade_checkpoint_resume_sqlite
 from app.db.migrations.session_workspace import upgrade_session_workspace_sqlite
 from app.db.migrations.runner_presence import upgrade_runner_presence_sqlite
+from app.db.migrations.mission_budget import upgrade_mission_budget_sqlite
 
 
 async def initialize_sqlite() -> None:
@@ -14,13 +15,15 @@ async def initialize_sqlite() -> None:
         version = await connection.fetchval("SELECT MAX(version) FROM schema_migrations")
         if version is not None and int(version) >= schema.SQLITE_SCHEMA_VERSION:
             return
-        if version is not None and int(version) in {2, 3, 4}:
+        if version is not None and int(version) in {2, 3, 4, 5}:
             async with connection.transaction():
                 if int(version) == 2:
                     await upgrade_checkpoint_resume_sqlite(connection)
                 if int(version) < 4:
                     await upgrade_session_workspace_sqlite(connection)
-                await upgrade_runner_presence_sqlite(connection)
+                if int(version) < 5:
+                    await upgrade_runner_presence_sqlite(connection)
+                await upgrade_mission_budget_sqlite(connection)
                 await _stamp(connection, schema)
             schema.logger.info("init_db: SQLite compatibility schema upgraded")
             return
@@ -29,6 +32,7 @@ async def initialize_sqlite() -> None:
             await schema._create_mission_control_plane_sqlite(connection)
             await upgrade_session_workspace_sqlite(connection)
             await upgrade_runner_presence_sqlite(connection)
+            await upgrade_mission_budget_sqlite(connection)
             await _stamp(connection, schema)
     schema.logger.info("init_db: SQLite local database initialized")
 

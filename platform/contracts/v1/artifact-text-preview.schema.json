@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/artifact-text-preview.schema.json",
+  "$defs": {
+    "ArtifactKind": {
+      "enum": [
+        "diff",
+        "commit",
+        "file",
+        "log",
+        "report",
+        "test-result",
+        "build",
+        "pull-request"
+      ],
+      "title": "ArtifactKind",
+      "type": "string"
+    },
+    "PreviewArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Id",
+          "type": "string"
+        },
+        "missionId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Missionid",
+          "type": "string"
+        },
+        "workUnitId": {
+          "maxLength": 255,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "title": "Workunitid",
+          "type": "string"
+        },
+        "attempt": {
+          "minimum": 1,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind"
+        },
+        "mediaType": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Mediatype",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "maximum": 262144,
+          "minimum": 0,
+          "title": "Sizebytes",
+          "type": "integer"
+        },
+        "digest": {
+          "pattern": "^sha256:[a-fA-F0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "missionId",
+        "workUnitId",
+        "attempt",
+        "kind",
+        "mediaType",
+        "sizeBytes",
+        "digest"
+      ],
+      "title": "PreviewArtifact",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "default": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "artifact": {
+      "$ref": "#/$defs/PreviewArtifact"
+    },
+    "encoding": {
+      "const": "utf-8",
+      "default": "utf-8",
+      "title": "Encoding",
+      "type": "string"
+    },
+    "integrity": {
+      "const": "verified",
+      "default": "verified",
+      "title": "Integrity",
+      "type": "string"
+    },
+    "text": {
+      "maxLength": 262144,
+      "title": "Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "artifact",
+    "encoding",
+    "integrity",
+    "text"
+  ],
+  "title": "Verified Artifact text preview; not an Evidence verdict",
+  "type": "object",
+  "description": "Additive human-only HTTP projection of bounded UTF-8 Artifact bytes. Shape validation cannot verify the byte digest or factual correctness, create Evidence, or establish PASS."
+}

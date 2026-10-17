@@ -46,7 +46,8 @@ function activate(context) {
     const serverUrl = vscode.workspace.getConfiguration("agenthub").get("serverUrl") ??
         "http://localhost:8000";
     const apiKey = vscode.workspace.getConfiguration("agenthub").get("apiKey") ?? "";
-    client = new agenthubClient_1.AgentHubClient(serverUrl, apiKey);
+    const workspaceId = vscode.workspace.getConfiguration("agenthub").get("workspaceId") ?? "local-admin";
+    client = new agenthubClient_1.AgentHubClient(serverUrl, apiKey, workspaceId);
     missionTreeProvider = new missionTree_1.MissionTreeProvider(client);
     // Sidebar mission tree
     const treeView = vscode.window.createTreeView("agenthub.missions", {
@@ -67,16 +68,8 @@ function activate(context) {
         });
         if (!objective)
             return;
-        try {
-            const result = await client.createMission(objective.trim());
-            vscode.window.showInformationMessage(`Mission ${result.missionId} created — agent ${result.assignedAgentId} is on it`);
-            chatPanel?.show();
-            chatPanel?.attachMission(result.missionId);
-            missionTreeProvider?.refresh();
-        }
-        catch (err) {
-            vscode.window.showErrorMessage(`Failed to create mission: ${err.message}`);
-        }
+        chatPanel?.show();
+        await chatPanel?.submitPrompt(objective.trim());
     }));
     context.subscriptions.push(vscode.commands.registerCommand("agenthub.refreshMissions", () => {
         missionTreeProvider?.refresh();
@@ -95,6 +88,7 @@ function activate(context) {
         chatPanel?.show();
         chatPanel?.sendPromptWithContext(`Review this ${editor.document.languageId} and suggest improvements.`, selection);
     }));
+    context.subscriptions.push(treeView, chatPanel);
     // Open chat on activate so users see it immediately
     chatPanel.show();
 }

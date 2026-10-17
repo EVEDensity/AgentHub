@@ -21,6 +21,7 @@ from app.domain import (
 )
 
 from app.repositories.mission_workspace_claim_selection import WorkspaceClaimSelectionMixin
+from app.repositories.mission_event_cursor import read_event_sequence
 
 Execute = Callable[..., Awaitable[None]]
 FetchOne = Callable[..., Awaitable[dict[str, Any] | None]]
@@ -357,13 +358,9 @@ class MissionRepository(WorkspaceClaimSelectionMixin):
         )
         return [self._event_from_row(row) for row in rows]
 
-    async def event_sequence(self, event_id: str) -> int:
-        """Return a durable cursor for a previously delivered event id."""
-        row = await self._fetch_one(
-            "SELECT sequence FROM mission_events WHERE event_id=$1",
-            event_id,
-        )
-        return int(row["sequence"]) if row is not None else 0
+    async def event_sequence(self, event_id: str, *, mission_id: str | None = None) -> int:
+        """Read a cursor, optionally restricted to one Mission aggregate."""
+        return await read_event_sequence(self._fetch_one, event_id, mission_id=mission_id)
 
     async def list_work_unit_events(
         self,

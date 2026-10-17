@@ -1,0 +1,23 @@
+Component: @fontsource/material-symbols-outlined
+Exact package version: 5.3.9
+Registry archive: https://registry.npmjs.org/@fontsource/material-symbols-outlined/-/material-symbols-outlined-5.3.9.tgz
+Package source repository: https://github.com/fontsource/font-files/tree/main/fonts/google/material-symbols-outlined
+Font source recorded by the package metadata: https://github.com/google/fonts
+Package publisher manifest publishHash: f7bf400366cbd8fe
+Package metadata font version: v377; lastModified: 2026-10-08
+
+This integration imports only the unmodified 400.css weight. The package's
+LICENSE, package.json, metadata.json, and README all identify SIL Open Font
+License 1.1 (OFL-1.1), attribution Google Inc. The original package LICENSE is
+preserved as fontsource-material-symbols-outlined.LICENSE.txt and copied into
+the generated public notices directory from the installed dependency.
+
+The font's embedded copyright names Google LLC, copyright 2026. No glyphs,
+font names, or binary font files are changed. Existing icon ligatures select
+glyphs through CSS. The repository lockfile preserves the package archive
+integrity; generated Next.js font assets are served from the application.
+
+The Fontsource website currently displays Apache-2.0 for this family, whereas
+this exact distributed package includes OFL-1.1. This notice records that
+upstream metadata discrepancy and preserves the actual supplied license;
+it does not substitute the website's license for the package's license.

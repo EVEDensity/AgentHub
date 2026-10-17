@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.v1.missions._artifact_preview import router as artifact_preview_router
 from app.api.v1.missions._artifacts import router as artifacts_router
 from app.api.v1.missions._crud import router as crud_router
 from app.api.v1.missions._decisions import router as decisions_router
@@ -22,6 +23,7 @@ for sub_router in (
     lifecycle_router,
     events_stream_router,
     artifacts_router,
+    artifact_preview_router,
     work_units_router,
 ):
     router.include_router(sub_router, prefix="/missions")

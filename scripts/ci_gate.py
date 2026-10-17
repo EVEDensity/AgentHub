@@ -10,6 +10,8 @@ CORE_CHECKS = {"changes", "quality", "python", "postgres"}
 OPTIONAL_CHECKS = {
     "windows-cli": "windows_cli", "frontend": "frontend", "go": "go",
     "rust": "rust", "docker": "docker", "smoke": "smoke",
+    "opensandbox": "opensandbox",
+    "browser-read": "browser_read",
 }
 
 

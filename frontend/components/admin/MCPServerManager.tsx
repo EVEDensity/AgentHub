@@ -275,7 +275,7 @@ function CallResultViewer({ result, isExecuting }: { result: typeof useMCPStore.
 export default function MCPServerManager(): JSX.Element {
   const {
     servers, selectedServerId, tools, resources, prompts, callResult,
-    isLoading, isExecuting, demoMode,
+    isLoading, isExecuting, error,
     loadServers, selectServer, discoverTools, discoverResources, discoverPrompts,
     callTool, addServer, removeServer, testConnection,
   } = useMCPStore();
@@ -296,10 +296,9 @@ export default function MCPServerManager(): JSX.Element {
         <div>
           <h2 className="text-[34px] font-semibold leading-tight text-warm-900">MCP Gateway</h2>
           <p className="mt-1 text-sm text-warm-500">管理 Model Context Protocol 服务器连接，发现和测试工具。</p>
-          {demoMode && (
-            <p className="mt-1 text-xs text-warning-600 flex items-center gap-1">
-              <span className="material-symbols-outlined text-[12px]">info</span>
-              Demo 模式 — 显示示例数据，连接后端获取实际 MCP 工具
+          {error && (
+            <p className="mt-1 text-xs text-danger-600" role="alert">
+              {error} <button className="underline" onClick={() => void loadServers()}>重新加载</button>
             </p>
           )}
         </div>

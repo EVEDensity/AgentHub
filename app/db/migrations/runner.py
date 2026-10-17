@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.db.mission_budget_capability import require_atomic_budget_backend
 from app.db.migrations.checkpoint_resume import (
     EXECUTION_CHECKPOINT_RESUME_REVISION,
     EXECUTION_CHECKPOINT_RESUME_UPGRADE,
@@ -11,6 +12,7 @@ from app.db.migrations.session_workspace import (
     SESSION_WORKSPACE_REVISION, SESSION_WORKSPACE_UPGRADE,
 )
 from app.db.migrations.runner_presence import RUNNER_PRESENCE_REVISION, RUNNER_PRESENCE_UPGRADE
+from app.db.migrations.mission_budget import MISSION_BUDGET_REVISION, MISSION_BUDGET_UPGRADE
 from app.db.migrations.mission_control_plane import (
     A2A_INBOUND_SOURCE_MAPPING_DOWN_REVISION,
     A2A_INBOUND_SOURCE_MAPPING_UPGRADE,
@@ -67,11 +69,12 @@ async def apply_startup_migrations(
     )
     row = await connection.fetchrow("SELECT version_num FROM alembic_version LIMIT 1")
     current = row["version_num"] if row else None
-    if current == RUNNER_PRESENCE_REVISION:
+    if current == MISSION_BUDGET_REVISION:
         migration_logger.info("init_db: Alembic already at head (%s)", current)
         return
 
     incremental = {
+        RUNNER_PRESENCE_REVISION: _advance_budget_head,
         SESSION_WORKSPACE_REVISION: _advance_presence_head,
         EXECUTION_CHECKPOINT_RESUME_REVISION: _advance_session_head,
         EXECUTION_CHECKPOINT_REVISION: _advance_checkpoint_resume_head,
@@ -101,7 +104,7 @@ async def apply_startup_migrations(
     }:
         message = (
             "unsupported Alembic upgrade path "
-            f"(current={current}, head={RUNNER_PRESENCE_REVISION}); "
+            f"(current={current}, head={MISSION_BUDGET_REVISION}); "
             "run 'alembic upgrade head' offline before starting AgentHub"
         )
         migration_logger.error("init_db: %s", message)
@@ -291,19 +294,32 @@ async def _advance_presence_head(
 ) -> None:
     for statement in RUNNER_PRESENCE_UPGRADE:
         await connection.execute(statement)
+    await _advance_budget_head(connection, current, migration_logger)
+
+
+async def _advance_budget_head(
+    connection: Any, current: str | None, migration_logger: logging.Logger,
+) -> None:
+    require_atomic_budget_backend(connection)
+    async with connection.transaction():
+        for statement in MISSION_BUDGET_UPGRADE:
+            await connection.execute(statement)
+        await _stamp_budget_head(connection, current)
+    migration_logger.info(
+        "init_db: Alembic advanced from %s to %s",
+        current or "unversioned", MISSION_BUDGET_REVISION,
+    )
+
+
+async def _stamp_budget_head(connection: Any, current: str | None) -> None:
     if current is None:
         await connection.execute(
             "INSERT INTO alembic_version(version_num) VALUES($1)",
-            RUNNER_PRESENCE_REVISION,
+            MISSION_BUDGET_REVISION,
         )
     else:
         await connection.execute(
             "UPDATE alembic_version SET version_num=$1 WHERE version_num=$2",
-            RUNNER_PRESENCE_REVISION,
+            MISSION_BUDGET_REVISION,
             current,
         )
-    migration_logger.info(
-        "init_db: Alembic advanced from %s to %s",
-        current or "unversioned",
-        RUNNER_PRESENCE_REVISION,
-    )
