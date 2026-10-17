@@ -231,7 +231,7 @@ class OpenSandboxBackend:
         await self._check_file_path(sandbox_id, path)
         metadata = json.dumps({"path": path, "mode": 600})
         await self._request("POST", self._path(sandbox_id, "files/upload"), files=[
-            ("metadata", (None, metadata, "application/json")),
+            ("metadata", ("metadata", metadata, "application/json")),
             ("file", ("input", data, "application/octet-stream")),
         ])
         downloaded = await self.download(sandbox_id, relative)

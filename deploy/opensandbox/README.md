@@ -81,6 +81,12 @@ success still requires the separate terminal status and actual exit code.
 Sources: [pinned writer](https://github.com/opensandbox-group/OpenSandbox/blob/6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9/components/execd/pkg/web/controller/sse.go),
 [SDK normalizer](https://github.com/opensandbox-group/OpenSandbox/blob/6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9/sdks/sandbox/python/src/opensandbox/adapters/sse.py).
 
+File uploads send both metadata and content as multipart file parts with
+filenames. The pinned Go handler reads `form.File["metadata"]`; a metadata form
+value without a filename is rejected. The adapter follows the
+[official SDK upload](https://github.com/opensandbox-group/OpenSandbox/blob/6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9/sdks/sandbox/python/src/opensandbox/adapters/filesystem_adapter.py)
+and verifies the transferred content with a download and SHA-256 digest.
+
 ## Pinning and provenance
 
 [`images.lock.json`](images.lock.json) records all OCI digests, `linux/amd64`,

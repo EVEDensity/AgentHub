@@ -89,7 +89,12 @@ class WirePeer:
             + b"\r\nMIME-Version: 1.0\r\n\r\n" + request.content)
         parts = list(message.iter_parts())
         assert [part.get_param("name", header="content-disposition") for part in parts] == ["metadata", "file"]
+        # Go's multipart parser reads form.File["metadata"], not form.Value:
+        # metadata without filename is rejected by the actual pinned server.
+        assert [part.get_filename() for part in parts] == ["metadata", "input"]
+        assert parts[0].get_content_type() == "application/json"
         metadata = json.loads(parts[0].get_payload(decode=True))
+        assert metadata["mode"] == 600
         self.files[(sandbox, metadata["path"])] = parts[1].get_payload(decode=True)
         return httpx.Response(200)
 
@@ -170,7 +175,9 @@ class OpenSandboxProtocolTests(unittest.TestCase):
     def test_legacy_error_duplicate_malformed_and_mixed_frames_cannot_confirm_start(self):
         init = b'{"type":"init","text":"cmd-1"}\n\n'
         for data in (init + b'{"type":"error","error":{"evalue":"secret"}}\n\n', init + init,
-                     init + b'{"type":"complete"', b'data: ' + init + init, init + b'data: ' + init):
+                     init + b'{"type":"complete"', b'data: ' + init + init, init + b'data: ' + init,
+                     b'data: {"type":"init","text":"cmd-1"}\n{"type":"error"}\n\n',
+                     b'data: ' + init + b':comment\n{"type":"error"}\n\n'):
             with self.subTest(data=data), self.assertRaises(OpenSandboxError):
                 execution_from_sse(data)
 
@@ -337,6 +344,7 @@ class OpenSandboxBackendTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_http_failure_reports_only_allowlisted_upstream_code_and_status(self):
         for upstream, expected in (("DOCKER::SANDBOX_START_FAILED", "DOCKER::SANDBOX_START_FAILED"),
+                                   ("INVALID_FILE_METADATA", "INVALID_FILE_METADATA"),
                                    (KEY, None)):
             with self.subTest(upstream=upstream):
                 backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True),

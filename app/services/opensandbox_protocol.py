@@ -49,7 +49,7 @@ class OpenSandboxError(RuntimeError):
         return result
 
 
-# Exact 1.1.1 services/constants.py values. A pattern match would permit a
+# Exact 1.1.1 services/constants.py and execd web/model/error.go values. A pattern match would permit a
 # reflected token or attacker-controlled string into reports. Never log messages.
 UPSTREAM_ERROR_CODES = frozenset({
     "DOCKER::INITIALIZATION_ERROR", "DOCKER::SANDBOX_QUERY_FAILED", "DOCKER::SANDBOX_NOT_FOUND",
@@ -59,6 +59,9 @@ UPSTREAM_ERROR_CODES = frozenset({
     "DOCKER::INVALID_ENTRYPOINT", "DOCKER::INVALID_PORT", "DOCKER::NETWORK_MODE_ENDPOINT_UNAVAILABLE",
     "SANDBOX::UNKNOWN_ERROR", "SANDBOX::API_NOT_SUPPORTED", "SANDBOX::INVALID_METADATA_LABEL",
     "SANDBOX::INVALID_PARAMETER", "SANDBOX::INTERNAL_ERROR",
+    "INVALID_REQUEST_BODY", "MISSING_QUERY", "RUNTIME_ERROR", "INVALID_FILE", "INVALID_FILE_CONTENT",
+    "INVALID_FILE_METADATA", "FILE_NOT_FOUND", "UNKNOWN", "CONTEXT_NOT_FOUND", "NOT_SUPPORTED",
+    "SERVICE_UNAVAILABLE", "SESSION_NOT_FOUND", "ALREADY_INITIALIZED",
 })
 WIRE_OPERATIONS = frozenset({
     "unknown", "sandbox_create", "sandbox_list", "sandbox_get", "sandbox_destroy", "sandbox_ready",
@@ -214,7 +217,7 @@ def execution_from_sse(data: bytes) -> str:
         if legacy:
             payload = block.strip()
         else:
-            if block.lstrip().startswith(("{", "[")):
+            if any(line.lstrip().startswith(("{", "[")) for line in block.splitlines()):
                 raise OpenSandboxError("mixed backend event framing")
             payload = "\n".join(line[5:].lstrip(" ") for line in block.splitlines()
                                 if line.startswith("data:"))
