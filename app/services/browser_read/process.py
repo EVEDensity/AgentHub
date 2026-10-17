@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import stat
 import subprocess
 import time
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 from app.services.trusted_tests.process import ProcessResult
@@ -24,9 +26,19 @@ class WorkdirBudget:
     reason: str | None
     entries: int
     bytes: int
+    error_number: int | None = None
+    error_type: str | None = None
 
 
-def _walk_error(error):
+def _walk_error(error, *, root):
+    if (
+        isinstance(error, FileNotFoundError)
+        and error.errno == errno.ENOENT
+        and error.filename is not None
+    ):
+        missing = Path(error.filename)
+        if missing != root and missing.is_relative_to(root):
+            return
     raise error
 
 
@@ -36,7 +48,7 @@ def inspect_workdir(root: Path, maximum: int) -> WorkdirBudget:
     try:
         root.lstat()
         for directory, children, files in os.walk(
-            root, followlinks=False, onerror=_walk_error
+            root, followlinks=False, onerror=partial(_walk_error, root=root)
         ):
             for name in (*children, *files):
                 try:
@@ -50,8 +62,11 @@ def inspect_workdir(root: Path, maximum: int) -> WorkdirBudget:
                     return WorkdirBudget("workdir_entries", entries, total)
                 if total > maximum:
                     return WorkdirBudget("workdir_bytes", entries, total)
-    except OSError:
-        return WorkdirBudget("workdir_unreadable", entries, total)
+        root.lstat()
+    except OSError as error:
+        return WorkdirBudget(
+            "workdir_unreadable", entries, total, error.errno, type(error).__name__
+        )
     return WorkdirBudget(None, entries, total)
 
 
@@ -60,11 +75,13 @@ def _limited(process, output, maximum, root, workdir_maximum):
     budget = inspect_workdir(root, workdir_maximum)
     if exceeded or budget.reason is not None:
         logger.warning(
-            "browser_process_budget output_limited=%s workdir_reason=%s entries=%d bytes=%d",
+            "browser_process_budget output_limited=%s workdir_reason=%s entries=%d bytes=%d workdir_errno=%s workdir_error_type=%s",
             exceeded,
             budget.reason or "within_budget",
             budget.entries,
             budget.bytes,
+            budget.error_number,
+            budget.error_type,
         )
     return exceeded or budget.reason is not None
 

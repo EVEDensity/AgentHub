@@ -30,6 +30,8 @@ accepted. Process output is bounded to 1 MiB and the owned directory to 128 MiB.
 Filesystem polling detects excess; it is not a kernel disk or memory quota.
 Chromium profile links, including dangling Singleton links, count as entries
 and contribute their own `lstat` byte size; their targets are never followed.
+An already disappeared child directory during scanning is an expected cleanup
+race; missing roots, unreadable paths and other I/O failures still fail the budget.
 
 The parent scans Linux `/proc` for the exact ownership marker and current UID,
 ignoring zombies and processes born strictly before this Python parent. The
