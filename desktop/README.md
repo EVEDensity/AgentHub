@@ -1,11 +1,9 @@
 # AgentHub Desktop
 
-> Status: GA candidate — Windows pipeline green end to end (workflow run
-> 33231676165: sidecar build, MSI/NSIS/portable packaging, installer
-> lifecycle smoke, WebView2 GUI smoke); signed public release pending the
-> five signing secrets in the repository.
+> Status: implemented source integration and limited packaging checks;
+> packaged shared UI and native WebView2 acceptance remain target.
 > Owner: desktop maintainers
-> Last reviewed: 2026-09-01
+> Last reviewed: 2026-10-18
 
 `desktop/` is the native, user-facing entry point for AgentHub. It owns local
 Runtime lifecycle, redacted diagnostics, OS integration, and secure credential
@@ -19,7 +17,7 @@ dashboard. Missions, approvals, artifacts, evidence, and other business
 workflows remain owned by Mission Control. The current release packages the
 desktop shell and Runtime sidecar; it does not package the server deployment.
 
-The desktop experience is one `AgentHub.exe`: it owns the lifecycle of bundled
+The full local-services profile targets one `AgentHub.exe`: it owns the lifecycle of bundled
 Mission Control, Gateway, MCP Gateway, and the standalone Next.js admin
 frontend, plus the Runtime sidecar. It creates local data directories, starts
 health-checked services, and opens the admin UI without requiring Node, Go,
@@ -33,6 +31,11 @@ is inherited, then restores that environment value afterward. The first
 desktop instance receives the 28000 port group by allocation order;
 concurrent second instances get their own groups while the bundled frontend
 still targets the first instance (single-instance limitation).
+`package-windows.ps1 -LocalServices` explicitly stages this full profile. The
+current workflow's ordinary package job does not select that switch; its
+tag-only `publish-stack` job builds the stack separately. A successful shell
+package therefore does not establish that the shared Next.js UI is included
+in that same package. See [ADR-0132](../docs/architecture/decisions/0132-desktop-verification-evidence-scopes.md).
 
 The admin Terminal now displays an unavailable notice without command input;
 it has no real terminal service and shows no simulated system or execution
@@ -84,8 +87,12 @@ claimed. This change does not modify the Tauri shell or its command surface.
 - `installer-install-smoke.ps1`: installs the generated MSI/NSIS package,
   validates shortcuts and sidecar placement, starts the shell, and uninstalls
   on an isolated Windows runner.
-- `webview2-gui-smoke.ps1`: runs the CLI-first shell regression and writes
-  screenshots under `output/playwright/`.
+- `shell-browser-smoke.ps1` / `.mjs`: runs the static shell in the locked
+  Playwright Chromium, blocks non-static requests, and writes three actual
+  screenshots plus a classified report under a unique `output/playwright/`
+  run directory. Its native commands use the existing browser-preview fixtures.
+- `webview2-gui-smoke.ps1`: compatibility entry point for that browser preview;
+  the historical name does not establish native WebView2 coverage.
 - `updater-rollback-smoke.ps1`: verifies signed updater metadata and rehearses
   restoring the previous ready sidecar after a failed candidate launch.
 - `ui/`: dependency-free shell UI served by the desktop application,
@@ -203,10 +210,17 @@ sidecar, portable ZIP, and any installers. It contains no credentials or
 Mission state. The Windows CI workflow runs the installer and portable gates
 and uploads the artifacts with this manifest.
 
-The Windows workflow also runs the GUI smoke after packaging. It verifies first
-render, the connection settings dialog, and screenshot capture. Native
-WebView2 availability remains covered by the installed-app startup check in
-`installer-install-smoke.ps1`.
+The Windows workflow also runs the shell browser preview after packaging. It
+checks the home, settings and monitoring DOM and captures actual screenshots.
+It uses the version already installed from `frontend/package-lock.json`, with
+no dynamic CLI download. From a development checkout, run `npm ci` in
+`frontend/`, install its matching Chromium with
+`node frontend/node_modules/@playwright/test/cli.js install chromium` from the
+repository root, then run `desktop/shell-browser-smoke.ps1 -Port 0`.
+Missing tools/browser, occupied ports, assertion and cleanup errors fail.
+Reports explicitly set native WebView2, packaged application and real-service
+verification to false. The installed-app startup check detects immediate
+process failure; it does not inspect WebView2 business flows.
 
 Signed updater artifacts are generated only for `desktop-v*` tags when
 `AGENTHUB_UPDATE_ENABLED=1`, a public key, endpoint, and
@@ -230,8 +244,8 @@ defaults and an Artifact directory; remote endpoints and credentials remain
 optional advanced configuration. `ServiceSupervisor` starts the bundled
 Mission Control, Gateway, and MCP Gateway binaries with per-service health
 endpoints, bounded restart (3 attempts), and fail-closed Missing status when a
-binary is not bundled. End-to-end desktop startup is verified by the Windows
-workflow GUI/installer smokes on a clean runner.
+binary is not bundled. Installer process startup and browser-preview checks
+cover different boundaries; full shared UI acceptance remains a native gate.
 
 ## Delivery Plan
 
@@ -257,13 +271,30 @@ workflow GUI/installer smokes on a clean runner.
    `START-HERE.txt`; MSI/NSIS installers ship `README-first.txt` at the
    install root next to the exe, verified by administrative MSI extraction).
 6. Validate a clean Windows machine with no Docker, Go, Rust, or repository
-   checkout installed. — enforced by `installer-install-smoke.ps1` on the
-   disposable CI runner (green in workflow run 33231676165); a physical
-   clean-machine record remains an optional operations artifact.
+   checkout installed. — target. The CI runner has developer tools installed;
+   its installer smoke detects immediate startup failures and does not prove
+   a complete task flow on a machine without those dependencies.
 
-All six items are implemented and pipeline-enforced; R5-1 is closed. The
-package contains the shell, Runtime sidecar, and the local service stack,
-so the admin UI is a self-contained local deployment target.
+The historical workflow run 33231676165 remains a packaging/startup record,
+not current native WebView2 or shared UI acceptance. Do not infer full-stack
+inclusion from a shell-only package or GA readiness from these smoke names.
+The next delivery slices are:
+
+1. **UI-4a, browser-preview evidence:** fixed local tools, owned test resources,
+   classified reports and actual screenshots; no native/package/service claim.
+2. **UI-4b, packaged resources (target):** inspect the actual selected Portable
+   and installer contents from the same commit, including the full stack,
+   baked loopback rewrites, Monaco workers, xterm, fonts and license notices.
+   Missing/stale/tampered assets must fail before any native GUI claim.
+3. **UI-4c, native WebView2 (target):** launch the actual packaged executable,
+   identify its own WebView2 process, use the real login path, and verify shared
+   Mission/Artifact frames, local assets, Chinese input, zoom and shutdown.
+   The shell's in-memory token is not currently an admin-origin login bridge;
+   injecting fixture localStorage cannot establish product authentication.
+
+See the [ordered component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target)
+for owners, prerequisites and failure gates. Signing and clean-machine
+installation/upgrade/rollback remain additional release gates.
 
 ## Configuration and credentials
 
@@ -320,8 +351,9 @@ fixed, redacted lifecycle messages; sidecar output and credentials are never
 returned to the UI.
 
 When a validated Mission Control endpoint is configured, the desktop can open
-it in the system browser through a native command. The desktop does not embed
-or duplicate the management workflows.
+it in the system browser through a native command. The shell also embeds the
+shared Next.js admin view in the full local-services profile. Those workflows
+remain server-owned; embedding the view does not create another business store.
 
 ## Runtime sidecar contract
 

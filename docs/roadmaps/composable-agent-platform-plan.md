@@ -179,6 +179,11 @@ UI-3a 复用已登记产物读取合同，为 `log` Artifact 接入固定版本 
 见 [ADR-0131](../architecture/decisions/0131-registered-log-artifact-snapshots.md)。
 这些切片不恢复完整原始逐字历史，也不证明桌面安装包已验收；实时日志和命令观察仍需独立合同。
 
+UI-4a 整理桌面验收证据：将历史误称 WebView2 的脚本保留为兼容入口，实际使用固定
+Playwright 做静态外壳浏览器预览，记录真实截图和明确分类的报告，不读取用户本机服务。
+报告不证明原生 WebView2、打包应用或真实服务已验证。见
+[ADR-0132](../architecture/decisions/0132-desktop-verification-evidence-scopes.md)。
+
 本仓库 [lockfile](../../frontend/package-lock.json) 当前锁定 Next.js 14.2.35、React 18.3.1、
 Tailwind CSS 3.4.19、`@monaco-editor/react` 4.7.0 / `monaco-editor` 0.55.1，以及
 已用于差异视图的 `react-diff-viewer-continued` 4.2.2。UI-1 将 Monaco 用于已登记产物的只读显示，
@@ -237,6 +242,29 @@ xterm 观察。每片单独提交、push 并等 CI 通过，再开始下一片�
 worker 与事件订阅释放测试，并记录包体和加载开销。Desktop 支持还须通过打包后的 WebView2
 烟测，验证离线字体/脚本/worker、现有 CSP、中文输入、缩放和窗口关闭清理；浏览器通过不等于
 Desktop 已验证。远端 CI 全绿是阶段完成条件，未运行的浏览器或 Desktop 检查必须列为缺口。
+
+**UI-4a 之后的具体任务顺序（target）。** 每个任务独立提交、push 和验收，不把浏览器预览
+升级成桌面发行结论。完成下面客户端切片后，再恢复 M2 外部执行器对比；不提前启用 M3 自治协作。
+
+1. **UI-3b，移除管理头部的静态执行指标。** Frontend 负责；可与 UI-4b 并行。
+   `frontend/app/admin/layout.tsx` 当前配置/默认 Agent ID 不能称为实际执行模型，
+   固定 `12.4K / 200K` 和 `18%` 应移除或明确未接通。验收是无任务、切换任务、配置失败
+   均不显示捏造用量；补组件/浏览器回归。现有 checkpoint 的累计上报 token 和 context 摘要
+   不等于上下文占比，也不保证分页首批记录的末项是全局最新。不为这项界面收口新增遥测合同。
+2. **UI-4b，同提交的真实打包资源门禁。** Desktop/构建负责；先明确
+   `desktop/package-windows.ps1 -LocalServices` 与 tag-only stack 发布的产物关系，再改
+   `desktop/local-services/build-windows.ps1` 及打包 smoke。验收必须检查实际 Portable/MSI
+   中的 Next 资源、28000 rewrite、Monaco worker、xterm、字体和许可，而不是检查源码目录。
+   缺失、篡改、旧提交混入全部失败；记录源码 commit、构建模式和产物摘要。通过只证明资源与
+   包装一致，不能替代原生 WebView2 运行。
+3. **UI-4c，真实 WebView2 和登录流程。** Desktop/Frontend/认证维护者共同负责；依赖
+   UI-4b。仅为测试进程启用调试连接，确认实际 exe 与其 WebView2 归属，使用真实登录路径，
+   验证嵌套 Mission/Artifact frame、离线本地资源、中文输入、缩放、只读和关闭释放。
+   现有 shell 内存 token 没有 admin-origin 登录桥，不能注入 localStorage 冒充产品认证。
+   如需桥接，先独立确定凭据、origin、权限和撤销合同并补 ADR；失败时显示实际错误。
+4. **UI-5，受支持客户端试用记录。** 交付/测试负责；依赖 UI-4c。在无仓库和开发工具的
+   Windows 环境执行安装、启动、真实任务、失败/取消、重启与卸载，保存当前版本证据。
+   签名、升级/回滚和团队多租户仍按 M5 独立门槛准入；不能由 CI runner 上的进程存活推导完成。
 
 **回滚。** 每片保留既有 API 合同及真实数据视图，通过退回组件提交和对应 lockfile 恢复上一个
 可用版本，无需迁移 Mission 数据。尚无真实数据通道的能力回退到明确不可用状态，不恢复模拟终端；

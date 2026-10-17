@@ -13,6 +13,12 @@
 > U1 管理台手册（docs/operations/newapi-admin-guide.md）已落地；
 > D1-D5 文档已更新。剩余：真实供应商渠道 e2e 需团队提供 key 后补跑。
 
+> 桌面证据更正（2026-10-18）：下文历史记录中的 `WebView2 GUI smoke`
+> 实际是静态外壳的浏览器预览，不启动打包 exe，也不驱动原生 WebView2。
+> 历史全绿记录不证明当前共享 UI 的打包、登录或原生验收已完成。
+> 当前证据分层与待办以 [ADR-0132](../architecture/decisions/0132-desktop-verification-evidence-scopes.md)
+> 和 [Desktop 交付计划](../../desktop/README.md#delivery-plan) 为准。
+
 **A1 进展（2026-08-27，DeepSeek 真实渠道）**：经 new-api 网关实测
 `deepseek-v4-flash`（官方模型名；注意不是口述的 flashV4）全部通过——
 渠道创建/同步（~3.1s，usage 90+27）/SSE（80 chunks，TTFT≈0ms）/原生

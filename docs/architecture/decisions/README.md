@@ -14,6 +14,7 @@ Create new records from `0000-template.md`.
 | ADR | Title |
 |---|---|
 | [0131](0131-registered-log-artifact-snapshots.md) | Display registered log Artifact snapshots through xterm |
+| [0132](0132-desktop-verification-evidence-scopes.md) | Separate desktop browser preview from packaged and native acceptance |
 | [0130](0130-native-session-mission-observation.md) | Recover native Session Missions as bounded observations |
 | [0129](0129-mission-assistant-ui-projection.md) | Bind the shared assistant dialog to Mission projections |
 | [0128](0128-registered-artifact-text-preview.md) | Preview registered Artifact text through Mission Control |

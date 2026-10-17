@@ -68,6 +68,17 @@ bytes, permission/network retries and explicit display bounds. Boundary fixtures
 are identified separately from the real process log. No Mission write or PASS
 is created by viewing a log. Local JS/CSS/license resources and the existing
 frontend activity/Terminal honesty checks remain part of validation.
+UI-4a adds a separate desktop shell browser-preview check using the same locked
+Playwright installation and matching Chromium. Node tests exercise actual
+static HTTP boundaries, occupied-port ownership and failure cleanup; Windows
+also exercises the legacy PowerShell entry point. A real browser checks three
+shell screens and captures screenshots. CI independently requires a passing
+classified report and three nonempty screenshots. It explicitly reports native
+WebView2, packaged application and real-service verification as false; the
+shell's browser-native-command fixtures are not release evidence. Changes to
+the preview runner/helpers, shell source or tests select both browser and
+Windows consumers. The dedicated Desktop Windows packaging workflow also uses
+the locked tools and uploads accurately named browser-preview evidence.
 The same job installs the VS Code extension's locked dependencies, compiles its
 TypeScript and runs its HTTP client and webview contract tests. API schema
 DTO changes also select those frontend consumers. Go changes and sandbox image
