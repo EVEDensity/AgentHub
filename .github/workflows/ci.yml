@@ -36,6 +36,7 @@ jobs:
       images: ${{ steps.select.outputs.images }}
       smoke: ${{ steps.select.outputs.smoke }}
       opensandbox: ${{ steps.select.outputs.opensandbox }}
+      browser_read: ${{ steps.select.outputs.browser_read }}
       base: ${{ steps.base.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
@@ -225,6 +226,12 @@ jobs:
           tests/services/test_desktop_skill_tools.py
           tests/contracts/test_reviewed_skill_packages.py
           tests/integration/test_reviewed_skills_runner_sqlite.py -q --tb=short
+      - name: Verify browser profile, wire and Native composition contracts
+        run: >-
+          python -m pytest tests/services/test_browser_read_profile.py
+          tests/services/test_browser_read_backend.py tests/services/test_browser_read_cleanup.py
+          tests/services/test_browser_read_harness.py tests/services/test_browser_native_factory.py
+          tests/contracts/test_browser_execution_report.py -q --tb=short
 
   frontend:
     name: Frontend, editor contracts and browser flow
@@ -380,10 +387,60 @@ jobs:
             .tmp/opensandbox-ci/report.native.json
           if-no-files-found: error
 
+  browser-read:
+    name: Playwright anonymous read Linux conformance
+    needs: changes
+    if: needs.changes.outputs.browser_read == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      AGENTHUB_REAL_BROWSER: '1'
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.tmp/playwright-browsers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: services/node/browser-read/package-lock.json
+      - run: python -m pip install -r requirements-dev.txt
+      - run: npm ci --ignore-scripts
+        working-directory: services/node/browser-read
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: browser-read-${{ runner.os }}-${{ hashFiles('services/node/browser-read/package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+        working-directory: services/node/browser-read
+      - run: npm test
+        working-directory: services/node/browser-read
+      - name: Require real Chromium, cancellation, deadlines and Runner integrity flow
+        run: >-
+          python -m pytest tests/integration/test_browser_read_live.py
+          tests/integration/test_browser_native_runner_sqlite.py
+          -q --tb=short --junitxml=.tmp/browser-read-results.xml
+      - name: Reject skipped or empty enabled browser conformance
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          suites=list(E.parse('.tmp/browser-read-results.xml').getroot().iter('testsuite'));
+          assert suites and sum(int(s.get('tests','0')) for s in suites) >= 8;
+          assert all(int(s.get('skipped','0')) == 0 for s in suites)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-read-conformance
+          path: .tmp/browser-read-results.xml
+          if-no-files-found: error
+
   gate:
     name: CI Gate
     if: always()
-    needs: [changes, quality, python, postgres, windows-cli, frontend, go, rust, docker, smoke, opensandbox]
+    needs: [changes, quality, python, postgres, windows-cli, frontend, go, rust, docker, smoke, opensandbox, browser-read]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

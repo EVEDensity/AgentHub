@@ -218,3 +218,22 @@ and [the disposable Linux experiment](../../../deploy/opensandbox/README.md).
 local tests and the explicitly enabled real Docker gate. It runs real model
 loopback HTTP, durable budget/Runner state, CAS and independent verification;
 the model fixture is not a charging provider.
+
+## Experimental anonymous browser composition
+
+`browser_native.BudgetedBrowserReadHarnessFactory` explicitly composes the strict
+model budget port with one `browser_read` tool. The actual claimed WorkUnit must
+require `browser.read`, and its unique Contract scope must match the frozen
+operator profile, origins and runtime digest. The default Desktop, CLI, Chat and
+Runner service do not select it. Resume, streaming and workspace scopes are
+refused. Each read starts a fresh anonymous browser on the Linux Runner; Web and
+Desktop clients do not acquire a local browser or extra permissions.
+
+Only a successful final read, model completion and confirmed cleanup can return
+the model-text and browser-report Artifacts. The independent verifier checks
+registered bytes; it does not certify webpage accuracy or research quality.
+Cancellation cleanup belongs to the browser port and may finish after Runner's
+bounded cancellation drain; a late return cannot publish successful Artifacts.
+See [the browser package](../browser_read/README.md),
+[ADR-0127](../../../docs/architecture/decisions/0127-experimental-anonymous-browser-read.md)
+and the separately enabled real Chromium conformance tests.

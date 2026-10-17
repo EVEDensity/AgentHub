@@ -96,6 +96,16 @@ budgeted Runner/CAS/Verifier checks. Its separate native report is uploaded with
 the original and infrastructure reports. Missing or duplicate required checks
 fail this experiment; deterministic model fixtures are not paid-vendor evidence.
 
+Browser adapter/worker/report changes select the separate Linux Playwright
+anonymous-read gate. It installs the exact npm lock and matching Chromium,
+requires real local-page, process cleanup and budgeted Native/SQLite/Verifier
+tests, and rejects an enabled suite with no tests or any skips. Its model is a
+deterministic loopback fixture. Browser request filtering does not establish
+production network isolation or webpage factual accuracy.
+Windows also runs the browser profile, wire, cleanup policy and Native/report
+contract tests. The Linux-only process tests explicitly skip on Windows; this
+does not advertise a Windows browser execution backend.
+
 `CI Gate` requires all core checks and every selected optional check to pass.
 A failed, cancelled, missing or unexpectedly skipped selected check fails the
 gate. A missing selection output also fails. Unaffected optional jobs may skip.

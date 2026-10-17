@@ -103,7 +103,13 @@ Windows 保留客户端入口，通过 API 访问受支持 Linux 执行节点。
 
 ### 5.4 浏览器采用 Playwright，按调用用途分层
 
-[Playwright](https://github.com/microsoft/playwright) 用于固定、可重放的浏览器验收；[官方 Playwright MCP](https://github.com/microsoft/playwright-mcp) 供 Native Harness 探索网页和执行授权操作。两者根许可 Apache-2.0。MCP 不再引入一个隐藏模型循环。
+[Playwright](https://github.com/microsoft/playwright) 用于固定、可重放的浏览器验收；[官方 Playwright MCP](https://github.com/microsoft/playwright-mcp) 是后续 Native Harness 探索网页和执行授权操作的适配候选。两者根许可 Apache-2.0。MCP 不再引入一个隐藏模型循环。
+
+首个实现切片见 [ADR-0127](../architecture/decisions/0127-experimental-anonymous-browser-read.md)：
+显式启用的 Linux `browser_read` 使用 Playwright 1.61.1 私有 Node worker，只读取受控来源的
+初始 HTML/纯文本文档。每次读取使用全新匿名浏览器，禁用脚本并拒绝跳转及子资源；模型预算、
+实际观察报告和产物完整性验收接入现有 Native/Runner 链路。现有 MCP 网关的会话和协议边界
+尚不满足此用法，因此该切片直接调用 SDK；不将其描述为已接入官方 MCP、通用网页调研或网络隔离。
 
 固定版本，按 tenant/mission/attempt 分配隔离浏览器会话。不要默认复用用户日常 Chrome 和 cookie。[官方安全说明](https://github.com/microsoft/playwright-mcp#security) 明确 MCP 不是安全边界；origins 配置、输出脱敏不能替代 Runner 网络与文件授权。发布、提交、购买、发送等外部动作采用独立能力和审批策略。
 
@@ -336,6 +342,9 @@ conformance 实验、Mission 持久预算账本、逐次供应商请求的严格
 ### M2 第 6 至 8 周：第二执行器和可复用工具
 
 接入一个 OpenHands 候选或经 PoC 证明更合适的同类执行器；首批 Skills 和 Playwright 工具接入现有网关。执行器只完成单 WorkUnit，不提前开放自治分工。
+
+已实现的限定切片是三个来源固定、渐进读取的自有 Skill 包，以及上述匿名静态文档读取组合。
+外部执行器对比、MCP 会话适配、来源引用调研和动态网页交互仍待独立验收，不能据此将 M2 整体标为完成。
 
 验收：相同固定任务集比较 Native/候选的正确率、耗时、费用、权限与取消；换执行器不改 Mission 模型。候选未提供收益或无法纳管则停用，主线 Native 不受影响。
 

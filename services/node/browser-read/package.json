@@ -1,0 +1,10 @@
+{
+  "name": "@agenthub/browser-read-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22 <25" },
+  "scripts": { "test": "node --test test-policy.mjs" },
+  "dependencies": { "playwright": "1.61.1" }
+}

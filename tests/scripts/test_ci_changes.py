@@ -85,6 +85,14 @@ class CiChangeSelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["windows_cli"])
 
+    def test_browser_read_boundaries_select_real_chromium_conformance(self) -> None:
+        for path in ("app/services/browser_read/backend.py", "app/services/runner/browser_native.py",
+                     "services/node/browser-read/worker.mjs", "services/node/browser-read/package-lock.json",
+                     "tests/services/test_browser_read_profile.py", "tests/integration/browser_read_fixture.py",
+                     "tests/integration/test_browser_read_live.py", "tests/integration/test_browser_native_runner_sqlite.py"):
+            with self.subTest(path=path):
+                self.assertTrue(select_checks([path])["browser_read"])
+
     def test_manual_run_selects_all_checks(self) -> None:
         checks = select_checks([], all_checks=True)
         self.assertTrue(checks["go"])

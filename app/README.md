@@ -72,6 +72,10 @@ workspace tree.
   `db/README.md` for migration and rollback boundaries (ADR-0110).
 
 * `services/`: application use cases, compatibility adapters, and storage ports.
+  The explicit `services/browser_read/` and `runner/browser_native.py` composition
+  binds anonymous Playwright observations to an actual claim and strict budget;
+  see [ADR-0127](../docs/architecture/decisions/0127-experimental-anonymous-browser-read.md).
+  It is an optional controlled-origin Linux experiment, not default browsing.
   `services/reviewed_skills/` owns three original document-only Skills, their
   pinned operator index and immutable read catalog. Explicit Desktop injection
   replaces the existing skill read pair; it never merges workspace packages,

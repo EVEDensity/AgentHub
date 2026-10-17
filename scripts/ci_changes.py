@@ -94,6 +94,7 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
         "tests/integration/test_opensandbox_native_sqlite.py", "tests/integration/opensandbox_native_scenario.py",
         "tests/services/test_reviewed_", "tests/services/test_desktop_skill_tools.py",
         "tests/integration/test_reviewed_skills_runner_sqlite.py",
+        "tests/services/test_browser_",
         "requirements", "pyproject.toml", "release/", "scripts/build-cli-",
     )
     images = _container_images(changed, go, rust, frontend)
@@ -105,6 +106,11 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
             "scripts/opensandbox_poc", "tests/services/test_opensandbox",
             "app/services/runner/opensandbox_native.py", "scripts/opensandbox_native_poc.py",
             "tests/integration/test_opensandbox_native", "tests/integration/opensandbox_native_scenario.py",
+        ),
+        "browser_read": contracts or changed(
+            "app/services/browser_read/", "app/services/runner/browser_native.py",
+            "services/node/browser-read/", "tests/services/test_browser_",
+            "tests/integration/browser_read_fixture.py", "tests/integration/test_browser_",
         ),
         "images": {"include": images},
         "smoke": go or changed(
