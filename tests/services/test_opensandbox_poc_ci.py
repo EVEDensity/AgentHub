@@ -177,6 +177,7 @@ def test_child_gets_key_only_via_environment_and_must_write_report(runtime, monk
     assert kwargs["environment"]["AGENTHUB_OPENSANDBOX_WORKLOAD_IMAGE"] == "fixed-image"
     assert kwargs["environment"]["AGENTHUB_OPENSANDBOX_CANARY_HOST"] == "172.17.0.1"
     assert command[command.index("--job-id") + 1] == runtime.job_id
+    assert "--enable-network-control" in command
     assert runtime.api_key not in capsys.readouterr().out
 
 

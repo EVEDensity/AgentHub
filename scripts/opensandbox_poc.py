@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import ipaddress
 import json
 import os
 import sys
@@ -84,10 +83,12 @@ async def _timeout_check(backend: OpenSandboxBackend, sandbox_id: str, report: d
         # the child marker well beyond that deadline and verify it afterwards.
         result = await backend.execute(sandbox_id, ["bash", "-c",
             "(sleep 5; printf late > /workspace/timeout-marker) & wait"], timeout_seconds=2)
+        report["timeout_observation"] = {"cleanup_action": "terminal_response", "exit_code": result.exit_code}
         timed_out = result.exit_code != 0
     except OpenSandboxError as exc:
         if str(exc) != "command timed out":
             raise
+        report["timeout_observation"] = exc.diagnostic()
         timed_out = True
     _check(report, "timeout_not_success", timed_out)
     await asyncio.sleep(6)
@@ -96,9 +97,9 @@ async def _timeout_check(backend: OpenSandboxBackend, sandbox_id: str, report: d
 
 
 async def _network_check(backend: OpenSandboxBackend, sandbox_id: str, report: dict) -> None:
-    host = ipaddress.ip_address(os.environ.get("AGENTHUB_OPENSANDBOX_CANARY_HOST", ""))
-    if host.version != 4 or not host.is_private or host.is_loopback:
-        raise OpenSandboxError("canary requires the private Docker bridge gateway")
+    host = backend.config.canary_control_host
+    if host is None:
+        raise OpenSandboxError("network control requires explicit enablement and a configured canary host")
     connections = []
 
     async def accept(reader, writer):
@@ -107,23 +108,34 @@ async def _network_check(backend: OpenSandboxBackend, sandbox_id: str, report: d
         await writer.wait_closed()
 
     policy = await backend.network_policy(sandbox_id)
-    _check(report, "deny_policy_acknowledged", policy.get("policy", {}).get("defaultAction") == "deny")
+    _check(report, "deny_policy_acknowledged", policy.get("policy") == {
+        "defaultAction": "deny", "egress": []})
+    control = await backend.create_network_control(report["job_id"])
+    report["sandbox_ids"].append(control)
+    control_policy = await backend.network_policy(control)
+    _check(report, "network_control_policy_acknowledged", control_policy.get("policy") == {
+        "defaultAction": "deny", "egress": [{"action": "allow", "target": host}]})
     server = await asyncio.start_server(accept, "0.0.0.0", 0)
     async with server:
         port = server.sockets[0].getsockname()[1]
-        _reader, writer = await asyncio.open_connection(str(host), port)
+        _reader, writer = await asyncio.open_connection(host, port)
         writer.close()
         await writer.wait_closed()
         await asyncio.sleep(0.1)
         _check(report, "network_canary_positive_control", len(connections) == 1)
         command = ["timeout", "2", "bash", "-c", f"exec 3<>/dev/tcp/{host}/{port}"]
+        allowed = await backend.execute(control, command, timeout_seconds=5)
+        await asyncio.sleep(0.1)
+        _check(report, "allowed_sandbox_reaches_host_canary", allowed.exit_code == 0 and len(connections) == 2)
         result = await backend.execute(sandbox_id, command, timeout_seconds=5)
         await asyncio.sleep(0.1)
-        _check(report, "default_deny_blocks_host_canary", result.exit_code != 0 and len(connections) == 1)
+        _check(report, "default_deny_blocks_host_canary", result.exit_code != 0 and len(connections) == 2)
 
 
 async def run_poc(args: argparse.Namespace, api_key: str) -> dict:
-    config = OpenSandboxConfig(args.endpoint, api_key, enabled=args.enable)
+    canary_host = (os.environ.get("AGENTHUB_OPENSANDBOX_CANARY_HOST") or None
+                   if getattr(args, "enable_network_control", False) else None)
+    config = OpenSandboxConfig(args.endpoint, api_key, enabled=args.enable, canary_control_host=canary_host)
     report = {"schema": "agenthub.opensandbox-poc.v1", "job_id": args.job_id,
               "status": "failed", "stage": "authentication", "sandbox_ids": [], "checks": []}
     backend = OpenSandboxBackend(config)
@@ -172,6 +184,8 @@ async def run_poc(args: argparse.Namespace, api_key: str) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--enable", action="store_true")
+    parser.add_argument("--enable-network-control", action="store_true",
+                        help="create a temporary sandbox allowed to reach only the canary host IP")
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--report", required=True, type=Path)

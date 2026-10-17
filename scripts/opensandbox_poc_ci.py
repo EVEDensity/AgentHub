@@ -173,7 +173,7 @@ def run_poc(runtime: Runtime, report: Path, workload: str) -> None:
         raise ValueError("Docker bridge did not return a usable canary IPv4 address")
     environment["AGENTHUB_OPENSANDBOX_CANARY_HOST"] = str(address)
     command = [sys.executable, str(ROOT / "scripts" / "opensandbox_poc.py"),
-               "--enable", "--endpoint", ENDPOINT, "--job-id", runtime.job_id,
+               "--enable", "--enable-network-control", "--endpoint", ENDPOINT, "--job-id", runtime.job_id,
                "--report", str(report)]
     output = run(command, environment=environment, timeout=480)
     if output:

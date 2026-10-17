@@ -18,6 +18,7 @@ from app.services.opensandbox_protocol import (
     MAX_BODY,
     WORKLOAD_IMAGE,
     CommandResult,
+    CommandStop,
     OpenSandboxConfig,
     OpenSandboxError,
     TransferredFile,
@@ -70,14 +71,16 @@ class OpenSandboxBackend:
             raise OpenSandboxError("backend transport failed", code="transport_error",
                                    operation=wire_operation(method, path)) from None
 
-    async def _cleanup_after_failure(self, cleanup: Awaitable[None], failure: BaseException) -> None:
+    async def _cleanup_after_failure(self, cleanup: Awaitable[CommandStop | None],
+                                     failure: BaseException) -> CommandStop | None:
         try:
-            await asyncio.shield(cleanup)
+            return await asyncio.shield(cleanup)
         except OpenSandboxError as exc:
             # Keep the actual failed operation; close() retries owned cleanup and
             # the CI wrapper independently verifies all residual resources.
             if isinstance(failure, OpenSandboxError):
                 failure.cleanup_error = exc.diagnostic()
+            return None
 
     async def _body(self, response: httpx.Response) -> bytes:
         result = bytearray()
@@ -109,6 +112,16 @@ class OpenSandboxBackend:
             raise
 
     async def create(self, job_id: str) -> str:
+        return await self._create(job_id, {"defaultAction": "deny", "egress": []})
+
+    async def create_network_control(self, job_id: str) -> str:
+        """Operator-only PoC: one configured private IP, never an arbitrary policy."""
+        host = self.config.canary_control_host
+        if host is None:
+            raise OpenSandboxError("network control probe is disabled")
+        return await self._create(job_id, {"defaultAction": "deny", "egress": [{"action": "allow", "target": host}]})
+
+    async def _create(self, job_id: str, policy: dict) -> str:
         body = {
             "image": {"uri": WORKLOAD_IMAGE},
             "platform": {"os": "linux", "arch": "amd64"},
@@ -116,7 +129,7 @@ class OpenSandboxBackend:
             "timeout": self.config.lifetime_seconds,
             "resourceLimits": {"cpu": "500m", "memory": "512Mi"},
             "metadata": {"agenthub.job": identifier(job_id)},
-            "networkPolicy": {"defaultAction": "deny", "egress": []},
+            "networkPolicy": policy,
         }
         # Upstream create synchronously provisions the sidecar and distributes
         # execd before returning 202. It needs a separate, still bounded deadline.
@@ -179,15 +192,31 @@ class OpenSandboxBackend:
                 return code
             await asyncio.sleep(0.1)
 
-    async def interrupt(self, sandbox_id: str, execution_id: str) -> None:
+    async def interrupt(self, sandbox_id: str, execution_id: str) -> CommandStop:
         """Confirm stopped state, or destroy the entire sandbox if uncertain."""
+        self._path(sandbox_id, "ping")
         try:
             async with asyncio.timeout(10):
-                await self._request("DELETE", self._path(sandbox_id, "command"),
-                                    params={"id": identifier(execution_id)})
-                await self._wait(sandbox_id, execution_id)
-        except (OpenSandboxError, TimeoutError):
-            await self.destroy(sandbox_id)
+                code = await self.command_status(sandbox_id, execution_id)
+                if code is not None:
+                    return CommandStop("confirmed_terminal", code)
+                try:
+                    await self._request("DELETE", self._path(sandbox_id, "command"),
+                                        params={"id": identifier(execution_id)})
+                except OpenSandboxError as exc:
+                    # Natural completion can race with DELETE. Only a strict
+                    # same-command terminal receipt makes that failure harmless.
+                    code = await self.command_status(sandbox_id, execution_id)
+                    if code is not None:
+                        return CommandStop("confirmed_terminal", code, exc.diagnostic())
+                    raise
+                return CommandStop("confirmed_interrupt", await self._wait(sandbox_id, execution_id))
+        except (OpenSandboxError, TimeoutError) as exc:
+            stopped = await self.destroy(sandbox_id)
+            if stopped is None:
+                raise OpenSandboxError("sandbox destruction could not be confirmed")
+            cause = exc.diagnostic() if isinstance(exc, OpenSandboxError) else {"code": "stop_confirmation_timeout"}
+            return CommandStop("confirmed_sandbox_destroy", cause=cause)
 
     async def start_command(self, sandbox_id: str, argv: list[str], *, timeout_seconds: float = 30) -> str:
         bounded_seconds(timeout_seconds)
@@ -214,12 +243,16 @@ class OpenSandboxBackend:
                 return CommandResult(execution_id, code, output.decode("utf-8", errors="replace")
                                      .replace(self.config.api_key, "[REDACTED]"))
         except BaseException as exc:
-            failure = (OpenSandboxError("command timed out", code="request_timeout", operation="command_status")
+            failure = (OpenSandboxError("command timed out", code="request_timeout",
+                                       operation="command_status" if execution_id else "command_start")
                        if isinstance(exc, TimeoutError) else exc)
             if execution_id is not None:
-                await self._cleanup_after_failure(self.interrupt(sandbox_id, execution_id), failure)
+                stopped = await self._cleanup_after_failure(self.interrupt(sandbox_id, execution_id), failure)
             else:
-                await self._cleanup_after_failure(self.destroy(sandbox_id), failure)
+                stopped = await self._cleanup_after_failure(self.destroy(sandbox_id), failure)
+            if isinstance(failure, OpenSandboxError) and stopped is not None:
+                failure.cleanup_action, failure.exit_code = stopped.action, stopped.exit_code
+                failure.cleanup_cause = stopped.cause
             if failure is not exc:
                 raise failure from None
             raise
@@ -260,7 +293,7 @@ class OpenSandboxBackend:
         if result.exit_code != 0:
             raise OpenSandboxError("workspace symlinks are not transferable")
 
-    async def destroy(self, sandbox_id: str) -> None:
+    async def destroy(self, sandbox_id: str) -> CommandStop | None:
         sandbox_id = identifier(sandbox_id)
         if sandbox_id not in self._owned:
             return
@@ -270,6 +303,7 @@ class OpenSandboxBackend:
                 raise OpenSandboxError("sandbox destruction was not confirmed")
         self._owned.discard(sandbox_id)
         self._active.pop(sandbox_id, None)
+        return CommandStop("confirmed_sandbox_destroy")
 
     async def close(self) -> None:
         failures = []

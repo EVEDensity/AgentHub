@@ -32,7 +32,10 @@ python scripts/opensandbox_poc_ci.py --enable --report data/opensandbox-poc/run-
 `--enable` is mandatory. Every run needs a fresh report path. The wrapper pulls
 the four digest-pinned images, creates a random job ID and authentication key,
 starts one temporary server, checks health and authentication, and calls
-`scripts/opensandbox_poc.py` using the current Python interpreter. No OpenSandbox
+`scripts/opensandbox_poc.py --enable-network-control` using the current Python
+interpreter. That explicit operator switch permits the third, temporary canary
+control sandbox described below; it does not change ordinary sandbox policy.
+No OpenSandbox
 SDK or server package is installed into AgentHub. The workload image is a small
 Ubuntu shell environment; Code Interpreter, Kubernetes, Redis, Vault and model
 providers are not required.
@@ -59,6 +62,15 @@ only after provisioning the sidecar and distributing execd. Ordinary HTTP calls
 retain a 15-second deadline; readiness and the full experiment remain bounded.
 This deadline does not establish that a failed create was caused by a timeout.
 
+Command interruption first checks the terminal status. If the interrupt DELETE
+fails, it checks status again before deciding whether to destroy the sandbox.
+Only a matching execution ID, `running=false`, a valid `finished_at` and an
+explicit exit code acknowledge that the command has already terminated. This
+avoids destroying a sandbox when its command naturally timed out immediately
+before cancellation. It is a command terminal acknowledgement; the PoC must
+still verify delayed child markers to establish that the tested descendants
+stopped. It does not establish cleanup of arbitrary detached processes.
+
 The execution-timeout check uses a two-second deadline, a child marker delayed
 five seconds, and a six-second observation wait. This leaves room to receive
 the start identity despite the pinned execd's 200ms SSE shutdown grace. Missing
@@ -71,10 +83,29 @@ The config enables bridge networking with the pinned `dns+nft` egress image.
 The HTTP adapter explicitly requests a deny policy per sandbox; configuring an
 egress image alone does not establish deny-by-default behavior. The wrapper
 passes the Docker bridge gateway as `AGENTHUB_OPENSANDBOX_CANARY_HOST` for the
-PoC's temporary TCP listener. A positive host probe establishes listener health;
-the sandbox's denied TCP connection is checked without depending on Internet
-availability. This listener binds a random port on the disposable host while
-the check runs and holds no secrets.
+PoC's temporary TCP listener. The standalone PoC reads that environment value
+only when the operator explicitly supplies `--enable-network-control`; the
+network stage fails when the flag or host is missing, without skipping checks
+or creating an extra sandbox. The host must be a canonical RFC1918 IPv4 address.
+
+The network check first confirms the original sandbox has exactly a deny
+default and no egress rules. It creates a third sandbox with the same pinned
+image and job metadata, records its ID immediately, and confirms its policy is
+exactly deny plus one allow rule for that host IP. Upstream rules restrict an
+IP rather than a port: this temporary control sandbox can reach that host IP
+on all ports, while the actual probe uses only the random listener port.
+It receives no credentials or host mounts and is removed with the other two
+sandboxes.
+The fixed policy implementation parses literal IP targets and emits static
+nftables IP sets; see [target normalization and static sets](https://github.com/opensandbox-group/OpenSandbox/blob/6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9/components/egress/pkg/policy/policy.go).
+
+A positive host probe establishes listener health. The control sandbox must
+then run the TCP probe successfully and add exactly one observed connection.
+The original deny sandbox runs the identical probe and must fail without
+adding a connection. Neither a zero exit without a connection nor failure of
+both sandbox probes establishes a passing result. This uses no Internet target.
+The listener binds a random port on the disposable host while the check runs
+and holds no secrets.
 
 Docker's runtime does not support upstream `secureAccess`. Loopback endpoints
 are not tenant-specific authenticated endpoints. Real malicious-workload
@@ -133,7 +164,10 @@ Failed reports retain the fixed experiment `stage` and a bounded structured
 exactly allowlisted upstream code. Remote bodies, messages, URLs and headers
 are never recorded. Unknown error codes are omitted. A cleanup failure is
 recorded separately without replacing the original operation failure. The
-first sandbox ID is recorded only after its readiness and workspace setup;
+timeout observation includes the confirmed cleanup action and terminal exit
+when available, so a natural completion race can be distinguished from a
+confirmed sandbox destruction or an unconfirmed cleanup.
+The first sandbox ID is recorded only after its readiness and workspace setup;
 an empty ID list alone cannot locate a failure within those steps.
 
 The server's SQLite state is an operating-system temporary directory mounted
@@ -176,7 +210,7 @@ not per-job containers or credential stores.
 Local contract verification:
 
 ```bash
-python -m pytest -q -p no:cacheprovider tests/services/test_opensandbox_backend.py tests/services/test_opensandbox_poc.py tests/services/test_opensandbox_poc_ci.py
+python -m pytest -q -p no:cacheprovider tests/services/test_opensandbox_backend.py tests/services/test_opensandbox_controls.py tests/services/test_opensandbox_poc.py tests/services/test_opensandbox_poc_ci.py
 python -m ruff check app/services/opensandbox_backend.py app/services/opensandbox_protocol.py scripts/opensandbox_poc.py scripts/opensandbox_poc_ci.py
 ```
 

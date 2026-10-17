@@ -35,6 +35,8 @@ class OpenSandboxError(RuntimeError):
         self.operation = operation if isinstance(operation, str) and operation in WIRE_OPERATIONS else "unknown"
         self.cleanup_error: dict | None = None
         self.exit_code = exit_code if type(exit_code) is int and -2147483648 <= exit_code <= 2147483647 else None
+        self.cleanup_action: str | None = None
+        self.cleanup_cause: dict | None = None
 
     def diagnostic(self) -> dict:
         """Only fixed local codes, an HTTP integer and exact upstream enums."""
@@ -47,6 +49,10 @@ class OpenSandboxError(RuntimeError):
             result["cleanup"] = self.cleanup_error
         if self.exit_code is not None:
             result["exit_code"] = self.exit_code
+        if self.cleanup_action is not None:
+            result["cleanup_action"] = self.cleanup_action
+        if self.cleanup_cause is not None:
+            result["cleanup_cause"] = self.cleanup_cause
         return result
 
 
@@ -139,6 +145,20 @@ def endpoint(value: str) -> str:
     return value.rstrip("/")
 
 
+def canary_address(value: object) -> str:
+    """Only the operator's single canonical RFC1918 IPv4 can be a PoC target."""
+    if not isinstance(value, str):
+        raise OpenSandboxError("canary requires one canonical RFC1918 IPv4 address")
+    try:
+        address = ipaddress.IPv4Address(value)
+        private_ranges = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+        if str(address) != value or not any(address in ipaddress.ip_network(item) for item in private_ranges):
+            raise ValueError
+    except ValueError:
+        raise OpenSandboxError("canary requires one canonical RFC1918 IPv4 address") from None
+    return str(address)
+
+
 @dataclass(frozen=True)
 class OpenSandboxConfig:
     endpoint: str
@@ -148,6 +168,7 @@ class OpenSandboxConfig:
     request_timeout_seconds: float = 15
     create_timeout_seconds: float = 90
     ready_timeout_seconds: float = 90
+    canary_control_host: str | None = None
 
     def __post_init__(self) -> None:
         endpoint(self.endpoint)
@@ -161,6 +182,8 @@ class OpenSandboxConfig:
         bounded_seconds(self.request_timeout_seconds, 60)
         bounded_seconds(self.create_timeout_seconds, 180)
         bounded_seconds(self.ready_timeout_seconds)
+        if self.canary_control_host is not None:
+            canary_address(self.canary_control_host)
 
 
 @dataclass(frozen=True)
@@ -168,6 +191,13 @@ class CommandResult:
     execution_id: str
     exit_code: int
     output: str
+
+
+@dataclass(frozen=True)
+class CommandStop:
+    action: str
+    exit_code: int | None = None
+    cause: dict | None = None
 
 
 @dataclass(frozen=True)
