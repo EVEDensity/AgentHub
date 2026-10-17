@@ -192,3 +192,29 @@ live supplier billing. Insufficient funds prevent the next HTTP request, and
 trusted late settlement cannot revive cancelled work.
 Focused Harness tests are `tests/services/test_harness_model_operations.py` and
 `tests/services/test_strict_budget_harness.py`.
+
+## Experimental budgeted Native sandbox composition
+
+`opensandbox_native.BudgetedOpenSandboxHarnessFactory` is an explicit alternative
+for `DesktopTaskClaimedWorkResolver`. It privately binds the same claim identity
+and strict model accounting, then creates `SandboxNativeHarness` with one fresh
+OpenSandbox and a bounded `run_shell` tool. A unique `sandbox.execute` grant must
+match the exact `opensandbox-shell.v1` profile and pinned image, and the WorkUnit
+must require that capability. Host repository scopes, resume and streaming are
+refused. The default runner and clients do not select this factory.
+
+The wrapper requires actual command observations and confirmed destruction
+before returning model-text and report Artifacts. The report contains combined
+output, not separate stdout/stderr; its byte count is sanitized UTF-8 before
+truncation. Final command failure, output limits or unconfirmed cleanup cannot
+be turned into success by model text. Runner/Verifier/Mission Control retain
+lease admission and output-integrity authority. This is not trusted pytest or
+code-correctness evidence, and same-container reporter integrity against hostile
+code is not established.
+
+See [ADR-0125](../../../docs/architecture/decisions/0125-experimental-sandbox-native-composition.md)
+and [the disposable Linux experiment](../../../deploy/opensandbox/README.md).
+`tests/integration/opensandbox_native_scenario.py` is shared by simulated-wire
+local tests and the explicitly enabled real Docker gate. It runs real model
+loopback HTTP, durable budget/Runner state, CAS and independent verification;
+the model fixture is not a charging provider.

@@ -207,6 +207,12 @@ jobs:
           tests/services/test_strict_budget_harness.py
           tests/services/test_harness_model_operations.py
           tests/integration/test_strict_budget_runner_sqlite.py -q --tb=short
+      - name: Verify experimental Native sandbox composition contracts
+        run: >-
+          python -m pytest tests/services/test_opensandbox_harness.py
+          tests/services/test_opensandbox_harness_supervision.py
+          tests/services/test_opensandbox_native_factory.py
+          tests/integration/test_opensandbox_native_sqlite.py -q --tb=short
 
   frontend:
     name: Frontend, editor contracts and browser flow
@@ -351,7 +357,7 @@ jobs:
           cache-dependency-path: requirements*.txt
       - run: python -m pip install -r requirements.txt
       - name: Require real pinned sandbox execution, cancellation and cleanup
-        run: python scripts/opensandbox_poc_ci.py --enable --report .tmp/opensandbox-ci/report.json
+        run: python scripts/opensandbox_poc_ci.py --enable --native-composition --report .tmp/opensandbox-ci/report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -359,6 +365,7 @@ jobs:
           path: |
             .tmp/opensandbox-ci/report.json
             .tmp/opensandbox-ci/report.infrastructure.json
+            .tmp/opensandbox-ci/report.native.json
           if-no-files-found: error
 
   gate:

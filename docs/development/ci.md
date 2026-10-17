@@ -49,6 +49,8 @@ The Windows job also runs strict-provider wire/real loopback HTTP accounting,
 Native Harness operation/retry policy and the real SQLite Runner/CAS/Verifier
 composition tests. These require no paid provider or external credentials and
 do not establish live vendor billing conformance.
+Experimental Native/OpenSandbox Harness/factory and simulated-wire SQLite
+composition tests also run on Windows, with no Docker requirement there.
 Public contract changes select all runtime consumers. Container builds follow
 the actual supported service recipes and their COPY inputs:
 
@@ -83,7 +85,11 @@ masked credential, requires real execution/cancellation/file/isolation checks,
 and cleans up only this job's resources. Missing runtime, failed setup, unknown
 execution results or failed cleanup fail that selected check. The experiment is
 off in application defaults; this CI check does not establish hostile-code or
-team-production readiness.
+team-production readiness. The enabled `--native-composition` stage preserves the
+original 19 checks and adds 13 mandatory Native command/exit/cancel/cleanup and
+budgeted Runner/CAS/Verifier checks. Its separate native report is uploaded with
+the original and infrastructure reports. Missing or duplicate required checks
+fail this experiment; deterministic model fixtures are not paid-vendor evidence.
 
 `CI Gate` requires all core checks and every selected optional check to pass.
 A failed, cancelled, missing or unexpectedly skipped selected check fails the

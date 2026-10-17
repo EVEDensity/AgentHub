@@ -16,6 +16,37 @@ the original sandbox's denied connection, actual timeout/cancellation child
 markers, and zero remaining main containers, sidecars or managed volumes.
 This is evidence for the disposable pinned profile, not production isolation.
 
+## Explicit Native composition experiment
+
+```bash
+python scripts/opensandbox_poc_ci.py --enable --native-composition --report .tmp/opensandbox-ci/report.json
+```
+
+The added flag preserves the original 19 conformance checks and runs four fresh
+Native sandbox executions against the same disposable server. Three cover real
+command output, exit 7 overriding a model completion claim, and cancellation after
+an actual command identity. The fourth runs an authenticated workspace claim,
+strict model HTTP accounting, Native shell tool, Runner Artifact publication,
+CAS and independent byte verification over real SQLite to its terminal state.
+Both model drivers are named deterministic fixtures; no charging model is used.
+The model HTTP fixture is a real loopback server, not vendor conformance evidence.
+
+`report.native.json` is separate from the original report, and all 13 required
+native checks must pass with four unique sandbox IDs. The wrapper reads IDs from
+both reports for exact-scope cleanup and still requires zero residual managed
+resources. This native combination requires its own successful Linux run; the
+historical 19-check record above alone does not establish it.
+
+`BudgetedOpenSandboxHarnessFactory` requires the exact `sandbox.execute` profile
+and image grant. It grants a bounded shell in a trusted-code Linux container;
+the initial cwd `/workspace` does not restrict access to the rest of the container.
+No host repository scopes/mounts, remote pytest policy, streaming or resume are
+admitted. The two returned Artifacts are model text and diagnostic command
+observations. The latter records actual exit, sanitized combined output, script
+digest and confirmed destruction; it is not TestRunReport/PASS Evidence. The
+existing `artifact-set.v1` criterion proves only registered byte integrity.
+See [ADR-0125](../../docs/architecture/decisions/0125-experimental-sandbox-native-composition.md).
+
 ## Prerequisites and command
 
 Use a disposable Linux amd64 host with Python 3.11 or newer, the repository

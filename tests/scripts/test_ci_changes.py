@@ -59,7 +59,10 @@ class CiChangeSelectionTests(unittest.TestCase):
 
     def test_opensandbox_boundaries_select_real_conformance(self) -> None:
         for path in ("app/services/opensandbox_backend.py", "deploy/opensandbox/lock.json",
-                     "scripts/opensandbox_poc_ci.py", "tests/services/test_opensandbox_backend.py"):
+                     "scripts/opensandbox_poc_ci.py", "tests/services/test_opensandbox_backend.py",
+                     "app/services/runner/opensandbox_native.py", "scripts/opensandbox_native_poc.py",
+                     "tests/integration/test_opensandbox_native_sqlite.py",
+                     "tests/integration/opensandbox_native_scenario.py"):
             self.assertTrue(select_checks([path])["opensandbox"], path)
 
     def test_cli_dependencies_select_windows_flow(self) -> None:
@@ -69,7 +72,11 @@ class CiChangeSelectionTests(unittest.TestCase):
                      "tests/services/strict_provider_fixtures.py",
                      "tests/services/test_strict_budget_harness.py",
                      "tests/services/test_harness_model_operations.py",
-                     "tests/integration/test_strict_budget_runner_sqlite.py"):
+                     "tests/integration/test_strict_budget_runner_sqlite.py",
+                     "tests/services/test_opensandbox_harness.py",
+                     "tests/services/test_opensandbox_harness_supervision.py",
+                     "tests/services/test_opensandbox_native_factory.py",
+                     "tests/integration/test_opensandbox_native_sqlite.py"):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["windows_cli"])
 

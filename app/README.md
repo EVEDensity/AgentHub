@@ -54,6 +54,10 @@ workspace tree.
   Same-Mission
   child WorkUnits share an account; forked Missions do not inherit one. See
   [ADR-0123](../docs/architecture/decisions/0123-persistent-mission-budget-ledger.md).
+  The explicit `runner/opensandbox_native.py` factory combines the strict model
+  port with a pinned sandbox shell grant and post-cleanup observation Artifacts;
+  see [ADR-0125](../docs/architecture/decisions/0125-experimental-sandbox-native-composition.md).
+  It remains a trusted-code experiment and does not add trusted test semantics.
 
 * `repositories/`: persistence and transaction boundaries.
   Legacy session file versions remain in `artifacts`; Mission Control owns

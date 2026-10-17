@@ -42,6 +42,7 @@ class Runtime:
     server_id: str = ""
     sandbox_ids: set[str] = field(default_factory=set)
     unknown_resource_counts: dict[str, int] | None = None
+    additional_reports: set[Path] = field(default_factory=set)
 
 
 def run(command: list[str], *, environment: dict[str, str] | None = None,
@@ -184,6 +185,40 @@ def run_poc(runtime: Runtime, report: Path, workload: str) -> None:
         raise RuntimeError("PoC did not produce a successful report for this job")
 
 
+def run_native_poc(runtime: Runtime, report: Path, workload: str) -> None:
+    """Require a separate real Native/tool/backend report, without changing the old PoC."""
+    runtime.additional_reports.add(report)
+    environment = os.environ.copy()
+    environment["AGENTHUB_OPENSANDBOX_API_KEY"] = runtime.api_key
+    environment["AGENTHUB_OPENSANDBOX_WORKLOAD_IMAGE"] = workload
+    command = [sys.executable, str(ROOT / "scripts" / "opensandbox_native_poc.py"),
+               "--enable", "--endpoint", ENDPOINT, "--job-id", runtime.job_id, "--report", str(report)]
+    output = run(command, environment=environment, timeout=480)
+    if output:
+        print(output.replace(runtime.api_key, "[REDACTED]"))
+    result = json.loads(report.read_text(encoding="utf-8"))
+    if (not isinstance(result, dict) or result.get("schema") != "agenthub.opensandbox-native-poc.v1"
+            or result.get("job_id") != runtime.job_id or result.get("status") != "passed"
+            or not native_checks_passed(result.get("checks"))):
+        raise RuntimeError("Native composition did not produce a successful report for this job")
+
+
+def native_checks_passed(checks: object) -> bool:
+    expected = {
+        "native_success_exit_and_output", "native_success_final_output", "native_success_cleanup_confirmed",
+        "native_failure_exit_preserved", "native_failure_not_success", "native_failure_cleanup_confirmed",
+        "native_cancellation_command_started", "native_cancellation_propagated", "native_cancellation_cleanup_confirmed",
+        "fresh_sandboxes_per_execution", "runner_budget_artifact_integrity_terminal",
+        "runner_sandbox_cleanup_confirmed", "backend_close_confirmed",
+    }
+    if not isinstance(checks, list) or len(checks) != len(expected):
+        return False
+    if not all(isinstance(item, dict) and item.get("passed") is True and isinstance(item.get("name"), str)
+               for item in checks):
+        return False
+    return {item["name"] for item in checks} == expected
+
+
 def container_ids(label: str) -> list[str]:
     values = run(["docker", "ps", "--all", "--quiet", "--no-trunc", "--filter",
                   f"label={label}"]).splitlines()
@@ -249,8 +284,9 @@ def cleanup_sandbox(runtime: Runtime, sandbox_id: str) -> None:
 
 def cleanup(runtime: Runtime, report: Path) -> list[str]:
     errors: list[str] = []
-    for operation in (lambda: read_report_ids(runtime, report),
-                      lambda: discover_owned(runtime)):
+    reads = [lambda path=path: read_report_ids(runtime, path)
+             for path in (report, *sorted(runtime.additional_reports))]
+    for operation in (*reads, lambda: discover_owned(runtime)):
         try:
             operation()
         except HANDLED_ERRORS as exc:
@@ -299,16 +335,17 @@ def interrupt(signum, frame) -> None:
     raise InterruptedError("PoC provisioning interrupted")
 
 
-def execute(report: Path) -> int:
+def execute(report: Path, *, native_composition: bool = False) -> int:
     lock = load_lock()
     infrastructure = {"status": "failed", "images": lock["images"],
                       "platform": lock["platform"], "cleanup_errors": [],
-                      "unknown_resource_counts": None}
+                      "unknown_resource_counts": None, "native_composition": native_composition}
     job_id = str(uuid.uuid4())
     infrastructure["job_id"] = job_id
     report.parent.mkdir(parents=True, exist_ok=True)
     destination = report.with_suffix(".infrastructure.json")
-    if report.exists() or destination.exists():
+    native_report = report.with_suffix(".native.json")
+    if report.exists() or destination.exists() or (native_composition and native_report.exists()):
         raise ValueError("refusing to overwrite an existing PoC report")
     with tempfile.TemporaryDirectory(prefix="agenthub-opensandbox-") as directory:
         runtime = Runtime(job_id, secrets.token_urlsafe(32), Path(directory))
@@ -328,6 +365,9 @@ def execute(report: Path) -> int:
             wait_ready(runtime)
             infrastructure["stage"] = "poc_checks"
             run_poc(runtime, report, lock["images"]["workload"])
+            if native_composition:
+                infrastructure["stage"] = "native_composition"
+                run_native_poc(runtime, native_report, lock["images"]["workload"])
             infrastructure["status"] = "passed"
             infrastructure["stage"] = "complete"
         except (*HANDLED_ERRORS, KeyboardInterrupt) as exc:
@@ -348,13 +388,15 @@ def execute(report: Path) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--enable", action="store_true", help="explicitly create disposable containers")
+    parser.add_argument("--native-composition", action="store_true",
+                        help="also require the separate Native Harness/tool/command experiment")
     parser.add_argument("--report", type=Path, default=ROOT / "data" / "opensandbox-poc" / "report.json")
     args = parser.parse_args(argv)
     if not args.enable:
         parser.error("--enable is required; provisioning is disabled by default")
     signal.signal(signal.SIGTERM, interrupt)
     try:
-        return execute(args.report.resolve())
+        return execute(args.report.resolve(), native_composition=args.native_composition)
     except (*HANDLED_ERRORS, KeyboardInterrupt) as exc:
         print(json.dumps({"status": "failed", "error_type": type(exc).__name__}))
         return 1
