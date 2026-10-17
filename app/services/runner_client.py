@@ -328,7 +328,8 @@ class MissionControlRunnerClient:
             except ValueError:
                 pass
             raise RunnerControlError(
-                f"Mission Control rejected {method} {path}: {detail}"
+                f"Mission Control rejected {method} {path}: {detail}",
+                http_status=response.status_code, detail=detail,
             )
         try:
             payload = response.json()

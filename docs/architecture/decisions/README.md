@@ -13,6 +13,8 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0122](0122-experimental-opensandbox-http-port.md) | Evaluate a pinned OpenSandbox behind an opt-in HTTP port |
+| [0121](0121-trusted-local-test-bundles.md) | Admit signed test bundles under the execution lease |
 | [0120](0120-development-service-failure-boundaries.md) | Seal privileged development services and fail closed on sandbox loss |
 | [0119](0119-default-task-artifact-acceptance.md) | Share explicit output-integrity acceptance across entry points |
 | [0118](0118-composable-agent-integrations.md) | Compose external capabilities behind Mission-owned execution |

@@ -195,6 +195,11 @@ jobs:
       - run: python scripts/ci_prepare_tokenizers.py
       - name: Verify CLI, terminal and Windows release contracts
         run: python -m pytest tests/cli tests/desktop tests/npm -q --tb=short
+      - name: Verify trusted-local snapshots, subprocess cleanup and test production
+        run: >-
+          python -m pytest tests/services/test_trusted_test_snapshot.py
+          tests/services/test_trusted_test_producer.py tests/services/test_trusted_test_harness.py
+          tests/services/test_trusted_test_process.py -q --tb=short
 
   frontend:
     name: Frontend, editor contracts and browser flow

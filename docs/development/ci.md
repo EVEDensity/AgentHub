@@ -41,6 +41,10 @@ the actual sandbox image and requires opt-in real Linux Docker execution and
 cancellation tests; missing Docker or image fails that enabled check. Rust changes run locked
 workspace tests. CLI/runtime/dependency changes run CLI, desktop and release
 contract tests, including real CLI subprocesses, on Windows/Python 3.12.
+The same Windows job runs the trusted-local snapshot, producer, Harness and
+process tests, including actual subprocess/Job Object cleanup. POSIX-only cases
+skip there and execute in the Linux core suite. Changes to those tests select
+the Windows job even when production source is unchanged.
 Public contract changes select all runtime consumers. Container builds follow
 the actual supported service recipes and their COPY inputs:
 

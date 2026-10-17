@@ -30,3 +30,14 @@ Multi-executor chat workflows and outbound A2A chat routes are not implemented.
 The adapter rejects those requests instead of redirecting them to the built-in
 Agent. See ADR-0112 and `tests/api/test_chat_mission.py` for admission, SQLite,
 transaction rollback, claim, and lease-fencing coverage.
+
+## Trusted test admission
+
+The explicit `trusted-test-run.v1` policy admits PASS only for the complete
+registered current-attempt Artifact bundle. `_verify_mixin.py` checks that the
+submitted five Artifacts match that complete immutable metadata set before byte
+verification and again under the Mission/WorkUnit admission transaction locks.
+Extra reports or another bundle cannot be omitted from a passing submission.
+Existing evaluators retain their registered-subset behavior; FAIL Evidence uses
+the existing admission path. See `trusted_tests/admission.py` and
+`tests/integration/test_trusted_test_verification_sqlite.py`.

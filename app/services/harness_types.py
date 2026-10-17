@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from app.services.harness_checkpoint import HarnessError, HarnessExecutionContext
 from app.services.model_contract import ModelUsage, ToolCall, ToolResult
 from app.services.tools.sandbox_executor import SandboxResult
+from app.services.execution_artifacts import HarnessArtifact
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ class HarnessResult:
     iterations: int = 1
     tool_calls: int = 0
     usage: ModelUsage = field(default_factory=ModelUsage)
+    artifacts: tuple[HarnessArtifact, ...] = ()
 
 class RepairErrorType(StrEnum):
     """Stable error classes eligible for a bounded repair attempt."""

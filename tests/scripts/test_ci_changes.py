@@ -63,7 +63,8 @@ class CiChangeSelectionTests(unittest.TestCase):
             self.assertTrue(select_checks([path])["opensandbox"], path)
 
     def test_cli_dependencies_select_windows_flow(self) -> None:
-        for path in ("requirements.txt", "app/services/runner/loops.py", "tests/cli/test_cli_e2e.py"):
+        for path in ("requirements.txt", "app/services/runner/loops.py", "tests/cli/test_cli_e2e.py",
+                     "tests/services/test_trusted_test_process.py"):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["windows_cli"])
 

@@ -23,7 +23,13 @@ is used for contact matching; tool execution still requires Contract scope and
 the existing permission policy. A RUNNING claim must restore a complete journal
 for its exact attempt before execution. Missing manifests or anchors cannot
 fall back to a fresh model loop. A concurrently held recovery lock returns
-`capacity_saturated` without failing the active WorkUnit.
+`capacity_saturated` without failing the active WorkUnit. After acquiring its
+private recovery scope, a RUNNING resume synchronously renews and validates the
+original lease before executing. A claim fetched before the previous owner
+completed cannot replay cached output after that owner releases the lock. Only
+Mission Control's exact 403 `Active Runner lease ownership required` rejection
+maps that stale workspace poll to `idle`; general authorization, missing-resource
+and service errors remain explicit errors.
 
 All desktop workers use the authenticated principal as lease owner; local
 worker indices are not server identities. Ordinary workspace claims prefer
@@ -89,6 +95,55 @@ compatibility parsers and low-level `run_verify_command` helper; that helper
 does not authorize execution or create trusted test Evidence on its own.
 Future test producers need an explicit Contract boundary and attributable
 reports before the Runner completes its lease-bound artifact set.
+
+The opt-in `trusted_tests` package supplies an operator-frozen repository/test
+profile and a signed five-Artifact bundle; see
+[ADR-0121](../../../docs/architecture/decisions/0121-trusted-local-test-bundles.md).
+`HarnessResult.artifacts` carries immutable candidate bytes. Runner validates
+and publishes the whole bundle, registers every entry under the live lease,
+then completes with all refs. Its deadline and heartbeat cover the Harness,
+producer and publication together. A shared monotonic abort/deadline fence is
+checked before and after heartbeat calls, after execution and publication, before each registration, and before
+the terminal command dispatch. A port returning after cancellation cannot
+dispatch another Artifact registration or completion through the Runner.
+Default executors still publish their single
+text output. A publication interruption preserves the existing recoverable
+RUNNING lease, and a partial bundle cannot establish Evidence.
+
+Terminal HTTP dispatch cannot be rolled back by cancelling its local await.
+If a heartbeat loses its lease while completion is in flight, or the local
+deadline expires, Runner waits at most another 500 ms for the actual transaction
+ACK. Only that response confirms the exact lease-fenced completion and refs;
+missing/rejected ACKs raise `RunnerTerminalAckUncertainError` and never invent
+success or send a second failure command. Cancellation after terminal dispatch
+propagates and logs that Mission Control may already have committed. Recovery
+and independent verification must use the durable state.
+
+Cancellation drain is bounded to 250 ms, with up to 250 ms for a best-effort
+final state flush. Normal successful execution flushes its state before
+publication under the supervised deadline. These are cooperative async bounds,
+not a hard wall-clock process limit: synchronous callbacks cannot be preempted,
+and ports retain responsibility for their process cleanup. An already dispatched
+HTTP command can still commit after local cancellation. Regression tests in
+`tests/services/test_runner_supervision_regressions.py` and
+`tests/integration/test_runner_supervision_sqlite_http.py` cover delayed real
+SQLite completion ACKs, stale leases, cancellation-resistant ports and late
+publication rejection; the existing reporting cancellation tests retain the
+recoverable RUNNING behavior.
+
+## Experimental OpenSandbox HTTP port
+
+`../opensandbox_backend.py` and `../opensandbox_protocol.py` implement a default-off,
+standalone OpenSandbox 1.1.1 experiment. They do not change platform sandbox
+selection, desktop execution, Mission state, recovery, or verification authority.
+The explicit caller owns Contract authorization. The port requires authentication,
+HTTPS or loopback HTTP, pinned Linux workloads, deny-default networking, bounded
+commands with independently polled terminal status, and confirmed destruction.
+File transfers are bounded, digest-checked, and refuse traversal and symlinks;
+this serial PoC does not establish a filesystem boundary against malicious
+concurrent background processes. There is no local fallback or SDK dependency.
+See [the experiment guide](../../../deploy/opensandbox/README.md) for opt-in
+commands, the real Linux Docker gate, limitations, and rollback.
 
 The controller tests cover CAS bytes and inert objective markers.
 `tests/integration/test_default_task_acceptance_sqlite.py` exercises the real

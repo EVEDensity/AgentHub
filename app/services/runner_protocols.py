@@ -18,6 +18,11 @@ class RunnerError(RuntimeError):
 class RunnerControlError(RunnerError):
     """Raised when Mission Control rejects or cannot complete a command."""
 
+    def __init__(self, message: str, *, http_status: int | None = None, detail: object = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.detail = detail
+
 
 class RunnerExecutionError(RunnerError):
     """Raised when execution or Artifact publication cannot finish honestly."""
@@ -202,6 +207,7 @@ class RunnerRunResult:
     work_unit: dict[str, Any]
     artifact: PublishedArtifact | None
     failure_reason: str | None = None
+    artifacts: tuple[PublishedArtifact, ...] = ()
 
 
 @dataclass(frozen=True)
