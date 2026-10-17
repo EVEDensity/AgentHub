@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "release": "1.1.1",
+  "source_tag": "release-1.1.1",
+  "source_tag_commit": "531700ca18a7fa5fab6a2f25d6dc68a76eddab12",
+  "upstream_bom_git_commit": "6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9",
+  "platform": "linux/amd64",
+  "images": {
+    "server": "docker.io/opensandbox/server@sha256:bcd5f264101262cebfa7e1ff9cd0424403e42f31a6596e4364cf90d8cb5c936b",
+    "execd": "docker.io/opensandbox/execd@sha256:cda2bc35409bbf57561599b316cafb899598f7dce671332e7ceda14eb1cfeded",
+    "egress": "docker.io/opensandbox/egress@sha256:bce2cc2e4dc3a3594678b91ac29efb0669fccebfdfc137727018d3b087fbb13a",
+    "workload": "docker.io/library/ubuntu:22.04@sha256:0a9887931b0e38af2e3487ed39e29436b0535c4f3f52e57745baaf79d1898956"
+  },
+  "sources": {
+    "release": "https://github.com/opensandbox-group/OpenSandbox/releases/tag/release-1.1.1",
+    "bom": "https://github.com/opensandbox-group/OpenSandbox/blob/release-1.1.1/docs/releases/1.1.1.yaml",
+    "license": "https://github.com/opensandbox-group/OpenSandbox/blob/release-1.1.1/LICENSE"
+  }
+}

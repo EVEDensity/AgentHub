@@ -80,17 +80,32 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
         return all_checks or any(path.startswith(prefixes) for path in paths)
 
     contracts = changed("platform/contracts/", "tests/contracts/")
-    go = contracts or changed("services/go/")
-    frontend = contracts or changed("frontend/", "app/api/", "app/schemas/", "tests/api/")
+    go = contracts or changed("services/go/", "deploy/sandbox-image/")
+    frontend = contracts or changed(
+        "frontend/", "extensions/vscode-agenthub/", "app/api/", "app/schemas/", "tests/api/",
+    )
     rust = contracts or changed("services/rust/")
     windows_cli = contracts or changed(
         "app/", "desktop/", "tests/cli/", "tests/desktop/", "tests/npm/",
+        "tests/services/test_trusted_test_",
+        "tests/services/test_strict_", "tests/services/strict_provider_fixtures.py",
+        "tests/services/test_harness_model_operations.py", "tests/integration/test_strict_budget_",
+        "tests/services/test_opensandbox_harness", "tests/services/test_opensandbox_native_factory.py",
+        "tests/integration/test_opensandbox_native_sqlite.py", "tests/integration/opensandbox_native_scenario.py",
+        "tests/services/test_reviewed_", "tests/services/test_desktop_skill_tools.py",
+        "tests/integration/test_reviewed_skills_runner_sqlite.py",
         "requirements", "pyproject.toml", "release/", "scripts/build-cli-",
     )
     images = _container_images(changed, go, rust, frontend)
     return {
         "go": go, "frontend": frontend, "rust": rust,
         "windows_cli": windows_cli, "docker": bool(images),
+        "opensandbox": contracts or changed(
+            "app/services/opensandbox_", "deploy/opensandbox/",
+            "scripts/opensandbox_poc", "tests/services/test_opensandbox",
+            "app/services/runner/opensandbox_native.py", "scripts/opensandbox_native_poc.py",
+            "tests/integration/test_opensandbox_native", "tests/integration/opensandbox_native_scenario.py",
+        ),
         "images": {"include": images},
         "smoke": go or changed(
             "services/python/", "deploy/", "scripts/ci-smoke-test.sh",

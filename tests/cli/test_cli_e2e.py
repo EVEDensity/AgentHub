@@ -5,11 +5,10 @@ desktop local runner and the mock model provider, drive one Mission
 through ``app.cli``, and assert the exit-code contract.
 
 The suite is slow (server boot + mission loop ≈ 30s per case) so it is
-gated behind ``AGENTHUB_CLI_E2E=1`` and skipped by default. The honest
-failure case is the load-bearing assertion: the mock model registers an
-artifact (bytes verify) but cannot create files, so the declared
-``VERIFY:`` command must veto the mission — proving the executor cannot
-self-certify on the CLI path.
+gated behind ``AGENTHUB_CLI_E2E=1`` and skipped by default. The mock provider
+produces output bytes, not workspace deliverables. Success verifies only those
+registered bytes. Objective ``VERIFY:`` / ``RUN:`` markers never execute shell
+commands and cannot stand in for trusted test evidence.
 """
 
 from __future__ import annotations
@@ -66,11 +65,11 @@ class CliEndToEndTests(unittest.TestCase):
                 ), file=sys.stderr)
         return code, buffer.getvalue()
 
-    def test_exec_honest_failure_verify_gate_vetoes_mock(self) -> None:
-        """The mock provider cannot create files; VERIFY must veto it."""
+    def test_exec_success_means_output_integrity_and_never_runs_objective_commands(self) -> None:
+        """A mock response may pass integrity while code creation stays unproven."""
         objective = (
             "创建 hello.py 并打印 hello world。\n"
-            "VERIFY: python hello.py"
+            "VERIFY: python hello.py\nRUN: python hello.py"
         )
         code, output = self._run_cli(
             "exec",
@@ -83,23 +82,23 @@ class CliEndToEndTests(unittest.TestCase):
         )
         # A JSON document must be parseable from stdout.
         payload = json.loads(output)
-        self.assertEqual(payload["status"], "FAILED")
-        self.assertEqual(payload["exitCode"], 1)
-        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "SUCCEEDED")
+        self.assertEqual(payload["exitCode"], 0)
+        self.assertEqual(code, 0)
         # The workspace must not contain fake deliverables.
         self.assertEqual(payload["workspaceFiles"], [])
         self.assertFalse((self.workspace / "hello.py").exists())
 
     def test_run_reports_mission_status(self) -> None:
-        """The human-readable path reports the same verdict as exec."""
+        """The human-readable path reports the same output-integrity status."""
         objective = (
             "创建 hello.py 并打印 hello world。\n"
-            "VERIFY: python hello.py"
+            "VERIFY: python hello.py\nRUN: python hello.py"
         )
         code, output = self._run_cli("run", objective, "--provider", "mock", "--no-web-search", "--mission-timeout", "240")
-        self.assertEqual(code, 1)
-        self.assertIn("FAILED", output)
-        self.assertIn("exit code 1", output)
+        self.assertEqual(code, 0)
+        self.assertIn("SUCCEEDED", output)
+        self.assertIn("exit code 0", output)
 
 
 if __name__ == "__main__":

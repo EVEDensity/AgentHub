@@ -15,6 +15,14 @@ from app.domain import (
     MissionContract,
     WorkUnit,
 )
+from app.services.trusted_tests.policy import (
+    TRUSTED_TEST_POLICY_KEYS,
+    TRUSTED_TEST_RUN_V1,
+    TrustedTestEvaluationPlan,
+    parse_with_trusted_policy,
+    satisfied_with_trusted_policy,
+)
+from app.services.verification_plan_factory import build_evaluation_plan
 
 _ARTIFACT_SET_V1 = "artifact-set.v1"
 _ARTIFACT_SET_V2 = "artifact-set.v2"
@@ -27,6 +35,7 @@ _SECURITY_SCAN_V1 = "security-scan.v1"
 # (1) append its id and field set here, (2) register an evaluator
 # implementation in verification_evaluator_service.py.
 _EVALUATOR_POLICY_KEYS: dict[str, frozenset[str]] = {
+    TRUSTED_TEST_RUN_V1: TRUSTED_TEST_POLICY_KEYS,
     _ARTIFACT_SET_V1: frozenset(
         {
             "evaluator",
@@ -202,6 +211,7 @@ class EvaluationPolicyDecision:
         | TestRunEvaluationPlan
         | BuildArtifactEvaluationPlan
         | SecurityScanEvaluationPlan
+        | TrustedTestEvaluationPlan
         | None
     ) = None
     reason: EvaluationPolicyReason | None = None
@@ -338,7 +348,7 @@ class StrictVerificationPolicyResolver:
                 continue
             configured_criterion_ids.append(criterion.id)
             try:
-                parsed = _parse_policy(criterion.id, configuration)
+                parsed = parse_with_trusted_policy(criterion.id, configuration, _parse_policy)
             except ValueError:
                 invalid_criterion_ids.append(criterion.id)
                 continue
@@ -371,7 +381,7 @@ class StrictVerificationPolicyResolver:
                 criterion_ids=[policy.criterion_id],
             )
         artifact_kinds = {artifact.kind.value for artifact in artifacts}
-        if not _policy_satisfied(policy, artifacts, artifact_kinds):
+        if not satisfied_with_trusted_policy(policy, artifacts, artifact_kinds, _policy_satisfied):
             return EvaluationPolicyDecision.inconclusive(
                 EvaluationPolicyReason.ARTIFACT_REQUIREMENTS_NOT_MET,
                 criterion_ids=[policy.criterion_id],
@@ -384,55 +394,7 @@ class StrictVerificationPolicyResolver:
         ).encode("utf-8")
         digest = "sha256:" + hashlib.sha256(encoded_configuration).hexdigest()
 
-        if policy.evaluator == _TEST_RUN_V1:
-            assert policy.minimum_test_results is not None
-            assert policy.minimum_pass_rate is not None
-            return EvaluationPolicyDecision.ready(
-                TestRunEvaluationPlan(
-                    criterion_id=policy.criterion_id,
-                    evaluator=policy.evaluator,
-                    configuration_digest=digest,
-                    minimum_test_results=policy.minimum_test_results,
-                    minimum_pass_rate=policy.minimum_pass_rate,
-                )
-            )
-        if policy.evaluator == _BUILD_ARTIFACT_V1:
-            assert policy.minimum_build_artifacts is not None
-            assert policy.build_max_size_bytes is not None
-            return EvaluationPolicyDecision.ready(
-                BuildArtifactEvaluationPlan(
-                    criterion_id=policy.criterion_id,
-                    evaluator=policy.evaluator,
-                    configuration_digest=digest,
-                    minimum_build_artifacts=policy.minimum_build_artifacts,
-                    max_artifact_size_bytes=policy.build_max_size_bytes,
-                )
-            )
-        if policy.evaluator == _SECURITY_SCAN_V1:
-            assert policy.minimum_scan_reports is not None
-            assert policy.max_severity is not None
-            return EvaluationPolicyDecision.ready(
-                SecurityScanEvaluationPlan(
-                    criterion_id=policy.criterion_id,
-                    evaluator=policy.evaluator,
-                    configuration_digest=digest,
-                    minimum_scan_reports=policy.minimum_scan_reports,
-                    max_severity=policy.max_severity,
-                )
-            )
-        # artifact-set.v1 / v2
-        assert policy.minimum_artifacts is not None
-        return EvaluationPolicyDecision.ready(
-            ArtifactSetEvaluationPlan(
-                criterion_id=policy.criterion_id,
-                evaluator=policy.evaluator,
-                configuration_digest=digest,
-                minimum_artifacts=policy.minimum_artifacts,
-                required_artifact_kinds=policy.required_artifact_kinds,
-                optional_artifact_kinds=policy.optional_artifact_kinds,
-                max_artifact_size_bytes=policy.max_artifact_size_bytes,
-            )
-        )
+        return EvaluationPolicyDecision.ready(build_evaluation_plan(policy, digest, contract))
 
 
 def _parse_policy(criterion_id: str, configuration: dict) -> _ParsedPolicy:

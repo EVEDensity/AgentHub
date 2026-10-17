@@ -3,19 +3,9 @@ import * as http from "http";
 import { URL } from "url";
 import { EventEmitter } from "events";
 
-export interface MissionSummary {
-  id: string;
-  objective: string;
-  status: string;
-  agentId?: string;
-  createdAt?: string;
-}
-
-export interface CreateMissionResult {
-  missionId: string;
-  assignedAgentId: string;
-  sessionId: string;
-}
+export type CreateMissionResult =
+  | { status: 'pending'; pendingId: string; ruleDescription?: string }
+  | { status: 'accepted'; missionId: string; sessionId?: string; streamUrl: string };
 
 export interface SessionEvent {
   id: string;
@@ -25,31 +15,12 @@ export interface SessionEvent {
   payload?: Record<string, unknown>;
 }
 
-export interface MissionCreatedResponse {
-  missionId: string;
-  sessionId: string;
-  assignedAgentId: string;
-  streamUrl: string;
-}
-
-/**
- * Minimal AgentHub backend client.
- *
- * Covers:
- * - GET  /system/health                     (server liveness)
- * - GET  /v1/agent/registry                 (agent list for @mention)
- * - POST /v1/chat_mission/mission           (create chat mission)
- * - POST /v1/chat_mission/confirm           (rule confirm)
- * - GET  /v1/sessions/{id}/events/stream    (SSE — real-time chat)
- * - GET  /v1/missions/{id}/events/stream    (SSE — mission timeline)
- * - GET  /v1/git/status                     (repo status)
- * - GET  /v1/git/diff                       (diff)
- */
+/** HTTP adapter for the versioned chat admission and Mission command contracts. */
 export class AgentHubClient {
   private baseUrl: string;
   private apiKey: string;
 
-  constructor(baseUrl: string, apiKey: string = "") {
+  constructor(baseUrl: string, apiKey: string = "", private workspaceId: string = "local-admin", private requestTimeoutMs = 30_000) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.apiKey = apiKey;
   }
@@ -71,39 +42,37 @@ export class AgentHubClient {
 
   // ── Chat Mission ──────────────────────────────────────────────────
 
-  async createMission(objective: string): Promise<CreateMissionResult> {
-    // The backend accepts either { message: "... }" or { objective: "...", message: "..." }.
-    // We send both to be forgiving.
-    const body = JSON.stringify({ message: objective, objective });
-    const data = await this._post<MissionCreatedResponse>(
+  async createMission(message: string): Promise<CreateMissionResult> {
+    const data = await this._post<Record<string, unknown>>(
       "/api/v1/chat/mission",
-      body,
-      "application/json"
+      JSON.stringify({ message, workspaceId: this.workspaceId, stream: true }), "application/json"
     );
-    // Note: the initial response does NOT include sessionId — the extension
-    // learns it from the first SSE event.  This is intentional (smaller
-    // create-mission payload, full context on the stream).
-    return {
-      missionId: data.missionId,
-      assignedAgentId: "",  // not in response; will come via SSE
-      sessionId: "",         // not in response; will come via SSE
-    };
+    return this._admission(data);
   }
 
-  async confirmMission(missionId: string, confirmId: string): Promise<{ missionId: string }> {
-    return this._post<{ missionId: string }>(
-      "/api/v1/chat/confirm",
-      JSON.stringify({ missionId, confirmId }),
-      "application/json"
+  async confirmMission(pendingId: string): Promise<CreateMissionResult> {
+    const data = await this._post<Record<string, unknown>>(
+      "/api/v1/chat/confirm", JSON.stringify({ pendingId }), "application/json"
     );
+    return this._admission(data);
   }
 
-  async cancelMission(missionId: string): Promise<{ missionId: string }> {
-    return this._post<{ missionId: string }>(
-      "/api/v1/chat/cancel",
-      JSON.stringify({ missionId }),
-      "application/json"
-    );
+  async cancelPending(pendingId: string): Promise<unknown> {
+    return this._post("/api/v1/chat/cancel", JSON.stringify({ pendingId }), "application/json");
+  }
+
+  async cancelMission(missionId: string): Promise<unknown> {
+    return this._post(`/api/v1/missions/${encodeURIComponent(missionId)}/cancel`, "{}", "application/json");
+  }
+
+  private _admission(data: Record<string, unknown>): CreateMissionResult {
+    if (data.status === 'pending' && typeof data.pendingId === 'string') {
+      return { status: 'pending', pendingId: data.pendingId, ruleDescription: typeof data.ruleDescription === 'string' ? data.ruleDescription : undefined };
+    }
+    if (typeof data.missionId !== 'string' || typeof data.streamUrl !== 'string') {
+      throw new Error('Invalid Mission admission response');
+    }
+    return { status: 'accepted', missionId: data.missionId, streamUrl: data.streamUrl, sessionId: typeof data.sessionId === 'string' ? data.sessionId : undefined };
   }
 
   // ── Git ────────────────────────────────────────────────────────────
@@ -149,6 +118,14 @@ export class AgentHubClient {
   ): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`);
     return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const complete = (error?: Error, value?: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        if (error) reject(error);
+        else resolve(value as T);
+      };
       const lib = url.protocol === "https:" ? https : http;
       const headers: Record<string, string> = {
         Accept: "application/json",
@@ -168,24 +145,35 @@ export class AgentHubClient {
           const chunks: Buffer[] = [];
           res.on("data", (c) => chunks.push(c));
           res.on("end", () => {
+            if (!res.complete) {
+              complete(new Error('AgentHub HTTP response was interrupted'));
+              return;
+            }
             const raw = Buffer.concat(chunks).toString("utf-8");
-            if (res.statusCode && res.statusCode >= 400) {
-              reject(new Error(`${res.statusCode} ${res.statusMessage}: ${raw.slice(0, 200)}`));
+            if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+              complete(new Error(`${res.statusCode} ${res.statusMessage}: ${raw.slice(0, 200)}`));
               return;
             }
             if (!raw) {
-              resolve({} as T);
+              complete(undefined, {} as T);
               return;
             }
             try {
-              resolve(JSON.parse(raw) as T);
+              complete(undefined, JSON.parse(raw) as T);
             } catch {
-              resolve(raw as unknown as T);
+              complete(new Error('AgentHub returned an invalid JSON response'));
             }
           });
+          res.on('aborted', () => complete(new Error('AgentHub HTTP response was interrupted')));
+          res.on('error', error => complete(error));
         }
       );
-      req.on("error", reject);
+      const deadline = setTimeout(() => {
+        const error = new Error('AgentHub HTTP request timed out');
+        complete(error);
+        req.destroy(error);
+      }, this.requestTimeoutMs);
+      req.on("error", error => complete(error));
       if (body) req.write(body);
       req.end();
     });
@@ -216,6 +204,17 @@ export class SSESubscription extends EventEmitter {
   }
 
   connect() {
+    if (this.closed) return;
+    let disconnected = false;
+    const disconnect = (error: Error, reconnect = true) => {
+      if (this.closed || disconnected) return;
+      disconnected = true;
+      // A partial frame belongs to the lost connection and cannot be joined
+      // to the next response. Transport EOF never means Mission completion.
+      this.buffer = '';
+      this.emit('error', error);
+      if (reconnect && !this.closed) this._scheduleReconnect();
+    };
     const urlObj = new URL(this.url);
     const lib = urlObj.protocol === "https:" ? https : http;
     const headers: Record<string, string> = {
@@ -233,24 +232,29 @@ export class SSESubscription extends EventEmitter {
         headers,
       },
       (res) => {
+        // Even rejected responses can be interrupted while their body drains.
+        // Attach terminal handlers before either validation branch can return.
+        res.on('aborted', () => disconnect(new Error('Mission event connection was interrupted; reconnecting')));
+        res.on('error', error => disconnect(error));
+        res.on('end', () => disconnect(new Error('Mission event connection closed; reconnecting')));
+        if (res.statusCode !== 200 || !res.headers['content-type']?.includes('text/event-stream')) {
+          res.resume();
+          disconnect(new Error(`Mission stream unavailable (HTTP ${res.statusCode})`), false);
+          return;
+        }
         res.setEncoding("utf-8");
         res.on("data", (chunk) => {
           this.buffer += chunk;
           this._drain();
         });
-        res.on("end", () => {
-          if (!this.closed) this._scheduleReconnect();
-        });
       }
     );
-    this.req.on("error", (err) => {
-      this.emit("error", err);
-      if (!this.closed) this._scheduleReconnect();
-    });
+    this.req.on("error", error => disconnect(error));
     this.req.end();
   }
 
   private _drain() {
+    this.buffer = this.buffer.replace(/\r\n/g, "\n");
     // SSE frames are separated by blank lines (double \n)
     let idx: number;
     while ((idx = this.buffer.indexOf("\n\n")) !== -1) {

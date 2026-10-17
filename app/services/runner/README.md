@@ -23,7 +23,13 @@ is used for contact matching; tool execution still requires Contract scope and
 the existing permission policy. A RUNNING claim must restore a complete journal
 for its exact attempt before execution. Missing manifests or anchors cannot
 fall back to a fresh model loop. A concurrently held recovery lock returns
-`capacity_saturated` without failing the active WorkUnit.
+`capacity_saturated` without failing the active WorkUnit. After acquiring its
+private recovery scope, a RUNNING resume synchronously renews and validates the
+original lease before executing. A claim fetched before the previous owner
+completed cannot replay cached output after that owner releases the lock. Only
+Mission Control's exact 403 `Active Runner lease ownership required` rejection
+maps that stale workspace poll to `idle`; general authorization, missing-resource
+and service errors remain explicit errors.
 
 All desktop workers use the authenticated principal as lease owner; local
 worker indices are not server identities. Ordinary workspace claims prefer
@@ -41,7 +47,7 @@ rejection remains immediate, and local authentication bypasses environment proxi
 explicit grants for the canonical Harness tool gateway. Suggest mode denies
 workspace mutation; edit mode permits bounded workspace edits; auto mode also
 permits the built-in code executor. Built-in handlers retain path and execution
-limits. Shell acceptance commands keep their existing declared-command channel.
+limits. Objective text never grants command execution or extra tool authority.
 Arbitrary remote, network and MCP side effects receive no implicit grant.
 Child desktop Harness runs inherit the same permission policy. A factory without
 an injected policy cannot approve side effects.
@@ -78,3 +84,137 @@ the saved visible result prefix. The normal loop and a successful-receipt gap
 apply the same limiter, so restarting preserves both feedback and its remaining
 character budget. Its scoped executor retains gateway permission/hook services
 and leaves the process-global result counter to compatibility callers.
+
+## Default verification boundary
+
+`controller.py` checks registered content bytes for availability, exact size and
+SHA-256. Zero-byte outputs are valid when those facts match. The default
+`artifact-set.v1` policy proves no code correctness or external test execution.
+It never executes objective `RUN:` or `VERIFY:` markers. `loops.py` retains the
+compatibility parsers and low-level `run_verify_command` helper; that helper
+does not authorize execution or create trusted test Evidence on its own.
+Future test producers need an explicit Contract boundary and attributable
+reports before the Runner completes its lease-bound artifact set.
+
+The opt-in `trusted_tests` package supplies an operator-frozen repository/test
+profile and a signed five-Artifact bundle; see
+[ADR-0121](../../../docs/architecture/decisions/0121-trusted-local-test-bundles.md).
+`HarnessResult.artifacts` carries immutable candidate bytes. Runner validates
+and publishes the whole bundle, registers every entry under the live lease,
+then completes with all refs. Its deadline and heartbeat cover the Harness,
+producer and publication together. A shared monotonic abort/deadline fence is
+checked before and after heartbeat calls, after execution and publication, before each registration, and before
+the terminal command dispatch. A port returning after cancellation cannot
+dispatch another Artifact registration or completion through the Runner.
+Default executors still publish their single
+text output. A publication interruption preserves the existing recoverable
+RUNNING lease, and a partial bundle cannot establish Evidence.
+
+Terminal HTTP dispatch cannot be rolled back by cancelling its local await.
+If a heartbeat loses its lease while completion is in flight, or the local
+deadline expires, Runner waits at most another 500 ms for the actual transaction
+ACK. Only that response confirms the exact lease-fenced completion and refs;
+missing/rejected ACKs raise `RunnerTerminalAckUncertainError` and never invent
+success or send a second failure command. Cancellation after terminal dispatch
+propagates and logs that Mission Control may already have committed. Recovery
+and independent verification must use the durable state.
+
+Cancellation drain is bounded to 250 ms, with up to 250 ms for a best-effort
+final state flush. Normal successful execution flushes its state before
+publication under the supervised deadline. These are cooperative async bounds,
+not a hard wall-clock process limit: synchronous callbacks cannot be preempted,
+and ports retain responsibility for their process cleanup. An already dispatched
+HTTP command can still commit after local cancellation. Regression tests in
+`tests/services/test_runner_supervision_regressions.py` and
+`tests/integration/test_runner_supervision_sqlite_http.py` cover delayed real
+SQLite completion ACKs, stale leases, cancellation-resistant ports and late
+publication rejection; the existing reporting cancellation tests retain the
+recoverable RUNNING behavior.
+
+## Experimental OpenSandbox HTTP port
+
+`../opensandbox_backend.py` and `../opensandbox_protocol.py` implement a default-off,
+standalone OpenSandbox 1.1.1 experiment. They do not change platform sandbox
+selection, desktop execution, Mission state, recovery, or verification authority.
+The explicit caller owns Contract authorization. The port requires authentication,
+HTTPS or loopback HTTP, pinned Linux workloads, deny-default networking, bounded
+commands with independently polled terminal status, and confirmed destruction.
+File transfers are bounded, digest-checked, and refuse traversal and symlinks;
+this serial PoC does not establish a filesystem boundary against malicious
+concurrent background processes. There is no local fallback or SDK dependency.
+See [the experiment guide](../../../deploy/opensandbox/README.md) for opt-in
+commands, the real Linux Docker gate, limitations, and rollback.
+
+The controller tests cover CAS bytes and inert objective markers.
+`tests/integration/test_default_task_acceptance_sqlite.py` exercises the real
+controller through authenticated HTTP Evidence admission and durable SQLite
+transitions, including empty outputs.
+
+## Experimental strict provider budget composition
+
+`strict_budget.StrictBudgetHarnessFactory` is an explicit in-process factory for
+`DesktopTaskClaimedWorkResolver`. It privately binds the authenticated Runner and
+actual claim identity, then uses `strict_provider.BudgetedModelPort` for direct
+HTTP calls. It is absent from the default Desktop/CLI/Chat and standalone Runner
+service wiring. The operator must supply the ledger, fixed provider profile and
+private credential; there is no fallback to the existing adapter.
+The optional constructor `limit_usd` is operator-only and must match an existing
+lower account limit. Omitting it selects the actual Contract ceiling; a mismatch
+with a frozen account fails closed. Claim context and model metadata cannot
+override that limit or private scope. Factory construction may happen while
+LEASED; reservation and dispatch occur only when the model is invoked.
+
+The factory accepts only manual/chat desktop roots, refuses resume and streaming,
+and sets `FunctionCallingHarness(model_retries=0)`. The compatibility default
+remains one transient retry. Harness generates
+`harness:model:{iteration}:response` and `harness:model:{iteration}:summary`;
+bounded retries keep the same identity. These are request metadata, not
+authorization or a new checkpoint schema. The ledger rechecks the RUNNING lease
+before dispatch. There is no planner, reflection or delegation. Runner's
+aggregate ModelUsage remains telemetry and cannot settle the ledger.
+
+Tools default to an empty tuple. Injected tools require an explicit operator
+allowlist, complete capability mapping, matching WorkUnit requirements and unique
+unscoped Contract grants. Scoped handlers and known model/delegation or remote
+agent/MCP capabilities are refused. Accepted handlers must be trusted local
+operator code performing no model/network calls. Names and capability strings
+do not prove arbitrary handlers satisfy that restriction. This does not sandbox
+Python or establish a general-purpose extension security boundary.
+
+The profile reserves a reviewed maximum billing input window plus its enforced
+completion limit per HTTP request. Its assumptions and unknown-usage behavior
+are documented in [the provider guide](../strict_provider/README.md) and
+[ADR-0124](../../../docs/architecture/decisions/0124-strict-in-process-provider-budget-profile.md).
+`tests/integration/test_strict_budget_runner_sqlite.py` uses a real loopback HTTP
+peer, SQLite ledger, Runner claim/reporting, CAS and independent byte verifier.
+Its successful terminal result proves output integrity, not code correctness or
+live supplier billing. Insufficient funds prevent the next HTTP request, and
+trusted late settlement cannot revive cancelled work.
+Focused Harness tests are `tests/services/test_harness_model_operations.py` and
+`tests/services/test_strict_budget_harness.py`.
+
+## Experimental budgeted Native sandbox composition
+
+`opensandbox_native.BudgetedOpenSandboxHarnessFactory` is an explicit alternative
+for `DesktopTaskClaimedWorkResolver`. It privately binds the same claim identity
+and strict model accounting, then creates `SandboxNativeHarness` with one fresh
+OpenSandbox and a bounded `run_shell` tool. A unique `sandbox.execute` grant must
+match the exact `opensandbox-shell.v1` profile and pinned image, and the WorkUnit
+must require that capability. Host repository scopes, resume and streaming are
+refused. The default runner and clients do not select this factory.
+
+The wrapper requires actual command observations and confirmed destruction
+before returning model-text and report Artifacts. The report contains combined
+output, not separate stdout/stderr; its byte count is sanitized UTF-8 before
+truncation. Final command failure, output limits or unconfirmed cleanup cannot
+be turned into success by model text. Runner/Verifier/Mission Control retain
+lease admission and output-integrity authority. This is not trusted pytest or
+code-correctness evidence, and same-container reporter integrity against hostile
+code is not established.
+
+See [ADR-0125](../../../docs/architecture/decisions/0125-experimental-sandbox-native-composition.md)
+and [the disposable Linux experiment](../../../deploy/opensandbox/README.md).
+`tests/integration/opensandbox_native_scenario.py` is shared by simulated-wire
+local tests and the explicitly enabled real Docker gate. It runs real model
+loopback HTTP, durable budget/Runner state, CAS and independent verification;
+the model fixture is not a charging provider.

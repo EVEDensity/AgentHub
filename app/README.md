@@ -43,6 +43,21 @@ workspace tree.
 
 * `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
   transition models.
+  `domain/mission_budget.py`, `services/model_pricing.py` and the internal
+  `MissionBudgetService` add exact nano-USD reservation/settlement infrastructure
+  backed by the Mission repository transaction. It is default-off infrastructure;
+  default model paths are not budget-enforced by this addition. The separate
+  operator-only `strict_provider` and `runner/strict_budget.py` composition binds
+  actual direct HTTP calls to the ledger, with no retry and conservative
+  operator-attested token bounds; see
+  [ADR-0124](../docs/architecture/decisions/0124-strict-in-process-provider-budget-profile.md).
+  Same-Mission
+  child WorkUnits share an account; forked Missions do not inherit one. See
+  [ADR-0123](../docs/architecture/decisions/0123-persistent-mission-budget-ledger.md).
+  The explicit `runner/opensandbox_native.py` factory combines the strict model
+  port with a pinned sandbox shell grant and post-cleanup observation Artifacts;
+  see [ADR-0125](../docs/architecture/decisions/0125-experimental-sandbox-native-composition.md).
+  It remains a trusted-code experiment and does not add trusted test semantics.
 
 * `repositories/`: persistence and transaction boundaries.
   Legacy session file versions remain in `artifacts`; Mission Control owns
@@ -50,13 +65,22 @@ workspace tree.
 
 * `db/`: connection and schema initialization. Checkpoint resume metadata uses
   a distinct PostgreSQL Alembic revision and a transactional SQLite version-2
-  to version-5 upgrade; historical rows retain NULL fingerprints. Session scope
+  to version-6 upgrade; historical rows retain NULL fingerprints. Session scope
   compatibility follows the checkpoint revision and retains unknown legacy
   ownership as NULL; v1 access checks durable scope before reading or writing.
   See
   `db/README.md` for migration and rollback boundaries (ADR-0110).
 
 * `services/`: application use cases, compatibility adapters, and storage ports.
+  `services/reviewed_skills/` owns three original document-only Skills, their
+  pinned operator index and immutable read catalog. Explicit Desktop injection
+  replaces the existing skill read pair; it never merges workspace packages,
+  installs tools or grants capabilities. See
+  [ADR-0126](../docs/architecture/decisions/0126-frozen-reviewed-skill-catalog.md).
+  The default-off `services/opensandbox_backend.py` HTTP port is exercised only
+  by the standalone disposable PoC in `deploy/opensandbox/`. It adds no SDK
+  dependency and does not select a production Runner backend or own Mission
+  state; see that guide for the future attempt-scoped injection boundary.
   Chat dispatch now persists one catalog-bound `desktop.task` WorkUnit through
   Mission Control. The local Runner claims its registered Agent only; other
   executors remain PENDING until their matching Runner is available. Unknown,
@@ -266,14 +290,11 @@ workspace tree.
   severity; failed or malformed reports cannot pass (ADR-0114). Reports do not
   prove actual external test/scanner execution. The desktop local runner
   (the `services/runner/` package behind the `services/desktop_local_runner.py`
-  facade) additionally treats any Mission
-  objective line starting with `VERIFY:` as a workspace acceptance command:
-  before submitting unattended PASS Evidence it runs that command in the
-  workspace (timeout `AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT`,
-  default 120 s); exit code 0 gates the PASS submission while a non-zero exit
-  or timeout submits FAIL Evidence carrying the last 2000 output characters,
-  which transitions the WorkUnit and Mission to `FAILED` (derivation never
-  retries a failed Mission on its own). PASS also runs the controlled
+  facade) verifies registered output availability, size and SHA-256 only.
+  The default verifier never interprets objective `VERIFY:` or `RUN:` text as
+  command authority, and it permits empty bytes when their registered digest
+  and size match. Code correctness and test execution require a separately
+  authorized trusted report producer. PASS also runs the controlled
   `artifact-set.v1` evaluator over the exact byte-verification results before
   and during transactional admission. Missing, extra, duplicate, wrong-digest,
   or wrong-size results fail without Evidence or state mutation; successful

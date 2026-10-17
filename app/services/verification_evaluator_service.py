@@ -10,7 +10,7 @@ is one entry in the registry — the policy resolver in
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Protocol, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from app.domain import ArtifactKind, EvidenceVerdict
 from app.services.artifact_integrity_service import ArtifactByteVerification
@@ -171,11 +171,14 @@ def _ensure_registry() -> dict[str, EvaluatorCallable]:
     from app.services.verification_policy_service import (
         _ARTIFACT_SET_V1,
         _ARTIFACT_SET_V2,
-        _TEST_RUN_V1,
         _BUILD_ARTIFACT_V1,
         _SECURITY_SCAN_V1,
+        _TEST_RUN_V1,
     )
-    from app.services.verification_report_evaluator import evaluate_test_run, evaluate_security_scan
+    from app.services.verification_report_evaluator import (
+        evaluate_security_scan,
+        evaluate_test_run,
+    )
 
     _EVALUATORS[_ARTIFACT_SET_V1] = _evaluate_artifact_set_v1
     _EVALUATORS[_ARTIFACT_SET_V2] = _evaluate_artifact_set_v2
@@ -188,12 +191,19 @@ def _ensure_registry() -> dict[str, EvaluatorCallable]:
 class StrictVerificationEvaluator:
     """Dispatch to evaluators registered in ``_EVALUATORS``."""
 
+    def __init__(self, *, trusted_producers=None):
+        self._trusted_producers = trusted_producers
+
     def evaluate(
         self,
         plan: _EvaluationPlan,
         artifacts: tuple[VerificationArtifactMetadata, ...],
         byte_verifications: tuple[ArtifactByteVerification, ...],
     ) -> VerificationEvaluationResult:
+        if plan.evaluator == "trusted-test-run.v1":
+            from app.services.trusted_tests.evaluator import evaluate_trusted_test_run
+
+            return evaluate_trusted_test_run(plan, artifacts, byte_verifications, registry=self._trusted_producers)
         evaluator = _ensure_registry().get(plan.evaluator)
         if evaluator is None:
             raise VerificationEvaluationError(

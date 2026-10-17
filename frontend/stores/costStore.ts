@@ -85,9 +85,11 @@ export const useCostStore = create<CostState>()((set, get) => ({
       if (data && typeof data === 'object' && Array.isArray(data.days)) {
         set({ tokenData: data });
         get().computeCostEstimate();
+      } else {
+        throw new Error('用量响应无效');
       }
     } catch (e) {
-      set({ costError: e instanceof Error ? e.message : 'Failed to load token data' });
+      set({ tokenData: null, costEstimate: null, costError: e instanceof Error ? e.message : 'Failed to load token data' });
     } finally {
       set({ costLoading: false });
     }
@@ -99,36 +101,18 @@ export const useCostStore = create<CostState>()((set, get) => ({
       const res = await fetch('/iam/billing', {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && Array.isArray(data.cycles)) {
-          set({ billingByTenant: data.cycles });
-        }
-      }
-    } catch {
-      // Billing data is optional; use mock data in dev
-      set({
-        billingByTenant: [
-          {
-            tenant_id: 'default',
-            plan: 'free',
-            daily_tokens: 100000,
-            monthly_tokens: 3000000,
-            used_tokens: 1250000,
-            used_sessions: 45,
-            used_agents: 3,
-            cycle_start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString(),
-            cycle_end: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString(),
-            status: 'open',
-          },
-        ],
-      });
+      if (!res.ok) throw new Error(`账单加载失败 (HTTP ${res.status})`);
+      const data = await res.json();
+      if (!Array.isArray(data?.cycles)) throw new Error('账单响应无效');
+      set({ billingByTenant: data.cycles });
+    } catch (err) {
+      set({ billingByTenant: [], costError: err instanceof Error ? err.message : '账单服务不可用' });
     }
   },
 
   computeCostEstimate: () => {
     const { tokenData, modelPrices } = get();
-    if (!tokenData || !tokenData.days.length) return;
+    if (!tokenData || !tokenData.days.length) { set({ costEstimate: null }); return; }
 
     const totalTokens = tokenData.days.reduce((sum, d) => sum + d.tokens, 0);
     const avgPricePerK = modelPrices.default || 0.001;
