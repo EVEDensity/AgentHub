@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, parse, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,3 +192,42 @@ for (const asset of ['monaco/0.55.1', 'xterm/6.0.0']) {
     assert.equal(await f.calls(), '');
   });
 }
+
+test('simulated freeze fixture plus actual npm failure restores the Next build environment', windowsOnly, async t => {
+  const f = await fixture(t);
+  // This committed, temporary freeze fixture exists only to reach the real
+  // build-windows Next failure branch. It is never package/compiler evidence.
+  await writeFile(join(f.root, 'desktop', 'local-services', 'build-mission-control.ps1'), String.raw`param([string]$OutputDirectory, [string]$PythonExecutable)
+[IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $OutputDirectory 'agenthub-mission-control.exe'), [byte[]]@(0x4d, 0x5a))
+$global:LASTEXITCODE = 0
+`);
+  const tools = join(f.owner, 'failing tools');
+  await writeFile(join(tools, 'record-next-env.ps1'), String.raw`$values = [ordered]@{}
+foreach ($name in @('API_BACKEND', 'API_BACKEND_URL', 'MISSION_CONTROL_URL', 'GO_GATEWAY_URL', 'GOCACHE', 'NEXT_DIST_DIR', 'PYTHONPATH')) {
+    $values[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+$values['location'] = (Get-Location).Path
+[IO.File]::WriteAllText(($env:AGENTHUB_BUILD_TEST_LOG + '.npm-env.json'), ($values | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))
+`);
+  await writeFile(join(tools, 'npm.cmd'), '@echo off\r\n>>"%AGENTHUB_BUILD_TEST_LOG%" echo npm:actual-failure-38\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0record-next-env.ps1"\r\nexit /b 38\r\n');
+  for (const args of [['add', 'desktop/local-services/build-mission-control.ps1'], ['-c', 'user.name=Owned Build Test', '-c', 'user.email=owned-build@example.invalid', 'commit', '-qm', 'Explicit simulated freeze fixture for npm failure']]) {
+    const commit = await subprocess('git.exe', args, { cwd: f.root });
+    assert.equal(commit.code, 0, commit.stderr);
+  }
+  const result = await f.invoke();
+  assert.match(result.error, /Next.js production build failed/);
+  assert.equal(result.nativeExit, 38);
+  const npmEnvironment = JSON.parse(await readFile(join(f.owner, 'calls.log.npm-env.json'), 'utf8'));
+  const canonicalRoot = await realpath(f.root);
+  assert.deepEqual(npmEnvironment, {
+    API_BACKEND: 'legacy', API_BACKEND_URL: 'http://127.0.0.1:28000',
+    MISSION_CONTROL_URL: 'http://127.0.0.1:28000', GO_GATEWAY_URL: 'http://127.0.0.1:28001',
+    GOCACHE: null, NEXT_DIST_DIR: '.next', PYTHONPATH: canonicalRoot,
+    location: join(canonicalRoot, 'frontend'),
+  });
+  assert.equal((await f.calls()).trim(), 'npm:actual-failure-38', 'No Python or Go compiler must execute in this fixture');
+  assert.deepEqual(await readFile(join(f.stage, 'agenthub-mission-control.exe')), Buffer.from([0x4d, 0x5a]));
+  await assert.rejects(readFile(join(f.stage, 'old-stage-marker.txt')), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(f.stage, 'stack-manifest.json')), { code: 'ENOENT' });
+});
