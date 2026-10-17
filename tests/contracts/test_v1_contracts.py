@@ -61,6 +61,7 @@ class PublicContractTests(unittest.TestCase):
                 "workspace-work-unit-claim-request.schema.json",
                 "decision.schema.json",
                 "artifact.schema.json",
+                "artifact-text-preview.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
                 "execution-checkpoint.schema.json",

@@ -9,15 +9,20 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx playwright test",
-    "postinstall": "node -e \"const fs=require('fs');const path=require('path');const copies=[['node_modules/pdfjs-dist/build/pdf.min.mjs','public/pdf.min.mjs'],['node_modules/pdfjs-dist/build/pdf.worker.min.mjs','public/pdf.worker.min.mjs']];try{fs.mkdirSync('public',{recursive:true});for(const [src,dst] of copies){fs.copyFileSync(path.join(...src.split('/')),path.join(...dst.split('/')));}console.log('copied pdfjs runtime to public/');}catch(e){console.warn('pdfjs runtime copy skipped:',e.message);}\""
+    "postinstall": "node -e \"const fs=require('fs');const path=require('path');const copies=[['node_modules/pdfjs-dist/build/pdf.min.mjs','public/pdf.min.mjs'],['node_modules/pdfjs-dist/build/pdf.worker.min.mjs','public/pdf.worker.min.mjs']];try{fs.mkdirSync('public',{recursive:true});for(const [src,dst] of copies){fs.copyFileSync(path.join(...src.split('/')),path.join(...dst.split('/')));}console.log('copied pdfjs runtime to public/');}catch(e){console.warn('pdfjs runtime copy skipped:',e.message);}\" && npm run prepare:monaco",
+    "prepare:monaco": "node scripts/prepare-monaco-assets.mjs",
+    "prebuild": "npm run prepare:monaco"
   },
   "dependencies": {
-    "@monaco-editor/react": "^4.6.0",
+    "@fontsource/material-symbols-outlined": "5.3.9",
+    "@monaco-editor/react": "4.7.0",
+    "@radix-ui/react-dialog": "1.3.1",
     "@tanstack/react-virtual": "^3.11.3",
     "@xyflow/react": "^12.10.0",
     "framer-motion": "^12.42.2",
     "konva": "^9.3.18",
     "lucide-react": "^1.16.0",
+    "monaco-editor": "0.55.1",
     "next": "^14.2.15",
     "pdfjs-dist": "^4.0.379",
     "pixi.js": "^8.19.0",

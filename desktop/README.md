@@ -27,7 +27,9 @@ Rust, Python, or Docker. Docker Compose remains the server/private-deployment
 path. The bundled admin frontend bakes the local stack endpoints
 (`127.0.0.1:28000` control plane, `:28001` gateway) into its Next.js rewrites
 at `local-services/build-windows.ps1` build time; standalone Next.js bundles
-cannot re-read those endpoints from runtime environment variables. The first
+cannot re-read those endpoints from runtime environment variables. The build
+pins `MISSION_CONTROL_URL` to the local control plane even when a remote override
+is inherited, then restores that environment value afterward. The first
 desktop instance receives the 28000 port group by allocation order;
 concurrent second instances get their own groups while the bundled frontend
 still targets the first instance (single-instance limitation).
@@ -36,9 +38,14 @@ The admin Terminal now displays an unavailable notice without command input;
 it has no real terminal service and shows no simulated system or execution
 results. This applies to the shared admin view opened by Desktop as well.
 
-Future chat, artifact-viewer and log-viewer components belong in the shared
-Next.js frontend, following the [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
-They are targets, not integrations delivered by this readiness change. The
+The shared Next.js Mission panel now contains the UI-1 shadcn/Radix Dialog and
+local Monaco code preview, documented in
+[ADR-0128](../docs/architecture/decisions/0128-registered-artifact-text-preview.md).
+The existing public-asset copy carries its generated editor, worker and license
+files into the standalone bundle. This source integration does not establish a
+new packaged WebView2 verification record. Future chat and log-viewer components
+follow the [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
+The
 dependency-free `ui/` shell keeps bootstrap, service lifecycle, diagnostics and
 native credential responsibilities; it does not gain another Mission store or
 an independent Agent runtime. Component adoption must pass packaged WebView2

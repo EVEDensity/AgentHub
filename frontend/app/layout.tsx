@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import type { JSX, ReactNode } from 'react';
+import '@fontsource/material-symbols-outlined/400.css';
 import '../styles/globals.css';
 import { PageTransitionProvider } from '../lib/animations/pageTransitionProvider';
 
@@ -24,10 +25,6 @@ export default function RootLayout({ children }: { children: ReactNode }): JSX.E
   return (
     <html lang="zh-CN">
       <head>
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=block"
-        />
         {/* Theme FOUC prevention: read stored theme from localStorage and apply
             data-theme to <html> BEFORE first paint. Must run synchronously
             (inlined, not via useEffect) to prevent flash of unstyled content.

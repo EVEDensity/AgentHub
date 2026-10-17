@@ -33,6 +33,13 @@ do not establish production readiness.
 [`scripts/ci_changes.py`](../../scripts/ci_changes.py) selects additional jobs
 from the changed dependency paths. Frontend/API/editor-extension changes run
 TypeScript, Vitest, a production build and Playwright browser checks in one job.
+The UI-1 Artifact browser tests start their own loopback Python process with real
+SQLite/CAS and production Mission routes. Fixture authentication and unrelated
+catalog calls are explicit; Mission reads use the actual Next rewrite. The gate
+requires these browser cases to exist, pass and not skip, and uploads JUnit.
+It verifies local Monaco/assets, read-only CJK/HTML source, actual Worker cleanup,
+empty/limited/sensitive objects and authorization/network retries without writes.
+This is browser coverage, not a packaged Desktop/WebView2 release result.
 The same job installs the VS Code extension's locked dependencies, compiles its
 TypeScript and runs its HTTP client and webview contract tests. API schema
 DTO changes also select those frontend consumers. Go changes and sandbox image

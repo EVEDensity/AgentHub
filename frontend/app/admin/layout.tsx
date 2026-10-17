@@ -276,20 +276,7 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
         {/* ── Status bar (thin top bar) ── */}
         <div className="admin-status-bar">
           <div className="admin-status-item">
-            <span className="admin-status-dot-sm pulse" />
-            系统正常
-          </div>
-          <div className="admin-status-item">
-            RPM <span className="admin-status-value">1,247</span>
-          </div>
-          <div className="admin-status-item">
-            P95 <span className="admin-status-value">1.8s</span>
-          </div>
-          <div className="admin-status-item">
-            成功率 <span className="admin-status-value">98.7%</span>
-          </div>
-          <div className="admin-status-item">
-            智能体 <span className="admin-status-value">6 在线</span>
+            运行指标尚未接入
           </div>
         </div>
 

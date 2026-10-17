@@ -247,8 +247,16 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       API_BACKEND: go
       GO_GATEWAY_URL: http://localhost:8081
+      MISSION_CONTROL_URL: http://127.0.0.1:38100
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install real Artifact browser fixture dependencies
+        run: python -m pip install -r ../requirements-dev.txt -r ../tests/contracts/requirements.txt
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -267,7 +275,21 @@ jobs:
       - run: npx vitest run
       - run: npm run build
       - run: npx playwright install chromium --with-deps
-      - run: npx playwright test --reporter=list
+      - run: npx playwright test --reporter=list,junit
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: .tmp/frontend-playwright.xml
+      - name: Require real Artifact preview browser coverage without skips
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'artifact-preview.spec.ts' in c.get('classname','')];
+          assert len(cases) >= 5;
+          assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-browser-results
+          path: frontend/.tmp/frontend-playwright.xml
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

@@ -30,6 +30,7 @@ if ($missionControlSource -ne $missionControlDest) {
     Copy-Item -LiteralPath $MissionControlBinary -Destination $missionControlTarget -Force
 }
 $frontendRoot = Join-Path $root 'frontend'
+$previousMissionControlUrl = $env:MISSION_CONTROL_URL
 Push-Location $frontendRoot
 try {
     # The standalone bundle bakes next.config.js rewrites at build time
@@ -41,10 +42,12 @@ try {
     # 28000/28001 — a documented single-instance limitation.
     $env:API_BACKEND = 'legacy'
     $env:API_BACKEND_URL = 'http://127.0.0.1:28000'
+    $env:MISSION_CONTROL_URL = 'http://127.0.0.1:28000'
     $env:GO_GATEWAY_URL = 'http://127.0.0.1:28001'
     npm.cmd run build
     if ($LASTEXITCODE -ne 0) { throw 'Next.js production build failed.' }
 } finally {
+    $env:MISSION_CONTROL_URL = $previousMissionControlUrl
     Remove-Item Env:API_BACKEND, Env:API_BACKEND_URL, Env:GO_GATEWAY_URL -ErrorAction SilentlyContinue
     Pop-Location
 }

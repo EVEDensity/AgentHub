@@ -79,15 +79,40 @@ supported probe; the browser cannot infer connection from a configured URL.
 
 ## Terminal availability and shared UI
 
+The shared admin header reports that runtime metrics are not connected. It has
+no fabricated health indicator, throughput, latency, success rate or online-agent
+count. Those require a separate real monitoring contract.
+
 The admin Terminal is an unavailable notice with no command input or execution
 action. No terminal service is connected: it does not execute browser or server
 commands, inspect files or environment variables, or manufacture health,
 process, agent, package-manager, Git or network results. Its component tests
 cover the notice and absence of execution and transport side effects.
 
-The bundled Desktop admin view uses this same Next.js UI. Future component
-adoption is a target in the [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target),
-not an installed chat runtime, editor integration or terminal transport. Keep
+The bundled Desktop admin view uses this same Next.js UI. The Mission panel now
+adopts a shadcn/Radix Dialog and locally loaded Monaco for explicitly requested,
+read-only registered Artifact previews. The bounded human/workspace-authorized
+API verifies bytes before returning text; the frontend rechecks identity,
+attempt, size and SHA-256. Empty, denied, unavailable and excessive content stays
+visible as such. Scope changes and cancellation discard old responses. Preview
+integrity does not mean Mission acceptance. See
+[the Artifact guide](components/artifacts/README.md) and
+[ADR-0128](../docs/architecture/decisions/0128-registered-artifact-text-preview.md).
+
+`npm ci` and `npm run build` prepare pinned local editor assets and notices;
+missing resources fail the build. Material Symbols use a pinned local Fontsource
+font with its distributed OFL-1.1 notice, without a Google Fonts request.
+Mission API rewrites use build-time
+`MISSION_CONTROL_URL`, falling back to `API_BACKEND_URL` even under the generic
+Go API profile. Docker exposes the corresponding build argument. Desktop's build
+explicitly pins that path to loopback and restores an inherited override afterward.
+The real browser gate uses a disposable SQLite/CAS HTTP fixture, rather than
+fulfilling Mission requests with browser fixtures. Packaged WebView2 validation
+remains a separate release requirement.
+
+Chat and log-viewer adoption remain targets in the
+[UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
+Keep
 Mission state, authorization and acceptance on the existing control-plane APIs;
 shared components own presentation and interaction only.
 

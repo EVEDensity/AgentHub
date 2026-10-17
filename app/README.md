@@ -95,6 +95,11 @@ workspace tree.
   search and glob remain the fallback and source of truth for reads.
   Artifact byte verification reads Runner-owned content through this boundary;
   Mission Control retains only immutable Artifact metadata.
+  The human/workspace-authorized Artifact preview reads at most 256 KiB of
+  registered public/internal UTF-8 text through the existing CAS/MinIO exporter,
+  rechecks bytes and returns no storage address. It does not persist content,
+  create Evidence or change Mission state; see
+  [ADR-0128](../docs/architecture/decisions/0128-registered-artifact-text-preview.md).
   Peer-facing A2A result export is a separate all-or-nothing service. It emits
   only completed PASS Evidence and referenced current-attempt Artifacts, rereads
   and verifies every byte, applies sensitivity/count/size limits, and never

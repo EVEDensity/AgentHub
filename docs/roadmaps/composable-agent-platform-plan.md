@@ -163,13 +163,15 @@ ClawXRouter 的策略思路用于研究：先实现可解释的按角色/能力�
 
 ### 5.11 Web 与 Desktop UI 组件（target）
 
-本节为后续目标，官方 GitHub 源码核对日期为 2026-10-18；未把候选库描述为已接入。
-当前 UI readiness 切片只移除管理 Terminal 的模拟命令、健康、进程、文件、环境及网络结果，
-改为没有输入框的明确未接通状态，不新增依赖、终端协议或 Desktop 壳实现。
+本节区分已实现切片和后续目标，官方 GitHub 源码核对日期为 2026-10-18。
+UI-0 移除管理 Terminal 的模拟命令、健康、进程、文件、环境及网络结果，改为没有输入框的明确
+未接通状态。UI-1 接入下述 Dialog 和只读 Artifact 视图，见
+[ADR-0128](../architecture/decisions/0128-registered-artifact-text-preview.md)；聊天和日志组件仍待接入。
 
 本仓库 [lockfile](../../frontend/package-lock.json) 当前锁定 Next.js 14.2.35、React 18.3.1、
 Tailwind CSS 3.4.19、`@monaco-editor/react` 4.7.0 / `monaco-editor` 0.55.1，以及
-已用于差异视图的 `react-diff-viewer-continued` 4.2.2。Monaco 依赖存在不表示编辑器已经接入。
+已用于差异视图的 `react-diff-viewer-continued` 4.2.2。UI-1 将 Monaco 用于已登记产物的只读显示，
+不提供工作区编辑、保存或执行。
 采用以下四组具体组件，逐片验收，不更换整套业务平台：
 
 1. **shadcn/ui：基础交互。** 审阅源码基线为 `shadcn` 2.3.0、commit
@@ -195,6 +197,8 @@ Tailwind CSS 3.4.19、`@monaco-editor/react` 4.7.0 / `monaco-editor` 0.55.1，�
    先展示获授权、已登记的 Artifact 字节及其 attempt / digest，保留现有差异视图，不再叠加 CodeMirror。
    客户端懒加载，按 [loader 配置](https://github.com/suren-atoyan/monaco-react/blob/eb120e66378471315620fe5339b73ba003f199ad/README.md#loader-config)
    使用本地 Monaco 和 worker 资源，不能依赖默认 CDN 才能在 Desktop 打开代码。
+   UI-1 为避免页面级 worker 池跨预览存活，采用独立本地 iframe 加载同一 core 包；没有在本轮
+   使用全局 React loader。关闭时销毁模型、编辑器、worker 和 Blob URL，frame 仅是生命周期边界。
 4. **xterm.js：真实命令观察的只读渲染。** 候选 `@xterm/xterm` 6.0.0、commit
    `f447274f430fd22513f6adbf9862d19524471c04`，
    [包声明](https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/package.json)

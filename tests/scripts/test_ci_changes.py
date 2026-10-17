@@ -155,6 +155,16 @@ class CiChangeSelectionTests(unittest.TestCase):
         self.assertTrue(checks["windows_cli"])
         self.assertIn("frontend", {image["name"] for image in checks["images"]["include"]})
 
+    def test_preview_byte_boundary_selects_its_real_browser_consumer(self) -> None:
+        for path in (
+            "app/services/artifact_preview_service.py",
+            "app/services/artifact_integrity_service.py",
+            "tests/integration/artifact_preview_http_fixture.py",
+            "tests/integration/test_artifact_preview_sqlite.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(select_checks([path])["frontend"])
+
     def test_invalid_base_is_an_error_instead_of_omitting_checks(self) -> None:
         root = Path(__file__).resolve().parents[2]
         result = subprocess.run(

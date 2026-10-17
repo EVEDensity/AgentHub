@@ -83,6 +83,8 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
     go = contracts or changed("services/go/", "deploy/sandbox-image/")
     frontend = contracts or changed(
         "frontend/", "extensions/vscode-agenthub/", "app/api/", "app/schemas/", "tests/api/",
+        "app/services/artifact_preview_service.py", "tests/integration/artifact_preview_http_fixture.py",
+        "app/services/artifact_integrity_service.py", "tests/integration/test_artifact_preview_sqlite.py",
     )
     rust = contracts or changed("services/rust/")
     windows_cli = contracts or changed(

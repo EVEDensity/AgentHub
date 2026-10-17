@@ -13,6 +13,8 @@ const apiBackend = process.env.API_BACKEND || 'go';
 const legacyUrl = process.env.API_BACKEND_URL || 'http://127.0.0.1:8000';
 const goGatewayUrl = process.env.GO_GATEWAY_URL || 'http://127.0.0.1:8081';
 const apiDestination = apiBackend === 'go' ? goGatewayUrl : legacyUrl;
+// Mission Control owns v1 Mission state and Artifact bytes on both API profiles.
+const missionControlUrl = process.env.MISSION_CONTROL_URL || legacyUrl;
 
 const nextConfig = {
   output: 'standalone',
@@ -45,6 +47,7 @@ const nextConfig = {
   },
   async rewrites() {
     return [
+      { source: '/api/v1/missions/:path*', destination: `${missionControlUrl}/api/v1/missions/:path*` },
       // Tool marketplace (G1) is served by the Go gateway even in legacy
       // mode: frontend/stores/toolStore.ts expects the gateway contract, and
       // the legacy /api/admin/tools is an unrelated tool-registry with no

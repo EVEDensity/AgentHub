@@ -29,7 +29,9 @@ Runner or external test/scanner producers must provide exact Mission, WorkUnit,
 and attempt identity plus individual case/finding records and consistent
 summaries. No built-in producer is implied by the schema. The independent
 verifier and Mission Control read the same integrity-verified bytes; raw report
-content is not added to discovery, Evidence, or HTTP projections. Existing
+content is not added to verification discovery, Evidence, or default Mission
+metadata projections. The separate human-only bounded text preview described
+below is an explicit read, not report interpretation or verification. Existing
 free-text reports fail semantic acceptance until producers migrate. See ADR-0114
 for failure behavior and the boundary between report verification and trusted
 test/scanner execution.
@@ -57,3 +59,12 @@ Mission verdict; `acceptance` is always `artifact-integrity-only`. Mission
 Control and Verifier retain the existing `artifact-set.v1` byte-integrity
 acceptance. Disabling this operator-only composition leaves historical reports
 readable and requires no migration of existing report formats or persistence.
+
+`artifact-text-preview.schema.json` defines the exact bounded human preview
+response: registered Artifact/WorkUnit/attempt identity, kind, media type, size,
+SHA-256 and UTF-8 text. It omits storage addresses and accepts no verdict or
+acceptance field. `integrity: verified` means the read bytes match the registered
+metadata; it does not add Evidence or accept a Mission. The endpoint permits
+only public/internal supported text up to 262,144 bytes; it rejects excessive,
+unavailable, mismatched or non-UTF-8 content without a truncated success. See
+[ADR-0128](../docs/architecture/decisions/0128-registered-artifact-text-preview.md).

@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0128](0128-registered-artifact-text-preview.md) | Preview registered Artifact text through Mission Control |
 | [0127](0127-experimental-anonymous-browser-read.md) | Evaluate one anonymous browser read behind a dedicated Native profile |
 | [0126](0126-frozen-reviewed-skill-catalog.md) | Freeze operator-reviewed document Skills before model use |
 | [0125](0125-experimental-sandbox-native-composition.md) | Compose the Native Harness with an explicit sandbox capability |
