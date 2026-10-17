@@ -36,6 +36,10 @@ class QualityDeltaTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.git("init", "-q")
+        # Disposable repositories must not launch detached maintenance that can
+        # still write .git while TemporaryDirectory removes the fixture.
+        self.git("config", "maintenance.auto", "false")
+        self.git("config", "gc.auto", "0")
         self.git("config", "user.name", "Quality Test")
         self.git("config", "user.email", "quality-test@agenthub.local")
         self.write("app/seed.py", "SEED = True\n")
