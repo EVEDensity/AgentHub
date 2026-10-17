@@ -1,0 +1,3 @@
+# These npm runtime mirrors must retain the exact distributed bytes on checkout.
+frontend/public/pdf.min.mjs -text
+frontend/public/pdf.worker.min.mjs -text

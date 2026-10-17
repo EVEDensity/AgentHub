@@ -72,7 +72,7 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
     paths = [path.replace("\\", "/") for path in paths]
     all_checks |= any(
         path.startswith(".github/workflows/")
-        or path in {"scripts/ci_changes.py", ".dockerignore"}
+        or path in {"scripts/ci_changes.py", ".dockerignore", ".gitattributes"}
         for path in paths
     )
 

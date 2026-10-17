@@ -150,7 +150,7 @@ also start and health-check the existing Docker Compose smoke stack. That stack
 starts Gateway and summarization with local infrastructure; image builds alone
 do not prove every service's boot, credential configuration or business flow.
 CI configuration
-changes and manual runs select every optional job.
+changes, global Git attribute changes and manual runs select every optional job.
 
 OpenSandbox adapter, pinned deployment, PoC and public-contract changes select
 the Linux conformance job. It starts the fixed upstream runtime with an ephemeral

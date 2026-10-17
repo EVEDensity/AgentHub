@@ -331,6 +331,9 @@ Omitting `-LocalServices` retains the shell-only developer profile. An old
 staged Mission Control executable is never reused by the full-service build.
 Next output is fixed to `.next`; inherited endpoint/output environment values
 are restored. See [local build ownership](local-services/README.md).
+The two tracked PDF runtime mirrors retain their upstream bytes through
+`.gitattributes`; Windows checkout must not rewrite them before npm stages the
+same locked files. The clean-source check continues to reject real changes.
 
 The inventory proves the selected package bytes and UI component notices. It
 is not a signed build attestation or a complete dependency-license audit.

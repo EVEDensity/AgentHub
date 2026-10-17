@@ -26,7 +26,7 @@ class CiChangeSelectionTests(unittest.TestCase):
         self.assertEqual(checks["images"], {"include": []})
 
     def test_ci_changes_run_every_optional_check(self) -> None:
-        for path in (".github/workflows/ci.yml", "scripts/ci_changes.py", ".dockerignore"):
+        for path in (".github/workflows/ci.yml", "scripts/ci_changes.py", ".dockerignore", ".gitattributes"):
             with self.subTest(path=path):
                 checks = select_checks([path])
                 self.assertTrue(all(value for value in checks.values() if isinstance(value, bool)))
