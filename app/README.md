@@ -43,6 +43,12 @@ workspace tree.
 
 * `domain/`: immutable Mission, Contract, WorkUnit, Artifact, Evidence, and
   transition models.
+  `domain/mission_budget.py`, `services/model_pricing.py` and the internal
+  `MissionBudgetService` add exact nano-USD reservation/settlement infrastructure
+  backed by the Mission repository transaction. It is default-off infrastructure;
+  no real model HTTP/Harness path is budget-enforced by this addition. Same-Mission
+  child WorkUnits share an account; forked Missions do not inherit one. See
+  [ADR-0123](../docs/architecture/decisions/0123-persistent-mission-budget-ledger.md).
 
 * `repositories/`: persistence and transaction boundaries.
   Legacy session file versions remain in `artifacts`; Mission Control owns
@@ -50,7 +56,7 @@ workspace tree.
 
 * `db/`: connection and schema initialization. Checkpoint resume metadata uses
   a distinct PostgreSQL Alembic revision and a transactional SQLite version-2
-  to version-5 upgrade; historical rows retain NULL fingerprints. Session scope
+  to version-6 upgrade; historical rows retain NULL fingerprints. Session scope
   compatibility follows the checkpoint revision and retains unknown legacy
   ownership as NULL; v1 access checks durable scope before reading or writing.
   See

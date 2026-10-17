@@ -9,8 +9,12 @@ This profile runs a small real execution experiment behind the optional
 AgentHub OpenSandbox HTTP adapter. It does not change Mission ownership,
 default execution, production deployment or the model loop. It needs no model
 key, cloud account, external service account or repository secret.
-Real Linux Docker execution remains unverified until the opt-in job records
-passing evidence.
+Real Linux Docker conformance passed at commit `ed914e7` in
+[CI run 39050791404](https://github.com/EVEDensity/AgentHub/actions/runs/39050791404).
+All 19 checks passed, including the allowed-sandbox network positive control,
+the original sandbox's denied connection, actual timeout/cancellation child
+markers, and zero remaining main containers, sidecars or managed volumes.
+This is evidence for the disposable pinned profile, not production isolation.
 
 ## Prerequisites and command
 
@@ -155,7 +159,7 @@ The PoC report records checks and exact sandbox IDs with the job identity. A
 zero exit without a matching successful report fails the wrapper. The wrapper
 writes a separate `report.infrastructure.json` with image pins, Docker version,
 job ID, overall status and cleanup errors. Tests using mocked HTTP or Docker
-only establish adapter contracts; a passing manual Linux run is required for
+only establish adapter contracts; a passing Linux conformance run is required for
 real environment evidence. No real Linux run or production claim is recorded
 by merely checking in this profile.
 

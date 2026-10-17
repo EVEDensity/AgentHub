@@ -41,3 +41,32 @@ Extra reports or another bundle cannot be omitted from a passing submission.
 Existing evaluators retain their registered-subset behavior; FAIL Evidence uses
 the existing admission path. See `trusted_tests/admission.py` and
 `tests/integration/test_trusted_test_verification_sqlite.py`.
+
+## Internal budget infrastructure
+
+`MissionBudgetService` is an opt-in internal ledger, with no provider HTTP or
+default Harness integration. It shares one Mission account across that Mission's
+child WorkUnits and fixes the actual Contract revision and server price table.
+Forked Missions have different account identities; cross-Mission inheritance is
+pending. The exact ceiling is read from stored Contract JSON using Decimal, and
+all charges/reservations use integer nano-USD. Per-million token prices are
+server-owned; each complete call's fractional nano-USD rounds upward once.
+
+Reserve and dispatch lock actual Mission/WorkUnit state and validate the current
+Runner/attempt/lease on the same transaction connection as account and reservation
+writes. Dispatch's CAS can be claimed once. A RESERVED operation can be released;
+dispatched timeout/cancellation/missing usage becomes UNKNOWN and retains its
+hold. Trusted late settlement changes financial rows only. An over-reservation
+charge records the entire amount and blocks further calls. Final receipts are
+immutable; UTC creation/dispatch/finalization times survive idempotent replays.
+
+The ledger supports native asyncpg PostgreSQL transactions and SQLite's
+single-process serialized writer. Neon HTTP SQL is explicitly refused: its
+stateless BEGIN/COMMIT emulation cannot provide atomic ledger operations or row
+locks. The budget migration refuses this backend before ledger DDL or stamping.
+
+There is no Runner self-reported settlement endpoint. This internal accounting
+layer does not make existing model calls budget-enforced. See
+[ADR-0123](../../../docs/architecture/decisions/0123-persistent-mission-budget-ledger.md),
+`tests/integration/test_mission_budget_sqlite.py` and the opt-in independent-
+connection PostgreSQL tests in `test_mission_budget_postgres.py`.

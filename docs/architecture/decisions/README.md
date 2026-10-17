@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0123](0123-persistent-mission-budget-ledger.md) | Persist an internal Mission budget ledger |
 | [0122](0122-experimental-opensandbox-http-port.md) | Evaluate a pinned OpenSandbox behind an opt-in HTTP port |
 | [0121](0121-trusted-local-test-bundles.md) | Admit signed test bundles under the execution lease |
 | [0120](0120-development-service-failure-boundaries.md) | Seal privileged development services and fail closed on sandbox loss |

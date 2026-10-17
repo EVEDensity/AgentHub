@@ -10,9 +10,10 @@ plain PostgreSQL DSNs; SQLAlchemy's changing default driver is not relied on.
 The original checkpoint revision is `a6d0e1f2b3c4`, following Contract lineage
 revision `f5c9d0e1a2b3`. Additive resume fields live in the separate
 `b7e1f203c4d5` revision. Session compatibility follows at `c8f2a314d5e6`; Runner presence is the additive
-head `d9a3b425e6f7`. Already present checkpoint fields are preserved.
+revision `d9a3b425e6f7`. Mission budget ledger follows at the additive head
+`e0b4c536f708`. Already present checkpoint fields are preserved.
 
-SQLite schema version 5 upgrades versions 2, 3 and 4 in a transaction that contains
+SQLite schema version 6 upgrades versions 2, 3, 4 and 5 in a transaction that contains
 the missing-column additions and the schema marker. It does not replay seeds
 or legacy DDL. Missing checkpoint tables and failed ALTERs fail startup without
 advancing the marker. Fresh profiles install the same five optional fields.
@@ -61,7 +62,49 @@ python -m pytest tests/integration/test_checkpoint_resume_postgres.py tests/inte
 ```
 
 Runner presence is an expiring operational projection, not a lifecycle owner.
-Version 4 upgrades only that projection without replaying seeds. Its DDL and
-marker commit together; migration failure leaves the prior marker and data.
+Its historical SQLite version 4-to-5 step adds only that projection without
+replaying seeds; current startup also applies the version 6 ledger step.
+Incremental DDL and the current marker commit together, and migration failure
+leaves the prior marker and data.
 See `tests/persistence/test_runner_presence_migrations.py` and
 `tests/integration/test_runner_presence_migrations_postgres.py`.
+
+Mission budget persistence adds accounts, operation-scoped reservations, and
+final receipts without backfilling balances or replaying historical usage.
+Accounts bind an exact Contract revision and a server pricing digest. Monetary
+columns store nonnegative signed BIGINT nano-USD; the account limit cannot
+exceed its Contract ceiling. Actual spending can exceed either ceiling so an
+unexpected provider overrun remains visible. A separate `blocked` flag prevents
+further admission after an overrun; lifecycle services own that decision.
+
+Reservation CHECKs enforce dispatch identity, terminal cost, and an explicit
+reason for UNKNOWN outcomes. Final receipts have unique provider receipt
+identities and database triggers reject UPDATE and DELETE on both backends.
+SQLite also rejects conflicting receipt INSERTs before replacement resolution,
+so `INSERT OR REPLACE` cannot discard an existing reservation/provider receipt
+even when `recursive_triggers` is off.
+Server UTC creation/dispatch/finalization timestamps are stored as microsecond
+ISO text with explicit state and ordering CHECKs; final receipt time and the
+reservation's final time commit together.
+The SQLite migration uses independent DDL that retains every ledger CHECK,
+requires integer storage for money, and adds the missing legacy Contract
+revision unique index needed by its composite foreign key. The generic legacy
+translator is not used for these tables.
+
+Budget storage supports native asyncpg PostgreSQL transactions and the existing
+single-process SQLite writer. The known stateless `NeonHttpConnection` backend
+is refused before budget DDL/version stamping and by the derived ledger
+repository before ledger reads or writes. Legacy Neon HTTP transaction emulation
+is not accepted as an atomic finance boundary.
+
+The PostgreSQL d9-to-e0 startup migration and SQLite compatibility upgrades
+commit ledger DDL with their version marker. A failed ledger migration rolls
+back newly created tables, indexes, triggers, and the marker. Alembic downgrade
+to d9 explicitly drops budget data and its receipt trigger function; operational
+rollback must account for that data loss before choosing a schema downgrade.
+Tests cover actual SQLite 2/3/4/5-to-6 upgrades and opt-in PostgreSQL head,
+downgrade/reupgrade, constraints, and injected failure rollback:
+
+```powershell
+python -m pytest tests/persistence/test_mission_budget_migrations.py tests/integration/test_mission_budget_migrations_postgres.py -q
+```
