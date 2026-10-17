@@ -40,6 +40,17 @@ class CiChangeSelectionTests(unittest.TestCase):
         self.assertTrue(checks["frontend"])
         self.assertEqual([image["name"] for image in checks["images"]["include"]], ["frontend"])
 
+    def test_desktop_preview_inputs_select_browser_and_windows_consumers(self) -> None:
+        for path in (
+            "desktop/shell-browser-smoke.mjs", "desktop/shell-browser-smoke-support.mjs",
+            "desktop/shell-browser-smoke.ps1", "desktop/webview2-gui-smoke.ps1",
+            "desktop/ui/main.js", "desktop/tests/shell-browser-smoke.test.mjs",
+        ):
+            with self.subTest(path=path):
+                checks = select_checks([path])
+                self.assertTrue(checks["frontend"])
+                self.assertTrue(checks["windows_cli"])
+
     def test_editor_extension_changes_run_client_contract_validation(self) -> None:
         for path in ("src/agenthubClient.ts", "package-lock.json", "tests/client.test.cjs"):
             with self.subTest(path=path):

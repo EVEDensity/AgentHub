@@ -56,8 +56,20 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD }}
       - name: Build and verify portable package
         run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -Portable
-      - name: Run WebView2 GUI smoke
-        run: .\webview2-gui-smoke.ps1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked browser-preview tools
+        run: npm ci
+        working-directory: frontend
+      - name: Install matching preview Chromium
+        run: node ..\frontend\node_modules\@playwright\test\cli.js install chromium
+      - name: Verify shell browser-preview harness
+        run: node --test tests/shell-browser-smoke.test.mjs
+      - name: Run shell browser preview (not native WebView2)
+        run: .\shell-browser-smoke.ps1 -Port 0
       - name: Verify updater signatures and rollback
         if: startsWith(github.ref, 'refs/tags/desktop-v')
         run: .\updater-rollback-smoke.ps1 -TargetTriple x86_64-pc-windows-msvc
@@ -80,11 +92,11 @@ jobs:
           name: agenthub-desktop-installer-smoke-${{ github.sha }}
           path: ${{ runner.temp }}/agenthub-installer-smoke-*
           if-no-files-found: ignore
-      - name: Upload WebView2 GUI screenshots
+      - name: Upload shell browser-preview evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: agenthub-desktop-webview2-${{ github.sha }}
+          name: agenthub-desktop-browser-preview-${{ github.sha }}
           path: output/playwright
           if-no-files-found: ignore
       - name: Upload signed updater artifacts
