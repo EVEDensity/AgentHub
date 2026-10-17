@@ -292,7 +292,7 @@ if ($env:AGENTHUB_UPDATE_ENABLED -eq '1') {
 if ($LASTEXITCODE -ne 0) {
     throw "Release manifest generation failed."
 }
-if ($LocalServices -and -not $NoInstaller) {
+if ($LocalServices -and ($Portable -or -not $NoInstaller)) {
     $resourceSmoke = Join-Path $desktopDirectory 'packaged-resources-smoke.ps1'
     & $resourceSmoke -ArtifactPath $portableArchive -Kind Portable -ExpectedManifest $expectedResources -SourceCommit $sourceCommit -ExpectedApplicationSha256 $builtApplicationDigest -ExpectedSidecarSha256 $builtSidecarDigest -OutputDirectory $resourceEvidence
     if (-not $Portable) {
