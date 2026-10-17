@@ -1,8 +1,7 @@
 import * as vscode from "vscode";
-import { AgentHubClient, MissionSummary } from "./agenthubClient";
+import { AgentHubClient } from "./agenthubClient";
 
-/** Sidebar tree view showing known Missions (placeholder for now —
- *  real Mission listing API will land in a follow-up). */
+/** Command shortcuts; Mission listing is not yet supported. */
 export class MissionTreeProvider implements vscode.TreeDataProvider<TreeItem> {
   private _onDidChangeTreeData = new vscode.EventEmitter<TreeItem | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -17,8 +16,9 @@ export class MissionTreeProvider implements vscode.TreeDataProvider<TreeItem> {
     return element;
   }
 
-  getChildren(): vscode.TreeItem[] {
-    const healthOk = this._checkHealthSync();
+  async getChildren(): Promise<vscode.TreeItem[]> {
+    let healthOk = false;
+    try { healthOk = (await this.client.health()).status === 'ok'; } catch { /* Render failed probe below. */ }
     if (!healthOk) {
       return [
         new TreeItem(
@@ -33,6 +33,8 @@ export class MissionTreeProvider implements vscode.TreeDataProvider<TreeItem> {
       ];
     }
     return [
+      new TreeItem("Mission listing unavailable", undefined, vscode.TreeItemCollapsibleState.None,
+        { description: "Server reachable; execution status is shown through Mission events" }),
       new TreeItem(
         "Create Mission…",
         {
@@ -40,7 +42,7 @@ export class MissionTreeProvider implements vscode.TreeDataProvider<TreeItem> {
           title: "Create Mission",
         },
         vscode.TreeItemCollapsibleState.None,
-        { description: "Start a new multi-agent task", tooltip: "" }
+        { description: "Submit a new Mission", tooltip: "" }
       ),
       new TreeItem(
         "Open Chat Panel",
@@ -54,15 +56,7 @@ export class MissionTreeProvider implements vscode.TreeDataProvider<TreeItem> {
     ];
   }
 
-  private _checkHealthSync(): boolean {
-    // Fire-and-forget — the sidebar renders optimistically.  Health probe
-    // happens inside the chat Webview every 15s anyway.
-    void this.client
-      .health()
-      .then(() => this._onDidChangeTreeData.fire())
-      .catch(() => this._onDidChangeTreeData.fire());
-    return true;
-  }
+
 }
 
 interface ItemMeta {

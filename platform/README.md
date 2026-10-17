@@ -33,3 +33,13 @@ content is not added to discovery, Evidence, or HTTP projections. Existing
 free-text reports fail semantic acceptance until producers migrate. See ADR-0114
 for failure behavior and the boundary between report verification and trusted
 test/scanner execution.
+
+`opensandbox-execution-report.schema.json` is an additive diagnostic Artifact
+format produced by the experimental Native sandbox Harness. Consumers are the
+disposable conformance script and integrity-verified Artifact readers; Mission
+Control and Verifier do not interpret it as a test verdict or PASS Evidence.
+It records actual command identity/exit and sanitized combined output only after
+confirmed sandbox destruction. Existing `artifact-set.v1` acceptance remains
+byte integrity. Disabling the experimental factory does not rewrite historical
+reports; see [ADR-0125](../docs/architecture/decisions/0125-experimental-sandbox-native-composition.md).
+No existing report format or database schema is migrated.

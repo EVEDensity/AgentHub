@@ -34,6 +34,7 @@ from app.cli.review import (
     build_review_objective,
     load_findings,
     review_exit_code,
+    build_review_result,
     stage_review_workspace,
 )
 from app.cli.receipts import cmd_replay, cmd_search
@@ -260,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     review_parser = subparsers.add_parser(
         "review-pr",
-        help="review a pull-request diff through the verifier-gated mission loop",
+        help="produce candidate PR findings (independent review verification unavailable)",
     )
     _add_model_flags(review_parser)
     review_parser.add_argument(
@@ -966,8 +967,8 @@ def cmd_review_pr(args: argparse.Namespace, cwd: Path) -> int:
 
     directory = state_dir(cwd)
     directory.mkdir(parents=True, exist_ok=True)
-    # Stage the diff and the CLI-written verifier (the validator is
-    # authored by the CLI, never by the agent — independent verifier).
+    # Stage candidate-review input and a manual structural diagnostic.
+    # The default verifier does not execute this workspace script.
     stage_review_workspace(workspace_root, diff_text)
     instruction_paths = collect_agents_md_layers(workspace_root, cwd)
     project_instructions = merge_project_instructions(instruction_paths)
@@ -1013,12 +1014,7 @@ def cmd_review_pr(args: argparse.Namespace, cwd: Path) -> int:
     if json_mode:
         print(
             json.dumps(
-                {
-                    "review": result.status,
-                    "missionId": result.mission_id,
-                    "findings": findings,
-                    "exitCode": exit_code,
-                },
+                build_review_result(result, findings, exit_code),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -1034,7 +1030,8 @@ def _print_review_human(
     print()
     print("=" * 60)
     print(f"review   {result.mission_id}")
-    print(f"status   {result.status}  (exit code {exit_code})")
+    print(f"mission  {result.status}  (exit code {exit_code})")
+    print("review   UNVERIFIED — independent review verification is unavailable")
     print("=" * 60)
     if findings is None:
         print("no readable review-findings.json produced")
@@ -1049,7 +1046,7 @@ def _print_review_human(
             print(f"    issue:      {item.get('issue', '')}")
             print(f"    suggestion: {item.get('suggestion', '')}")
     if not (findings.get("blocking") or []):
-        print("\nno blocking findings — review passes")
+        print("\nmodel reported no blocking findings; review remains unverified")
 
 
 def _print_human(result: MissionRunResult, *, elapsed: float) -> None:

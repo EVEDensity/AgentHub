@@ -26,7 +26,7 @@ from app.db.sqlite_translator import (  # noqa: F401 - compatibility exports
 )
 
 logger = logging.getLogger("agenthub.db.init")
-SQLITE_SCHEMA_VERSION = 5
+SQLITE_SCHEMA_VERSION = 6
 
 async def ainit_db() -> None:
     """Create all tables and seed data on the configured backend.

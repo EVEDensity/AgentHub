@@ -1,5 +1,7 @@
 'use client';
 
+import { unsupportedMissionInput } from '../lib/missionChatInput';
+
 import React, { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import dynamic from 'next/dynamic';
 import AuthForm from '../components/chat/AuthForm';
@@ -187,6 +189,7 @@ export default function AgentHubIM(): JSX.Element {
   inputRef.current = input;
   const attachedFilesRef = useRef(attachedFiles);
   attachedFilesRef.current = attachedFiles;
+  const sendDraftRef = useRef<(customText?: string) => void>(() => {});
   const previewTabsRef = useRef(previewTabs);
   previewTabsRef.current = previewTabs;
   // 关键修复：始终以 ref 形式保留最新的 sessionId，
@@ -673,13 +676,13 @@ export default function AgentHubIM(): JSX.Element {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       setMentionOpen(false);
-      handleSend();
+      sendDraftRef.current();
       return;
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       setMentionOpen(false);
-      handleSend();
+      sendDraftRef.current();
     }
   }, [mentionOpen, mentionTrigger, mentionActiveIndex, filteredAgents, filteredWorkflows, filteredSkills]);
 
@@ -824,6 +827,7 @@ export default function AgentHubIM(): JSX.Element {
   }, []);
 
   const handleSend = useCallback((customText?: string) => {
+    if (missionSending) return;
     // ★ 关键修复：用 ref 取“此时此刻”真实的 sessionId，绕过 useCallback 闭包过期问题。
     // 表现：切换 / 新建会话后立刻发消息，sessionId 不会用上一次渲染的旧值。
     const activeSessionId = activeSessionIdRef.current;
@@ -840,6 +844,9 @@ export default function AgentHubIM(): JSX.Element {
         : '';
     const text = rawText.trim();
     if (!text && currentFiles.length === 0) return;
+    const input = { attachments: currentFiles, references: [...fileReferences, ...quoteReferences], execPermission };
+    const unsupported = unsupportedMissionInput(input);
+    if (unsupported) { setNotice(unsupported); return; }
     const draft = buildOutgoingMessageDraft({
       text,
       files: currentFiles,
@@ -863,17 +870,6 @@ export default function AgentHubIM(): JSX.Element {
       attachments: draft.attachments.length > 0 ? draft.attachments : undefined,
     };
 
-    const wsMsg: PendingMessage = {
-      sessionId: activeSessionId,
-      content: draft.aiContent,
-      sender: user?.name || 'user',
-      timestamp: new Date().toISOString(),
-      type: 'text',
-      attachments: currentFiles,
-      quoteReferences: quoteReferences.length > 0 ? quoteReferences : undefined,
-      exec_permission: execPermission,
-      auto_reply: autoReplyRef.current,
-    };
 
     if (isStreaming) {
       setSessionStreaming(activeSessionId, false);
@@ -891,27 +887,32 @@ export default function AgentHubIM(): JSX.Element {
     //    P0 migration complete: every message creates a Mission and streams SSE events.
     //    sendMission rejects on 4xx/5xx — we surface the error in-place and let
     //    the user retry rather than silently falling back.
-    sendMission(draft.aiContent).then((result) => {
+    sendMission(draft.aiContent, input).then((result) => {
       if (!result) {
         setSendState('error');
         setNotice('Mission create failed — check console for details');
       } else {
         setSendState('sent');
+        // An acknowledgement clears only the draft fields actually submitted.
+        // Edits or session switches made while admission was pending survive.
+        if (activeSessionIdRef.current === activeSessionId) {
+          setInput(previous => previous === currentInput ? '' : previous);
+          setAttachedFiles(previous => previous === currentFiles ? [] : previous);
+          setFileReferences(previous => previous === fileReferences ? [] : previous);
+          setQuoteReferences(previous => previous === quoteReferences ? [] : previous);
+        }
       }
     }).catch(() => {
       setSendState('error');
       setNotice('Mission stream error — retry or refresh the page');
     });
-    setInput('');
-    setAttachedFiles([]);
-    setFileReferences([]);
-    setQuoteReferences([]);
-  }, [sessionId, user, isStreaming, fileReferences, quoteReferences, sendMission]);
+  }, [sessionId, user, isStreaming, fileReferences, quoteReferences, execPermission, missionSending, sendMission]);
+  sendDraftRef.current = handleSend;
 
   const handleRetryMessage = useCallback((msg: PendingMessage) => {
     // P0: Retry also goes through Mission/SSE — same route as the
     // original send, but a fresh Mission with the same objective.
-    sendMission(msg.content).then((result) => {
+    sendMission(msg.content, { attachments: msg.attachments, references: msg.quoteReferences, execPermission: msg.exec_permission }).then((result) => {
       if (result) {
         setNotice('Message resent via Mission');
       } else {

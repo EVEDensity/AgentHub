@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { MessageSquareQuote } from 'lucide-react';
 import type { Agent, AttachedFile, FileReference, QuoteReference, SkillMeta, WorkflowSummary } from '../../types';
 import { PLATFORM_LABELS, PLATFORM_COLORS } from '../../types';
-import PermissionModePopover, { type ExecPermission } from './PermissionModePopover';
+import { type ExecPermission } from './PermissionModePopover';
 
 const FILE_CATEGORY_CONFIG: Record<string, { label: string; extensions: string[]; mimePattern: RegExp }> = {
   code: { label: 'Code', extensions: ['py','js','ts','jsx','tsx','java','go','rs','c','cpp','h','hpp','swift','kt','rb','php','sql','sh','bash','vue','svelte','astro'], mimePattern: /^(text\/|\b(?:javascript|typescript|json)\b)/ },
@@ -609,15 +609,9 @@ const ChatInput = memo(function ChatInput({
 
             {/* Permission mode */}
             <span className="composer-toolbar-sep" aria-hidden />
-            <PermissionModePopover value={execPermission} onChange={onExecPermissionChange} />
+            <span className="text-xs text-warm-400" title="当前聊天不支持覆盖执行权限">权限由服务端合同控制</span>
 
-            {/* Auto-reply toggle */}
-            <button type="button" onClick={() => onAutoReplyChange(!autoReply)}
-              className={`composer-toolbar-toggle ${autoReply ? 'active' : ''}`}
-              title={autoReply ? '自动回复已启用' : '仅发送模式'}>
-              <span className="text-sm leading-none">{autoReply ? 'A' : 'M'}</span>
-              <span className="composer-toggle-label">{autoReply ? '自动' : '仅发送'}</span>
-            </button>
+            <span className="text-xs text-warm-400" title="每条消息提交为 Mission">任务模式</span>
 
             {/* More actions */}
             <button type="button" className={`composer-toolbar-btn ${showMoreActions ? 'active' : ''}`}

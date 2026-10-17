@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { AgentHubClient, MissionSummary } from "./agenthubClient";
+import { AgentHubClient } from "./agenthubClient";
 import { ChatPanel } from "./chatPanel";
 import { MissionTreeProvider } from "./missionTree";
 
@@ -14,7 +14,8 @@ export function activate(context: vscode.ExtensionContext) {
   const apiKey =
     vscode.workspace.getConfiguration("agenthub").get<string>("apiKey") ?? "";
 
-  client = new AgentHubClient(serverUrl, apiKey);
+  const workspaceId = vscode.workspace.getConfiguration("agenthub").get<string>("workspaceId") ?? "local-admin";
+  client = new AgentHubClient(serverUrl, apiKey, workspaceId);
   missionTreeProvider = new MissionTreeProvider(client);
 
   // Sidebar mission tree
@@ -42,19 +43,8 @@ export function activate(context: vscode.ExtensionContext) {
         validateInput: (v) => (v && v.trim().length > 0 ? undefined : "Mission objective required"),
       });
       if (!objective) return;
-      try {
-        const result = await client.createMission(objective.trim());
-        vscode.window.showInformationMessage(
-          `Mission ${result.missionId} created — agent ${result.assignedAgentId} is on it`
-        );
-        chatPanel?.show();
-        chatPanel?.attachMission(result.missionId);
-        missionTreeProvider?.refresh();
-      } catch (err) {
-        vscode.window.showErrorMessage(
-          `Failed to create mission: ${(err as Error).message}`
-        );
-      }
+      chatPanel?.show();
+      await chatPanel?.submitPrompt(objective.trim());
     })
   );
 
@@ -83,6 +73,8 @@ export function activate(context: vscode.ExtensionContext) {
       );
     })
   );
+
+  context.subscriptions.push(treeView, chatPanel);
 
   // Open chat on activate so users see it immediately
   chatPanel.show();

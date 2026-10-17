@@ -39,7 +39,6 @@ from app.services.harness_service import (
     ModelPort,
 )
 from app.services.runner_composition import HarnessModelFactoryPort
-from app.services.runner.tool_approval import desktop_tool_approval
 from app.services.tool_registry import ToolDefinition, ToolParameter
 from app.services.tools.definitions import (
     APPLY_CHANGE_SET,
@@ -560,6 +559,8 @@ def _build_delegate_subtask_executor(
     sub agent can neither recurse nor spawn further agents. The child's
     final summary text is returned, truncated to the desktop result cap.
     """
+    from app.services.runner.tool_approval import desktop_tool_approval
+
     tools = list(subtask_tools)
 
     async def execute(arguments: Mapping[str, Any]) -> str:
@@ -598,8 +599,8 @@ def _build_delegate_subtask_executor(
 COMMAND_EXECUTE_TOOL_NAME = "command_execute"
 COMMAND_EXECUTE_DENIED_MESSAGE = (
     "工具执行失败: 桌面档不允许通过 command_execute 工具直接执行 shell 命令。"
-    "如需运行命令，请在任务 objective 中以 'RUN: <command>' 行声明，"
-    "该命令会在验收（verifier）阶段于工作区内执行，其退出码与输出会进入 Evidence 证据。"
+    "当前默认验收仅验证产物完整性；任务文本标记不会执行命令。"
+    "独立可信的命令验收生产者尚未接入。"
 )
 
 
@@ -743,8 +744,8 @@ WEB_FETCH_TOOL_NAME = "web_fetch"
 # suggest — read-only plus research tools; the agent can inspect and
 #           propose changes but every workspace mutation is denied.
 # edit    — full file read/write inside the workspace (the historical
-#           desktop default); code stays confined to objective-declared
-#           RUN:/VERIFY: acceptance commands.
+#           desktop default); it does not grant code execution.
+#           Objective text never grants additional execution authority.
 # auto    — the complete whitelist including code_execute.
 
 TOOL_PERMISSION_SUGGEST = "suggest"
@@ -795,8 +796,8 @@ def _build_permission_denied_executor(
         return (
             f"错误：工具 {tool_name} 在当前权限档位（{mode}）下被禁用。"
             f"suggest=只读；edit=可写工作区文件；auto=完整白名单。"
-            "如需该能力，请以更高权限档位重新运行，或在任务 objective "
-            "中以 'RUN: <command>' 声明命令（由验收阶段执行并计入证据）。"
+            "如需该能力，请通过受支持的权限配置选择更高权限档位后重新运行。"
+            "任务文本标记不会执行命令，默认验收仅验证产物完整性。"
         )
 
     return execute
@@ -1052,8 +1053,7 @@ def build_desktop_runner_tools(
             name=COMMAND_EXECUTE_TOOL_NAME,
             description=(
                 "执行任意 shell 命令（桌面档已禁用工具直连执行）："
-                "请改在任务 objective 中以 'RUN: <command>' 行声明命令，"
-                "由验收阶段执行并计入证据。"
+                "任务文本标记不会执行命令；默认验收仅验证产物完整性。"
             ),
             parameters={
                 "type": "object",

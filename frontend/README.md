@@ -58,3 +58,25 @@ Control Decisions in the selected workspace. It reads
   while a command is in flight.
 - The API enforces human-only access and workspace authorization; the frontend
   does not infer or replace those permissions.
+
+## Current command support
+
+Mission chat currently admits plain text. Nonempty attachments, file/message
+references and execution permission overrides are rejected visibly before
+admission; selected input is kept so it can be corrected. The server also
+rejects unknown request fields. The permission hint describes server Contract
+ownership, and every send creates a Mission rather than a local-only message.
+Failed admission preserves the draft. Acknowledgement clears only unchanged
+submitted fields, so typing or adding context while a request is pending is safe.
+
+The deployment dialog is an explicit unavailable notice until a real deployment
+command is supported. Workflow definitions remain editable; test execution,
+history and execution analytics are unavailable until backed by Mission data.
+MCP, Agent version and billing reads show transport errors instead of fixtures.
+Failed add/remove/rollback/tool commands never update the view as if they had
+succeeded. MCP connection probing is unavailable until the gateway exposes a
+supported probe; the browser cannot infer connection from a configured URL.
+
+Run `npm test` and `npx tsc --noEmit` for the frontend checks. The management
+failure tests cover network and HTTP failures, while admission tests ensure
+unsupported input does not create a Mission.

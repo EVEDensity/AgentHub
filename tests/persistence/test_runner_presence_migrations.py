@@ -34,8 +34,8 @@ class RunnerPresenceSQLiteMigrationTests(unittest.IsolatedAsyncioTestCase):
             await self.initialize()
             await self.initialize()
         async with self.pool.acquire() as connection:
-            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), 5)
-            self.assertEqual(await connection.fetchval("SELECT COUNT(*) FROM schema_migrations WHERE version=5"), 1)
+            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), 6)
+            self.assertEqual(await connection.fetchval("SELECT COUNT(*) FROM schema_migrations WHERE version=6"), 1)
             self.assertEqual(await connection.fetchval("SELECT COUNT(*) FROM runner_presence"), 0)
             owners = await connection.fetch("SELECT name,password_hash FROM users")
             self.assertTrue(owners)
@@ -68,4 +68,4 @@ class RunnerPresenceSQLiteMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await connection.fetchval("SELECT COUNT(*) FROM users WHERE password_hash='preserved-local-hash'"), 1)
         await self.initialize()
         async with self.pool.acquire() as connection:
-            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), 5)
+            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), 6)

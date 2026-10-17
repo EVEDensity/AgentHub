@@ -2,7 +2,7 @@
 
 > Status: implemented
 > Owner: repository maintainers
-> Last reviewed: 2026-10-09
+> Last reviewed: 2026-10-18
 > Scope: GitHub Actions validation, release checks and external evidence
 
 ## Deterministic merge gate
@@ -31,12 +31,26 @@ and runs those cases against a real database. Skipped external-service cases
 do not establish production readiness.
 
 [`scripts/ci_changes.py`](../../scripts/ci_changes.py) selects additional jobs
-from the changed dependency paths. Frontend/API changes run TypeScript,
-Vitest, a production build and Playwright browser checks in one job. API schema
-DTO changes also select those frontend consumers. Go changes
-run vet and race tests for every workspace module. Rust changes run locked
+from the changed dependency paths. Frontend/API/editor-extension changes run
+TypeScript, Vitest, a production build and Playwright browser checks in one job.
+The same job installs the VS Code extension's locked dependencies, compiles its
+TypeScript and runs its HTTP client and webview contract tests. API schema
+DTO changes also select those frontend consumers. Go changes and sandbox image
+changes run vet and race tests for every workspace module. The Go job also builds
+the actual sandbox image and requires opt-in real Linux Docker execution and
+cancellation tests; missing Docker or image fails that enabled check. Rust changes run locked
 workspace tests. CLI/runtime/dependency changes run CLI, desktop and release
 contract tests, including real CLI subprocesses, on Windows/Python 3.12.
+The same Windows job runs the trusted-local snapshot, producer, Harness and
+process tests, including actual subprocess/Job Object cleanup. POSIX-only cases
+skip there and execute in the Linux core suite. Changes to those tests select
+the Windows job even when production source is unchanged.
+The Windows job also runs strict-provider wire/real loopback HTTP accounting,
+Native Harness operation/retry policy and the real SQLite Runner/CAS/Verifier
+composition tests. These require no paid provider or external credentials and
+do not establish live vendor billing conformance.
+Experimental Native/OpenSandbox Harness/factory and simulated-wire SQLite
+composition tests also run on Windows, with no Docker requirement there.
 Public contract changes select all runtime consumers. Container builds follow
 the actual supported service recipes and their COPY inputs:
 
@@ -64,6 +78,18 @@ starts Gateway and summarization with local infrastructure; image builds alone
 do not prove every service's boot, credential configuration or business flow.
 CI configuration
 changes and manual runs select every optional job.
+
+OpenSandbox adapter, pinned deployment, PoC and public-contract changes select
+the Linux conformance job. It starts the fixed upstream runtime with an ephemeral
+masked credential, requires real execution/cancellation/file/isolation checks,
+and cleans up only this job's resources. Missing runtime, failed setup, unknown
+execution results or failed cleanup fail that selected check. The experiment is
+off in application defaults; this CI check does not establish hostile-code or
+team-production readiness. The enabled `--native-composition` stage preserves the
+original 19 checks and adds 13 mandatory Native command/exit/cancel/cleanup and
+budgeted Runner/CAS/Verifier checks. Its separate native report is uploaded with
+the original and infrastructure reports. Missing or duplicate required checks
+fail this experiment; deterministic model fixtures are not paid-vendor evidence.
 
 `CI Gate` requires all core checks and every selected optional check to pass.
 A failed, cancelled, missing or unexpectedly skipped selected check fails the
@@ -109,7 +135,10 @@ distinguishes these enforced rules from review targets and the historical audit.
 The three third-party AI comment-agent workflows were removed: Cursor was a
 Claude alias, the issue-comment checkout referenced a nonexistent event field,
 and generated edits used unvalidated path/shell interpolation. AgentHub's own
-optional verifier-gated `review-pr` workflow remains.
+optional candidate-findings `review-pr` workflow remains. Its default Artifact
+integrity policy does not establish trusted review validation: nonempty diffs
+with no blocking findings return `UNVERIFIED`/exit 4 until an independent trusted
+review producer is integrated. It cannot currently provide a passing review gate.
 
 ## Tokenizer provisioning
 
@@ -144,7 +173,8 @@ configuration after explicit enablement fail the selected job.
 PR from an owner, member or collaborator. Forks cannot receive model credentials.
 The default provider/model can be overridden by `AGENTHUB_REVIEW_PROVIDER` and
 `AGENTHUB_REVIEW_MODEL`. Enabled review failures and blocking findings still fail
-its status; deterministic CI does not depend on buying a model channel.
+its status; an unverified clean candidate also fails rather than claiming review
+acceptance. Deterministic CI does not depend on buying a model channel.
 
 ## Releases and local reproduction
 

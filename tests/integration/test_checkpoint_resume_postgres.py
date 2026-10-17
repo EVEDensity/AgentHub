@@ -89,6 +89,7 @@ class CheckpointResumePostgresTests(unittest.TestCase):
     def _original_checkpoint(self) -> None:
         # Minimal parent tables isolate the checkpoint transition from domain
         # seeding. The fresh-install test below also runs the entire chain.
+        self._execute("CREATE TABLE mission_contracts(id TEXT, version INTEGER, PRIMARY KEY(id,version))")
         self._execute("CREATE TABLE missions(id TEXT PRIMARY KEY)")
         self._execute(
             "CREATE TABLE work_units(id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id))"
@@ -113,7 +114,7 @@ class CheckpointResumePostgresTests(unittest.TestCase):
         self.assertTrue(_COLUMNS <= self._columns())
         self.assertEqual(
             self._execute("SELECT version_num FROM alembic_version"),
-            [("d9a3b425e6f7",)],
+            [("e0b4c536f708",)],
         )
 
     def test_existing_rows_survive_upgrade_downgrade_and_reupgrade(self) -> None:
@@ -212,7 +213,7 @@ class CheckpointResumePostgresTests(unittest.TestCase):
                     await connection.fetchval(
                         "SELECT version_num FROM alembic_version"
                     ),
-                    "d9a3b425e6f7",
+                    "e0b4c536f708",
                 )
                 self.assertEqual(
                     await connection.fetchval(

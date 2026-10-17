@@ -41,6 +41,7 @@ API 目标转换为可恢复、可审计、附带 Artifact 和 Evidence 的执�
 - [North Star（开发者优先的 CLI 体验路线图）](./roadmaps/north-star-developer-cli-experience.md)
 - [CLI AI 问题与解决思路日志](./development/ai-problem-solving-log.md)
 - [Delivery roadmap（重构与交付路线图）](./roadmaps/reconstruction-roadmap.md)
+- [可组合 Agent 平台建设方案](./roadmaps/composable-agent-platform-plan.md)（草案：开源组件选型、接入边界与分阶段验收）
 - [多Agent记忆架构调研与演进路线](./roadmaps/multi-agent-memory-architecture.md)（Buzz 对标、四大范式、差距与分阶段计划）
 - [Documentation governance](./governance/documentation-standard.md)
 - [Code quality standard（代码质量与审查机制）](./governance/code-quality-standard.md)

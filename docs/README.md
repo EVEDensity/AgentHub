@@ -68,3 +68,9 @@ areas also contain a local `README.md` describing ownership and placement:
 CI ownership, coverage and external-evidence configuration are documented in
 [`development/ci.md`](development/ci.md). `.github/README.md` is the automation
 entry point; release workflows are separate from the deterministic PR merge gate.
+
+The [Composable Agent Platform Plan](roadmaps/composable-agent-platform-plan.md)
+is an accepted delivery direction for integrating external executors, sandbox and tool
+components behind existing Mission ownership. Its boundary decision is
+[ADR-0118 (accepted)](architecture/decisions/0118-composable-agent-integrations.md);
+neither document is an implementation or production-readiness claim.

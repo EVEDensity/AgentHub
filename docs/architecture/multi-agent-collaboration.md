@@ -63,7 +63,7 @@
        ▼                          ▼                              ▼
 ┌───────────────┐      ┌────────────────────┐      ┌──────────────────────────────┐
 │ Runner        │      │ Verifier（独立）    │      │ A2A / MCP 适配器（边缘协议）   │
-│ 隔离执行/租约/ │      │ VERIFY: 命令门禁、   │      │ 外部 Agent 委派 / 工具与资源  │
+│ 隔离执行/租约/ │      │ 产物完整性验收、   │      │ 外部 Agent 委派 / 工具与资源  │
 │ 心跳/沙箱  ✅  │      │ artifact-set 评估器 │      │  ✅（生产路径）                │
 │       │       │      │  ✅                  │      └──────────────────────────────┘
 │       ▼       │      └─────────┬────────────┘
@@ -194,7 +194,7 @@ message.created 事件
 
 ```text
 Mission 创建（objective 携带会话上下文压缩包）
-  → Contract（验收标准：VERIFY: 命令 / artifact-set 评估器）
+  → Contract（验收标准：artifact-set 产物完整性；可信测试生产者另行接入）
   → WorkUnit 派生 → Runner claim/lease/heartbeat（ADR-0002/0012）
   → Harness 有界循环（预算/检查点/工具：文件、执行、lint、web、搜索）
      └─ 可经 A2A/MCP 委派外部 Agent 或工具（ADR-0034/0036）

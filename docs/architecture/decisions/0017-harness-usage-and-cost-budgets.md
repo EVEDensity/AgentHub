@@ -4,6 +4,9 @@
 > Owner: architecture maintainers
 > Date: 2026-08-09
 > Scope: Harness model usage accounting and bounded execution
+>
+> Partially superseded by [ADR-0123](0123-persistent-mission-budget-ledger.md)
+> for the new internal persistent ledger. Existing Harness behavior is unchanged.
 
 ## Context
 

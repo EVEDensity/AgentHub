@@ -26,16 +26,12 @@ from app.domain import (
 from app.services.artifact_integrity_service import (
     ArtifactByteVerifier,
 )
+from app.services.trusted_tests.policy import TrustedTestParameters
 from app.services.verification_evaluator_service import (
     StrictVerificationEvaluator,
     VerificationEvaluator,
 )
-from app.services.verification_policy_service import (
-    ArtifactSetEvaluationPlan,
-    BuildArtifactEvaluationPlan,
-    SecurityScanEvaluationPlan,
-    TestRunEvaluationPlan,
-)
+from app.services.verifier_plan_factory import build_discovered_plan
 
 
 class VerifierError(RuntimeError):
@@ -309,6 +305,11 @@ class _ReadyEvaluationPolicyTestRun(_Projection):
     parameters: _TestRunParameters
 
 
+class _ReadyEvaluationPolicyTrustedTest(_ReadyEvaluationPolicyTestRun):
+    evaluator: Literal["trusted-test-run.v1"]
+    parameters: TrustedTestParameters
+
+
 class _ReadyEvaluationPolicyBuildArtifact(_Projection):
     status: Literal["ready"]
     criterion_id: Annotated[str, Field(min_length=1, max_length=255)]
@@ -335,6 +336,7 @@ _ReadyEvaluationPolicy = Annotated[
     _ReadyEvaluationPolicyArtifactSetV1
     | _ReadyEvaluationPolicyArtifactSetV2
     | _ReadyEvaluationPolicyTestRun
+    | _ReadyEvaluationPolicyTrustedTest
     | _ReadyEvaluationPolicyBuildArtifact
     | _ReadyEvaluationPolicySecurityScan,
     Field(discriminator="evaluator"),
@@ -502,7 +504,7 @@ class ControlledVerifier:
             for artifact in context.artifacts
         )
         byte_verifications = await self._byte_verifier.verify_all(artifacts)
-        plan = _build_plan_from_policy(policy)
+        plan = _build_plan_from_policy(policy, context.contract)
         evaluation = self._evaluator.evaluate(
             plan,
             artifacts,
@@ -586,58 +588,9 @@ def _admission_outcome_matches(verdict: EvidenceVerdict, work_status: WorkUnitSt
     return mission_status in {MissionStatus.RUNNING, MissionStatus.VERIFYING, MissionStatus.SUCCEEDED}
 
 
-def _build_plan_from_policy(policy: _ReadyEvaluationPolicy) -> object:
-    """Build the typed evaluation plan from a discriminator-parsed policy.
-
-    Each verifier client-side projection carries evaluator-specific
-    parameters; this helper dispatches to the correct plan dataclass so the
-    shared :class:`StrictVerificationEvaluator` can run it.
-    """
-    evaluator = policy.evaluator
-    common = dict(
-        criterion_id=policy.criterion_id,
-        evaluator=evaluator,
-        configuration_digest=policy.configuration_digest,
-    )
-    if evaluator == "artifact-set.v1":
-        return ArtifactSetEvaluationPlan(
-            **common,
-            minimum_artifacts=policy.parameters.minimum_artifacts,
-            required_artifact_kinds=tuple(
-                kind.value for kind in policy.parameters.required_artifact_kinds
-            ),
-        )
-    if evaluator == "artifact-set.v2":
-        return ArtifactSetEvaluationPlan(
-            **common,
-            minimum_artifacts=policy.parameters.minimum_artifacts,
-            required_artifact_kinds=tuple(
-                kind.value for kind in policy.parameters.required_artifact_kinds
-            ),
-            optional_artifact_kinds=tuple(
-                kind.value for kind in policy.parameters.optional_artifact_kinds
-            ),
-            max_artifact_size_bytes=policy.parameters.max_artifact_size_bytes,
-        )
-    if evaluator == "test-run.v1":
-        return TestRunEvaluationPlan(
-            **common,
-            minimum_test_results=policy.parameters.minimum_test_results,
-            minimum_pass_rate=policy.parameters.minimum_pass_rate,
-        )
-    if evaluator == "build-artifact.v1":
-        return BuildArtifactEvaluationPlan(
-            **common,
-            minimum_build_artifacts=policy.parameters.minimum_build_artifacts,
-            max_artifact_size_bytes=policy.parameters.max_artifact_size_bytes,
-        )
-    if evaluator == "security-scan.v1":
-        return SecurityScanEvaluationPlan(
-            **common,
-            minimum_scan_reports=policy.parameters.minimum_scan_reports,
-            max_severity=policy.parameters.max_severity,
-        )
-    raise VerifierProtocolError(f"unsupported evaluator: {evaluator}")
+def _build_plan_from_policy(policy: _ReadyEvaluationPolicy, contract=None) -> object:
+    """Compatibility facade for discriminator-validated typed plans."""
+    return build_discovered_plan(policy, contract)
 
 
 def _validate_response(model: type[_Projection], payload: Mapping[str, Any]) -> Any:

@@ -1,18 +1,11 @@
-"""agenthub review-pr — PR review through the standard mission loop (I-4).
+"""Produce candidate PR findings through the output-integrity Mission loop.
 
-The command is a thin adapter over the same execute_objective() path as
-run/exec: the diff is staged into the workspace together with a
-review-findings schema validator written by the CLI (never by the
-agent), the objective instructs the agent to produce
-``review-findings.json``, and the mission's VERIFY gate replays the
-validator as the independent verifier. Exit codes reuse the CLI
-contract:
-
-* ``0`` — mission SUCCEEDED and no blocking findings (review passes)
-* ``1`` — mission FAILED, or blocking findings exist (actionable list
-  is printed / emitted in the JSON document)
-* ``2`` / ``3`` — mission CANCELLED / wait timeout
-* ``4`` — infrastructure error (missing diff, unreadable findings...)
+The default verifier does not execute objective commands. A staged CLI-written
+validator remains a manually invokable structural check, not trusted execution
+or evidence: it is in the agent-writable workspace. Until an isolated trusted
+review producer is wired in, a successful Mission yields UNVERIFIED/exit 4.
+Model-reported blocking findings yield exit 1; cancellation and timeout preserve
+the Mission exit code. An empty diff is separately reported as SKIPPED.
 """
 
 from __future__ import annotations
@@ -22,12 +15,10 @@ from pathlib import Path
 
 from .runtime import EXIT_INFRA_ERROR, EXIT_MISSION_FAILED, MissionRunResult
 
-# The verifier is written by the CLI, not by the executing agent: it
-# checks the findings document structurally and cross-references every
-# reported file against the diff itself, so an agent cannot invent a
-# passing review for files the PR does not touch.
+# A manual diagnostic only. Its presence does not establish independent review
+# evidence and the default verifier never executes this workspace script.
 _VALIDATOR_SOURCE = '''\
-"""Independent validator for agenthub review-pr findings (CLI-written).
+"""Manual structural validator for agenthub review-pr candidate findings.
 
 Exit 0 = findings document is structurally valid and every referenced
 file actually appears in the reviewed diff. Any violation exits 1 with
@@ -124,7 +115,8 @@ Rules:
 - If the diff is clean, all three arrays are empty.
 - Do not modify any file other than review-findings.json.
 
-VERIFY: python _agenthub_review_validate.py
+The default verifier checks output integrity only. This review remains unverified;
+no acceptance command is executed from this objective.
 """
 
 
@@ -133,7 +125,7 @@ def build_review_objective() -> str:
 
 
 def stage_review_workspace(workspace: Path, diff_text: str) -> None:
-    """Stage the diff and the CLI-written verifier into the workspace."""
+    """Stage the diff and an optional manual diagnostic in the workspace."""
     (workspace / "pr.diff").write_text(diff_text, encoding="utf-8")
     (workspace / "_agenthub_review_validate.py").write_text(
         _VALIDATOR_SOURCE, encoding="utf-8"
@@ -143,9 +135,16 @@ def stage_review_workspace(workspace: Path, diff_text: str) -> None:
 def load_findings(workspace: Path) -> dict | None:
     path = workspace / "review-findings.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        findings = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(findings, dict):
+        return None
+    for severity in ("blocking", "warnings", "nits"):
+        items = findings.get(severity)
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            return None
+    return findings
 
 
 def review_exit_code(result: MissionRunResult, findings: dict | None) -> int:
@@ -158,4 +157,18 @@ def review_exit_code(result: MissionRunResult, findings: dict | None) -> int:
         return EXIT_INFRA_ERROR
     if findings.get("blocking"):
         return EXIT_MISSION_FAILED
-    return 0
+    # Output integrity cannot certify review quality or validator execution.
+    return EXIT_INFRA_ERROR
+
+
+def build_review_result(
+    result: MissionRunResult, findings: dict | None, exit_code: int,
+) -> dict[str, object]:
+    """Separate the Mission's integrity outcome from the unverified review."""
+    return {
+        "review": "UNVERIFIED" if result.exit_code == 0 else result.status,
+        "verification": "output-integrity-only",
+        "missionId": result.mission_id,
+        "findings": findings,
+        "exitCode": exit_code,
+    }

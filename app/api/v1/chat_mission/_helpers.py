@@ -33,6 +33,7 @@ from app.services.agent_binding_service import (
     DatabaseAgentBindingResolver,
 )
 from app.services.auth_service import get_current_user
+from app.services.default_mission_contract import build_default_task_contract
 from app.services.mission_service import (
     MissionService,
     build_human_actor,
@@ -224,31 +225,10 @@ async def _pick_default_participant(
 
 
 def _build_chat_contract(contract_id: str) -> MissionContract:
-    """Minimal contract for chat-originated Missions.
-
-    Kept tiny on purpose — chat is a conversational surface, not a
-    deterministic verification pipeline.  A proper contract builder will
-    be extracted once we converge on Mission contract policies across
-    all sources.
-    """
-    return MissionContract.model_validate({
-        "id": contract_id,
-        "version": 1,
-        "repositoryScopes": [],
-        "allowedCapabilities": [],
-        "budgets": {"timeSeconds": 600, "modelCost": 5, "retries": 1},
-        "acceptanceCriteria": [
-            {
-                "id": "chat-response",
-                "kind": "manual",
-                "description": "Chat Mission acceptance — agent responds to the user's message.",
-                "required": True,
-                "configuration": {},
-            }
-        ],
-        "decisionGates": [],
-        "forbiddenActions": [],
-    })
+    """Use independent output-integrity acceptance without adding tool grants."""
+    return MissionContract.model_validate(build_default_task_contract(
+        contract_id, 600, model_cost=5, retries=1,
+    ))
 
 
 def _validate_chat_dispatch(resolved: list[dict], unresolved: list[dict]) -> None:
