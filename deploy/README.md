@@ -10,6 +10,12 @@ Community deployment should not require the full enterprise service topology.
 Do not use deployment configuration to silently change domain semantics. A
 feature unavailable in a deployment must fail explicitly and be observable.
 
+The explicit [OpenSandbox experiment](opensandbox/README.md) pins upstream
+runtime/workload digests and provides a disposable Linux conformance command.
+It is not enabled by the normal Compose stack or selected as a default Runner
+backend. Its authentication, execution and cleanup gate must pass before wider
+adoption; it does not establish team-production isolation.
+
 ## Default development boundary
 
 `docker-compose.platform.yml` is a local development topology. Published ports

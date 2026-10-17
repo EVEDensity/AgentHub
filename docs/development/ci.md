@@ -69,6 +69,14 @@ do not prove every service's boot, credential configuration or business flow.
 CI configuration
 changes and manual runs select every optional job.
 
+OpenSandbox adapter, pinned deployment, PoC and public-contract changes select
+the Linux conformance job. It starts the fixed upstream runtime with an ephemeral
+masked credential, requires real execution/cancellation/file/isolation checks,
+and cleans up only this job's resources. Missing runtime, failed setup, unknown
+execution results or failed cleanup fail that selected check. The experiment is
+off in application defaults; this CI check does not establish hostile-code or
+team-production readiness.
+
 `CI Gate` requires all core checks and every selected optional check to pass.
 A failed, cancelled, missing or unexpectedly skipped selected check fails the
 gate. A missing selection output also fails. Unaffected optional jobs may skip.

@@ -57,6 +57,11 @@ class CiChangeSelectionTests(unittest.TestCase):
     def test_sandbox_image_changes_run_real_execution_validation(self) -> None:
         self.assertTrue(select_checks(["deploy/sandbox-image/Dockerfile"])["go"])
 
+    def test_opensandbox_boundaries_select_real_conformance(self) -> None:
+        for path in ("app/services/opensandbox_backend.py", "deploy/opensandbox/lock.json",
+                     "scripts/opensandbox_poc_ci.py", "tests/services/test_opensandbox_backend.py"):
+            self.assertTrue(select_checks([path])["opensandbox"], path)
+
     def test_cli_dependencies_select_windows_flow(self) -> None:
         for path in ("requirements.txt", "app/services/runner/loops.py", "tests/cli/test_cli_e2e.py"):
             with self.subTest(path=path):

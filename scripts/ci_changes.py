@@ -93,6 +93,10 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
     return {
         "go": go, "frontend": frontend, "rust": rust,
         "windows_cli": windows_cli, "docker": bool(images),
+        "opensandbox": contracts or changed(
+            "app/services/opensandbox_", "deploy/opensandbox/",
+            "scripts/opensandbox_poc", "tests/services/test_opensandbox",
+        ),
         "images": {"include": images},
         "smoke": go or changed(
             "services/python/", "deploy/", "scripts/ci-smoke-test.sh",

@@ -57,6 +57,10 @@ workspace tree.
   `db/README.md` for migration and rollback boundaries (ADR-0110).
 
 * `services/`: application use cases, compatibility adapters, and storage ports.
+  The default-off `services/opensandbox_backend.py` HTTP port is exercised only
+  by the standalone disposable PoC in `deploy/opensandbox/`. It adds no SDK
+  dependency and does not select a production Runner backend or own Mission
+  state; see that guide for the future attempt-scoped injection boundary.
   Chat dispatch now persists one catalog-bound `desktop.task` WorkUnit through
   Mission Control. The local Runner claims its registered Agent only; other
   executors remain PENDING until their matching Runner is available. Unknown,
