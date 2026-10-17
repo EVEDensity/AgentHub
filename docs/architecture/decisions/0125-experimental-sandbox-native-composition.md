@@ -44,8 +44,9 @@ Resume and streaming are refused in this first factory.
 
 Commands are serialized, with explicit call, script, timeout and output limits.
 An early failed command can be followed by a successful repair command; every
-observation remains visible. No command, an unsuccessful last command, fatal
-backend/output error, model failure or unconfirmed destruction prevents success.
+observation remains visible. Success requires at least one actual command, a
+successful last command, bounded output, model success and confirmed destruction.
+Fatal backend or output errors prevent success.
 The overall execution deadline covers provisioning, model/tool work and normal
 cleanup. Failure/cancellation allows only a bounded cleanup grace for the owned
 sandbox. Late or cancellation-resistant results cannot publish artifacts.

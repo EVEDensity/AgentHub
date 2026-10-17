@@ -53,6 +53,7 @@ class PublicContractTests(unittest.TestCase):
                 "test-run-report.schema.json",
                 "security-scan-report.schema.json",
                 "execution-manifest.schema.json",
+                "opensandbox-execution-report.schema.json",
                 "trusted-test-receipt.schema.json",
                 "trusted-test-producer-keys.schema.json",
                 "mission-execution-status.schema.json",
