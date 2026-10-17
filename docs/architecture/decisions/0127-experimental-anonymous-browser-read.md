@@ -60,6 +60,14 @@ use worker-supplied PIDs or kill foreign process groups. Unknown inventory or
 unconfirmed cleanup prevents success. Cancellation permits bounded owned cleanup
 and fences late results from Artifact publication.
 
+The inventory excludes processes born strictly before the Python parent: a new
+UUID passed only to subsequently spawned workers cannot be inherited by an older
+process. Processes in the same clock tick remain candidates. An unreadable
+candidate keeps cleanup unknown, while independently confirmed owned processes
+are still signalled. Browser-owned profile symlinks count toward filesystem
+entry/metadata limits without following their targets; this does not change the
+stricter trusted-test snapshot policy.
+
 After at least one successful final read and confirmed cleanup, the Harness
 returns two Artifacts: model text as the existing `test-result` kind and a
 `browser-execution-report.v1` diagnostic. Runner registers them under its active
@@ -97,3 +105,5 @@ fallback browser or ordinary shell path.
 - [Browser contexts](https://playwright.dev/docs/api/class-browsercontext).
 - [Explicit redirect and retry controls](https://playwright.dev/docs/api/class-route#route-fetch).
 - [Browser process launcher](https://github.com/microsoft/playwright/blob/39e3553a4f283a41134d75d7e404484bd9e6865a/packages/utils/processLauncher.ts).
+- [Linux initial environment and access checks](https://man7.org/linux/man-pages/man5/proc_pid_environ.5.html).
+- [Linux PID descriptor identity](https://man7.org/linux/man-pages/man2/pidfd_open.2.html).

@@ -19,8 +19,8 @@ normal host install: the temporary HOME intentionally hides a user's default
 cache, cookies and browser profile. Nothing downloads a missing browser.
 
 `LocalBrowserReadBackend` refuses other operating systems. Its dedicated process
-backend reuses the test-process result value and filesystem-budget checker, but
-does not use the legacy process-group termination path. Node admission is one
+backend reuses the test-process result value, but uses its own directory budget
+and does not use the legacy process-group termination path. Node admission is one
 synchronous `Popen` call with a fixed argv and a minimal environment: temporary
 HOME/TMP/XDG directories, a standard PATH/locale, an optional explicit browser
 cache and this read's UUID ownership marker. Model credentials, Runner tokens,
@@ -28,13 +28,21 @@ proxy settings and NODE_OPTIONS are not inherited. The worker input is private
 temporary JSON; no model-controlled command, executable, environment or path is
 accepted. Process output is bounded to 1 MiB and the owned directory to 128 MiB.
 Filesystem polling detects excess; it is not a kernel disk or memory quota.
+Chromium profile links, including dangling Singleton links, count as entries
+and contribute their own `lstat` byte size; their targets are never followed.
 
 The parent scans Linux `/proc` for the exact ownership marker and current UID,
-ignoring zombies. It opens pidfds and rechecks process start identity and marker
+ignoring zombies and processes born strictly before this Python parent. The
+marker is generated only by this parent and injected into subsequently spawned
+children, so earlier processes cannot have inherited it. Equal birth ticks
+remain eligible. It opens pidfds and rechecks process start identity and marker
 before signalling each matching process, including detached Chromium descendants
 created before `started.json` exists. It never authorizes signals from a worker-
 reported PID, never runs broad `pkill`, and never signals an entire group.
-Unreadable same-UID process state yields unknown cleanup, not confirmation.
+Unreadable eligible same-UID process state yields unknown cleanup, not
+confirmation. It does not prevent signalling other positively identified owned
+processes. Diagnostic logs contain static categories, counts, errno and limit
+flags, never process environments, page text, URLs or raw exception messages.
 This requires a host where the parent's same-UID processes are visible through
 `/proc` and Linux pidfds are available. It is cooperative cleanup of trusted
 runtime code, not a security boundary against an actor hiding or altering its

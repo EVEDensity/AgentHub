@@ -13,11 +13,11 @@ from app.services.browser_read import process_cleanup as cleanup
 from app.services.browser_read.process import LinuxBrowserProcessBackend
 
 
-def proc_fixture(root, pid, owner, *, state="S"):
+def proc_fixture(root, pid, owner, *, state="S", start_time="12345"):
     directory = root / str(pid)
     directory.mkdir()
     fields = [state, "1", str(pid)] + ["0"] * 17
-    fields[19] = "12345"
+    fields[19] = start_time
     (directory / "stat").write_text(
         f"{pid} (fixture chrome) " + " ".join(fields), encoding="ascii"
     )
@@ -74,8 +74,10 @@ class BrowserCleanupTests(unittest.IsolatedAsyncioTestCase):
                 self.subTest(matches=matches),
                 patch.object(
                     cleanup,
-                    "owned_processes",
-                    return_value=(cleanup.OwnedProcess(101, 101, "start"),),
+                    "_inventory",
+                    return_value=cleanup.ProcessInventory(
+                        (cleanup.OwnedProcess(101, 101, "start"),)
+                    ),
                 ),
                 patch.object(
                     cleanup.os, "pidfd_open", return_value=91, create=True
@@ -89,6 +91,54 @@ class BrowserCleanupTests(unittest.IsolatedAsyncioTestCase):
                 opened.assert_called_once_with(101)
                 closed.assert_called_once_with(91)
                 self.assertEqual(sent.call_count, int(matches))
+
+    def test_old_unreadable_process_is_excluded_but_new_unknown_is_retained(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, owner = Path(directory), str(uuid.uuid4())
+            proc_fixture(root, 101, owner, start_time="90")
+            proc_fixture(root, 102, owner, start_time="100")
+            with (
+                patch.object(
+                    cleanup.os, "geteuid", return_value=root.stat().st_uid, create=True
+                ),
+                patch.object(cleanup, "_parent_birth", return_value=100),
+                patch.object(
+                    cleanup, "_matches", side_effect=PermissionError(13, "denied")
+                ) as matches,
+            ):
+                inventory = cleanup._inventory(owner, root)
+            self.assertEqual(
+                (inventory.owned, inventory.unreadable, inventory.error_number),
+                ((), 1, 13),
+            )
+            self.assertEqual(matches.call_args.args[0].name, "102")
+            self.assertEqual(matches.call_count, 1)
+
+    def test_unknown_inventory_does_not_prevent_signalling_a_confirmed_owned_pid(self):
+        inventory = cleanup.ProcessInventory(
+            (cleanup.OwnedProcess(101, 101, "start"),), 1, 13
+        )
+        with (
+            patch.object(cleanup, "_inventory", return_value=inventory),
+            patch.object(cleanup.os, "pidfd_open", return_value=91, create=True),
+            patch.object(cleanup.signal, "pidfd_send_signal", create=True) as sent,
+            patch.object(cleanup.signal, "SIGKILL", 9, create=True),
+            patch.object(cleanup.os, "close"),
+            patch.object(cleanup, "_same_process", return_value=True),
+        ):
+            self.assertEqual(cleanup._signal_owned(str(uuid.uuid4())), 1)
+        sent.assert_called_once_with(91, 9)
+
+    async def test_new_unknown_process_still_prevents_cleanup_confirmation(self):
+        with (
+            patch.object(cleanup, "_signal_owned", return_value=1),
+            patch.object(
+                cleanup, "_inventory", return_value=cleanup.ProcessInventory((), 1, 13)
+            ),
+        ):
+            self.assertFalse(
+                await cleanup.cleanup_owned_processes(str(uuid.uuid4()), 0.01)
+            )
 
     async def test_permission_failure_never_confirms_process_cleanup(self):
         with patch.object(cleanup, "_signal_owned", side_effect=PermissionError):
