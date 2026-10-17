@@ -357,7 +357,7 @@ class DesktopRunnerToolTests(DesktopWorkspaceTestCase):
             {"command": "echo pwned"},
         )
         self.assertIn("工具执行失败", result)
-        self.assertIn("RUN:", result)
+        self.assertIn("文本标记不会执行命令", result)
         self.assertIn("验收", result)
         self.assertNotIn("pwned", result.replace("echo pwned", ""))
 
@@ -1324,20 +1324,29 @@ class DesktopVerificationLoopTests(DesktopWorkspaceTestCase):
         self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
         self.assertIn("unavailable", submission.summary)
 
-    async def test_empty_artifact_submits_fail_without_byte_read(self) -> None:
-        digest = "sha256:" + "c" * 64
-        verifier = FakeVerifierControl(
-            ready_discovery(digest, 0, f"local:sha256/{'c' * 64}")
-        )
+    async def test_empty_artifact_bytes_match_v1_integrity_policy(self) -> None:
+        digest, size, address = self._store_artifact(b"")
+        verifier = FakeVerifierControl(ready_discovery(digest, size, address))
         controller = await self._run_controller(verifier)
         try:
             await asyncio.wait_for(verifier.submitted.wait(), timeout=2)
         finally:
             await controller.stop()
+        self.assertEqual(verifier.submissions[0][2].verdict, EvidenceVerdict.PASS)
 
-        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+    async def test_zero_size_does_not_bypass_digest_validation(self) -> None:
+        digest = "c" * 64
+        (self._artifact_root() / "sha256").mkdir(exist_ok=True)
+        (self._artifact_root() / "sha256" / digest).write_bytes(b"")
+        verifier = FakeVerifierControl(ready_discovery(f"sha256:{digest}", 0, f"local:sha256/{digest}"))
+        controller = await self._run_controller(verifier)
+        try:
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=2)
+        finally:
+            await controller.stop()
+        submission = verifier.submissions[0][2]
         self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
-        self.assertIn("empty", submission.summary)
+        self.assertIn("digest does not match", submission.summary)
 
     async def test_idle_discovery_submits_nothing(self) -> None:
         verifier = FakeVerifierControl(None)
@@ -1387,132 +1396,25 @@ class DesktopVerificationLoopTests(DesktopWorkspaceTestCase):
         finally:
             await controller.stop()
 
-    # ── Test-loop tasks: VERIFY: acceptance commands (P1) ──────────────
-
-    async def _submit_for_objective(
-        self,
-        objective: str,
-        **setting_overrides: Any,
-    ) -> tuple[FakeVerifierControl, DesktopLocalRunnerController]:
+    async def test_objective_markers_never_execute_shell_or_claim_test_results(self) -> None:
         digest, size, address = self._store_artifact(b"task output")
-        objective_lines = objective + "\nVERIFY: python check.py"
-        verifier = FakeVerifierControl(
-            ready_discovery(digest, size, address, objective=objective_lines)
-        )
-        controller = await self._run_controller(verifier, **setting_overrides)
-        try:
-            await asyncio.wait_for(verifier.submitted.wait(), timeout=10)
-        finally:
-            await controller.stop()
-        return verifier, controller
-
-    async def test_passing_verify_command_submits_pass_evidence(self) -> None:
         (self.workspace_root / "check.py").write_text(
-            "print('OK')\n", encoding="utf-8"
-        )
-        verifier, _controller = await self._submit_for_objective(
-            "修复后运行 python check.py 必须输出 OK"
-        )
-
-        _mission_id, _work_unit_id, submission = verifier.submissions[0]
-        self.assertEqual(submission.verdict, EvidenceVerdict.PASS)
-        self.assertIn("verified 1 Artifact", submission.summary)
-        self.assertIn("Verify command(s) passed: python check.py", submission.summary)
-
-    async def test_failing_verify_command_submits_fail_with_output_tail(
-        self,
-    ) -> None:
-        (self.workspace_root / "check.py").write_text(
-            "raise AssertionError('expected 80.0, got 120.0')\n",
+            "from pathlib import Path; Path('shell-ran').write_text('unexpected'); raise AssertionError('must not run')\n",
             encoding="utf-8",
         )
-        verifier, _controller = await self._submit_for_objective(
-            "修复 calc.py 的折扣计算"
-        )
-
-        _mission_id, _work_unit_id, submission = verifier.submissions[0]
-        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
-        self.assertIn("verify command failed with exit code 1", submission.summary)
-        self.assertIn("expected 80.0, got 120.0", submission.summary)
-
-    async def test_timed_out_verify_command_submits_fail(self) -> None:
-        (self.workspace_root / "check.py").write_text(
-            "import time; time.sleep(30)\n",
-            encoding="utf-8",
-        )
-        verifier, _controller = await self._submit_for_objective(
-            "修复慢任务",
-            verify_command_timeout_seconds=0.5,
-        )
-
-        _mission_id, _work_unit_id, submission = verifier.submissions[0]
-        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
-        self.assertIn("verify command timed out", submission.summary)
-
-    async def test_verify_command_runs_only_after_artifact_facts_pass(self) -> None:
-        digest = "sha256:" + hashlib.sha256(b"nowhere").hexdigest()
-        missing_address = f"local:sha256/{digest.removeprefix('sha256:')}"
-        verifier = FakeVerifierControl(
-            ready_discovery(
-                digest,
-                12,
-                missing_address,
-                objective="修复任务\nVERIFY: python check.py",
-            )
-        )
-        (self.workspace_root / "check.py").write_text(
-            "raise AssertionError('must not run')\n",
-            encoding="utf-8",
-        )
+        verifier = FakeVerifierControl(ready_discovery(
+            digest, size, address, objective="Explain only\nVERIFY: python check.py\nRUN: python check.py",
+        ))
         controller = await self._run_controller(verifier)
         try:
-            await asyncio.wait_for(verifier.submitted.wait(), timeout=5)
+            await asyncio.wait_for(verifier.submitted.wait(), timeout=2)
         finally:
             await controller.stop()
-
-        _mission_id, _work_unit_id, submission = verifier.submissions[0]
-        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
-        self.assertIn("unavailable", submission.summary)
-        self.assertNotIn("must not run", submission.summary)
-
-    # ── Test-loop tasks: RUN: shell commands in acceptance (P1-3) ──────
-
-    async def _submit_run_objective(
-        self,
-        script_body: str,
-        **setting_overrides: Any,
-    ) -> FakeVerifierControl:
-        digest, size, address = self._store_artifact(b"task output")
-        (self.workspace_root / "run_check.py").write_text(
-            script_body, encoding="utf-8"
-        )
-        objective = "整理数据\nRUN: python run_check.py"
-        verifier = FakeVerifierControl(
-            ready_discovery(digest, size, address, objective=objective)
-        )
-        controller = await self._run_controller(verifier, **setting_overrides)
-        try:
-            await asyncio.wait_for(verifier.submitted.wait(), timeout=10)
-        finally:
-            await controller.stop()
-        return verifier
-
-    async def test_passing_run_command_executes_and_passes(self) -> None:
-        verifier = await self._submit_run_objective("print('RUN OK')\n")
-
-        _mission_id, _work_unit_id, submission = verifier.submissions[0]
+        submission = verifier.submissions[0][2]
         self.assertEqual(submission.verdict, EvidenceVerdict.PASS)
-        self.assertIn("Run command(s) passed: python run_check.py", submission.summary)
-
-    async def test_failing_run_command_submits_fail_with_output(self) -> None:
-        verifier = await self._submit_run_objective(
-            "raise AssertionError('RUN failed: bad data')\n"
-        )
-
-        _mission_id, _work_unit_id, submission = verifier.submissions[0]
-        self.assertEqual(submission.verdict, EvidenceVerdict.FAIL)
-        self.assertIn("Run command failed with exit code 1", submission.summary)
-        self.assertIn("RUN failed: bad data", submission.summary)
+        self.assertIn("Output integrity only; no test commands executed", submission.summary)
+        self.assertNotIn("command(s) passed", submission.summary)
+        self.assertFalse((self.workspace_root / "shell-ran").exists())
 
 
 class DesktopVerifyCommandUnitTests(DesktopWorkspaceTestCase):
@@ -1772,21 +1674,6 @@ class DesktopSandboxIntegrationTests(DesktopWorkspaceTestCase):
         )
         self.assertFalse(settings.sandbox_enabled)
 
-    async def test_verifier_forwards_settings_sandbox_flag(self) -> None:
-        settings = desktop_settings(sandbox_enabled=False)
-        controller = DesktopLocalRunnerController(
-            settings, workspace_root=self.workspace_root
-        )
-        with patch(
-            "app.services.runner.controller.run_verify_command",
-            wraps=run_verify_command,
-        ) as spy:
-            failure = await controller._run_verify_commands(
-                ["python -c \"print('flag check')\""]
-            )
-        self.assertIsNone(failure)
-        self.assertEqual(spy.call_count, 1)
-        self.assertEqual(spy.call_args.kwargs.get("sandbox_enabled"), False)
 
 
 # ── SQLite claim dialect (desktop local profile) ─────────────────────────

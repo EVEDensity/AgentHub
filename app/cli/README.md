@@ -7,6 +7,24 @@ including the existing monkeypatch seams.
 `server_environment.py` constructs the subprocess environment, including the
 explicit resume target; `runtime.build_server_env` remains a compatibility import.
 
+`runtime.build_contract` is a compatibility facade for
+`app/services/default_mission_contract.py`, shared with Chat and projected into
+Desktop. The default `artifact-set.v1` policy proves output availability, size
+and SHA-256 through an independent verifier. The Runner's historical
+`test-result` output kind includes model text and does not prove tests ran.
+There is no minimum byte size or code-correctness guarantee in this default
+policy; explicit test/report acceptance remains a separate contract choice.
+Objective `RUN:` and `VERIFY:` lines are ordinary text; the default verifier
+never executes them. A successful mock-provider Mission confirms registered
+output integrity and does not confirm that requested files or tests exist.
+
+`review-pr` produces candidate findings and stages an optional manual schema
+check. That script lives in the writable workspace and is not trusted Evidence.
+A successful Mission is reported as `review: UNVERIFIED` with exit 4 while an
+isolated trusted review producer is unavailable; model-reported blocking findings
+still return exit 1. Empty diffs explicitly return `SKIPPED_EMPTY_DIFF`/exit 0.
+
+
 Execution resume requires a nonterminal protocol-v2 checkpoint, an unchanged
 checkpoint anchor in the lease-fenced projection, and the original live lease
 owned by the same Runner and attempt. An expired or foreign lease is refused

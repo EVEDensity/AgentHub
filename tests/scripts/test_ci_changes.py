@@ -40,6 +40,12 @@ class CiChangeSelectionTests(unittest.TestCase):
         self.assertTrue(checks["frontend"])
         self.assertEqual([image["name"] for image in checks["images"]["include"]], ["frontend"])
 
+    def test_editor_extension_changes_run_client_contract_validation(self) -> None:
+        for path in ("src/agenthubClient.ts", "package-lock.json", "tests/client.test.cjs"):
+            with self.subTest(path=path):
+                checks = select_checks([f"extensions/vscode-agenthub/{path}"])
+                self.assertTrue(checks["frontend"])
+
     def test_python_service_change_checks_packaging_and_running_services(self) -> None:
         checks = select_checks(["services/python/model_adapter_service/main.py"])
         self.assertTrue(checks["smoke"])
@@ -47,6 +53,9 @@ class CiChangeSelectionTests(unittest.TestCase):
 
     def test_deployment_changes_run_real_compose_health_checks(self) -> None:
         self.assertTrue(select_checks(["deploy/docker-compose.ci.yml"])["smoke"])
+
+    def test_sandbox_image_changes_run_real_execution_validation(self) -> None:
+        self.assertTrue(select_checks(["deploy/sandbox-image/Dockerfile"])["go"])
 
     def test_cli_dependencies_select_windows_flow(self) -> None:
         for path in ("requirements.txt", "app/services/runner/loops.py", "tests/cli/test_cli_e2e.py"):

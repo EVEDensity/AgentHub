@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -76,10 +77,10 @@ type VerifyResponse struct {
 }
 
 type TenantInput struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Plan      string `json:"plan"`
-	Status    string `json:"status"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Plan       string `json:"plan"`
+	Status     string `json:"status"`
 	QuotasJSON string `json:"quotas_json"`
 }
 
@@ -137,7 +138,10 @@ type ClassifyResponse struct {
 }
 
 func main() {
-	jwtSecret := []byte(getenv("JWT_SECRET", ""))
+	jwtSecret, serviceToken, err := loadServiceCredentials(os.Getenv)
+	if err != nil {
+		log.Fatalf("IAM configuration rejected: %v", err)
+	}
 	ttl := getenvDuration("JWT_TTL", 24*time.Hour)
 	issuer := iam.NewTokenIssuer(jwtSecret, "iam-service", ttl)
 
@@ -176,62 +180,15 @@ func main() {
 				"abac authorization evaluation",
 				"sensitive tool risk classification",
 			},
-			"dev_mode":    issuer.IsDevMode(),
+			"dev_mode":     issuer.IsDevMode(),
 			"jwt_enforced": !issuer.IsDevMode(),
 		})
 	})
 
 	// ── Token issuance & verification ──────────────────────────────────
-	mux.HandleFunc("/iam/token", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		var req TokenRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonError(w, http.StatusBadRequest, "invalid json body")
-			return
-		}
-		if req.TenantID == "" || req.UserID == "" {
-			jsonError(w, http.StatusBadRequest, "tenant_id and user_id are required")
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer cancel()
-		roles, scopes, tenantRole, err := loadPrincipalScopes(ctx, pool, req.TenantID, req.UserID)
-		if err != nil {
-			log.Printf("load scopes for %s/%s failed: %v", req.TenantID, req.UserID, err)
-			// In dev mode, allow issuance even if the user is not in PG yet.
-			if !issuer.IsDevMode() {
-				jsonError(w, http.StatusForbidden, "principal not found or disabled")
-				return
-			}
-		}
-		claims := iam.Claims{
-			TenantID:   req.TenantID,
-			UserID:     req.UserID,
-			Roles:      roles,
-			Scopes:     scopes,
-			TenantRole: tenantRole,
-		}
-		tok, err := issuer.Issue(claims)
-		if err != nil {
-			jsonError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		tokensIssued.WithLabelValues(req.TenantID, tenantRole).Inc()
-		expiresAt := time.Now().UTC().Add(ttl)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(TokenResponse{
-			AccessToken: tok,
-			TokenType:   "Bearer",
-			ExpiresAt:   expiresAt,
-			TenantID:    req.TenantID,
-			UserID:      req.UserID,
-			Roles:       roles,
-			Scopes:      scopes,
-		})
-	})
+	mux.Handle("/iam/token", issueTokenHandler(issuer, ttl, func(ctx context.Context, tenantID, userID string) ([]string, []string, string, error) {
+		return loadPrincipalScopes(ctx, pool, tenantID, userID)
+	}))
 
 	mux.HandleFunc("/iam/verify", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -435,52 +392,9 @@ func main() {
 	})
 
 	// ── Authorization evaluation ───────────────────────────────────────
-	mux.HandleFunc("/iam/authorize", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		var req AuthzRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonError(w, http.StatusBadRequest, "invalid json body")
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-		defer cancel()
-		roles, scopes, tenantRole, _ := loadPrincipalScopes(ctx, pool, req.TenantID, req.UserID)
-		principal := iam.TenantContext{
-			TenantID:   req.TenantID,
-			UserID:     req.UserID,
-			Roles:      roles,
-			Scopes:     scopes,
-			TenantRole: tenantRole,
-		}
-		if issuer.IsDevMode() {
-			principal.DevMode = true
-		}
-		azReq := iam.AuthzRequest{
-			Principal: principal,
-			Action:    iam.Action(req.Action),
-			Resource: iam.Resource{
-				Type:       req.Resource.Type,
-				TenantID:   req.Resource.TenantID,
-				OwnerID:    req.Resource.OwnerID,
-				Visibility: req.Resource.Visibility,
-			},
-			ToolRisk: req.ToolRisk,
-		}
-		decision := iam.Evaluate(azReq)
-		reason := ""
-		switch decision {
-		case iam.DecisionDeny:
-			reason = "cross-tenant access denied or insufficient role for critical tool"
-		case iam.DecisionNeedConfirmation:
-			reason = "sensitive tool requires explicit confirmation"
-		}
-		authzDecisions.WithLabelValues(string(decision), req.Action, req.Resource.Type).Inc()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(AuthzResponse{Decision: string(decision), Reason: reason, TenantRole: tenantRole})
-	})
+	mux.Handle("/iam/authorize", authorizeHandler(func(ctx context.Context, tenantID, userID string) ([]string, []string, string, error) {
+		return loadPrincipalScopes(ctx, pool, tenantID, userID)
+	}))
 
 	// ── Sensitive tool classification ──────────────────────────────────
 	mux.HandleFunc("/iam/tools/classify", func(w http.ResponseWriter, r *http.Request) {
@@ -568,41 +482,40 @@ func main() {
 		}
 	})
 
+	// ── P3-2 Quota & billing ────────────────────────────────────
+	mux.HandleFunc("/iam/quotas", func(w http.ResponseWriter, r *http.Request) {
+		serveQuotas(pool, w, r)
+	})
+	mux.HandleFunc("/iam/quotas/", func(w http.ResponseWriter, r *http.Request) {
+		serveQuotas(pool, w, r)
+	})
+	mux.HandleFunc("/iam/quotas/check", func(w http.ResponseWriter, r *http.Request) {
+		serveQuotaCheck(pool, w, r)
+	})
+	mux.HandleFunc("/iam/usage", func(w http.ResponseWriter, r *http.Request) {
+		serveUsage(pool, w, r)
+	})
+	mux.HandleFunc("/iam/billing", func(w http.ResponseWriter, r *http.Request) {
+		serveBilling(pool, w, r)
+	})
+	mux.HandleFunc("/iam/billing/", func(w http.ResponseWriter, r *http.Request) {
+		serveBilling(pool, w, r)
+	})
 
-		// ── P3-2 Quota & billing ────────────────────────────────────
-		mux.HandleFunc("/iam/quotas", func(w http.ResponseWriter, r *http.Request) {
-			serveQuotas(pool, w, r)
-		})
-		mux.HandleFunc("/iam/quotas/", func(w http.ResponseWriter, r *http.Request) {
-			serveQuotas(pool, w, r)
-		})
-		mux.HandleFunc("/iam/quotas/check", func(w http.ResponseWriter, r *http.Request) {
-			serveQuotaCheck(pool, w, r)
-		})
-		mux.HandleFunc("/iam/usage", func(w http.ResponseWriter, r *http.Request) {
-			serveUsage(pool, w, r)
-		})
-		mux.HandleFunc("/iam/billing", func(w http.ResponseWriter, r *http.Request) {
-			serveBilling(pool, w, r)
-		})
-		mux.HandleFunc("/iam/billing/", func(w http.ResponseWriter, r *http.Request) {
-			serveBilling(pool, w, r)
-		})
-
-		// ── P3-4 KMS & data masking ─────────────────────────────────
-		masterKey := getMasterKey()
-		mux.HandleFunc("/iam/secrets", func(w http.ResponseWriter, r *http.Request) {
-			serveKMS(pool, w, r, masterKey)
-		})
-		mux.HandleFunc("/iam/secrets/reveal", func(w http.ResponseWriter, r *http.Request) {
-			serveKMSReveal(pool, w, r, masterKey)
-		})
-		mux.HandleFunc("/iam/secrets/rotate", func(w http.ResponseWriter, r *http.Request) {
-			serveKMSRotate(pool, w, r, masterKey)
-		})
-		mux.HandleFunc("/iam/mask", func(w http.ResponseWriter, r *http.Request) {
-			serveDataMask(w, r)
-		})
+	// ── P3-4 KMS & data masking ─────────────────────────────────
+	masterKey := getMasterKey()
+	mux.HandleFunc("/iam/secrets", func(w http.ResponseWriter, r *http.Request) {
+		serveKMS(pool, w, r, masterKey)
+	})
+	mux.HandleFunc("/iam/secrets/reveal", func(w http.ResponseWriter, r *http.Request) {
+		serveKMSReveal(pool, w, r, masterKey)
+	})
+	mux.HandleFunc("/iam/secrets/rotate", func(w http.ResponseWriter, r *http.Request) {
+		serveKMSRotate(pool, w, r, masterKey)
+	})
+	mux.HandleFunc("/iam/mask", func(w http.ResponseWriter, r *http.Request) {
+		serveDataMask(w, r)
+	})
 
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		obs.MetricsHandler().ServeHTTP(w, r)
@@ -610,8 +523,10 @@ func main() {
 
 	addr := getenv("IAM_ADDR", ":8088")
 	log.Printf("iam-service listening on %s (dev_mode=%v jwt_enforced=%v ttl=%s)", addr, issuer.IsDevMode(), !issuer.IsDevMode(), ttl)
-	handler := obs.Middleware("iam-service", mux)
-	log.Fatal(http.ListenAndServe(addr, handler))
+	handler := obs.Middleware("iam-service", serviceAuthorization(serviceToken, mux))
+	server := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	log.Fatal(server.ListenAndServe())
 }
 
 // loadPrincipalScopes loads the roles, effective scopes, and tenant role for a
@@ -622,6 +537,9 @@ func loadPrincipalScopes(ctx context.Context, pool *db.Pool, tenantID, userID st
 		SELECT r.id, r.name
 		FROM platform_user_roles ur
 		JOIN platform_roles r ON r.id = ur.role_id
+		JOIN platform_tenants t ON t.id = ur.tenant_id AND t.status = 'active'
+		JOIN platform_users u ON u.id = ur.user_id AND u.tenant_id = ur.tenant_id AND u.status = 'active'
+		AND (r.tenant_id = '' OR r.tenant_id = ur.tenant_id)
 		WHERE ur.tenant_id = $1 AND ur.user_id = $2`, tenantID, userID)
 	if err != nil {
 		return nil, nil, "", err
@@ -630,36 +548,39 @@ func loadPrincipalScopes(ctx context.Context, pool *db.Pool, tenantID, userID st
 	var roleIDs, roleNames []string
 	for rows.Next() {
 		var id, name string
-		if err := rows.Scan(&id, &name); err == nil {
-			roleIDs = append(roleIDs, id)
-			roleNames = append(roleNames, name)
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, nil, "", err
 		}
+		roleIDs = append(roleIDs, id)
+		roleNames = append(roleNames, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, "", err
 	}
 	if len(roleIDs) == 0 {
-		// No assigned roles: default to member for backward compatibility.
-		roleNames = []string{iam.RoleMember}
-		roleIDs = []string{"role-member"}
+		return nil, nil, "", errors.New("principal has no roles in an active tenant")
 	}
 	// Load scopes for the roles.
 	scopeRows, err := pool.Query(ctx, `SELECT scope FROM platform_role_permissions WHERE role_id = ANY($1)`, roleIDs)
 	if err != nil {
-		return roleNames, iam.ScopesForRoles(roleNames), deriveTenantRole(roleNames), nil
+		return nil, nil, "", err
 	}
 	defer scopeRows.Close()
 	seen := map[string]struct{}{}
 	scopes := make([]string, 0, 16)
 	for scopeRows.Next() {
 		var s string
-		if err := scopeRows.Scan(&s); err == nil {
-			if _, ok := seen[s]; ok {
-				continue
-			}
-			seen[s] = struct{}{}
-			scopes = append(scopes, s)
+		if err := scopeRows.Scan(&s); err != nil {
+			return nil, nil, "", err
 		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		scopes = append(scopes, s)
 	}
-	if len(scopes) == 0 {
-		scopes = iam.ScopesForRoles(roleNames)
+	if err := scopeRows.Err(); err != nil {
+		return nil, nil, "", err
 	}
 	return roleNames, scopes, deriveTenantRole(roleNames), nil
 }
@@ -712,6 +633,7 @@ func loadTenantToolRules(ctx context.Context, pool *db.Pool, tenantID string) []
 // ── helpers ────────────────────────────────────────────────────────────
 
 func jsonError(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})

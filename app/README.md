@@ -266,14 +266,11 @@ workspace tree.
   severity; failed or malformed reports cannot pass (ADR-0114). Reports do not
   prove actual external test/scanner execution. The desktop local runner
   (the `services/runner/` package behind the `services/desktop_local_runner.py`
-  facade) additionally treats any Mission
-  objective line starting with `VERIFY:` as a workspace acceptance command:
-  before submitting unattended PASS Evidence it runs that command in the
-  workspace (timeout `AGENTHUB_DESKTOP_LOCAL_RUNNER_VERIFY_COMMAND_TIMEOUT`,
-  default 120 s); exit code 0 gates the PASS submission while a non-zero exit
-  or timeout submits FAIL Evidence carrying the last 2000 output characters,
-  which transitions the WorkUnit and Mission to `FAILED` (derivation never
-  retries a failed Mission on its own). PASS also runs the controlled
+  facade) verifies registered output availability, size and SHA-256 only.
+  The default verifier never interprets objective `VERIFY:` or `RUN:` text as
+  command authority, and it permits empty bytes when their registered digest
+  and size match. Code correctness and test execution require a separately
+  authorized trusted report producer. PASS also runs the controlled
   `artifact-set.v1` evaluator over the exact byte-verification results before
   and during transactional admission. Missing, extra, duplicate, wrong-digest,
   or wrong-size results fail without Evidence or state mutation; successful

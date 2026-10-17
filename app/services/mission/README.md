@@ -15,7 +15,9 @@ WorkUnit and creation event in one transaction. Repeated admission returns the
 same plan; it never rebinds existing work or creates a new attempt.
 
 Catalog capability tags are descriptive. They are not copied into Contract tool
-grants. The current chat Contract grants no tools and retains manual acceptance.
+grants. The current chat Contract grants no tools and uses the shared default
+`artifact-set.v1` output-integrity policy. This proves registered byte
+availability, size and digest; it does not prove tests ran or code is correct.
 Dispatch alone cannot create PASS Evidence or mark a Mission successful.
 
 Workspace claims admit chat roots only for the exact `chat` / `desktop.task` /

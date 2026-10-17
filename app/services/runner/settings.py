@@ -38,16 +38,13 @@ SANDBOX_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_SANDBOX"
 # desktop runner shares the Mission Control process and database).
 INPROCESS_GUIDANCE_ENV = "AGENTHUB_DESKTOP_LOCAL_RUNNER_INPROCESS"
 
-# Test-loop task convention (P1): an objective line starting with this marker
-# declares one acceptance command. The unattended verifier runs it in the
-# workspace before submitting PASS Evidence; exit code 0 is mandatory.
+# Legacy marker parsers remain import-compatible. These strings are not
+# execution authority and the default verifier never interprets them.
 VERIFY_COMMAND_MARKER = "VERIFY:"
 VERIFY_COMMAND_OUTPUT_TAIL_CHARS = 2000
 
-# Shell-command convention (P1-3): objective lines starting with this marker
-# declare commands the unattended verifier executes during acceptance. The
-# ``command_execute`` tool itself is denial-only, so arbitrary shell runs stay
-# confined to declared acceptance semantics.
+# Reserved compatibility marker; any future command producer must obtain
+# authority outside objective text. The command_execute tool remains denial-only.
 RUN_COMMAND_MARKER = "RUN:"
 
 # The desktop shell always talks to the local Mission Control workspace.

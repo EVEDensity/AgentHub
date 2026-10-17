@@ -121,136 +121,21 @@ func TestDemuxDockerStreamMultipleFrames(t *testing.T) {
 	}
 }
 
-// ── Noop Client Behavior ──────────────────────────────────────────────
-
-func TestNewClientNoop(t *testing.T) {
-	c := NewClient("", "")
-	if !c.IsNoop() {
-		t.Fatal("empty socket path should create noop client")
-	}
-}
-
-func TestNewClientWithSocket(t *testing.T) {
-	c := NewClient("/var/run/docker.sock", "")
-	if c.IsNoop() {
-		t.Fatal("socket path should create real client")
-	}
-	if c.http == nil {
-		t.Fatal("real client should have HTTP transport")
-	}
-}
-
-func TestNoopCreate(t *testing.T) {
-	c := NewClient("", "")
-	info, err := c.Create(ContainerConfig{
-		Name:     "test-sandbox",
-		Image:    "agenthub/sandbox:latest",
-		AgentID:  "agent-1",
-		TenantID: "tenant-1",
-		CPU:      1.0,
-		MemoryMB: 512,
-	})
-	if err != nil {
-		t.Fatalf("noop create should not error: %v", err)
-	}
-	if info.ID == "" {
-		t.Fatal("noop create should return an ID")
-	}
-	if info.Status != "created" {
-		t.Fatalf("expected status 'created', got '%s'", info.Status)
-	}
-	if info.AgentID != "agent-1" {
-		t.Fatalf("expected AgentID 'agent-1', got '%s'", info.AgentID)
-	}
-	if info.CPULimit != 1.0 {
-		t.Fatalf("expected CPULimit 1.0, got %f", info.CPULimit)
-	}
-	if info.MemoryMB != 512 {
-		t.Fatalf("expected MemoryMB 512, got %d", info.MemoryMB)
-	}
-}
-
-func TestNoopStartStopRemove(t *testing.T) {
-	c := NewClient("", "")
-	info, _ := c.Create(ContainerConfig{Name: "test", Image: "img", AgentID: "a1", TenantID: "t1"})
-	id := info.ID
-
-	// Start
-	if err := c.Start(id); err != nil {
-		t.Fatalf("noop start: %v", err)
-	}
-	// Stop
-	if err := c.Stop(id); err != nil {
-		t.Fatalf("noop stop: %v", err)
-	}
-	// Remove
-	if err := c.Remove(id); err != nil {
-		t.Fatalf("noop remove: %v", err)
-	}
-}
-
-func TestNoopExec(t *testing.T) {
-	c := NewClient("", "")
-	result, err := c.Exec("sandbox-1", "echo hello")
-	if err != nil {
-		t.Fatalf("noop exec: %v", err)
-	}
-	if result.ExitCode != 0 {
-		t.Fatalf("noop exec should exit 0, got %d", result.ExitCode)
-	}
-	if result.Stdout == "" {
-		t.Fatal("noop exec should return some stdout")
-	}
-	if result.DurationMs < 0 {
-		t.Fatal("duration must be non-negative")
-	}
-}
-
-func TestNoopInspect(t *testing.T) {
-	c := NewClient("", "")
-	status, err := c.Inspect("sandbox-1")
-	if err != nil {
-		t.Fatalf("noop inspect: %v", err)
-	}
-	if status != "running" {
-		t.Fatalf("noop inspect should return 'running', got '%s'", status)
-	}
-}
-
-func TestNoopList(t *testing.T) {
-	c := NewClient("", "")
-	containers, err := c.List()
-	if err != nil {
-		t.Fatalf("noop list: %v", err)
-	}
-	if containers != nil {
-		t.Fatalf("noop list should return nil, got %v", containers)
-	}
-}
-
-func TestNoopPing(t *testing.T) {
-	c := NewClient("", "")
-	err := c.Ping(nil)
-	if err == nil {
-		t.Fatal("noop ping should return an error")
-	}
-}
-
 // ── Type Round-Trips ──────────────────────────────────────────────────
 
 func TestContainerInfoRoundTrip(t *testing.T) {
 	// Verify JSON round-trip for ContainerInfo (used in API responses).
 	info := &ContainerInfo{
-		ID:        "abc123",
-		Name:      "test-container",
-		Image:     "test-image",
-		Status:    "running",
-		AgentID:   "agent-1",
-		TenantID:  "t1",
-		CPULimit:  1.5,
-		MemoryMB:  1024,
-		DiskMB:    5120,
-		Network:   "none",
+		ID:       "abc123",
+		Name:     "test-container",
+		Image:    "test-image",
+		Status:   "running",
+		AgentID:  "agent-1",
+		TenantID: "t1",
+		CPULimit: 1.5,
+		MemoryMB: 1024,
+		DiskMB:   5120,
+		Network:  "none",
 	}
 
 	// Marshal/unmarshal

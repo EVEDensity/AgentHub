@@ -25,9 +25,30 @@ Direct admission also groups Mission/Contract creation, start, WorkUnit dispatch
 and the Mission-created receipt in one transaction. Catalog changes or storage
 failures cannot leave an orphan RUNNING Mission behind a failed HTTP request.
 
+Default admission uses `app/services/default_mission_contract.py`, the same
+output-integrity policy as CLI and Desktop. Its `artifact-set.v1` criterion
+allows the independent verifier to reach a terminal outcome after checking the
+current attempt's registered `test-result` bytes. That historical output kind
+also contains model text; it does not prove test execution or code correctness.
+The policy verifies availability, size and SHA-256, and has no minimum byte size.
+It does not accept an executor's self-issued PASS or add Contract tool grants.
+Only newly admitted Missions use this default; existing immutable Contracts and
+pending Decisions retain their original acceptance requirements.
+
+This endpoint currently accepts text only. `attachments`, `references`, and
+`execPermission` are unsupported fields and return HTTP 422 during request
+validation, before a Mission, session or pending confirmation can be created.
+Clients must show this limitation instead of dropping these inputs or implying
+that a local permission selector changes the server's empty tool grants.
+
 Rule confirmation/cancellation uses the pending repository's transactional
 companions. A compare-and-set consumes PENDING once; Mission/Contract creation,
 start, dispatch and confirmation receipts commit together or roll back together.
 Expired requests persist EXPIRED and return 410. A failed storage write never
 falls through to execution. SQLite serializes transactions across tasks; the
 same task may nest without opening an independent transaction. See ADR-0113.
+
+Default-policy closure is covered by
+`tests/integration/test_default_task_acceptance_sqlite.py`: durable HTTP
+admission, fenced execution, real CAS bytes, independent authenticated HTTP
+verification, terminal success, tampered/missing bytes, and cancellation.
