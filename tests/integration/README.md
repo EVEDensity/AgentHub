@@ -19,8 +19,9 @@ catalog resolution, transactions, status, event streams, cancellation and
 Decision resolution use the real routers and repositories.
 
 The authenticated `/fixture/missions/{missionId}/advance` driver accepts
-`start`, `text`, `expire`, `complete`, or `decision`. It invokes real claim and
-state commands; `text` runs the production Harness with an explicitly fixed
+`start`, `text`, `expire`, `complete`, or `decision`. It targets the requested
+admitted WorkUnit using real transactional `lease_work_unit` and start commands;
+the normal production workspace claim selector is unchanged. `text` runs the production Harness with an explicitly fixed
 test ModelPort, `complete` publishes real CAS output and stops at `VERIFYING`,
 and `decision` supplies only a `report` so the default Contract's missing
 `test-result` requirement creates real pending governance. The driver never
@@ -29,15 +30,29 @@ changing a clock or persisted status. The private workspace's `fixture-confirm`
 keyword rule exercises transactional pending confirmation and cancellation.
 
 `/fixture/health` exposes the process ID and request counters; the authenticated
-Mission snapshot exposes actual durable state for browser assertions. Each
-browser case must cancel its remaining nonterminal Missions before another
-case advances work: production workspace claim and verification discovery
-select work by their normal policy. Reconnection replays persisted WorkUnit
+Mission snapshot exposes actual durable state for browser assertions. Multiple
+sessions may retain PENDING Missions while the driver leases a particular one.
+Before exercising `decision`, other eligible VERIFYING Missions must be handled
+because production verification discovery still selects by its normal workspace
+policy. Reconnection replays persisted WorkUnit
 events with the same IDs; consumers must deduplicate those identities.
 `test_mission_chat_http_fixture.py` verifies the HTTP/SQLite/Harness boundary,
 real CAS, keyset cursors, failure/authorization and cleanup. It does not prove
 real provider accuracy, tool execution, full conversation-history recovery or
 native Desktop packaging.
+
+`test_native_session_history.py` exercises the native Session list/detail and
+source-bound chat Mission directory through real admission and SQLite HTTP
+serialization, including workspace/legacy rejection, unknown/foreign/non-chat
+cursors, pagination during new admission, Unicode objective excerpts and
+state-neutral reads. `test_session_mission_history_order.py` executes the new
+history repository's SQL directly on SQLite and opt-in PostgreSQL JSONB with
+native TIMESTAMPTZ. It covers timezone offsets, naive UTC, exact microseconds,
+equal-instant ID ties, every keyset boundary and source/workspace filtering.
+These projections recover saved task goals and bounded observations, not a
+lossless transcript. `tests/contracts/test_session_history.py` validates actual
+HTTP producer payloads against the versioned directory/detail/Mission-page
+schema and checks strict DTO/schema parity and limits.
 
 `test_mission_sse_cursor_sqlite.py` protects Mission stream resume against
 aggregate-local sequence confusion. Only a cursor belonging to the authorized

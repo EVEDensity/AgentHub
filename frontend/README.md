@@ -30,11 +30,16 @@ the server command and shows success only after acknowledgement. Pending rule
 confirmations expose explicit confirmation and cancellation buttons. Expired
 leases cannot display active execution.
 
-The conversation view caches IDs of native v1 sessions returned by admission;
-legacy session IDs do not acquire inferred workspace ownership. Workspace
-selection uses the authenticated user's scope, and cache entries never replace
-API authorization. Session changes clear transport events and cursors. Catalog
-reads render registered Agents or a visible unavailable state without fixtures.
+The main conversation reads native Sessions and their actual chat Mission
+associations from `/api/v1/sessions`. Explicit personal-workspace selection uses
+Mission Control's authenticated `/api/v1/access/whoami`, with visible read errors;
+it does not infer scope from local credentials or the Go platform catalog. Selecting a saved Mission
+only observes it; it does not repeat admission or execution. Server task target
+excerpts are labeled separately from original requests. Historical Sessions are
+read-only here; editing a new draft creates no Session. The server admission
+process can leave an empty Session on a later failure or pending rule. Legacy rows
+remain unchanged and do not acquire inferred workspace ownership. Scope
+changes clear local bytes and cursors, including A→B→A late responses.
 
 See [ADR-0116](../docs/architecture/decisions/0116-runner-contact-and-chat-execution-status.md).
 
@@ -116,11 +121,13 @@ observations. It preserves failed/edited drafts, pauses observers on close,
 requires server cancellation acknowledgements and displays independent
 verification/governance states. The library supplies no model loop, tool grant
 or alternative acceptance. This UI-2a slice replaces the old admin public-chat
-proxy and simulated typing; the main conversation page remains a separate
-migration. See [the chat guide](components/chat/README.md) and
+proxy and simulated typing. UI-2b also migrates the main conversation to native
+Session/Mission observations, without the old messages/Task/DAG store. See
+[the chat guide](components/chat/README.md),
+[ADR-0130](../docs/architecture/decisions/0130-native-session-mission-observation.md) and
 [ADR-0129](../docs/architecture/decisions/0129-mission-assistant-ui-projection.md).
 
-Main-conversation and log-viewer adoption remain targets in the
+Complete original transcript recovery and log-viewer adoption remain targets in the
 [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
 Keep
 Mission state, authorization and acceptance on the existing control-plane APIs;

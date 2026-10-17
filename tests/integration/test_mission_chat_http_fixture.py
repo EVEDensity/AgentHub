@@ -196,6 +196,28 @@ def test_real_one_second_lease_expires_without_fabricated_status_or_text(chat_ht
     assert snapshot(chat_http, mission_id) == persisted
 
 
+def test_targeted_fixture_lease_changes_only_the_selected_pending_session(chat_http):
+    other = admit(chat_http)
+    selected = admit(chat_http)
+    assert other["sessionId"] != selected["sessionId"]
+    untouched = snapshot(chat_http, other["missionId"])
+    assert untouched["workUnits"][0]["status"] == "PENDING"
+    assert untouched["workUnits"][0]["attempt"] == 0
+    before = snapshot(chat_http, selected["missionId"])
+    assert before["workUnits"][0]["status"] == "PENDING"
+    changed = advance(chat_http, selected["missionId"], "start", leaseSeconds=1)
+    unit = changed["workUnits"][0]
+    assert unit["status"] == "RUNNING" and unit["attempt"] == 1
+    assert unit["assignedAgentId"] == AGENT_ID
+    assert unit["lease"]["runnerId"] == "chat-browser-runner"
+    assert unit["lease"]["id"].startswith("lease-")
+    assert status(chat_http, selected["missionId"])["workUnits"][0]["availabilitySource"] == "lease"
+    assert snapshot(chat_http, other["missionId"]) == untouched
+    # The selected live lease supplies real workspace runner availability;
+    # the untouched WorkUnit is still merely waiting for its own claim.
+    assert status(chat_http, other["missionId"])["workUnits"][0]["reason"] == "waiting_claim"
+
+
 def test_real_output_registration_and_completion_stop_at_verifying(chat_http):
     mission_id = admit(chat_http)["missionId"]
     persisted = advance(chat_http, mission_id, "complete")

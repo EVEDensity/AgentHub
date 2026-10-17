@@ -50,8 +50,14 @@ Closing pauses observation and leaves accepted server work running; no native
 session/permission/model authority is added. See
 [ADR-0129](../docs/architecture/decisions/0129-mission-assistant-ui-projection.md).
 This is also source/browser integration, not a new packaged release record.
-Future main-conversation and log-viewer components
-follow the [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
+The same Next bundle's main route now uses UI-2b native Session/Mission
+observations and Mission Control's personal-scope probe, documented in
+[ADR-0130](../docs/architecture/decisions/0130-native-session-mission-observation.md).
+It restores selectable task goals and bounded observations, not original full
+transcripts or execution checkpoints. This remains source/browser evidence;
+the Desktop default admin entry and native shell are unchanged. Packaged
+validation and the future log viewer follow the
+[UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
 The
 dependency-free `ui/` shell keeps bootstrap, service lifecycle, diagnostics and
 native credential responsibilities; it does not gain another Mission store or

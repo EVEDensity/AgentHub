@@ -16,6 +16,26 @@ successful dispatch is not proof that a Runner exists or that execution passed.
 The Mission source stores the actual session ID so later lifecycle events can
 refer back to that session.
 
+The separate read-only native history API is implemented in `../sessions.py`.
+`GET /api/v1/sessions?workspaceId&limit&offset` lists durable workspace-scoped
+Session metadata (at most 50 per page), and `GET /api/v1/sessions/{id}?workspaceId`
+reads the same minimal metadata. Unknown or legacy unscoped Sessions are not
+assigned to a workspace using membership or browser aliases.
+`GET /api/v1/sessions/{id}/missions?workspaceId&limit&beforeId` lists at most 20
+Missions whose actual source is chat and binds that exact Session and workspace.
+Creation time and ID provide descending keyset order; foreign, non-chat and
+unknown Mission cursors return 404. These personal projections use `no-store`.
+`SessionMissionHistoryRepository` owns only this bounded SQL read. The versioned
+`session-history.schema.json` matches the serialized DTOs in
+`app/schemas/session_history.py`.
+
+Each Mission item contains at most 1,000 Unicode code points of its persisted
+objective and an explicit truncation flag. Rules or archivist preprocessing may
+already have changed that objective. This is a task goal excerpt, not an
+original message receipt or a complete conversation transcript. Reading or
+selecting history does not admit, resume, cancel or accept a Mission; clients
+observe its existing status and bounded event ledger through the Mission APIs.
+
 Mission Control creates only the exact requested Mission's WorkUnit. The manual
 desktop derivation loop does not supply a fallback executor for chat Missions.
 Rule target Agents use the same catalog admission and cannot create a separate

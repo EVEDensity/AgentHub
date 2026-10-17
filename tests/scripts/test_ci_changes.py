@@ -177,6 +177,16 @@ class CiChangeSelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["frontend"])
 
+    def test_native_history_inputs_select_the_browser_consumer(self) -> None:
+        for path in (
+            "app/repositories/session_mission_history.py",
+            "app/services/session_history_service.py",
+            "tests/integration/test_native_session_history.py",
+            "tests/integration/test_session_mission_history_order.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(select_checks([path])["frontend"])
+
     def test_invalid_base_is_an_error_instead_of_omitting_checks(self) -> None:
         root = Path(__file__).resolve().parents[2]
         result = subprocess.run(

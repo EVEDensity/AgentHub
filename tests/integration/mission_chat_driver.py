@@ -13,7 +13,6 @@ from app.services.harness_service import FunctionCallingHarness
 from app.services.harness_types import HarnessRequest
 from app.services.mission_service import MissionService
 from app.services.model_contract import ModelResponse, ModelStreamEvent
-from app.services.workspace_admission_service import WorkspaceClaimAdmissionPolicy
 
 WORKSPACE_ID = "workspace-chat-browser"
 AGENT_ID = "local-desktop-agent"
@@ -66,23 +65,13 @@ class MissionChatDriver:
         unit = await self._unit(mission_id)
         if unit.status.value != "PENDING":
             raise ValueError("Fixture start requires a PENDING WorkUnit")
-        # Guard the fixture driver from accidentally claiming a different test's
-        # ready work. The production claim still applies its actual selection.
-        for mission in await self.repository.list_missions(WORKSPACE_ID):
-            if mission.id == mission_id or mission.status.value != "RUNNING":
-                continue
-            others = await self.repository.list_work_units(mission.id)
-            if any(other.status.value in {"PENDING", "RETRYING"} for other in others):
-                raise ValueError("Cancel other pending fixture Missions before advancing")
-        outcome = await self.service.claim_workspace_bound_work_unit(
-            WORKSPACE_ID, agent_id=AGENT_ID, adapter_type="function-calling",
-            supported_work_unit_kinds=("desktop.task",), runner_id=RUNNER.id,
-            actor=RUNNER, lease_seconds=lease_seconds,
-            admission_policy=WorkspaceClaimAdmissionPolicy(tenant_id=WORKSPACE_ID, max_concurrent=0),
+        # Target an admitted WorkUnit through existing transactional commands.
+        # Other sessions may retain ready work without affecting this test's
+        # selection; lease creation, attempts and fencing remain real.
+        unit = await self.service.lease_work_unit(
+            mission_id, unit.id, runner_id=RUNNER.id, actor=RUNNER,
+            lease_seconds=lease_seconds,
         )
-        if outcome.work_unit is None or outcome.work_unit.id != unit.id:
-            raise ValueError("Fixture production claim did not select the requested WorkUnit")
-        unit = outcome.work_unit
         return await self.service.start_work_unit(
             mission_id, unit.id, lease_id=unit.lease.id, runner_id=RUNNER.id, actor=RUNNER,
         )

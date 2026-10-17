@@ -171,7 +171,10 @@ UI-2a 已将管理端/Desktop 共享聊天弹窗替换为 assistant-ui 外部 st
 复用真实 Mission 提交、规则确认、执行状态、事件重连和取消；保留失败草稿，
 没有新模型循环、工具授权或本地成功判定。见
 [ADR-0129](../architecture/decisions/0129-mission-assistant-ui-projection.md)。
-该切片不迁移主聊天页的完整历史，也不证明桌面安装包已验收；主聊天页和日志组件仍待接入。
+UI-2b 进一步迁移主聊天页：显式选择真实工作空间、读取原生 Session 目录及其实际 chat Mission，
+恢复服务端任务目标节选和有界账本观察。历史会话仅观察，选择不会重新提交或执行；旧会话不推断归属。
+见 [ADR-0130](../architecture/decisions/0130-native-session-mission-observation.md)。
+这些切片不恢复完整原始逐字历史，也不证明桌面安装包已验收；日志组件仍待读取合同。
 
 本仓库 [lockfile](../../frontend/package-lock.json) 当前锁定 Next.js 14.2.35、React 18.3.1、
 Tailwind CSS 3.4.19、`@monaco-editor/react` 4.7.0 / `monaco-editor` 0.55.1，以及
@@ -220,8 +223,8 @@ Mission/WorkUnit 终态仍来自 Mission Control；SSE 连接、组件 runtime �
 
 **实施分片。** UI-0 为当前终端诚实性和不可用状态回归；UI-1 先接一个基础交互组件及只读
 Artifact 代码视图，验证本地资源和大文件边界；UI-2 再用外部 store 适配聊天，保留发送失败草稿、
-等待 Runner、租约失效、VERIFYING、Decision 及取消确认。UI-2a 限定为管理弹窗，UI-2b 再迁移
-已有主聊天页，完整历史恢复仍需独立合同和验收；UI-3 在真实日志读取合同完成后接只读
+等待 Runner、租约失效、VERIFYING、Decision 及取消确认。UI-2a 限定为管理弹窗，UI-2b 迁移
+已有主聊天页的原生任务观察，完整原始历史恢复仍需独立合同和验收；UI-3 在真实日志读取合同完成后接只读
 xterm 观察。每片单独提交、push 并等 CI 通过，再开始下一片；没有日志合同就停留在未接通状态。
 
 **验收门槛。** 每片记录来源 commit、版本、许可和所采用文件；新增依赖使用精确 lockfile 及

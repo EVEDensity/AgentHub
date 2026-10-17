@@ -49,6 +49,8 @@ const nextConfig = {
     return [
       { source: '/api/v1/missions/:path*', destination: `${missionControlUrl}/api/v1/missions/:path*` },
       { source: '/api/v1/chat/:path*', destination: `${missionControlUrl}/api/v1/chat/:path*` },
+      { source: '/api/v1/sessions/:path*', destination: `${missionControlUrl}/api/v1/sessions/:path*` },
+      { source: '/api/v1/access/:path*', destination: `${missionControlUrl}/api/v1/access/:path*` },
       // Tool marketplace (G1) is served by the Go gateway even in legacy
       // mode: frontend/stores/toolStore.ts expects the gateway contract, and
       // the legacy /api/admin/tools is an unrelated tool-registry with no

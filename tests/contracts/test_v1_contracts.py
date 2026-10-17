@@ -62,6 +62,7 @@ class PublicContractTests(unittest.TestCase):
                 "decision.schema.json",
                 "artifact.schema.json",
                 "artifact-text-preview.schema.json",
+                "session-history.schema.json",
                 "evidence.schema.json",
                 "event-envelope.schema.json",
                 "execution-checkpoint.schema.json",

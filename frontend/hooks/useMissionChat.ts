@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { unsupportedMissionInput, type MissionChatInput } from '../lib/missionChatInput';
 import type { ArchivistInfo } from '../types';
 import type { ChatRenderEvent } from '../lib/missionEventMapper';
-import { missionCommand, missionIdentifier, missionStreamPath, readMissionStream } from '../lib/missionStream';
+import { MissionCommandRejection, missionCommand, missionIdentifier, missionStreamPath, readMissionStream } from '../lib/missionStream';
 import { readMissionSession, rememberMissionSession } from '../lib/missionSessionCache';
 
 export type MissionStreamState = 'idle' | 'connecting' | 'streaming' | 'closed' | 'error';
@@ -21,6 +21,12 @@ export interface MissionChatOptions {
   eventLimit?: number;
   /** A mounted-only view may avoid reusing native session links after scope reset/refresh. */
   cacheSessionLink?: boolean;
+  /** An explicitly read native Session; never infer this from a legacy view ID. */
+  nativeSessionId?: string;
+  /** Observe an already authorized Session/Mission association using GET only. */
+  resumeMissionId?: string;
+  /** Latch this view after an uncertain admission; check server state before a new task. */
+  blockUncertainAdmission?: boolean;
   token?: string;
   workspaceId?: string;
   sessionId?: string;
@@ -42,7 +48,7 @@ export function useMissionChat(options: MissionChatOptions) {
   const key = (options.workspaceId ?? 'local-admin') + '/' + (options.sessionId ?? 'new');
   const keyRef = useRef(key);
   keyRef.current = key;
-  const identity = key + '/' + (options.token ?? '');
+  const identity = JSON.stringify([key, options.token, options.nativeSessionId, options.resumeMissionId]);
   const identityRef = useRef(identity);
   identityRef.current = identity;
   const [streamState, setStreamState] = useState<MissionStreamState>('idle');
@@ -55,6 +61,8 @@ export function useMissionChat(options: MissionChatOptions) {
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [admissionUncertain, setAdmissionUncertain] = useState(false);
+  const uncertainRef = useRef(false);
   const targetRef = useRef<string | null>(null);
   targetRef.current = pending ? 'pending/' + pending.id : missionId ? 'mission/' + missionId : null;
   const abortRef = useRef<AbortController | null>(null);
@@ -62,11 +70,13 @@ export function useMissionChat(options: MissionChatOptions) {
   const seenRef = useRef(new Set<string>());
   const cursorRef = useRef<string | undefined>();
   const generationRef = useRef(0);
+  const scopeEpoch = useRef(0);
   const commands = useRef(new Set<AbortController>());
   const cancelRef = useRef<string | null>(null);
   const busyRef = useRef<string | null>(null);
 
   useEffect(() => {
+    ++scopeEpoch.current;
     ++generationRef.current;
     abortRef.current?.abort();
     streamRef.current = null;
@@ -74,22 +84,30 @@ export function useMissionChat(options: MissionChatOptions) {
     seenRef.current.clear();
     busyRef.current = null;
     cancelRef.current = null;
-    setMissionId(null);
-    setSessionId(options.cacheSessionLink === false ? undefined : readMissionSession(key));
+    const native = options.nativeSessionId;
+    const resume = options.resumeMissionId;
+    const valid = (native === undefined || missionIdentifier(native))
+      && (resume === undefined || missionIdentifier(resume) && missionIdentifier(native));
+    setMissionId(valid ? resume ?? null : null);
+    setSessionId(valid ? native ?? (options.cacheSessionLink === false ? undefined : readMissionSession(key)) : undefined);
     setPending(null);
-    setError(null);
+    setError(valid ? null : '原生会话恢复参数无效');
     setEventBuffer({ events: [], omitted: 0 });
     setMentions(null);
     setArchivistInfo(null);
     setStreamState('idle');
     setSending(false);
     setCancelling(false);
+    uncertainRef.current = false;
+    setAdmissionUncertain(false);
+    if (valid && resume && options.token) streamRef.current = { missionId: resume, url: `/api/v1/missions/${encodeURIComponent(resume)}/events/stream`, identity };
     return () => {
+      ++scopeEpoch.current;
       ++generationRef.current;
       abortRef.current?.abort();
       for (const controller of commands.current) controller.abort();
     };
-  }, [identity, key, options.cacheSessionLink]);
+  }, [identity, key, options.cacheSessionLink, options.nativeSessionId, options.resumeMissionId]);
 
   const subscribe = useCallback((mid: string, url: string) => {
     abortRef.current?.abort();
@@ -148,6 +166,8 @@ export function useMissionChat(options: MissionChatOptions) {
 
   const admit = useCallback((data: Record<string, any>, requestKey: string) => {
     if (!missionIdentifier(data.sessionId)) throw new Error('任务提交响应无效，请在 Mission 面板核对');
+    const expectedSession = options.nativeSessionId;
+    if (expectedSession && data.sessionId !== expectedSession) throw new Error('任务响应会话不符，请在 Mission 面板核对');
     if (data.status === 'pending') {
       if (!missionIdentifier(data.pendingId)) throw new Error('任务提交响应无效，请在 Mission 面板核对');
       if (data.ruleDescription !== undefined && typeof data.ruleDescription !== 'string') throw new Error('任务提交响应无效，请在 Mission 面板核对');
@@ -179,12 +199,14 @@ export function useMissionChat(options: MissionChatOptions) {
     streamRef.current = { missionId: data.missionId, url: data.streamUrl, identity };
     if (enabledRef.current) subscribe(data.missionId, data.streamUrl);
     return { missionId: data.missionId as string, mentions: (data.mentions ?? EMPTY_MENTIONS) as MissionMentionResult, archivist: data.archivist as ArchivistInfo | undefined };
-  }, [identity, options.cacheSessionLink, subscribe]);
+  }, [identity, options.cacheSessionLink, options.nativeSessionId, subscribe]);
 
   const command = useCallback(async (path: string, body: unknown) => {
-    if (!options.token || !enabledRef.current || busyRef.current === identity) return null;
+    if (!options.token || !enabledRef.current || busyRef.current === identity || options.blockUncertainAdmission && uncertainRef.current) return null;
     const requestKey = key;
     const requestIdentity = identity;
+    const epoch = scopeEpoch.current;
+    const current = () => requestIdentity === identityRef.current && epoch === scopeEpoch.current;
     busyRef.current = requestIdentity;
     setSending(true);
     setError(null);
@@ -192,22 +214,29 @@ export function useMissionChat(options: MissionChatOptions) {
     commands.current.add(controller);
     try {
       const response = await commandWithDeadline(path, body, authHeaders(), controller);
-      if (requestIdentity !== identityRef.current) return null;
+      if (!current()) return null;
       return admit(response, requestKey);
     } catch (err) {
-      if (requestIdentity === identityRef.current) {
+      if (current()) {
+        const rejected = err instanceof MissionCommandRejection && err.status >= 400 && err.status < 500 && err.status !== 408;
+        if (options.blockUncertainAdmission && !rejected) { uncertainRef.current = true; setAdmissionUncertain(true); }
         setError(err instanceof Error ? err.message : '任务提交失败');
         setStreamState('error');
       }
       return null;
     } finally {
       commands.current.delete(controller);
-      if (busyRef.current === requestIdentity) busyRef.current = null;
-      if (requestIdentity === identityRef.current) setSending(false);
+      if (current() && busyRef.current === requestIdentity) busyRef.current = null;
+      if (current()) setSending(false);
     }
-  }, [options.token, key, identity, authHeaders, admit]);
+  }, [options.token, options.blockUncertainAdmission, key, identity, authHeaders, admit]);
 
   const sendMission = useCallback((message: string, input: MissionChatInput = {}) => {
+    if (options.nativeSessionId !== undefined && !missionIdentifier(options.nativeSessionId)
+        || options.resumeMissionId !== undefined && (!missionIdentifier(options.resumeMissionId) || !missionIdentifier(options.nativeSessionId))) {
+      setError('原生会话恢复参数无效');
+      return Promise.resolve(null);
+    }
     const unsupported = unsupportedMissionInput(input);
     if (unsupported) {
       setError(unsupported);
@@ -217,15 +246,16 @@ export function useMissionChat(options: MissionChatOptions) {
       message, workspaceId: options.workspaceId ?? 'local-admin',
       sessionId: sessionId ?? (options.cacheSessionLink === false ? undefined : readMissionSession(key)) ?? null, stream: true,
     });
-  }, [command, options.workspaceId, options.cacheSessionLink, sessionId, key]);
+  }, [command, options.workspaceId, options.cacheSessionLink, options.nativeSessionId, options.resumeMissionId, sessionId, key]);
 
   const confirmPending = useCallback(() => pending ? command('/api/v1/chat/confirm', { pendingId: pending.id }) : Promise.resolve(null), [pending, command]);
   const cancel = useCallback(async () => {
     const path = pending ? '/api/v1/chat/cancel' : missionId ? '/api/v1/missions/' + encodeURIComponent(missionId) + '/cancel' : null;
     if (!path || !options.token || !enabledRef.current || cancelRef.current) return false;
     const requestIdentity = identity;
+    const epoch = scopeEpoch.current;
     const requestTarget = pending ? 'pending/' + pending.id : 'mission/' + missionId;
-    const stillCurrent = () => requestIdentity === identityRef.current && requestTarget === targetRef.current;
+    const stillCurrent = () => epoch === scopeEpoch.current && requestIdentity === identityRef.current && requestTarget === targetRef.current;
     const controller = new AbortController();
     commands.current.add(controller);
     cancelRef.current = requestTarget;
@@ -246,8 +276,8 @@ export function useMissionChat(options: MissionChatOptions) {
       return false;
     } finally {
       commands.current.delete(controller);
-      if (cancelRef.current === requestTarget) cancelRef.current = null;
-      if (requestIdentity === identityRef.current) setCancelling(false);
+      if (epoch === scopeEpoch.current && cancelRef.current === requestTarget) cancelRef.current = null;
+      if (epoch === scopeEpoch.current && requestIdentity === identityRef.current) setCancelling(false);
     }
   }, [pending, missionId, identity, options.token, authHeaders]);
 
@@ -260,7 +290,7 @@ export function useMissionChat(options: MissionChatOptions) {
   }, [identity, missionId, subscribe]);
 
   return { sendMission, cancel, confirmPending, reconnect, streamState, missionId, sessionId, events: eventBuffer.events,
-    omittedEvents: eventBuffer.omitted, mentions, archivistInfo, pending, error, sending, cancelling };
+    omittedEvents: eventBuffer.omitted, mentions, archivistInfo, pending, error, sending, cancelling, admissionUncertain };
 }
 
 async function commandWithDeadline(path: string, body: unknown, headers: Record<string, string>, controller: AbortController) {

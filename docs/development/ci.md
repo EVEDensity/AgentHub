@@ -49,6 +49,15 @@ failures, pause/resume, cursor deduplication and scope reset. Production Mission
 and chat requests are never fulfilled by Playwright fixtures. Fixture model text
 is deterministic and creates no PASS Evidence. This is not paid-provider or
 complete transcript-recovery evidence.
+The UI-2b native Session suite adds eleven real API cases without skips:
+reload/selection without admission, server target excerpts and Harness
+observations, multiple Sessions, actual 21-Mission paging, permission/read retries,
+acknowledged cancellation, an admission committed before its response is lost,
+definite rejection/correction, principal mismatch and credential changes.
+Mission Control's real `access/whoami` supplies personal scope; an unavailable
+Go platform catalog does not manufacture scope or block this profile. The JUnit
+gate requires all eleven native Session cases in addition to the existing suites.
+History is bounded observation, not complete original transcript persistence.
 The same job installs the VS Code extension's locked dependencies, compiles its
 TypeScript and runs its HTTP client and webview contract tests. API schema
 DTO changes also select those frontend consumers. Go changes and sandbox image

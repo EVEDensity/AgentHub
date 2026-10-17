@@ -76,3 +76,12 @@ metadata; it does not add Evidence or accept a Mission. The endpoint permits
 only public/internal supported text up to 262,144 bytes; it rejects excessive,
 unavailable, mismatched or non-UTF-8 content without a truncated success. See
 [ADR-0128](../docs/architecture/decisions/0128-registered-artifact-text-preview.md).
+
+`session-history.schema.json` defines read-only native Session metadata and
+bounded chat Mission directories. Scope comes from the persisted workspace and
+actual Mission source Session, not legacy membership or browser aliases. Mission
+objective previews contain at most 1,000 Unicode code points and identify
+truncation; objectives may contain preprocessing and are not original messages.
+Cursor paging, metadata and saved objective text do not resume execution or
+establish acceptance. No legacy row or storage schema is migrated. See
+[ADR-0130](../docs/architecture/decisions/0130-native-session-mission-observation.md).

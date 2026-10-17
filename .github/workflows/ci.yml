@@ -290,6 +290,12 @@ jobs:
           cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'mission-chat.spec.ts' in c.get('classname','')];
           assert len(cases) >= 11;
           assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - name: Require real native Session restoration browser coverage without skips
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'native-mission-sessions.spec.ts' in c.get('classname','')];
+          assert len(cases) >= 11;
+          assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

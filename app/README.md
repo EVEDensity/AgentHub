@@ -367,6 +367,11 @@ workspace tree.
   is the migration pattern: one version-neutral router mounted twice
   (legacy `/api/skills` unauthenticated, `/api/v1/skills` authenticated)
   until every caller migrates.
+  Native Session list/detail and source-bound chat Mission history are read-only
+  projections in `api/v1/sessions.py`, backed by `session_history_service.py` and
+  the narrow `session_mission_history.py` repository. They do not infer legacy
+  workspace ownership, manufacture original messages or resume execution; see
+  ADR-0130 and the versioned Session history schema.
 
 * `schemas/`: versioned request and response validation.
 

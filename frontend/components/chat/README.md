@@ -1,9 +1,9 @@
 # Chat presentation
 
-> Status: implemented, bounded UI-2a profile\
+> Status: implemented, bounded UI-2a and UI-2b profiles\
 > Owner: frontend and Mission Control maintainers\
 > Last reviewed: 2026-10-18\
-> Scope: shared admin/Desktop Mission assistant; existing main conversation remains separate
+> Scope: shared admin/Desktop assistant and native main Session/Mission observations
 
 `AIChatDialog` submits text through `useMissionChat` and displays the same
 workspace-authorized execution status as the main conversation. It replaces the
@@ -46,9 +46,29 @@ WorkUnit window; disconnected older observations are not guaranteed here.
 
 The standalone Next app, Web and bundled Desktop share these sources and local
 assets. Packaged WebView2, IME, offline and release checks remain separate.
-The main `app/page.tsx` conversation, legacy messages and public bot route are
-not migrated by this slice. Their runtime/state cannot establish this dialog's
-Mission acceptance.
+The public bot route retains its separate scope. Its runtime/state cannot
+establish this dialog's Mission acceptance.
+
+## Native main conversation
+
+`app/page.tsx` and `NativeMissionWorkspace` use explicit personal scope selection
+from Mission Control's authenticated `access/whoami` projection and the v1 native
+Session/Mission reads. Selecting a historical Mission
+only reads its current status and bounded ledger stream. Its saved objective is
+labeled as a server task target and may contain rule/context preprocessing; it
+is not represented as an original user message. Historical Sessions are read-only
+in this profile. A new view admits plain text, retains unsupported attachments
+and failed/concurrently edited drafts, and permits another request only after
+the current Mission is observably terminal. Changing selection stops local
+observation without cancelling server work.
+
+The directory has explicit loading/error/retry/more states. Its local read cache
+holds at most 500 Sessions and 200 Missions with a visible limit notice. No local
+Session ID alias supplies ownership. Native restoration is GET-only; it creates
+no Mission or resumed execution. The old legacy message/Task/DAG store and
+share/edit/deploy actions do not run on this page. Existing records are unchanged.
+Full original transcript persistence and unbounded history remain separate.
+See [ADR-0130](../../../docs/architecture/decisions/0130-native-session-mission-observation.md).
 
 See [ADR-0129](../../../docs/architecture/decisions/0129-mission-assistant-ui-projection.md),
 [component checks](../../__tests__/components/chat/AIChatDialog.test.tsx) and

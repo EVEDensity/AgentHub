@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0130](0130-native-session-mission-observation.md) | Recover native Session Missions as bounded observations |
 | [0129](0129-mission-assistant-ui-projection.md) | Bind the shared assistant dialog to Mission projections |
 | [0128](0128-registered-artifact-text-preview.md) | Preview registered Artifact text through Mission Control |
 | [0127](0127-experimental-anonymous-browser-read.md) | Evaluate one anonymous browser read behind a dedicated Native profile |

@@ -13,7 +13,9 @@ async function prepareChat(page: Page, readFailure = false, submit = true) {
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname;
     const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
-    if (path === '/api/chat/sessions') return reply([{ id: 'legacy-view', name: 'Runner waiting test', ownerId: 'alice', myRole: 'owner' }]);
+    if (path === '/api/v1/access/whoami') return reply({ userId: 'alice', name: 'Alice', role: 'user', workspaceId: 'alice', isAdmin: false, canVerify: false });
+    if (path === '/api/v1/sessions') return reply({ schemaVersion: 1, workspaceId: 'alice', sessions: [], hasMore: false, nextOffset: null });
+    if (path === '/api/v1/sessions/native-browser-session/missions') return reply({ schemaVersion: 1, workspaceId: 'alice', sessionId: 'native-browser-session', missions: [], hasMore: false, nextBeforeId: null });
     if (path === '/api/v1/workspaces/alice/members') return reply({ scopeId: 'alice', members: [{ memberId: 'executor', name: 'Executor', kind: 'agent', role: 'agent', enabled: true, adapterType: 'function-calling', capabilities: [] }] });
     if (path === '/api/v1/skills') return reply({ skills: [] });
     if (path === '/api/v1/chat/mission') {
@@ -47,9 +49,10 @@ async function prepareChat(page: Page, readFailure = false, submit = true) {
     return reply([]);
   });
   await page.goto('/');
-  const composer = page.locator('textarea.composer-textarea');
+  await page.getByRole('combobox', { name: '工作空间' }).selectOption('alice');
+  const composer = page.getByRole('textbox', { name: '任务要求' });
   await composer.fill('@executor inspect this workspace');
-  if (submit) await page.locator('button.composer-send-btn').click();
+  if (submit) await page.getByRole('button', { name: '提交 Mission', exact: true }).click();
   return { submissions: () => submissions, body: () => submittedBody, cancelled: () => cancelled };
 }
 
@@ -78,17 +81,17 @@ test('status outage is visible and read retry does not submit a duplicate Missio
 
 test('unsupported attachments remain in the composer and never become a partial text Mission', async ({ page }) => {
   const calls = await prepareChat(page, false, false);
-  const composer = page.locator('textarea.composer-textarea');
+  const composer = page.getByRole('textbox', { name: '任务要求' });
   await page.locator('input[type=file]').setInputFiles({ name: 'context.txt', mimeType: 'text/plain', buffer: Buffer.from('required context') });
   const remove = page.getByRole('button', { name: '移除 context.txt' });
   await expect(remove).toBeVisible();
-  await page.locator('button.composer-send-btn').click();
+  await page.getByRole('button', { name: '提交 Mission', exact: true }).click();
   await expect(page.getByText('当前 Mission 聊天暂不支持附件，请移除附件后发送文本。', { exact: true })).toBeVisible();
   expect(calls.submissions()).toBe(0);
   await expect(composer).toHaveValue('@executor inspect this workspace');
   await expect(remove).toBeVisible();
   await remove.click();
-  await page.locator('button.composer-send-btn').click();
+  await page.getByRole('button', { name: '提交 Mission', exact: true }).click();
   await expect.poll(calls.submissions).toBe(1);
   expect(calls.body()).toEqual({ message: '@executor inspect this workspace', workspaceId: 'alice', sessionId: null, stream: true });
 });
@@ -98,9 +101,9 @@ test('failed admission keeps the complete text draft for retry', async ({ page }
   await page.route('**/api/v1/chat/mission', route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'admission unavailable' }),
   }));
-  const composer = page.locator('textarea.composer-textarea');
-  await page.locator('button.composer-send-btn').click();
-  await expect(page.getByText('Mission create failed — check console for details', { exact: true })).toBeVisible();
+  const composer = page.getByRole('textbox', { name: '任务要求' });
+  await page.getByRole('button', { name: '提交 Mission', exact: true }).click();
+  await expect(page.getByRole('region', { name: '原生 Mission 对话' }).getByRole('alert').filter({ hasText: 'admission unavailable' })).toBeVisible();
   await expect(composer).toHaveValue('@executor inspect this workspace');
 });
 
@@ -117,8 +120,8 @@ test('late admission preserves new text and attachments entered while submitting
       streamUrl: '/api/v1/missions/mission-browser-1/events/stream',
     }) });
   });
-  const composer = page.locator('textarea.composer-textarea');
-  await page.locator('button.composer-send-btn').click();
+  const composer = page.getByRole('textbox', { name: '任务要求' });
+  await page.getByRole('button', { name: '提交 Mission', exact: true }).click();
   await expect.poll(() => received).toBe(true);
   await composer.fill('next task draft');
   await page.locator('input[type=file]').setInputFiles({ name: 'next-task.txt', mimeType: 'text/plain', buffer: Buffer.from('new task context') });
@@ -132,7 +135,7 @@ test('late admission preserves new text and attachments entered while submitting
 
 test('successful admission clears the unchanged submitted draft', async ({ page }) => {
   await prepareChat(page, false, false);
-  await page.locator('textarea.composer-textarea').press('Control+Enter');
+  await page.getByRole('textbox', { name: '任务要求' }).press('Control+Enter');
   await expect(page.getByRole('region', { name: 'Mission 执行状态' })).toBeVisible();
-  await expect(page.locator('textarea.composer-textarea')).toHaveValue('');
+  await expect(page.getByRole('textbox', { name: '任务要求' })).toHaveValue('');
 });

@@ -116,12 +116,16 @@ function deliver(frame: string, signal: AbortSignal, onEvent: (event: ChatRender
   if (event) onEvent({ ...event, eventType, eventId: typeof eventId === 'string' ? eventId : '' });
 }
 
+export class MissionCommandRejection extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 export async function missionCommand(path: string, body: unknown, headers: Record<string, string>, signal?: AbortSignal): Promise<Record<string, any>> {
   const response = await fetch(path, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
     signal, cache: 'no-store', credentials: 'same-origin', redirect: 'error',
   });
   const data: Record<string, any> = await readMissionJson(response, signal).catch(error => { if (response.ok) throw error; return {}; });
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail.slice(0, 512) : `请求失败 (HTTP ${response.status})`);
+  if (!response.ok) throw new MissionCommandRejection(typeof data.detail === 'string' ? data.detail.slice(0, 512) : `请求失败 (HTTP ${response.status})`, response.status);
   return data;
 }
