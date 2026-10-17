@@ -110,7 +110,17 @@ The real browser gate uses a disposable SQLite/CAS HTTP fixture, rather than
 fulfilling Mission requests with browser fixtures. Packaged WebView2 validation
 remains a separate release requirement.
 
-Chat and log-viewer adoption remain targets in the
+The admin/Desktop Mission assistant now uses a lazily loaded assistant-ui
+external-store view over the existing Mission commands and bounded ledger
+observations. It preserves failed/edited drafts, pauses observers on close,
+requires server cancellation acknowledgements and displays independent
+verification/governance states. The library supplies no model loop, tool grant
+or alternative acceptance. This UI-2a slice replaces the old admin public-chat
+proxy and simulated typing; the main conversation page remains a separate
+migration. See [the chat guide](components/chat/README.md) and
+[ADR-0129](../docs/architecture/decisions/0129-mission-assistant-ui-projection.md).
+
+Main-conversation and log-viewer adoption remain targets in the
 [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
 Keep
 Mission state, authorization and acceptance on the existing control-plane APIs;

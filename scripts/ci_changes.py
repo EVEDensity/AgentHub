@@ -85,6 +85,9 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
         "frontend/", "extensions/vscode-agenthub/", "app/api/", "app/schemas/", "tests/api/",
         "app/services/artifact_preview_service.py", "tests/integration/artifact_preview_http_fixture.py",
         "app/services/artifact_integrity_service.py", "tests/integration/test_artifact_preview_sqlite.py",
+        "app/repositories/mission_event_cursor.py", "app/repositories/mission_repository.py",
+        "tests/integration/mission_chat_", "tests/integration/test_mission_chat_",
+        "tests/integration/test_mission_sse_cursor_sqlite.py",
     )
     rust = contracts or changed("services/rust/")
     windows_cli = contracts or changed(

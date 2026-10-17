@@ -49,7 +49,7 @@ async def stream_mission_events(
     last_event_id = (after_event_id or request.headers.get("last-event-id", "")).strip()
     if last_event_id and after_sequence == 0:
         try:
-            after_sequence = await repository.event_sequence(last_event_id)
+            after_sequence = await repository.event_sequence(last_event_id, mission_id=mission_id)
         except Exception:  # noqa: BLE001 - stale/unknown IDs simply catch up from zero
             after_sequence = 0
 
@@ -107,7 +107,9 @@ async def stream_mission_events(
         event_stream(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            # Proxy compression can buffer small frames until this unbounded
+            # response ends. Preserve streaming bytes through Next's proxy.
+            "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",
         },
     )

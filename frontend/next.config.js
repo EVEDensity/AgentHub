@@ -48,6 +48,7 @@ const nextConfig = {
   async rewrites() {
     return [
       { source: '/api/v1/missions/:path*', destination: `${missionControlUrl}/api/v1/missions/:path*` },
+      { source: '/api/v1/chat/:path*', destination: `${missionControlUrl}/api/v1/chat/:path*` },
       // Tool marketplace (G1) is served by the Go gateway even in legacy
       // mode: frontend/stores/toolStore.ts expects the gateway contract, and
       // the legacy /api/admin/tools is an unrelated tool-registry with no

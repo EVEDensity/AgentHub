@@ -1,8 +1,6 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { once } from 'node:events';
-import net from 'node:net';
-import path from 'node:path';
+import type { ChildProcess } from 'node:child_process';
 import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
+import { startOwnedPythonFixture, stopOwnedPythonFixture } from './helpers/ownedPythonFixture';
 
 const FIXTURE_ORIGIN = 'http://127.0.0.1:38100';
 const MISSION_ID = 'mis-preview-browser';
@@ -10,34 +8,6 @@ const MISSION_PATH = `/api/v1/missions/${MISSION_ID}`;
 const JSON_TEXT = '{"note":"产物 中文","html":"<img src=x onerror=window.PREVIEW_EXECUTED=true>"}';
 const HUMAN_HEADERS = { Authorization: 'Bearer artifact-browser-human' };
 type MonacoWindow = Window & { monaco: typeof import('monaco-editor'); PREVIEW_EXECUTED?: unknown };
-
-async function fixturePortOccupied(): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect({ host: '127.0.0.1', port: 38100 });
-    socket.setTimeout(2000);
-    socket.once('connect', () => { socket.destroy(); resolve(true); });
-    socket.once('error', (error: NodeJS.ErrnoException) => {
-      socket.destroy();
-      if (error.code === 'ECONNREFUSED') resolve(false); else reject(error);
-    });
-    socket.once('timeout', () => { socket.destroy(); reject(new Error('Fixture port ownership probe timed out')); });
-  });
-}
-
-async function shutdownOwnedChild(child: ChildProcess | undefined): Promise<void> {
-  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
-  const closed = once(child, 'close').then(() => true);
-  const waitClosed = async (milliseconds: number) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([closed, new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), milliseconds); })]);
-    } finally { if (timer) clearTimeout(timer); }
-  };
-  child.kill('SIGTERM');
-  if (await waitClosed(12000)) return;
-  if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-  if (!await waitClosed(3000)) throw new Error('Owned API fixture did not exit after bounded termination');
-}
 
 async function openMission(page: Page) {
   const previewRequests: string[] = [];
@@ -106,52 +76,11 @@ async function assertMissionUnchanged(request: APIRequestContext) {
 test.describe('Artifact preview real API', () => {
   test.describe.configure({ mode: 'serial', retries: 0, timeout: 60000 });
   let child: ChildProcess | undefined;
-  let fixtureOutput = '';
-  let fixtureError = '';
-
   test.beforeAll(async ({ request }) => {
     test.setTimeout(60000);
-    if (await fixturePortOccupied()) throw new Error('Refusing to use or stop an existing service on fixture port 38100');
-    let python = process.env.AGENTHUB_TEST_PYTHON || 'python';
-    let args = ['-m', 'tests.integration.artifact_preview_http_fixture'];
-    if (process.platform === 'win32') {
-      // A Windows venv python.exe is a launcher which starts another process.
-      // Launch its real interpreter directly so our owned handle/PID is the
-      // server; retain the same reviewed venv dependency paths explicitly.
-      const probe = spawnSync(python, ['-c', 'import json,site,sys; print(json.dumps({"executable":sys._base_executable,"sites":site.getsitepackages()}))'], { windowsHide: true, encoding: 'utf8', timeout: 10000 });
-      if (probe.status !== 0 || probe.error) throw new Error('Could not identify the Windows Python interpreter');
-      const runtime = JSON.parse(probe.stdout) as { executable: string; sites: string[] };
-      if (!path.isAbsolute(runtime.executable) || !Array.isArray(runtime.sites) || runtime.sites.some(directory => !path.isAbsolute(directory))) throw new Error('Python interpreter metadata is invalid');
-      python = runtime.executable;
-      args = ['-c', 'import runpy,site,sys; [site.addsitedir(p) for p in sys.argv[1:]]; runpy.run_module("tests.integration.artifact_preview_http_fixture",run_name="__main__")', ...runtime.sites];
-    }
-    child = spawn(python, args, {
-      cwd: path.resolve(process.cwd(), '..'), windowsHide: true,
-      env: { ...process.env, PYTHONUNBUFFERED: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stdout?.on('data', data => { fixtureOutput = (fixtureOutput + data.toString()).slice(-16000); });
-    child.stderr?.on('data', data => { fixtureError = (fixtureError + data.toString()).slice(-16000); });
-    let spawnError: Error | undefined;
-    child.on('error', error => { spawnError = error; });
-    try {
-      await expect.poll(async () => {
-        if (spawnError) throw spawnError;
-        if (child?.exitCode !== null || child?.signalCode !== null) throw new Error(`Owned API fixture exited: ${fixtureError}`);
-        if (!fixtureOutput.includes(MISSION_ID)) return false;
-        try {
-          const response = await request.get(`${FIXTURE_ORIGIN}/fixture/health`, { timeout: 1000 });
-          if (!response.ok()) return false;
-          const body = await response.json();
-          return body.ready === true && body.fixturePid === child.pid;
-        } catch { return false; }
-      }, { timeout: 30000, intervals: [100, 250, 500] }).toBe(true);
-    } catch (error) {
-      await shutdownOwnedChild(child);
-      throw new Error(`Owned API fixture did not become ready (owned PID ${child.pid}): ${String(error)}\n${fixtureOutput}\n${fixtureError}`);
-    }
+    child = await startOwnedPythonFixture(request, 'tests.integration.artifact_preview_http_fixture', 'workspace-preview');
   });
-
-  test.afterAll(async () => { await shutdownOwnedChild(child); });
+  test.afterAll(async () => { await stopOwnedPythonFixture(child); });
 
   test('renders actual CJK bytes read-only with local Monaco and releases its workers', async ({ page, request }, testInfo) => {
     const calls = await openMission(page);

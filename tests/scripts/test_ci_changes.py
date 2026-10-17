@@ -165,6 +165,18 @@ class CiChangeSelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["frontend"])
 
+    def test_chat_cursor_and_real_fixture_select_the_browser_consumer(self) -> None:
+        for path in (
+            "app/repositories/mission_event_cursor.py",
+            "app/repositories/mission_repository.py",
+            "tests/integration/mission_chat_http_fixture.py",
+            "tests/integration/mission_chat_driver.py",
+            "tests/integration/test_mission_chat_http_fixture.py",
+            "tests/integration/test_mission_sse_cursor_sqlite.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(select_checks([path])["frontend"])
+
     def test_invalid_base_is_an_error_instead_of_omitting_checks(self) -> None:
         root = Path(__file__).resolve().parents[2]
         result = subprocess.run(

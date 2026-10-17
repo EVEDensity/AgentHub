@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useMissionExecutionStatus, type ExecutionUnitStatus } from '../../hooks/useMissionExecutionStatus';
+import { useEffect, useState } from 'react';
+import { useMissionExecutionStatus, type ExecutionUnitStatus, type MissionExecutionReadState } from '../../hooks/useMissionExecutionStatus';
 
 const LABELS: Record<string, string> = {
   waiting_runner: '等待 Runner 连接，任务尚未执行',
@@ -24,12 +24,20 @@ export function executionUnitLabel(unit: ExecutionUnitStatus, now = Date.now()):
   return LABELS[unit.reason] ?? '执行状态待确认';
 }
 
-export default function MissionExecutionBanner({ missionId, token, authHeaders, onCancel }: {
+export default function MissionExecutionBanner({ missionId, token, authHeaders, onCancel, status }: {
   missionId: string | null; token?: string; authHeaders: () => Record<string, string>;
   onCancel?: () => Promise<boolean>;
+  status?: MissionExecutionReadState;
 }) {
-  const { data, error, retry } = useMissionExecutionStatus(missionId, token, authHeaders);
+  const ownStatus = useMissionExecutionStatus(status ? null : missionId, token, authHeaders);
+  const { data, error, retry } = status ?? ownStatus;
+  const [now, setNow] = useState(Date.now);
   const [cancelling, setCancelling] = useState(false);
+  useEffect(() => {
+    if (!data || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(data.missionStatus)) return;
+    const timer = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(timer);
+  }, [data]);
   if (!missionId) return null;
   return (
     <section aria-label="Mission 执行状态" className="border-b border-warm-150 px-6 py-3 text-sm" aria-live="polite">
@@ -37,12 +45,14 @@ export default function MissionExecutionBanner({ missionId, token, authHeaders, 
         <div role="alert" className="text-danger-600">
           {error} <button type="button" onClick={retry} className="ml-2 underline">重试读取状态</button>
         </div>
-      ) : !data ? '正在读取任务状态…' : data.workUnits.length === 0 ? LABELS[data.missionStatus.toLowerCase()] ?? '等待任务派发' : data.workUnits.map(unit => (
+      ) : !data ? '正在读取任务状态…' : <>
+      {data.missionStatus === 'WAITING_DECISION' && <p className="font-medium">等待人工决策</p>}
+      {data.workUnits.length === 0 ? LABELS[data.missionStatus.toLowerCase()] ?? '等待任务派发' : data.workUnits.map(unit => (
         <div key={unit.workUnitId}>
-          <span>{unit.assignedAgentId ?? '未绑定执行器'} · {executionUnitLabel(unit)}</span>
+          <span>{unit.assignedAgentId ?? '未绑定执行器'} · {executionUnitLabel(unit, now)}</span>
           <span className="ml-2 text-xs text-warm-500">{unit.status}</span>
         </div>
-      ))}
+      ))}</>}
       {data && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(data.missionStatus) && onCancel && (
         <button type="button" disabled={cancelling} className="mt-2 underline" onClick={() => {
           setCancelling(true);

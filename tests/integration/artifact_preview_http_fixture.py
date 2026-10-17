@@ -139,7 +139,8 @@ def build_fixture_app() -> FastAPI:
 
     @app.get("/fixture/health")
     async def health() -> dict:
-        return {"ready": True, "fixturePid": os.getpid(), "reads": dict(app.state.exporter.reads)}
+        return {"ready": True, "fixturePid": os.getpid(), "workspaceId": WORKSPACE_ID,
+                "reads": dict(app.state.exporter.reads)}
 
     return app
 

@@ -16,6 +16,14 @@ Mission and WorkUnit semantics are defined by the domain and API contracts.
 A2A and MCP schemas describe integration boundaries and must map to those
 objects without duplicating their lifecycle.
 
+Mission SSE event IDs are stable identities; aggregate sequence numbers are
+local to a Mission or WorkUnit. HTTP resume resolves a sequence only for an
+event from the authorized Mission's own Mission aggregate. WorkUnit, foreign
+or unknown cursor IDs safely replay, and consumers deduplicate stable IDs.
+The existing recent WorkUnit window is bounded and is not a complete historical
+transcript. No v1 event schema or persistence migration is introduced by this
+correction; see [ADR-0129](../docs/architecture/decisions/0129-mission-assistant-ui-projection.md).
+
 `decision.schema.json` is the durable human-governance projection. It binds a
 Mission and WorkUnit attempt to immutable context, offered resolutions, and an
 optimistically versioned lifecycle. Protocol adapters and verifiers may expose

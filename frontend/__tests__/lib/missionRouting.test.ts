@@ -12,6 +12,7 @@ async function rewrites(env: Record<string, string>) {
 it('routes Mission projections and bytes to their owner even under the Go API profile', async () => {
   const rules = await rewrites({ API_BACKEND: 'go', GO_GATEWAY_URL: 'http://gateway.test:8081', MISSION_CONTROL_URL: 'http://control.test:8000' });
   expect(rules[0]).toEqual({ source: '/api/v1/missions/:path*', destination: 'http://control.test:8000/api/v1/missions/:path*' });
+  expect(rules.find(rule => rule.source === '/api/v1/chat/:path*')?.destination).toBe('http://control.test:8000/api/v1/chat/:path*');
   expect(rules.find(rule => rule.source === '/api/:path*')?.destination).toBe('http://gateway.test:8081/api/:path*');
 });
 

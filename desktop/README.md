@@ -43,7 +43,14 @@ local Monaco code preview, documented in
 [ADR-0128](../docs/architecture/decisions/0128-registered-artifact-text-preview.md).
 The existing public-asset copy carries its generated editor, worker and license
 files into the standalone bundle. This source integration does not establish a
-new packaged WebView2 verification record. Future chat and log-viewer components
+new packaged WebView2 verification record. The same shared source now includes
+the UI-2a assistant-ui Mission dialog, replacing the admin public-gateway chat
+and simulated typing with admission, bounded observations and real cancellation.
+Closing pauses observation and leaves accepted server work running; no native
+session/permission/model authority is added. See
+[ADR-0129](../docs/architecture/decisions/0129-mission-assistant-ui-projection.md).
+This is also source/browser integration, not a new packaged release record.
+Future main-conversation and log-viewer components
 follow the [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
 The
 dependency-free `ui/` shell keeps bootstrap, service lifecycle, diagnostics and

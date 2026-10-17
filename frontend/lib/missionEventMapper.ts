@@ -14,6 +14,8 @@
 import type { MissionEvent } from '../types';
 
 export interface ChatRenderEvent {
+  /** Original ledger type; observations do not grant execution or acceptance. */
+  eventType?: string;
   /** Stable ledger identity for reconnect deduplication. */
   eventId?: string;
   /** Mission/chat turn id — useful for grouping bubbles. */

@@ -40,6 +40,15 @@ requires these browser cases to exist, pass and not skip, and uploads JUnit.
 It verifies local Monaco/assets, read-only CJK/HTML source, actual Worker cleanup,
 empty/limited/sensitive objects and authorization/network retries without writes.
 This is browser coverage, not a packaged Desktop/WebView2 release result.
+The UI-2a assistant suite separately starts an owned real SQLite/Harness HTTP
+fixture on that same baked loopback endpoint. Browser files run with one worker
+so independent fixture owners do not collide. All eleven assistant cases must
+exist and pass without skips: no-Runner admission, actual text/VERIFYING, lease
+expiry, pending rules, Decision navigation, cancellation, authorization/network
+failures, pause/resume, cursor deduplication and scope reset. Production Mission
+and chat requests are never fulfilled by Playwright fixtures. Fixture model text
+is deterministic and creates no PASS Evidence. This is not paid-provider or
+complete transcript-recovery evidence.
 The same job installs the VS Code extension's locked dependencies, compiles its
 TypeScript and runs its HTTP client and webview contract tests. API schema
 DTO changes also select those frontend consumers. Go changes and sandbox image
