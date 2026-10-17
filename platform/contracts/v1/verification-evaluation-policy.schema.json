@@ -25,7 +25,8 @@
         "artifact-set.v2",
         "test-run.v1",
         "build-artifact.v1",
-        "security-scan.v1"
+        "security-scan.v1",
+        "trusted-test-run.v1"
       ]
     },
     "configurationDigest": {
@@ -317,6 +318,76 @@
                 "maximum": 5
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "evaluator"
+        ],
+        "properties": {
+          "evaluator": {
+            "const": "trusted-test-run.v1"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "minimumTestResults": {
+                "const": 1,
+                "title": "Minimumtestresults",
+                "type": "integer"
+              },
+              "minimumPassRate": {
+                "maximum": 1,
+                "minimum": 0,
+                "title": "Minimumpassrate",
+                "type": "number"
+              },
+              "expectedInputSnapshotDigest": {
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "title": "Expectedinputsnapshotdigest",
+                "type": "string"
+              },
+              "testProfileDigest": {
+                "pattern": "^sha256:[a-f0-9]{64}$",
+                "title": "Testprofiledigest",
+                "type": "string"
+              },
+              "producerId": {
+                "maxLength": 255,
+                "minLength": 1,
+                "title": "Producerid",
+                "type": "string"
+              },
+              "keyId": {
+                "maxLength": 255,
+                "minLength": 1,
+                "title": "Keyid",
+                "type": "string"
+              },
+              "executionMode": {
+                "const": "trusted-local",
+                "title": "Executionmode",
+                "type": "string"
+              }
+            },
+            "required": [
+              "minimumTestResults",
+              "minimumPassRate",
+              "expectedInputSnapshotDigest",
+              "testProfileDigest",
+              "producerId",
+              "keyId",
+              "executionMode"
+            ],
+            "title": "TrustedTestParameters",
+            "type": "object"
           }
         }
       }

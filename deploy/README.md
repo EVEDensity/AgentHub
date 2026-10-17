@@ -10,6 +10,36 @@ Community deployment should not require the full enterprise service topology.
 Do not use deployment configuration to silently change domain semantics. A
 feature unavailable in a deployment must fail explicitly and be observable.
 
+The explicit [OpenSandbox experiment](opensandbox/README.md) pins upstream
+runtime/workload digests and provides a disposable Linux conformance command.
+It is not enabled by the normal Compose stack or selected as a default Runner
+backend. Its authentication, execution and cleanup gate must pass before wider
+adoption; it does not establish team-production isolation.
+
+## Default development boundary
+
+`docker-compose.platform.yml` is a local development topology. Published ports
+bind to `127.0.0.1`; they are not a supported public or multi-tenant deployment.
+The normal frontend/session/Gateway projection does not require the optional
+legacy execution and knowledge services.
+
+`--profile legacy-experimental` explicitly opts into the old orchestrator/runtime,
+model adapter, knowledge ingestion/retrieval, document pipeline, summarization,
+evaluation and their dedicated stores. These services still have unverified
+tenant/data/real-provider boundaries and must remain disabled in team deployment.
+Enabling that profile is for isolated development, not an isolation guarantee.
+
+`--profile iam-admin` enables privileged IAM administration only after a distinct
+mounted operator token and JWT signing key are provisioned. IAM has no published
+host port; all management endpoints require the operator service credential.
+See [the IAM service guide](../services/go/iam-service/README.md). Stopping either
+profile prevents new service activity without changing durable Mission state.
+
+The default Go sandbox must report Docker unavailability as failure. It does not
+provide a successful simulated fallback. See
+[the sandbox guide](../services/go/sandbox-service/README.md) for supported
+network and execution limits.
+
 ## Local Decision expiry supervision
 
 The Decision expiry supervisor is available only through the explicit

@@ -1,4 +1,4 @@
-"""Version-4 to version-5 local upgrades include observation DDL and marker."""
+"""Version-4 local profiles gain presence and the current additive schema."""
 from __future__ import annotations
 
 import tempfile
@@ -34,7 +34,7 @@ class RunnerPresenceSQLiteMigrationTests(unittest.IsolatedAsyncioTestCase):
         await self._initialize()
         await self._initialize()
         async with self.pool.acquire() as connection:
-            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), 5)
+            self.assertEqual(await connection.fetchval("SELECT MAX(version) FROM schema_migrations"), 6)
             self.assertEqual(await connection.fetchval("SELECT value FROM user_notes"), "keep my data")
             self.assertEqual(await connection.fetchval("SELECT COUNT(*) FROM runner_presence"), 0)
 

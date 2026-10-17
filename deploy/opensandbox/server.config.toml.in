@@ -1,0 +1,42 @@
+# Generated only for the disposable Linux Docker PoC. The key is environment-only.
+[server]
+host = "127.0.0.1"
+port = 18080
+max_sandbox_timeout_seconds = 300
+
+[runtime]
+type = "docker"
+execd_image = "@EXECD_IMAGE@"
+
+[proxy]
+resolve_internal = true
+
+[docker]
+network_mode = "bridge"
+host_ip = "127.0.0.1"
+publish_host = "127.0.0.1"
+port_range_min = 45000
+port_range_max = 45120
+api_timeout = 30
+pids_limit = 256
+no_new_privileges = true
+drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+
+[storage]
+# No host volume is requested by the PoC. An empty list would allow all paths.
+allowed_host_paths = ["/nonexistent/agenthub-opensandbox-poc-disabled"]
+
+[store]
+type = "sqlite"
+path = "/poc-state/server.db"
+
+[egress]
+image = "@EGRESS_IMAGE@"
+mode = "dns+nft"
+readiness_timeout_seconds = 30
+
+[renew_intent]
+enabled = false
+
+[otel]
+enabled = false

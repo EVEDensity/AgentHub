@@ -28,6 +28,7 @@ class SessionWorkspaceSQLiteTests(unittest.IsolatedAsyncioTestCase):
 
     async def _legacy_profile(self):
         async with self.pool.acquire() as connection:
+            await connection.execute("CREATE TABLE mission_contracts(id TEXT, version INTEGER, PRIMARY KEY(id,version))")
             await connection.execute("INSERT INTO schema_migrations VALUES(3,'old-version')")
             await connection.execute("""CREATE TABLE sessions(
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'group',

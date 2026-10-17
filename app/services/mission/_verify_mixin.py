@@ -50,6 +50,7 @@ from app.services.evidence_integrity_service import (
     EvidenceIntegrityMaterial,
     Sha256EvidenceIntegrityHasher,
 )
+from app.services.trusted_tests.admission import require_complete_attempt_artifacts
 from app.services.verification_evaluator_service import (
     StrictVerificationEvaluator,
     VerificationEvaluationResult,
@@ -146,6 +147,9 @@ class MissionVerifyMixin:
                 criterion_id=criterion_id,
                 configuration_digest=configuration_digest,
             )
+            await require_complete_attempt_artifacts(
+                self._repository, evaluation_plan, work_unit, tuple(artifacts),
+            )
         if self._artifact_byte_verifier is None:
             raise ArtifactBytesUnavailableError(
                 "artifact byte verifier is not configured"
@@ -206,6 +210,9 @@ class MissionVerifyMixin:
                     artifacts=tuple(current_artifacts),
                     criterion_id=criterion_id,
                     configuration_digest=configuration_digest,
+                )
+                await require_complete_attempt_artifacts(
+                    repository, current_plan, work_unit, tuple(current_artifacts),
                 )
                 current_evaluation = self._verification_evaluator.evaluate(
                     current_plan,

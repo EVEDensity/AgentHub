@@ -2,7 +2,7 @@
 //
 // Provides HTTP REST API for managing isolated Docker containers used as
 // Agent code-execution sandboxes. Supports seccomp profiles, resource
-// quotas (CPU/memory/disk), and command execution with result capture.
+// limits (CPU/memory), and command execution with result capture.
 //
 // Endpoints:
 //   GET    /containers          — list all sandbox containers
@@ -15,9 +15,9 @@
 //   GET    /containers/{id}/logs   — get execution logs
 //   GET    /stats               — aggregate stats
 //   GET    /healthz             — health check
+//   GET    /readyz              — Docker readiness check
 //
-// When DOCKER_SOCKET is not set or unreachable, the service degrades
-// gracefully to noop mode (in-memory simulation) for development.
+// Unavailable Docker fails closed. Only network=none is currently supported.
 
 package main
 
@@ -25,6 +25,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -42,24 +43,32 @@ import (
 
 type sandboxServer struct {
 	mu         sync.RWMutex
-	docker     *docker.Client
+	docker     dockerBackend
 	containers map[string]*docker.ContainerInfo // keyed by container ID
 	execLogs   map[string][]execLogEntry        // keyed by container ID
 	totalExecs int
 
-	// Noop mode counters
-	noopContainerSeq int
+	containerSeq int
+}
+
+type dockerBackend interface {
+	Ping(context.Context) error
+	Create(context.Context, docker.ContainerConfig) (*docker.ContainerInfo, error)
+	Start(context.Context, string) error
+	Stop(context.Context, string) error
+	Remove(context.Context, string) error
+	Exec(context.Context, string, string) (*docker.ExecResult, error)
 }
 
 type execLogEntry struct {
-	ID         string `json:"id"`
+	ID          string `json:"id"`
 	ContainerID string `json:"container_id"`
-	Command    string `json:"command"`
-	ExitCode   int    `json:"exit_code"`
-	Stdout     string `json:"stdout"`
-	Stderr     string `json:"stderr"`
-	DurationMs int64  `json:"duration_ms"`
-	ExecutedAt string `json:"executed_at"`
+	Command     string `json:"command"`
+	ExitCode    int    `json:"exit_code"`
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+	DurationMs  int64  `json:"duration_ms"`
+	ExecutedAt  string `json:"executed_at"`
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -71,29 +80,17 @@ func main() {
 	}
 
 	seccompProfile := os.Getenv("SANDBOX_SECCOMP_PROFILE")
-	if seccompProfile == "" {
-		seccompProfile = "/etc/agenthub/seccomp.json" // default custom profile path
-	}
-	// If the custom profile doesn't exist, use Docker's built-in default.
-	if _, err := os.Stat(seccompProfile); os.IsNotExist(err) {
-		log.Printf("sandbox-service: custom seccomp profile %s not found — using Docker default", seccompProfile)
-		seccompProfile = ""
-	}
 
-	// Try to connect to Docker; fall back to noop if unreachable
+	// Keep the real client on failure so readiness can recover when Docker does.
+	// Operations still fail; there is no simulated execution backend.
 	dc := docker.NewClient(socketPath, seccompProfile)
-	if !dc.IsNoop() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := dc.Ping(ctx); err != nil {
-			log.Printf("sandbox-service: Docker daemon unreachable (%v) — switching to noop mode", err)
-			dc = docker.NewClient("", seccompProfile) // re-create in noop mode
-		} else {
-			log.Printf("sandbox-service: connected to Docker at %s (seccomp=%s)", socketPath, seccompProfile)
-		}
+	probeCtx, cancelProbe := context.WithTimeout(context.Background(), 3*time.Second)
+	if err := dc.Ping(probeCtx); err != nil {
+		log.Printf("sandbox-service: Docker unavailable (%v); execution is disabled until readiness recovers", err)
 	} else {
-		log.Println("sandbox-service: running in noop (in-memory) mode")
+		log.Printf("sandbox-service: connected to Docker at %s", socketPath)
 	}
+	cancelProbe()
 
 	srv := &sandboxServer{
 		docker:     dc,
@@ -103,6 +100,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealthz)
+	mux.HandleFunc("/readyz", srv.handleReadyz)
 	mux.HandleFunc("/containers", srv.handleContainers)
 	mux.HandleFunc("/containers/", srv.handleContainerByID)
 	mux.HandleFunc("/stats", srv.handleStats)
@@ -132,17 +130,26 @@ func main() {
 // ── Handlers ─────────────────────────────────────────────────────────
 
 func (s *sandboxServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	mode := "noop"
-	if !s.docker.IsNoop() {
-		mode = "docker"
+	writeJSON(w, http.StatusOK, map[string]string{"status": "alive"})
+}
+
+func (s *sandboxServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if getenv("SANDBOX_NETWORK_ALLOW", "none") != "none" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "ready": false, "mode": "unavailable"})
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
-		"mode":   mode,
-	})
+	if err := s.docker.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "ready": false, "mode": "unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "ready": true, "mode": "docker"})
 }
 
 func (s *sandboxServer) handleContainers(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
 	switch r.Method {
 	case http.MethodGet:
 		// List all containers
@@ -173,6 +180,14 @@ func (s *sandboxServer) handleContainers(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id is required"})
 			return
 		}
+		if len(req.NetworkAllow) > 0 {
+			writeFailure(w, http.StatusUnprocessableEntity, docker.ErrNetworkPolicyUnsupported)
+			return
+		}
+		if err := s.docker.Ping(ctx); err != nil {
+			writeFailure(w, http.StatusServiceUnavailable, errors.New("Docker is unavailable"))
+			return
+		}
 		if req.TenantID == "" {
 			req.TenantID = "default"
 		}
@@ -192,28 +207,23 @@ func (s *sandboxServer) handleContainers(w http.ResponseWriter, r *http.Request)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
-		s.noopContainerSeq++
-		containerName := fmt.Sprintf("ah-sandbox-%s-%d", req.AgentID, s.noopContainerSeq)
+		s.containerSeq++
+		containerName := fmt.Sprintf("ah-sandbox-%s-%d", req.AgentID, s.containerSeq)
 
-		network := "none"
-		if len(req.NetworkAllow) > 0 {
-			network = "bridge"
-		}
-
-		info, err := s.docker.Create(docker.ContainerConfig{
-			Name:        containerName,
-			Image:       req.Image,
-			AgentID:     req.AgentID,
-			TenantID:    req.TenantID,
-			CPU:         req.CPULimit,
-			MemoryMB:    req.MemoryMB,
-			DiskMB:      req.DiskMB,
-			Network:     network,
+		info, err := s.docker.Create(ctx, docker.ContainerConfig{
+			Name:         containerName,
+			Image:        req.Image,
+			AgentID:      req.AgentID,
+			TenantID:     req.TenantID,
+			CPU:          req.CPULimit,
+			MemoryMB:     req.MemoryMB,
+			DiskMB:       req.DiskMB,
+			Network:      "none",
 			NetworkAllow: req.NetworkAllow,
 		})
 		if err != nil {
 			log.Printf("sandbox-service: create container failed: %v", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "container creation failed: " + err.Error()})
+			writeExecutionFailure(w, err)
 			return
 		}
 
@@ -229,6 +239,8 @@ func (s *sandboxServer) handleContainers(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
 	// Parse: /containers/{id}[/{action}]
 	path := strings.TrimPrefix(r.URL.Path, "/containers/")
 	parts := strings.SplitN(path, "/", 2)
@@ -248,6 +260,12 @@ func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Reque
 	}
 
 	switch {
+	case info.Status == "failed" && r.Method == http.MethodPost:
+		// Unconfirmed exec/cleanup permanently invalidates this container.
+		// Start or stop must not erase that fence if Docker later recovers.
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "failed container must be deleted"})
+		return
+
 	case r.Method == http.MethodGet && action == "logs":
 		logs, _ := s.execLogs[containerID]
 		writeJSON(w, http.StatusOK, logs)
@@ -256,15 +274,9 @@ func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusOK, info)
 
 	case r.Method == http.MethodPost && action == "start":
-		if err := s.docker.Start(containerID); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if err := s.docker.Start(ctx, containerID); err != nil {
+			writeExecutionFailure(w, err)
 			return
-		}
-		// Apply network egress policy if the container has allowlisted hosts.
-		if len(info.NetworkAllow) > 0 {
-			if err := s.docker.ApplyNetworkPolicy(containerID, info.NetworkAllow); err != nil {
-				log.Printf("sandbox-service: network policy warning for %s: %v", containerID, err)
-			}
 		}
 		info.Status = "running"
 		now := time.Now()
@@ -272,8 +284,8 @@ func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusOK, map[string]string{"status": "started"})
 
 	case r.Method == http.MethodPost && action == "stop":
-		if err := s.docker.Stop(containerID); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if err := s.docker.Stop(ctx, containerID); err != nil {
+			writeExecutionFailure(w, err)
 			return
 		}
 		info.Status = "stopped"
@@ -282,6 +294,7 @@ func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Reque
 	case r.Method == http.MethodPost && action == "exec":
 		var req struct {
 			Command string `json:"command"`
+			Timeout int    `json:"timeout"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
@@ -297,15 +310,23 @@ func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		result, err := s.docker.Exec(containerID, req.Command)
+		execCtx, cancelExec := context.WithTimeout(r.Context(), executionTimeout(req.Timeout))
+		defer cancelExec()
+		result, err := s.docker.Exec(execCtx, containerID, req.Command)
 		if err != nil {
 			log.Printf("sandbox-service: exec in %s failed: %v", containerID, err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			// An interrupted HTTP stream does not terminate Docker exec. Force
+			// removal with an independent deadline before admitting more work.
+			info.Status = "failed"
+			if cleanupErr := s.removeContainer(containerID); cleanupErr != nil {
+				log.Printf("sandbox-service: failed execution cleanup for %s: %v", containerID, cleanupErr)
+			}
+			writeExecutionFailure(w, err)
 			return
 		}
 
 		entry := execLogEntry{
-			ID:          fmt.Sprintf("exec-%s-%d", containerID[:8], len(s.execLogs[containerID])),
+			ID:          fmt.Sprintf("exec-%s-%d", containerID, len(s.execLogs[containerID])),
 			ContainerID: containerID,
 			Command:     req.Command,
 			ExitCode:    result.ExitCode,
@@ -320,8 +341,9 @@ func (s *sandboxServer) handleContainerByID(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusOK, entry)
 
 	case r.Method == http.MethodDelete:
-		if err := s.docker.Remove(containerID); err != nil {
-			log.Printf("sandbox-service: remove container %s warning: %v", containerID, err)
+		if err := s.docker.Remove(ctx, containerID); err != nil {
+			writeExecutionFailure(w, err)
+			return
 		}
 		delete(s.containers, containerID)
 		delete(s.execLogs, containerID)
@@ -384,7 +406,9 @@ func (s *sandboxServer) handleStats(w http.ResponseWriter, r *http.Request) {
 // Python SandboxExecutor calls this endpoint in "remote" mode.
 //
 // POST /v1/execute
-//   {"code": "print('hi')", "language": "python", "timeout": 30, "image": ""}
+//
+//	{"code": "print('hi')", "language": "python", "timeout": 30, "image": ""}
+//
 // → {"success": true, "stdout": "hi\n", "stderr": "", "exit_code": 0, "duration_ms": 150}
 func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -393,10 +417,11 @@ func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req struct {
-		Code     string `json:"code"`
-		Language string `json:"language"`
-		Timeout  int    `json:"timeout"`
-		Image    string `json:"image"`
+		Code         string   `json:"code"`
+		Language     string   `json:"language"`
+		Timeout      int      `json:"timeout"`
+		Image        string   `json:"image"`
+		NetworkAllow []string `json:"network_allow"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
@@ -404,6 +429,10 @@ func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) 
 	}
 	if req.Code == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "code is required"})
+		return
+	}
+	if len(req.NetworkAllow) > 0 {
+		writeFailure(w, http.StatusUnprocessableEntity, docker.ErrNetworkPolicyUnsupported)
 		return
 	}
 
@@ -419,12 +448,8 @@ func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.Timeout <= 0 {
-		req.Timeout = 30
-	}
-	if req.Timeout > 300 {
-		req.Timeout = 300 // hard cap 5 min
-	}
+	ctx, cancel := context.WithTimeout(r.Context(), executionTimeout(req.Timeout))
+	defer cancel()
 
 	image := req.Image
 	if image == "" {
@@ -433,6 +458,14 @@ func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) 
 	cpuLimit := getenvFloat("SANDBOX_CPU_LIMIT", 1.0)
 	memMB := getenvInt("SANDBOX_MEMORY_MB", 512)
 	networkAllow := getenv("SANDBOX_NETWORK_ALLOW", "none")
+	if networkAllow != "none" {
+		writeFailure(w, http.StatusServiceUnavailable, docker.ErrNetworkPolicyUnsupported)
+		return
+	}
+	if err := s.docker.Ping(ctx); err != nil {
+		writeFailure(w, http.StatusServiceUnavailable, errors.New("Docker is unavailable"))
+		return
+	}
 
 	// Build the exec command. Base64-encode the code to avoid all shell
 	// escaping issues (quotes, newlines, special chars).
@@ -446,82 +479,55 @@ func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) 
 
 	// ── Create container ───────────────────────────────────────────────
 	s.mu.Lock()
-	s.noopContainerSeq++
-	containerName := fmt.Sprintf("ah-exec-%d-%d", time.Now().UnixNano(), s.noopContainerSeq)
+	s.containerSeq++
+	containerName := fmt.Sprintf("ah-exec-%d-%d", time.Now().UnixNano(), s.containerSeq)
 	s.mu.Unlock()
 
-	var networkAllowSlice []string
-	if networkAllow != "none" && networkAllow != "" {
-		networkAllowSlice = strings.Split(networkAllow, ",")
-	}
-
-	networkMode := "none"
-	if len(networkAllowSlice) > 0 {
-		networkMode = "bridge"
-	}
-
-	info, err := s.docker.Create(docker.ContainerConfig{
-		Name:         containerName,
-		Image:        image,
-		AgentID:      "v1-exec",
-		TenantID:     "default",
-		CPU:          cpuLimit,
-		MemoryMB:     memMB,
-		DiskMB:       10240,
-		Network:      networkMode,
-		NetworkAllow: networkAllowSlice,
+	info, err := s.docker.Create(ctx, docker.ContainerConfig{
+		Name:     containerName,
+		Image:    image,
+		AgentID:  "v1-exec",
+		TenantID: "default",
+		CPU:      cpuLimit,
+		MemoryMB: memMB,
+		DiskMB:   10240,
+		Network:  "none",
 	})
 	if err != nil {
 		log.Printf("sandbox-service /v1/execute: create failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"success": false,
-			"error":   "container creation failed: " + err.Error(),
-		})
+		writeExecutionFailure(w, err)
 		return
 	}
 
 	// Cleanup: always destroy the container after exec
+	removed := false
 	defer func() {
-		if err := s.docker.Remove(info.ID); err != nil {
-			log.Printf("sandbox-service /v1/execute: cleanup warning for %s: %v", info.ID, err)
+		if !removed {
+			if err := s.removeContainer(info.ID); err != nil {
+				log.Printf("sandbox-service /v1/execute: cleanup failed for %s: %v", info.ID, err)
+			}
 		}
-		s.mu.Lock()
-		delete(s.containers, info.ID)
-		delete(s.execLogs, info.ID)
-		s.mu.Unlock()
 	}()
 
 	// ── Start container ────────────────────────────────────────────────
-	if err := s.docker.Start(info.ID); err != nil {
+	if err := s.docker.Start(ctx, info.ID); err != nil {
 		log.Printf("sandbox-service /v1/execute: start failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"success":   false,
-			"error":     "container start failed: " + err.Error(),
-			"container": info.ID,
-		})
+		writeExecutionFailure(w, err)
 		return
-	}
-
-	// ── Apply network egress policy ───────────────────────────────────
-	if len(networkAllowSlice) > 0 {
-		if err := s.docker.ApplyNetworkPolicy(info.ID, networkAllowSlice); err != nil {
-			log.Printf("sandbox-service /v1/execute: network policy warning for %s: %v", info.ID, err)
-			// Non-fatal — container still runs but with unrestricted network.
-			// This degrades gracefully: the policy is best-effort.
-		}
 	}
 
 	// ── Exec code ─────────────────────────────────────────────────────
-	result, err := s.docker.Exec(info.ID, execCmd)
+	result, err := s.docker.Exec(ctx, info.ID, execCmd)
 	if err != nil {
 		log.Printf("sandbox-service /v1/execute: exec failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"success":   false,
-			"error":     "exec failed: " + err.Error(),
-			"container": info.ID,
-		})
+		writeExecutionFailure(w, err)
 		return
 	}
+	if err := s.removeContainer(info.ID); err != nil {
+		writeFailure(w, http.StatusBadGateway, errors.New("execution finished but container cleanup failed"))
+		return
+	}
+	removed = true
 
 	s.mu.Lock()
 	s.totalExecs++
@@ -534,11 +540,41 @@ func (s *sandboxServer) handleV1Execute(w http.ResponseWriter, r *http.Request) 
 		"exit_code":    result.ExitCode,
 		"duration_ms":  result.DurationMs,
 		"container_id": info.ID,
-		"mode":         "remote",
+		"mode":         "docker",
 	})
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+func executionTimeout(seconds int) time.Duration {
+	if seconds <= 0 {
+		seconds = 30
+	}
+	if seconds > 300 {
+		seconds = 300
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func (s *sandboxServer) removeContainer(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.docker.Remove(ctx, id)
+}
+
+func writeFailure(w http.ResponseWriter, status int, err error) {
+	writeJSON(w, status, map[string]any{"success": false, "exit_code": -1, "error": err.Error()})
+}
+
+func writeExecutionFailure(w http.ResponseWriter, err error) {
+	status := http.StatusBadGateway
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		status = http.StatusGatewayTimeout
+	} else if errors.Is(err, docker.ErrUnavailable) {
+		status = http.StatusServiceUnavailable
+	}
+	writeFailure(w, status, err)
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

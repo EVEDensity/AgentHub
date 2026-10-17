@@ -3,6 +3,7 @@
  * SSE connection state never establishes whether a WorkUnit is executing.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { unsupportedMissionInput, type MissionChatInput } from '../lib/missionChatInput';
 import type { ArchivistInfo } from '../types';
 import type { ChatRenderEvent } from '../lib/missionEventMapper';
 import { missionCommand, readMissionStream } from '../lib/missionStream';
@@ -129,10 +130,17 @@ export function useMissionChat(options: MissionChatOptions) {
     }
   }, [options.token, key, identity, authHeaders, admit]);
 
-  const sendMission = useCallback((message: string) => command('/api/v1/chat/mission', {
-    message, workspaceId: options.workspaceId ?? 'local-admin',
-    sessionId: sessionId ?? readMissionSession(key) ?? null, stream: true,
-  }), [command, options.workspaceId, sessionId, key]);
+  const sendMission = useCallback((message: string, input: MissionChatInput = {}) => {
+    const unsupported = unsupportedMissionInput(input);
+    if (unsupported) {
+      setError(unsupported);
+      return Promise.resolve(null);
+    }
+    return command('/api/v1/chat/mission', {
+      message, workspaceId: options.workspaceId ?? 'local-admin',
+      sessionId: sessionId ?? readMissionSession(key) ?? null, stream: true,
+    });
+  }, [command, options.workspaceId, sessionId, key]);
 
   const confirmPending = useCallback(() => pending ? command('/api/v1/chat/confirm', { pendingId: pending.id }) : Promise.resolve(null), [pending, command]);
   const cancel = useCallback(async () => {

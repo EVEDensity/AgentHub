@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "ArtifactLink": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "digest"
+      ],
+      "title": "ArtifactLink",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "missionId": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Missionid",
+      "type": "string"
+    },
+    "workUnitId": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Workunitid",
+      "type": "string"
+    },
+    "attempt": {
+      "maximum": 2147483647,
+      "minimum": 1,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "contractId": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Contractid",
+      "type": "string"
+    },
+    "contractVersion": {
+      "minimum": 1,
+      "title": "Contractversion",
+      "type": "integer"
+    },
+    "configurationDigest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Configurationdigest",
+      "type": "string"
+    },
+    "executionMode": {
+      "const": "trusted-local",
+      "title": "Executionmode",
+      "type": "string"
+    },
+    "inputSnapshotDigest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Inputsnapshotdigest",
+      "type": "string"
+    },
+    "candidateSnapshotDigest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Candidatesnapshotdigest",
+      "type": "string"
+    },
+    "testProfileDigest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Testprofiledigest",
+      "type": "string"
+    },
+    "manifestType": {
+      "const": "trusted-test-execution",
+      "title": "Manifesttype",
+      "type": "string"
+    },
+    "patch": {
+      "$ref": "#/$defs/ArtifactLink"
+    },
+    "report": {
+      "$ref": "#/$defs/ArtifactLink"
+    },
+    "log": {
+      "$ref": "#/$defs/ArtifactLink"
+    },
+    "receipt": {
+      "$ref": "#/$defs/ArtifactLink"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "missionId",
+    "workUnitId",
+    "attempt",
+    "contractId",
+    "contractVersion",
+    "configurationDigest",
+    "executionMode",
+    "inputSnapshotDigest",
+    "candidateSnapshotDigest",
+    "testProfileDigest",
+    "manifestType",
+    "patch",
+    "report",
+    "log",
+    "receipt"
+  ],
+  "title": "ExecutionManifest",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/execution-manifest.schema.json"
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.agenthub.dev/v1/opensandbox-execution-report.schema.json",
+  "title": "OpenSandbox execution observations; not a test verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "missionId", "workUnitId", "attempt", "backendKind", "image", "sandboxId", "jobId", "commands", "cleanupConfirmed", "timestampSource", "modelOutputTruncated", "acceptance"],
+  "properties": {
+    "schema": {"const": "agenthub.opensandbox-execution-report.v1"},
+    "missionId": {"$ref": "#/$defs/identifier"},
+    "workUnitId": {"$ref": "#/$defs/identifier"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "backendKind": {"const": "opensandbox"},
+    "image": {"type": "string", "pattern": "^docker\\.io/[a-z0-9/_.:-]+@sha256:[a-f0-9]{64}$"},
+    "sandboxId": {"$ref": "#/$defs/identifier"},
+    "jobId": {"type": "string", "format": "uuid"},
+    "commands": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/command"}},
+    "cleanupConfirmed": {"const": true},
+    "timestampSource": {"const": "host-observation"},
+    "modelOutputTruncated": {"type": "boolean"},
+    "acceptance": {"const": "artifact-integrity-only"}
+  },
+  "$defs": {
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 255},
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "scriptSha256", "commandId", "startedAt", "finishedAt", "timeoutSeconds", "exitCode", "combinedOutput", "outputStream", "outputBytes", "outputTruncated", "status"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1, "maximum": 32},
+        "scriptSha256": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "commandId": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+        "startedAt": {"type": "string", "format": "date-time"},
+        "finishedAt": {"type": "string", "format": "date-time"},
+        "timeoutSeconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 300},
+        "exitCode": {"type": ["integer", "null"], "minimum": -2147483648, "maximum": 2147483647},
+        "combinedOutput": {"type": "string", "maxLength": 1048576},
+        "outputStream": {"const": "combined"},
+        "outputBytes": {"type": "integer", "minimum": 0},
+        "outputTruncated": {"type": "boolean"},
+        "status": {"enum": ["completed", "backend_error", "output_limit", "cancelled"]},
+        "errorCode": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    }
+  }
+}

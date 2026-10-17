@@ -52,11 +52,7 @@ from app.services.runner.auth import DesktopAuthenticator
 from app.services.runner.loops import (
     MissionControlDesktopMissionSource,
     DesktopMissionSourcePort,
-    _verify_command_failure_summary,
     derive_desktop_task_work_units,
-    extract_run_commands,
-    extract_verify_commands,
-    run_verify_command,
 )
 from app.services.runner.model import (
     DesktopTaskHarnessFactory,
@@ -485,8 +481,8 @@ class DesktopLocalRunnerController:
         """Discover one VERIFYING item and submit Evidence for artifact facts.
 
         Everything runs through the Mission Control verifier API; the loop
-        only judges registered Artifact bytes (existence, non-empty size,
-        SHA-256 digest) — never its own execution result.
+        only judges registered Artifact bytes (existence, registered size and
+        SHA-256 digest). Mission objective text never authorizes a command.
         """
         verifier = self._verifier
         if verifier is None:
@@ -521,24 +517,13 @@ class DesktopLocalRunnerController:
 
         failure_reason = await self._check_artifact_facts(artifacts)
         objective = str(mission.get("objective") or "")
-        verify_commands = extract_verify_commands(objective)
-        run_commands = extract_run_commands(objective)
-        if failure_reason is None and verify_commands:
-            failure_reason = await self._run_verify_commands(verify_commands)
-        if failure_reason is None and run_commands:
-            failure_reason = await self._run_verify_commands(
-                run_commands, label="Run command"
-            )
         if failure_reason is None:
             verdict = EvidenceVerdict.PASS
             summary = (
                 f"{_DESKTOP_EVALUATOR} verified {len(artifacts)} Artifact(s): "
-                "files exist, are non-empty and byte digests match."
+                "files exist and registered sizes and SHA-256 digests match. "
+                "Output integrity only; no test commands executed."
             )
-            if verify_commands:
-                summary += " Verify command(s) passed: " + "; ".join(verify_commands)
-            if run_commands:
-                summary += " Run command(s) passed: " + "; ".join(run_commands)
         else:
             verdict = EvidenceVerdict.FAIL
             summary = f"desktop verification failed: {failure_reason}"
@@ -644,8 +629,8 @@ class DesktopLocalRunnerController:
             artifact_id = str(artifact.get("id"))
             if not isinstance(size_bytes, int) or isinstance(size_bytes, bool):
                 return f"artifact {artifact_id} has an invalid registered size"
-            if size_bytes <= 0:
-                return f"artifact {artifact_id} is empty"
+            if size_bytes < 0:
+                return f"artifact {artifact_id} has an invalid registered size"
             descriptors.append(
                 _VerificationArtifactBytes(
                     id=artifact_id,
@@ -661,29 +646,6 @@ class DesktopLocalRunnerController:
             await byte_verifier.verify_all(descriptors)
         except ArtifactByteVerificationError as exc:
             return str(exc)
-        return None
-
-    async def _run_verify_commands(
-        self,
-        commands: Sequence[str],
-        *,
-        label: str = "verify command",
-    ) -> str | None:
-        """Run declared objective commands; ``None`` means all passed.
-
-        Each command runs in the workspace root with the configured timeout;
-        the first failing command produces the Evidence summary (output tail
-        included) that drives the FAIL verdict.
-        """
-        for command in commands:
-            outcome = await run_verify_command(
-                command,
-                cwd=self._workspace_root,
-                timeout_seconds=self._settings.verify_command_timeout_seconds,
-                sandbox_enabled=self._settings.sandbox_enabled,
-            )
-            if outcome.timed_out or outcome.exit_code != 0:
-                return _verify_command_failure_summary(outcome, label=label)
         return None
 
 

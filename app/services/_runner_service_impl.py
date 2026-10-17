@@ -15,9 +15,12 @@ from app.services.harness_service import (
     HarnessExecutionContext,
     HarnessPort,
     HarnessRequest,
+    HarnessResult,
     HarnessResumeInput,
     SandboxHarness,
 )
+from app.services.mission._workspace_claim import validate_resume_mission_id
+from app.services.recovery_lock import RecoveryExecutionBusy
 from app.services.runner_client import MissionControlRunnerClient
 from app.services.runner_context_validation import (  # noqa: F401 - compatibility exports
     _A2A_INBOUND_CONTEXT_PROFILE,
@@ -58,17 +61,30 @@ from app.services.runner_protocols import (  # noqa: F401 - compatibility export
     SandboxPort,
     _LeaseContext,
 )
+from app.services.runner_recovery_scope import runner_recovery_scope
+from app.services.runner_reporting import (
+    ArtifactReportingError,
+    AttemptProgress,
+    report_result,
+)
+from app.services.runner_supervision import (
+    AttemptFence,
+    RunnerTerminalAckUncertainError,
+    bounded_cleanup,
+    supervise,
+)
 from app.services.runner_sync import run_mission_sync
-from app.services.recovery_lock import RecoveryExecutionBusy
 from app.services.tools.sandbox_executor import SandboxExecutor, SandboxResult
 from app.services.workspace_admission_service import WorkspaceClaimStatus
-from app.services.mission._workspace_claim import validate_resume_mission_id
-from app.services.runner_recovery_scope import runner_recovery_scope
 from app.services.workspace_fingerprint import (
     context_manifest_digest,
 )
 
 logger = logging.getLogger("agenthub.runner")
+
+
+class _StaleRunningClaim(RunnerControlError):
+    """Mission Control explicitly rejected the old claim's lease ownership."""
 
 
 def _validate_supported_capabilities(value: tuple[str, ...]) -> tuple[str, ...]:
@@ -278,6 +294,8 @@ class WorkUnitRunner:
             )
         except RecoveryExecutionBusy:
             return RunnerWorkspacePollResult(WorkspaceClaimStatus.CAPACITY_SATURATED, None)
+        except _StaleRunningClaim:
+            return RunnerWorkspacePollResult(WorkspaceClaimStatus.IDLE, None)
         return RunnerWorkspacePollResult(
             claim_status=claim_status,
             run_result=run_result,
@@ -419,7 +437,7 @@ class WorkUnitRunner:
             # an invalid transition and could lose the checkpoint lineage.
             current_status = str(leased.get("status") or "").upper()
             if current_status == "RUNNING":
-                started = leased
+                await self._revalidate_running_lease(mission_id, work_unit_id, lease, lease_seconds)
             else:
                 started = await self._control.start_work_unit(
                     mission_id,
@@ -429,20 +447,26 @@ class WorkUnitRunner:
                 )
                 _assert_lease_context(started, lease)
 
+            progress = AttemptProgress()
+            fence = AttemptFence(asyncio.get_running_loop().time() + timeout)
             try:
-                result = await self._execute_with_supervision(
-                    mission_id,
-                    work_unit_id,
-                    lease,
-                    code=code,
-                    language=language,
-                    timeout=timeout,
-                    cwd=cwd,
-                    lease_seconds=lease_seconds,
-                    harness=harness,
-                    resume=resume,
+                return await supervise(
+                    self._execute_and_report(
+                        mission_id, work_unit_id, lease, code=code, language=language,
+                        timeout=timeout, cwd=cwd, harness=harness, resume=resume,
+                        artifact_kind=artifact_kind, media_type=media_type, progress=progress, fence=fence,
+                    ),
+                    self._heartbeat_loop(mission_id, work_unit_id, lease, lease_seconds=lease_seconds, fence=fence),
+                    timeout=timeout, fence=fence,
                 )
             except asyncio.CancelledError:
+                if fence.terminal_kind is not None:
+                    logger.warning("Runner cancelled after %s dispatch; Mission Control state may be committed", fence.terminal_kind)
+                    raise
+                if progress.reporting:
+                    # Preserve the existing recoverable RUNNING lease after a
+                    # publication interruption; a partial bundle is not evidence.
+                    raise
                 with suppress(RunnerControlError):
                     await self._fail(
                         mission_id,
@@ -450,6 +474,10 @@ class WorkUnitRunner:
                         lease,
                         "runner execution cancelled",
                     )
+                raise
+            except RunnerTerminalAckUncertainError:
+                # Never fail an attempt after an unconfirmed terminal dispatch:
+                # the command may already have cleared its lease in MC.
                 raise
             except RunnerHeartbeatError as exc:
                 await self._fail(
@@ -461,7 +489,12 @@ class WorkUnitRunner:
                 raise RunnerExecutionError(
                     f"heartbeat supervision failed for WorkUnit {work_unit_id}"
                 ) from exc
+            except ArtifactReportingError as exc:
+                await self._fail(mission_id, work_unit_id, lease, str(exc))
+                raise
             except Exception as exc:
+                if fence.terminal_kind is not None:
+                    raise RunnerTerminalAckUncertainError("terminal command has no confirmed ACK; Mission Control state is unknown") from exc
                 await self._fail(
                     mission_id,
                     work_unit_id,
@@ -472,128 +505,51 @@ class WorkUnitRunner:
                     f"Harness execution failed for WorkUnit {work_unit_id}"
                 ) from exc
 
-            if not result.success:
-                reason = _execution_failure_reason(result)
-                failed = await self._fail(mission_id, work_unit_id, lease, reason)
-                return RunnerRunResult(
-                    success=False,
-                    work_unit=failed,
-                    artifact=None,
-                    failure_reason=reason,
-                )
+            finally:
+                if not progress.flushed:
+                    await bounded_cleanup(self._flush_supervisor_state(harness))
 
-            try:
-                published = await self._publisher.publish_bytes(result.stdout.encode())
-                artifact_id = _artifact_id(work_unit_id, lease.attempt, published.digest)
-                await self._control.register_artifact(
-                    mission_id,
-                    work_unit_id,
-                    runner_id=self._runner_id,
-                    lease_id=lease.lease_id,
-                    artifact=published,
-                    artifact_id=artifact_id,
-                    kind=artifact_kind,
-                    media_type=media_type,
-                )
-                completed = await self._control.complete_work_unit(
-                    mission_id,
-                    work_unit_id,
-                    runner_id=self._runner_id,
-                    lease_id=lease.lease_id,
-                    artifact_refs=[
-                        {"id": artifact_id, "digest": published.digest},
-                    ],
-                )
-            except Exception as exc:
-                await self._fail(
-                    mission_id,
-                    work_unit_id,
-                    lease,
-                    f"artifact reporting failed: {exc}",
-                )
-                raise RunnerExecutionError(
-                    f"artifact reporting failed for WorkUnit {work_unit_id}"
-                ) from exc
-
-            return RunnerRunResult(
-                success=True,
-                work_unit=completed,
-                artifact=published,
-            )
-
-    async def _execute_with_supervision(
-        self,
-        mission_id: str,
-        work_unit_id: str,
-        lease: _LeaseContext,
-        *,
-        code: str,
-        language: str,
-        timeout: float,
-        cwd: Path | None,
-        lease_seconds: int,
-        harness: HarnessPort,
-        resume: HarnessResumeInput | None = None,
-    ) -> SandboxResult:
-        execution_task = asyncio.create_task(
-            harness.execute(
-                HarnessRequest(
-                    code=code,
-                    language=language,
-                    timeout=timeout,
-                    cwd=cwd,
-                    execution=HarnessExecutionContext(
-                        mission_id=mission_id,
-                        work_unit_id=work_unit_id,
-                        attempt=lease.attempt,
-                    ),
-                    on_text_delta=self._on_text_delta,
-                    resume=resume,
-                    # The private journal fingerprints its actual tool workspace.
-                    # Stateless Harnesses have no recoverable workspace binding.
-                    workspace_revision=None,
-                    context_manifest_digest=context_manifest_digest(code),
-                )
-            )
-        )
-        heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(
-                mission_id,
-                work_unit_id,
-                lease,
-                lease_seconds=lease_seconds,
-            )
-        )
+    async def _revalidate_running_lease(self, mission_id, work_unit_id, lease, lease_seconds):
         try:
-            done, _ = await asyncio.wait(
-                (execution_task, heartbeat_task),
-                return_when=asyncio.FIRST_COMPLETED,
+            renewed = await self._control.heartbeat_work_unit(
+                mission_id, work_unit_id, runner_id=self._runner_id,
+                lease_id=lease.lease_id, lease_seconds=lease_seconds,
             )
-            if heartbeat_task in done:
-                heartbeat_error = heartbeat_task.exception()
-                if heartbeat_error is None:
-                    heartbeat_error = RunnerHeartbeatError(
-                        "heartbeat supervisor stopped unexpectedly"
-                    )
-                execution_task.cancel()
-                await _drain_cancelled_task(execution_task)
-                await self._flush_supervisor_state(harness)
-                if isinstance(heartbeat_error, RunnerHeartbeatError):
-                    raise heartbeat_error
-                raise RunnerHeartbeatError(
-                    "lease heartbeat failed"
-                ) from heartbeat_error
-            return execution_task.result().sandbox
-        except asyncio.CancelledError:
-            execution_task.cancel()
-            await _drain_cancelled_task(execution_task)
-            await self._flush_supervisor_state(harness)
+        except RunnerControlError as exc:
+            # Only this existing, exact server rejection proves the claim lost
+            # its lease. General Forbidden/unavailable responses remain errors.
+            if exc.http_status == 403 and exc.detail == "Active Runner lease ownership required":
+                raise _StaleRunningClaim("RUNNING claim no longer owns its lease") from exc
             raise
-        finally:
-            if not heartbeat_task.done():
-                heartbeat_task.cancel()
-            await _drain_cancelled_task(heartbeat_task)
-            await self._flush_supervisor_state(harness)
+        _assert_lease_context(renewed, lease)
+
+    async def _execute_and_report(
+        self, mission_id, work_unit_id, lease, *, code, language, timeout, cwd,
+        harness, resume, artifact_kind, media_type, progress, fence,
+    ) -> RunnerRunResult:
+        result = await harness.execute(HarnessRequest(
+            code=code, language=language, timeout=timeout, cwd=cwd,
+            execution=HarnessExecutionContext(mission_id=mission_id, work_unit_id=work_unit_id, attempt=lease.attempt),
+            on_text_delta=self._on_text_delta, resume=resume, workspace_revision=None,
+            context_manifest_digest=context_manifest_digest(code),
+        ))
+        fence.ensure_active()
+        if not isinstance(result, HarnessResult):
+            raise RunnerExecutionError("Harness returned an invalid execution result")
+        await self._flush_supervisor_state(harness)
+        fence.ensure_active()
+        progress.flushed = True
+        if not result.sandbox.success:
+            reason = _execution_failure_reason(result.sandbox)
+            fence.dispatch_terminal("fail")
+            failed = await self._fail(mission_id, work_unit_id, lease, reason)
+            return RunnerRunResult(False, failed, None, reason)
+        progress.reporting = True
+        return await report_result(
+            self._control, self._publisher, result, mission_id=mission_id,
+            work_unit_id=work_unit_id, runner_id=self._runner_id, lease=lease,
+            artifact_kind=artifact_kind, media_type=media_type, fence=fence,
+        )
 
     async def _flush_supervisor_state(self, harness: HarnessPort) -> None:
         """Flush request-scoped receipts/checkpoints before Runner exits.
@@ -621,12 +577,15 @@ class WorkUnitRunner:
         lease: _LeaseContext,
         *,
         lease_seconds: int,
+        fence: AttemptFence,
     ) -> None:
         interval = self._heartbeat_interval_seconds
         if interval is None:
             interval = min(max(lease_seconds / 3, 0.1), 30.0)
         while True:
+            fence.ensure_active()
             await asyncio.sleep(interval)
+            fence.ensure_active()
             renewed = await self._control.heartbeat_work_unit(
                 mission_id,
                 work_unit_id,
@@ -634,6 +593,7 @@ class WorkUnitRunner:
                 lease_id=lease.lease_id,
                 lease_seconds=lease_seconds,
             )
+            fence.ensure_active()
             try:
                 _assert_lease_context(renewed, lease)
             except RunnerControlError as exc:

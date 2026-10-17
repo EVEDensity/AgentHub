@@ -71,7 +71,13 @@ def test_invalid_capability_declarations_are_rejected(capabilities):
 
 @pytest.mark.asyncio
 async def test_running_claim_resumes_without_restarting_work_unit():
-    control = FakeControl()
+    class RunningControl(FakeControl):
+        async def heartbeat_work_unit(self, mission_id, work_unit_id, **kwargs):
+            await super().heartbeat_work_unit(mission_id, work_unit_id, **kwargs)
+            assert kwargs["lease_id"] == self.claim_payload["lease"]["id"]
+            return self.claim_payload
+
+    control = RunningControl()
     control.claim_payload = inbound_claim_payload()
     control.claim_payload["status"] = "RUNNING"
     resume = HarnessResumeInput(checkpoint_id="checkpoint-real-resolver-port", attempt=2)
@@ -79,7 +85,7 @@ async def test_running_claim_resumes_without_restarting_work_unit():
     poll = await runner(control, resolver=resolver).claim_ready_and_run("workspace-1")
     assert poll.run_result.success
     assert resolver.harness.requests[0].resume is resume
-    assert [name for name, _ in control.calls] == ["claim_ready", "register", "complete"]
+    assert [name for name, _ in control.calls] == ["claim_ready", "heartbeat", "register", "complete"]
 
 
 @pytest.mark.asyncio

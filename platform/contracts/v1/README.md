@@ -3,6 +3,14 @@
 This directory is the language-neutral contract boundary shared by the
 control plane, runners, adapters, and user interfaces.
 
+`execution-manifest.schema.json` and `trusted-test-receipt.schema.json` add the
+explicit `trusted-test-run.v1` execution provenance contract. They bind the
+existing test-run report to exact Contract revision/policy, snapshots, patch,
+log and producer signature. `trusted-test-producer-keys.schema.json` defines
+operator-only, profile-scoped trust configuration. These do not change the
+existing test-run v1 body or make default output-integrity acceptance semantic.
+See `app/services/trusted_tests/README.md` for registration order and limits.
+
 ## Compatibility rules
 
 - Files in `v1` use JSON Schema Draft 2020-12.

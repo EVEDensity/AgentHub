@@ -228,6 +228,15 @@ so the admin UI is a self-contained local deployment target.
 
 ## Configuration and credentials
 
+The task form uses `ui/default-contract.js`, a projection of the shared Python
+default in `app/services/default_mission_contract.py`. The cross-language
+contract test executes this projection and checks its exact protocol fields.
+Default completion means independent verification of registered output
+availability, size and SHA-256. It does not certify code correctness or actual
+test execution, and the default contract grants no tools. The existing Runner
+output kind `test-result` can contain model text; no minimum byte size is
+imposed by `artifact-set.v1`.
+
 Desktop configuration is split by sensitivity. The app configuration file
 contains only validated Mission Control and MCP endpoints, the local Artifact
 directory, and a schema version. Mission Control tokens, MCP tokens, and model
