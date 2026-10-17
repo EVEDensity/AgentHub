@@ -2,7 +2,7 @@
 
 > Status: accepted\
 > Owner: architecture and platform maintainers\
-> Last reviewed: 2026-10-17\
+> Last reviewed: 2026-10-18\
 > Scope: 开源组件选型、执行与验证边界、统一入口、多 Agent、记忆、后台触发和交付阶段\
 > Baseline: AgentHub `c318099`；外部资料核对日期 2026-10-17\
 > Related decision: [ADR-0118 accepted](../architecture/decisions/0118-composable-agent-integrations.md)
@@ -154,6 +154,71 @@ ClawXRouter 的策略思路用于研究：先实现可解释的按角色/能力�
 - [browser-use](https://github.com/browser-use/browser-use)：MIT 库，但完整 Agent 自带模型循环；确有任务质量收益时以独立 Executor 纳管，不藏在普通工具里。
 - [ACP](https://github.com/agentclientprotocol/agent-client-protocol)：后续编辑器互操作候选；是 editor-agent 协议，不替代 A2A/MCP/WorkUnit。先修现有 VS Code API，再增加该协议。
 - 首期不叠加多个 Agent 编排框架，不引入第二任务数据库、默认图谱记忆、开放插件市场或完整集群调度平台。
+
+### 5.11 Web 与 Desktop UI 组件（target）
+
+本节为后续目标，官方 GitHub 源码核对日期为 2026-10-18；未把候选库描述为已接入。
+当前 UI readiness 切片只移除管理 Terminal 的模拟命令、健康、进程、文件、环境及网络结果，
+改为没有输入框的明确未接通状态，不新增依赖、终端协议或 Desktop 壳实现。
+
+本仓库 [lockfile](../../frontend/package-lock.json) 当前锁定 Next.js 14.2.35、React 18.3.1、
+Tailwind CSS 3.4.19、`@monaco-editor/react` 4.7.0 / `monaco-editor` 0.55.1，以及
+已用于差异视图的 `react-diff-viewer-continued` 4.2.2。Monaco 依赖存在不表示编辑器已经接入。
+采用以下四组具体组件，逐片验收，不更换整套业务平台：
+
+1. **shadcn/ui：基础交互。** 审阅源码基线为 `shadcn` 2.3.0、commit
+   `c8c4027b6b192822ea2952b225ee4760cddedf0d`，
+   [包声明](https://github.com/shadcn-ui/ui/blob/c8c4027b6b192822ea2952b225ee4760cddedf0d/packages/shadcn/package.json)
+   与 [许可证](https://github.com/shadcn-ui/ui/blob/c8c4027b6b192822ea2952b225ee4760cddedf0d/LICENSE.md) 为 MIT。
+   同提交的 [示例应用](https://github.com/shadcn-ui/ui/blob/c8c4027b6b192822ea2952b225ee4760cddedf0d/apps/www/package.json)
+   使用 React 18 / Tailwind 3，可用于审阅 Dialog、Tabs、ScrollArea 的适配方式。
+   按需引入经过审核的组件源码，保留许可并适配现有 warm 设计变量；不运行 `latest` 生成器，
+   也不把此历史源码基线当作安装旧 CLI 的要求。实施 PR 重新检查所用文件及依赖安全更新并冻结来源。
+2. **assistant-ui：会话呈现。** 候选 `@assistant-ui/react` 0.15.29、commit
+   `a46d6634e7a75eddd85d51415b1a615886d4ad0e`，
+   [包声明](https://github.com/assistant-ui/assistant-ui/blob/a46d6634e7a75eddd85d51415b1a615886d4ad0e/packages/react/package.json)
+   支持 React 18 / 19，[许可证](https://github.com/assistant-ui/assistant-ui/blob/a46d6634e7a75eddd85d51415b1a615886d4ad0e/LICENSE) 为 MIT。
+   先用 [ExternalStoreRuntime](https://github.com/assistant-ui/assistant-ui/blob/a46d6634e7a75eddd85d51415b1a615886d4ad0e/apps/docs/content/docs/runtimes/custom/external-store.mdx)
+   适配现有会话投影与发送、取消命令，复用消息、工具观察和输入区域；包的 peer 声明不能代替本仓库类型及运行测试。
+   不启用其云会话作为事实源；未获后端支持的附件、重试、分支及工具执行按钮保持不可用。
+3. **Monaco：只读产物和代码审阅。** 复用已锁定的 `@monaco-editor/react` 4.7.0，
+   来源 commit `eb120e66378471315620fe5339b73ba003f199ad`
+   （[包声明，MIT](https://github.com/suren-atoyan/monaco-react/blob/eb120e66378471315620fe5339b73ba003f199ad/package.json)）；
+   `monaco-editor` 0.55.1 来源 commit `516f350bdaf7a82f6731bd128a9ec86a6e5fa47d`
+   （[包声明，MIT](https://github.com/microsoft/monaco-editor/blob/516f350bdaf7a82f6731bd128a9ec86a6e5fa47d/package.json)）。
+   先展示获授权、已登记的 Artifact 字节及其 attempt / digest，保留现有差异视图，不再叠加 CodeMirror。
+   客户端懒加载，按 [loader 配置](https://github.com/suren-atoyan/monaco-react/blob/eb120e66378471315620fe5339b73ba003f199ad/README.md#loader-config)
+   使用本地 Monaco 和 worker 资源，不能依赖默认 CDN 才能在 Desktop 打开代码。
+4. **xterm.js：真实命令观察的只读渲染。** 候选 `@xterm/xterm` 6.0.0、commit
+   `f447274f430fd22513f6adbf9862d19524471c04`，
+   [包声明](https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/package.json)
+   与 [许可证](https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/LICENSE) 为 MIT。
+   只有接通获授权的真实命令观察或日志 Artifact 后才采用，用 `disableStdin`、有界 scrollback
+   和输出截断呈现观察；不把渲染器当作已存在的终端服务。默认不允许输出自动打开链接或写剪贴板。
+   交互式终端仍需另行实现会话授权、执行隔离、限额、取消和审计合同，本节不授权浏览器直接执行。
+
+**Web 与 Desktop 的复用方式。** 组件、样式和 API 投影适配留在 `frontend/`，Web 路由与
+Desktop 当前打开的 Next.js admin 复用同一实现。Tauri 的 `desktop/ui/` 继续负责启动、升级、
+本地服务、诊断和安全凭据，不为组件引入另一套 Mission store 或 Agent runtime。
+Mission/WorkUnit 终态仍来自 Mission Control；SSE 连接、组件 runtime 的 `done` 和模型最终文本
+不能替代 Evidence 或验收。组件不得直接调用工具或凭显示中的能力名称扩权。
+
+**实施分片。** UI-0 为当前终端诚实性和不可用状态回归；UI-1 先接一个基础交互组件及只读
+Artifact 代码视图，验证本地资源和大文件边界；UI-2 再用外部 store 适配聊天，保留发送失败草稿、
+等待 Runner、租约失效、VERIFYING、Decision 及取消确认；UI-3 在真实日志读取合同完成后接只读
+xterm 观察。每片单独提交、push 并等 CI 通过，再开始下一片；没有日志合同就停留在未接通状态。
+
+**验收门槛。** 每片记录来源 commit、版本、许可和所采用文件；新增依赖使用精确 lockfile 及
+其完整性记录。运行 `npm ci`、Vitest、独立 `tsc --noEmit` 和 Next.js build，不能只靠 build
+推断类型检查已通过。Playwright 覆盖实际 API 的授权失败、空数据、网络错误、过期租约、取消和
+重连去重，确认客户端不能制造成功状态。按组件增加焦点/键盘、长会话或大文件、恶意 Markdown/ANSI、
+worker 与事件订阅释放测试，并记录包体和加载开销。Desktop 支持还须通过打包后的 WebView2
+烟测，验证离线字体/脚本/worker、现有 CSP、中文输入、缩放和窗口关闭清理；浏览器通过不等于
+Desktop 已验证。远端 CI 全绿是阶段完成条件，未运行的浏览器或 Desktop 检查必须列为缺口。
+
+**回滚。** 每片保留既有 API 合同及真实数据视图，通过退回组件提交和对应 lockfile 恢复上一个
+可用版本，无需迁移 Mission 数据。尚无真实数据通道的能力回退到明确不可用状态，不恢复模拟终端；
+失败的候选不阻塞现有消息、Artifact、Evidence 和 Decision 的读取。
 
 ## 6. 适配契约和运行流程
 

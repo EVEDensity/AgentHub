@@ -77,6 +77,20 @@ Failed add/remove/rollback/tool commands never update the view as if they had
 succeeded. MCP connection probing is unavailable until the gateway exposes a
 supported probe; the browser cannot infer connection from a configured URL.
 
+## Terminal availability and shared UI
+
+The admin Terminal is an unavailable notice with no command input or execution
+action. No terminal service is connected: it does not execute browser or server
+commands, inspect files or environment variables, or manufacture health,
+process, agent, package-manager, Git or network results. Its component tests
+cover the notice and absence of execution and transport side effects.
+
+The bundled Desktop admin view uses this same Next.js UI. Future component
+adoption is a target in the [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target),
+not an installed chat runtime, editor integration or terminal transport. Keep
+Mission state, authorization and acceptance on the existing control-plane APIs;
+shared components own presentation and interaction only.
+
 Run `npm test` and `npx tsc --noEmit` for the frontend checks. The management
 failure tests cover network and HTTP failures, while admission tests ensure
 unsupported input does not create a Mission.
