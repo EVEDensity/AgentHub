@@ -27,6 +27,7 @@ class OpenSandboxError(RuntimeError):
         self.code = code if isinstance(code, str) and code in {
             "backend_failure", "http_error", "transport_error", "transport_timeout", "request_timeout",
             "command_identity_missing", "command_start_rejected", "workspace_initialize_failed",
+            "sandbox_not_owned",
         } else "backend_failure"
         self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
         self.upstream_code = (upstream_code if isinstance(upstream_code, str)

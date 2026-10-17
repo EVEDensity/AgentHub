@@ -271,6 +271,27 @@ class OpenSandboxBackendTests(unittest.IsolatedAsyncioTestCase):
             await self.backend.execute(sandbox, ["long-run"], timeout_seconds=0.01)
         self.assertFalse(self.peer.commands[f"cmd-{self.peer.sequence}"]["running"])
 
+    async def test_timeout_before_identity_destroys_and_confirms_absence_without_fallback(self):
+        async def delayed_start(request):
+            if request.method == "POST" and request.url.path.endswith("/command"):
+                await asyncio.sleep(0.05)
+            return await self.peer(request)
+
+        backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True),
+                                     transport=httpx.MockTransport(delayed_start))
+        try:
+            sandbox = await backend.create(JOB)
+            with self.assertRaisesRegex(OpenSandboxError, "command timed out"):
+                await backend.execute(sandbox, ["long-run"], timeout_seconds=0.01)
+            self.assertNotIn(sandbox, self.peer.sandboxes)
+            self.assertEqual([(r.method, r.url.path) for r in self.peer.requests[-2:]],
+                             [("DELETE", f"/v1/sandboxes/{sandbox}"), ("GET", f"/v1/sandboxes/{sandbox}")])
+            with self.assertRaises(OpenSandboxError) as failure:
+                await backend.execute(sandbox, ["check-marker"])
+            self.assertEqual(failure.exception.diagnostic()["code"], "sandbox_not_owned")
+        finally:
+            await backend.close()
+
     async def test_transfer_refuses_active_command(self):
         sandbox = await self.backend.create(JOB)
         self.peer.next_mode = "running"

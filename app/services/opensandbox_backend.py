@@ -55,7 +55,7 @@ class OpenSandboxBackend:
     def _path(self, sandbox_id: str, suffix: str) -> str:
         sandbox_id = identifier(sandbox_id)
         if sandbox_id not in self._owned:
-            raise OpenSandboxError("sandbox is not owned by this backend")
+            raise OpenSandboxError("sandbox is not owned by this backend", code="sandbox_not_owned")
         return f"sandboxes/{sandbox_id}/proxy/44772/{suffix}"
 
     @asynccontextmanager

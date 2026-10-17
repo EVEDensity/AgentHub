@@ -59,6 +59,14 @@ only after provisioning the sidecar and distributing execd. Ordinary HTTP calls
 retain a 15-second deadline; readiness and the full experiment remain bounded.
 This deadline does not establish that a failed create was caused by a timeout.
 
+The execution-timeout check uses a two-second deadline, a child marker delayed
+five seconds, and a six-second observation wait. This leaves room to receive
+the start identity despite the pinned execd's 200ms SSE shutdown grace. Missing
+identity still destroys the sandbox; that destruction cannot pass the marker
+check. The successful run must execute the marker absence check inside the
+same sandbox after the delay. See the pinned
+[grace constant](https://github.com/opensandbox-group/OpenSandbox/blob/6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9/components/execd/pkg/flag/parser.go).
+
 The config enables bridge networking with the pinned `dns+nft` egress image.
 The HTTP adapter explicitly requests a deny policy per sandbox; configuring an
 egress image alone does not establish deny-by-default behavior. The wrapper

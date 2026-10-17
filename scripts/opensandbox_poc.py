@@ -79,15 +79,18 @@ async def _cancellation_check(backend: OpenSandboxBackend, sandbox_id: str, repo
 async def _timeout_check(backend: OpenSandboxBackend, sandbox_id: str, report: dict) -> None:
     timed_out = False
     try:
+        # Pinned execd keeps its start SSE response open for a 200ms grace.
+        # Allow identity delivery before the bounded execution deadline; keep
+        # the child marker well beyond that deadline and verify it afterwards.
         result = await backend.execute(sandbox_id, ["bash", "-c",
-            "(sleep 2; printf late > /workspace/timeout-marker) & wait"], timeout_seconds=0.5)
+            "(sleep 5; printf late > /workspace/timeout-marker) & wait"], timeout_seconds=2)
         timed_out = result.exit_code != 0
     except OpenSandboxError as exc:
         if str(exc) != "command timed out":
             raise
         timed_out = True
     _check(report, "timeout_not_success", timed_out)
-    await asyncio.sleep(3)
+    await asyncio.sleep(6)
     result = await backend.execute(sandbox_id, ["bash", "-c", "test ! -e /workspace/timeout-marker"])
     _check(report, "timeout_stopped_child_marker", result.exit_code == 0)
 

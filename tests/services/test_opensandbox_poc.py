@@ -88,3 +88,29 @@ class PocReportTests(unittest.IsolatedAsyncioTestCase):
         report = await self._run(_network_check=AsyncMock(side_effect=OpenSandboxError("blocked")))
         self.assertEqual(report["status"], "failed")
         self.backend.close.assert_awaited_once()
+
+
+class PocTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_timeout_still_requires_later_marker_check_with_timing_margin(self):
+        backend = SimpleNamespace(execute=AsyncMock(side_effect=[OpenSandboxError("command timed out"),
+            SimpleNamespace(exit_code=0)]))
+        report = {"checks": []}
+        with patch.object(opensandbox_poc.asyncio, "sleep", new_callable=AsyncMock) as sleep:
+            await opensandbox_poc._timeout_check(backend, "sandbox", report)
+        first = backend.execute.await_args_list[0]
+        self.assertEqual(first.kwargs["timeout_seconds"], 2)
+        self.assertIn("sleep 5", first.args[1][-1])
+        sleep.assert_awaited_once_with(6)
+        self.assertEqual(len(backend.execute.await_args_list), 2)
+        self.assertTrue(report["checks"][-1]["passed"])
+        self.assertEqual(report["checks"][-1]["name"], "timeout_stopped_child_marker")
+
+    async def test_destroyed_sandbox_does_not_count_as_a_missing_marker_success(self):
+        backend = SimpleNamespace(execute=AsyncMock(side_effect=[OpenSandboxError("command timed out"),
+            OpenSandboxError("not owned", code="sandbox_not_owned")]))
+        report = {"checks": []}
+        with (patch.object(opensandbox_poc.asyncio, "sleep", new_callable=AsyncMock),
+              self.assertRaises(OpenSandboxError) as failure):
+            await opensandbox_poc._timeout_check(backend, "sandbox", report)
+        self.assertEqual(failure.exception.diagnostic()["code"], "sandbox_not_owned")
+        self.assertEqual([check["name"] for check in report["checks"]], ["timeout_not_success"])
