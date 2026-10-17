@@ -63,5 +63,16 @@ async function copyDependencyNotices(name, from = root) {
 await copyDependencyNotices('@radix-ui/react-dialog');
 await copyDependencyNotices('@fontsource/material-symbols-outlined');
 await copyDependencyNotices('@assistant-ui/react');
+await copyDependencyNotices('@xterm/xterm');
+const xterm = path.join(root, 'node_modules', '@xterm', 'xterm');
+const xtermMetadata = JSON.parse(await readFile(path.join(xterm, 'package.json'), 'utf8'));
+if (xtermMetadata.version !== '6.0.0' || xtermMetadata.license !== 'MIT') throw new Error('Log assets require reviewed xterm 6.0.0');
+const xtermDestination = path.join(root, 'public', 'xterm', '6.0.0');
+await mkdir(xtermDestination, { recursive: true });
+for (const [input, output] of [['lib/xterm.js', 'xterm.js'], ['css/xterm.css', 'xterm.css'], ['LICENSE', 'LICENSE.txt']]) {
+  if (!(await stat(path.join(xterm, input))).isFile()) throw new Error(`Required log asset is missing: ${input}`);
+  await cp(path.join(xterm, input), path.join(xtermDestination, output));
+}
+await cp(path.join(root, 'licenses', 'xterm.SOURCE.txt'), path.join(xtermDestination, 'SOURCE.txt'));
 await cp(path.join(root, 'licenses', 'fontsource-material-symbols-outlined.SOURCE.txt'), path.join(notices, 'fontsource-material-symbols-outlined.SOURCE.txt'));
-console.log('Prepared reviewed Monaco 0.55.1 editor, workers and notices at public/monaco/0.55.1');
+console.log('Prepared reviewed Monaco 0.55.1 and xterm 6.0.0 assets and notices');

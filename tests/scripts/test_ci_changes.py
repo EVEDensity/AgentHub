@@ -187,6 +187,16 @@ class CiChangeSelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["frontend"])
 
+    def test_log_producer_and_real_fixture_select_the_browser_consumer(self) -> None:
+        for path in (
+            "tests/integration/artifact_log_http_fixture.py",
+            "tests/integration/test_artifact_log_http_fixture.py",
+            "app/services/trusted_tests/producer.py",
+            "app/services/trusted_tests/process.py",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(select_checks([path])["frontend"])
+
     def test_invalid_base_is_an_error_instead_of_omitting_checks(self) -> None:
         root = Path(__file__).resolve().parents[2]
         result = subprocess.run(

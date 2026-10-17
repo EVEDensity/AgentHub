@@ -58,6 +58,16 @@ Mission Control's real `access/whoami` supplies personal scope; an unavailable
 Go platform catalog does not manufacture scope or block this profile. The JUnit
 gate requires all eleven native Session cases in addition to the existing suites.
 History is bounded observation, not complete original transcript persistence.
+The UI-3a registered-log suite adds seven real browser cases, also required
+without skips. An owned fixture runs the actual trusted-local pytest producer,
+publishes its captured log through CAS and Mission commands, and serves the
+existing production preview GET. It covers original-byte integrity, CJK,
+neutralized ANSI/HTML/control output, read-only input/focus, actual terminal
+disposal/reopening, empty/oversized/sensitive objects, corrupt/missing/invalid
+bytes, permission/network retries and explicit display bounds. Boundary fixtures
+are identified separately from the real process log. No Mission write or PASS
+is created by viewing a log. Local JS/CSS/license resources and the existing
+frontend activity/Terminal honesty checks remain part of validation.
 The same job installs the VS Code extension's locked dependencies, compiles its
 TypeScript and runs its HTTP client and webview contract tests. API schema
 DTO changes also select those frontend consumers. Go changes and sandbox image

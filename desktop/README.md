@@ -56,8 +56,14 @@ observations and Mission Control's personal-scope probe, documented in
 It restores selectable task goals and bounded observations, not original full
 transcripts or execution checkpoints. This remains source/browser evidence;
 the Desktop default admin entry and native shell are unchanged. Packaged
-validation and the future log viewer follow the
+validation follows the
 [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
+The shared Mission Artifact surface also includes UI-3a's local xterm 6.0.0
+registered-log snapshot renderer and shipped MIT notices. It verifies original
+bytes, displays bounded control-neutralized text and adds no native command or
+terminal transport. The sidebar shows only actual frontend navigation activity.
+See [ADR-0131](../docs/architecture/decisions/0131-registered-log-artifact-snapshots.md).
+This does not establish a new packaged Desktop/WebView2/offline release result.
 The
 dependency-free `ui/` shell keeps bootstrap, service lifecycle, diagnostics and
 native credential responsibilities; it does not gain another Mission store or

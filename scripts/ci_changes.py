@@ -91,6 +91,8 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
         "app/repositories/session_mission_history.py", "app/services/session_history_service.py",
         "tests/integration/test_native_session_history.py",
         "tests/integration/test_session_mission_history_order.py",
+        "tests/integration/artifact_log_http_fixture.py", "tests/integration/test_artifact_log_http_fixture.py",
+        "app/services/trusted_tests/producer.py", "app/services/trusted_tests/process.py",
     )
     rust = contracts or changed("services/rust/")
     windows_cli = contracts or changed(

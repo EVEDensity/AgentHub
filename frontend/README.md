@@ -88,6 +88,11 @@ The shared admin header reports that runtime metrics are not connected. It has
 no fabricated health indicator, throughput, latency, success rate or online-agent
 count. Those require a separate real monitoring contract.
 
+The sidebar activity panel starts empty and records only actual browser navigation
+clicks, with browser timestamps and at most 200 entries. It has no pseudo-command
+input, invented system/version messages or execution/state/tool tabs. These local
+activities are explicitly separate from server execution logs.
+
 The admin Terminal is an unavailable notice with no command input or execution
 action. No terminal service is connected: it does not execute browser or server
 commands, inspect files or environment variables, or manufacture health,
@@ -127,7 +132,12 @@ Session/Mission observations, without the old messages/Task/DAG store. See
 [ADR-0130](../docs/architecture/decisions/0130-native-session-mission-observation.md) and
 [ADR-0129](../docs/architecture/decisions/0129-mission-assistant-ui-projection.md).
 
-Complete original transcript recovery and log-viewer adoption remain targets in the
+UI-3a uses pinned local xterm 6.0.0 for explicitly opened, byte-verified `log`
+Artifacts. Controls are made visible before a bounded plain-text snapshot enters
+the read-only frame; no terminal transport, addon or execution authority is
+connected. Real log availability depends on producers registering an Artifact.
+See [ADR-0131](../docs/architecture/decisions/0131-registered-log-artifact-snapshots.md).
+Complete original transcript recovery, live logs and execution remain targets in the
 [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
 Keep
 Mission state, authorization and acceptance on the existing control-plane APIs;

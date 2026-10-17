@@ -1,0 +1,5 @@
+html { color-scheme: dark; background: #121418; color: #e4e7ec; font-family: ui-monospace, Consolas, monospace; }
+body { margin: 0; box-sizing: border-box; padding: 12px; overflow: auto; }
+#terminal-host { width: max-content; }
+#terminal-host .xterm { padding: 0; }
+#error { font: 13px sans-serif; color: #f09a94; }

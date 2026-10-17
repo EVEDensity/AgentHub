@@ -11,6 +11,9 @@ import {
 const ReadOnlyArtifactCode = dynamic(() => import('./ReadOnlyArtifactCode'), {
   ssr: false, loading: () => <p role="status">正在加载本地代码视图</p>,
 });
+const ReadOnlyArtifactLog = dynamic(() => import('./ReadOnlyArtifactLog'), {
+  ssr: false, loading: () => <p role="status">正在加载本地日志视图</p>,
+});
 
 type PreviewState = { key: string; status: 'loading' | 'error'; error?: string }
   | { key: string; status: 'ready'; preview: ArtifactPreview };
@@ -88,6 +91,7 @@ export function MissionArtifactList({ missionId, items, authHeaders }: Props) {
           {visible?.status === 'ready' && <>
             <p className="text-xs text-warm-600">字节校验通过 · {visible.preview.artifact.sizeBytes} 字节；Mission 状态仍以服务端验收为准。</p>
             {visible.preview.text === '' ? <p className="text-sm text-warm-600">空产物（0 字节）</p>
+              : selected.kind === 'log' ? <ReadOnlyArtifactLog text={visible.preview.text} artifactId={selected.id} onClose={close} />
               : <ReadOnlyArtifactCode text={visible.preview.text} artifactId={selected.id} mediaType={selected.mediaType} onClose={close} />}
           </>}
         </div>}

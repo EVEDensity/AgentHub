@@ -174,7 +174,10 @@ UI-2a 已将管理端/Desktop 共享聊天弹窗替换为 assistant-ui 外部 st
 UI-2b 进一步迁移主聊天页：显式选择真实工作空间、读取原生 Session 目录及其实际 chat Mission，
 恢复服务端任务目标节选和有界账本观察。历史会话仅观察，选择不会重新提交或执行；旧会话不推断归属。
 见 [ADR-0130](../architecture/decisions/0130-native-session-mission-observation.md)。
-这些切片不恢复完整原始逐字历史，也不证明桌面安装包已验收；日志组件仍待读取合同。
+UI-3a 复用已登记产物读取合同，为 `log` Artifact 接入固定版本 xterm 纯文本快照；先验证原始字节，
+再可见转义控制符并限制行数/字数，不接 stdin、PTY 或命令服务。侧栏仅显示真实前端导航活动。
+见 [ADR-0131](../architecture/decisions/0131-registered-log-artifact-snapshots.md)。
+这些切片不恢复完整原始逐字历史，也不证明桌面安装包已验收；实时日志和命令观察仍需独立合同。
 
 本仓库 [lockfile](../../frontend/package-lock.json) 当前锁定 Next.js 14.2.35、React 18.3.1、
 Tailwind CSS 3.4.19、`@monaco-editor/react` 4.7.0 / `monaco-editor` 0.55.1，以及
@@ -207,7 +210,7 @@ Tailwind CSS 3.4.19、`@monaco-editor/react` 4.7.0 / `monaco-editor` 0.55.1，�
    使用本地 Monaco 和 worker 资源，不能依赖默认 CDN 才能在 Desktop 打开代码。
    UI-1 为避免页面级 worker 池跨预览存活，采用独立本地 iframe 加载同一 core 包；没有在本轮
    使用全局 React loader。关闭时销毁模型、编辑器、worker 和 Blob URL，frame 仅是生命周期边界。
-4. **xterm.js：真实命令观察的只读渲染。** 候选 `@xterm/xterm` 6.0.0、commit
+4. **xterm.js：已登记日志快照的只读渲染。** UI-3a 采用 `@xterm/xterm` 6.0.0、commit
    `f447274f430fd22513f6adbf9862d19524471c04`，
    [包声明](https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/package.json)
    与 [许可证](https://github.com/xtermjs/xterm.js/blob/f447274f430fd22513f6adbf9862d19524471c04/LICENSE) 为 MIT。

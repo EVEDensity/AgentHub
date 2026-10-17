@@ -16,6 +16,7 @@ frontend/.env*.local
 frontend/tsconfig.tsbuildinfo
 frontend/test-results/
 frontend/public/monaco/
+frontend/public/xterm/
 frontend/.next-codex/
 
 # Environment and secrets

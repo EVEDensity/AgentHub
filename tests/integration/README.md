@@ -64,6 +64,39 @@ PostgreSQL-backed tests require `AGENTHUB_TEST_POSTGRES_DSN` pointing to a
 dedicated disposable database. Each test creates and drops its own unique
 schema. Never point this variable at production or a shared developer database.
 
+`artifact_log_http_fixture.py` is the separate UI-3 browser fixture, run with
+`python -m tests.integration.artifact_log_http_fixture`. It owns
+`127.0.0.1:38100` only for its test file, with workspace `workspace-log` and
+Mission `mis-log-browser`; do not reuse another test's listener. Fixed Bearer
+identities `artifact-log-human` and `artifact-log-foreign` are local to this
+fixture. A real `TrustedLocalTestProducer` executes a frozen external pytest
+suite using its production process backend. One deliberate failing test makes
+pytest retain the actual ANSI/CJK, stdout/stderr, HTML and terminal-control
+output. The returned log bytes are published unchanged to CAS and registered
+under a real MissionService lease before completion to VERIFYING. The Mission
+stays RUNNING without Evidence. Reading these bytes neither verifies the entire
+signed test bundle nor establishes acceptance; this fixture registers only its
+log, not a complete trusted-test verification profile.
+
+`artifact-log-real` is this actual producer output. `artifact-log-empty`,
+`-large`, `-denied`, `-tampered`, `-missing`, `-invalid` and `-bounded` are explicitly
+artificial boundary cases, registered through the same lease/CAS path. The
+last two storage fault cases intentionally corrupt or remove their own CAS
+object; no production command or arbitrary filesystem path is exposed.
+The bounded case is 2,002 logical lines without a trailing newline; line index
+2,000 contains 2,500 CJK code points, and the last line is the unique
+`fixture-log-bounded-tail-2001` marker. Raw bytes remain below 256 KiB. The
+client's tail-2,000-line, 2,000-code-point row projection should omit two source
+lines and truncate one row; the HTTP API still returns the original verified
+bytes. This is an artificial display-boundary fixture, not producer output.
+`/fixture/health` reports process ID, metadata/source labels and per-Artifact
+byte-read counts. The real log digest varies with actual pytest timing and
+owned temporary paths. `test_artifact_log_http_fixture.py` checks actual
+process capture, HTTP integrity/authorization, no byte I/O before denial,
+failure statuses, state-neutral reads and owned cleanup. Existing UI-1 seeds
+and the production preview endpoint remain unchanged. This is a registered
+log snapshot, not a live terminal, separated stdout/stderr or complete history.
+
 Run the default integration layer from the repository root:
 
 ```powershell
