@@ -39,7 +39,6 @@ from app.services.harness_service import (
     ModelPort,
 )
 from app.services.runner_composition import HarnessModelFactoryPort
-from app.services.runner.tool_approval import desktop_tool_approval
 from app.services.tool_registry import ToolDefinition, ToolParameter
 from app.services.tools.definitions import (
     APPLY_CHANGE_SET,
@@ -560,6 +559,8 @@ def _build_delegate_subtask_executor(
     sub agent can neither recurse nor spawn further agents. The child's
     final summary text is returned, truncated to the desktop result cap.
     """
+    from app.services.runner.tool_approval import desktop_tool_approval
+
     tools = list(subtask_tools)
 
     async def execute(arguments: Mapping[str, Any]) -> str:
@@ -795,7 +796,7 @@ def _build_permission_denied_executor(
         return (
             f"错误：工具 {tool_name} 在当前权限档位（{mode}）下被禁用。"
             f"suggest=只读；edit=可写工作区文件；auto=完整白名单。"
-            "如需该能力，请通过受支持的权限配置重新运行。"
+            "如需该能力，请通过受支持的权限配置选择更高权限档位后重新运行。"
             "任务文本标记不会执行命令，默认验收仅验证产物完整性。"
         )
 
