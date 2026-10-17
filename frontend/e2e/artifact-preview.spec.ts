@@ -40,7 +40,7 @@ async function openMission(page: Page) {
   });
   await page.route('**/platform/**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ workspaces: [{ id: 'workspace-preview', name: 'Preview fixture' }] }) }));
   await page.goto('/admin');
-  await expect(page.getByText('运行指标尚未接入', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '执行指标状态' })).toContainText('运行指标尚未接入');
   await expect(page.getByText('系统正常', { exact: true })).toHaveCount(0);
   await expect(page.getByText('98.7%', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: /^.*Mission Control/ }).click();

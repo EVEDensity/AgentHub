@@ -67,6 +67,10 @@ bytes, displays bounded control-neutralized text and adds no native command or
 terminal transport. The sidebar shows only actual frontend navigation activity.
 See [ADR-0131](../docs/architecture/decisions/0131-registered-log-artifact-snapshots.md).
 This does not establish a new packaged Desktop/WebView2/offline release result.
+UI-3b removes the shared admin header's configured-Agent/fallback-model label
+and fixed token/context percentages. It states that those execution metrics
+are not connected, while retaining workspace/user/navigation context. This is
+the same shared source/browser surface, not native WebView2 or packaged proof.
 The
 dependency-free `ui/` shell keeps bootstrap, service lifecycle, diagnostics and
 native credential responsibilities; it does not gain another Mission store or

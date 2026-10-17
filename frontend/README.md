@@ -87,6 +87,13 @@ supported probe; the browser cannot infer connection from a configured URL.
 The shared admin header reports that runtime metrics are not connected. It has
 no fabricated health indicator, throughput, latency, success rate or online-agent
 count. Those require a separate real monitoring contract.
+UI-3b also removes the configured default Agent ID/fallback model name and the
+fixed token/window/percentage displays from this header. It explicitly says
+execution model, token use and context occupancy are not connected. It does not
+read checkpoints or reinterpret configured Agents as observed execution. The
+workspace, user, menu and navigation remain actual UI context. Empty Missions,
+switching actual Missions and configuration-read failures must retain this
+truthful state without introducing telemetry requests or Mission commands.
 
 The sidebar activity panel starts empty and records only actual browser navigation
 clicks, with browser timestamps and at most 200 entries. It has no pseudo-command
