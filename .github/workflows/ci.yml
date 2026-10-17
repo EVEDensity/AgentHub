@@ -290,7 +290,17 @@ jobs:
         shell: pwsh
         run: |
           $changes = @(git status --porcelain --untracked-files=normal)
-          if ($LASTEXITCODE -ne 0 -or $changes.Count) { throw "Build preparation changed source inputs: $($changes -join '; ')" }
+          if ($LASTEXITCODE -ne 0 -or $changes.Count) {
+            git diff --raw
+            git ls-files --eol -- frontend/public/pdf.min.mjs frontend/public/pdf.worker.min.mjs
+            git config --show-origin --get-regexp 'core\.(filemode|autocrlf|safecrlf)'
+            foreach ($name in @('pdf.min.mjs', 'pdf.worker.min.mjs')) {
+              Get-FileHash -Algorithm SHA256 -LiteralPath "frontend/public/$name", "frontend/node_modules/pdfjs-dist/build/$name" | Format-Table -AutoSize
+              git rev-parse "HEAD:frontend/public/$name"
+              git hash-object "frontend/public/$name"
+            }
+            throw "Build preparation changed source inputs: $($changes -join '; ')"
+          }
       - uses: actions/cache/restore@v4
         id: tauri_cli_cache
         with:
