@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0126](0126-frozen-reviewed-skill-catalog.md) | Freeze operator-reviewed document Skills before model use |
 | [0125](0125-experimental-sandbox-native-composition.md) | Compose the Native Harness with an explicit sandbox capability |
 | [0124](0124-strict-in-process-provider-budget-profile.md) | Bind an explicit provider profile to the Mission budget ledger |
 | [0123](0123-persistent-mission-budget-ledger.md) | Persist an internal Mission budget ledger |

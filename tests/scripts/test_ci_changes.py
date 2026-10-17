@@ -76,7 +76,12 @@ class CiChangeSelectionTests(unittest.TestCase):
                      "tests/services/test_opensandbox_harness.py",
                      "tests/services/test_opensandbox_harness_supervision.py",
                      "tests/services/test_opensandbox_native_factory.py",
-                     "tests/integration/test_opensandbox_native_sqlite.py"):
+                     "tests/integration/test_opensandbox_native_sqlite.py",
+                     "tests/services/test_reviewed_skill_catalog.py",
+                     "tests/services/test_reviewed_skill_tools.py",
+                     "tests/services/test_reviewed_desktop_skills.py",
+                     "tests/services/test_desktop_skill_tools.py",
+                     "tests/integration/test_reviewed_skills_runner_sqlite.py"):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["windows_cli"])
 

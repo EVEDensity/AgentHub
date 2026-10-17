@@ -92,6 +92,8 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
         "tests/services/test_harness_model_operations.py", "tests/integration/test_strict_budget_",
         "tests/services/test_opensandbox_harness", "tests/services/test_opensandbox_native_factory.py",
         "tests/integration/test_opensandbox_native_sqlite.py", "tests/integration/opensandbox_native_scenario.py",
+        "tests/services/test_reviewed_", "tests/services/test_desktop_skill_tools.py",
+        "tests/integration/test_reviewed_skills_runner_sqlite.py",
         "requirements", "pyproject.toml", "release/", "scripts/build-cli-",
     )
     images = _container_images(changed, go, rust, frontend)

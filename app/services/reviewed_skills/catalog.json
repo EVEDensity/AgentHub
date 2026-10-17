@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "skills": [
+    {
+      "name": "code-review",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/EVEDensity/AgentHub/blob/c1dac3c2ade9951aaa02113618cdb5bf3ab8638e/app/services/reviewed_skills/packages/code-review/SKILL.md",
+      "sourceRevision": "c1dac3c2ade9951aaa02113618cdb5bf3ab8638e",
+      "requiredCapabilities": [
+        "repository.read"
+      ],
+      "files": [
+        {
+          "path": "LICENSE",
+          "sizeBytes": 11395,
+          "sha256": "sha256:4e9ed28fab0503eaf98f2d1914329118c9367dddff5ef2a7b3676657d8593523"
+        },
+        {
+          "path": "SKILL.md",
+          "sizeBytes": 2263,
+          "sha256": "sha256:8f357a01822f5d3f2b4bedaf19ddc24fcd2d0d80a598dfeb78fcf0a13761d400"
+        },
+        {
+          "path": "references/output.md",
+          "sizeBytes": 894,
+          "sha256": "sha256:b287a6e56ed358b4ecef5d5a930472637ea987625de2ba9aefda4db962b5ce98"
+        }
+      ],
+      "packageDigest": "sha256:fec75921f3ad861cdfc5fd85d5429a0e39eec9376f8cbb30028180ff3bca036d"
+    },
+    {
+      "name": "repository-fix",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/EVEDensity/AgentHub/blob/c1dac3c2ade9951aaa02113618cdb5bf3ab8638e/app/services/reviewed_skills/packages/repository-fix/SKILL.md",
+      "sourceRevision": "c1dac3c2ade9951aaa02113618cdb5bf3ab8638e",
+      "requiredCapabilities": [
+        "repository.read",
+        "repository.write"
+      ],
+      "files": [
+        {
+          "path": "LICENSE",
+          "sizeBytes": 11395,
+          "sha256": "sha256:4e9ed28fab0503eaf98f2d1914329118c9367dddff5ef2a7b3676657d8593523"
+        },
+        {
+          "path": "SKILL.md",
+          "sizeBytes": 2250,
+          "sha256": "sha256:d24e9cd8a283ddb40d40620b207aa21dbc4504793b7b30510ca4c93fb61c7545"
+        },
+        {
+          "path": "references/output.md",
+          "sizeBytes": 746,
+          "sha256": "sha256:59941b92540e35a09bc3b5f8e15cc71c9e4680c99aaff352f35ebf64ef052396"
+        }
+      ],
+      "packageDigest": "sha256:61e15228e568cb26b60e8f73718974df57d31af65ea08de9af00480cc086364b"
+    },
+    {
+      "name": "source-traceable-research",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "sourceUrl": "https://github.com/EVEDensity/AgentHub/blob/c1dac3c2ade9951aaa02113618cdb5bf3ab8638e/app/services/reviewed_skills/packages/source-traceable-research/SKILL.md",
+      "sourceRevision": "c1dac3c2ade9951aaa02113618cdb5bf3ab8638e",
+      "requiredCapabilities": [
+        "web.read"
+      ],
+      "files": [
+        {
+          "path": "LICENSE",
+          "sizeBytes": 11395,
+          "sha256": "sha256:4e9ed28fab0503eaf98f2d1914329118c9367dddff5ef2a7b3676657d8593523"
+        },
+        {
+          "path": "SKILL.md",
+          "sizeBytes": 2274,
+          "sha256": "sha256:5e13daaf124d728ed1d96e9a6e4ce4eea58da71508bd4b2a5373845a93cc0b33"
+        },
+        {
+          "path": "references/output.md",
+          "sizeBytes": 778,
+          "sha256": "sha256:4065b83793ea16f88140ef84723d356e141cf032a51f2bfc04e77b843bf71bd4"
+        }
+      ],
+      "packageDigest": "sha256:e9a28640ce4f8372ed5cf175a17599bda2c5f92b7b7768fc77febc2f31526ce5"
+    }
+  ]
+}

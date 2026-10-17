@@ -72,6 +72,11 @@ workspace tree.
   `db/README.md` for migration and rollback boundaries (ADR-0110).
 
 * `services/`: application use cases, compatibility adapters, and storage ports.
+  `services/reviewed_skills/` owns three original document-only Skills, their
+  pinned operator index and immutable read catalog. Explicit Desktop injection
+  replaces the existing skill read pair; it never merges workspace packages,
+  installs tools or grants capabilities. See
+  [ADR-0126](../docs/architecture/decisions/0126-frozen-reviewed-skill-catalog.md).
   The default-off `services/opensandbox_backend.py` HTTP port is exercised only
   by the standalone disposable PoC in `deploy/opensandbox/`. It adds no SDK
   dependency and does not select a production Runner backend or own Mission

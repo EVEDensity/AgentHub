@@ -33,6 +33,7 @@ dependencies = [
   "Pillow==12.2.0",
   "markdown==3.7",
   "python-dotenv==1.2.2",
+  "PyYAML==6.0.3",
   "rich>=13.9,<16",
   "pywin32>=306; sys_platform == 'win32'",
 ]
@@ -52,3 +53,11 @@ version = {attr = "app.version.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.services.reviewed_skills" = [
+  "catalog.json",
+  "packages/*/SKILL.md",
+  "packages/*/LICENSE",
+  "packages/*/references/*.md",
+]

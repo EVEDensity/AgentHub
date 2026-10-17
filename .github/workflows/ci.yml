@@ -112,6 +112,8 @@ jobs:
       AGENTHUB_CLI_E2E: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -186,6 +188,8 @@ jobs:
       AGENTHUB_CLI_E2E: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -213,6 +217,14 @@ jobs:
           tests/services/test_opensandbox_harness_supervision.py
           tests/services/test_opensandbox_native_factory.py
           tests/integration/test_opensandbox_native_sqlite.py -q --tb=short
+      - name: Verify frozen reviewed Skills and progressive Native reads
+        run: >-
+          python -m pytest tests/services/test_reviewed_skill_catalog.py
+          tests/services/test_reviewed_skill_tools.py
+          tests/services/test_reviewed_desktop_skills.py
+          tests/services/test_desktop_skill_tools.py
+          tests/contracts/test_reviewed_skill_packages.py
+          tests/integration/test_reviewed_skills_runner_sqlite.py -q --tb=short
 
   frontend:
     name: Frontend, editor contracts and browser flow

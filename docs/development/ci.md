@@ -51,6 +51,11 @@ composition tests. These require no paid provider or external credentials and
 do not establish live vendor billing conformance.
 Experimental Native/OpenSandbox Harness/factory and simulated-wire SQLite
 composition tests also run on Windows, with no Docker requirement there.
+The Windows and Linux suites validate the original reviewed Skills' source
+commit bytes, frozen catalog, read tools and budgeted Native/SQLite flow. CLI
+tests build and install an actual wheel outside the checkout to verify resource
+inclusion. Python and Windows source checkouts retain Git history for the pinned
+content revision. These checks do not run a paid model or establish review quality.
 Public contract changes select all runtime consumers. Container builds follow
 the actual supported service recipes and their COPY inputs:
 
