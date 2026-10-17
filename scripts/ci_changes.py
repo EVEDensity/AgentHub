@@ -111,6 +111,10 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
     )
     images = _container_images(changed, go, rust, frontend)
     return {
+        "desktop_package": contracts or changed(
+            "desktop/", "frontend/", "app/", "main.py", "mission_control_entrypoint.py",
+            "requirements", "services/go/", "tests/desktop/",
+        ),
         "go": go, "frontend": frontend, "rust": rust,
         "windows_cli": windows_cli, "docker": bool(images),
         "opensandbox": contracts or changed(

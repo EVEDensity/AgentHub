@@ -13,6 +13,7 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0133](0133-desktop-package-resource-integrity.md) | Verify resources extracted from one full desktop build |
 | [0131](0131-registered-log-artifact-snapshots.md) | Display registered log Artifact snapshots through xterm |
 | [0132](0132-desktop-verification-evidence-scopes.md) | Separate desktop browser preview from packaged and native acceptance |
 | [0130](0130-native-session-mission-observation.md) | Recover native Session Missions as bounded observations |

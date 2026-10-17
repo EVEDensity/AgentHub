@@ -31,11 +31,12 @@ is inherited, then restores that environment value afterward. The first
 desktop instance receives the 28000 port group by allocation order;
 concurrent second instances get their own groups while the bundled frontend
 still targets the first instance (single-instance limitation).
-`package-windows.ps1 -LocalServices` explicitly stages this full profile. The
-current workflow's ordinary package job does not select that switch; its
-tag-only `publish-stack` job builds the stack separately. A successful shell
-package therefore does not establish that the shared Next.js UI is included
-in that same package. See [ADR-0132](../docs/architecture/decisions/0132-desktop-verification-evidence-scopes.md).
+`package-windows.ps1 -LocalServices` explicitly rebuilds this full profile from
+a clean committed checkout. PR/main CI and the distribution workflow select it;
+the tag-only `publish-stack` job builds a separate downloadable stack. Actual
+Portable and MSI extraction verifies shared resource inclusion for the full
+profile. Shell-only packages retain their narrower scope. See
+[ADR-0133](../docs/architecture/decisions/0133-desktop-package-resource-integrity.md).
 
 The admin Terminal now displays an unavailable notice without command input;
 it has no real terminal service and shows no simulated system or execution
@@ -86,6 +87,10 @@ claimed. This change does not modify the Tauri shell or its command surface.
 - `package-windows.ps1`: one-command Windows build and installer gate.
 - `packaged-artifact-smoke.ps1`: verifies the built application and sidecar
   digest without starting the desktop process.
+- `package-resource-manifest.mjs`: inventories the fresh full-service stage,
+  checks required UI assets and verifies extracted bytes against the external
+  manifest. `packaged-resources-smoke.ps1` extracts actual Portable/MSI files;
+  `require-package-resource-reports.ps1` independently requires both reports.
 - `packaged-runtime-smoke.ps1`: starts only the packaged sidecar and verifies
   its loopback readiness contract.
 - `installer-install-smoke.ps1`: installs the generated MSI/NSIS package,
@@ -286,7 +291,7 @@ The next delivery slices are:
 
 1. **UI-4a, browser-preview evidence:** fixed local tools, owned test resources,
    classified reports and actual screenshots; no native/package/service claim.
-2. **UI-4b, packaged resources (target):** inspect the actual selected Portable
+2. **UI-4b, packaged resources:** inspect the actual selected Portable
    and installer contents from the same commit, including the full stack,
    baked loopback rewrites, Monaco workers, xterm, fonts and license notices.
    Missing/stale/tampered assets must fail before any native GUI claim.
@@ -299,6 +304,38 @@ The next delivery slices are:
 See the [ordered component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target)
 for owners, prerequisites and failure gates. Signing and clean-machine
 installation/upgrade/rollback remain additional release gates.
+
+## Full-service resource verification
+
+From a clean committed Windows checkout with the locked frontend dependencies,
+Python application dependencies and PyInstaller 6.16.0, Go, Node and the pinned
+Rust/Tauri tools installed:
+
+```powershell
+.\desktop\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -LocalServices
+.\desktop\require-package-resource-reports.ps1 -Directory desktop/.runtime/package-resources -SourceCommit (git rev-parse HEAD)
+```
+
+This invocation rebuilds the services and frontend once, produces both the
+installer and Portable ZIP, and verifies actual ZIP/MSI extraction against an
+external file inventory from the same build. It does not install or launch the
+UI for this resource check. Missing or extra files, wrong source commit,
+modified bytes, broken rewrites, absent workers/fonts and incorrect selected
+component notices fail. Build input hashes, full commit, artifact hashes and
+classified reports are retained in ignored `.runtime/package-resources/`.
+The PR/main CI gate requires both package forms from its exact selected SHA.
+
+`-LocalServices -Portable` verifies only the Portable form; `-NoInstaller`
+builds the release application without claiming installer resource acceptance.
+Omitting `-LocalServices` retains the shell-only developer profile. An old
+staged Mission Control executable is never reused by the full-service build.
+Next output is fixed to `.next`; inherited endpoint/output environment values
+are restored. See [local build ownership](local-services/README.md).
+
+The inventory proves the selected package bytes and UI component notices. It
+is not a signed build attestation or a complete dependency-license audit.
+Native WebView2, real login/Mission flow, public signing and clean-machine
+operation remain separate acceptance gates.
 
 ## Configuration and credentials
 

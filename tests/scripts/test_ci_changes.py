@@ -11,6 +11,15 @@ from scripts.ci_changes import select_checks
 
 
 class CiChangeSelectionTests(unittest.TestCase):
+    def test_desktop_package_inputs_require_actual_windows_packaging(self) -> None:
+        for path in ("desktop/package-windows.ps1", "desktop/package-resource-manifest.mjs",
+                     "desktop/local-services/build-windows.ps1", "frontend/next.config.js",
+                     "frontend/package-lock.json", "app/api/auth.py", "main.py",
+                     "mission_control_entrypoint.py", "requirements.txt",
+                     "services/go/gateway-service/main.go", "platform/contracts/v1/mission.json"):
+            with self.subTest(path=path):
+                self.assertTrue(select_checks([path])["desktop_package"])
+
     def test_documentation_does_not_rebuild_unaffected_runtime_images(self) -> None:
         checks = select_checks(["docs/development/ci.md"])
         self.assertFalse(any(value for value in checks.values() if isinstance(value, bool)))

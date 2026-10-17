@@ -254,12 +254,14 @@ Desktop 已验证。远端 CI 全绿是阶段完成条件，未运行的浏览�
    固定 `12.4K / 200K` 和 `18%` 已移除并明确未接通。组件/浏览器回归覆盖无任务、
    切换实际任务和配置读取失败，均不显示捏造用量。现有 checkpoint 的累计上报 token 和 context 摘要
    不等于上下文占比，也不保证分页首批记录的末项是全局最新。不为这项界面收口新增遥测合同。
-2. **UI-4b，同提交的真实打包资源门禁。** Desktop/构建负责；先明确
-   `desktop/package-windows.ps1 -LocalServices` 与 tag-only stack 发布的产物关系，再改
-   `desktop/local-services/build-windows.ps1` 及打包 smoke。验收必须检查实际 Portable/MSI
+2. **UI-4b，同提交的真实打包资源门禁（已实现门禁）。** Desktop/构建负责；明确
+   `desktop/package-windows.ps1 -LocalServices` 同一次全量构建产生 Portable/MSI，tag-only stack
+   仍是独立下载产物。CI 从干净精确提交重新冻结服务，固定 `.next` 与本地端口，不复用旧 exe。
+   包外保存完整资源清单，实际解包后逐字节核验；验收检查实际 Portable/MSI
    中的 Next 资源、28000 rewrite、Monaco worker、xterm、字体和许可，而不是检查源码目录。
    缺失、篡改、旧提交混入全部失败；记录源码 commit、构建模式和产物摘要。通过只证明资源与
-   包装一致，不能替代原生 WebView2 运行。
+   包装一致，不能替代原生 WebView2 运行，也不等于完整全栈许可或签名审计。
+   见 [ADR-0133](../architecture/decisions/0133-desktop-package-resource-integrity.md)。
 3. **UI-4c，真实 WebView2 和登录流程。** Desktop/Frontend/认证维护者共同负责；依赖
    UI-4b。仅为测试进程启用调试连接，确认实际 exe 与其 WebView2 归属，使用真实登录路径，
    验证嵌套 Mission/Artifact frame、离线本地资源、中文输入、缩放、只读和关闭释放。
