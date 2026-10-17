@@ -96,7 +96,8 @@ wrong-commit, unsafe paths, broken local asset references and selected component
 notice changes fail. The stable CI gate requires this job for desktop,
 frontend, control-plane, Go workspace, dependency and public-contract changes.
 An independent report check requires both forms and their real outer digests;
-fixture rejection tests are additional checks. Evidence is uploaded as
+fixture rejection tests and locked native desktop unit tests are additional checks.
+The unit tests reuse the release build and do not start a GUI. Evidence is uploaded as
 `desktop-package-resources`. This is unsigned package resource integrity,
 not native WebView2, authentication, live services or clean-machine acceptance.
 See [ADR-0133](../architecture/decisions/0133-desktop-package-resource-integrity.md).

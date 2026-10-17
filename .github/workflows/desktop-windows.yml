@@ -78,6 +78,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD }}
       - name: Require actual Portable and MSI resource reports
         run: .\require-package-resource-reports.ps1 -Directory .runtime/package-resources -SourceCommit '${{ github.sha }}'
+      - name: Verify native desktop unit contracts without a GUI
+        run: cargo test --release --locked --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml
       - name: Upload package resource verification
         if: always()
         uses: actions/upload-artifact@v4

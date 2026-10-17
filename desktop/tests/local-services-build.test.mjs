@@ -232,48 +232,57 @@ $values['location'] = (Get-Location).Path
   await assert.rejects(readFile(join(f.stage, 'stack-manifest.json')), { code: 'ENOENT' });
 });
 
-test('actual Git attributes keep tiny LF mirror fixtures clean after npm-style overwrite and detect changed bytes', windowsOnly, async t => {
+test('actual Git attributes keep four tiny LF asset/schema fixtures clean on overwrite and detect each changed byte', windowsOnly, async t => {
   const f = await fixture(t);
-  // Tiny text fixtures exercise checkout/copy semantics; these are not PDF
-  // distributions, npm installation, or evidence that a package was built.
+  // Tiny text fixtures exercise checkout/copy semantics; these are not real
+  // PDF/schema contents, npm installation, or evidence that a package was built.
   await copyFile(join(scripts, '..', '..', '.gitattributes'), join(f.root, '.gitattributes'));
   const upstream = join(f.root, '.tmp', 'upstream-mirror-fixtures');
   await mkdir(upstream, { recursive: true });
-  const names = ['pdf.min.mjs', 'pdf.worker.min.mjs'];
-  for (const name of names) {
-    const bytes = Buffer.from(`// Tiny LF mirror fixture: ${name}\nexport const fixture = true;\n`);
-    await writeFile(join(upstream, name), bytes);
-    await copyFile(join(upstream, name), join(f.root, 'frontend', 'public', name));
+  const paths = ['frontend/public/pdf.min.mjs', 'frontend/public/pdf.worker.min.mjs',
+    'desktop/src-tauri/gen/schemas/desktop-schema.json', 'desktop/src-tauri/gen/schemas/windows-schema.json'];
+  for (const path of paths) {
+    const bytes = Buffer.from(`{"tinyLfFixture":"${path}"}\n`);
+    await mkdir(dirname(join(upstream, path)), { recursive: true });
+    await mkdir(dirname(join(f.root, path)), { recursive: true });
+    await writeFile(join(upstream, path), bytes);
+    await copyFile(join(upstream, path), join(f.root, path));
   }
   for (const args of [
     ['config', 'core.autocrlf', 'true'], ['config', 'core.filemode', 'false'],
-    ['add', '.gitattributes', ...names.map(name => `frontend/public/${name}`)],
+    ['add', '.gitattributes', ...paths],
     ['-c', 'user.name=Owned Build Test', '-c', 'user.email=owned-build@example.invalid', 'commit', '-qm', 'Tiny LF mirror attribute fixtures'],
   ]) {
     const git = await subprocess('git.exe', args, { cwd: f.root });
     assert.equal(git.code, 0, git.stderr);
   }
-  for (const name of names) await unlink(join(f.root, 'frontend', 'public', name));
-  const checkout = await subprocess('git.exe', ['checkout', 'HEAD', '--', ...names.map(name => `frontend/public/${name}`)], { cwd: f.root });
+  for (const path of paths) await unlink(join(f.root, path));
+  const checkout = await subprocess('git.exe', ['checkout', 'HEAD', '--', ...paths], { cwd: f.root });
   assert.equal(checkout.code, 0, checkout.stderr);
-  for (const name of names) {
-    const target = join(f.root, 'frontend', 'public', name);
+  for (const path of paths) {
+    const target = join(f.root, path);
     const bytes = await readFile(target);
     assert.equal(bytes.includes(Buffer.from('\r\n')), false, 'Git checkout must retain upstream LF bytes with core.autocrlf=true');
-    assert.deepEqual(bytes, await readFile(join(upstream, name)));
-    await copyFile(join(upstream, name), target);
+    assert.deepEqual(bytes, await readFile(join(upstream, path)));
+    await copyFile(join(upstream, path), target);
   }
   // This is intentionally the first status after replacement; a later diff or
   // status refresh must not be needed to make the clean-source guard pass.
   const clean = await subprocess('git.exe', ['status', '--porcelain', '--untracked-files=normal'], { cwd: f.root });
   assert.equal(clean.code, 0, clean.stderr);
   assert.equal(clean.stdout, '');
-  const changed = join(f.root, 'frontend', 'public', names[0]);
-  const bytes = await readFile(changed);
-  bytes[0] ^= 1;
-  await writeFile(changed, bytes);
-  const dirty = await subprocess('git.exe', ['status', '--porcelain', '--untracked-files=normal'], { cwd: f.root });
-  assert.equal(dirty.code, 0, dirty.stderr);
-  assert.equal(dirty.stdout.trimEnd(), ' M frontend/public/pdf.min.mjs');
+  for (const path of paths) {
+    const changed = join(f.root, path);
+    const bytes = await readFile(changed);
+    bytes[0] ^= 1;
+    await writeFile(changed, bytes);
+    const dirty = await subprocess('git.exe', ['status', '--porcelain', '--untracked-files=normal'], { cwd: f.root });
+    assert.equal(dirty.code, 0, dirty.stderr);
+    assert.equal(dirty.stdout.trimEnd(), ` M ${path}`);
+    await copyFile(join(upstream, path), changed);
+  }
+  const restored = await subprocess('git.exe', ['status', '--porcelain', '--untracked-files=normal'], { cwd: f.root });
+  assert.equal(restored.code, 0, restored.stderr);
+  assert.equal(restored.stdout, '');
   assert.equal(await f.calls(), '');
 });

@@ -17,7 +17,7 @@ use protocol::{ControlPlaneSnapshot, RuntimeSnapshot};
 use runtime::LocalRuntime;
 use services::{ServiceSnapshot, ServiceSupervisor};
 use std::process::Command;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 /// Spawn a child process without flashing a console window on the desktop.
@@ -213,13 +213,12 @@ async fn bootstrap_stack(
     });
     let manifest_url_clone = manifest_url.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
-        let channel = app.channel::<bootstrap::ProgressEvent>("bootstrap-progress");
         bootstrap::bootstrap_stack(
             &manifest_url_clone,
             &data_dir,
             &base,
             &mut |event| {
-                let _ = channel.send(event);
+                let _ = app.emit("bootstrap-progress", event);
             },
         )
     })
