@@ -101,8 +101,8 @@ jobs:
           path: |
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-desktop.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-runtime.exe
-            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.msi
-            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error
@@ -126,7 +126,7 @@ jobs:
         with:
           name: agenthub-desktop-updater-${{ github.sha }}
           path: |
-            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.sig
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.sig
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error
 
@@ -230,7 +230,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: agenthub-desktop-windows-${{ github.sha }}
-          path: dist
+          path: ${{ runner.temp }}/desktop-artifacts
       - name: Prepare Python environment for the Mission Control freeze
         shell: pwsh
         run: |
@@ -245,8 +245,7 @@ jobs:
       - name: Build the full local-services stack
         shell: pwsh
         run: |
-          $stack = Join-Path $env:RUNNER_TEMP 'stack-release'
-          if (Test-Path $stack) { Remove-Item $stack -Recurse -Force }
+          $stack = Join-Path $env:RUNNER_TEMP ('stack-release-' + [guid]::NewGuid().ToString('N'))
           $services = Join-Path $stack 'local-services'
           New-Item -ItemType Directory -Force -Path $services | Out-Null
           $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
@@ -254,7 +253,7 @@ jobs:
           # Runner runtime sidecar comes from the packaged artifact; the
           # desktop shell itself updates through the Tauri updater, not
           # the stack.
-          Copy-Item dist\agenthub-runtime.exe -Destination $services -Force
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'desktop-artifacts\agenthub-runtime.exe') -Destination $services -Force
           # The bundled-stack manifest (services list, written by the
           # build script) is a bundle artifact; downloaded stacks get
           # their manifest copy from the downloader itself.
