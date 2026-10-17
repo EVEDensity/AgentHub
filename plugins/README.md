@@ -2,6 +2,11 @@
 
 本目录存放用户自定义的 AgentHub 工具系统插件。插件基于 [pluggy](https://pluggy.readthedocs.io/) 框架，通过实现 `@hookimpl` 方法注入工具执行生命周期。
 
+首批内置的纯文档 Skills 与可执行插件分别管理，唯一内容源位于
+[`app/services/reviewed_skills/`](../app/services/reviewed_skills/README.md)，
+随 Python wheel 发行。其目录与正文读取不会安装插件或授予工具权限；
+本目录的 pluggy 插件仍是受信任的 Python 代码。
+
 ## 快速开始
 
 ### 1. 加载示例插件

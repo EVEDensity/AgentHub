@@ -32,6 +32,19 @@ desktop instance receives the 28000 port group by allocation order;
 concurrent second instances get their own groups while the bundled frontend
 still targets the first instance (single-instance limitation).
 
+The admin Terminal now displays an unavailable notice without command input;
+it has no real terminal service and shows no simulated system or execution
+results. This applies to the shared admin view opened by Desktop as well.
+
+Future chat, artifact-viewer and log-viewer components belong in the shared
+Next.js frontend, following the [UI component plan](../docs/roadmaps/composable-agent-platform-plan.md#511-web-与-desktop-ui-组件target).
+They are targets, not integrations delivered by this readiness change. The
+dependency-free `ui/` shell keeps bootstrap, service lifecycle, diagnostics and
+native credential responsibilities; it does not gain another Mission store or
+an independent Agent runtime. Component adoption must pass packaged WebView2
+and offline asset checks as well as browser tests before Desktop support is
+claimed. This change does not modify the Tauri shell or its command surface.
+
 ## Layout
 
 - `src-tauri/`: Tauri application, local process boundary, and native tests.
@@ -227,6 +240,15 @@ package contains the shell, Runtime sidecar, and the local service stack,
 so the admin UI is a self-contained local deployment target.
 
 ## Configuration and credentials
+
+The task form uses `ui/default-contract.js`, a projection of the shared Python
+default in `app/services/default_mission_contract.py`. The cross-language
+contract test executes this projection and checks its exact protocol fields.
+Default completion means independent verification of registered output
+availability, size and SHA-256. It does not certify code correctness or actual
+test execution, and the default contract grants no tools. The existing Runner
+output kind `test-result` can contain model text; no minimum byte size is
+imposed by `artifact-set.v1`.
 
 Desktop configuration is split by sensitivity. The app configuration file
 contains only validated Mission Control and MCP endpoints, the local Artifact

@@ -38,21 +38,11 @@ const https = __importStar(require("https"));
 const http = __importStar(require("http"));
 const url_1 = require("url");
 const events_1 = require("events");
-/**
- * Minimal AgentHub backend client.
- *
- * Covers:
- * - GET  /system/health                     (server liveness)
- * - GET  /v1/agent/registry                 (agent list for @mention)
- * - POST /v1/chat_mission/mission           (create chat mission)
- * - POST /v1/chat_mission/confirm           (rule confirm)
- * - GET  /v1/sessions/{id}/events/stream    (SSE — real-time chat)
- * - GET  /v1/missions/{id}/events/stream    (SSE — mission timeline)
- * - GET  /v1/git/status                     (repo status)
- * - GET  /v1/git/diff                       (diff)
- */
+/** HTTP adapter for the versioned chat admission and Mission command contracts. */
 class AgentHubClient {
-    constructor(baseUrl, apiKey = "") {
+    constructor(baseUrl, apiKey = "", workspaceId = "local-admin", requestTimeoutMs = 30000) {
+        this.workspaceId = workspaceId;
+        this.requestTimeoutMs = requestTimeoutMs;
         this.baseUrl = baseUrl.replace(/\/$/, "");
         this.apiKey = apiKey;
     }
@@ -66,25 +56,28 @@ class AgentHubClient {
         return data.registry ?? [];
     }
     // ── Chat Mission ──────────────────────────────────────────────────
-    async createMission(objective) {
-        // The backend accepts either { message: "... }" or { objective: "...", message: "..." }.
-        // We send both to be forgiving.
-        const body = JSON.stringify({ message: objective, objective });
-        const data = await this._post("/api/v1/chat/mission", body, "application/json");
-        // Note: the initial response does NOT include sessionId — the extension
-        // learns it from the first SSE event.  This is intentional (smaller
-        // create-mission payload, full context on the stream).
-        return {
-            missionId: data.missionId,
-            assignedAgentId: "", // not in response; will come via SSE
-            sessionId: "", // not in response; will come via SSE
-        };
+    async createMission(message) {
+        const data = await this._post("/api/v1/chat/mission", JSON.stringify({ message, workspaceId: this.workspaceId, stream: true }), "application/json");
+        return this._admission(data);
     }
-    async confirmMission(missionId, confirmId) {
-        return this._post("/api/v1/chat/confirm", JSON.stringify({ missionId, confirmId }), "application/json");
+    async confirmMission(pendingId) {
+        const data = await this._post("/api/v1/chat/confirm", JSON.stringify({ pendingId }), "application/json");
+        return this._admission(data);
+    }
+    async cancelPending(pendingId) {
+        return this._post("/api/v1/chat/cancel", JSON.stringify({ pendingId }), "application/json");
     }
     async cancelMission(missionId) {
-        return this._post("/api/v1/chat/cancel", JSON.stringify({ missionId }), "application/json");
+        return this._post(`/api/v1/missions/${encodeURIComponent(missionId)}/cancel`, "{}", "application/json");
+    }
+    _admission(data) {
+        if (data.status === 'pending' && typeof data.pendingId === 'string') {
+            return { status: 'pending', pendingId: data.pendingId, ruleDescription: typeof data.ruleDescription === 'string' ? data.ruleDescription : undefined };
+        }
+        if (typeof data.missionId !== 'string' || typeof data.streamUrl !== 'string') {
+            throw new Error('Invalid Mission admission response');
+        }
+        return { status: 'accepted', missionId: data.missionId, streamUrl: data.streamUrl, sessionId: typeof data.sessionId === 'string' ? data.sessionId : undefined };
     }
     // ── Git ────────────────────────────────────────────────────────────
     async gitStatus() {
@@ -115,6 +108,17 @@ class AgentHubClient {
     async _fetch(method, path, body, contentType) {
         const url = new url_1.URL(`${this.baseUrl}${path}`);
         return new Promise((resolve, reject) => {
+            let settled = false;
+            const complete = (error, value) => {
+                if (settled)
+                    return;
+                settled = true;
+                clearTimeout(deadline);
+                if (error)
+                    reject(error);
+                else
+                    resolve(value);
+            };
             const lib = url.protocol === "https:" ? https : http;
             const headers = {
                 Accept: "application/json",
@@ -133,24 +137,35 @@ class AgentHubClient {
                 const chunks = [];
                 res.on("data", (c) => chunks.push(c));
                 res.on("end", () => {
+                    if (!res.complete) {
+                        complete(new Error('AgentHub HTTP response was interrupted'));
+                        return;
+                    }
                     const raw = Buffer.concat(chunks).toString("utf-8");
-                    if (res.statusCode && res.statusCode >= 400) {
-                        reject(new Error(`${res.statusCode} ${res.statusMessage}: ${raw.slice(0, 200)}`));
+                    if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+                        complete(new Error(`${res.statusCode} ${res.statusMessage}: ${raw.slice(0, 200)}`));
                         return;
                     }
                     if (!raw) {
-                        resolve({});
+                        complete(undefined, {});
                         return;
                     }
                     try {
-                        resolve(JSON.parse(raw));
+                        complete(undefined, JSON.parse(raw));
                     }
                     catch {
-                        resolve(raw);
+                        complete(new Error('AgentHub returned an invalid JSON response'));
                     }
                 });
+                res.on('aborted', () => complete(new Error('AgentHub HTTP response was interrupted')));
+                res.on('error', error => complete(error));
             });
-            req.on("error", reject);
+            const deadline = setTimeout(() => {
+                const error = new Error('AgentHub HTTP request timed out');
+                complete(error);
+                req.destroy(error);
+            }, this.requestTimeoutMs);
+            req.on("error", error => complete(error));
             if (body)
                 req.write(body);
             req.end();
@@ -175,6 +190,20 @@ class SSESubscription extends events_1.EventEmitter {
         this.setMaxListeners(20);
     }
     connect() {
+        if (this.closed)
+            return;
+        let disconnected = false;
+        const disconnect = (error, reconnect = true) => {
+            if (this.closed || disconnected)
+                return;
+            disconnected = true;
+            // A partial frame belongs to the lost connection and cannot be joined
+            // to the next response. Transport EOF never means Mission completion.
+            this.buffer = '';
+            this.emit('error', error);
+            if (reconnect && !this.closed)
+                this._scheduleReconnect();
+        };
         const urlObj = new url_1.URL(this.url);
         const lib = urlObj.protocol === "https:" ? https : http;
         const headers = {
@@ -190,24 +219,27 @@ class SSESubscription extends events_1.EventEmitter {
             method: "GET",
             headers,
         }, (res) => {
+            // Even rejected responses can be interrupted while their body drains.
+            // Attach terminal handlers before either validation branch can return.
+            res.on('aborted', () => disconnect(new Error('Mission event connection was interrupted; reconnecting')));
+            res.on('error', error => disconnect(error));
+            res.on('end', () => disconnect(new Error('Mission event connection closed; reconnecting')));
+            if (res.statusCode !== 200 || !res.headers['content-type']?.includes('text/event-stream')) {
+                res.resume();
+                disconnect(new Error(`Mission stream unavailable (HTTP ${res.statusCode})`), false);
+                return;
+            }
             res.setEncoding("utf-8");
             res.on("data", (chunk) => {
                 this.buffer += chunk;
                 this._drain();
             });
-            res.on("end", () => {
-                if (!this.closed)
-                    this._scheduleReconnect();
-            });
         });
-        this.req.on("error", (err) => {
-            this.emit("error", err);
-            if (!this.closed)
-                this._scheduleReconnect();
-        });
+        this.req.on("error", error => disconnect(error));
         this.req.end();
     }
     _drain() {
+        this.buffer = this.buffer.replace(/\r\n/g, "\n");
         // SSE frames are separated by blank lines (double \n)
         let idx;
         while ((idx = this.buffer.indexOf("\n\n")) !== -1) {

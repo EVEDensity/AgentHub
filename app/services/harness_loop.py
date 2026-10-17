@@ -91,11 +91,12 @@ class HarnessLoop:
         self.response_content = None
         await self.record(Phase.ITERATION_STARTED)
         await self.record(Phase.MODEL_STARTED)
+        request = replace(self.request, model_operation_id=f"harness:model:{self.iteration}:response")
         if self.request.on_text_delta is not None:
             response = await self.harness._stream_with_retry(
-                self.request, tuple(self.results), tools_enabled=bool(self.harness._tools))
+                request, tuple(self.results), tools_enabled=bool(self.harness._tools))
         else:
-            response = await self.harness._complete_with_retry(self.request, tuple(self.results))
+            response = await self.harness._complete_with_retry(request, tuple(self.results))
         self.usage = self.usage.add(response.usage)
         self.response_content = response.content
         self.pending = list(response.tool_calls)
@@ -136,6 +137,7 @@ class HarnessLoop:
             "Using the tool results above, write the final answer to the original task now."))
         try:
             self.iteration = max(self.harness._max_iterations + 1, self.next_iteration)
+            request = replace(request, model_operation_id=f"harness:model:{self.iteration}:summary")
             self.next_iteration = self.iteration
             await self.record(Phase.ITERATION_STARTED)
             await self.record(Phase.MODEL_STARTED)

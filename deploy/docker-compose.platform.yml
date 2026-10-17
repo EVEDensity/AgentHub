@@ -1,6 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────
-# AgentHub Platform — full stack (infra + Go online tier + Python offline
-# tier + Rust cores + observability). Bring up with:
+# AgentHub local development stack. Experimental legacy execution/knowledge
+# services require --profile legacy-experimental; IAM administration requires
+# --profile iam-admin and an independent mounted operator credential.
+# This file is not the supported team/production topology. Bring up with:
 #   docker compose -f deploy/docker-compose.platform.yml up --build
 # ─────────────────────────────────────────────────────────────────────
 
@@ -17,12 +19,12 @@ services:
   redis:
     image: redis:7.2
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["6389:6379"]
+    ports: ["127.0.0.1:6389:6379"]
 
   nats:
     image: nats:2.10
     command: ["-js"]
-    ports: ["4222:4222", "8222:8222"]
+    ports: ["127.0.0.1:4222:4222", "127.0.0.1:8222:8222"]
 
   postgres:
     image: postgres:16
@@ -30,7 +32,7 @@ services:
       POSTGRES_USER: agenthub
       POSTGRES_PASSWORD: agenthub
       POSTGRES_DB: agenthub
-    ports: ["5435:5432"]
+    ports: ["127.0.0.1:5435:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agenthub -d agenthub"]
       interval: 3s
@@ -39,16 +41,18 @@ services:
       start_period: 5s
 
   minio:
+    profiles: ["legacy-experimental"]
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123
-    ports: ["9000:9000", "9001:9001"]
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
 
   qdrant:
+    profiles: ["legacy-experimental"]
     image: qdrant/qdrant:latest
-    ports: ["6333:6333"]
+    ports: ["127.0.0.1:6333:6333"]
 
   # ═══════════════════════════════════════════════════════════════════
   #  Milvus — 分布式向量数据库（可选，默认不启用）
@@ -87,17 +91,18 @@ services:
   #     ETCD_ENDPOINTS: milvus-etcd:2379
   #     MINIO_ADDRESS: milvus-minio:9000
   #   depends_on: [milvus-etcd, milvus-minio]
-  #   ports: ["19530:19530", "9091:9091"]
+  #   ports: ["127.0.0.1:19530:19530", "127.0.0.1:9091:9091"]
   #   volumes:
   #     - milvus-data:/var/lib/milvus
 
   opensearch:
+    profiles: ["legacy-experimental"]
     image: opensearchproject/opensearch:2.15.0
     environment:
       discovery.type: single-node
       plugins.security.disabled: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
-    ports: ["9200:9200"]
+    ports: ["127.0.0.1:9200:9200"]
 
   # ═══════════════════════════════════════════════════════════════════
   #  OBSERVABILITY
@@ -110,14 +115,14 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=7d"
-    ports: ["9090:9090"]
+    ports: ["127.0.0.1:9090:9090"]
 
   tempo:
     image: grafana/tempo:latest
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:
       - ./tempo.yml:/etc/tempo.yaml:ro
-    ports: ["3200:3200", "4318:4318"]   # 4318 = OTLP/HTTP
+    ports: ["127.0.0.1:3200:3200", "127.0.0.1:4318:4318"]   # 4318 = OTLP/HTTP
 
   grafana:
     image: grafana/grafana:latest
@@ -128,14 +133,14 @@ services:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
       - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
-    ports: ["3001:3000"]
+    ports: ["127.0.0.1:3001:3000"]
     depends_on: [prometheus, tempo, loki]
 
   # Sprint J4: Loki centralized logging — log aggregation.
   loki:
     image: grafana/loki:latest
     command: ["-config.file=/etc/loki/local-config.yaml"]
-    ports: ["3100:3100"]
+    ports: ["127.0.0.1:3100:3100"]
     volumes:
       - loki-data:/loki
 
@@ -156,7 +161,7 @@ services:
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--web.external-url=http://localhost:9093"
-    ports: ["9093:9093"]
+    ports: ["127.0.0.1:9093:9093"]
     depends_on: [prometheus]
 
   # ═══════════════════════════════════════════════════════════════════
@@ -185,9 +190,10 @@ services:
     depends_on: [nats, session-service, tempo]
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports: ["8081:8081"]
+    ports: ["127.0.0.1:8081:8081"]
 
   realtime-orchestrator:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/go/realtime-orchestrator/Dockerfile
@@ -197,7 +203,7 @@ services:
       MODEL_ADAPTER_URL: "http://model-adapter-service:8091"
       RETRIEVAL_CORE_URL: "http://retrieval-core:8102"
     depends_on: [nats, redis, model-adapter-service, retrieval-core, tempo]
-    ports: ["8082:8082"]
+    ports: ["127.0.0.1:8082:8082"]
 
   session-service:
     build:
@@ -208,7 +214,7 @@ services:
       SESSION_ADDR: ":8083"
       STREAM_DELIVERY_URL: "http://stream-delivery-service:8086"
     depends_on: [redis, postgres, stream-delivery-service, tempo]
-    ports: ["8083:8083"]
+    ports: ["127.0.0.1:8083:8083"]
 
   tool-permission-service:
     build:
@@ -218,9 +224,10 @@ services:
       <<: *go-env
       PERMISSION_ADDR: ":8084"
     depends_on: [redis, postgres, nats, tempo]
-    ports: ["8084:8084"]
+    ports: ["127.0.0.1:8084:8084"]
 
   agent-runtime-control-plane:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/go/agent-runtime-control-plane/Dockerfile
@@ -229,7 +236,7 @@ services:
       RUNTIME_ADDR: ":8085"
       MODEL_ADAPTER_URL: "http://model-adapter-service:8091"
     depends_on: [nats, tempo, model-adapter-service]
-    ports: ["8085:8085"]
+    ports: ["127.0.0.1:8085:8085"]
 
   stream-delivery-service:
     build:
@@ -239,7 +246,7 @@ services:
       <<: *go-env
       DELIVERY_ADDR: ":8086"
     depends_on: [nats, redis, tempo]
-    ports: ["8086:8086"]
+    ports: ["127.0.0.1:8086:8086"]
 
   audit-log-service:
     build:
@@ -249,9 +256,10 @@ services:
       <<: *go-env
       AUDIT_ADDR: ":8087"
     depends_on: [nats, postgres, tempo]
-    ports: ["8087:8087"]
+    ports: ["127.0.0.1:8087:8087"]
 
   iam-service:
+    profiles: ["iam-admin"]
     build:
       context: ..
       dockerfile: services/go/iam-service/Dockerfile
@@ -260,8 +268,14 @@ services:
       IAM_ADDR: ":8088"
       JWT_SECRET: "${JWT_SECRET:-}"
       JWT_TTL: "24h"
+      IAM_SERVICE_TOKEN_FILE: "/run/secrets/iam-service-token"
     depends_on: [postgres, tempo]
-    ports: ["8088:8088"]
+    expose: ["8088"]
+    secrets:
+      - iam-service-token
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
 
   sandbox-service:
     build:
@@ -280,7 +294,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./sandbox-image/seccomp.json:/etc/agenthub/seccomp.json:ro
     depends_on: [tempo]
-    ports: ["8097:8097"]
+    ports: ["127.0.0.1:8097:8097"]
 
   # ═══════════════════════════════════════════════════════════════════
   #  FRONTEND
@@ -296,12 +310,13 @@ services:
     depends_on: [gateway-service]
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
 
   # ═══════════════════════════════════════════════════════════════════
   #  PYTHON OFFLINE TIER
   # ═══════════════════════════════════════════════════════════════════
   offline-knowledge-service:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/python/offline_knowledge_service/Dockerfile
@@ -321,33 +336,37 @@ services:
       EMBEDDING_BATCH_SIZE: "32"
       MAX_CHUNKS_PER_INGEST: "2048"
     depends_on: [qdrant, opensearch, minio, nats, model-adapter-service]
-    ports: ["8092:8092"]
+    ports: ["127.0.0.1:8092:8092"]
 
   model-adapter-service:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/python/model_adapter_service/Dockerfile
-    ports: ["8091:8091"]
+    ports: ["127.0.0.1:8091:8091"]
 
   summarization-service:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/python/summarization_service/Dockerfile
     environment:
       NATS_URL: "nats://nats:4222"
     depends_on: [nats]
-    ports: ["8093:8093"]
+    ports: ["127.0.0.1:8093:8093"]
 
   evaluation-batch-service:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/python/evaluation_batch_service/Dockerfile
     environment:
       NATS_URL: "nats://nats:4222"
     depends_on: [nats]
-    ports: ["8094:8094"]
+    ports: ["127.0.0.1:8094:8094"]
 
   document-pipeline-service:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/python/document_pipeline_service/Dockerfile
@@ -363,7 +382,7 @@ services:
       # 抽取限制
       MAX_EXTRACT_CHARS: "500000"
     depends_on: [nats, minio]
-    ports: ["8095:8095"]
+    ports: ["127.0.0.1:8095:8095"]
 
   # Mission Control maintenance process. Disabled unless the operator selects
   # --profile mission-supervision; this local profile is not a production
@@ -499,9 +518,10 @@ services:
       SC_CONSUMER_POLICY: "drop_oldest"
       SC_CONSUMER_IDLE_TIMEOUT_SECS: "90"
     depends_on: [nats, tempo]
-    ports: ["8101:8101"]
+    ports: ["127.0.0.1:8101:8101"]
 
   retrieval-core:
+    profiles: ["legacy-experimental"]
     build:
       context: ..
       dockerfile: services/rust/crates/retrieval-core/Dockerfile
@@ -527,7 +547,7 @@ services:
       RC_FUSION_FRESHNESS_HALF_LIFE_DAYS: "30"
       RC_FUSION_PER_SOURCE_LIMIT: "50"
     depends_on: [nats, qdrant, opensearch, model-adapter-service, tempo]
-    ports: ["8102:8102"]
+    ports: ["127.0.0.1:8102:8102"]
 
   fanout-core:
     build:
@@ -545,7 +565,7 @@ services:
       FC_SUBSCRIBER_CAPACITY: "256"
       FC_SLOW_SUBSCRIBER_POLICY: "drop_oldest"
     depends_on: [nats, tempo]
-    ports: ["8103:8103"]
+    ports: ["127.0.0.1:8103:8103"]
 
   patch-merge-core:
     build:
@@ -559,7 +579,7 @@ services:
       PMC_MAX_TEXT_BYTES: "8388608"
       PMC_MAX_OPS: "200000"
     depends_on: [nats, tempo]
-    ports: ["8104:8104"]
+    ports: ["127.0.0.1:8104:8104"]
 
   memory-segment-core:
     build:
@@ -576,7 +596,7 @@ services:
       MSC_KEEP_RECENT: "10"
       MSC_CHARS_PER_TOKEN: "4.0"
     depends_on: [nats, tempo]
-    ports: ["8105:8105"]
+    ports: ["127.0.0.1:8105:8105"]
 
   # ═══════════════════════════════════════════════════════════════════
   #  vLLM — 本地推理服务（可选，默认不启用）
@@ -621,7 +641,7 @@ services:
       --max-model-len ${VLLM_MAX_MODEL_LEN:-8192}
       --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.9}
       --trust-remote-code
-    ports: ["8106:8000"]   # 8106 是预留端口，vLLM 内部固定 8000
+    ports: ["127.0.0.1:8106:8000"]   # 8106 是预留端口，vLLM 内部固定 8000
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -634,6 +654,8 @@ volumes:
   loki-data:
 
 secrets:
+  iam-service-token:
+    file: "${AGENTHUB_IAM_SERVICE_TOKEN_FILE:-./secrets/iam-service-token}"
   decision-expiry-database-url:
     file: "${AGENTHUB_DECISION_EXPIRY_DATABASE_URL_FILE:-./secrets/decision-expiry-database-url}"
   runner-mission-control-token:

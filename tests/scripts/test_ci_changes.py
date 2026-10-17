@@ -40,6 +40,12 @@ class CiChangeSelectionTests(unittest.TestCase):
         self.assertTrue(checks["frontend"])
         self.assertEqual([image["name"] for image in checks["images"]["include"]], ["frontend"])
 
+    def test_editor_extension_changes_run_client_contract_validation(self) -> None:
+        for path in ("src/agenthubClient.ts", "package-lock.json", "tests/client.test.cjs"):
+            with self.subTest(path=path):
+                checks = select_checks([f"extensions/vscode-agenthub/{path}"])
+                self.assertTrue(checks["frontend"])
+
     def test_python_service_change_checks_packaging_and_running_services(self) -> None:
         checks = select_checks(["services/python/model_adapter_service/main.py"])
         self.assertTrue(checks["smoke"])
@@ -48,10 +54,44 @@ class CiChangeSelectionTests(unittest.TestCase):
     def test_deployment_changes_run_real_compose_health_checks(self) -> None:
         self.assertTrue(select_checks(["deploy/docker-compose.ci.yml"])["smoke"])
 
+    def test_sandbox_image_changes_run_real_execution_validation(self) -> None:
+        self.assertTrue(select_checks(["deploy/sandbox-image/Dockerfile"])["go"])
+
+    def test_opensandbox_boundaries_select_real_conformance(self) -> None:
+        for path in ("app/services/opensandbox_backend.py", "deploy/opensandbox/lock.json",
+                     "scripts/opensandbox_poc_ci.py", "tests/services/test_opensandbox_backend.py",
+                     "app/services/runner/opensandbox_native.py", "scripts/opensandbox_native_poc.py",
+                     "tests/integration/test_opensandbox_native_sqlite.py",
+                     "tests/integration/opensandbox_native_scenario.py"):
+            self.assertTrue(select_checks([path])["opensandbox"], path)
+
     def test_cli_dependencies_select_windows_flow(self) -> None:
-        for path in ("requirements.txt", "app/services/runner/loops.py", "tests/cli/test_cli_e2e.py"):
+        for path in ("requirements.txt", "app/services/runner/loops.py", "tests/cli/test_cli_e2e.py",
+                     "tests/services/test_trusted_test_process.py",
+                     "tests/services/test_strict_provider_http.py",
+                     "tests/services/strict_provider_fixtures.py",
+                     "tests/services/test_strict_budget_harness.py",
+                     "tests/services/test_harness_model_operations.py",
+                     "tests/integration/test_strict_budget_runner_sqlite.py",
+                     "tests/services/test_opensandbox_harness.py",
+                     "tests/services/test_opensandbox_harness_supervision.py",
+                     "tests/services/test_opensandbox_native_factory.py",
+                     "tests/integration/test_opensandbox_native_sqlite.py",
+                     "tests/services/test_reviewed_skill_catalog.py",
+                     "tests/services/test_reviewed_skill_tools.py",
+                     "tests/services/test_reviewed_desktop_skills.py",
+                     "tests/services/test_desktop_skill_tools.py",
+                     "tests/integration/test_reviewed_skills_runner_sqlite.py"):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["windows_cli"])
+
+    def test_browser_read_boundaries_select_real_chromium_conformance(self) -> None:
+        for path in ("app/services/browser_read/backend.py", "app/services/runner/browser_native.py",
+                     "services/node/browser-read/worker.mjs", "services/node/browser-read/package-lock.json",
+                     "tests/services/test_browser_read_profile.py", "tests/integration/browser_read_fixture.py",
+                     "tests/integration/test_browser_read_live.py", "tests/integration/test_browser_native_runner_sqlite.py"):
+            with self.subTest(path=path):
+                self.assertTrue(select_checks([path])["browser_read"])
 
     def test_manual_run_selects_all_checks(self) -> None:
         checks = select_checks([], all_checks=True)

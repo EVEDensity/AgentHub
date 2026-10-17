@@ -33,3 +33,27 @@ content is not added to discovery, Evidence, or HTTP projections. Existing
 free-text reports fail semantic acceptance until producers migrate. See ADR-0114
 for failure behavior and the boundary between report verification and trusted
 test/scanner execution.
+
+`opensandbox-execution-report.schema.json` is an additive diagnostic Artifact
+format produced by the experimental Native sandbox Harness. Consumers are the
+disposable conformance script and integrity-verified Artifact readers; Mission
+Control and Verifier do not interpret it as a test verdict or PASS Evidence.
+It records actual command identity/exit and sanitized combined output only after
+confirmed sandbox destruction. Existing `artifact-set.v1` acceptance remains
+byte integrity. Disabling the experimental factory does not rewrite historical
+reports; see [ADR-0125](../docs/architecture/decisions/0125-experimental-sandbox-native-composition.md).
+No existing report format or database schema is migrated.
+
+`browser-execution-report.schema.json` is an additive diagnostic Artifact from
+the experimental anonymous browser-read Native Harness. It binds ordered host
+observations to Mission, WorkUnit attempt, Contract revision, operator profile,
+runtime digest, pinned Playwright/upstream versions and allowed origins. Each
+read retains its bounded worker result, timestamps and cleanup observation;
+failed or empty reads and unconfirmed cleanup remain diagnostic states. The
+nested worker result matches the strict `BrowserReadResult` DTO. Consumers are
+conformance tests and integrity-verified Artifact readers. Neither schema
+validation nor page/model text verifies factual accuracy, trusted tests or a
+Mission verdict; `acceptance` is always `artifact-integrity-only`. Mission
+Control and Verifier retain the existing `artifact-set.v1` byte-integrity
+acceptance. Disabling this operator-only composition leaves historical reports
+readable and requires no migration of existing report formats or persistence.

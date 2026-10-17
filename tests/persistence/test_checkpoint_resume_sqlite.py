@@ -28,6 +28,7 @@ class CheckpointResumeSQLiteTests(unittest.IsolatedAsyncioTestCase):
 
     async def _legacy_database(self) -> None:
         async with self.pool.acquire() as connection:
+            await connection.execute("CREATE TABLE mission_contracts(id TEXT, version INTEGER, PRIMARY KEY(id,version))")
             await connection.execute("CREATE TABLE sessions(id TEXT PRIMARY KEY, created_at TEXT NOT NULL, name TEXT NOT NULL)")
             await connection.execute("INSERT INTO sessions VALUES('old-session', '2026-09-01', 'Legacy session')")
             await connection.execute(

@@ -33,6 +33,7 @@ from app.cli.resume import ResumeExecutionPlan
 from app.cli.server_environment import build_server_env
 from app.cli.control_state import control_state_directory
 from app.services.recovery_store import runner_state_directory
+from app.services.default_mission_contract import build_default_task_contract
 from app.cli.transport import HttpTransport
 from app.cli.config import ConfigResolver
 from app.cli.sse_client import SseClient
@@ -256,34 +257,8 @@ def _load_config(cwd: Path) -> dict[str, Any]:
 
 
 def build_contract(contract_id: str, time_seconds: int) -> dict[str, Any]:
-    """Desktop-style manual contract with the deterministic verifier gate.
-
-    The ``artifact-set.v1`` criterion routes acceptance through the
-    independent unattended verifier — the executor cannot self-certify.
-    """
-    return {
-        "id": contract_id,
-        "version": 1,
-        "repositoryScopes": [],
-        "allowedCapabilities": [],
-        "budgets": {"timeSeconds": time_seconds, "modelCost": 1, "retries": 0},
-        "acceptanceCriteria": [
-            {
-                "id": "desktop-artifacts",
-                "kind": "manual",
-                "description": "CLI task artifact verification (files exist, non-empty, byte-identical).",
-                "required": True,
-                "configuration": {
-                    "evaluator": "artifact-set.v1",
-                    "workUnitKinds": ["desktop.task"],
-                    "minimumArtifacts": 1,
-                    "requiredArtifactKinds": ["test-result"],
-                },
-            }
-        ],
-        "decisionGates": [],
-        "forbiddenActions": [],
-    }
+    """Compatibility facade for the shared output-integrity contract."""
+    return build_default_task_contract(contract_id, time_seconds)
 
 
 

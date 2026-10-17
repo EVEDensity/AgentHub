@@ -35,99 +35,6 @@ function apiHeaders(): Record<string, string> {
   return { 'Content-Type': 'application/json', ...auth };
 }
 
-function fmtErr(detail: unknown, fallback: string): string {
-  return useAuthStore.getState().fmtErr(detail, fallback);
-}
-
-// ── Demo data generator (works without backend) ────────────────────
-
-function generateDemoVersions(agentId: string): AgentVersion[] {
-  const now = Date.now();
-  const baseConfig = {
-    agentId,
-    domain: 'general',
-    adapterType: 'deepseek',
-    baseModelName: 'deepseek-v3',
-    rankLevel: 'L1',
-    displayName: 'Demo Agent',
-    dutyNote: '通用助手',
-    capabilityTags: ['chat', 'code'],
-    systemPrompt: 'You are a helpful assistant.',
-    userPrompt: '',
-    assistantPrompt: '',
-  };
-
-  const versions: AgentVersion[] = [
-    {
-      id: `v-${agentId}-1`,
-      agentId,
-      version: 1,
-      snapshot: { ...baseConfig },
-      changeSummary: '初始创建',
-      changedFields: ['agentId', 'domain', 'adapterType', 'baseModelName', 'rankLevel', 'displayName', 'dutyNote', 'capabilityTags', 'systemPrompt'],
-      createdBy: 'admin',
-      createdAt: new Date(now - 7 * 86400000).toISOString(),
-    },
-    {
-      id: `v-${agentId}-2`,
-      agentId,
-      version: 2,
-      snapshot: {
-        ...baseConfig,
-        displayName: 'Demo Agent v2',
-        dutyNote: '增强版通用助手',
-        systemPrompt: 'You are a helpful assistant. Always respond in a structured format.',
-        capabilityTags: ['chat', 'code', 'analysis'],
-      },
-      changeSummary: '更新显示名称、职责说明、System Prompt，新增分析能力标签',
-      changedFields: ['displayName', 'dutyNote', 'systemPrompt', 'capabilityTags'],
-      createdBy: 'admin',
-      createdAt: new Date(now - 5 * 86400000).toISOString(),
-    },
-    {
-      id: `v-${agentId}-3`,
-      agentId,
-      version: 3,
-      snapshot: {
-        ...baseConfig,
-        displayName: 'Demo Agent v2',
-        dutyNote: '增强版通用助手',
-        systemPrompt: 'You are a helpful assistant. Always respond in a structured format.',
-        capabilityTags: ['chat', 'code', 'analysis'],
-        baseModelName: 'deepseek-v4-pro',
-        rankLevel: 'L2',
-        userPrompt: 'Please analyze the following: {{input}}',
-      },
-      changeSummary: '升级模型到 deepseek-v4-pro，调整等级为 L2，新增 User Prompt 模板',
-      changedFields: ['baseModelName', 'rankLevel', 'userPrompt'],
-      createdBy: 'admin',
-      createdAt: new Date(now - 2 * 86400000).toISOString(),
-    },
-    {
-      id: `v-${agentId}-4`,
-      agentId,
-      version: 4,
-      snapshot: {
-        ...baseConfig,
-        displayName: 'Demo Agent v2',
-        dutyNote: '增强版通用助手',
-        systemPrompt: 'You are a helpful assistant. Always respond in a structured JSON format.\n\n## Rules\n1. Be concise\n2. Use code blocks for code\n3. Cite sources when applicable',
-        capabilityTags: ['chat', 'code', 'analysis'],
-        baseModelName: 'deepseek-v4-pro',
-        rankLevel: 'L2',
-        userPrompt: 'Please analyze the following: {{input}}',
-        assistantPrompt: 'I will analyze the input and provide a structured response.',
-      },
-      changeSummary: '增强 System Prompt（添加规则区块），新增 Assistant Prompt',
-      changedFields: ['systemPrompt', 'assistantPrompt'],
-      createdBy: 'dev-user',
-      createdAt: new Date(now - 1 * 86400000).toISOString(),
-    },
-  ];
-
-  return versions;
-}
-
 // ── Store ──────────────────────────────────────────────────────────
 
 export const useAgentVersionStore = create<AgentVersionState>()((set, get) => ({
@@ -151,16 +58,13 @@ export const useAgentVersionStore = create<AgentVersionState>()((set, get) => ({
 
       if (res.ok) {
         const data = (await res.json()) as AgentVersionListResponse;
+        if (!Array.isArray(data.versions)) throw new Error('版本响应无效');
         set({ versions: data.versions, loading: false });
       } else {
-        // Fallback: use demo data when backend is not available
-        const demo = generateDemoVersions(agentId);
-        set({ versions: demo, loading: false });
+        throw new Error(`加载版本失败 (HTTP ${res.status})`);
       }
-    } catch {
-      // Network error — use demo data
-      const demo = generateDemoVersions(agentId);
-      set({ versions: demo, loading: false });
+    } catch (err) {
+      set({ versions: [], loading: false, error: err instanceof Error ? err.message : '版本服务不可用' });
     }
   },
 
@@ -229,16 +133,11 @@ export const useAgentVersionStore = create<AgentVersionState>()((set, get) => ({
         set({ rollingBack: false });
         return true;
       } else {
-        // Demo mode: simulate success
-        useAdminStore.getState().setNotice(`[演示] 已回滚 Agent "${agentId}" 到版本 v${targetVersion}`);
-        set({ rollingBack: false });
-        return true;
+        throw new Error(`回滚失败 (HTTP ${res.status})`);
       }
-    } catch {
-      // Demo mode fallback
-      useAdminStore.getState().setNotice(`[演示] 已回滚 Agent "${agentId}" 到版本 v${targetVersion}`);
-      set({ rollingBack: false });
-      return true;
+    } catch (err) {
+      set({ rollingBack: false, error: err instanceof Error ? err.message : '回滚服务不可用' });
+      return false;
     }
   },
 
