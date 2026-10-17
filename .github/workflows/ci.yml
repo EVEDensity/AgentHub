@@ -322,6 +322,12 @@ jobs:
           cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'artifact-log.spec.ts' in c.get('classname','')];
           assert len(cases) >= 7;
           assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
+      - name: Require honest admin header browser coverage without skips
+        run: >-
+          python -c "import xml.etree.ElementTree as E;
+          cases=[c for c in E.parse('.tmp/frontend-playwright.xml').getroot().iter('testcase') if 'admin-header.spec.ts' in c.get('classname','')];
+          assert len(cases) >= 3;
+          assert all(c.find('skipped') is None and c.find('failure') is None and c.find('error') is None for c in cases)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef, type JSX, type ReactNode } fr
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '../../stores/authStore';
 import { useAdminStore, type MenuItem } from '../../stores/adminStore';
-import { useAgentStore } from '../../stores/agentStore';
 import { WorkspaceSelector } from '../../components/admin/WorkspaceSelector';
 import AdminSidebar from '../../components/admin/AdminSidebar';
 import AdminActivityPanel, { type FrontendActivity } from '../../components/admin/AdminActivityPanel';
@@ -25,7 +24,6 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
   const user = useAuthStore((s) => s.user);
   const activeMenu = useAdminStore((s) => s.activeMenu);
   const setActiveMenu = useAdminStore((s) => s.setActiveMenu);
-  const defaultChatAgent = useAgentStore((s) => s.defaultChatAgent);
 
   // ── Panel state ────────────────────────────────────────────────────
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -252,14 +250,14 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
           ════════════════════════════════════════════════════ */}
       <div className="admin-right-panel">
         {/* ── Status bar (thin top bar) ── */}
-        <div className="admin-status-bar">
+        <div className="admin-status-bar" role="region" aria-label="执行指标状态" style={{ height: 'auto', minHeight: 32 }}>
           <div className="admin-status-item">
-            运行指标尚未接入
+            运行指标尚未接入：实际执行模型、Token 用量和上下文占用
           </div>
         </div>
 
         {/* ── Header bar ── */}
-        <header className="admin-header">
+        <header className="admin-header" aria-label="管理页头部">
           <div className="admin-header-inner">
             {/* Left section */}
             <div className="admin-header-left">
@@ -314,27 +312,6 @@ export default function AdminLayout({ children }: { children: ReactNode }): JSX.
               {/* Active menu tag */}
               <span className="admin-header-menu-tag">{activeMenu}</span>
 
-              {/* Context status — token / model / session */}
-              <div className="admin-header-status">
-                <span className="admin-header-status-item" title="当前模型">
-                  <span className="admin-header-status-dot model" />
-                  {defaultChatAgent || 'Claude Opus 4.8'}
-                </span>
-                <span className="admin-header-status-sep" />
-                <span className="admin-header-status-item" title="Token 用量 (今日)">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                  </svg>
-                  12.4K / 200K
-                </span>
-                <span className="admin-header-status-sep" />
-                <span className="admin-header-status-item" title="上下文窗口填充率">
-                  <span className="admin-header-status-bar">
-                    <span className="admin-header-status-fill" style={{ width: '18%' }} />
-                  </span>
-                  18%
-                </span>
-              </div>
             </div>
 
             {/* Right section */}

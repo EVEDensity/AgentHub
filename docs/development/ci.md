@@ -68,6 +68,14 @@ bytes, permission/network retries and explicit display bounds. Boundary fixtures
 are identified separately from the real process log. No Mission write or PASS
 is created by viewing a log. Local JS/CSS/license resources and the existing
 frontend activity/Terminal honesty checks remain part of validation.
+UI-3b adds three required header cases without skips: an empty Mission catalog,
+switching actual Missions, and a failed configuration read. They retain the
+unavailable execution-metrics explanation and reject configured-Agent/model,
+fixed token and context-occupancy claims. Existing owned HTTP/SQLite Mission
+fixtures serve real Mission reads; unrelated configuration/catalog fixtures
+remain explicit. Observing the header must not add Mission commands or infer
+execution telemetry from configuration. This remains shared-source browser
+coverage, not a native Desktop release result.
 UI-4a adds a separate desktop shell browser-preview check using the same locked
 Playwright installation and matching Chromium. Node tests exercise actual
 static HTTP boundaries, occupied-port ownership and failure cleanup; Windows
