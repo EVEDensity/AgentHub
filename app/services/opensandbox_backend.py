@@ -130,7 +130,8 @@ class OpenSandboxBackend:
             phase = "workspace_initialize"
             result = await self.execute(sandbox_id, ["mkdir", "-p", "/workspace"], timeout_seconds=10)
             if result.exit_code != 0:
-                raise OpenSandboxError("workspace initialization failed")
+                raise OpenSandboxError("workspace initialization failed", code="workspace_initialize_failed",
+                                       operation="workspace_initialize", exit_code=result.exit_code)
         except BaseException as exc:
             if isinstance(exc, OpenSandboxError) and exc.operation == "unknown":
                 exc.operation = phase

@@ -73,6 +73,14 @@ are not tenant-specific authenticated endpoints. Real malicious-workload
 isolation, kernel escapes, DNS rebinding and adversarial network-policy bypasses
 require separate evaluation.
 
+The pinned execd advertises `text/event-stream` but writes legacy bare JSON
+objects separated by blank lines. The adapter accepts that framing and standard
+SSE `data:` frames, as the official SDK does. Both require exactly one command
+identity; errors, mixed framing and missing identities fail the run. Command
+success still requires the separate terminal status and actual exit code.
+Sources: [pinned writer](https://github.com/opensandbox-group/OpenSandbox/blob/6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9/components/execd/pkg/web/controller/sse.go),
+[SDK normalizer](https://github.com/opensandbox-group/OpenSandbox/blob/6150f3642bbf9db47f06d6c42ca9c7bfae06b3e9/sdks/sandbox/python/src/opensandbox/adapters/sse.py).
+
 ## Pinning and provenance
 
 [`images.lock.json`](images.lock.json) records all OCI digests, `linux/amd64`,

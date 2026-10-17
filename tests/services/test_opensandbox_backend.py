@@ -53,12 +53,13 @@ class WirePeer:
         self.sequence += 1
         identity = f"cmd-{self.sequence}"
         mode, self.next_mode = self.next_mode, "normal"
-        code = 7 if body["argv"] == ["exit-seven"] else 0
+        code = 7 if body["argv"] == ["exit-seven"] or mode == "nonzero" else 0
         self.commands[identity] = {"sandbox": sandbox, "running": mode == "running",
                                    "exit": code, "mode": mode}
         self.started.set()
         payload = {"type": "init", "text": identity, "timestamp": 1}
-        data = "data: " + json.dumps(payload) + "\n\n"
+        # Pinned execd writes legacy JSON frames, not standard data: prefixes.
+        data = json.dumps(payload) + "\n\n"
         if mode == "dropped":
             data = ""
         return httpx.Response(200, text=data, headers={"Content-Type": "text/event-stream"})
@@ -157,6 +158,22 @@ class OpenSandboxProtocolTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(OpenSandboxError):
                 execution_from_sse(data)
 
+    def test_pinned_execd_legacy_frames_and_standard_sse_both_confirm_identity(self):
+        events = [{"type": "init", "text": "cmd-1", "timestamp": 1},
+                  {"type": "ping", "text": "pong"}, {"type": "complete", "execution_time": 2}]
+        for prefix in ("", "data: "):
+            for newline in ("\n", "\r\n"):
+                with self.subTest(prefix=prefix, newline=newline):
+                    data = (newline * 2).join(prefix + json.dumps(event) for event in events)
+                    self.assertEqual(execution_from_sse(data.encode()), "cmd-1")
+
+    def test_legacy_error_duplicate_malformed_and_mixed_frames_cannot_confirm_start(self):
+        init = b'{"type":"init","text":"cmd-1"}\n\n'
+        for data in (init + b'{"type":"error","error":{"evalue":"secret"}}\n\n', init + init,
+                     init + b'{"type":"complete"', b'data: ' + init + init, init + b'data: ' + init):
+            with self.subTest(data=data), self.assertRaises(OpenSandboxError):
+                execution_from_sse(data)
+
     def test_terminal_needs_identity_boolean_exit_and_timestamp(self):
         base = {"id": "cmd-1", "running": False, "exit_code": 0, "finished_at": "2026-10-17T01:00:00Z"}
         for overrides in ({"id": "other"}, {"running": "false"}, {"exit_code": None},
@@ -188,6 +205,14 @@ class OpenSandboxBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("volumes", body)
         self.assertNotIn("env", body)
         self.assertEqual((await self.backend.network_policy(sandbox))["policy"]["defaultAction"], "deny")
+
+    async def test_workspace_failure_records_actual_exit_without_command_output(self):
+        self.peer.next_mode = "nonzero"
+        with self.assertRaises(OpenSandboxError) as failure:
+            await self.backend.create(JOB)
+        self.assertEqual(failure.exception.diagnostic(), {"code": "workspace_initialize_failed",
+            "operation": "workspace_initialize", "exit_code": 7})
+        self.assertNotIn(FIRST, self.peer.sandboxes)
 
     async def test_preserves_real_nonzero_status_and_uses_authenticated_proxy(self):
         sandbox = await self.backend.create(JOB)

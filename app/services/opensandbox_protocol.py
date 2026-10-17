@@ -22,16 +22,18 @@ class OpenSandboxError(RuntimeError):
 
     def __init__(self, message: str, *, code: str = "backend_failure",
                  http_status: int | None = None, upstream_code: str | None = None,
-                 operation: str = "unknown") -> None:
+                 operation: str = "unknown", exit_code: int | None = None) -> None:
         super().__init__(message)
         self.code = code if isinstance(code, str) and code in {
             "backend_failure", "http_error", "transport_error", "transport_timeout", "request_timeout",
+            "command_identity_missing", "command_start_rejected", "workspace_initialize_failed",
         } else "backend_failure"
         self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
         self.upstream_code = (upstream_code if isinstance(upstream_code, str)
                               and upstream_code in UPSTREAM_ERROR_CODES else None)
         self.operation = operation if isinstance(operation, str) and operation in WIRE_OPERATIONS else "unknown"
         self.cleanup_error: dict | None = None
+        self.exit_code = exit_code if type(exit_code) is int and -2147483648 <= exit_code <= 2147483647 else None
 
     def diagnostic(self) -> dict:
         """Only fixed local codes, an HTTP integer and exact upstream enums."""
@@ -42,6 +44,8 @@ class OpenSandboxError(RuntimeError):
             result["upstream_code"] = self.upstream_code
         if self.cleanup_error is not None:
             result["cleanup"] = self.cleanup_error
+        if self.exit_code is not None:
+            result["exit_code"] = self.exit_code
         return result
 
 
@@ -194,24 +198,37 @@ def json_object(data: bytes) -> dict:
 
 
 def execution_from_sse(data: bytes) -> str:
-    """Background start requires exactly one well-formed init event."""
+    """Accept pinned execd bare-JSON frames and standard SSE data frames.
+
+    The 1.1.1 writer sends JSON followed by two newlines despite advertising
+    text/event-stream. Its own SDK normalizes this legacy framing. Both forms
+    still require exactly one init; mixed framing and error events fail closed.
+    """
     try:
         text = data.decode("utf-8")
     except UnicodeError:
         raise OpenSandboxError("invalid backend event stream") from None
+    legacy = text.lstrip().startswith(("{", "["))
     found: list[str] = []
     for block in text.replace("\r\n", "\n").split("\n\n"):
-        payload = "\n".join(line[5:].lstrip(" ") for line in block.splitlines()
-                            if line.startswith("data:"))
+        if legacy:
+            payload = block.strip()
+        else:
+            if block.lstrip().startswith(("{", "[")):
+                raise OpenSandboxError("mixed backend event framing")
+            payload = "\n".join(line[5:].lstrip(" ") for line in block.splitlines()
+                                if line.startswith("data:"))
         if not payload:
             continue
         event = json_object(payload.encode())
         if event.get("type") == "error":
-            raise OpenSandboxError("backend rejected command start")
+            raise OpenSandboxError("backend rejected command start", code="command_start_rejected",
+                                   operation="command_start")
         if event.get("type") == "init":
             found.append(identifier(event.get("text")))
     if len(found) != 1:
-        raise OpenSandboxError("backend did not confirm command identity")
+        raise OpenSandboxError("backend did not confirm command identity", code="command_identity_missing",
+                               operation="command_start")
     return found[0]
 
 
