@@ -1,8 +1,11 @@
 import type { ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import type { Terminal } from '@xterm/xterm';
 import { expect, test, type APIRequestContext, type Frame, type Page } from '@playwright/test';
 import { projectArtifactLog } from '../lib/artifacts/artifactLogProjection';
+import type { ArtifactPreview } from '../lib/artifacts/missionArtifactPreview';
 import { ownedPythonFixtureLogs, startOwnedPythonFixture, stopOwnedPythonFixture } from './helpers/ownedPythonFixture';
+import { capturedPreviewResponse, installPreviewResponseCapture, previewCaptureGeneration } from './helpers/previewResponseCapture';
 
 const ORIGIN = 'http://127.0.0.1:38100';
 const MISSION = 'mis-log-browser';
@@ -11,6 +14,7 @@ type Audit = { created: number; disposed: number; clipboard: number; navigation:
 type LogWindow = Window & { __logTerminal?: Terminal; __logAudit: Audit; LOG_PREVIEW_EXECUTED?: unknown };
 
 async function openMission(page: Page) {
+  await installPreviewResponseCapture(page);
   const reads: string[] = [];
   const writes: string[] = [];
   const requests: string[] = [];
@@ -70,11 +74,20 @@ async function openMission(page: Page) {
 }
 
 async function openLog(page: Page, id = 'real') {
-  const response = page.waitForResponse(value => new URL(value.url()).pathname === `/api/v1/missions/${MISSION}/artifacts/artifact-log-${id}/preview`);
+  const path = `/api/v1/missions/${MISSION}/artifacts/artifact-log-${id}/preview`;
+  const generation = await previewCaptureGeneration(page);
+  const response = page.waitForResponse(value => new URL(value.url()).pathname === path);
   await page.getByRole('button', { name: `预览 artifact-log-${id}`, exact: true }).click();
   const actual = await response;
   expect(actual.status()).toBe(200);
-  const preview = await actual.json();
+  // Observe the application's actual chunks instead of a separate CDP body-cache read.
+  const captured = await capturedPreviewResponse(page, path, generation);
+  expect(captured.status).toBe(200); expect(captured.url).toBe(actual.url());
+  const preview = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(captured.bytes))) as ArtifactPreview;
+  expect(preview).toMatchObject({ schemaVersion: 1, encoding: 'utf-8', integrity: 'verified', artifact: { id: `artifact-log-${id}`, missionId: MISSION, kind: 'log' } });
+  const bytes = Buffer.from(preview.text, 'utf8');
+  expect(bytes.byteLength).toBe(preview.artifact.sizeBytes);
+  expect(`sha256:${createHash('sha256').update(bytes).digest('hex')}`).toBe(preview.artifact.digest);
   const element = page.getByTitle(`产物 artifact-log-${id} 的只读日志`);
   await expect(element).toBeVisible();
   const frame = await (await element.elementHandle())!.contentFrame();
