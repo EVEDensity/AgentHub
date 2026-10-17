@@ -80,8 +80,10 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
         return all_checks or any(path.startswith(prefixes) for path in paths)
 
     contracts = changed("platform/contracts/", "tests/contracts/")
-    go = contracts or changed("services/go/")
-    frontend = contracts or changed("frontend/", "app/api/", "app/schemas/", "tests/api/")
+    go = contracts or changed("services/go/", "deploy/sandbox-image/")
+    frontend = contracts or changed(
+        "frontend/", "extensions/vscode-agenthub/", "app/api/", "app/schemas/", "tests/api/",
+    )
     rust = contracts or changed("services/rust/")
     windows_cli = contracts or changed(
         "app/", "desktop/", "tests/cli/", "tests/desktop/", "tests/npm/",

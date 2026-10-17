@@ -13,6 +13,9 @@ Create new records from `0000-template.md`.
 
 | ADR | Title |
 |---|---|
+| [0120](0120-development-service-failure-boundaries.md) | Seal privileged development services and fail closed on sandbox loss |
+| [0119](0119-default-task-artifact-acceptance.md) | Share explicit output-integrity acceptance across entry points |
+| [0118](0118-composable-agent-integrations.md) | Compose external capabilities behind Mission-owned execution |
 | [0110](0110-checkpoint-resume-storage-compatibility.md) | Preserve checkpoint migration lineage and resume storage compatibility |
 | [0108](0108-event-log-as-memory-multi-agent-collaboration.md) | Event log as memory for multi-agent collaboration |
 | [0107](0107-memory-slimming-web-chat-decommission.md) | Slim the memory subsystem to L0/L1 |

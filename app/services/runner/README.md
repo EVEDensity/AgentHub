@@ -41,7 +41,7 @@ rejection remains immediate, and local authentication bypasses environment proxi
 explicit grants for the canonical Harness tool gateway. Suggest mode denies
 workspace mutation; edit mode permits bounded workspace edits; auto mode also
 permits the built-in code executor. Built-in handlers retain path and execution
-limits. Shell acceptance commands keep their existing declared-command channel.
+limits. Objective text never grants command execution or extra tool authority.
 Arbitrary remote, network and MCP side effects receive no implicit grant.
 Child desktop Harness runs inherit the same permission policy. A factory without
 an injected policy cannot approve side effects.
@@ -78,3 +78,19 @@ the saved visible result prefix. The normal loop and a successful-receipt gap
 apply the same limiter, so restarting preserves both feedback and its remaining
 character budget. Its scoped executor retains gateway permission/hook services
 and leaves the process-global result counter to compatibility callers.
+
+## Default verification boundary
+
+`controller.py` checks registered content bytes for availability, exact size and
+SHA-256. Zero-byte outputs are valid when those facts match. The default
+`artifact-set.v1` policy proves no code correctness or external test execution.
+It never executes objective `RUN:` or `VERIFY:` markers. `loops.py` retains the
+compatibility parsers and low-level `run_verify_command` helper; that helper
+does not authorize execution or create trusted test Evidence on its own.
+Future test producers need an explicit Contract boundary and attributable
+reports before the Runner completes its lease-bound artifact set.
+
+The controller tests cover CAS bytes and inert objective markers.
+`tests/integration/test_default_task_acceptance_sqlite.py` exercises the real
+controller through authenticated HTTP Evidence admission and durable SQLite
+transitions, including empty outputs.

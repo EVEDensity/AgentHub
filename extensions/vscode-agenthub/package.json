@@ -1,6 +1,6 @@
 {
   "name": "agenthub",
-  "displayName": "AgentHub — Multi-Agent Collaboration",
+  "displayName": "AgentHub \u2014 Multi-Agent Collaboration",
   "description": "Chat with AgentHub agents inside VS Code. @agent to wake them up, watch Mission events in real time, and review Artifacts + Evidence.",
   "version": "0.1.0",
   "publisher": "agenthub",
@@ -31,6 +31,11 @@
           "type": "string",
           "default": "",
           "description": "Optional API key for protected deployments."
+        },
+        "agenthub.workspaceId": {
+          "type": "string",
+          "default": "local-admin",
+          "description": "Workspace ID authorized for the configured user token."
         }
       }
     },
@@ -41,7 +46,7 @@
       },
       {
         "command": "agenthub.createMission",
-        "title": "AgentHub: Create Mission…"
+        "title": "AgentHub: Create Mission\u2026"
       },
       {
         "command": "agenthub.refreshMissions",
@@ -51,10 +56,6 @@
       {
         "command": "agenthub.sendSelection",
         "title": "AgentHub: Send Selection to Chat"
-      },
-      {
-        "command": "agenthub.watchDiff",
-        "title": "AgentHub: Watch Current File Diff"
       }
     ],
     "viewsContainers": {
@@ -72,11 +73,6 @@
           "type": "tree",
           "id": "agenthub.missions",
           "name": "Missions"
-        },
-        {
-          "type": "webview",
-          "id": "agenthub.chat",
-          "name": "Chat"
         }
       ]
     },
@@ -92,7 +88,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "node ./node_modules/@vscode/vsce/vsce.js package"
+    "package": "node ./node_modules/@vscode/vsce/vsce.js package",
+    "test": "npm run compile && node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

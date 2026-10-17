@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function prepareChat(page: Page, readFailure = false) {
+async function prepareChat(page: Page, readFailure = false, submit = true) {
   let submissions = 0;
   let reads = 0;
   let cancelled = false;
@@ -49,7 +49,7 @@ async function prepareChat(page: Page, readFailure = false) {
   await page.goto('/');
   const composer = page.locator('textarea.composer-textarea');
   await composer.fill('@executor inspect this workspace');
-  await page.locator('button.composer-send-btn').click();
+  if (submit) await page.locator('button.composer-send-btn').click();
   return { submissions: () => submissions, body: () => submittedBody, cancelled: () => cancelled };
 }
 
@@ -74,4 +74,65 @@ test('status outage is visible and read retry does not submit a duplicate Missio
   await status.getByRole('button', { name: '重试读取状态' }).click();
   await expect(status.getByText('executor · 等待 Runner 连接，任务尚未执行')).toBeVisible();
   expect(calls.submissions()).toBe(1);
+});
+
+test('unsupported attachments remain in the composer and never become a partial text Mission', async ({ page }) => {
+  const calls = await prepareChat(page, false, false);
+  const composer = page.locator('textarea.composer-textarea');
+  await page.locator('input[type=file]').setInputFiles({ name: 'context.txt', mimeType: 'text/plain', buffer: Buffer.from('required context') });
+  const remove = page.getByRole('button', { name: '移除 context.txt' });
+  await expect(remove).toBeVisible();
+  await page.locator('button.composer-send-btn').click();
+  await expect(page.getByText('当前 Mission 聊天暂不支持附件，请移除附件后发送文本。', { exact: true })).toBeVisible();
+  expect(calls.submissions()).toBe(0);
+  await expect(composer).toHaveValue('@executor inspect this workspace');
+  await expect(remove).toBeVisible();
+  await remove.click();
+  await page.locator('button.composer-send-btn').click();
+  await expect.poll(calls.submissions).toBe(1);
+  expect(calls.body()).toEqual({ message: '@executor inspect this workspace', workspaceId: 'alice', sessionId: null, stream: true });
+});
+
+test('failed admission keeps the complete text draft for retry', async ({ page }) => {
+  await prepareChat(page, false, false);
+  await page.route('**/api/v1/chat/mission', route => route.fulfill({
+    status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'admission unavailable' }),
+  }));
+  const composer = page.locator('textarea.composer-textarea');
+  await page.locator('button.composer-send-btn').click();
+  await expect(page.getByText('Mission create failed — check console for details', { exact: true })).toBeVisible();
+  await expect(composer).toHaveValue('@executor inspect this workspace');
+});
+
+test('late admission preserves new text and attachments entered while submitting', async ({ page }) => {
+  await prepareChat(page, false, false);
+  let releaseAdmission!: () => void;
+  const held = new Promise<void>(resolve => { releaseAdmission = resolve; });
+  let received = false;
+  await page.route('**/api/v1/chat/mission', async route => {
+    received = true;
+    await held;
+    await route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({
+      missionId: 'mission-browser-1', sessionId: 'native-browser-session',
+      streamUrl: '/api/v1/missions/mission-browser-1/events/stream',
+    }) });
+  });
+  const composer = page.locator('textarea.composer-textarea');
+  await page.locator('button.composer-send-btn').click();
+  await expect.poll(() => received).toBe(true);
+  await composer.fill('next task draft');
+  await page.locator('input[type=file]').setInputFiles({ name: 'next-task.txt', mimeType: 'text/plain', buffer: Buffer.from('new task context') });
+  const remove = page.getByRole('button', { name: '移除 next-task.txt' });
+  await expect(remove).toBeVisible();
+  releaseAdmission();
+  await expect(page.getByRole('region', { name: 'Mission 执行状态' })).toBeVisible();
+  await expect(composer).toHaveValue('next task draft');
+  await expect(remove).toBeVisible();
+});
+
+test('successful admission clears the unchanged submitted draft', async ({ page }) => {
+  await prepareChat(page, false, false);
+  await page.locator('textarea.composer-textarea').press('Control+Enter');
+  await expect(page.getByRole('region', { name: 'Mission 执行状态' })).toBeVisible();
+  await expect(page.locator('textarea.composer-textarea')).toHaveValue('');
 });
