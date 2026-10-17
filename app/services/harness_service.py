@@ -106,6 +106,13 @@ def is_transient_model_error(exc: BaseException) -> bool:
             return True
     return False
 
+
+def _model_retry_policy(value: int) -> int:
+    if type(value) is not int or value not in {0, 1}:
+        raise ValueError("model_retries must be the integer zero or one")
+    return value
+
+
 class FunctionCallingHarness:
     """Bounded model/function-call loop with an explicit per-run tool allowlist."""
 
@@ -124,6 +131,7 @@ class FunctionCallingHarness:
         approval_callback: Callable[[str, Mapping[str, Any]], Awaitable[bool] | bool] | None = None,
         recovery: Any = None,
         feedback_policy: Any = None,
+        model_retries: int = 1,
     ) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be at least 1")
@@ -151,6 +159,7 @@ class FunctionCallingHarness:
         self._recovery = recovery
         self._recovery_close_deferred = False
         self._feedback_policy = feedback_policy
+        self._model_retries = _model_retry_policy(model_retries)
 
     @property
     def workspace_root(self) -> Path | None:
@@ -222,7 +231,7 @@ class FunctionCallingHarness:
         try:
             return await invoke()
         except Exception as exc:  # noqa: BLE001 - retried only when transient
-            if not is_transient_model_error(exc):
+            if not self._should_retry_model(exc):
                 raise
             logger.warning(
                 "harness: transient model error (%s: %s), retrying once in %.1fs",
@@ -294,10 +303,7 @@ class FunctionCallingHarness:
         try:
             return await consume_once()
         except Exception as exc:
-            if (
-                getattr(exc, "_agenthub_stream_delivered", False)
-                or not is_transient_model_error(exc)
-            ):
+            if not self._should_retry_model(exc):
                 raise
             logger.warning(
                 "harness: transient pre-stream model error (%s), retrying once",
@@ -305,6 +311,10 @@ class FunctionCallingHarness:
             )
             await asyncio.sleep(MODEL_RETRY_BACKOFF_SECONDS)
             return await consume_once()
+
+    def _should_retry_model(self, exc: Exception) -> bool:
+        return (self._model_retries == 1 and not getattr(exc, "_agenthub_stream_delivered", False)
+                and is_transient_model_error(exc))
 
     def _build_model_request(
         self,
@@ -335,6 +345,8 @@ class FunctionCallingHarness:
                 )
             )
         metadata: dict[str, Any] = {"language": request.language}
+        if request.model_operation_id is not None:
+            metadata["modelOperationId"] = request.model_operation_id
         if request.cwd is not None:
             metadata["cwd"] = str(request.cwd)
         if request.execution is not None:

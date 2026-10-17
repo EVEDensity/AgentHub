@@ -88,6 +88,8 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
     windows_cli = contracts or changed(
         "app/", "desktop/", "tests/cli/", "tests/desktop/", "tests/npm/",
         "tests/services/test_trusted_test_",
+        "tests/services/test_strict_", "tests/services/strict_provider_fixtures.py",
+        "tests/services/test_harness_model_operations.py", "tests/integration/test_strict_budget_",
         "requirements", "pyproject.toml", "release/", "scripts/build-cli-",
     )
     images = _container_images(changed, go, rust, frontend)

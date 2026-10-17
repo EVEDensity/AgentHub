@@ -149,3 +149,46 @@ The controller tests cover CAS bytes and inert objective markers.
 `tests/integration/test_default_task_acceptance_sqlite.py` exercises the real
 controller through authenticated HTTP Evidence admission and durable SQLite
 transitions, including empty outputs.
+
+## Experimental strict provider budget composition
+
+`strict_budget.StrictBudgetHarnessFactory` is an explicit in-process factory for
+`DesktopTaskClaimedWorkResolver`. It privately binds the authenticated Runner and
+actual claim identity, then uses `strict_provider.BudgetedModelPort` for direct
+HTTP calls. It is absent from the default Desktop/CLI/Chat and standalone Runner
+service wiring. The operator must supply the ledger, fixed provider profile and
+private credential; there is no fallback to the existing adapter.
+The optional constructor `limit_usd` is operator-only and must match an existing
+lower account limit. Omitting it selects the actual Contract ceiling; a mismatch
+with a frozen account fails closed. Claim context and model metadata cannot
+override that limit or private scope. Factory construction may happen while
+LEASED; reservation and dispatch occur only when the model is invoked.
+
+The factory accepts only manual/chat desktop roots, refuses resume and streaming,
+and sets `FunctionCallingHarness(model_retries=0)`. The compatibility default
+remains one transient retry. Harness generates
+`harness:model:{iteration}:response` and `harness:model:{iteration}:summary`;
+bounded retries keep the same identity. These are request metadata, not
+authorization or a new checkpoint schema. The ledger rechecks the RUNNING lease
+before dispatch. There is no planner, reflection or delegation. Runner's
+aggregate ModelUsage remains telemetry and cannot settle the ledger.
+
+Tools default to an empty tuple. Injected tools require an explicit operator
+allowlist, complete capability mapping, matching WorkUnit requirements and unique
+unscoped Contract grants. Scoped handlers and known model/delegation or remote
+agent/MCP capabilities are refused. Accepted handlers must be trusted local
+operator code performing no model/network calls. Names and capability strings
+do not prove arbitrary handlers satisfy that restriction. This does not sandbox
+Python or establish a general-purpose extension security boundary.
+
+The profile reserves a reviewed maximum billing input window plus its enforced
+completion limit per HTTP request. Its assumptions and unknown-usage behavior
+are documented in [the provider guide](../strict_provider/README.md) and
+[ADR-0124](../../../docs/architecture/decisions/0124-strict-in-process-provider-budget-profile.md).
+`tests/integration/test_strict_budget_runner_sqlite.py` uses a real loopback HTTP
+peer, SQLite ledger, Runner claim/reporting, CAS and independent byte verifier.
+Its successful terminal result proves output integrity, not code correctness or
+live supplier billing. Insufficient funds prevent the next HTTP request, and
+trusted late settlement cannot revive cancelled work.
+Focused Harness tests are `tests/services/test_harness_model_operations.py` and
+`tests/services/test_strict_budget_harness.py`.

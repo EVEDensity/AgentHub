@@ -64,7 +64,12 @@ class CiChangeSelectionTests(unittest.TestCase):
 
     def test_cli_dependencies_select_windows_flow(self) -> None:
         for path in ("requirements.txt", "app/services/runner/loops.py", "tests/cli/test_cli_e2e.py",
-                     "tests/services/test_trusted_test_process.py"):
+                     "tests/services/test_trusted_test_process.py",
+                     "tests/services/test_strict_provider_http.py",
+                     "tests/services/strict_provider_fixtures.py",
+                     "tests/services/test_strict_budget_harness.py",
+                     "tests/services/test_harness_model_operations.py",
+                     "tests/integration/test_strict_budget_runner_sqlite.py"):
             with self.subTest(path=path):
                 self.assertTrue(select_checks([path])["windows_cli"])
 

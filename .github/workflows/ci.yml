@@ -200,6 +200,13 @@ jobs:
           python -m pytest tests/services/test_trusted_test_snapshot.py
           tests/services/test_trusted_test_producer.py tests/services/test_trusted_test_harness.py
           tests/services/test_trusted_test_process.py -q --tb=short
+      - name: Verify strict provider HTTP accounting and Native Harness composition
+        run: >-
+          python -m pytest tests/services/test_strict_provider_http.py
+          tests/services/test_strict_provider_wire.py tests/services/test_strict_provider_fences.py
+          tests/services/test_strict_budget_harness.py
+          tests/services/test_harness_model_operations.py
+          tests/integration/test_strict_budget_runner_sqlite.py -q --tb=short
 
   frontend:
     name: Frontend, editor contracts and browser flow

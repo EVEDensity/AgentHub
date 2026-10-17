@@ -46,7 +46,12 @@ workspace tree.
   `domain/mission_budget.py`, `services/model_pricing.py` and the internal
   `MissionBudgetService` add exact nano-USD reservation/settlement infrastructure
   backed by the Mission repository transaction. It is default-off infrastructure;
-  no real model HTTP/Harness path is budget-enforced by this addition. Same-Mission
+  default model paths are not budget-enforced by this addition. The separate
+  operator-only `strict_provider` and `runner/strict_budget.py` composition binds
+  actual direct HTTP calls to the ledger, with no retry and conservative
+  operator-attested token bounds; see
+  [ADR-0124](../docs/architecture/decisions/0124-strict-in-process-provider-budget-profile.md).
+  Same-Mission
   child WorkUnits share an account; forked Missions do not inherit one. See
   [ADR-0123](../docs/architecture/decisions/0123-persistent-mission-budget-ledger.md).
 

@@ -2,7 +2,7 @@
 
 > Status: implemented
 > Owner: repository maintainers
-> Last reviewed: 2026-10-17
+> Last reviewed: 2026-10-18
 > Scope: GitHub Actions validation, release checks and external evidence
 
 ## Deterministic merge gate
@@ -45,6 +45,10 @@ The same Windows job runs the trusted-local snapshot, producer, Harness and
 process tests, including actual subprocess/Job Object cleanup. POSIX-only cases
 skip there and execute in the Linux core suite. Changes to those tests select
 the Windows job even when production source is unchanged.
+The Windows job also runs strict-provider wire/real loopback HTTP accounting,
+Native Harness operation/retry policy and the real SQLite Runner/CAS/Verifier
+composition tests. These require no paid provider or external credentials and
+do not establish live vendor billing conformance.
 Public contract changes select all runtime consumers. Container builds follow
 the actual supported service recipes and their COPY inputs:
 

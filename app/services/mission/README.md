@@ -45,7 +45,10 @@ the existing admission path. See `trusted_tests/admission.py` and
 ## Internal budget infrastructure
 
 `MissionBudgetService` is an opt-in internal ledger, with no provider HTTP or
-default Harness integration. It shares one Mission account across that Mission's
+default Harness integration of its own. The separate operator-only
+[`strict_provider`](../strict_provider/README.md) dispatcher uses this internal
+service for actual direct HTTP calls in an explicitly selected in-process profile.
+It shares one Mission account across that Mission's
 child WorkUnits and fixes the actual Contract revision and server price table.
 Forked Missions have different account identities; cross-Mission inheritance is
 pending. The exact ceiling is read from stored Contract JSON using Decimal, and
@@ -66,7 +69,9 @@ stateless BEGIN/COMMIT emulation cannot provide atomic ledger operations or row
 locks. The budget migration refuses this backend before ledger DDL or stamping.
 
 There is no Runner self-reported settlement endpoint. This internal accounting
-layer does not make existing model calls budget-enforced. See
+layer does not make existing default model calls budget-enforced. The strict
+profile's private dispatcher reads actual usage; Runner telemetry does not
+settle money. See [ADR-0124](../../../docs/architecture/decisions/0124-strict-in-process-provider-budget-profile.md),
 [ADR-0123](../../../docs/architecture/decisions/0123-persistent-mission-budget-ledger.md),
 `tests/integration/test_mission_budget_sqlite.py` and the opt-in independent-
 connection PostgreSQL tests in `test_mission_budget_postgres.py`.

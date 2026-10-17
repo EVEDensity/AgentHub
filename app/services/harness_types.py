@@ -25,6 +25,7 @@ class HarnessRequest:
     workspace_revision: str | None = None
     context_manifest_digest: str | None = None
     resume: HarnessResumeInput | None = None
+    model_operation_id: str | None = None
 
 @dataclass(frozen=True)
 class HarnessResumeInput:
