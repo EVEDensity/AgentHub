@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 
 import httpx
@@ -28,6 +28,8 @@ from app.services.opensandbox_protocol import (
     identifier,
     json_object,
     terminal_status,
+    upstream_error_code,
+    wire_operation,
     workspace_path,
 )
 
@@ -61,8 +63,21 @@ class OpenSandboxBackend:
         try:
             async with self._client.stream(method, path, **kwargs) as response:
                 yield response
+        except httpx.TimeoutException:
+            raise OpenSandboxError("backend transport timed out", code="transport_timeout",
+                                   operation=wire_operation(method, path)) from None
         except httpx.HTTPError:
-            raise OpenSandboxError("backend transport failed") from None
+            raise OpenSandboxError("backend transport failed", code="transport_error",
+                                   operation=wire_operation(method, path)) from None
+
+    async def _cleanup_after_failure(self, cleanup: Awaitable[None], failure: BaseException) -> None:
+        try:
+            await asyncio.shield(cleanup)
+        except OpenSandboxError as exc:
+            # Keep the actual failed operation; close() retries owned cleanup and
+            # the CI wrapper independently verifies all residual resources.
+            if isinstance(failure, OpenSandboxError):
+                failure.cleanup_error = exc.diagnostic()
 
     async def _body(self, response: httpx.Response) -> bytes:
         result = bytearray()
@@ -72,17 +87,26 @@ class OpenSandboxBackend:
                 raise OpenSandboxError("backend response exceeded limit")
         return bytes(result)
 
-    async def _request(self, method: str, path: str, *, accepted=(200,), content_type=None, **kwargs) -> bytes:
+    async def _request(self, method: str, path: str, *, accepted=(200,), content_type=None,
+                       timeout_seconds: float | None = None, **kwargs) -> bytes:
+        deadline = timeout_seconds if timeout_seconds is not None else self.config.request_timeout_seconds
         try:
-            async with asyncio.timeout(self.config.request_timeout_seconds):
-                async with self._response(method, path, **kwargs) as response:
+            async with asyncio.timeout(deadline):
+                async with self._response(method, path, timeout=deadline, **kwargs) as response:
                     if response.status_code not in accepted:
-                        raise OpenSandboxError(f"backend HTTP {response.status_code}")
+                        body = await self._body(response)
+                        raise OpenSandboxError(f"backend HTTP {response.status_code}", code="http_error",
+                                               http_status=response.status_code,
+                                               upstream_code=upstream_error_code(body))
                     if content_type and response.headers.get("content-type", "").split(";")[0] != content_type:
                         raise OpenSandboxError("unexpected backend content type")
                     return await self._body(response)
         except TimeoutError:
-            raise OpenSandboxError("backend request timed out") from None
+            raise OpenSandboxError("backend request timed out", code="request_timeout",
+                                   operation=wire_operation(method, path)) from None
+        except OpenSandboxError as exc:
+            exc.operation = wire_operation(method, path)
+            raise
 
     async def create(self, job_id: str) -> str:
         body = {
@@ -94,20 +118,28 @@ class OpenSandboxBackend:
             "metadata": {"agenthub.job": identifier(job_id)},
             "networkPolicy": {"defaultAction": "deny", "egress": []},
         }
-        data = json_object(await self._request("POST", "sandboxes", accepted=(202,), json=body))
+        # Upstream create synchronously provisions the sidecar and distributes
+        # execd before returning 202. It needs a separate, still bounded deadline.
+        data = json_object(await self._request("POST", "sandboxes", accepted=(202,), json=body,
+                                              timeout_seconds=self.config.create_timeout_seconds))
         sandbox_id = identifier(data.get("id"))
         self._owned.add(sandbox_id)
+        phase = "sandbox_ready"
         try:
             await self._ready(sandbox_id)
+            phase = "workspace_initialize"
             result = await self.execute(sandbox_id, ["mkdir", "-p", "/workspace"], timeout_seconds=10)
             if result.exit_code != 0:
                 raise OpenSandboxError("workspace initialization failed")
-        except BaseException:
-            await asyncio.shield(self.destroy(sandbox_id))
+        except BaseException as exc:
+            if isinstance(exc, OpenSandboxError) and exc.operation == "unknown":
+                exc.operation = phase
+            await self._cleanup_after_failure(self.destroy(sandbox_id), exc)
             raise
         return sandbox_id
 
     async def _ready(self, sandbox_id: str) -> None:
+        ping_status = None
         try:
             async with asyncio.timeout(self.config.ready_timeout_seconds):
                 while True:
@@ -118,11 +150,14 @@ class OpenSandboxBackend:
                         raise OpenSandboxError("sandbox failed readiness")
                     if state == "Running":
                         async with self._response("GET", self._path(sandbox_id, "ping")) as response:
+                            ping_status = response.status_code
                             if response.status_code == 200:
                                 return
                     await asyncio.sleep(0.2)
         except TimeoutError:
-            raise OpenSandboxError("sandbox readiness timed out") from None
+            raise OpenSandboxError("sandbox readiness timed out", code="request_timeout",
+                                   operation="sandbox_ping" if ping_status is not None else "sandbox_ready",
+                                   http_status=ping_status) from None
 
     async def command_status(self, sandbox_id: str, execution_id: str) -> int | None:
         data = await self._request("GET", self._path(sandbox_id, f"command/status/{identifier(execution_id)}"))
@@ -178,12 +213,14 @@ class OpenSandboxBackend:
                 return CommandResult(execution_id, code, output.decode("utf-8", errors="replace")
                                      .replace(self.config.api_key, "[REDACTED]"))
         except BaseException as exc:
+            failure = (OpenSandboxError("command timed out", code="request_timeout", operation="command_status")
+                       if isinstance(exc, TimeoutError) else exc)
             if execution_id is not None:
-                await asyncio.shield(self.interrupt(sandbox_id, execution_id))
+                await self._cleanup_after_failure(self.interrupt(sandbox_id, execution_id), failure)
             else:
-                await asyncio.shield(self.destroy(sandbox_id))
-            if isinstance(exc, TimeoutError):
-                raise OpenSandboxError("command timed out") from None
+                await self._cleanup_after_failure(self.destroy(sandbox_id), failure)
+            if failure is not exc:
+                raise failure from None
             raise
 
     async def upload(self, sandbox_id: str, relative: str, data: bytes, *, sha256: str) -> TransferredFile:

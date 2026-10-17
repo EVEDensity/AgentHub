@@ -2,7 +2,7 @@
 
 > Status: implemented
 > Owner: Runner maintainers
-> Last reviewed: 2026-10-17
+> Last reviewed: 2026-10-18
 > Scope: explicit M1 integration experiment, outside normal Runner startup
 
 This profile runs a small real execution experiment behind the optional
@@ -54,6 +54,11 @@ random key before provisioning. It is absent from config files, reports and
 artifacts. Neither missing nor wrong authentication may access `/v1/sandboxes`.
 The unauthenticated `/health` endpoint alone cannot establish readiness.
 
+Creation has an independent 90-second deadline because upstream returns `202`
+only after provisioning the sidecar and distributing execd. Ordinary HTTP calls
+retain a 15-second deadline; readiness and the full experiment remain bounded.
+This deadline does not establish that a failed create was caused by a timeout.
+
 The config enables bridge networking with the pinned `dns+nft` egress image.
 The HTTP adapter explicitly requests a deny policy per sandbox; configuring an
 egress image alone does not establish deny-by-default behavior. The wrapper
@@ -100,6 +105,14 @@ job ID, overall status and cleanup errors. Tests using mocked HTTP or Docker
 only establish adapter contracts; a passing manual Linux run is required for
 real environment evidence. No real Linux run or production claim is recorded
 by merely checking in this profile.
+
+Failed reports retain the fixed experiment `stage` and a bounded structured
+`error`: local `code`, fixed operation name, HTTP status when known, and an
+exactly allowlisted upstream code. Remote bodies, messages, URLs and headers
+are never recorded. Unknown error codes are omitted. A cleanup failure is
+recorded separately without replacing the original operation failure. The
+first sandbox ID is recorded only after its readiness and workspace setup;
+an empty ID list alone cannot locate a failure within those steps.
 
 The server's SQLite state is an operating-system temporary directory mounted
 at `/poc-state`. Config and state are removed on wrapper exit.

@@ -20,6 +20,7 @@ from app.services.opensandbox_protocol import (
     endpoint,
     execution_from_sse,
     terminal_status,
+    upstream_error_code,
     workspace_path,
 )
 
@@ -163,6 +164,13 @@ class OpenSandboxProtocolTests(unittest.TestCase):
             with self.subTest(overrides=overrides), self.assertRaises(OpenSandboxError):
                 terminal_status({**base, **overrides}, "cmd-1")
 
+    def test_diagnostics_never_echo_unrecognized_codes_messages_or_urls(self):
+        for body in (b"not JSON secret", b'[]', b'{"code": ["secret"]}',
+                     b'{"code": "DOCKER::SECRET", "message": "secret"}'):
+            self.assertIsNone(upstream_error_code(body))
+        error = OpenSandboxError(KEY, code=KEY, upstream_code=KEY, operation="https://secret.example")
+        self.assertEqual(error.diagnostic(), {"code": "backend_failure", "operation": "unknown"})
+
 
 class OpenSandboxBackendTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -297,5 +305,139 @@ class OpenSandboxBackendTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(OpenSandboxError) as failure:
                 await backend.create(JOB)
             self.assertNotIn(KEY, str(failure.exception))
+            self.assertEqual(failure.exception.diagnostic(),
+                             {"code": "transport_error", "operation": "sandbox_create"})
+        finally:
+            await backend.close()
+
+    async def test_http_failure_reports_only_allowlisted_upstream_code_and_status(self):
+        for upstream, expected in (("DOCKER::SANDBOX_START_FAILED", "DOCKER::SANDBOX_START_FAILED"),
+                                   (KEY, None)):
+            with self.subTest(upstream=upstream):
+                backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True),
+                    transport=httpx.MockTransport(lambda request, upstream=upstream: httpx.Response(
+                        500, json={"code": upstream, "message": KEY, "detail": {"request": KEY}})))
+                try:
+                    with self.assertRaises(OpenSandboxError) as failure:
+                        await backend.create(JOB)
+                    diagnostic = failure.exception.diagnostic()
+                    self.assertEqual(diagnostic["code"], "http_error")
+                    self.assertEqual(diagnostic["operation"], "sandbox_create")
+                    self.assertEqual(diagnostic["http_status"], 500)
+                    self.assertEqual(diagnostic.get("upstream_code"), expected)
+                    self.assertNotIn(KEY, repr(diagnostic))
+                finally:
+                    await backend.close()
+
+    async def test_create_has_independent_deadline_without_extending_command_requests(self):
+        async def delayed_create(request):
+            if request.method == "POST" and request.url.path == "/v1/sandboxes":
+                await asyncio.sleep(0.03)
+            return await self.peer(request)
+
+        backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True,
+            request_timeout_seconds=0.01, create_timeout_seconds=0.1),
+            transport=httpx.MockTransport(delayed_create))
+        try:
+            sandbox = await backend.create(JOB)
+            self.assertEqual(sandbox, FIRST)
+            self.assertEqual(self.peer.requests[0].extensions["timeout"]["read"], 0.1)
+            self.assertTrue(any(request.extensions["timeout"]["read"] == 0.01
+                                for request in self.peer.requests[1:]))
+        finally:
+            await backend.close()
+
+    async def test_create_deadline_is_enforced_and_reports_specific_operation(self):
+        async def never_finishes(request):
+            await asyncio.sleep(1)
+            raise AssertionError("deadline was not enforced")
+
+        backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True,
+            create_timeout_seconds=0.01), transport=httpx.MockTransport(never_finishes))
+        try:
+            with self.assertRaises(OpenSandboxError) as failure:
+                async with asyncio.timeout(0.2):
+                    await backend.create(JOB)
+            self.assertEqual(failure.exception.diagnostic(),
+                             {"code": "request_timeout", "operation": "sandbox_create"})
+        finally:
+            await backend.close()
+
+    async def test_readiness_failure_diagnostic_is_distinct_from_create_failure(self):
+        async def readiness_fails(request):
+            if request.method == "GET" and request.url.path == f"/v1/sandboxes/{FIRST}" and FIRST in self.peer.sandboxes:
+                return httpx.Response(500, json={"code": "DOCKER::SANDBOX_QUERY_FAILED", "message": KEY})
+            return await self.peer(request)
+
+        backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True),
+                                     transport=httpx.MockTransport(readiness_fails))
+        try:
+            with self.assertRaises(OpenSandboxError) as failure:
+                await backend.create(JOB)
+            self.assertEqual(failure.exception.diagnostic()["operation"], "sandbox_get")
+            self.assertNotIn(FIRST, self.peer.sandboxes)
+        finally:
+            await backend.close()
+
+    async def test_create_cleanup_failure_does_not_mask_original_readiness_error(self):
+        async def readiness_fails(request):
+            if (request.method == "GET" and request.url.path == f"/v1/sandboxes/{FIRST}"
+                    and FIRST in self.peer.sandboxes):
+                return httpx.Response(500, json={"code": "DOCKER::SANDBOX_QUERY_FAILED", "message": KEY})
+            return await self.peer(request)
+
+        self.peer.failed_delete = True
+        backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True),
+                                     transport=httpx.MockTransport(readiness_fails))
+        try:
+            with self.assertRaises(OpenSandboxError) as failure:
+                await backend.create(JOB)
+            diagnostic = failure.exception.diagnostic()
+            self.assertEqual(diagnostic["upstream_code"], "DOCKER::SANDBOX_QUERY_FAILED")
+            self.assertEqual(diagnostic["operation"], "sandbox_get")
+            self.assertEqual(diagnostic["cleanup"]["operation"], "sandbox_destroy")
+            self.assertNotIn(KEY, repr(diagnostic))
+        finally:
+            self.peer.failed_delete = False
+            await backend.close()
+
+    async def test_execute_cleanup_failure_does_not_mask_original_command_error(self):
+        failure_enabled = False
+
+        async def command_fails(request):
+            if failure_enabled and request.method == "POST" and request.url.path.endswith("/command"):
+                return httpx.Response(503, json={"code": "SANDBOX::INTERNAL_ERROR", "message": KEY})
+            return await self.peer(request)
+
+        backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True),
+                                     transport=httpx.MockTransport(command_fails))
+        try:
+            sandbox = await backend.create(JOB)
+            failure_enabled = self.peer.failed_delete = True
+            with self.assertRaises(OpenSandboxError) as failure:
+                await backend.execute(sandbox, ["start"])
+            diagnostic = failure.exception.diagnostic()
+            self.assertEqual(diagnostic["http_status"], 503)
+            self.assertEqual(diagnostic["operation"], "command_start")
+            self.assertEqual(diagnostic["cleanup"]["http_status"], 503)
+            self.assertEqual(diagnostic["cleanup"]["operation"], "sandbox_destroy")
+        finally:
+            self.peer.failed_delete = False
+            await backend.close()
+
+    async def test_readiness_ping_timeout_preserves_last_status_without_body(self):
+        async def ping_fails(request):
+            if request.url.path.endswith("/ping"):
+                return httpx.Response(502, text=KEY)
+            return await self.peer(request)
+
+        backend = OpenSandboxBackend(OpenSandboxConfig("http://localhost", KEY, enabled=True,
+            ready_timeout_seconds=0.01), transport=httpx.MockTransport(ping_fails))
+        try:
+            with self.assertRaises(OpenSandboxError) as failure:
+                await backend.create(JOB)
+            diagnostic = failure.exception.diagnostic()
+            self.assertEqual(diagnostic, {"code": "request_timeout", "operation": "sandbox_ping", "http_status": 502})
+            self.assertNotIn(KEY, repr(diagnostic))
         finally:
             await backend.close()

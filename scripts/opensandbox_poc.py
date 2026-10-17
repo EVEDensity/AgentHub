@@ -122,28 +122,38 @@ async def _network_check(backend: OpenSandboxBackend, sandbox_id: str, report: d
 async def run_poc(args: argparse.Namespace, api_key: str) -> dict:
     config = OpenSandboxConfig(args.endpoint, api_key, enabled=args.enable)
     report = {"schema": "agenthub.opensandbox-poc.v1", "job_id": args.job_id,
-              "status": "failed", "sandbox_ids": [], "checks": []}
+              "status": "failed", "stage": "authentication", "sandbox_ids": [], "checks": []}
     backend = OpenSandboxBackend(config)
     try:
         async with asyncio.timeout(240):
             await _auth_checks(config.endpoint.rstrip("/"), report)
+            report["stage"] = "create_first_sandbox"
             first = await backend.create(args.job_id)
             report["sandbox_ids"].append(first)
+            report["stage"] = "create_second_sandbox"
             second = await backend.create(args.job_id)
             report["sandbox_ids"].append(second)
+            report["stage"] = "command_output"
             result = await backend.execute(first, ["bash", "-c", "printf stdout-proof; printf stderr-proof >&2"])
             _check(report, "real_output_and_zero_exit", result.exit_code == 0
                    and "stdout-proof" in result.output and "stderr-proof" in result.output)
             failed = await backend.execute(first, ["bash", "-c", "exit 7"])
             _check(report, "nonzero_exit_preserved", failed.exit_code == 7)
+            report["stage"] = "file_transfer_and_isolation"
             await _transfer_checks(backend, first, second, report)
+            report["stage"] = "cancellation"
             await _cancellation_check(backend, first, report)
+            report["stage"] = "timeout"
             await _timeout_check(backend, first, report)
+            report["stage"] = "network_default_deny"
             await _network_check(backend, first, report)
             report["status"] = "passed"
+            report["stage"] = "complete"
     except (OpenSandboxError, httpx.HTTPError, TimeoutError, ValueError, OSError) as exc:
         # Error types only: upstream messages/requests may contain sensitive data.
         report["error_type"] = type(exc).__name__
+        if isinstance(exc, OpenSandboxError):
+            report["error"] = exc.diagnostic()
     finally:
         try:
             await backend.close()
@@ -151,6 +161,8 @@ async def run_poc(args: argparse.Namespace, api_key: str) -> dict:
         except (OpenSandboxError, httpx.HTTPError, OSError) as exc:
             report["status"] = "failed"
             report["cleanup_error_type"] = type(exc).__name__
+            if isinstance(exc, OpenSandboxError):
+                report["cleanup_error"] = exc.diagnostic()
     return report
 
 

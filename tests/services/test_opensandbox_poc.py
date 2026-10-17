@@ -63,8 +63,19 @@ class PocReportTests(unittest.IsolatedAsyncioTestCase):
         report = await self._run()
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["error_type"], "OpenSandboxError")
+        self.assertEqual(report["stage"], "create_first_sandbox")
+        self.assertEqual(report["error"], {"code": "backend_failure", "operation": "unknown"})
         self.assertNotIn("ephemeral-secret", repr(report))
         self.backend.close.assert_awaited_once()
+
+    async def test_report_retains_safe_http_diagnostic_without_remote_body(self):
+        self.backend.create.side_effect = OpenSandboxError("ephemeral-secret", code="http_error",
+            http_status=500, upstream_code="DOCKER::SANDBOX_START_FAILED", operation="sandbox_create")
+        report = await self._run()
+        self.assertEqual(report["stage"], "create_first_sandbox")
+        self.assertEqual(report["error"], {"code": "http_error", "http_status": 500,
+            "upstream_code": "DOCKER::SANDBOX_START_FAILED", "operation": "sandbox_create"})
+        self.assertNotIn("ephemeral-secret", repr(report))
 
     async def test_cleanup_failure_revokes_success(self):
         self.backend.close.side_effect = OpenSandboxError("ephemeral-secret")

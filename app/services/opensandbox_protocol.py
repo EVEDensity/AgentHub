@@ -20,6 +20,75 @@ from urllib.parse import urlsplit
 class OpenSandboxError(RuntimeError):
     """Sanitized backend failure; never contains remote bodies or credentials."""
 
+    def __init__(self, message: str, *, code: str = "backend_failure",
+                 http_status: int | None = None, upstream_code: str | None = None,
+                 operation: str = "unknown") -> None:
+        super().__init__(message)
+        self.code = code if isinstance(code, str) and code in {
+            "backend_failure", "http_error", "transport_error", "transport_timeout", "request_timeout",
+        } else "backend_failure"
+        self.http_status = http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        self.upstream_code = (upstream_code if isinstance(upstream_code, str)
+                              and upstream_code in UPSTREAM_ERROR_CODES else None)
+        self.operation = operation if isinstance(operation, str) and operation in WIRE_OPERATIONS else "unknown"
+        self.cleanup_error: dict | None = None
+
+    def diagnostic(self) -> dict:
+        """Only fixed local codes, an HTTP integer and exact upstream enums."""
+        result = {"code": self.code, "operation": self.operation}
+        if self.http_status is not None:
+            result["http_status"] = self.http_status
+        if self.upstream_code is not None:
+            result["upstream_code"] = self.upstream_code
+        if self.cleanup_error is not None:
+            result["cleanup"] = self.cleanup_error
+        return result
+
+
+# Exact 1.1.1 services/constants.py values. A pattern match would permit a
+# reflected token or attacker-controlled string into reports. Never log messages.
+UPSTREAM_ERROR_CODES = frozenset({
+    "DOCKER::INITIALIZATION_ERROR", "DOCKER::SANDBOX_QUERY_FAILED", "DOCKER::SANDBOX_NOT_FOUND",
+    "DOCKER::SANDBOX_IMAGE_PULL_FAILED", "DOCKER::SANDBOX_START_FAILED", "DOCKER::SANDBOX_DELETE_FAILED",
+    "DOCKER::SANDBOX_NOT_RUNNING", "DOCKER::SANDBOX_EXECD_START_FAILED",
+    "DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED", "DOCKER::SANDBOX_BOOTSTRAP_INSTALL_FAILED",
+    "DOCKER::INVALID_ENTRYPOINT", "DOCKER::INVALID_PORT", "DOCKER::NETWORK_MODE_ENDPOINT_UNAVAILABLE",
+    "SANDBOX::UNKNOWN_ERROR", "SANDBOX::API_NOT_SUPPORTED", "SANDBOX::INVALID_METADATA_LABEL",
+    "SANDBOX::INVALID_PARAMETER", "SANDBOX::INTERNAL_ERROR",
+})
+WIRE_OPERATIONS = frozenset({
+    "unknown", "sandbox_create", "sandbox_list", "sandbox_get", "sandbox_destroy", "sandbox_ready",
+    "workspace_initialize", "sandbox_ping", "command_start", "command_cancel", "command_status",
+    "command_logs", "file_upload", "file_download", "network_policy",
+})
+
+
+def wire_operation(method: str, path: str) -> str:
+    """Translate a route to a fixed name without reporting identities or URLs."""
+    if path == "sandboxes":
+        return "sandbox_create" if method == "POST" else "sandbox_list"
+    if len(path.split("/")) == 2:
+        return "sandbox_destroy" if method == "DELETE" else "sandbox_get"
+    suffixes = {"/ping": "sandbox_ping", "/logs": "command_logs", "/files/upload": "file_upload",
+                "/files/download": "file_download", "/networkpolicy": "network_policy"}
+    for suffix, name in suffixes.items():
+        if path.endswith(suffix):
+            return name
+    if "/command/status/" in path:
+        return "command_status"
+    if path.endswith("/command"):
+        return "command_cancel" if method == "DELETE" else "command_start"
+    return "unknown"
+
+
+def upstream_error_code(data: bytes) -> str | None:
+    try:
+        value = json.loads(data)
+    except (ValueError, UnicodeError):
+        return None
+    code = value.get("code") if isinstance(value, dict) else None
+    return code if isinstance(code, str) and code in UPSTREAM_ERROR_CODES else None
+
 
 WORKLOAD_IMAGE = (
     "docker.io/library/ubuntu:22.04@sha256:"
@@ -69,6 +138,7 @@ class OpenSandboxConfig:
     enabled: bool = False
     lifetime_seconds: int = 180
     request_timeout_seconds: float = 15
+    create_timeout_seconds: float = 90
     ready_timeout_seconds: float = 90
 
     def __post_init__(self) -> None:
@@ -81,6 +151,7 @@ class OpenSandboxConfig:
             raise OpenSandboxError("sandbox lifetime must be integral seconds")
         bounded_seconds(self.lifetime_seconds)
         bounded_seconds(self.request_timeout_seconds, 60)
+        bounded_seconds(self.create_timeout_seconds, 180)
         bounded_seconds(self.ready_timeout_seconds)
 
 
