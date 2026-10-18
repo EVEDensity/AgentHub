@@ -180,32 +180,23 @@ try {
             Write-Output "Installer generation disabled; validating the release application only."
         }
     }
-    $buildArguments += @('--', '--locked')
-    & cargo +1.88.0 @buildArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Tauri bundle build failed."
-    }
     $msiApplicationDigest = $null
     if ($LocalServices -and -not $NoInstaller -and -not $Portable) {
-        # Tauri patches the release executable with bundle-type metadata. The
-        # combined build leaves the NSIS variant in place, while MSI contains
-        # a distinct MSI-patched variant. Build MSI once more on its own so we
-        # can bind extraction verification to the exact executable it embeds.
         $releaseApplication = Join-Path $releaseDirectory 'agenthub-desktop.exe'
-        $applicationBackup = Join-Path ([IO.Path]::GetTempPath()) ('agenthub-nsis-app-' + [guid]::NewGuid().ToString('N') + '.exe')
-        Copy-Item -LiteralPath $releaseApplication -Destination $applicationBackup
-        try {
-            $msiBuildArguments = @('tauri', 'build', '--target', $TargetTriple, '--ci', '--bundles', 'msi')
-            if ($generatedUpdaterConfig) { $msiBuildArguments += @('--config', $generatedUpdaterConfig) }
-            $msiBuildArguments += @('--', '--locked')
-            & cargo +1.88.0 @msiBuildArguments
-            if ($LASTEXITCODE -ne 0) { throw 'MSI-specific Tauri bundle build failed.' }
-            $msiApplicationDigest = (Get-FileHash -LiteralPath $releaseApplication -Algorithm SHA256).Hash.ToLowerInvariant()
-        } finally {
-            if (-not (Test-Path -LiteralPath $applicationBackup -PathType Leaf)) { throw 'NSIS executable backup disappeared before restore.' }
-            Copy-Item -LiteralPath $applicationBackup -Destination $releaseApplication -Force
-            Remove-Item -LiteralPath $applicationBackup -Force
-        }
+        # Tauri patches the executable with bundle-type metadata. Build each
+        # installer separately and capture its executable while that exact
+        # bundle type is active, before the next build patches it again.
+        $msiBuildArguments = $buildArguments + @('--bundles', 'msi', '--', '--locked')
+        & cargo +1.88.0 @msiBuildArguments
+        if ($LASTEXITCODE -ne 0) { throw 'MSI-specific Tauri bundle build failed.' }
+        $msiApplicationDigest = (Get-FileHash -LiteralPath $releaseApplication -Algorithm SHA256).Hash.ToLowerInvariant()
+        $nsisBuildArguments = $buildArguments + @('--bundles', 'nsis', '--', '--locked')
+        & cargo +1.88.0 @nsisBuildArguments
+        if ($LASTEXITCODE -ne 0) { throw 'NSIS-specific Tauri bundle build failed.' }
+    } else {
+        $buildArguments += @('--', '--locked')
+        & cargo +1.88.0 @buildArguments
+        if ($LASTEXITCODE -ne 0) { throw 'Tauri bundle build failed.' }
     }
     if ($LocalServices) {
         $commitAfterBuild = (& git -C $desktopDirectory rev-parse HEAD).Trim()
