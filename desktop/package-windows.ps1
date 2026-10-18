@@ -185,6 +185,28 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri bundle build failed."
     }
+    $msiApplicationDigest = $null
+    if ($LocalServices -and -not $NoInstaller -and -not $Portable) {
+        # Tauri patches the release executable with bundle-type metadata. The
+        # combined build leaves the NSIS variant in place, while MSI contains
+        # a distinct MSI-patched variant. Build MSI once more on its own so we
+        # can bind extraction verification to the exact executable it embeds.
+        $releaseApplication = Join-Path $releaseDirectory 'agenthub-desktop.exe'
+        $applicationBackup = Join-Path ([IO.Path]::GetTempPath()) ('agenthub-nsis-app-' + [guid]::NewGuid().ToString('N') + '.exe')
+        Copy-Item -LiteralPath $releaseApplication -Destination $applicationBackup
+        try {
+            $msiBuildArguments = @('tauri', 'build', '--target', $TargetTriple, '--ci', '--bundles', 'msi')
+            if ($generatedUpdaterConfig) { $msiBuildArguments += @('--config', $generatedUpdaterConfig) }
+            $msiBuildArguments += @('--', '--locked')
+            & cargo +1.88.0 @msiBuildArguments
+            if ($LASTEXITCODE -ne 0) { throw 'MSI-specific Tauri bundle build failed.' }
+            $msiApplicationDigest = (Get-FileHash -LiteralPath $releaseApplication -Algorithm SHA256).Hash.ToLowerInvariant()
+        } finally {
+            if (-not (Test-Path -LiteralPath $applicationBackup -PathType Leaf)) { throw 'NSIS executable backup disappeared before restore.' }
+            Copy-Item -LiteralPath $applicationBackup -Destination $releaseApplication -Force
+            Remove-Item -LiteralPath $applicationBackup -Force
+        }
+    }
     if ($LocalServices) {
         $commitAfterBuild = (& git -C $desktopDirectory rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0 -or $commitAfterBuild -cne $sourceCommit) { throw 'Source commit changed during packaging.' }
@@ -302,7 +324,8 @@ if ($LocalServices -and ($Portable -or -not $NoInstaller)) {
     if (-not $Portable) {
         $msiPackages = @(Get-ChildItem -LiteralPath $installerDirectory -Filter '*.msi' -Recurse -File)
         if ($msiPackages.Count -ne 1) { throw 'Full-service resource acceptance requires exactly one current MSI.' }
-        & $resourceSmoke -ArtifactPath $msiPackages[0].FullName -Kind Msi -ExpectedManifest $expectedResources -SourceCommit $sourceCommit -ExpectedApplicationSha256 $builtApplicationDigest -ExpectedSidecarSha256 $builtSidecarDigest -OutputDirectory $resourceEvidence
+        if (-not $msiApplicationDigest) { throw 'MSI-specific executable digest was not captured.' }
+        & $resourceSmoke -ArtifactPath $msiPackages[0].FullName -Kind Msi -ExpectedManifest $expectedResources -SourceCommit $sourceCommit -ExpectedApplicationSha256 $msiApplicationDigest -ExpectedSidecarSha256 $builtSidecarDigest -OutputDirectory $resourceEvidence
     }
 }
 Write-Output "Release application: $(Join-Path $releaseDirectory 'agenthub-desktop.exe')"
