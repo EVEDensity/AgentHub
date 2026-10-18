@@ -65,7 +65,7 @@ try {
     $applicationRoot = $applications[0].Directory.FullName
     foreach ($item in @(@('agenthub-desktop.exe', $ExpectedApplicationSha256), @('agenthub-runtime.exe', $ExpectedSidecarSha256))) {
         $actual = (Get-FileHash -LiteralPath (Join-Path $applicationRoot $item[0]) -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actual -cne $item[1]) { throw "Packaged executable differs from this build: $($item[0])" }
+        if ($actual -cne $item[1]) { throw "Packaged executable differs from this build: $($item[0]); expected SHA-256 $($item[1]), extracted SHA-256 $actual." }
     }
     $resourceReportPath = Join-Path $runDirectory 'resources.json'
     & node (Join-Path $PSScriptRoot 'package-resource-manifest.mjs') verify --root $applicationRoot --expected $ExpectedManifest --source-commit $SourceCommit --output $resourceReportPath
