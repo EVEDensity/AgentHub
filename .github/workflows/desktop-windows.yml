@@ -36,6 +36,28 @@ jobs:
           key: desktop-windows-${{ runner.os }}-${{ hashFiles('desktop/**/Cargo.lock', 'desktop/**/Cargo.toml') }}
       - name: Install pinned Tauri CLI
         run: cargo install tauri-cli --version 2.11.4 --locked
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/go/go.work
+          cache-dependency-path: services/go/**/go.sum
+      - name: Install full-stack build dependencies
+        run: python -m pip install -r ../requirements.txt pyinstaller==6.16.0
+      - name: Install locked frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Independently check frontend types
+        run: npx tsc --noEmit
+        working-directory: frontend
+      - name: Verify package rejection boundaries
+        run: node --test tests/*.test.mjs
       - name: Enforce public release signing policy
         if: startsWith(github.ref, 'refs/tags/desktop-v')
         run: .\release-policy.ps1 -PublicRelease
@@ -46,7 +68,7 @@ jobs:
           AGENTHUB_UPDATE_PUBLIC_KEY: ${{ secrets.AGENTHUB_UPDATE_PUBLIC_KEY }}
           AGENTHUB_UPDATE_ENDPOINT: ${{ secrets.AGENTHUB_UPDATE_ENDPOINT }}
       - name: Build and verify installer package
-        run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc
+        run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -LocalServices
         env:
           AGENTHUB_INSTALLER_LIFECYCLE_SMOKE: '1'
           AGENTHUB_UPDATE_ENABLED: ${{ startsWith(github.ref, 'refs/tags/desktop-v') && '1' || '0' }}
@@ -54,16 +76,17 @@ jobs:
           AGENTHUB_UPDATE_ENDPOINT: ${{ secrets.AGENTHUB_UPDATE_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.AGENTHUB_UPDATE_PRIVATE_KEY_PASSWORD }}
-      - name: Build and verify portable package
-        run: .\package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -Portable
-      - uses: actions/setup-node@v4
+      - name: Require actual Portable and MSI resource reports
+        run: .\require-package-resource-reports.ps1 -Directory .runtime/package-resources -SourceCommit '${{ github.sha }}'
+      - name: Verify native desktop unit contracts without a GUI
+        run: cargo test --release --locked --target x86_64-pc-windows-msvc --manifest-path src-tauri/Cargo.toml
+      - name: Upload package resource verification
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install locked browser-preview tools
-        run: npm ci
-        working-directory: frontend
+          name: agenthub-desktop-package-resources-${{ github.sha }}
+          path: desktop/.runtime/package-resources/
+          if-no-files-found: error
       - name: Install matching preview Chromium
         run: node ..\frontend\node_modules\@playwright\test\cli.js install chromium
       - name: Verify shell browser-preview harness
@@ -80,8 +103,8 @@ jobs:
           path: |
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-desktop.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/agenthub-runtime.exe
-            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.msi
-            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.exe
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.zip
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error
@@ -105,7 +128,7 @@ jobs:
         with:
           name: agenthub-desktop-updater-${{ github.sha }}
           path: |
-            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*.sig
+            desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.sig
             desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/*-release.json
           if-no-files-found: error
 
@@ -209,24 +232,22 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: agenthub-desktop-windows-${{ github.sha }}
-          path: dist
+          path: ${{ runner.temp }}/desktop-artifacts
       - name: Prepare Python environment for the Mission Control freeze
         shell: pwsh
         run: |
-          # build-mission-control.ps1 imports dependencies from
-          # .venv\Lib\site-packages; the ambient python must be this venv
-          # so the PyInstaller freeze and the site-packages agree.
+          # The selected interpreter must own both PyInstaller and the
+          # application dependencies. Build helpers no longer reuse exe files.
           python -m venv .venv
           .\.venv\Scripts\python.exe -m pip install --upgrade pip
-          .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller==6.16.0
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
       - name: Build the full local-services stack
         shell: pwsh
         run: |
-          $stack = Join-Path $env:RUNNER_TEMP 'stack-release'
-          if (Test-Path $stack) { Remove-Item $stack -Recurse -Force }
+          $stack = Join-Path $env:RUNNER_TEMP ('stack-release-' + [guid]::NewGuid().ToString('N'))
           $services = Join-Path $stack 'local-services'
           New-Item -ItemType Directory -Force -Path $services | Out-Null
           $env:PATH = "$PWD\.venv\Scripts;$env:PATH"
@@ -234,7 +255,7 @@ jobs:
           # Runner runtime sidecar comes from the packaged artifact; the
           # desktop shell itself updates through the Tauri updater, not
           # the stack.
-          Copy-Item dist\agenthub-runtime.exe -Destination $services -Force
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'desktop-artifacts\agenthub-runtime.exe') -Destination $services -Force
           # The bundled-stack manifest (services list, written by the
           # build script) is a bundle artifact; downloaded stacks get
           # their manifest copy from the downloader itself.

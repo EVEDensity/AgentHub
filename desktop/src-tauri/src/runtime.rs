@@ -659,8 +659,15 @@ mod tests {
             .spawn()
             .expect("test child starts");
         let runtime = LocalRuntime::with_child(child);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        let snapshot = runtime.snapshot();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let snapshot = loop {
+            let snapshot = runtime.snapshot();
+            if snapshot.status == RuntimeStatus::Stopped {
+                break snapshot;
+            }
+            assert!(std::time::Instant::now() < deadline, "test child did not exit in time");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         assert_eq!(snapshot.status, RuntimeStatus::Stopped);
         assert_eq!(snapshot.readiness, RuntimeReadiness::Unhealthy);
         assert_eq!(snapshot.exit_code, Some(7));

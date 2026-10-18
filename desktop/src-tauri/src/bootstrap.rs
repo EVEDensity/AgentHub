@@ -32,7 +32,7 @@ struct RawManifest {
     files: Vec<RawFileEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RawFileEntry {
     path: String,
@@ -98,10 +98,9 @@ impl std::fmt::Display for BootstrapError {
 }
 
 fn http_agent() -> Agent {
-    Agent::config_builder()
-        .timeout(Some(std::time::Duration::from_secs(HTTP_TIMEOUT_SECONDS)))
+    ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECONDS))
         .build()
-        .into()
 }
 
 fn fetch_bytes(agent: &Agent, url: &str) -> Result<Vec<u8>, String> {

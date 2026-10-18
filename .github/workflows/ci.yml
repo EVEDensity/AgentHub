@@ -37,6 +37,7 @@ jobs:
       smoke: ${{ steps.select.outputs.smoke }}
       opensandbox: ${{ steps.select.outputs.opensandbox }}
       browser_read: ${{ steps.select.outputs.browser_read }}
+      desktop_package: ${{ steps.select.outputs.desktop_package }}
       base: ${{ steps.base.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
@@ -238,6 +239,99 @@ jobs:
           tests/services/test_browser_read_workdir.py
           tests/services/test_browser_read_harness.py tests/services/test_browser_native_factory.py
           tests/contracts/test_browser_execution_report.py -q --tb=short
+
+  desktop-package:
+    name: Windows full-package resources
+    needs: changes
+    if: needs.changes.outputs.desktop_package == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/go/go.work
+          cache-dependency-path: services/go/**/go.sum
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/runtime-sidecar/target
+            desktop/src-tauri/target
+          key: desktop-resources-${{ runner.os }}-${{ hashFiles('desktop/**/Cargo.lock') }}-tauri-2.11.4
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc --noEmit
+        working-directory: frontend
+      - name: Verify resource rejection boundaries
+        run: node --test desktop/tests/*.test.mjs
+      - name: Require unchanged committed build inputs
+        shell: pwsh
+        run: |
+          $changes = @(git status --porcelain --untracked-files=normal)
+          if ($LASTEXITCODE -ne 0 -or $changes.Count) {
+            git diff --raw
+            git ls-files --eol -- frontend/public/pdf.min.mjs frontend/public/pdf.worker.min.mjs
+            git config --show-origin --get-regexp 'core\.(filemode|autocrlf|safecrlf)'
+            foreach ($name in @('pdf.min.mjs', 'pdf.worker.min.mjs')) {
+              Get-FileHash -Algorithm SHA256 -LiteralPath "frontend/public/$name", "frontend/node_modules/pdfjs-dist/build/$name" | Format-Table -AutoSize
+              git rev-parse "HEAD:frontend/public/$name"
+              git hash-object "frontend/public/$name"
+            }
+            throw "Build preparation changed source inputs: $($changes -join '; ')"
+          }
+      - uses: actions/cache/restore@v4
+        id: tauri_cli_cache
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-${{ runner.os }}-2.11.4-rust-1.88.0
+      - name: Prepare pinned build tools
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements.txt pyinstaller==6.16.0
+          if ($LASTEXITCODE -ne 0) { throw 'Python freeze dependencies failed to install.' }
+          if ((cargo tauri --version 2>$null) -ne 'tauri-cli 2.11.4') { cargo install tauri-cli --version 2.11.4 --locked --force }
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Tauri CLI installation failed.' }
+      - uses: actions/cache/save@v4
+        if: steps.tauri_cli_cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/.cargo/bin/cargo-tauri.exe
+          key: ${{ steps.tauri_cli_cache.outputs.cache-primary-key }}
+      - name: Build one current full stack and verify actual Portable and MSI
+        shell: pwsh
+        run: desktop/package-windows.ps1 -TargetTriple x86_64-pc-windows-msvc -LocalServices
+      - name: Require both actual package reports
+        shell: pwsh
+        run: desktop/require-package-resource-reports.ps1 -Directory desktop/.runtime/package-resources -SourceCommit '${{ github.event.pull_request.head.sha || github.sha }}'
+      - name: Verify native desktop unit contracts without a GUI
+        run: cargo test --release --locked --target x86_64-pc-windows-msvc --manifest-path desktop/src-tauri/Cargo.toml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-package-resources
+          path: desktop/.runtime/package-resources/
+          if-no-files-found: error
 
   frontend:
     name: Frontend, editor contracts and browser flow
@@ -514,7 +608,7 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [changes, quality, python, postgres, windows-cli, frontend, go, rust, docker, smoke, opensandbox, browser-read]
+    needs: [changes, quality, python, postgres, windows-cli, desktop-package, frontend, go, rust, docker, smoke, opensandbox, browser-read]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

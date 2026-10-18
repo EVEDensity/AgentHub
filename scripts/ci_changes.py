@@ -72,7 +72,7 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
     paths = [path.replace("\\", "/") for path in paths]
     all_checks |= any(
         path.startswith(".github/workflows/")
-        or path in {"scripts/ci_changes.py", ".dockerignore"}
+        or path in {"scripts/ci_changes.py", ".dockerignore", ".gitattributes"}
         for path in paths
     )
 
@@ -111,6 +111,10 @@ def select_checks(paths: list[str], *, all_checks: bool = False) -> dict:
     )
     images = _container_images(changed, go, rust, frontend)
     return {
+        "desktop_package": contracts or changed(
+            "desktop/", "frontend/", "app/", "main.py", "mission_control_entrypoint.py",
+            "requirements", "services/go/", "tests/desktop/",
+        ),
         "go": go, "frontend": frontend, "rust": rust,
         "windows_cli": windows_cli, "docker": bool(images),
         "opensandbox": contracts or changed(

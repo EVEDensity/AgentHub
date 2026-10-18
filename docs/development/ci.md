@@ -87,7 +87,22 @@ shell's browser-native-command fixtures are not release evidence. Changes to
 the preview runner/helpers, shell source or tests select both browser and
 Windows consumers. The dedicated Desktop Windows packaging workflow also uses
 the locked tools and uploads accurately named browser-preview evidence.
-The same job installs the VS Code extension's locked dependencies, compiles its
+A selected UI-4b Windows job now rebuilds the full local-service stack from a
+clean checkout of the exact source SHA, including a fresh Python freeze, both
+Go gateways and the standalone Next frontend with fixed desktop rewrites.
+It creates Portable and MSI from one stage, then actually extracts both and
+compares every resource to the external inventory. Missing/extra/modified,
+wrong-commit, unsafe paths, broken local asset references and selected component
+notice changes fail. The stable CI gate requires this job for desktop,
+frontend, control-plane, Go workspace, dependency and public-contract changes.
+An independent report check requires both forms and their real outer digests;
+fixture rejection tests and locked native desktop unit tests are additional checks.
+The unit tests reuse the release build and do not start a GUI. Evidence is uploaded as
+`desktop-package-resources`. This is unsigned package resource integrity,
+not native WebView2, authentication, live services or clean-machine acceptance.
+See [ADR-0133](../architecture/decisions/0133-desktop-package-resource-integrity.md).
+
+The frontend job also installs the VS Code extension's locked dependencies, compiles its
 TypeScript and runs its HTTP client and webview contract tests. API schema
 DTO changes also select those frontend consumers. Go changes and sandbox image
 changes run vet and race tests for every workspace module. The Go job also builds
@@ -136,7 +151,7 @@ also start and health-check the existing Docker Compose smoke stack. That stack
 starts Gateway and summarization with local infrastructure; image builds alone
 do not prove every service's boot, credential configuration or business flow.
 CI configuration
-changes and manual runs select every optional job.
+changes, global Git attribute changes and manual runs select every optional job.
 
 OpenSandbox adapter, pinned deployment, PoC and public-contract changes select
 the Linux conformance job. It starts the fixed upstream runtime with an ephemeral

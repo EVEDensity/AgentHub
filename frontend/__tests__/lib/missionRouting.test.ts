@@ -23,12 +23,17 @@ it('uses the baked Desktop control-plane endpoint when no override is supplied',
   expect(rules[0].destination).toBe('http://127.0.0.1:28000/api/v1/missions/:path*');
 });
 
-it('pins Desktop Mission routing before the build even when a remote override is inherited', async () => {
+it('pins Desktop rewrites before invoking the production build with inherited overrides', async () => {
   const script = readFileSync(resolve('../desktop/local-services/build-windows.ps1'), 'utf8');
-  const beforeBuild = script.split('npm.cmd run build')[0];
+  const buildIndex = script.indexOf('& $npmCommand run build');
+  expect(buildIndex).toBeGreaterThan(0);
+  const beforeBuild = script.slice(0, buildIndex);
   const assignments = [...beforeBuild.matchAll(/\$env:(API_BACKEND|API_BACKEND_URL|GO_GATEWAY_URL|MISSION_CONTROL_URL) = '([^']+)'/g)];
   const env = { MISSION_CONTROL_URL: 'https://foreign.test', ...Object.fromEntries(assignments.map(match => [match[1], match[2]])) };
-  expect((await rewrites(env))[0].destination).toBe('http://127.0.0.1:28000/api/v1/missions/:path*');
-  expect(script).toContain('$previousMissionControlUrl = $env:MISSION_CONTROL_URL');
-  expect(script).toContain('$env:MISSION_CONTROL_URL = $previousMissionControlUrl');
+  const rules = await rewrites(env);
+  expect(rules[0].destination).toBe('http://127.0.0.1:28000/api/v1/missions/:path*');
+  expect(rules.find(rule => rule.source === '/api/:path*')?.destination).toBe('http://127.0.0.1:28000/api/:path*');
+  expect(rules.find(rule => rule.source === '/api/admin/tools')?.destination).toBe('http://127.0.0.1:28001/api/admin/tools');
+  expect(rules.find(rule => rule.source === '/platform/:path*')?.destination).toBe('http://127.0.0.1:28001/:path*');
+  // Actual failure-path environment restoration runs in desktop/tests/local-services-build.test.mjs.
 });
