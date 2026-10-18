@@ -232,15 +232,16 @@ $values['location'] = (Get-Location).Path
   await assert.rejects(readFile(join(f.stage, 'stack-manifest.json')), { code: 'ENOENT' });
 });
 
-test('actual Git attributes keep four tiny LF asset/schema fixtures clean on overwrite and detect each changed byte', windowsOnly, async t => {
+test('actual Git attributes keep five tiny LF asset/native fixtures clean on overwrite and detect each changed byte', windowsOnly, async t => {
   const f = await fixture(t);
   // Tiny text fixtures exercise checkout/copy semantics; these are not real
-  // PDF/schema contents, npm installation, or evidence that a package was built.
+  // PDF/schema/TOML contents, npm installation, or package build evidence.
   await copyFile(join(scripts, '..', '..', '.gitattributes'), join(f.root, '.gitattributes'));
   const upstream = join(f.root, '.tmp', 'upstream-mirror-fixtures');
   await mkdir(upstream, { recursive: true });
   const paths = ['frontend/public/pdf.min.mjs', 'frontend/public/pdf.worker.min.mjs',
-    'desktop/src-tauri/gen/schemas/desktop-schema.json', 'desktop/src-tauri/gen/schemas/windows-schema.json'];
+    'desktop/src-tauri/gen/schemas/desktop-schema.json', 'desktop/src-tauri/gen/schemas/windows-schema.json',
+    'desktop/src-tauri/Cargo.toml'];
   for (const path of paths) {
     const bytes = Buffer.from(`{"tinyLfFixture":"${path}"}\n`);
     await mkdir(dirname(join(upstream, path)), { recursive: true });

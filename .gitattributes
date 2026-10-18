@@ -4,3 +4,5 @@ frontend/public/pdf.worker.min.mjs -text
 # Tauri regenerates these schemas with exact LF bytes during native builds.
 desktop/src-tauri/gen/schemas/desktop-schema.json -text
 desktop/src-tauri/gen/schemas/windows-schema.json -text
+# Preserve the authored native manifest bytes across Tauri's Windows builds.
+desktop/src-tauri/Cargo.toml -text

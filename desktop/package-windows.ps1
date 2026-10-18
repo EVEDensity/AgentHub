@@ -189,7 +189,11 @@ try {
         $commitAfterBuild = (& git -C $desktopDirectory rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0 -or $commitAfterBuild -cne $sourceCommit) { throw 'Source commit changed during packaging.' }
         $changesAfterBuild = @(& git -C $desktopDirectory status --porcelain --untracked-files=normal)
-        if ($LASTEXITCODE -ne 0 -or $changesAfterBuild.Count -ne 0) { throw "Source checkout changed during packaging: $($changesAfterBuild -join '; ')" }
+        if ($LASTEXITCODE -ne 0 -or $changesAfterBuild.Count -ne 0) {
+            $changeDiff = @(& git -C $desktopDirectory diff --no-ext-diff --no-color --)
+            if ($LASTEXITCODE -ne 0) { $changeDiff = @('Unable to read the source diff.') }
+            throw "Source checkout changed during packaging: $($changesAfterBuild -join '; ')`n$($changeDiff -join "`n")"
+        }
     }
 } finally {
     Pop-Location
