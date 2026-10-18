@@ -12,6 +12,8 @@ dependencies and matching installed browser. See [Desktop verification](../READM
 
 `package-resources.test.mjs` exercises resource inventories, actual fixture ZIP
 extraction and rejection of missing, modified, stale and unsafe resources.
+On Windows it also verifies Tauri's fixed-width MSI/NSIS executable marker
+digest calculation, including missing and duplicate marker rejection.
 Its package skeletons are explicit fixtures; selected component notices and
 fonts come from the locked frontend installation. Install `frontend/` with
 `npm ci` first. `local-services-build.test.mjs` runs Windows PowerShell against

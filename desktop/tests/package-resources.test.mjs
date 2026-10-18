@@ -14,6 +14,7 @@ const desktop = fileURLToPath(new URL('../', import.meta.url));
 const frontend = resolve(desktop, '../frontend');
 const runner = join(desktop, 'package-resource-manifest.mjs');
 const wrapper = join(desktop, 'packaged-resources-smoke.ps1');
+const bundleDigestScript = join(desktop, 'tauri-bundle-digest.ps1');
 const commit = 'a'.repeat(40);
 const monaco = 'frontend/public/monaco/0.55.1/';
 const xterm = 'frontend/public/xterm/6.0.0/';
@@ -277,6 +278,26 @@ async function powershell(script, args = []) {
   try { return { code: 0, ...await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args], { windowsHide: true, timeout: 60000, env }) }; }
   catch (error) { return { code: error.code, stdout: error.stdout, stderr: error.stderr }; }
 }
+
+test('Tauri MSI and NSIS digests apply only the exact fixed-width bundle marker', { skip: !windows }, async t => {
+  const root = await ownedDirectory(t);
+  const marker = Buffer.from('__TAURI_BUNDLE_TYPE_VAR_UNK');
+  const input = Buffer.concat([Buffer.from('synthetic-pe-prefix\0'), marker, Buffer.from('\0synthetic-pe-suffix')]);
+  const executable = join(root, 'synthetic.exe');
+  await writeFile(executable, input);
+  for (const [bundleType, replacement] of [['msi', '__TAURI_BUNDLE_TYPE_VAR_MSI'], ['nsis', '__TAURI_BUNDLE_TYPE_VAR_NSS']]) {
+    const result = await powershell(bundleDigestScript, ['-Path', executable, '-BundleType', bundleType]);
+    const expected = Buffer.from(input);
+    Buffer.from(replacement).copy(expected, Buffer.from('synthetic-pe-prefix\0').length);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout.trim(), digest(expected));
+  }
+  await writeFile(executable, Buffer.from('binary without a Tauri marker'));
+  assert.notEqual((await powershell(bundleDigestScript, ['-Path', executable, '-BundleType', 'msi'])).code, 0);
+  await writeFile(executable, Buffer.concat([marker, Buffer.from('\0'), marker]));
+  assert.notEqual((await powershell(bundleDigestScript, ['-Path', executable, '-BundleType', 'msi'])).code, 0);
+});
+
 async function archive(f, badEntries) {
   const script = join(f.root, 'make-owned-fixture-zip.ps1'), zip = join(f.root, 'synthetic-package.zip');
   await writeFile(script, `param([string]$Source,[string]$Target,[string]$Entries)\n$ErrorActionPreference='Stop'\nAdd-Type -AssemblyName System.IO.Compression\nAdd-Type -AssemblyName System.IO.Compression.FileSystem\nif ($Entries) {\n  $zip=[IO.Compression.ZipFile]::Open($Target,[IO.Compression.ZipArchiveMode]::Create)\n  try { foreach($name in (Get-Content -LiteralPath $Entries -Raw | ConvertFrom-Json)) { $entry=$zip.CreateEntry($name); $writer=[IO.StreamWriter]::new($entry.Open()); try {$writer.Write('synthetic')} finally {$writer.Dispose()} } } finally {$zip.Dispose()}\n} else {\n  $next=Get-Item -LiteralPath (Join-Path $Source 'local-services/frontend/.next') -Force\n  $next.Attributes=$next.Attributes -bor [IO.FileAttributes]::Hidden\n  [IO.Compression.ZipFile]::CreateFromDirectory($Source,$Target,[IO.Compression.CompressionLevel]::Optimal,$false)\n}\n`);

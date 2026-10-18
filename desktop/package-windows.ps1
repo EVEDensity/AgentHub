@@ -140,6 +140,7 @@ if (Test-Path -LiteralPath $installerDirectory) {
 Push-Location $tauriDirectory
 try {
     $buildArguments = @("tauri", "build", "--target", $TargetTriple, "--ci")
+    $bundleDigestScript = Join-Path $desktopDirectory 'tauri-bundle-digest.ps1'
     $generatedUpdaterConfig = $null
     # One merged config pass: resource entries and the signed-updater overrides
     # MUST land in the same --config file — Tauri applies only the last
@@ -180,23 +181,21 @@ try {
             Write-Output "Installer generation disabled; validating the release application only."
         }
     }
+    $buildArguments += @('--', '--locked')
+    & cargo +1.88.0 @buildArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tauri bundle build failed."
+    }
     $msiApplicationDigest = $null
     if ($LocalServices -and -not $NoInstaller -and -not $Portable) {
+        # Tauri 2.11.4 patches a fixed-width marker in a temporary copy for
+        # each installer, then restores the unpatched release executable.
+        # Derive the MSI copy's exact expected bytes without rebuilding Rust.
         $releaseApplication = Join-Path $releaseDirectory 'agenthub-desktop.exe'
-        # Tauri patches the executable with bundle-type metadata. Build each
-        # installer separately and capture its executable while that exact
-        # bundle type is active, before the next build patches it again.
-        $msiBuildArguments = $buildArguments + @('--bundles', 'msi', '--', '--locked')
-        & cargo +1.88.0 @msiBuildArguments
-        if ($LASTEXITCODE -ne 0) { throw 'MSI-specific Tauri bundle build failed.' }
-        $msiApplicationDigest = (Get-FileHash -LiteralPath $releaseApplication -Algorithm SHA256).Hash.ToLowerInvariant()
-        $nsisBuildArguments = $buildArguments + @('--bundles', 'nsis', '--', '--locked')
-        & cargo +1.88.0 @nsisBuildArguments
-        if ($LASTEXITCODE -ne 0) { throw 'NSIS-specific Tauri bundle build failed.' }
-    } else {
-        $buildArguments += @('--', '--locked')
-        & cargo +1.88.0 @buildArguments
-        if ($LASTEXITCODE -ne 0) { throw 'Tauri bundle build failed.' }
+        $msiApplicationDigest = (& $bundleDigestScript -Path $releaseApplication -BundleType msi).Trim()
+        if ($LASTEXITCODE -ne 0 -or $msiApplicationDigest -notmatch '^[a-f0-9]{64}$') {
+            throw 'Unable to derive the MSI-patched application digest.'
+        }
     }
     if ($LocalServices) {
         $commitAfterBuild = (& git -C $desktopDirectory rev-parse HEAD).Trim()
